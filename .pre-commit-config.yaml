@@ -1,0 +1,8 @@
+# Local secret-scanning before a commit ever leaves your machine, complementing CI's gitleaks
+# and GitHub push protection. Install once:  pip install pre-commit && pre-commit install
+# The hook uses this repo's .gitleaks.toml automatically.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
