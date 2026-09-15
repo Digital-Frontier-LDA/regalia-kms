@@ -29,8 +29,10 @@ jobs:
             echo "::error::gofmt would rewrite these files:"; echo "$unformatted"; exit 1
           fi
 
-      - name: go vet
-        run: go vet ./...
+      - name: go vet (both modules)
+        run: |
+          go vet ./...
+          ( cd adapters/sops && go vet ./... )
 
       - name: build (default + piv tag)
         run: |
