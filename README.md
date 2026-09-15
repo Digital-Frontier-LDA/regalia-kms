@@ -1,93 +1,115 @@
 # Regalia KMS
 
-**A hardware-backed key-management service.** Regalia KMS keeps private keys on dedicated hardware —
-SmartCard-HSM tokens (Nitrokey HSM 2 for production, or a Raspberry Pi Pico running
-[Pico-HSM](https://github.com/polhenarejos/pico-hsm) for staging), YubiKey PIV, and OpenPGP cards —
-and exposes signing, key-wrapping, and opaque-secret release over a **mutually-authenticated API**.
-Clients never receive a PIN, a PKCS#11 path, a key handle, or raw key bytes; every operation is
-authenticated, policy-checked, and written to a tamper-evident audit log.
+**A self-hosted, hardware-backed key-management service for the everyday key needs of a small or
+medium software company.** Keys are used through one centralized service, rooted in dedicated
+hardware you own — SmartCard-HSM tokens (Nitrokey HSM 2 for production, or a Raspberry Pi Pico
+running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) for staging), YubiKey PIV, and OpenPGP
+cards. Clients call a **mutually-authenticated API** and never receive a PIN, a PKCS#11 path, a key
+handle, or raw key bytes. Every operation is authenticated, policy-checked, and written to a
+tamper-evident audit log. No cloud KMS, no vendor-held custody, no per-call billing.
 
 Written in Go. Single binary. Fail-closed by default.
 
-> ⚠️ **Status: pre-production.** The software — API, operation stack, policy/registry, audit,
-> envelope storage, and the PKCS#11 backend — is implemented and covered by an extensive Go test
-> suite (unit, contract, property, and mutation-swept guards). **Production hardware qualification
-> (Nitrokey HSM 2) is not yet complete.** Do not protect production keys with it yet — see
-> [What it does / doesn't do](#what-regalia-kms-does--doesnt-do).
+> ⚠️ **Status: pre-production / pre-1.0.** The software — API, operation stack, policy/registry,
+> audit, envelope storage, and the PKCS#11 backend — is implemented and covered by an extensive Go
+> test suite (unit, contract, property, and mutation-swept guards). **Production hardware
+> qualification (Nitrokey HSM 2) is not yet complete.** Use it for development, testing, and staging;
+> don't protect production keys with it yet. See [does / doesn't do](#what-it-does--doesnt-do).
+
+## What it covers
+
+One device serving every cryptographic role a small company actually has:
+
+| Capability | What it's for | Evidence boundary |
+|---|---|---|
+| **SOPS data-key wrap/unwrap** | secrets, commit & release signing via [SOPS](https://github.com/getsops/sops)/GPG | local + E2E-tested KMS adapter |
+| **Signing** (release, commit, SSH, wallet) | purpose-shaped signing over a policy-gated API | KMS signing API + policy |
+| **X.509 CA / key agreement** | internal certificate issuance, service TLS | operation stack + E2E coverage |
+| **Opaque secrets** (API tokens, passwords, symmetric keys) | hardware-rooted envelope custody | seal, release, and re-wrap |
+| **Cosmos / Akash wallet ops** | secp256k1 transaction signing (optional) | SignDoc binding; policy gates apply |
+| **RBAC · mTLS · policy · fencing · audit** | the control plane around all of the above | implemented contracts; production gates explicit |
+
+"Covered" ≠ "production-qualified" — see the backend status below.
 
 ## Features
 
-**Cryptographic operations — on the token**
-- Digital signatures and certificate signing execute on the HSM; the private key never leaves it.
-- **Envelope storage for opaque secrets** (API tokens, passwords, symmetric keys): a hardware-held
-  KEK wraps per-secret **AES-256-GCM** data keys, so non-token-native secrets still get hardware
-  custody. Plaintext is size- and lifetime-bounded and zeroized after use. ([`ENVELOPE.md`](ENVELOPE.md))
-- Key rotation by re-wrap, without changing ciphertext.
-
-**Access control & governance**
-- **Mutual-TLS client identity** — the caller *is* its verified certificate chain; no bearer tokens,
-  no shared secrets. ([`IDENTITY.md`](IDENTITY.md))
-- **Purpose-bound policy** over a declarative custody registry: which principal may perform which
-  operation on which object, for which purpose. ([`POLICY.md`](POLICY.md), [`config/REGISTRY.md`](config/REGISTRY.md))
-- **Tamper-evident audit** — a hash-chained journal, shippable off-host. ([`AUDIT.md`](AUDIT.md), [`OBSERVABILITY.md`](OBSERVABILITY.md))
+- **Operations execute on the token.** Signatures and certificate signing never expose the private
+  key. Opaque secrets get hardware custody via **AES-256-GCM** data keys wrapped by a hardware-held
+  KEK; plaintext is size- and lifetime-bounded and zeroized after use. ([`ENVELOPE.md`](ENVELOPE.md))
+- **mTLS identity + purpose-bound policy.** The caller *is* its verified certificate chain — no
+  bearer tokens, no shared secrets — and a declarative registry decides who may do what, to which
+  object, for which purpose. ([`IDENTITY.md`](IDENTITY.md), [`POLICY.md`](POLICY.md), [`config/REGISTRY.md`](config/REGISTRY.md))
+- **Tamper-evident audit** — a hash-chained journal, shippable off-host. ([`AUDIT.md`](AUDIT.md))
 - **Single-signer fencing** — never two active signers across sites. ([`FENCING.md`](FENCING.md))
-
-**Integrations**
-- **SOPS** — a local Unix-socket sidecar makes Regalia the decryption authority for
-  [SOPS](https://github.com/getsops/sops)-encrypted files; clients hold no age/PGP identities.
-  ([`SOPS-TRANSPORT.md`](SOPS-TRANSPORT.md), [`adapters/sops/`](adapters/sops/))
-- **Cosmos / Akash** — SignDoc binding and digest handling for Cosmos-SDK transaction signing.
-  ([`COSMOS-SUPPORT.md`](COSMOS-SUPPORT.md))
+- **SOPS sidecar** — a local Unix-socket adapter makes Regalia the decryption authority; clients
+  hold no age/PGP identities. ([`SOPS-TRANSPORT.md`](SOPS-TRANSPORT.md))
 
 ## Backends
 
 | Backend | Transport | Status | Notes |
 |---|---|---|---|
-| **Nitrokey HSM 2** (SmartCard-HSM) | PKCS#11 | ✅ software · 🚧 production qualification | The intended production HSM. Device-cert identity and on-token key-provenance probes await final hardware sign-off. |
-| **Pico HSM** — RP2350 running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) | PKCS#11 | ✅ staging | An open-hardware SmartCard-HSM (~$5 board) for development/staging. Under policy D1 a Pico measurement never informs a production decision. Firmware patches, upstream fixes, and hardware drills live in [regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony). |
+| **Nitrokey HSM 2** (SmartCard-HSM) | PKCS#11 | ✅ software · 🚧 production qualification | The designated production HSM (audited NXP firmware). Device-cert identity and on-token key-provenance probes await final hardware sign-off. |
+| **Pico HSM** — RP2350 running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) | PKCS#11 | ✅ staging | A fully-capable open-hardware SmartCard-HSM (~$5 board). It *could* hold production keys; Regalia **chooses** not to (policy D1) and reserves production for the Nitrokey — a trust decision, not a capability gap. Firmware/drills: [regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony). |
 | **YubiKey PIV** | PIV (`-tags piv`) | ✅ implemented · ⚠️ not wired into the default daemon | Built only under `-tags piv`; the default build links a stub. |
 | **OpenPGP card** | PC/SC (`-tags piv`) | 🚧 admission + protocol done; transport/wiring pending | ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)) |
 | Software / file-based KEK | — | ❌ refused in production **by design** | Production KEKs must be non-exportable hardware keys; there is no software fallback. |
 
-## What Regalia KMS does / doesn't do
+## What it does / doesn't do
 
 **Does**
 - ✅ Root every production key operation in hardware, with **no software key-material fallback**.
-- ✅ Authenticate every client by mTLS and gate every operation by declarative, purpose-bound policy.
+- ✅ Authenticate every client by mTLS; gate every operation by declarative, purpose-bound policy.
 - ✅ Give hardware custody to non-token-native secrets via wrapped envelopes.
 - ✅ Produce a tamper-evident audit trail and enforce single-signer fencing.
 - ✅ Act as the SOPS decryption authority and sign Cosmos-SDK transactions.
 
-**Doesn't (yet)**
-- ❌ **Not production-qualified.** Nitrokey HSM 2 hardware qualification (device-cert identity,
-  on-token key provenance) is still open. Treat the project as pre-production.
-- ❌ **Not a KMIP server.** Regalia exposes its own minimal mTLS API ([`api/openapi.json`](api/openapi.json)),
-  not KMIP — it is not a drop-in for KMIP clients.
-- ❌ **Not a general-purpose cloud KMS.** No cloud-provider, database, or disk-encryption
-  integrations; it is a custody service for a specific hardware-rooted model.
-- ❌ **No software key storage.** By design there is no software or file-based KEK in production.
-- ⚠️ **Replacement-token restore is not proven end-to-end** — recovering an envelope onto a fresh
-  token depends on a physical KEK-replication ceremony that is not yet qualified.
+**Deliberately doesn't**
+- ❌ Export private keys, recovery sources, token credentials, or unwrapped KEKs.
+- ❌ Let clients choose a reader, slot, backend, or arbitrary mechanism.
+- ❌ Fall back to software cryptography or another token in production.
+- ❌ Authenticate human administrators through the cryptographic-operation API.
+- ❌ Promise transparent hot high-availability between two signing devices (see the trade below).
+- ❌ Turn rotation/revocation/destruction into unreviewed runtime verbs — those are manifest- and
+  ceremony-controlled workflows ([regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony)).
+
+**Not yet**
+- ⚠️ **Not production-qualified** — Nitrokey HSM 2 hardware qualification is open.
+- ⚠️ **Not a KMIP server** — Regalia exposes its own minimal mTLS API ([`api/openapi.json`](api/openapi.json)), not KMIP.
+- ⚠️ **Not a general-purpose cloud KMS** — no cloud/database/disk-encryption integrations.
+
+## Why self-hosted — the trade, stated honestly
+
+Two HSMs you buy once, on hosts you already run, instead of a metered cloud service:
+
+| | AWS CloudHSM | Regalia |
+|---|---|---|
+| **cost** | ~$25,400/yr (2 HSMs for HA × [$1.45/hr](https://aws.amazon.com/cloudhsm/pricing/) × 8,760 h) | ~€220 once — two Nitrokey HSM 2 (~€99–109 each) |
+| **who holds the keys** | the provider, in their regions | you, in your racks |
+| **recovery** | provider-dependent | 4-of-6 Shamir shares on metal, offline, no original device needed |
+
+What you give up — this is a real trade, not a free lunch:
+- **Throughput:** ~12–14 signatures/sec (with a large spread by key type), not thousands. Fine for
+  treasury ops, secrets, and a CA; not for high-volume token issuance.
+- **Availability:** cold standby with a human RTO of hours, not managed multi-AZ failover — a
+  deliberate choice, because two hot signers on one account is worse than an outage.
+- **No FIPS 140-2 Level 3 validation.** If you're procuring against that box, this isn't it.
+- **You are the support contract.**
+
+If your key operations are treasury-scale rather than transaction-scale, the trade is
+overwhelmingly favourable. If not, buy the managed service.
 
 ## Quick start
 
 ```sh
-# Build and test (Go 1.26+)
-go build ./...
+go build ./...            # Go 1.26+
 go test ./...
-
-# Run the daemon (loopback dev mode; serves mTLS once TLS paths are configured)
-go run ./cmd/regalia-kms -listen 127.0.0.1:8443
+go run ./cmd/regalia-kms -listen 127.0.0.1:8443   # loopback dev mode
 ```
 
-The daemon serves mutual TLS when `tls_certificate_path`, `tls_private_key_path`, and
+The daemon serves mutual TLS once `tls_certificate_path`, `tls_private_key_path`, and
 `tls_client_ca_path` are set, and refuses a non-loopback listener without them. Configuration is one
-strict JSON object (≤32 KiB); unknown fields, unsafe values, non-loopback plaintext listeners, and
-group/world-writable files are rejected. It has **no** fields for PINs, credentials, or key material.
-Example configs are in [`config/`](config/).
-
-The YubiKey PIV backend compiles only under `-tags piv` (`go build -tags piv ./...`); the default
-build links a stub.
+strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key material; examples in
+[`config/`](config/). The YubiKey PIV backend compiles only under `-tags piv`.
 
 ## Repository layout
 
@@ -99,40 +121,24 @@ build links a stub.
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory) |
-| `*.md` | Per-component design docs (see below) |
-
-## Documentation
-
-| Doc | Topic |
-|---|---|
-| [`API.md`](API.md) · [`api/`](api/) | Wire protocol / OpenAPI contract |
-| [`IDENTITY.md`](IDENTITY.md) | mTLS client identity and device identity |
-| [`POLICY.md`](POLICY.md) · [`config/REGISTRY.md`](config/REGISTRY.md) | Purpose-bound policy and the custody registry |
-| [`ENVELOPE.md`](ENVELOPE.md) | Opaque-secret envelope format and rotation |
-| [`AUDIT.md`](AUDIT.md) · [`OBSERVABILITY.md`](OBSERVABILITY.md) | Hash-chained audit and metrics |
-| [`FENCING.md`](FENCING.md) | Single-signer fencing |
-| [`PIN-CUSTODY.md`](PIN-CUSTODY.md) | Unattended PIN handling |
-| [`SOPS-TRANSPORT.md`](SOPS-TRANSPORT.md) | SOPS sidecar transport boundary |
-| [`COSMOS-SUPPORT.md`](COSMOS-SUPPORT.md) · [`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md) | Cosmos signing; OpenPGP-card compatibility |
-| [`TESTING.md`](TESTING.md) | Test tiers and how to run them |
+| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `OPENPGP-COMPATIBILITY`, `TESTING`) |
 
 ## Security
 
 - **No secrets in the repository.** Secret scanning runs over the whole tree with content-only
-  allowlists (never path allowlists), so a real credential committed beside a benign construct is
-  still caught. See [`.gitleaks.toml`](.gitleaks.toml).
+  allowlists (never path allowlists). See [`.gitleaks.toml`](.gitleaks.toml).
 - **Report vulnerabilities** privately via GitHub Security Advisories, not a public issue.
-
-## Design records
-
-Some code comments and docs cite internal design records (`ADR-0001`, the threat model, requirements)
-that live in the operators' private repository and are not part of this release. The in-repo `*.md`
-files above are self-contained for understanding and using the code.
 
 ## Related
 
 - [regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony) — air-gapped Qubes
   key-ceremony tooling, the Pico HSM staging emulator, and the RP2350 firmware work.
+
+## Design records
+
+Some code comments and docs cite internal design records (`ADR-0001`, the threat model, requirements)
+that live in the operators' private repository and are not part of this release. The in-repo `*.md`
+files are self-contained for understanding and using the code.
 
 ## License
 
