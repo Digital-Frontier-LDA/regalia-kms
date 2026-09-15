@@ -7,6 +7,12 @@ and they were green for reasons unrelated to the thing they named.
 This is a catalogue of the specific ways that happened here, with the real example each time. It is
 not general testing advice; it is the list of mistakes this codebase has actually made.
 
+> **Note for the open-source release.** This repository ships the Go module and its Go test suite.
+> Some examples below reference the wider harness kept in the operators' private repository — the
+> Python CI tiers (`tests/`, `tools/*.py`), the end-to-end scripts (`e2e/`), the deploy tooling
+> (`deploy/`), and the CI workflows (`.github/`) — which are not published here. The lessons are
+> general; those particular file paths are illustrative.
+
 **What it offers is recognition, not immunity.** Reading it will not stop you writing these — the
 night it was written, two of its entries caught their own author within hours, one of them added
 earlier that same evening. What it buys is the twenty minutes you would otherwise
@@ -28,7 +34,7 @@ Restore the protection and confirm green again. Both halves are the evidence.
 reason**, because a false red gets the *check* deleted rather than the code fixed. The Staging HSM
 battery has been red since 2026-08-26 for reasons unrelated to any change, and now gates nothing
 (#76) — every author has learned to merge past it, which is the same as not having it. While
-verifying this document I ran its identifier check from inside `kms/`, so it looked for `kms/kms/`
+verifying this document I ran its identifier check from inside ``, so it looked for `kms/`
 and reported all twelve identifiers missing. Had I trusted that, the honest response would have
 looked like deleting the claims.
 
@@ -343,7 +349,7 @@ never type-checked unless you pass the tag: anything touching shared types needs
 **That rule has a converse, and stating only one half made it read as complete.** The case above is
 tagged code the default build skips. The other case is an *untagged test that needs tagged code* —
 and the command this section prescribes does not catch it. Measured on #252, where
-`kms/internal/backend/yubikey/sweep_uncovered_test.go` opened with a bare `package yubikey` and
+`internal/backend/yubikey/sweep_uncovered_test.go` opened with a bare `package yubikey` and
 called `NewPIVDriver`:
 
     go build ./...                                exit 0
@@ -365,7 +371,7 @@ instruments, and the middle row is the one worth knowing:
 | command | on an unparseable test file | why |
 |---|---|---|
 | `go build ./...` | exit 0, silent | does not compile test files at all |
-| `gofmt -l kms/` | **stdout empty, stderr has the error, exit 2** | an unparseable file is not an unformatted one, and gofmt reports the two differently |
+| `gofmt -l ` | **stdout empty, stderr has the error, exit 2** | an unparseable file is not an unformatted one, and gofmt reports the two differently |
 | `go vet ./...` | exit 1, names the file and line | compiles the test package |
 
 `gofmt` is therefore **not** silent — but it is silent on the stream most callers read. The common
@@ -374,7 +380,7 @@ parse: a formatting gate blind to the worse of the two things it is looking at. 
 this right** — `.github/workflows/kms.yml` checks the exit code first and does not suppress stderr,
 with a comment saying why, because its first version had the bug:
 
-    if ! unformatted=$(gofmt -l kms/); then ... exit 1; fi
+    if ! unformatted=$(gofmt -l ); then ... exit 1; fi
 
 Local one-liners are where it still bites, and "gofmt clean" in a report usually means the blind
 idiom.
@@ -397,7 +403,7 @@ an environment that never had it. Where the environment is supposed to provide i
 should itself be an assertion: refuse to skip when `CI` is set, so a missing dependency fails the run
 instead of quietly shrinking it.
 
-**So is `-run` matching nothing.** `kms/e2e/softhsm-pkcs11.sh` invokes its three SoftHSM tests by
+**So is `-run` matching nothing.** `e2e/softhsm-pkcs11.sh` invokes its three SoftHSM tests by
 exact name, `-run '^TestHTTPToCoordinatorToConcretePKCS11$'` and two others. All three exist today.
 If one is renamed, `go test` prints `ok ... [no tests to run]` and **exits 0**, so the hardware
 battery goes green having executed nothing. Pinning a test by name in a script couples it to that
@@ -572,7 +578,7 @@ someone helpful.
 §14 says an absence needs a test and so does its explanation. This is the same argument for a claim
 of **completion**, and it is the one that cost a real defect.
 
-`kms/tools/sops_inventory.py` documented four traps its own development had hit. A reader auditing the file
+`tools/sops_inventory.py` documented four traps its own development had hit. A reader auditing the file
 reconstructed every one of them from those docstrings — except the one whose comment said it was
 handled. And they did not fail to find it: they **actively did not look**, because the comment said
 the question was settled.
@@ -590,13 +596,13 @@ about how well either is written — it is about what each one licenses the next
 is why a stale fix comment survives longer than a stale hazard comment.
 
 So: **a comment claiming something is proved should name the test that proves it, and something
-should fail when that test does not exist.** `kms/tests/test_named_tests_exist.py` is that check, over
+should fail when that test does not exist.** `tests/test_named_tests_exist.py` is that check, over
 both Go and Python. A fix comment naming a missing test is a hazard comment wearing a fix comment's
 clothes, and without the check there is nothing to tell them apart.
 
 Two consequences worth stating, because both showed up immediately:
 
-- **Abbreviations defeat it.** `kms/cmd/regalia-kms/main.go` said "`TestFenceRunner...` exercises it", which reads fine
+- **Abbreviations defeat it.** `cmd/regalia-kms/main.go` said "`TestFenceRunner...` exercises it", which reads fine
   and cannot be verified. Matching is exact, so the name is now written out.
 - **Where no test exists, say so in the comment.** `discover()`'s deduplication is asserted in a
   docstring and verified nowhere, so its docstring now says NOT PROVED BY ANY TEST HERE and names who
@@ -616,7 +622,7 @@ and test files for the tests that exist. Adding `internal` and `tests` to its `S
 assertion green — it had fewer references to check *and* fewer tests to check them against, so every
 surviving pair still matched. `assertTrue(defined)` was guarding non-empty when the property that
 mattered was *complete*. The fix is a floor on **reach**, not on count: the walk must find files
-under `kms/internal`, `kms/cmd` and `kms/tests`, and it names the directory it stopped finding.
+under `internal`, `cmd` and `tests`, and it names the directory it stopped finding.
 
 **The contract that was also the corpus.** `test_runbook_structure.py` iterates the elements each
 document's contract declares. Deleting `"prerequisites"` from `CUSTODY_ELEMENTS` removed the
@@ -715,7 +721,7 @@ target.
 means *nothing can construct the input* — you cannot hand `envelope.Peek` an envelope that `Parse`
 already refused, so the branch has no reachable fixture at any layer. It does **not** mean "the
 current caller validates first". `Serve` took `options.ShutdownTimeout` raw while defaulting its
-sibling `OperationTimeout` two lines above; I checked that `kms/internal/config/config.go` bounds `shutdown_timeout` to
+sibling `OperationTimeout` two lines above; I checked that `internal/config/config.go` bounds `shutdown_timeout` to
 1s–2m, concluded the missing guard could not be made to fail, and cited this section for not writing
 the test. `Serve` is exported and `Options{ShutdownTimeout: 0}` is a value any caller in the module
 can build — #189 wrote that test and it goes red without the guard, on both zero and negative.
@@ -990,7 +996,7 @@ worked example in this file is a *refusal* guard — `if bad { return err }` —
 isolates it correctly. On an *admission* predicate the same operator does the opposite: it makes the
 function reject everything.
 
-Measured on `permitsClientAuthentication` (`kms/internal/auth/auth.go`), whose body is
+Measured on `permitsClientAuthentication` (`internal/auth/auth.go`), whose body is
 `if usage == ExtKeyUsageClientAuth || usage == ExtKeyUsageAny { return true }`:
 
 Counts below are **top-level test functions**, produced from the `kms` module root by:
@@ -1125,7 +1131,7 @@ further out**, because the proxy it chose is produced by the failure too.
 **The same substitution reaches the sweeps that look for it.** Auditing this repository for
 decoders that accept trailing bytes, I counted *files* containing a decoder against *files*
 containing an EOF check, and reported the estate almost clean. The unit was wrong:
-`kms/internal/approval/approval.go` held **two** decoders and **one** check, so per-file granularity
+`internal/approval/approval.go` held **two** decoders and **one** check, so per-file granularity
 counted it as covered and hid the very defect the sweep existed to find — and the decoder it hid was
 the second of the two the sweep eventually reported.
 
@@ -1160,8 +1166,8 @@ without having the property.**
 So the durable part is the unit, and only the unit:
 
 ```
-grep -rn  "json.NewDecoder" --include="*.go" kms/ | grep -v _test | wc -l   # decoders
-grep -rln "json.NewDecoder" --include="*.go" kms/ | grep -v _test | wc -l   # files
+grep -rn  "json.NewDecoder" --include="*.go"  | grep -v _test | wc -l   # decoders
+grep -rln "json.NewDecoder" --include="*.go"  | grep -v _test | wc -l   # files
 ```
 
 Two files with one decoder each and two files with two are the same number of files and a different
@@ -1186,7 +1192,7 @@ you designed the proxy around.
 - File existence, non-empty file, "the artifact uploaded". All of them are satisfied by a process
   that started, did nothing useful, and exited.
 - A count that a total failure drives to zero, where zero is also a legitimate answer. Say which
-  zero you mean, and refuse the other — `kms/tools/junit.py` refuses an empty event stream rather
+  zero you mean, and refuse the other — `tools/junit.py` refuses an empty event stream rather
   than reporting it as a suite with no tests.
 
 ### What to write instead
@@ -1224,7 +1230,7 @@ Writing a test to hold two constants in agreement, when one `const` would do, is
 to a cheap problem, and it leaves the second definition there for someone to edit.
 
 Only when they genuinely cannot be merged does the technique below apply. The SOPS adapter is a
-separate module that cannot import `kms/internal`; the Python validator cannot call Go. There the fix
+separate module that cannot import `internal`; the Python validator cannot call Go. There the fix
 is not one implementation but **two implementations asserted against one table** — each test running
 its own real loader rather than a copy of its rule, and each implementation's comment naming the
 other, so a reader knows there are two and that changing one means changing both.

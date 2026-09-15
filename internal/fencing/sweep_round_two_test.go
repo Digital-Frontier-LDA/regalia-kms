@@ -67,7 +67,7 @@ package fencing
 //
 // The line numbers above are the ones this file was measured against. They are a
 // coordinate into that measurement, not a claim that they still address the same
-// operand after an edit -- re-derive with kms/tools/guardenum before reusing them.
+// operand after an edit -- re-derive with tools/guardenum before reusing them.
 
 import (
 	"bytes"

@@ -112,7 +112,7 @@ func TestRequiredBackendsExcludesFIDOEnrollmentsAtTheDaemonSite(t *testing.T) {
 //
 // A FIDO private key is born on the authenticator and never leaves it: no escrow, no Shamir path,
 // nothing to fall back on if these rules do not hold. They existed in the JSON Schema and in
-// kms/tools/custody_manifest.py, both of which check the manifest in this repository during CI —
+// tools/custody_manifest.py, both of which check the manifest in this repository during CI —
 // while the daemon loads whatever registry_path names.
 func TestLoadEnforcesFIDOContinuityRules(t *testing.T) {
 	twoSites := fidoEnrollment("custodian-a", "fido-admin-a", "active") + "," +

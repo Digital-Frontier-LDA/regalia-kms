@@ -21,7 +21,7 @@ import (
 // the audit log.
 //
 // The shape matches the custody manifest's `exception` object (reason, expires, approved_by;
-// kms/tools/custody_manifest.py), plus the removal criteria, so an operator writing one is writing
+// tools/custody_manifest.py), plus the removal criteria, so an operator writing one is writing
 // something they have seen before. It is NOT read from the manifest today: the manifest's
 // exception record is bound to custody mode "exception", which means "deliberately single-homed",
 // and overloading it to also mean "deliberately on the legacy backend" would make one field answer

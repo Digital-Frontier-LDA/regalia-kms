@@ -3,7 +3,7 @@
 ## Decision
 
 ADR-0001 §4 allocates the YubiKey OpenPGP applet to **unavoidable legacy card integration** and to
-nothing else. This document states what that allows, and `kms/internal/backend/openpgp` enforces
+nothing else. This document states what that allows, and `internal/backend/openpgp` enforces
 it. Where the two disagree, the package is right and this file is stale — every limit below is
 asserted by a test, and the tests are named beside each rule so a reader can check rather than
 trust.
@@ -82,7 +82,7 @@ Five required fields, refused at construction if any is missing or blank:
 | `Expires` | compared at every admission, not once at load |
 
 The first three and the expiry match the custody manifest's `exception` object
-(`kms/tools/custody_manifest.py`), so an operator writing one is writing something they have seen
+(`tools/custody_manifest.py`), so an operator writing one is writing something they have seen
 before. `RemovalCriteria` has no counterpart there and is the field most likely to be left out,
 which is why it is required rather than encouraged.
 
@@ -196,10 +196,10 @@ The question "which legacy GPG integrations justify this carve-out?" has a measu
 **none was found** — in this repository, and in the one consumer repository its own documents
 name.
 
-- `gnupg` is *installed* — `ceremony/qubes/salt/vault-tools.sls`, the offline bundle's tool
+- `gnupg` is *installed* — `qubes/salt/vault-tools.sls`, the offline bundle's tool
   manifest, and the preflight presence checks all list `gpg` — but installation is not dependency.
 - No script in the repository *invokes* `gpg` for any operation: zero occurrences of `gpg --…`
-  anywhere in `ceremony/`, `kms/`, or CI. The emulator *stubs* it (`simulate-ceremony.sh`
+  anywhere in `ceremony/`, ``, or CI. The emulator *stubs* it (`simulate-ceremony.sh`
   manufactures a mock `gpg`), and `hsm-import-key.sh` mentions it only in an error message
   explaining why a key without its certificate would be invisible to future GPG/SSH consumers.
 - This repository contains no `.sops.yaml`; the SOPS configurations are in the repositories that

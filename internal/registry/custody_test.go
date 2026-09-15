@@ -69,7 +69,7 @@ func TestLoaderEnumsMatchThePublishedSchema(t *testing.T) {
 
 // A PRODUCTION KEY ON ONE DEVICE IS ONE FAILURE AWAY FROM BEING GONE.
 //
-// "production object requires at least 2 hardware bindings" lived in kms/tools/custody_manifest.py
+// "production object requires at least 2 hardware bindings" lived in tools/custody_manifest.py
 // and nowhere else. That tool validates the manifest in the REPOSITORY during CI; the daemon loads
 // whatever registry_path points at and re-checks none of it. The rule therefore held for manifests
 // that went through review and for no others — and its absence was silent, because the daemon
@@ -282,7 +282,7 @@ func loadManifest(t *testing.T, document map[string]any) (*Registry, error) {
 // $defs.binding.properties.state, so the state list was the one enum in this manifest with no
 // guard at all — and it is the one that diverged.
 //
-// #160 added "revoked" to the Go chain and to neither the schema nor kms/tools/custody_manifest.py.
+// #160 added "revoked" to the Go chain and to neither the schema nor tools/custody_manifest.py.
 // The daemon then loaded a manifest CI refused, which meant no committed manifest could exercise
 // the feature the state was added for. A reviewer caught it; the suite could not, because an
 // inline `!=` chain has no set to compare against. That is why registry.go now spells these as

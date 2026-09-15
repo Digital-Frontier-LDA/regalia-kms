@@ -34,7 +34,7 @@
 // beside a non-zero refusal count -- and an empty record set is itself a refusal, so the zero-file
 // case cannot reach the success path at all.
 //
-// Exit codes follow kms/tools/guardenum: 2 for usage, 1 for a run that refused or could not read
+// Exit codes follow tools/guardenum: 2 for usage, 1 for a run that refused or could not read
 // its input, 0 only for a verified inventory.
 //
 //	go run ./tools/inventory inventory.json

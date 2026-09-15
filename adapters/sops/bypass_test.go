@@ -34,7 +34,7 @@ import (
 // lists an age or PGP recipient alongside the KMS carrier and SOPS picks the
 // one it can reach locally. No adapter test can catch that, because the
 // adapter is not on the path. That bypass is covered by
-// `kms/tools/sops_policy.py`, which requires exactly one carrier and refuses
+// `tools/sops_policy.py`, which requires exactly one carrier and refuses
 // legacy recipient blocks. The two halves together are the centralization
 // claim; separately, each looks stronger than it is.
 

@@ -325,7 +325,7 @@ func validateEnvelope(envelope Envelope, wrapper Wrapper) error {
 	//
 	// So the split is: this function is the SYNTACTIC floor (a token that cannot be opened at all),
 	// and "no empty secrets" is a SEMANTIC rule enforced where it can be named.
-	// kms/internal/secrets/guard_coverage_test.go pins both halves.
+	// internal/secrets/guard_coverage_test.go pins both halves.
 	if len(envelope.Nonce) != 12 || len(envelope.Ciphertext) < 16 || len(envelope.Ciphertext) > MaxPlaintextBytes+16 || len(envelope.WrappedDataKey) == 0 || len(envelope.WrappedDataKey) > 64<<10 {
 		return ErrInvalidEnvelope
 	}

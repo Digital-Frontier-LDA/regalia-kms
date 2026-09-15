@@ -37,8 +37,8 @@
 // altered before comparison. TWO non-test files in this module carry them today, both in
 // comments:
 //
-//	kms/tools/guardenum/main.go   describing which neutralisation preserves an operand's siblings
-//	kms/internal/sweeptext/sweeptext.go   this file, describing the shapes it strips
+//	tools/guardenum/main.go   describing which neutralisation preserves an operand's siblings
+//	internal/sweeptext/sweeptext.go   this file, describing the shapes it strips
 //
 // No ledger reads either — policy's names guardenum only inside a comment of its own — so
 // nothing is corrupted today. But tools/guardenum is one of #237's swept packages, and a

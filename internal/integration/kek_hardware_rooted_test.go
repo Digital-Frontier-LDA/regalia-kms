@@ -24,7 +24,7 @@ import (
 // PKCS#11 attributes which really do separate the two keys on a real module. A fake asserting
 // "the fake refused" would prove nothing about CKA_LOCAL.
 //
-// Object 02 is generated on-token by kms/e2e/softhsm-pkcs11.sh; object 07 is imported by it.
+// Object 02 is generated on-token by e2e/softhsm-pkcs11.sh; object 07 is imported by it.
 func TestOnlyAHardwareRootedKEKIsUsable(t *testing.T) {
 	module, serial := os.Getenv("REGALIA_PKCS11_E2E_MODULE"), os.Getenv("REGALIA_PKCS11_E2E_SERIAL")
 	if module == "" || serial == "" {

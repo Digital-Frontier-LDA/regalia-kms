@@ -65,7 +65,7 @@ const (
 	// over rules that were never applied.
 	schemaVersion = 1
 
-	// dateLayout is the only accepted spelling of a date, matching kms/tools/custody_manifest.py
+	// dateLayout is the only accepted spelling of a date, matching tools/custody_manifest.py
 	// so the two tools cannot disagree about what a date is.
 	dateLayout = "2006-01-02"
 )
@@ -73,9 +73,9 @@ const (
 // THE VOCABULARY BELOW IS NOT THIS TOOL'S TO INVENT.
 //
 // class, environment and custody are the SAME sets the custody manifest publishes in
-// kms/config/custody-manifest.schema.json ($defs.custodyObject.properties.{kind,environment,
+// config/custody-manifest.schema.json ($defs.custodyObject.properties.{kind,environment,
 // custody}). Copying the values here rather than importing them is forced -- the loader's copies
-// in kms/internal/registry are unexported -- so the binding is held by a test instead:
+// in internal/registry are unexported -- so the binding is held by a test instead:
 // TestVocabularyMatchesThePublishedCustodySchema reads the schema file and compares the sets.
 //
 // The reason to share them at all is that a secret does not change class when it becomes a KMS
@@ -131,7 +131,7 @@ var (
 var (
 	// identifierPattern is a lowercase identifier, and it is DELIBERATELY NOT the registry's.
 	//
-	// kms/internal/registry uses `^[a-z0-9][a-z0-9-]{2,62}$` (exported as registry.MatchesIdentifier)
+	// internal/registry uses `^[a-z0-9][a-z0-9-]{2,62}$` (exported as registry.MatchesIdentifier)
 	// and the two differ in both directions, so neither is a superset of the other:
 	//
 	//	ci          valid here, refused there   an inventory names systems like ci and dns; a
@@ -477,7 +477,7 @@ func Verify(data []byte, now time.Time) Report {
 		report.refuse("document", "%s", clip(err.Error()))
 		return report
 	}
-	// One document per file, as kms/internal/registry requires of a manifest. Trailing JSON is the
+	// One document per file, as internal/registry requires of a manifest. Trailing JSON is the
 	// shape where a second, unreviewed set of records rides along behind the reviewed one.
 	//
 	// THIS WAS decoder.More(), AND More() DOES NOT ANSWER THIS QUESTION. Measured on the four
@@ -593,7 +593,7 @@ func Verify(data []byte, now time.Time) Report {
 				checkField(&report, where, "exception.tracking", record.Exception.Tracking(), trackingPattern)
 				// AN EXCEPTION PAST ITS EXPIRY. The type guarantees the date exists; only today can
 				// say whether it has passed. Compared by day in UTC, matching
-				// kms/tools/custody_manifest.py, so an exception is live through the whole of its
+				// tools/custody_manifest.py, so an exception is live through the whole of its
 				// final day rather than expiring at an hour nobody wrote down.
 				today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
 				if record.Exception.Expires().Before(today) {

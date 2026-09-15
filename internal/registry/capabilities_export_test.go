@@ -11,7 +11,7 @@ import (
 // ONE CAPABILITY TABLE, READ BY BOTH LANGUAGES.
 //
 // There were two. Capabilities() in Go decided what the daemon accepts, and CAPABILITIES in
-// kms/tools/custody_manifest.py decided what CI accepts — and they disagreed in both directions.
+// tools/custody_manifest.py decided what CI accepts — and they disagreed in both directions.
 // Python had no p256 or p384 for nitrokey-pkcs11 at all, so the validator rejected manifests the
 // daemon supports; it lacked certificate-sign and key-agreement everywhere; and it still carried
 // aes-256/unwrap after the driver was shown to refuse it.

@@ -13,7 +13,7 @@ package main
 // THIS ROUND'S POPULATION AND SURVIVOR COUNT ARE NOT REPEATED HERE, and that is the correction
 // rather than an omission. They were stated in the present tense, in a file, for a measurement
 // taken once against a tree that has moved since — so they read as current and were not. Round 2
-// re-derived them from kms/tools/guardenum and got a different unit as well as a different
+// re-derived them from tools/guardenum and got a different unit as well as a different
 // number: a whole-condition sweep measures SITES, and a site with three leaves hides two
 // operands inside one verdict. The live figures belong in the PR ledger that carries the run
 // that produced them; see guard_coverage_round2_test.go for what the leaf-level sweep found,

@@ -16,8 +16,8 @@ Every rule below says which tier verifies it. A rule no tier verifies says so.
 
 **Nitrokey (SmartCard-HSM).** The 2026-08-01 ratification of 2-of-3 public-key authentication
 (decision D2 / requirement B8; `doc/HSM-THREAT-MODEL.md`, `doc/HSM-KMS-DEPLOYMENT.md`) **replaces the
-static user PIN at both production sites.** It is ratified, not built: nothing in `kms/internal` or
-`kms/cmd` implements it. Until it is, the daemon gives the Nitrokey a static PIN through the mechanism
+static user PIN at both production sites.** It is ratified, not built: nothing in `internal` or
+`cmd` implements it. Until it is, the daemon gives the Nitrokey a static PIN through the mechanism
 below, and that is an interim, not the production design.
 
 **YubiKey PIV.** PKA does not apply. PIV has no public-key authentication that authorizes use of a
@@ -111,7 +111,7 @@ A virtual TPM narrows offline disk theft; it does not protect a running guest fr
 which can inspect guest memory or roll back VM and vTPM state. Therefore:
 
 - **Exclude the encrypted PIN blobs and vTPM state from ordinary Proxmox backup/snapshot jobs.**
-  *Verified by:* the evidence tier — `kms/deploy/proxmox/verify.py` refuses VM snapshots, any backup
+  *Verified by:* the evidence tier — `deploy/proxmox/verify.py` refuses VM snapshots, any backup
   job including the VMID, and `runtime_credentials_excluded_from_backup` not proven.
 - **Disable live migration and suspend/hibernate for the KMS VM.** *Verified by:* the evidence tier
   (`live_migration_allowed`, `hibernation_disabled`).
@@ -130,7 +130,7 @@ which can inspect guest memory or roll back VM and vTPM state. Therefore:
   *Verified by:* `TestReconcileRefusesAJournalHoldingLessThanTheCollectorRemembers`.
   Two limits:
   - It holds **only when an audit sink is configured**. A journal-only host has nothing to reconcile
-    against, and `kms/README.md` records that no production off-host sink is configured today.
+    against, and `README.md` records that no production off-host sink is configured today.
   - A rollback of **vTPM state alone**, without the disk, is not detectable by anything in this
     repository. It is mitigated by the snapshot and backup prohibitions above, not detected.
 - **Keep a separately sealed encrypted credential export in the 4-of-6 recovery kit** so a rebuilt

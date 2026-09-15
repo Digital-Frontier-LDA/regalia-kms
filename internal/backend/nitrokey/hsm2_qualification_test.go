@@ -40,7 +40,7 @@ func (qualNoSecureChannel) Establish(context.Context, string, string) error { re
 //	REGALIA_QUAL_CONTROL=1     assert the SoftHSM-known outcomes instead of only recording them,
 //	                          so this instrument is falsifiable on a token whose answers are known.
 //
-// The SoftHSM control (kms/e2e/softhsm-pkcs11.sh shapes a matching token) proves the instrument
+// The SoftHSM control (e2e/softhsm-pkcs11.sh shapes a matching token) proves the instrument
 // reads what it claims: a SoftHSM-generated key reports local, an imported key does not, and there
 // is no device certificate. Pointed at a Nitrokey, the same calls record the real answers.
 func TestNitrokeyHSM2Qualification(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 )
 
 // The other half of the pair. See TestKMSURLAcceptsExactlyTheOriginForms in
-// kms/adapters/sops/cmd/regalia-sops-kms: the same rule is implemented twice across a module boundary
+// adapters/sops/cmd/regalia-sops-kms: the same rule is implemented twice across a module boundary
 // that forbids sharing, so the same table is asserted on both sides. A divergence now fails a test
 // instead of surfacing as a config that works for one component and not the other.
 func TestSinkURLRuleMatchesTheAdapter(t *testing.T) {

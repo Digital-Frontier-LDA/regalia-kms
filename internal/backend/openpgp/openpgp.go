@@ -41,7 +41,7 @@
 // It does not talk to a card, and it must not. Both
 // TestOnlyBackendPackagesImportDeviceLibraries and TestNoPackageShellsOut apply to it, and this
 // package appears on neither allowlist — a name split across a line break is not a citation, so
-// they are written out whole here on purpose (kms/tests/test_named_tests_exist.py matches exactly).
+// they are written out whole here on purpose (tests/test_named_tests_exist.py matches exactly).
 // The Driver and Card interfaces in provider.go are a SEAM that the daemon does not wire. Every
 // card behaviour THIS package's tests reason about is MODELLED by a test double. The driver that
 // implements the seam (openpgp/driver over openpgp/pcsc) is qualified separately against a real
