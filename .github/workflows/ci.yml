@@ -1,0 +1,58 @@
+# Build, test, and vulnerability scan for the Go module. Self-contained; least-privilege.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install PC/SC dev headers (the -tags piv / OpenPGP cgo build needs libpcsclite)
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+
+      - name: gofmt (formatting is not optional)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would rewrite these files:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build (default + piv tag)
+        run: |
+          go build ./...
+          go build -tags piv ./...
+
+      - name: test (both modules, race + vet)
+        run: |
+          go test -race ./...
+          ( cd adapters/sops && go test -race ./... )
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Install govulncheck (pinned)
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+      - name: Scan both modules for known-vulnerable, reachable dependencies
+        run: |
+          govulncheck ./...
+          ( cd adapters/sops && govulncheck ./... )
