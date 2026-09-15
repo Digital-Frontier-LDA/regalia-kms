@@ -1,0 +1,1095 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Regalia KMS API",
+    "version": "1.0.0",
+    "description": "Purpose-shaped hardware-backed cryptographic operations. Version 1 is a contract; no production implementation is implied."
+  },
+  "servers": [
+    {
+      "url": "https://kms.example.invalid"
+    }
+  ],
+  "security": [
+    {
+      "mutualTLS": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "health"
+    },
+    {
+      "name": "operations"
+    },
+    {
+      "name": "secrets"
+    },
+    {
+      "name": "objects"
+    }
+  ],
+  "paths": {
+    "/v1/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "tags": [
+          "health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Process is alive; contains no dependency detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "tags": [
+          "health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Required dependencies are ready; contains no dependency detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "One or more required dependencies are unavailable; contains no detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "tags": [
+          "health"
+        ],
+        "summary": "Operational metrics in Prometheus text exposition format.",
+        "description": "Requires an authenticated client whose SPIFFE identity is listed in metrics_reader_principals. Label values are drawn only from static configuration (route paths, custody-manifest device ids, fixed enums) \u2014 never from request data.",
+        "responses": {
+          "200": {
+            "description": "The current metric series.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No verified client identity."
+          },
+          "403": {
+            "description": "The authenticated identity is not a configured metrics reader."
+          }
+        }
+      }
+    },
+    "/v1/operations/certificate-sign": {
+      "post": {
+        "operationId": "certificateSign",
+        "tags": [
+          "operations"
+        ],
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal context.nonce; every value is accepted at most once.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnwrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized unwrapped data key.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidOperation"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Sign a certificate request",
+        "description": "Issues a certificate from a PKCS#10 CSR in DER, at most 8 KiB. The CSR is a request, not an instruction: the issuer profile decides the namespace, lifetime and key usage."
+      }
+    },
+    "/v1/operations/key-agreement": {
+      "post": {
+        "operationId": "keyAgreement",
+        "tags": [
+          "operations"
+        ],
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal context.nonce; every value is accepted at most once.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnwrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized unwrapped data key.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidOperation"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Derive a shared key",
+        "description": "Performs ECDH against a peer public key in PKIX DER, at most 4 KiB, and returns a 32-byte key derived through HKDF-SHA256 bound to the request context. The raw shared secret is never returned."
+      }
+    },
+    "/v1/operations/release-secret": {
+      "post": {
+        "operationId": "releaseSecret",
+        "tags": [
+          "operations"
+        ],
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal context.nonce; every value is accepted at most once.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseSecretRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized secret plaintext.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidOperation"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "summary": "Release an enveloped secret",
+        "description": "Unwraps a regalia-envelope-v2 envelope of at most 64 KiB and returns the secret plaintext. The envelope must belong to the object the route authorised."
+      }
+    },
+    "/v1/operations/seal-envelope": {
+      "post": {
+        "operationId": "sealEnvelope",
+        "tags": [
+          "operations"
+        ],
+        "summary": "Produce a regalia-envelope-v2 document for a secret the caller encrypted locally.",
+        "description": "The request carries the assembled parts (ciphertext, nonce, data key) and never the plaintext. The KMS proves possession of the data key by a local AEAD round-trip, then wraps the key against the object's commissioned KEK. The response is the envelope document; the KMS stores no copy.",
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal context.nonce; every value is accepted at most once.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SealEnvelopeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The sealed envelope.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/v1/operations/sign": {
+      "post": {
+        "operationId": "sign",
+        "tags": [
+          "operations"
+        ],
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal context.nonce; every value is accepted at most once.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidOperation"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/operations/unwrap": {
+      "post": {
+        "operationId": "unwrapDataKey",
+        "tags": [
+          "operations"
+        ],
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal context.nonce; every value is accepted at most once.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnwrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized unwrapped data key.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidOperation"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/operations/wrap": {
+      "post": {
+        "operationId": "wrapDataKey",
+        "tags": [
+          "operations"
+        ],
+        "parameters": [
+          {
+            "name": "X-Request-ID",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must exactly equal context.nonce; every value is accepted at most once.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized hardware-wrapped data key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Denied"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidOperation"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "mutualTLS": {
+        "type": "mutualTLS",
+        "description": "Client certificate mapped to a workload principal."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "code",
+          "message",
+          "retryable"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "enum": [
+              "INVALID_ARGUMENT",
+              "UNAUTHENTICATED",
+              "DENIED",
+              "NOT_FOUND",
+              "CONFLICT",
+              "INVALID_OPERATION",
+              "BACKEND_UNAVAILABLE",
+              "DEPENDENCY_UNAVAILABLE",
+              "RESOURCE_EXHAUSTED",
+              "CANCELED",
+              "DEADLINE_EXCEEDED",
+              "INTERNAL"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "ok",
+              "unavailable"
+            ]
+          }
+        }
+      },
+      "ObjectID": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]{2,62}$"
+      },
+      "OperationContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "environment",
+          "purpose",
+          "expires_at",
+          "nonce"
+        ],
+        "properties": {
+          "environment": {
+            "enum": [
+              "production",
+              "staging",
+              "development"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{2,62}$"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "nonce": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          },
+          "subject": {
+            "type": "string",
+            "maxLength": 256
+          }
+        }
+      },
+      "OperationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "operation_id",
+          "object_id",
+          "content_type",
+          "result_base64"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_id": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "result_base64": {
+            "type": "string",
+            "maxLength": 1400000
+          }
+        }
+      },
+      "PublicKeyResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "object_id",
+          "algorithm",
+          "format",
+          "public_key_base64",
+          "fingerprint"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "object_id": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "algorithm": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "format": {
+            "enum": [
+              "spki-der",
+              "openssh",
+              "x509-der"
+            ]
+          },
+          "public_key_base64": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      },
+      "ReleaseSecretRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "context",
+          "format",
+          "payload_base64"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/OperationContext"
+          },
+          "format": {
+            "const": "regalia-envelope-v2"
+          },
+          "payload_base64": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "SealEnvelopeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object_id",
+          "context",
+          "format",
+          "ciphertext_base64",
+          "nonce_base64",
+          "data_key_base64"
+        ],
+        "properties": {
+          "object_id": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "context": {
+            "$ref": "#/components/schemas/OperationContext"
+          },
+          "format": {
+            "type": "string",
+            "const": "regalia-envelope-v2"
+          },
+          "ciphertext_base64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 24,
+            "maxLength": 1400000,
+            "description": "AES-256-GCM ciphertext the caller produced locally; smallest is a tag over one byte."
+          },
+          "nonce_base64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 16,
+            "maxLength": 16,
+            "description": "The 12-byte GCM nonce."
+          },
+          "data_key_base64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "minLength": 44,
+            "maxLength": 44,
+            "description": "The 32-byte data key; the only secret material on the wire, under mTLS."
+          }
+        }
+      },
+      "SecretResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "operation_id",
+          "secret_id",
+          "content_type",
+          "value_base64"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "secret_id": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "value_base64": {
+            "type": "string",
+            "maxLength": 1400000
+          }
+        }
+      },
+      "SignRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object_id",
+          "context",
+          "content_type",
+          "payload_base64"
+        ],
+        "properties": {
+          "object_id": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "context": {
+            "$ref": "#/components/schemas/OperationContext"
+          },
+          "content_type": {
+            "enum": [
+              "application/vnd.cosmos.tx+protobuf",
+              "application/vnd.regalia.release-manifest+json",
+              "application/ssh-signature-input",
+              "application/pkix-certification-request",
+              "application/octet-stream"
+            ]
+          },
+          "payload_base64": {
+            "type": "string",
+            "maxLength": 1400000,
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          }
+        }
+      },
+      "UnwrapRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object_id",
+          "context",
+          "format",
+          "wrapped_data_key_base64"
+        ],
+        "properties": {
+          "object_id": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "context": {
+            "$ref": "#/components/schemas/OperationContext"
+          },
+          "format": {
+            "enum": [
+              "sops-pgp",
+              "regalia-envelope-v2"
+            ]
+          },
+          "wrapped_data_key_base64": {
+            "type": "string",
+            "maxLength": 65536,
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          },
+          "envelope_aad_base64": {
+            "type": "string",
+            "maxLength": 16384,
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          }
+        }
+      },
+      "WrapRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "object_id",
+          "context",
+          "format",
+          "plaintext_data_key_base64"
+        ],
+        "properties": {
+          "object_id": {
+            "$ref": "#/components/schemas/ObjectID"
+          },
+          "context": {
+            "$ref": "#/components/schemas/OperationContext"
+          },
+          "format": {
+            "enum": [
+              "regalia-envelope-v2"
+            ]
+          },
+          "plaintext_data_key_base64": {
+            "type": "string",
+            "maxLength": 5464,
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          },
+          "envelope_aad_base64": {
+            "type": "string",
+            "maxLength": 16384,
+            "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed or invalid request.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthenticated": {
+        "description": "No valid workload identity.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Denied": {
+        "description": "Identity or policy denied the request.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Logical object not found or not visible to this principal.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Idempotency/replay nonce already consumed or durable state conflict.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "InvalidOperation": {
+        "description": "Operation is incompatible with object purpose or policy.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "Required backend, policy, registry, audit, or state dependency is unavailable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

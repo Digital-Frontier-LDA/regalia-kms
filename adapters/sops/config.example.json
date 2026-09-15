@@ -1,0 +1,9 @@
+{
+  "socket_path": "/run/regalia-sops-kms/service.sock",
+  "kms_url": "https://kms.service.internal:8443",
+  "server_name": "kms.service.internal",
+  "ca_path": "/run/credentials/regalia-sops-kms.service/kms-ca.pem",
+  "certificate_path": "/run/credentials/regalia-sops-kms.service/workload-cert.pem",
+  "private_key_path": "/run/credentials/regalia-sops-kms.service/workload-key.pem",
+  "timeout": "15s"
+}

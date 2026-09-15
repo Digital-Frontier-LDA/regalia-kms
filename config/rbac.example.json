@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "principals": [
+    {
+      "uri": "spiffe://regalia/workload/release-production",
+      "grants": [
+        {
+          "objects": ["release-signing-key"],
+          "operations": ["sign"],
+          "environments": ["production"]
+        }
+      ]
+    }
+  ]
+}

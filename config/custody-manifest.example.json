@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "manifest_id": "regalia-company-custody",
+  "generated_at": "2026-09-03T00:00:00Z",
+  "objects": [
+    {
+      "id": "production-wallet-signer",
+      "name": "Production Cosmos wallet signer",
+      "kind": "asymmetric-key",
+      "classification": "critical",
+      "environment": "production",
+      "owner": "treasury",
+      "purpose": "cosmos-transaction",
+      "custody": "direct-hardware",
+      "algorithm": "secp256k1",
+      "operations": ["sign"],
+      "policy_id": "cosmos-hot-wallet",
+      "bindings": [
+        {
+          "site": "sitea",
+          "backend": "nitrokey-pkcs11",
+          "device_id": "nitrokey-sitea",
+          "object_id": "01",
+          "public_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "planned"
+        },
+        {
+          "site": "siteb",
+          "backend": "nitrokey-pkcs11",
+          "device_id": "nitrokey-siteb",
+          "object_id": "01",
+          "public_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "planned"
+        }
+      ],
+      "recovery": {
+        "mode": "shamir-4-of-6",
+        "authority_id": "company-root-2026",
+        "minimum_replicas": 2,
+        "status": "planned"
+      },
+      "rotation": {"maximum_age_days": 365, "last_rotated": null},
+      "migration": {"status": "planned", "source": "external:tx-signer", "owner_repository": "example-service"},
+      "verification": {"status": "planned", "last_verified": null, "evidence": "issue:33"}
+    },
+    {
+      "id": "release-signing-key",
+      "name": "Release signing key",
+      "kind": "asymmetric-key",
+      "classification": "restricted",
+      "environment": "production",
+      "owner": "release-engineering",
+      "purpose": "release-artifact",
+      "custody": "direct-hardware",
+      "algorithm": "p256",
+      "operations": ["sign"],
+      "policy_id": "release-signing",
+      "bindings": [
+        {
+          "site": "sitea",
+          "backend": "yubikey-piv",
+          "device_id": "yubikey-sitea",
+          "object_id": "9c",
+          "public_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "state": "planned",
+          "pin_policy": "once",
+          "touch_policy": "never"
+        },
+        {
+          "site": "siteb",
+          "backend": "yubikey-piv",
+          "device_id": "yubikey-siteb",
+          "object_id": "9c",
+          "public_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "state": "planned",
+          "pin_policy": "once",
+          "touch_policy": "never"
+        }
+      ],
+      "recovery": {
+        "mode": "shamir-4-of-6",
+        "authority_id": "company-root-2026",
+        "minimum_replicas": 2,
+        "status": "planned"
+      },
+      "rotation": {"maximum_age_days": 365, "last_rotated": null},
+      "migration": {"status": "planned", "source": "organization:release-pipelines"},
+      "verification": {"status": "planned", "last_verified": null, "evidence": "issue:33"}
+    },
+    {
+      "id": "deployment-api-token",
+      "name": "Production deployment API token",
+      "kind": "api-token",
+      "classification": "restricted",
+      "environment": "production",
+      "owner": "platform",
+      "purpose": "deployment-api",
+      "custody": "hardware-envelope",
+      "algorithm": "opaque",
+      "operations": ["release-secret"],
+      "policy_id": "production-deployer",
+      "bindings": [
+        {
+          "site": "sitea",
+          "backend": "nitrokey-pkcs11",
+          "device_id": "nitrokey-sitea",
+          "object_id": "20",
+          "kek_algorithm": "rsa2048",
+          "kek_version": "1",
+          "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "state": "planned"
+        },
+        {
+          "site": "siteb",
+          "backend": "nitrokey-pkcs11",
+          "device_id": "nitrokey-siteb",
+          "object_id": "20",
+          "kek_algorithm": "rsa2048",
+          "kek_version": "1",
+          "public_fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "state": "planned"
+        }
+      ],
+      "recovery": {
+        "mode": "shamir-4-of-6",
+        "authority_id": "company-root-2026",
+        "minimum_replicas": 2,
+        "status": "planned"
+      },
+      "rotation": {"maximum_age_days": 90, "last_rotated": null},
+      "migration": {"status": "planned", "source": "organization:ci-cd"},
+      "verification": {"status": "planned", "last_verified": null, "evidence": "issue:33"}
+    },
+    {
+      "id": "github-org-admin-fido",
+      "name": "GitHub organization administrator FIDO continuity",
+      "kind": "fido-credential",
+      "classification": "critical",
+      "environment": "production",
+      "owner": "security",
+      "purpose": "github-admin-login",
+      "custody": "fido-multi-enrollment",
+      "algorithm": "device-managed",
+      "operations": ["authenticate"],
+      "policy_id": "github-org-admin",
+      "bindings": [
+        {
+          "site": "custodian-a",
+          "backend": "fido2",
+          "device_id": "fido-admin-a",
+          "object_id": "github-enrollment-a",
+          "public_fingerprint": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "state": "planned"
+        },
+        {
+          "site": "custodian-b",
+          "backend": "fido2",
+          "device_id": "fido-admin-b",
+          "object_id": "github-enrollment-b",
+          "public_fingerprint": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "state": "planned"
+        }
+      ],
+      "recovery": {"mode": "multi-enrollment", "minimum_replicas": 2, "status": "planned"},
+      "rotation": {"maximum_age_days": 730, "last_rotated": null},
+      "migration": {"status": "planned", "source": "organization:github"},
+      "verification": {"status": "planned", "last_verified": null, "evidence": "issue:33"}
+    }
+  ]
+}

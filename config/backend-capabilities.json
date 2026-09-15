@@ -1,0 +1,86 @@
+{
+  "fido2": {
+    "device-managed": [
+      "authenticate"
+    ]
+  },
+  "nitrokey-pkcs11": {
+    "aes-256": [
+      "unwrap"
+    ],
+    "ed25519": [
+      "sign"
+    ],
+    "opaque": [
+      "release-secret",
+      "seal-envelope"
+    ],
+    "p256": [
+      "certificate-sign",
+      "key-agreement",
+      "sign"
+    ],
+    "p384": [
+      "certificate-sign",
+      "key-agreement",
+      "sign"
+    ],
+    "rsa2048": [
+      "certificate-sign",
+      "sign",
+      "unwrap",
+      "wrap"
+    ],
+    "rsa3072": [
+      "certificate-sign",
+      "sign",
+      "unwrap",
+      "wrap"
+    ],
+    "rsa4096": [
+      "certificate-sign",
+      "sign",
+      "unwrap",
+      "wrap"
+    ],
+    "secp256k1": [
+      "sign"
+    ]
+  },
+  "yubikey-openpgp": {
+    "cv25519": [
+      "unwrap"
+    ],
+    "ed25519": [
+      "sign"
+    ],
+    "rsa2048": [
+      "sign",
+      "unwrap"
+    ],
+    "rsa3072": [
+      "sign",
+      "unwrap"
+    ],
+    "rsa4096": [
+      "sign",
+      "unwrap"
+    ]
+  },
+  "yubikey-piv": {
+    "p256": [
+      "certificate-sign",
+      "sign"
+    ],
+    "p384": [
+      "certificate-sign",
+      "sign"
+    ],
+    "rsa2048": [
+      "certificate-sign",
+      "sign",
+      "unwrap",
+      "wrap"
+    ]
+  }
+}

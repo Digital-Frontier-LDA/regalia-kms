@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "policies": [
+    {
+      "id": "cosmos-hot-wallet",
+      "object_id": "production-wallet-signer",
+      "purpose": "cosmos-transaction",
+      "environment": "production",
+      "operation": "sign",
+      "algorithm": "secp256k1",
+      "content_types": [
+        "application/vnd.cosmos.tx+protobuf"
+      ],
+      "max_payload_bytes": 100000,
+      "max_future_seconds": 300,
+      "required_approvals": 1,
+      "approvers": [
+        "spiffe://regalia/approver/treasury"
+      ],
+      "cosmos": {
+        "chain_ids": [
+          "cosmoshub-4"
+        ],
+        "account_numbers": [
+          42
+        ],
+        "message_types": [
+          "/cosmos.bank.v1beta1.MsgSend"
+        ],
+        "sources": [
+          "cosmos1replace-with-wallet-address"
+        ],
+        "destinations": [
+          "cosmos1replace-with-approved-destination"
+        ],
+        "max_gas_limit": 500000,
+        "max_fee": {
+          "uatom": 10000
+        },
+        "max_per_transaction": {
+          "uatom": 1000000
+        },
+        "max_per_day": {
+          "uatom": 5000000
+        }
+      }
+    },
+    {
+      "id": "release-signing",
+      "object_id": "release-signing-key",
+      "purpose": "release-artifact",
+      "environment": "production",
+      "operation": "sign",
+      "algorithm": "p256",
+      "content_types": [
+        "application/vnd.regalia.digest"
+      ],
+      "max_payload_bytes": 32,
+      "max_future_seconds": 300,
+      "required_approvals": 1,
+      "approvers": [
+        "spiffe://regalia/approver/release"
+      ]
+    },
+    {
+      "id": "production-deployer",
+      "object_id": "deployment-api-token",
+      "purpose": "deployment-api",
+      "environment": "production",
+      "operation": "release-secret",
+      "algorithm": "opaque",
+      "content_types": [
+        "application/octet-stream"
+      ],
+      "max_payload_bytes": 65536,
+      "max_future_seconds": 300,
+      "required_approvals": 0,
+      "approvers": [
+        "spiffe://regalia/approver/platform"
+      ]
+    },
+    {
+      "id": "github-org-admin",
+      "object_id": "github-org-admin-fido",
+      "purpose": "github-admin-login",
+      "environment": "production",
+      "operation": "authenticate",
+      "algorithm": "device-managed",
+      "content_types": [
+        "application/octet-stream"
+      ],
+      "max_payload_bytes": 1024,
+      "max_future_seconds": 300,
+      "required_approvals": 2,
+      "approvers": [
+        "spiffe://regalia/approver/security",
+        "spiffe://regalia/approver/platform"
+      ]
+    }
+  ]
+}

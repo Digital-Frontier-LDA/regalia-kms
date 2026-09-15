@@ -1,0 +1,31 @@
+# Secret scanning for a repository whose entire purpose is key custody.
+#
+# The scan runs over the whole tree, not a diff: a secret removed in a later commit is still
+# published. Policy: allowlists describe CONTENT only — NO ALLOWLIST MAY NAME A PATH. A path
+# allowlist silently blinds an entire file, so a real key planted beside a benign construct would
+# pass. A content pattern narrow enough to name the benign construct cannot do that.
+#
+# Before adding an entry: the finding is probably prose or a fixture, and COMPOSITION is the fix.
+# Write a literal header as "-----BEGIN " + "PRIVATE KEY-----" and the scanner does not fire while
+# the assembled value is byte-identical. An entry here is only for a literal that cannot be composed
+# away and is pinned by exact value.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "PKCS#11 key-type constants: `keyType == pkcs11.CKK_RSA` reads as high entropy to the generic rule"
+regexTarget = "line"
+regexes = ['''keyType == pkcs11\.CKK_[A-Z0-9_]+''']
+
+[[allowlists]]
+description = "Sequential-hex placeholder used as a test idempotency key: a counting sequence, not a credential"
+regexes = ['''^1234567890abcdef$''']
+
+[[allowlists]]
+description = "wrapped_data_key_base64 test fixtures, pinned by exact value; each decodes to short ASCII, none is secret"
+regexes = [
+    '''^U0VOU0lUSVZFX0NBTkFSWQ==$''',
+    '''^c2VjcmV0LWVudmVsb3BlLWZpeHR1cmU=$''',
+    '''^d3JhcHBlZA==$''',
+]

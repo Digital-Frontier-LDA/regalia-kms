@@ -1,0 +1,6 @@
+{
+  "approvers": {
+    "spiffe://regalia/approver/treasury": "TFvcHBsZWFzZXJlcGxhY2V0aGlzd2l0aGFyZWFsa2V5MDE=",
+    "spiffe://regalia/approver/security": "UGxlYXNlcmVwbGFjZXRoaXN3aXRoYXJlYWxrZXkwMDAwMDI="
+  }
+}

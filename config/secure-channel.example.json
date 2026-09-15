@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "devices": [
+    {
+      "device_serial": "DENK0200000",
+      "verified_by": "custodian-a",
+      "verified_at": "2026-09-01T09:00:00Z",
+      "expires_at": "2026-12-01T09:00:00Z",
+      "firmware": "6.6",
+      "secure_messaging_established": true
+    }
+  ]
+}

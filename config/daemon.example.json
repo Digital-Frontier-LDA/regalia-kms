@@ -1,0 +1,32 @@
+{
+  "listen_address": "0.0.0.0:8443",
+  "registry_path": "config/custody-manifest.example.json",
+  "rbac_policy_path": "config/rbac.example.json",
+  "policy_path": "config/policy.example.json",
+  "policy_state_path": "/var/lib/regalia-kms/policy-state.jsonl",
+  "site": "sitea",
+  "operation_timeout": "15s",
+  "shutdown_timeout": "10s",
+  "max_concurrent_operations": 4,
+  "tls_certificate_path": "/etc/regalia-kms/tls/server.crt",
+  "tls_private_key_path": "/etc/regalia-kms/tls/server.key",
+  "tls_client_ca_path": "/etc/regalia-kms/tls/clients.pem",
+  "issuer_certificate_path": "/etc/regalia-kms/pki/staging-ca.crt",
+  "issuer_dns_suffixes": [
+    "staging.internal"
+  ],
+  "issuer_validity": "2160h",
+  "pkcs11_module_path": "/usr/lib/opensc-pkcs11.so",
+  "secure_channel_evidence_path": "/etc/regalia-kms/evidence/secure-channel.json",
+  "pin_paths": {
+    "hsm-sitea": "/run/credentials/regalia-kms.service/hsm-sitea.pin"
+  },
+  "audit_journal_path": "/var/lib/regalia-kms/audit.jsonl",
+  "audit_sink_url": "https://audit.internal",
+  "fencing_lease_path": "/run/regalia-kms/site-lease.json",
+  "fencing_state_path": "/var/lib/regalia-kms/epochs.jsonl",
+  "fencing_public_key_path": "/etc/regalia-kms/fencing/lease-signing.pub",
+  "metrics_reader_principals": [
+    "spiffe://regalia/operator/monitoring"
+  ]
+}
