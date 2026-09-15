@@ -40,7 +40,7 @@ func clientContentAAD(objectID string, bindingContext []byte) []byte {
 // does the whole round trip against one -- wrap the data key on the token, assemble the envelope,
 // then release it back through the same token and require the plaintext.
 //
-// Gated on REGALIA_PKCS11_E2E_MODULE/_SERIAL, set by kms/e2e/softhsm-pkcs11.sh, like the other
+// Gated on REGALIA_PKCS11_E2E_MODULE/_SERIAL, set by e2e/softhsm-pkcs11.sh, like the other
 // concrete-module tests here.
 func TestSealOnConcretePKCS11ThenReleaseFromIt(t *testing.T) {
 	modulePath, serial := os.Getenv("REGALIA_PKCS11_E2E_MODULE"), os.Getenv("REGALIA_PKCS11_E2E_SERIAL")
@@ -67,7 +67,7 @@ func TestSealOnConcretePKCS11ThenReleaseFromIt(t *testing.T) {
 		Algorithm: "opaque", KEKAlgorithm: "rsa2048", KEKVersion: "1",
 		Binding: registry.Binding{
 			Site: "e2e", Backend: "nitrokey-pkcs11", DeviceID: "softhsm-e2e", DeviceSerial: serial,
-			// id 02 is the rsa2048 key kms/e2e/softhsm-pkcs11.sh provisions
+			// id 02 is the rsa2048 key e2e/softhsm-pkcs11.sh provisions
 			// (--keypairgen --key-type rsa:2048 --id 02). The PIN is that script's too.
 			DevAuthFingerprint: devAuth, ObjectID: "02", KEKAlgorithm: "rsa2048", KEKVersion: "1",
 			State: "active",
@@ -113,7 +113,7 @@ func TestSealOnConcretePKCS11ThenReleaseFromIt(t *testing.T) {
 		t.Fatalf("SEAL FAILED ON A REAL MODULE: %v\n"+
 			"The wrap produced nothing a card accepted, which no double would have shown.\n"+
 			"If the token was provisioned elsewhere, note that this test is coupled to "+
-			"kms/e2e/softhsm-pkcs11.sh: object id %q and the PIN it sets. Those are declared in both "+
+			"e2e/softhsm-pkcs11.sh: object id %q and the PIN it sets. Those are declared in both "+
 			"places and only a comment ties them, so a token built differently fails here rather "+
 			"than at the card.", err, route.Binding.ObjectID)
 	}

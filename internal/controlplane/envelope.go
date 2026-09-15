@@ -9,7 +9,7 @@
 // the fencing epoch history — and a site that cannot recover that state after a loss is a site
 // that loses its own history. So the durable state is exported SEPARATELY, as an encrypted,
 // integrity-checked application artifact carried out through the custody procedure, and the
-// machine image stays forbidden. kms/deploy/proxmox/README.md states the contract this package
+// machine image stays forbidden. deploy/proxmox/README.md states the contract this package
 // implements: runtime credentials, vTPM state, memory, swap, core dumps, PINs, plaintext
 // outputs and token state are excluded; rebuild recovers operational authority through the
 // witnessed custody procedure, never by restoring an image.
@@ -190,7 +190,7 @@ func deriveKey(shared, ephemeralPublic, recipientPublic []byte) ([]byte, error) 
 
 // Recipient is a parsed custody-authority public key: the ECDH half for sealing, plus the
 // digest an operator transcribes into the custody record — the same fingerprint discipline as
-// the commissioning evidence key in kms/deploy/proxmox.
+// the commissioning evidence key in deploy/proxmox.
 type Recipient struct {
 	PublicKey *ecdh.PublicKey
 	// Digest is the lowercase hex SHA-256 of the key's DER encoding.

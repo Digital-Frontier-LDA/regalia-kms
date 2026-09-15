@@ -2,7 +2,7 @@ package registry
 
 // ROUND 5 OF THE #237 MUTATION SWEEP — REGISTRY LAYER.
 //
-// Re-derived on origin/main with kms/tools/guardenum: 120 sites / 164 operands
+// Re-derived on origin/main with tools/guardenum: 120 sites / 164 operands
 // / 328 operand-directions. Each operand was neutralised (the identity of its
 // joiner: `(false && x)` inside an `||` chain, `(true || x)` inside an `&&`
 // chain) and dominated (the annihilator, forcing the whole chain), one at a

@@ -13,8 +13,8 @@ import (
 //
 // Three things have to agree: OBSERVABILITY.md (the promise), the alert rules (what pages),
 // and this package (what is actually rendered). Two of the three pairs were already checked
-// -- kms/tests/test_alert_rules.py pins rules against the document, and
-// kms/tests/test_alert_firing.py drives a fault at every rule -- but the third pair was not.
+// -- tests/test_alert_rules.py pins rules against the document, and
+// tests/test_alert_firing.py drives a fault at every rule -- but the third pair was not.
 //
 // TestRenderedSeriesCarryTheirValueAndFreshness (in telemetry_test.go) reads a list written
 // out by hand there, so "promised" meant "remembered", not "documented". A series added to the

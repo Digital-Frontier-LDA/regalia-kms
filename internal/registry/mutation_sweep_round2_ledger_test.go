@@ -2,7 +2,7 @@ package registry
 
 // ROUND 2 OF THE #237 MUTATION SWEEP — REGISTRY LAYER (REVISED).
 //
-// Re-derived on origin/main (c976467) with kms/tools/guardenum, built in
+// Re-derived on origin/main (c976467) with tools/guardenum, built in
 // this worktree:
 //
 //   guardenum sha256: 4c135057fd6c486920a03da3074db7483fceaf1b5597b11ad787f4aecd14218a
@@ -28,11 +28,11 @@ package registry
 // the row's own line is restored; an edit on the row's own line that
 // changes `Site` makes the guard red.
 //
-// IDIOMATOLOGY. The shared stripper in kms/internal/sweeptext (DEV5, #379,
+// IDIOMATOLOGY. The shared stripper in internal/sweeptext (DEV5, #379,
 // drift-pinned by #381) handles all five documented wrapper shapes
 // including the single-operand form. The per-line strip in the drift
 // guard takes the same path the audit package takes in
-// kms/internal/audit/ledger_test.go:466 — split on \n, strip the line
+// internal/audit/ledger_test.go:466 — split on \n, strip the line
 // the row cites, compare against the recorded `Site`.
 //
 // THE MASKED BUCKET. Round-1 used NEUTRAL polarity `(false && x)` for
@@ -550,7 +550,7 @@ func TestSweepLedgerIDsAreUnique(t *testing.T) {
 // (rewriting text that does not carry a wrapper) — in which case the
 // live-source comparison would silently pass against rewritten text.
 //
-// Sweeptext is shared via kms/internal/sweeptext (DEV5, #379, drift-pinned
+// Sweeptext is shared via internal/sweeptext (DEV5, #379, drift-pinned
 // by #381); the falsifier shapes in that package's own test file are
 // the canonical list. The subsets exercised here are the forms the
 // round-2 sweep harness and round-2 control arm apply.

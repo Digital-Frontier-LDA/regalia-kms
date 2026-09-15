@@ -105,7 +105,7 @@ func TestReadinessFailsOnBacklogEvenWhenTheCollectorIsHealthy(t *testing.T) {
 	// threshold for a backlog that no longer existed when it looked.
 	//
 	// Measured at 1 failure in 300 runs before this line, 0 in 300 after. It fires on CI often
-	// enough to have blocked #216, a PR whose only change was one file in kms/adapters/sops.
+	// enough to have blocked #216, a PR whose only change was one file in adapters/sops.
 	//
 	// close() stops the loop without draining (events stay durable in the journal), and Ready
 	// consults only backlog() and the sink -- never `stopped` -- so the property under test is

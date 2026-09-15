@@ -65,7 +65,7 @@ func (h *recordingHandler) seen() []string {
 //
 // #58 asked for a redaction test: capture the logger, drive the daemon, grep the buffer for a cert
 // serial, a peer IP, a raw payload. That premise does not hold -- there is no logging in
-// kms/internal at all, and the daemon's only log statements are eight slog calls in main.go at
+// internal at all, and the daemon's only log statements are eight slog calls in main.go at
 // startup, emitting digests, a site name and config paths. A substring grep would have searched an
 // empty buffer, and it is a weak instrument besides: a fixed list only catches leaks of those exact
 // values on the paths a test happens to drive, so a later slog.Info("request", "principal", p)

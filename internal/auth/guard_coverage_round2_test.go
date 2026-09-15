@@ -17,14 +17,14 @@ import (
 // guard_coverage_test.go closed the first set. A second sweep neutered one operand at a time
 // (`false && <operand>` for a refusal operand, `true || <operand>` for a conjunct whose FALSE value
 // is the refusal) and the whole kms module — every package `go list ./...` reports when run from
-// the `kms/` module root — stayed green for every guard below. The package count is deliberately
+// the `` module root — stayed green for every guard below. The package count is deliberately
 // not written here: it was 25 when this was measured, nothing re-derives it, and a comment cannot
 // carry the date that would tell a reader when it was last true.
 //
 // The directory is part of the command, not a detail. There is no go.mod at the repository root, so
 // `go list ./...` run from there FAILS ("directory prefix . does not contain main module") rather
 // than reporting a different number -- a published command that answers the question only from one
-// directory has not made the claim re-derivable. And `kms/adapters/sops` is a SEPARATE module: it
+// directory has not made the claim re-derivable. And `adapters/sops` is a SEPARATE module: it
 // is not among those packages and was not part of this sweep. Four of
 // them do not merely admit a bad input when they are gone: they PANIC, because the operand is what
 // stops a nil from reaching the dereference on the next line. Those tests recover deliberately, so

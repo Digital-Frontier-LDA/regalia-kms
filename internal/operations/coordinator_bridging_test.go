@@ -55,7 +55,7 @@ func bridgeEncodeMsgSend(from, to, denom string, amount uint64) []byte {
 	// A DECIMAL STRING, as the upstream protos encode it. This was a varint, and it is the THIRD
 	// copy of that assumption in the repository -- the decoder required it, the policy package's
 	// test encoder produced it, and so did this one. Three agreeing halves and no cosmos node
-	// among them. See kms/internal/policy/testdata for bytes from the generated encoder.
+	// among them. See internal/policy/testdata for bytes from the generated encoder.
 	coin.Write(bridgeEncodeString(2, strconv.FormatUint(amount, 10)))
 	var buf bytes.Buffer
 	buf.Write(bridgeEncodeString(1, from))

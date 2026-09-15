@@ -1,7 +1,7 @@
 package fencing
 
 // SOLE-DETECTORS for constructor-nil refusal guards the 2026-09-07 sweep of
-// kms/internal/fencing left UNCOVERED. The two `Open` constructors each carry
+// internal/fencing left UNCOVERED. The two `Open` constructors each carry
 // a six-operand validation chain whose only realistic sole-detector fixtures
 // are the kind each test below provides: every OTHER operand valid, only the
 // operand under test violated.

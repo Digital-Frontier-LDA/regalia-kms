@@ -14,7 +14,7 @@ package policy
 //
 // THOSE THREE FIGURES ARE THE DAY THEY WERE TAKEN, NOT THE PRESENT TENSE, and the
 // paragraph above did not say so. Re-derived 2026-09-09 over every non-test .go
-// file under kms/, with the same tool: 39 operands across 33 case sites in 11
+// file under , with the same tool: 39 operands across 33 case sites in 11
 // files. The tree gained four files' worth of this shape in between, so a reader
 // taking 24/20/7 as current is short by more than a third. The count is left
 // where it is as the record of what that change measured; what it now carries is

@@ -458,7 +458,7 @@ func Load(reader io.Reader, site string, health BackendHealth) (*Registry, error
 
 // THE DAEMON ENFORCES THE CUSTODY RULES, NOT ONLY CI.
 //
-// These sets and the redundancy rule below existed in kms/tools/custody_manifest.py and nowhere
+// These sets and the redundancy rule below existed in tools/custody_manifest.py and nowhere
 // else. That tool validates the manifest IN THE REPOSITORY during CI; the daemon loads whatever
 // file registry_path points at, which need not be that one and is not re-checked. So "a production
 // object requires at least 2 hardware bindings" — the rule that means losing one device does not
@@ -482,7 +482,7 @@ var (
 	// EVERY BINDING STATE, AS A SET, BECAUSE THREE FILES HAVE TO AGREE ON IT.
 	//
 	// This was an inline `!=` chain. Adding "revoked" for #160 changed the chain and left both
-	// config/custody-manifest.schema.json and kms/tools/custody_manifest.py behind, so the daemon
+	// config/custody-manifest.schema.json and tools/custody_manifest.py behind, so the daemon
 	// loaded a manifest CI refused -- the feature's own state could not appear in any committed
 	// manifest. Review caught it; nothing in the suite did, because a chain cannot be compared to
 	// an enum. As a set it can be, and TestBindingStatesMatchThePublishedSchema does.
@@ -509,7 +509,7 @@ var (
 	//
 	// A map to a class means a new mode cannot be added without typing one, and custodyUnclassified
 	// is the zero value, so a mode reached without a decision is refused at Load instead of assumed
-	// operable. TestEveryCustodyModeIsClassified (kms/internal/registry/custody_test.go) holds that
+	// operable. TestEveryCustodyModeIsClassified (internal/registry/custody_test.go) holds that
 	// a key cannot sit in this map without picking a class; the key-set binding to the schema is
 	// TestLoaderEnumsMatchThePublishedSchema, not this test.
 	custodyModes = map[string]custodyClass{
@@ -608,7 +608,7 @@ func validateCustody(object *custodyObject) error {
 // enrolled a second credential BEFORE the first is lost, so these rules are the whole of the
 // guarantee -- there is no recovery path behind them to fall back on.
 //
-// They lived in kms/tools/custody_manifest.py and the JSON Schema, both of which run in CI against
+// They lived in tools/custody_manifest.py and the JSON Schema, both of which run in CI against
 // the manifest in this repository. The daemon loads whatever registry_path names, which need not be
 // that file and was not re-checked, so a manifest could claim FIDO custody at the boundary while
 // listing one enrollment, or two on the same desk. See the note on custodyModes above: a rule
@@ -640,7 +640,7 @@ func validateFIDOContinuity(object *custodyObject) error {
 		sites[binding.Site] = struct{}{}
 	}
 	if len(sites) < 2 {
-		// The first clause is byte-identical to kms/tools/custody_manifest.py's message for this
+		// The first clause is byte-identical to tools/custody_manifest.py's message for this
 		// rule, so an operator who meets one of them can find the other. CI rejects a manifest and
 		// the daemon rejects the same manifest; reading those as two different problems is a wrong
 		// turn that costs an afternoon.

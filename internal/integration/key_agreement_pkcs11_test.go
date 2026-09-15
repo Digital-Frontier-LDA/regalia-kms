@@ -42,7 +42,7 @@ func TestKeyAgreementOnAConcretePKCS11Module(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// id 03 is the p256 key kms/e2e/softhsm-pkcs11.sh provisions with --usage-derive.
+	// id 03 is the p256 key e2e/softhsm-pkcs11.sh provisions with --usage-derive.
 	route := registry.Route{
 		ObjectID: "agreement-key", Purpose: "agreement", Environment: "production", Algorithm: "p256",
 		Binding: registry.Binding{

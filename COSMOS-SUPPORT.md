@@ -57,7 +57,7 @@ policy journal together through failover.
 ## Hardware qualification command
 
 The software pipeline is runnable without a token. For a staging PicoHSM2 or compatible PKCS#11
-device, [`e2e/cosmos-hardware-sign-verify.sh`](e2e/cosmos-hardware-sign-verify.sh) hashes the
+device, `e2e/cosmos-hardware-sign-verify.sh` hashes the
 generated SignDoc fixture, signs the digest through the configured secp256k1 object, and verifies
 the raw ECDSA result against the public key read from that same token. It requires explicit
 `REGALIA_COSMOS_PKCS11_MODULE`, `REGALIA_COSMOS_PKCS11_TOKEN_LABEL`, and

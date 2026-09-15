@@ -55,6 +55,6 @@ an authorization boundary.
 Validate the contract with:
 
 ```sh
-python3 -m json.tool kms/api/openapi.json >/dev/null
+python3 -m json.tool api/openapi.json >/dev/null
 python3 -m unittest kms.tests.test_openapi_contract
 ```

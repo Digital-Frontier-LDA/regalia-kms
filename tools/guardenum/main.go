@@ -73,7 +73,7 @@
 //	return a && b, nil          A boolean return is a site only as the SOLE
 //	                            result, so that the site and the value the caller
 //	                            branches on are the same thing. Re-measured over
-//	                            all non-test Go under kms/ at 7760182: 0
+//	                            all non-test Go under  at 7760182: 0
 //	                            multi-result returns whose result is a boolean
 //	                            operator.
 //	ok := a && b                An assignment defers the decision to whatever
@@ -89,7 +89,7 @@
 // hang. A run without a timeout records nothing about that operand. Infinite
 // loops and range loops have no for-clause condition and contribute no site.
 //
-// Re-measured at 7760182: all non-test Go under kms/ contains 12 for-clause
+// Re-measured at 7760182: all non-test Go under  contains 12 for-clause
 // sites / 15 operands. #237's inherited 22-package population contains 11/13;
 // the remaining two-operand loop is in tools/inventory, outside that issue's
 // scope. The issue denominator is 1405 sites / 2007 operands: its case-aware

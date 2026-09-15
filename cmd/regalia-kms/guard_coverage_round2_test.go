@@ -2,7 +2,7 @@ package main
 
 // GUARD COVERAGE, ROUND 2 (#237). The first pass over this package mutated 103 whole `if`
 // CONDITIONS to `if false && (<original>)`. This pass re-derived the population from
-// kms/tools/guardenum and swept per LEAF OPERAND: 152 sites / 165 operands, one
+// tools/guardenum and swept per LEAF OPERAND: 152 sites / 165 operands, one
 // operand-direction each, plus 10 operands in a shape guardenum does not enumerate at all.
 //
 // THE SHAPE THE ENUMERATOR CANNOT SEE. guardenum's header states that an `if` condition and a

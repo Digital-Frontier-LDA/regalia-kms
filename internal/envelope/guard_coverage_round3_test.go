@@ -1,7 +1,7 @@
 package envelope
 
 // ROUND 3 of the #237 mutation sweep over this package: 42 guard sites, 73 leaf operands,
-// enumerated with kms/tools/guardenum (go/ast) and neutralised one operand at a time against
+// enumerated with tools/guardenum (go/ast) and neutralised one operand at a time against
 // internal/envelope plus every package whose test closure reaches it (internal/operations,
 // internal/secrets, internal/integration, cmd/regalia-kms).
 //
