@@ -131,7 +131,7 @@ const splitBrainDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca49599
 // activates proves nothing about dual activation, and would pass on a broken implementation
 // for free.
 func TestACompleteHandoverNeverMakesBothSitesReady(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	start := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	clock := &splitBrainClock{now: start}
 	authority, publicKey := newSplitBrainAuthority(t)
@@ -201,7 +201,7 @@ func TestACompleteHandoverNeverMakesBothSitesReady(t *testing.T) {
 // on the wall clock, and the next cross-site grant was only issuable after that expiry — but
 // the defense-in-depth net is demonstrably absent, which is the fact #220's fix has to change.
 func TestARestoredSiteReAcceptsASupersededLeaseWhileItLasts(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	start := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	clock := &splitBrainClock{now: start}
 	authority, publicKey := newSplitBrainAuthority(t)
@@ -247,7 +247,7 @@ func TestARestoredSiteReAcceptsASupersededLeaseWhileItLasts(t *testing.T) {
 // leaves the site unable to activate until a new lease is issued. That looks like an outage and
 // is the mechanism working: a lease authorises one exact configuration, not "the site".
 func TestTheGateBindsTheLeaseToTheRegistry(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	start := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
 	clock := &splitBrainClock{now: start}
 	authority, publicKey := newSplitBrainAuthority(t)

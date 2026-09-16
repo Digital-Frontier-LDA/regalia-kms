@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -17,10 +18,17 @@ import (
 // do not exist in a checkout, and validate() is the half that decides whether the document itself
 // is coherent.
 func TestShippedAdapterExampleLoadsAndValidates(t *testing.T) {
-	// loadConfig requires an absolute path — a relative credential path would resolve against
-	// whatever directory systemd started the unit in — so resolve the checked-in example first.
-	path, err := filepath.Abs(filepath.Join("..", "..", "config.example.json"))
+	// loadConfig refuses a group- or world-writable file, and a checked-out file carries whatever
+	// mode the developer's umask left it (0664 under the 0002 umask common on user-private-group
+	// systems), so stage the example at 0600 first. t.TempDir is absolute, which loadConfig also
+	// requires — a relative credential path would resolve against whatever directory systemd
+	// started the unit in.
+	contents, err := os.ReadFile(filepath.Join("..", "..", "config.example.json"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	settings, err := loadConfig(path)

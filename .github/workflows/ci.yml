@@ -39,8 +39,13 @@ jobs:
           go build ./...
           go build -tags piv ./...
 
+      # umask 002, not the runner's 022: t.TempDir() and checked-out files take their mode from
+      # the umask, and every loader here refuses group-writable input. Fixtures that only pass
+      # because the umask happened to trim the group bit would otherwise stay green until a
+      # developer on a user-private-group system ran them (TESTING.md §13).
       - name: test (both modules, race + vet)
         run: |
+          umask 002
           go test -race ./...
           ( cd adapters/sops && go test -race ./... )
 

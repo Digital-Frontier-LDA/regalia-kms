@@ -104,7 +104,7 @@ const roundTwoDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 // different message.
 func TestOpenNamesAConfigurationFaultRatherThanReportingTheSiteFenced(t *testing.T) {
 	public, _, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	lease := filepath.Join(directory, "lease.json")
 	state := filepath.Join(directory, "epochs.jsonl")
 	for _, row := range []struct {
@@ -235,7 +235,7 @@ func TestANilStandbyAnswersNotReadyRatherThanPanicking(t *testing.T) {
 func roundTwoGate(t *testing.T, clock *time.Time) (*Gate, string, ed25519.PrivateKey, time.Time) {
 	t.Helper()
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
@@ -310,7 +310,7 @@ func TestTheGateRefusesALeaseLongerThanMaxLeaseDurationEvenThoughItIsSigned(t *t
 //     at nothing and the chain this gate wrote stops verifying.
 func TestReopeningAGateOverItsOwnJournalKeepsTheChain(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
@@ -396,7 +396,7 @@ func TestAGateThatCannotRecordTheEpochDoesNotGoActiveOnIt(t *testing.T) {
 // Falsifier: `(false && (!info.Mode().IsRegular()))`. The message becomes
 // "fencing journal integrity failure".
 func TestAnEpochJournalPathThatIsADirectoryIsUnsafeNotTampered(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "epochs.jsonl")
+	path := filepath.Join(privateTempDir(t), "epochs.jsonl")
 	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +452,7 @@ func TestAnEpochChainThatRehashesItselfIsStillRefused(t *testing.T) {
 		{"a record detached from the one before it", []epochRecord{first, sealedEpoch(2, genesisHash)}},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "epochs.jsonl")
+			path := filepath.Join(privateTempDir(t), "epochs.jsonl")
 			writeEpochChain(t, path, row.records...)
 			for _, record := range row.records {
 				if record.Hash != epochHash(record) {
@@ -521,7 +521,7 @@ func TestAnAuthorityChainThatRehashesItselfIsStillRefused(t *testing.T) {
 		{"a decision that is neither a grant nor a refusal", []GrantRecord{sealedGrant("revoked", 1, genesisHash)}},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "authority.jsonl")
+			path := filepath.Join(privateTempDir(t), "authority.jsonl")
 			writeGrantChain(t, path, row.records...)
 			for _, record := range row.records {
 				if record.Hash != grantRecordHash(record) {
@@ -574,7 +574,7 @@ func TestTheIssuerSaysWhichWayItsMemoryIsDamaged(t *testing.T) {
 		},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "issuer.json")
+			path := filepath.Join(privateTempDir(t), "issuer.json")
 			if err := os.WriteFile(path, []byte(row.contents), 0o600); err != nil {
 				t.Fatal(err)
 			}

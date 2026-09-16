@@ -149,7 +149,7 @@ func TestRegistryRoutingToAnUnservableBackendIsRefusedAtStartup(t *testing.T) {
 // This is the failure the reachability test cannot see. Nothing is unreachable here; a nil argument
 // was passed to a reachable constructor and never updated.
 func TestDaemonAttachesTheBackendHealthProbeToTheRegistry(t *testing.T) {
-	keyRegistry, err := registry.LoadFile(filepath.Join("..", "..", "config", "custody-manifest.example.json"), "sitea", nil)
+	keyRegistry, err := registry.LoadFile(shippedExample(t, "custody-manifest.example.json"), "sitea", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

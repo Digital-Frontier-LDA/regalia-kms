@@ -21,7 +21,7 @@ const issueDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 // way the feature already was: configurable, tested, and unable to make any site active.
 func TestAnIssuedLeaseIsAcceptedByTheDaemonThatVerifiesIt(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
@@ -146,7 +146,7 @@ func TestTheIssuerRefusesIncoherentGrants(t *testing.T) {
 
 // Losing the record is how a repeated epoch gets signed, so an unreadable one refuses.
 func TestUnreadableIssuerStateRefusesRatherThanAssumingFirstGrant(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "issuer.json")
 
 	previous, err := LoadIssuerState(path)
@@ -163,7 +163,7 @@ func TestUnreadableIssuerStateRefusesRatherThanAssumingFirstGrant(t *testing.T) 
 }
 
 func TestIssuerStateRoundTrips(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "issuer.json")
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	grant := Grant{Site: "siteb", Epoch: 9, NotBefore: now, ExpiresAt: now.Add(5 * time.Minute), RegistryDigest: issueDigest}
@@ -191,7 +191,7 @@ func TestIssuerStateRoundTrips(t *testing.T) {
 // by the issuer before it can be written at all.
 func TestTheIssuerWillNotSignALeaseTheDaemonWouldRefuse(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
 	atTheLimit, err := SignGrant(private, Grant{
@@ -229,7 +229,7 @@ func TestTheIssuerWillNotSignALeaseTheDaemonWouldRefuse(t *testing.T) {
 // the authority has then produced exactly what it exists to prevent while verifying each
 // lease correctly. A read-check-write over the state of a safety property is a race.
 func TestTheIssuerSerialisesItself(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	statePath := filepath.Join(directory, "issuer.json")
 
 	release, err := LockIssuer(statePath)
@@ -256,7 +256,7 @@ func TestTheIssuerSerialisesItself(t *testing.T) {
 // lease. A writable record lets anyone with local access roll the epoch back or erase the
 // previous site's expiry and obtain an overlapping lease.
 func TestWritableIssuerStateIsRefused(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "issuer.json")
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	if err := SaveIssuerState(path, Grant{Site: "sitea", Epoch: 3, NotBefore: now,
@@ -280,7 +280,7 @@ func TestWritableIssuerStateIsRefused(t *testing.T) {
 // over a group-writable one stays group-writable and readLease refuses it as unsafe.
 func TestPublishingALeaseOverAWritableFileStillProducesOneTheDaemonAccepts(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 
@@ -332,7 +332,7 @@ func TestPublishingALeaseOverAWritableFileStillProducesOneTheDaemonAccepts(t *te
 // suffix, so the name cannot be pre-created and an existing one cannot be followed.
 func TestPublishingDoesNotFollowAPlantedTemporary(t *testing.T) {
 	_, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	victim := filepath.Join(directory, "victim")
 	if err := os.WriteFile(victim, []byte("must survive"), 0o600); err != nil {
@@ -370,7 +370,7 @@ func TestPublishingDoesNotFollowAPlantedTemporary(t *testing.T) {
 // stat-then-read on the path checks one file and reads whatever the name points at a moment
 // later, and this record decides both safety properties.
 func TestIssuerStateIsRejectedWhenTheFileItselfIsUnsafe(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "issuer.json")
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	if err := SaveIssuerState(path, Grant{Site: "sitea", Epoch: 3, NotBefore: now,
@@ -423,7 +423,7 @@ func write(t *testing.T, directory, name, contents string) string {
 // brace resets the authority's memory instead of stopping it -- and the next grant repeats
 // an epoch or overlaps a live lease with nothing anywhere reporting a fault.
 func TestAPartialIssuerRecordIsRefusedRatherThanReadAsAFirstRun(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	complete := `{"site":"sitea","epoch":3,"expires_at":"2026-09-05T12:05:00Z"}`
 
 	// The control first: a complete record must load, or every refusal below holds because
@@ -478,7 +478,7 @@ func TestTheIssuerWillNotSignALeaseTooLargeForTheDaemonToRead(t *testing.T) {
 // Writing a record the next run refuses as oversized wedges the authority: it cannot read
 // its own memory and therefore cannot issue again.
 func TestTheIssuerWillNotWriteARecordItCouldNotReadBack(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "issuer.json")
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	ordinary := Grant{Site: "sitea", Epoch: 1, NotBefore: now,
@@ -513,7 +513,7 @@ func TestTheIssuerWillNotWriteARecordItCouldNotReadBack(t *testing.T) {
 // authority could write, this needs a directory the attacker already controls. It is still
 // the difference between the guarantee the comment claimed and the one the code made.
 func TestAReplaceableRecordIsRefusedEvenWhenTheFileItselfLooksSafe(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "issuer.json")
 	now := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
 	if err := SaveIssuerState(path, Grant{Site: "sitea", Epoch: 9, NotBefore: now,

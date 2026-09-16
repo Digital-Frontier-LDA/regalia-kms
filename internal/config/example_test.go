@@ -18,8 +18,7 @@ import (
 // looked at the sink URL and no test ever loaded the file. This test closes both halves: the
 // example must parse, must validate, and its sink address must be one the audit sink accepts.
 func TestShippedExampleDaemonConfigIsUsable(t *testing.T) {
-	path := filepath.Join("..", "..", "config", "daemon.example.json")
-	settings, err := Load(path)
+	settings, err := Load(stagedShippedExample(t))
 	if err != nil {
 		t.Fatalf("shipped example config does not load: %v", err)
 	}
@@ -42,7 +41,7 @@ func TestShippedExampleDaemonConfigIsUsable(t *testing.T) {
 // at. LockedFileSource refuses symlinks, so an /etc path cannot be redirected to the runtime
 // credential later — the example has to be right the first time.
 func TestShippedExamplePINPathsMatchTheCredentialDirectory(t *testing.T) {
-	settings, err := Load(filepath.Join("..", "..", "config", "daemon.example.json"))
+	settings, err := Load(stagedShippedExample(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,4 +82,21 @@ func TestEveryShippedExampleParsesStrictly(t *testing.T) {
 	if seen == 0 {
 		t.Fatal("no daemon example config was found to check")
 	}
+}
+
+// stagedShippedExample copies daemon.example.json into a 0600 file and returns its path. Load
+// refuses a group- or world-writable file, and the mode of a checked-out file is whatever the
+// developer's umask left it (0664 under the 0002 umask common on user-private-group systems),
+// so loading the example straight out of the working tree tests the checkout, not the example.
+func stagedShippedExample(t *testing.T) string {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join("..", "..", "config", "daemon.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "daemon.json")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

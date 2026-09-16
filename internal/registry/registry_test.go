@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -10,7 +11,16 @@ import (
 )
 
 func TestRepositoryManifestLoadsAsUncommissionedRegistry(t *testing.T) {
-	path := filepath.Join("..", "..", "config", "custody-manifest.example.json")
+	// LoadFile refuses a group- or world-writable manifest, and a checked-out file carries
+	// whatever mode the developer's umask left it, so stage the example at 0600 first.
+	contents, err := os.ReadFile(filepath.Join("..", "..", "config", "custody-manifest.example.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "custody-manifest.json")
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	registry, err := LoadFile(path, "sitea", &healthMap{states: map[string]bool{}})
 	if err != nil {
 		t.Fatalf("LoadFile() error = %v", err)

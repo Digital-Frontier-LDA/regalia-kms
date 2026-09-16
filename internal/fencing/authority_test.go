@@ -9,7 +9,7 @@ import (
 )
 
 func TestTheAuthorityJournalRecordsGrantsAndRefusals(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "authority.jsonl")
 	journal, err := OpenAuthorityJournal(path)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestTheAuthorityJournalRecordsGrantsAndRefusals(t *testing.T) {
 }
 
 func TestTheAuthorityJournalRefusesTamperingAndBadModes(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "authority.jsonl")
 	journal, err := OpenAuthorityJournal(path)
 	if err != nil {
@@ -129,7 +129,7 @@ func TestTheChainBindsTheRecordContent(t *testing.T) {
 	// test, because the byte-mangling tamper above is caught by structure, not cryptography.
 	// This test rewrites a decision's ATTRIBUTION in place, keeping every hash field exactly
 	// as recorded: the real hash refuses it; a content-blind hash accepts it.
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "authority.jsonl")
 	journal, err := OpenAuthorityJournal(path)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestTheChainBindsTheRecordContent(t *testing.T) {
 // and the injected content rides along in the one artifact that exists to make a decision
 // auditable. gate.go's lease verifier has refused unknown fields since it was written.
 func TestAJournalRecordCarryingAnUnknownFieldIsRefused(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	path := filepath.Join(dir, "authority.jsonl")
 	journal, err := OpenAuthorityJournal(path)
 	if err != nil {

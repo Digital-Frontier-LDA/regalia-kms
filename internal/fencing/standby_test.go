@@ -19,7 +19,7 @@ import (
 // up the moment it is granted.
 func TestStandbyBecomesActiveWhenTheLeaseArrivesWithoutRestart(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
@@ -44,7 +44,7 @@ func TestStandbyBecomesActiveWhenTheLeaseArrivesWithoutRestart(t *testing.T) {
 // outside, "misconfigured" and "correctly passive" look identical, and only one of them is fixable.
 func TestStandbyRefusesIncompleteConfigurationImmediately(t *testing.T) {
 	public, _, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	lease := filepath.Join(directory, "lease.json")
 	state := filepath.Join(directory, "epochs.jsonl")
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -77,7 +77,7 @@ func TestStandbyRefusesIncompleteConfigurationImmediately(t *testing.T) {
 // completing the in-flight operation is exactly the double-signing ADR-0001 §8 forbids.
 func TestLosingTheLeaseMidFlightStopsTheOperation(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
@@ -116,7 +116,7 @@ func TestLosingTheLeaseMidFlightStopsTheOperation(t *testing.T) {
 // still-unexpired lease is the dangerous case: the epoch it observed has moved on.
 func TestAnOldActiveCannotResumeAfterTheEpochMoves(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
