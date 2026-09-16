@@ -149,8 +149,8 @@ func TestOpenRefusesANilClock(t *testing.T) {
 	)
 	if recovered := recoveredPanic(func() {
 		gate, openErr = Open(
-			filepath.Join(t.TempDir(), "lease.json"),
-			filepath.Join(t.TempDir(), "state.jsonl"),
+			filepath.Join(privateTempDir(t), "lease.json"),
+			filepath.Join(privateTempDir(t), "state.jsonl"),
 			"sitea",
 			"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			public,
@@ -194,7 +194,7 @@ func TestOpenRefusesANilClock(t *testing.T) {
 	// reported `OLD form fires? false | NEW form fires? true`: with a nil error
 	// the old form never reached its second operand. The row's own assertion
 	// still passes under it — the run reds HERE, so only this anchor catches it.
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	controlGate, controlErr := Open(
 		filepath.Join(directory, "lease.json"),
 		filepath.Join(directory, "state.jsonl"),
@@ -248,8 +248,8 @@ func TestNewStandbyRefusesANilClock(t *testing.T) {
 	}
 
 	standby, err := NewStandby(
-		filepath.Join(t.TempDir(), "lease.json"),
-		filepath.Join(t.TempDir(), "state.jsonl"),
+		filepath.Join(privateTempDir(t), "lease.json"),
+		filepath.Join(privateTempDir(t), "state.jsonl"),
 		"sitea",
 		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		public,
@@ -283,7 +283,7 @@ func TestNewStandbyRefusesANilClock(t *testing.T) {
 	// The row's own assertion still passes under that mutation — it asks for a
 	// refusal and gets one, and the run reds HERE instead. Only the anchor
 	// separates "refused the nil clock" from "refuses everything".
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	controlStandby, controlErr := NewStandby(
 		filepath.Join(directory, "lease.json"),
 		filepath.Join(directory, "state.jsonl"),

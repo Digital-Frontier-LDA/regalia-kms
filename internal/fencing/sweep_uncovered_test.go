@@ -96,7 +96,7 @@ func TestGateGoRefusesInvalidConfiguration(t *testing.T) {
 // Falsifier: replace `if gate.lastHash == ""` with `if false && gate.lastHash == ""`.
 func TestGateInitialisesGenesisHashWhenStateHasNoChain(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Now().UTC()
@@ -128,7 +128,7 @@ func TestGateInitialisesGenesisHashWhenStateHasNoChain(t *testing.T) {
 // already-cancelled context and calls Ready().
 func TestEvaluateLockedAbortsOnCancelledContext(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Now().UTC()
@@ -162,7 +162,7 @@ func TestEvaluateLockedAbortsOnCancelledContext(t *testing.T) {
 // asserts the os form to match the import.)
 // Falsifier: removing the guard makes errors.Is(err, os.ErrNotExist) false.
 func TestReadLeaseReturnsOsOpenErrorForMissingPath(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	_, err := readLease(filepath.Join(directory, "absent.json"))
 	if err == nil {
 		t.Fatalf("missing lease did not error")
@@ -178,7 +178,7 @@ func TestReadLeaseReturnsOsOpenErrorForMissingPath(t *testing.T) {
 // succeeds. The test asserts a specific error class so the mutation cannot
 // be silent even when readLease would otherwise produce a parse failure.
 func TestReadLeaseRefusesNonRegularFiles(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	// Point lease path at a directory; IsRegular returns false.
 	directoryPath := filepath.Join(directory, "lease.dir")
 	if err := os.Mkdir(directoryPath, 0o700); err != nil {
@@ -191,7 +191,7 @@ func TestReadLeaseRefusesNonRegularFiles(t *testing.T) {
 }
 
 func TestReadLeaseRefusesGroupWritableRegularFile(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	writable := filepath.Join(directory, "lease.json")
 	// Group-writable content; everything else looks valid.
 	if err := os.WriteFile(writable, []byte(`{}`), 0o664); err != nil {
@@ -221,7 +221,7 @@ func TestReadLeaseRefusesGroupWritableRegularFile(t *testing.T) {
 // gate.go:153 return the same "invalid fencing lease" message, making the size
 // guard unreachable from the test.
 func TestReadLeaseRejectsFilesOverSixteenKiB(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	oversize := filepath.Join(directory, "lease.json")
 	prefix := []byte(`{"version":1,"epoch":1,"signature":"`)
 	suffix := []byte(`"}`)
@@ -245,7 +245,7 @@ func TestReadLeaseRejectsFilesOverSixteenKiB(t *testing.T) {
 // SPECIFIC error message rather than just `err != nil`, since the secondary
 // document is valid JSON and a downstream decode would otherwise succeed.
 func TestReadLeaseRejectsMultipleDocumentsInOneFile(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	lease := filepath.Join(directory, "lease.json")
 	first := []byte(`{"version":1,"site":"x","epoch":1,"signature":"AA"}`)
 	second := []byte(`{"version":2,"site":"x","epoch":2,"signature":"BB"}`)
@@ -277,7 +277,7 @@ func TestReadLeaseRejectsShapeFailures(t *testing.T) {
 	}
 	for _, scenario := range cases {
 		t.Run(scenario.name, func(t *testing.T) {
-			directory := t.TempDir()
+			directory := privateTempDir(t)
 			lease := filepath.Join(directory, "lease.json")
 			doc := map[string]any{"version": 1, "site": "x", "epoch": 1,
 				"not_before": "2026-09-04T00:00:00Z", "expires_at": "2026-09-04T00:01:00Z",
@@ -332,7 +332,7 @@ func TestReadLeaseRejectsShapeFailures(t *testing.T) {
 // `if false && (...)` — a journal at 0644 passes through and the daemon
 // trusts whatever it reads.
 func TestVerifyEpochJournalRefusesJournalWithInsecureMode(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	if err := os.WriteFile(statePath, []byte{}, 0o644); err != nil {
 		t.Fatal(err)
@@ -362,7 +362,7 @@ func TestVerifyEpochJournalRefusesJournalWithInsecureMode(t *testing.T) {
 // the publish. `operationRan` is the discriminator. Verified 2026-09-06.
 func TestFencedRunnerRecoversLeaseMidFlight(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath := filepath.Join(directory, "lease.json")
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	now := time.Now().UTC()
@@ -450,7 +450,7 @@ func (runner *probeRunner) Run(ctx context.Context, operation func(context.Conte
 //     fixture is honest, a red control means the fixture is broken and
 //     the test is a gap, not a no-op.
 func TestLoadIssuerStateReportsOpenFailure(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	parent := filepath.Join(directory, "locked")
 	if err := os.Mkdir(parent, 0o700); err != nil {
 		t.Fatal(err)
@@ -492,7 +492,7 @@ func TestLoadIssuerStateReportsOpenFailure(t *testing.T) {
 // try to JSON-decode it as a record. The test asserts the SPECIFIC error
 // message.
 func TestLoadIssuerStateRejectsNonRegularFile(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	statePath := filepath.Join(directory, "state.json")
 	if err := os.Mkdir(statePath, 0o700); err != nil {
 		t.Fatal(err)
@@ -512,7 +512,7 @@ func TestLoadIssuerStateRejectsNonRegularFile(t *testing.T) {
 // with `if false && ...` — the published file then inherits the temp file's
 // mode (0600 from os.CreateTemp). The test asserts on the SPECIFIC mode.
 func TestWriteAtomicallyAppliesTheRequestedMode(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "lease.json")
 	if err := WriteLease(path, []byte("{}")); err != nil {
 		t.Fatal(err)

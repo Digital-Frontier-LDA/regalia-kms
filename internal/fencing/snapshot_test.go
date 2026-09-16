@@ -19,7 +19,7 @@ import (
 // are read.
 func TestStandbySnapshotDistinguishesNeverHeldFromHeldFromLost(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath, statePath := filepath.Join(directory, "lease.json"), filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	standby, err := NewStandby(leasePath, statePath, "sitea", "sha256:registry", public, func() time.Time { return now })

@@ -527,6 +527,16 @@ tested nothing. To break `Stat` for a descendant, `chmod` the parent directory.
 The general form: when a test asserts behaviour under a hostile condition, confirm the condition was
 actually created before trusting the result.
 
+The benign condition can be equally imaginary. `t.TempDir()` looks private, but `testing` creates
+the per-test directory with `0777` and lets the umask trim it — `0755` under `umask 022`, `0775`
+under the `umask 002` that user-private-group systems ship with. A checked-out file is the same:
+git stores `100644`, the working tree gets `0666 &^ umask`. Every loader in this repository refuses
+a group-writable file or directory, so 60-odd tests that loaded a shipped example straight from
+`config/`, or handed the issuer a bare `t.TempDir()`, passed on one machine and failed on the next
+without any code changing. The fixtures now `chmod 0700` the directory (`privateTempDir`) or stage
+the example at `0600` (`shippedExample`), and CI runs the suite under `umask 002` so the laxer
+umask is the one that has to pass.
+
 ## 14. The reason a thing is deliberately missing lives only in prose
 
 `doc/RUNBOOK-KMS-INCIDENT.md` requires five elements per scenario and the operator runbook requires

@@ -100,7 +100,7 @@ func TestNilAuthorityJournalRefusesRatherThanPanicking(t *testing.T) {
 // openTestJournal returns a usable journal in a directory the mode discipline accepts.
 func openTestJournal(t *testing.T) *AuthorityJournal {
 	t.Helper()
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	journal, err := OpenAuthorityJournal(filepath.Join(directory, "authority.jsonl"))
 	if err != nil {
 		t.Fatalf("fixture journal did not open: %v", err)
@@ -122,7 +122,7 @@ func openTestJournal(t *testing.T) *AuthorityJournal {
 // A journal directory anyone can write to is not a journal directory. The record's own permissions
 // are irrelevant: whoever can create files beside it can replace it and re-sign.
 func TestAnAuthorityJournalInAWorldWritableDirectoryIsRefused(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	if err := os.Chmod(directory, 0o777); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestAnAuthorityJournalInAWorldWritableDirectoryIsRefused(t *testing.T) {
 // not exist, on the one signal in this package that must mean what it says. So the assertion is on
 // the message, not on the presence of an error.
 func TestAnAuthorityJournalPathThatIsADirectoryIsRefused(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	asDirectory := filepath.Join(directory, "authority.jsonl")
 	if err := os.Mkdir(asDirectory, 0o700); err != nil {
 		t.Fatal(err)
@@ -189,7 +189,7 @@ func TestAnAuthorityJournalPathThatIsADirectoryIsRefused(t *testing.T) {
 //
 // The sibling check inside verifyAuthorityJournal has a detector; this one, inside Append, did not.
 func TestAppendingToALooselyPermissionedJournalIsRefused(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "authority.jsonl")
 	journal, err := OpenAuthorityJournal(path)
 	if err != nil {
@@ -265,7 +265,7 @@ func TestAppendingToALooselyPermissionedJournalIsRefused(t *testing.T) {
 // included, and only the encoder refuses it. The record written on the REFUSAL path carries the
 // same times, so a rejected grant journals through here too.
 func TestARecordThatCannotBeEncodedDoesNotAdvanceTheChain(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "authority.jsonl")
 	journal, err := OpenAuthorityJournal(path)
 	if err != nil {
@@ -329,7 +329,7 @@ func journalSize(t *testing.T, path string) int64 {
 // the ordinary way that happens. Without the guard the nil *os.File is dereferenced on the next
 // line and the daemon dies inside a fencing decision.
 func TestAppendingWhenTheJournalCannotBeOpenedIsRefused(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	inner := filepath.Join(directory, "inner")
 	if err := os.Mkdir(inner, 0o700); err != nil {
 		t.Fatal(err)

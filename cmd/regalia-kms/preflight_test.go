@@ -19,9 +19,9 @@ func completeSettings(t *testing.T) config.Config {
 	dir := t.TempDir()
 	return config.Config{
 		ListenAddress: "127.0.0.1:8443", Site: "sitea",
-		RegistryPath:     filepath.Join("..", "..", "config", "custody-manifest.example.json"),
-		RBACPolicyPath:   filepath.Join("..", "..", "config", "rbac.example.json"),
-		PolicyPath:       filepath.Join("..", "..", "config", "policy.example.json"),
+		RegistryPath:     shippedExample(t, "custody-manifest.example.json"),
+		RBACPolicyPath:   shippedExample(t, "rbac.example.json"),
+		PolicyPath:       shippedExample(t, "policy.example.json"),
 		PolicyStatePath:  filepath.Join(dir, "policy-state.jsonl"),
 		OperationTimeout: 15_000_000_000, ShutdownTimeout: 10_000_000_000, MaxConcurrentOperations: 4,
 	}

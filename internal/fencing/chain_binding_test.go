@@ -20,7 +20,7 @@ import (
 // This test is the one tamper shape whose sole detector is the hash: a meaningful field is
 // rewritten in place with every recorded hash left byte-identical.
 func TestTheEpochChainBindsTheRecordContent(t *testing.T) {
-	dir := t.TempDir()
+	dir := privateTempDir(t)
 	statePath := filepath.Join(dir, "epochs.jsonl")
 
 	// A valid two-record chain, built exactly as the gate appends it. previous starts at

@@ -25,7 +25,7 @@ import (
 //	lease it cannot read.
 
 func TestAPublishedFileGetsTheModeAskedForNotTheTemporarysOwn(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "lease.json")
 
 	if err := writeAtomically(path, []byte("contents\n"), 0o644); err != nil {
@@ -61,7 +61,7 @@ func TestAPublishedFileGetsTheModeAskedForNotTheTemporarysOwn(t *testing.T) {
 // The failure is induced by making the destination a directory, so the rename fails last, after
 // every earlier step has succeeded.
 func TestNoTemporarySurvivesAFailedWrite(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "lease.json")
 	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestNoTemporarySurvivesAFailedWrite(t *testing.T) {
 }
 
 func TestNoTemporarySurvivesASuccessfulWrite(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "lease.json")
 	if err := writeAtomically(path, []byte("contents\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -107,7 +107,7 @@ func TestNoTemporarySurvivesASuccessfulWrite(t *testing.T) {
 // publish, so CreateTemp fails and nothing downstream runs. What matters is not the error — it is
 // that the file a daemon is about to read is untouched.
 func TestAFailedWriteLeavesThePublishedLeaseIntact(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "lease.json")
 	if err := writeAtomically(path, []byte("first\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestAFailedWriteLeavesThePublishedLeaseIntact(t *testing.T) {
 // property by pre-creating the predictable name as a DIRECTORY: if writeAtomically used it, the
 // open would fail. It succeeding is the evidence that it does not.
 func TestTheTemporaryIsNotAPredictableName(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	path := filepath.Join(directory, "lease.json")
 	if err := os.Mkdir(path+".tmp", 0o700); err != nil {
 		t.Fatal(err)
@@ -154,7 +154,7 @@ func TestTheTemporaryIsNotAPredictableName(t *testing.T) {
 // must replace the link — writing through it would let anyone who can create the lease path
 // redirect the authority's write onto a file of their choosing.
 func TestPublishingReplacesTheSymlinkRatherThanItsTarget(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	target := filepath.Join(directory, "elsewhere")
 	if err := os.WriteFile(target, []byte("do not touch\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -184,7 +184,7 @@ func TestPublishingReplacesTheSymlinkRatherThanItsTarget(t *testing.T) {
 }
 
 func TestTheIssuerDirectoryMustNotBeWritableByOthers(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 
 	if err := requireUnwritableDirectory(directory); err != nil {
 		t.Fatalf("a 0700 temp directory was refused: %v", err)
@@ -215,7 +215,7 @@ func TestTheIssuerDirectoryMustNotBeWritableByOthers(t *testing.T) {
 }
 
 func TestTheIssuerDirectoryMustBeADirectoryThatExists(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	file := filepath.Join(directory, "not-a-directory")
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)

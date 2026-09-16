@@ -37,7 +37,7 @@ import (
 )
 
 func TestVerifyEpochJournalRefusesAFieldItsHashCannotSee(t *testing.T) {
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	statePath := filepath.Join(directory, "epochs.jsonl")
 	leasePath := filepath.Join(directory, "lease.json")
 

@@ -15,11 +15,11 @@ import (
 
 func loadExamplePair(t *testing.T) (*registry.Registry, *policy.Engine) {
 	t.Helper()
-	keyRegistry, err := registry.LoadFile(filepath.Join("..", "..", "config", "custody-manifest.example.json"), "sitea", nil)
+	keyRegistry, err := registry.LoadFile(shippedExample(t, "custody-manifest.example.json"), "sitea", nil)
 	if err != nil {
 		t.Fatalf("shipped custody manifest does not load: %v", err)
 	}
-	policies, _, err := policy.LoadFile(filepath.Join("..", "..", "config", "policy.example.json"))
+	policies, _, err := policy.LoadFile(shippedExample(t, "policy.example.json"))
 	if err != nil {
 		t.Fatalf("shipped policy document does not load: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestAnUnenforcedDeclaredPolicyIsRefusedAtStartup(t *testing.T) {
 // the configuration says they already have.
 func TestRBACGrantsMustNameObjectsTheRegistryHas(t *testing.T) {
 	keyRegistry, _ := loadExamplePair(t)
-	rbacPolicy, err := auth.LoadPolicyFile(filepath.Join("..", "..", "config", "rbac.example.json"))
+	rbacPolicy, err := auth.LoadPolicyFile(shippedExample(t, "rbac.example.json"))
 	if err != nil {
 		t.Fatalf("shipped RBAC policy does not load: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestRBACGrantsOutsideTheRegistryAreRefused(t *testing.T) {
 // is not representable and is not what this checks.
 func TestObjectsWithNoGrantAreAccepted(t *testing.T) {
 	keyRegistry, _ := loadExamplePair(t)
-	rbacPolicy, err := auth.LoadPolicyFile(filepath.Join("..", "..", "config", "rbac.example.json"))
+	rbacPolicy, err := auth.LoadPolicyFile(shippedExample(t, "rbac.example.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestObjectsWithNoGrantAreAccepted(t *testing.T) {
 // when only the registry does — without the second assertion the test passes on the broken
 // behaviour, because the registry digest also changes when the registry changes.
 func TestAuditPolicyDigestTracksThePolicyNotTheRegistry(t *testing.T) {
-	policyPath := filepath.Join("..", "..", "config", "policy.example.json")
+	policyPath := shippedExample(t, "policy.example.json")
 	_, firstDigest, err := policy.LoadFile(policyPath)
 	if err != nil {
 		t.Fatal(err)

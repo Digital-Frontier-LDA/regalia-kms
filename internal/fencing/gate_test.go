@@ -26,7 +26,7 @@ func writeLease(t *testing.T, path string, private ed25519.PrivateKey, site, dig
 
 func TestGateRejectsExpirySubstitutionAndEpochRollback(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath, statePath := filepath.Join(directory, "lease.json"), filepath.Join(directory, "epochs.jsonl")
 	now := time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 	clock := now
@@ -58,7 +58,7 @@ func TestGateRejectsExpirySubstitutionAndEpochRollback(t *testing.T) {
 func TestGateRejectsInvalidSignatureRegistryAndJournalTamper(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
 	_, attacker, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	leasePath, statePath := filepath.Join(directory, "lease.json"), filepath.Join(directory, "epochs.jsonl")
 	now := time.Now().UTC()
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -91,7 +91,7 @@ func (runner *immediateRunner) Run(ctx context.Context, operation func(context.C
 
 func TestFencedRunnerChecksLeaseBeforeHardware(t *testing.T) {
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
-	directory := t.TempDir()
+	directory := privateTempDir(t)
 	now := time.Now().UTC()
 	clock := now
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
