@@ -1,0 +1,9 @@
+# Benchmark harness only (tools/bench/hsm-bench.py). Hash-pinned; install with
+#   pip install --require-hashes -r tools/bench/requirements.txt
+# The wheels are CPython 3.11 (Debian 12), 3.12 and 3.13 (Debian 13) manylinux x86_64, plus the
+# sdist. Hashes are PyPI's, cross-checked against a `pip download` on dev-regalia 2026-09-17.
+pykcs11==1.5.20 \
+    --hash=sha256:272d69b793f252b41e70836a91717a2f4336958c1f90a129c9226f70ae43c5c9 \
+    --hash=sha256:de3435c4efc954c5ad5134a74802441b5f3c40e83802e23506a09d90b2a765ec \
+    --hash=sha256:abdc1b4e8b97f7c29f95df23e1158f40183ba44a4f8a54757f7b08d0d3dd57e9 \
+    --hash=sha256:1f7a7c8164fac636382aa7b0d70279ad5581379748fc17a20bc0be8fe574c259
