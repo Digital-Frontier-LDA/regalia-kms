@@ -1,0 +1,59 @@
+{
+  "schema_version": 4,
+  "captured_at": "2026-09-04T12:00:00Z",
+  "site": "staging",
+  "node": "pve-example-01",
+  "vmid": 9401,
+  "host": {
+    "pve_version": "pve-manager/9.0.3/test-only",
+    "iommu_enabled": true,
+    "ksm_run": 0,
+    "ksm_pages_shared": 0,
+    "datacenter_firewall_enabled": true,
+    "storage_encryption_active": true
+  },
+  "vm": {
+    "type": "qemu",
+    "machine": "q35",
+    "bios": "ovmf",
+    "balloon": 0,
+    "usb_mappings": [],
+    "hostpci": [
+      {
+        "pci_address": "0000:03:00.0",
+        "physical_port": "rear-slot-3-port-1",
+        "iommu_group_members": 1,
+        "vfio_bound": true
+      }
+    ],
+    "snapshots": [],
+    "pending_changes": {},
+    "saved_state": false
+  },
+  "cluster": {
+    "ha_managed": false,
+    "replication_jobs": [],
+    "backup_jobs_including_vmid": [],
+    "live_migration_allowed": false,
+    "policy_guard_timer_enabled": true,
+    "policy_guard_enforce_stop": true,
+    "policy_guard_interval_seconds": 15,
+    "policy_guard_last_result_sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "guest": {
+    "core_dumps_disabled": true,
+    "hibernation_disabled": true,
+    "swap_disabled_or_encrypted": true,
+    "runtime_credentials_excluded_from_backup": true,
+    "direct_token_clients_absent": true,
+    "kms_service_unprivileged": true,
+    "credential_tpm2_pcrs": [7]
+  },
+  "token": {
+    "logical_device_id": "pico-staging-01",
+    "manufacturer_serial": "TEST-ONLY-SERIAL",
+    "public_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "cryptographic_identity_verified_in_guest": true,
+    "immutable_policy_verified_in_guest": true
+  }
+}
