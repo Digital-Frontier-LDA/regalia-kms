@@ -1,0 +1,40 @@
+[Unit]
+Description=Regalia local SOPS to KMS adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=regalia-sops
+Group=regalia-sops
+ExecStart=/usr/local/bin/regalia-sops-kms -config /etc/regalia-sops-kms/config.json
+RuntimeDirectory=regalia-sops-kms
+RuntimeDirectoryMode=0700
+LoadCredential=kms-ca.pem:/etc/regalia-sops-kms/public/kms-ca.pem
+LoadCredential=workload-cert.pem:/etc/regalia-sops-kms/public/workload-cert.pem
+# Provision as a short-lived workload credential; never commit the encrypted blob.
+LoadCredentialEncrypted=workload-key.pem:/etc/regalia-sops-kms/credentials/workload-key.cred
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

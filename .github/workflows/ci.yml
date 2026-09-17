@@ -43,6 +43,12 @@ jobs:
       # the umask, and every loader here refuses group-writable input. Fixtures that only pass
       # because the umask happened to trim the group bit would otherwise stay green until a
       # developer on a user-private-group system ran them (TESTING.md §13).
+      - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
+        # The Go suite does not cover the deployment tooling, the custody-manifest validator, the
+        # alert rules or the documentation contracts — those are Python, and they gate the same
+        # repository. Run them the way the tests expect to be discovered.
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
       - name: test (both modules, race + vet)
         run: |
           umask 002

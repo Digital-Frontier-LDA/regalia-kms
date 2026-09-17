@@ -1,0 +1,66 @@
+{
+  "schema_version": 2,
+  "site": "staging",
+  "node": "pve-example-01",
+  "vmid": 9401,
+  "name": "kms-staging-01",
+  "image": {
+    "host_path": "/var/lib/vz/template/iso/debian-12-genericcloud-amd64.qcow2",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "compute": {
+    "cores": 4,
+    "memory_mib": 4096,
+    "cpu": "x86-64-v2-AES"
+  },
+  "storage": {
+    "pool": "kms-zfs",
+    "zfs_dataset": "rpool/kms-staging",
+    "disk_gib": 32
+  },
+  "network": {
+    "bridge": "vmbr20",
+    "vlan": 220,
+    "mac": "02:00:00:00:94:01",
+    "guest_ipv4": "192.0.2.10/24",
+    "gateway_ipv4": "192.0.2.1",
+    "kms_port": 8443,
+    "ssh_port": 22,
+    "client_cidrs": [
+      "198.51.100.0/24"
+    ],
+    "admin_cidrs": [
+      "203.0.113.0/28"
+    ],
+    "monitoring_cidrs": [
+      "203.0.113.128/32"
+    ],
+    "audit_sinks": [
+      {
+        "cidr": "203.0.113.192/32",
+        "port": 6514
+      }
+    ],
+    "ntp_sinks": [
+      {
+        "cidr": "203.0.113.193/32",
+        "port": 123
+      }
+    ]
+  },
+  "controller": {
+    "pci_address": "0000:65:00.0",
+    "vendor_device": "1b21:2142",
+    "physical_port": "rear-slot-4-port-1"
+  },
+  "cloud_init": {
+    "user": "kms-bootstrap",
+    "ssh_public_key_file": "/root/commissioning/kms-bootstrap.pub"
+  },
+  "controls": {
+    "disable_host_ksm": true,
+    "prohibit_snapshots_backups_ha_replication": true,
+    "dedicated_admin_ownership_accepted": true,
+    "commissioning_evidence_public_key_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}
