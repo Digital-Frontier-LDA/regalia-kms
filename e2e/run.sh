@@ -12,6 +12,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CEREMONY="${REGALIA_CEREMONY_DIR:-}"
 need_ceremony() {
+  # --plan prints what WOULD run; it must not require the substrate, or a reader cannot see the
+  # plan without checking out the other repository first. Only an actual run needs it.
+  if [ "$PLAN" = 1 ]; then
+    # Show the path a reader would have to provide, rather than an empty string that reads as "/".
+    [ -n "$CEREMONY" ] || CEREMONY="<REGALIA_CEREMONY_DIR>"
+    return 0
+  fi
   [ -n "$CEREMONY" ] && [ -d "$CEREMONY/qubes" ] && return 0
   echo "REFUSING mode '$MODE': it runs the ceremony emulator/battery, which lives in" >&2
   echo "regalia-ceremony. Set REGALIA_CEREMONY_DIR to a checkout of that repository." >&2
