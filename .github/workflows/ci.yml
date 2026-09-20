@@ -55,6 +55,22 @@ jobs:
           go test -race ./...
           ( cd adapters/sops && go test -race ./... )
 
+  # The benchmark harness is Python, and its regression tests need no card and no PyKCS11 — a fake
+  # module stands in for the library. Without this job they would ship untested in a Go-only CI,
+  # which is how the handle-reuse defect they pin reached review in the first place.
+  bench-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: unit tests for the PKCS#11 benchmark harness
+        run: python3 tools/bench/test_hsm_bench.py
+
   govulncheck:
     runs-on: ubuntu-latest
     timeout-minutes: 15
