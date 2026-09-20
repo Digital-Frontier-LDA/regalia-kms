@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import os
 import unittest
 from pathlib import Path
 
@@ -280,6 +281,24 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("cannot read the manifest", result.stderr)
         self.assertNotIn("Traceback", result.stderr)
+
+    def test_a_manifest_that_is_not_an_object_is_refused_rather_than_traced(self):
+        """json.loads accepts any JSON document. `[]` and `"x"` parse cleanly and then die in
+        `manifest.get(...)` with an AttributeError — a traceback on the same read path the test
+        above exists to keep free of them. The file is well-formed JSON, so the read succeeded;
+        what failed is the assumption about its shape, and that has to be stated."""
+        for document in ("[]", '"x"', "42", "null"):
+            with self.subTest(document=document):
+                with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+                    handle.write(document)
+                    path = handle.name
+                try:
+                    result = self._run(path, "--object", FIDO_OBJECT, "--retiring", "x")
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn("REFUSED", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                finally:
+                    os.unlink(path)
 
 
 if __name__ == "__main__":

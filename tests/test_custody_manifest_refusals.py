@@ -99,7 +99,11 @@ class ManifestRefusalTests(unittest.TestCase):
         """Zero or a negative maximum age is a rotation deadline already in the past for every
         object, which would make the deadline meaningless rather than strict. A string is the
         JSON-authoring slip that would otherwise compare oddly."""
-        for age in (0, -1, "365", None, 1.5):
+        # True is in this list on purpose: isinstance(True, int) is true and True >= 1, so
+        # "maximum_age_days": true was accepted and read as ONE DAY, putting every object past its
+        # rotation deadline immediately. envelope_max_age_days already excluded bool, and two
+        # bounds disagreeing about the same authoring slip is how one of them gets trusted.
+        for age in (0, -1, "365", None, 1.5, True, False):
             with self.subTest(age=age):
                 obj = direct_key()
                 obj["rotation"]["maximum_age_days"] = age
@@ -145,6 +149,20 @@ class ManifestRefusalTests(unittest.TestCase):
                 obj = direct_key()
                 obj["bindings"][0]["public_fingerprint"] = bad
                 self.assert_refused(obj, "sha256 followed by 64 lowercase hex digits")
+
+
+    def test_a_commissioned_nitrokey_fingerprint_must_be_a_string(self):
+        """Truthiness is not a type. A dict or a list here is truthy, reaches the regex and raises
+        TypeError -- a traceback out of a validator whose entire contract is that a bad manifest
+        produces a named refusal. The sibling public_fingerprint check already required a string."""
+        for bad in ({"a": 1}, ["sha256:" + "a" * 64], 12345, True):
+            with self.subTest(devaut=bad):
+                obj = direct_key()
+                obj["bindings"][0]["backend"] = "nitrokey-pkcs11"
+                obj["bindings"][0]["state"] = "active"
+                obj["bindings"][0]["device_serial"] = "DENK0404144"
+                obj["bindings"][0]["devaut_fingerprint"] = bad
+                self.assert_refused(obj, "devaut_fingerprint")
 
 
 if __name__ == "__main__":

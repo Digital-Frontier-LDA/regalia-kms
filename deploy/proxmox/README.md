@@ -168,8 +168,15 @@ interface. Preserve the four JSON lines in the signed transcript:
 python3 deploy/proxmox/network_probe.py site-example.json --role client --source-ip 198.51.100.20
 python3 deploy/proxmox/network_probe.py site-example.json --role monitoring --source-ip 203.0.113.128
 python3 deploy/proxmox/network_probe.py site-example.json --role admin --source-ip 203.0.113.4
-python3 deploy/proxmox/network_probe.py site-example.json --role unauthorized --source-ip 198.51.100.20
+python3 deploy/proxmox/network_probe.py site-example.json --role unauthorized --source-ip 203.0.113.66
 ```
+
+The `unauthorized` source address must lie outside EVERY role CIDR in the site file — here outside
+`198.51.100.0/24` (clients), `203.0.113.0/28` (admin), `203.0.113.128/32` (monitoring) and the
+audit sinks. The line above used `198.51.100.20`, which is a CLIENT address: the firewall accepts
+it on 8443 exactly as configured, the probe reports `expected=closed, observed=open` and exits 1,
+and a correct firewall reads as a failed one. Change this address with the site file, not from
+memory.
 
 The probe establishes firewall reachability only. On the allowed KMS path also
 send a request without a client certificate and require the TLS handshake or

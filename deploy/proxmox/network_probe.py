@@ -79,7 +79,13 @@ def main(argv: list[str]) -> int:
         }
         print(json.dumps(report, sort_keys=True))
         return 0 if passed else 1
-    except (OSError, json.JSONDecodeError, InvalidConfig) as error:
+    # ValueError, not the three subclasses it used to name. `ipaddress.ip_address("10.0.0.300")`
+    # and `ip_interface` on a malformed guest address raise plain ValueError, which fell through as
+    # a traceback and exit 1 — and exit 1 is this tool's documented "the firewall does not match"
+    # result. An operator typo in --source-ip therefore read as a firewall finding, which is the
+    # one confusion a probe like this must not create. InvalidConfig and json.JSONDecodeError are
+    # both ValueError subclasses, so the refusals that already worked keep working.
+    except (OSError, ValueError) as error:
         print(f"REFUSED: {error}", file=sys.stderr)
         return 2
 

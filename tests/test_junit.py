@@ -24,6 +24,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def parse_report(path):
+    """Parse a JUnit report this suite just generated, refusing a document type declaration first.
+
+    `xml.etree` is the stdlib parser and it does expand INTERNAL entities, which is the billion-
+    laughs shape; external entities it does not fetch. Every file parsed here is written moments
+    earlier by tools/junit.py into a temp directory, so neither vector is reachable — but "the
+    input is trusted" is exactly the sentence that stops being true when someone reuses a helper.
+    Rather than take a third-party parser into a test tree that is otherwise stdlib-only, the one
+    construct both attacks need is refused outright: a JUnit report our converter produced has no
+    DOCTYPE, so encountering one is itself a defect worth failing on, not something to parse
+    safely and ignore.
+    """
+    raw = Path(path).read_bytes()
+    if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+        raise AssertionError(
+            f"{path} carries a DOCTYPE or ENTITY declaration. tools/junit.py never writes one, so "
+            f"this report did not come from it (or it has grown a way to embed caller-controlled "
+            f"markup), and it is not parsed here.")
+    return ET.fromstring(raw)
+
+
 def convert(tmp, lines):
     """Run the converter over synthetic `go test -json` events and return the parsed report."""
     source = Path(tmp) / "gotest.json"
@@ -32,7 +53,7 @@ def convert(tmp, lines):
     done = subprocess.run(
         [sys.executable, "-m", "tools.junit", "--gotest", str(source), "--out", str(out)],
         cwd=ROOT, capture_output=True, text=True)
-    return done, (ET.parse(out).getroot() if out.exists() else None)
+    return done, (parse_report(out) if out.exists() else None)
 
 
 def failure_text(report, what):
@@ -184,7 +205,7 @@ class PythonRunnerTests(unittest.TestCase):
                                   "                self.assertNotEqual(7, n, 'DISTINCTIVE')\n")
             done, out = self.run_suite(tmp)
             self.assertEqual(1, done.returncode, "a failing subtest did not fail the run")
-            report = ET.parse(out).getroot()
+            report = parse_report(out)
             self.assertEqual(
                 "1", report.get("failures"),
                 "a subtest failure is missing from the report. unittest delivers those through "
@@ -217,7 +238,7 @@ class PythonRunnerTests(unittest.TestCase):
             done, out = self.run_suite(tmp)
             self.assertEqual(1, done.returncode)
             try:
-                report = ET.parse(out).getroot()
+                report = parse_report(out)
             except ET.ParseError as error:
                 self.fail(f"the report does not parse ({error}). XML 1.0 forbids most control "
                           f"characters and ElementTree writes them through unescaped, so the "

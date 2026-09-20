@@ -214,6 +214,14 @@ def main() -> int:
     except (OSError, ValueError) as error:
         print(f"REFUSED: cannot read the manifest: {error}", file=sys.stderr)
         return 1
+    # json.loads accepts any JSON document. A file holding `[]` or `"x"` parses cleanly and then
+    # dies in `manifest.get(...)` with an AttributeError — a traceback where this tool's contract
+    # is a line starting REFUSED, which is what the missing-manifest test exists to guarantee for
+    # the very same read path.
+    if not isinstance(manifest, dict):
+        print(f"REFUSED: {arguments.manifest} does not hold a JSON object "
+              f"(top level is {type(manifest).__name__})", file=sys.stderr)
+        return 1
 
     try:
         survivors = plan_retirement(manifest, arguments.object, arguments.retiring)

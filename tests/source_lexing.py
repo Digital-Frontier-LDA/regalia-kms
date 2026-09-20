@@ -145,7 +145,14 @@ def shell_code(source: str) -> str:
                 quote = character
             elif line[index:index + 2] == "<<" and line[index:index + 3] != "<<<":
                 cursor = index + 2
+                # `<<-` strips leading TABS from the body and from the terminator; plain `<<`
+                # requires the terminator alone on its line with no leading whitespace at all.
+                # The mode travels with the delimiter because the two are not interchangeable:
+                # accepting an indented terminator for a plain heredoc ends masking early, and
+                # the source checks then read heredoc DATA as executable shell.
+                dash = False
                 if cursor < len(line) and line[cursor] == "-":
+                    dash = True
                     cursor += 1
                 while cursor < len(line) and line[cursor].isspace():
                     cursor += 1
@@ -157,7 +164,7 @@ def shell_code(source: str) -> str:
                     cursor += 1
                 if cursor > start and (not delimiter_quote or
                                        (cursor < len(line) and line[cursor] == delimiter_quote)):
-                    found.append(line[start:cursor])
+                    found.append((line[start:cursor], dash))
                 index = cursor
                 continue
             index += 1
@@ -165,8 +172,12 @@ def shell_code(source: str) -> str:
 
     for line in uncommented.splitlines(keepends=True):
         if heredocs:
-            candidate = line.strip()
-            delimiter = heredocs[0]
+            delimiter, dash = heredocs[0]
+            body = line[:-1] if line.endswith("\n") else line
+            # Tabs only, and only for `<<-`. `line.strip()` accepted an indented terminator for
+            # both forms, so a body line that merely MENTIONS the delimiter — indented, inside the
+            # data — closed the heredoc, and everything after it was lexed as code.
+            candidate = body.lstrip("\t") if dash else body
             output.append("\n" if line.endswith("\n") else "")
             if candidate == delimiter:
                 heredocs.pop(0)

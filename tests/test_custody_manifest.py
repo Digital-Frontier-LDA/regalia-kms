@@ -1,4 +1,5 @@
 import copy
+import datetime
 import json
 import tempfile
 import unittest
@@ -148,7 +149,13 @@ class CustodyManifestTests(unittest.TestCase):
         obj = direct_key()
         obj["verification"] = {"status": "verified", "last_verified": None, "evidence": "drill:1"}
         self.assert_invalid(manifest_with(obj), "require a timestamp")
-        obj["verification"] = {"status": "verified", "last_verified": "2026-09-04T12:00:00Z", "evidence": "drill:1"}
+        # DERIVED FROM TODAY, NOT WRITTEN DOWN. validate_object refuses a verified object whose
+        # last_verified is older than VERIFICATION_MAX_AGE_DAYS, so a literal timestamp turns this
+        # test into a time bomb: it passes until the date crosses that bound and then fails with
+        # no code change, in a suite whose failures are supposed to mean something broke.
+        recent = (datetime.datetime.now(datetime.timezone.utc)
+                  - datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        obj["verification"] = {"status": "verified", "last_verified": recent, "evidence": "drill:1"}
         validate_manifest(manifest_with(obj))
 
     def test_secret_bearing_field_names_are_rejected_at_any_depth(self):

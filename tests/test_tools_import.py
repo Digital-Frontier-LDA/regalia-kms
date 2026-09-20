@@ -14,10 +14,18 @@ them.
 from __future__ import annotations
 
 import importlib
+import re
 import unittest
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
+
+# A module name this test is willing to import. The names come from globbing this repository's own
+# tools/ directory, not from a caller — but `importlib.import_module` takes a dotted path, and a
+# file whose stem is not a plain identifier either cannot be imported at all (a dash) or is not the
+# module anyone meant (a dot, which would walk into a package). Checking the shape first turns that
+# into a named failure instead of an obscure import error, and keeps the argument literal-shaped.
+MODULE_NAME = re.compile(r"[a-z_][a-z0-9_]*\Z")
 
 
 def _modules():
@@ -32,8 +40,19 @@ class ToolsImportTests(unittest.TestCase):
             f"only {len(_modules())} importable tools found under {TOOLS}: the layout changed and "
             f"this check would pass by importing almost nothing")
 
+    def test_every_tool_module_name_is_importable_as_written(self):
+        for name in _modules():
+            with self.subTest(module=name):
+                self.assertRegex(
+                    name, MODULE_NAME,
+                    f"tools/{name}.py cannot be imported under that name — Python module names are "
+                    f"identifiers, so a dash or a dot makes the file unreachable from any `import` "
+                    f"statement, however well it runs as a script.")
+
     def test_every_tool_module_imports(self):
         for name in _modules():
+            if not MODULE_NAME.match(name):
+                continue        # reported by the test above; not fed to the importer
             with self.subTest(module=name):
                 try:
                     importlib.import_module(f"tools.{name}")

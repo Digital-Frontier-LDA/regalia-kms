@@ -158,3 +158,68 @@ class ProxmoxEvidenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DocumentedProbeAddressTests(unittest.TestCase):
+    """The README's four probe commands are copied into a signed transcript. If one of them cannot
+    pass against the shipped site file, the operator either records a failure that is not one or
+    quietly edits the command — and the transcript stops meaning what it says.
+
+    The `unauthorized` role requires every port CLOSED, so its source address must lie outside
+    every role CIDR. It used 198.51.100.20, a CLIENT address: the firewall accepts it on 8443
+    exactly as configured, the probe reports expected=closed observed=open, and a correct firewall
+    reads as a failed one."""
+
+    README = Path(__file__).parents[1] / "deploy" / "proxmox" / "README.md"
+    SITE = Path(__file__).parents[1] / "deploy" / "proxmox" / "site.example.json"
+
+    def documented_sources(self):
+        import re
+        found = {}
+        for line in self.README.read_text(encoding="utf-8").splitlines():
+            m = re.search(r"network_probe\.py \S+ --role (\w+) --source-ip (\S+)", line)
+            if m:
+                found.setdefault(m.group(1), []).append(m.group(2))
+        return found
+
+    def configured_networks(self):
+        import ipaddress
+        site = json.loads(self.SITE.read_text(encoding="utf-8"))["network"]
+        nets = []
+        for key in ("client_cidrs", "admin_cidrs", "monitoring_cidrs"):
+            nets += [ipaddress.ip_network(c) for c in site.get(key, [])]
+        nets += [ipaddress.ip_network(s["cidr"]) for s in site.get("audit_sinks", [])]
+        return nets
+
+    def test_the_readme_documents_a_probe_for_every_role(self):
+        roles = self.documented_sources()
+        self.assertEqual({"client", "monitoring", "admin", "unauthorized"}, set(roles),
+                         f"the README's probe block no longer covers every role: {sorted(roles)}")
+
+    def test_the_unauthorized_probe_source_is_outside_every_configured_cidr(self):
+        import ipaddress
+        nets = self.configured_networks()
+        self.assertTrue(nets, "no CIDRs were read from site.example.json; this check would pass "
+                              "by comparing against nothing")
+        for addr in self.documented_sources()["unauthorized"]:
+            ip = ipaddress.ip_address(addr)
+            inside = [str(n) for n in nets if ip in n]
+            self.assertFalse(
+                inside,
+                f"the documented unauthorized probe source {addr} is inside {inside}. The firewall "
+                f"will accept it, the probe will report expected=closed observed=open and exit 1, "
+                f"and the transcript will record a correct firewall as a failure.")
+
+    def test_each_authorized_probe_source_is_inside_its_own_role_cidr(self):
+        import ipaddress
+        site = json.loads(self.SITE.read_text(encoding="utf-8"))["network"]
+        key = {"client": "client_cidrs", "admin": "admin_cidrs", "monitoring": "monitoring_cidrs"}
+        for role, addrs in self.documented_sources().items():
+            if role == "unauthorized":
+                continue
+            nets = [ipaddress.ip_network(c) for c in site[key[role]]]
+            for addr in addrs:
+                self.assertTrue(
+                    any(ipaddress.ip_address(addr) in n for n in nets),
+                    f"the documented {role} probe source {addr} is outside {[str(n) for n in nets]}, "
+                    f"so the firewall will refuse it and the run will record a false negative.")

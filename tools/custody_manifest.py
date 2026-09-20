@@ -227,7 +227,13 @@ def validate_binding(binding: Any, path: str) -> dict[str, Any]:
     if backend == "nitrokey-pkcs11" and item["state"] in COMMISSIONED_STATES:
         if not item.get("device_serial") or not item.get("devaut_fingerprint"):
             fail(path, "commissioned Nitrokey requires device_serial and devaut_fingerprint")
-        if not FINGERPRINT_PATTERN.fullmatch(item["devaut_fingerprint"]):
+        # require_string first, exactly as the public_fingerprint check above does. Truthiness is
+        # not a type: `{"a": 1}` and `["sha256:…"]` are both truthy, reach fullmatch and raise
+        # TypeError — a traceback out of a validator whose whole contract is that a bad manifest
+        # produces a named refusal.
+        require_string(item["device_serial"], f"{path}.device_serial")
+        devaut = require_string(item["devaut_fingerprint"], f"{path}.devaut_fingerprint")
+        if not FINGERPRINT_PATTERN.fullmatch(devaut):
             fail(f"{path}.devaut_fingerprint", "must be sha256 followed by 64 lowercase hex digits")
 
     if backend in {"yubikey-piv", "yubikey-openpgp"}:
@@ -356,8 +362,14 @@ def validate_object(raw: Any, path: str) -> str:
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             fail(f"{path}.rotation.envelope_max_age_days",
                  "must be a positive integer of days; omit it to leave envelope lifetime unbounded")
-    if not isinstance(rotation["maximum_age_days"], int) or rotation["maximum_age_days"] < 1:
-        fail(f"{path}.rotation.maximum_age_days", "must be a positive integer")
+    # `isinstance(True, int)` is true and `True >= 1`, so a manifest saying
+    # "maximum_age_days": true was read as ONE DAY and put every object past its rotation deadline
+    # immediately. The sibling check on envelope_max_age_days already excluded bool; two bounds
+    # disagreeing about the same authoring slip is how one of them gets trusted.
+    if (not isinstance(rotation["maximum_age_days"], int)
+            or isinstance(rotation["maximum_age_days"], bool)
+            or rotation["maximum_age_days"] < 1):
+        fail(f"{path}.rotation.maximum_age_days", "must be a positive integer of days")
     if rotation["last_rotated"] is not None:
         validate_date(rotation["last_rotated"], f"{path}.rotation.last_rotated")
 
