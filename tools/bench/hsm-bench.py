@@ -25,7 +25,24 @@ import PyKCS11
 
 MODULE = os.environ.get("PKCS11_MODULE", "/opt/homebrew/lib/opensc-pkcs11.so")
 PIN = os.environ["HSM_PIN"]
-N = int(os.environ.get("BENCH_N", "25"))
+
+
+def _samples(raw):
+    """BENCH_N, or a refusal. Zero or a negative count makes `measure()` return an empty list and
+    `statistics.mean([])` raise StatisticsError — the run dies after spending PIN logins and card
+    operations, with a traceback that names statistics rather than the environment variable that
+    caused it. A number the tool cannot measure with is a refusal, stated before the card is
+    touched."""
+    try:
+        n = int(raw)
+    except ValueError:
+        sys.exit(f"BENCH_N={raw!r} is not an integer; give a sample count of 1 or more")
+    if n < 1:
+        sys.exit(f"BENCH_N={n} would take no samples; give a sample count of 1 or more")
+    return n
+
+
+N = _samples(os.environ.get("BENCH_N", "25"))
 
 CURVE_OID = {
     "06082a8648ce3d030107": "prime256v1 (P-256)",
@@ -132,40 +149,72 @@ def _run(holder, info, reopen):
     print(f"samples : {N} per measurement, ONE session, logged in ONCE")
     print("p90     : nearest-rank\n")
 
-    rows = []
+    # ENUMERATE BY CKA_ID, NOT BY HANDLE. PKCS#11 guarantees an object handle only for the life of
+    # the session that produced it, and `reopen()` below replaces the session after a failed
+    # operation — so every handle taken from the old session may be invalid on the new one, and a
+    # module is free to number them differently. Keeping them meant the recovery path measured
+    # nothing: each later key failed with CKR_OBJECT_HANDLE_INVALID, which reads in the output as
+    # a card that cannot sign. Identity is the CKA_ID; the handle is re-resolved from it whenever
+    # the session changes.
+    keys = []
     for obj in holder[0].findObjects([(PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY)]):
         try:
-            kid = bytes(holder[0].getAttributeValue(obj, [PyKCS11.CKA_ID])[0]).hex()
+            kid_raw = bytes(holder[0].getAttributeValue(obj, [PyKCS11.CKA_ID])[0])
             ktype = holder[0].getAttributeValue(obj, [PyKCS11.CKA_KEY_TYPE])[0]
             label = holder[0].getAttributeValue(obj, [PyKCS11.CKA_LABEL])[0] or "(no label)"
         except PyKCS11.PyKCS11Error as exc:
             print(f"  !! skipping a key, attributes unreadable: {exc}")
             continue
+        keys.append((kid_raw, kid_raw.hex(), ktype, label))
+
+    def resolve(kid_raw):
+        """The current handle for this key on the CURRENT session, or None if it is gone."""
+        found = holder[0].findObjects([(PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY),
+                                       (PyKCS11.CKA_ID, kid_raw)])
+        return found[0] if found else None
+
+    rows = []
+    for kid_raw, kid, ktype, label in keys:
+        # Resolved ONCE per key, outside the measured operations: a C_FindObjects inside the timed
+        # loop would be measuring the search, not the signature.
+        cell = [resolve(kid_raw)]
+        if cell[0] is None:
+            rows.append((label, kid, "?", "key lookup", None, "key not found on this session"))
+            continue
+        obj = cell[0]
         desc = key_desc(holder[0], obj, ktype)
 
         ops = []
         if ktype == PyKCS11.CKK_RSA:
             ms = PyKCS11.Mechanism(PyKCS11.CKM_SHA256_RSA_PKCS, None)
             ops.append(("sign (PKCS#1 v1.5, SHA-256)",
-                        lambda o=obj, m=ms: holder[0].sign(o, os.urandom(32), m)))
+                        lambda c=cell, m=ms: holder[0].sign(c[0], os.urandom(32), m)))
             ct, why = rsa_ciphertext(holder[0], obj)
             md = PyKCS11.Mechanism(PyKCS11.CKM_RSA_PKCS, None)
             if ct is None:
                 rows.append((label, kid, desc, "decrypt (PKCS#1 v1.5)", None, why))
             else:
                 ops.append(("decrypt (PKCS#1 v1.5)",
-                            lambda o=obj, c=ct, m=md: holder[0].decrypt(o, c, m)))
+                            lambda k=cell, c=ct, m=md: holder[0].decrypt(k[0], c, m)))
         elif ktype == PyKCS11.CKK_EC:
             for nm, mech in (("ECDSA sign (raw, pre-hashed)", PyKCS11.CKM_ECDSA),
                              ("ECDSA sign (SHA-256 on card)", PyKCS11.CKM_ECDSA_SHA256)):
                 m = PyKCS11.Mechanism(mech, None)
-                ops.append((nm, lambda o=obj, m=m: holder[0].sign(o, os.urandom(32), m)))
+                ops.append((nm, lambda c=cell, m=m: holder[0].sign(c[0], os.urandom(32), m)))
 
         for name, fn in ops:
+            if cell[0] is None:
+                rows.append((label, kid, desc, name, None,
+                             "key not found after the session was replaced"))
+                continue
             times, err = measure(fn)
             rows.append((label, kid, desc, name, times, err))
             if err:
                 reopen()
+                # The replacement session's handles are its own. Re-resolve before the next
+                # operation; if the key cannot be found there, say so instead of timing a stale
+                # handle and reporting the resulting error as a property of the card.
+                cell[0] = resolve(kid_raw)
 
     hdr = (f"{'label':14} {'id':4} {'key':20} {'operation':30} "
            f"{'mean ms':>9} {'med ms':>8} {'p90 ms':>8} {'ops/s':>7}")

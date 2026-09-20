@@ -7,3 +7,32 @@ pykcs11==1.5.20 \
     --hash=sha256:de3435c4efc954c5ad5134a74802441b5f3c40e83802e23506a09d90b2a765ec \
     --hash=sha256:abdc1b4e8b97f7c29f95df23e1158f40183ba44a4f8a54757f7b08d0d3dd57e9 \
     --hash=sha256:1f7a7c8164fac636382aa7b0d70279ad5581379748fc17a20bc0be8fe574c259
+
+# `cryptography` is NOT optional in practice. hsm-bench.py encrypts host-side with the public half
+# to measure RSA decrypt — the card refuses C_Encrypt on a public object, correctly — and without
+# this package that row silently reports "install `cryptography` to measure decrypt" instead of a
+# number. A benchmark that quietly drops a measurement the README says it takes is the failure this
+# repository keeps writing tests about, so it is installed with the harness, not beside it.
+# abi3 wheels: cp311 covers Debian 13 (3.12, 3.13) and cp39 covers Debian 12 (3.11); manylinux
+# 2_34, 2_28 and 2014 are all pinned because which one pip picks depends on the host glibc. The
+# sdist is pinned last for a platform with no matching wheel.
+cryptography==50.0.1 \
+    --hash=sha256:51afcfceb15597cf2635068e4ac9a56b2abde622edde17f37d85fd7b5306497a \
+    --hash=sha256:51593d180cf6d179bde5c5d065bed81386b1f381656ae7d042b7ffc87a9895ad \
+    --hash=sha256:ff838d62ec1bfce4f9ba7fa16f4a7b554cd8d0c299e6be37502161a660c84eef \
+    --hash=sha256:9dde0a357190eb3b1da1bb9ab750e9c85cba82ca5977aa0836cbb94e92611239 \
+    --hash=sha256:407fe2b6db00939c05c0e945e9914238f2f0a430974839429dafc82b1ee6bee5 \
+    --hash=sha256:e22dfed744bd4002e909464cb23d2f0b05c6f3113a79ef2e9864a53db737c733 \
+    --hash=sha256:5dd9bda1c12b4162f6ff568eeb5e0ff956c28d14406e875cfe8a63a2d414ff20
+# cffi and pycparser are RUNTIME dependencies of the cryptography wheels (not just of the sdist
+# build), and --require-hashes refuses an install where any transitive requirement is unpinned:
+#   "In --require-hashes mode, all requirements must have their versions pinned with =="
+# Measured here by installing into a clean venv, which is the only way this file is worth trusting.
+cffi==2.1.1 \
+    --hash=sha256:34e261f78cb6ceaaa36f42f2613f4380d94d9c759a9c73c769ee6e0247364632 \
+    --hash=sha256:c1453022f490d2459a11819d83ad1d586e9ff65a12ac3e705ffebd46d3685dcf \
+    --hash=sha256:a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2 \
+    --hash=sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be
+pycparser==3.0 \
+    --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992 \
+    --hash=sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29
