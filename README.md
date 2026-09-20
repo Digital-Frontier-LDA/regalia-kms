@@ -120,7 +120,7 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `adapters/sops/` | SOPS key-service sidecar adapter (separate Go module) |
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
-| `tools/` | Developer tooling (mutation-guard enumerator, inventory) |
+| `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
 | `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `OPENPGP-COMPATIBILITY`, `TESTING`) |
 
 ## Security
