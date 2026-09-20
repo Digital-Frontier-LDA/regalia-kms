@@ -93,20 +93,24 @@ class FakeLib:
     def __init__(self, keys):
         self.keys = keys
         self.sessions = []
+        self.calls = []          # every library call, so "no card was touched" is checkable
 
     def load(self, path):
-        pass
+        self.calls.append("load")
 
     def getSlotList(self, tokenPresent=True):
+        self.calls.append("getSlotList")
         return [0]
 
     def getTokenInfo(self, slot):
+        self.calls.append("getTokenInfo")
         class I:
             label = "fake-token"
             firmwareVersion = (4, 1)
         return I()
 
     def openSession(self, slot, flags):
+        self.calls.append("openSession")
         s = FakeSession(self.keys)
         self.sessions.append(s)
         return s
@@ -202,16 +206,35 @@ class BenchTest(unittest.TestCase):
         self.assertNotIn("—", rows[1], f"the key's second operation was lost with the session:\n{out}")
 
     def test_a_sample_count_below_one_is_refused_before_the_card_is_touched(self):
-        install_fake([(b"\x01", CKK_EC, "k1")])
-        with self.assertRaises(SystemExit) as cm:
-            load_bench({"HSM_PIN": "123456", "BENCH_N": "0", "PKCS11_MODULE": "/fake"})
-        self.assertIn("1 or more", str(cm.exception))
+        # "Before the card is touched" is the claim, so it is the thing asserted: exiting is not
+        # enough if the module was already loaded, the slot listed or a session opened — each of
+        # those reaches the token, and one of them spends a PIN login.
+        for bad in ("0", "-5"):
+            with self.subTest(bench_n=bad):
+                lib = install_fake([(b"\x01", CKK_EC, "k1")])
+                with self.assertRaises(SystemExit) as cm:
+                    load_bench({"HSM_PIN": "123456", "BENCH_N": bad, "PKCS11_MODULE": "/fake"})
+                self.assertIn("1 or more", str(cm.exception))
+                self.assertEqual([], lib.calls, f"the card was touched anyway: {lib.calls}")
+                self.assertEqual([], lib.sessions, "a session was opened before the refusal")
 
     def test_a_non_numeric_sample_count_is_refused(self):
-        install_fake([(b"\x01", CKK_EC, "k1")])
+        lib = install_fake([(b"\x01", CKK_EC, "k1")])
         with self.assertRaises(SystemExit) as cm:
             load_bench({"HSM_PIN": "123456", "BENCH_N": "twelve", "PKCS11_MODULE": "/fake"})
         self.assertIn("not an integer", str(cm.exception))
+        self.assertEqual([], lib.calls, f"the card was touched anyway: {lib.calls}")
+
+    def test_two_keys_sharing_a_cka_id_are_refused_rather_than_confused(self):
+        # Nothing stops a token from holding two private keys with the same CKA_ID. Taking the
+        # first match would print one key's timings under the other key's label and curve — a
+        # wrong number that looks exactly like a measurement.
+        keys = [(b"\x01", CKK_EC, "k1"), (b"\x01", CKK_RSA, "k1-duplicate")]
+        _lib, out = self.run_bench(keys)
+        self.assertIn("ambiguous", out, f"an ambiguous CKA_ID was measured anyway:\n{out}")
+        for line in out.splitlines():
+            if line.startswith("k1") and "ambiguous" not in line:
+                self.assertNotRegex(line, r"\d+\.\d", f"a timing was reported for an ambiguous id: {line}")
 
 
 if __name__ == "__main__":

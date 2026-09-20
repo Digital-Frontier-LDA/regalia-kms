@@ -168,18 +168,28 @@ def _run(holder, info, reopen):
         keys.append((kid_raw, kid_raw.hex(), ktype, label))
 
     def resolve(kid_raw):
-        """The current handle for this key on the CURRENT session, or None if it is gone."""
+        """The current handle for this key on the CURRENT session.
+
+        Returns (handle, None) or (None, why). EXACTLY ONE MATCH IS REQUIRED: nothing stops a token
+        from holding two private keys with the same CKA_ID, and taking the first match would report
+        one key's timings under the other key's label and curve — a wrong number that looks like a
+        measurement, which is the failure mode this whole file is written against."""
         found = holder[0].findObjects([(PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY),
                                        (PyKCS11.CKA_ID, kid_raw)])
-        return found[0] if found else None
+        if len(found) == 1:
+            return found[0], None
+        if not found:
+            return None, "key not found on this session"
+        return None, f"ambiguous CKA_ID {kid_raw.hex()}: {len(found)} private keys share it, not measured"
 
     rows = []
     for kid_raw, kid, ktype, label in keys:
         # Resolved ONCE per key, outside the measured operations: a C_FindObjects inside the timed
         # loop would be measuring the search, not the signature.
-        cell = [resolve(kid_raw)]
+        handle, why = resolve(kid_raw)
+        cell = [handle]
         if cell[0] is None:
-            rows.append((label, kid, "?", "key lookup", None, "key not found on this session"))
+            rows.append((label, kid, "?", "key lookup", None, why))
             continue
         obj = cell[0]
         desc = key_desc(holder[0], obj, ktype)
@@ -202,10 +212,11 @@ def _run(holder, info, reopen):
                 m = PyKCS11.Mechanism(mech, None)
                 ops.append((nm, lambda c=cell, m=m: holder[0].sign(c[0], os.urandom(32), m)))
 
+        lost = None
         for name, fn in ops:
             if cell[0] is None:
                 rows.append((label, kid, desc, name, None,
-                             "key not found after the session was replaced"))
+                             lost or "key not resolvable after the session was replaced"))
                 continue
             times, err = measure(fn)
             rows.append((label, kid, desc, name, times, err))
@@ -214,7 +225,7 @@ def _run(holder, info, reopen):
                 # The replacement session's handles are its own. Re-resolve before the next
                 # operation; if the key cannot be found there, say so instead of timing a stale
                 # handle and reporting the resulting error as a property of the card.
-                cell[0] = resolve(kid_raw)
+                cell[0], lost = resolve(kid_raw)
 
     hdr = (f"{'label':14} {'id':4} {'key':20} {'operation':30} "
            f"{'mean ms':>9} {'med ms':>8} {'p90 ms':>8} {'ops/s':>7}")
@@ -223,7 +234,7 @@ def _run(holder, info, reopen):
     for label, kid, desc, name, times, err in rows:
         if err:
             print(f"{label[:14]:14} {kid:4} {desc[:20]:20} {name[:30]:30} "
-                  f"{'—':>9} {'—':>8} {'—':>8} {'—':>7}   {err[:30]}")
+                  f"{'—':>9} {'—':>8} {'—':>8} {'—':>7}   {err[:70]}")
         else:
             mean = statistics.mean(times)
             print(f"{label[:14]:14} {kid:4} {desc[:20]:20} {name[:30]:30} "
