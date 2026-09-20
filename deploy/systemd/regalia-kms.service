@@ -1,0 +1,37 @@
+[Unit]
+Description=Regalia centralized KMS
+Documentation=https://github.com/Digital-Frontier-LDA/regalia
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=regalia-kms
+Group=regalia-kms
+ExecStart=/usr/local/sbin/regalia-kms -config /etc/regalia-kms/config.json
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+StateDirectory=regalia-kms
+StateDirectoryMode=0700
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

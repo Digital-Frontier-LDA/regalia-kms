@@ -377,7 +377,7 @@ instruments, and the middle row is the one worth knowing:
 `gofmt` is therefore **not** silent — but it is silent on the stream most callers read. The common
 idiom `test -z "$(gofmt -l ...)"` captures stdout only, so it passes on a file gofmt could not
 parse: a formatting gate blind to the worse of the two things it is looking at. **CI already gets
-this right** — `.github/workflows/kms.yml` checks the exit code first and does not suppress stderr,
+this right** — the KMS workflow checks the exit code first and does not suppress stderr,
 with a comment saying why, because its first version had the bug:
 
     if ! unformatted=$(gofmt -l ); then ... exit 1; fi
@@ -539,7 +539,8 @@ umask is the one that has to pass.
 
 ## 14. The reason a thing is deliberately missing lives only in prose
 
-`doc/RUNBOOK-KMS-INCIDENT.md` requires five elements per scenario and the operator runbook requires
+The incident runbook (kept with the operational records, outside this repository) requires five
+elements per scenario and the operator runbook requires
 six. The difference is deliberate: **rollback is excluded**, because during a compromise, reversing
 state is usually destroying the evidence of what happened, and a form field named *Rollback* invites
 exactly that at the moment nobody has spare judgement.
@@ -588,7 +589,7 @@ someone helpful.
 §14 says an absence needs a test and so does its explanation. This is the same argument for a claim
 of **completion**, and it is the one that cost a real defect.
 
-`tools/sops_inventory.py` documented four traps its own development had hit. A reader auditing the file
+A SOPS inventory tool (kept with the operational records) documented four traps its own development had hit. A reader auditing the file
 reconstructed every one of them from those docstrings — except the one whose comment said it was
 handled. And they did not fail to find it: they **actively did not look**, because the comment said
 the question was settled.
@@ -634,7 +635,7 @@ surviving pair still matched. `assertTrue(defined)` was guarding non-empty when 
 mattered was *complete*. The fix is a floor on **reach**, not on count: the walk must find files
 under `internal`, `cmd` and `tests`, and it names the directory it stopped finding.
 
-**The contract that was also the corpus.** `test_runbook_structure.py` iterates the elements each
+**The contract that was also the corpus.** A runbook-structure test iterates the elements each
 document's contract declares. Deleting `"prerequisites"` from `CUSTODY_ELEMENTS` removed the
 requirement *and* the assertion that would have caught it, in one edit, with the suite green.
 `assertGreater(checked, 0)` could not see it either: the count of *procedures* checked does not move
@@ -644,7 +645,7 @@ changing a contract, it stops the change being invisible.
 **And the first fix for it was the same mistake one level down.** The pin was originally a *count*,
 `len(elements)`, which a deletion moves — but a **swap** does not. Trading CUSTODY's `prerequisites`
 for a second entry pointing at an existing literal holds the size at 4, and with that requirement
-gone `RUNBOOK-CUSTODIAN-ROTATION.md` lost all three of its `**Prerequisites.**` markers with nothing
+gone, the custodian-rotation runbook lost all three of its `**Prerequisites.**` markers with nothing
 red, while the identical document edit is red when the element is present. **Pin identity, not
 size:** a size is a summary, and a summary is exactly what a substitution is invisible to. Names are
 pinned and literals are not, because changing a literal while keeping the name is already caught —
@@ -1289,7 +1290,7 @@ found it.
 
 ## Do not hide from the instrument
 
-Fixing #88, the secret scanner flagged `hsm-host-role/files/verify-deployment.py` — on branch
+Fixing #88, the secret scanner flagged a deployment-verification script — on branch
 `ops/kms-ansible-hardening`, not yet on `main` — for containing the PEM headers it exists to hunt
 for. The file holds no secret, so composing the headers from parts in the script was
 legitimate. The test then pinned the expected headers base64-encoded, on the reasoning that gitleaks

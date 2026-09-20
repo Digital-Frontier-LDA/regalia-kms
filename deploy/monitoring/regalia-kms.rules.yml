@@ -1,0 +1,164 @@
+# Alert rules for the Regalia KMS, one per series in kms/OBSERVABILITY.md.
+#
+# That document is the contract: every condition here is stated there, and
+# tests/test_alert_rules.py proves the two cannot drift — a documented series
+# with no rule is decoration, and a rule naming an undocumented series is wrong
+# about what it watches.
+#
+# Severity reads as: critical pages, warning investigates in hours.
+groups:
+  - name: regalia-kms
+    rules:
+      - alert: RegaliaAuditBacklogGrowing
+        expr: regalia_audit_backlog_events > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Audit events are accumulating without reaching the collector.
+      - alert: RegaliaAuditBacklogOverLimit
+        expr: regalia_audit_backlog_events > 4096
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Audit backlog is past maxAuditBacklog; readiness is already false and the off-host copy is behind.
+      - alert: RegaliaAuditOldestUnshippedStale
+        expr: regalia_audit_oldest_unshipped_age_seconds > 300
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: The oldest unshipped audit event is over five minutes old; the tamper-evident off-host copy is falling behind.
+      - alert: RegaliaAuditShipperStuck
+        expr: regalia_audit_backlog_events > 0 and rate(regalia_audit_shipped_sequence[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The backlog is nonzero and the acknowledged head has not moved; the shipper is stuck, not just behind.
+      - alert: RegaliaAuditChainBroken
+        expr: regalia_audit_verify_outcome{outcome="chain-broken"} == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: The audit journal on disk no longer matches what was written — altered, truncated, or replaced under a running daemon. This is a security page.
+      - alert: RegaliaAuditVerifyUnreadable
+        expr: regalia_audit_verify_outcome{outcome="unreadable"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The journal verifier cannot read what it audits (permissions, a missing journal, a canceled context). Pages operations, not security; it must never read as a broken chain.
+      - alert: RegaliaAuditVerifyUnknownOutcome
+        expr: regalia_audit_verify_outcome{outcome="unknown"} == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: The verification outcome is outside the closed enum — a wiring or renderer bug. The trail's state is being misreported; treat it as unverified until fixed.
+      - alert: RegaliaAuditVerifyStale
+        expr: time() - regalia_audit_verify_last_run_seconds > 120
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: The journal verifier has not run in over two minutes — twice its interval. A verifier that stops asking is the blind spot the loop exists to close.
+      - alert: RegaliaFencingLeaseLost
+        expr: regalia_fencing_lease_held == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: This site does not hold the fencing lease. Fire this only for the intended-active site; a passive site holds no lease by design. A site that has never evaluated the lease does not match this rule at all -- the gauge is absent until the first evaluation, so this cannot fire on a restart; RegaliaFencingNeverEvaluated covers that state.
+      # A LEASE THAT HAS NEVER BEEN EVALUATED FIRES NEITHER RULE ABOVE OR BELOW.
+      #
+      # regalia_fencing_lease_held and _last_check_seconds are both ABSENT until the first
+      # evaluation, deliberately: a zero there is byte-identical to a lease that was just lost,
+      # so LeaseLost would page on every restart and a rule that pages on every restart gets
+      # silenced. But absence means EvaluationStale cannot fire either -- time() minus a series
+      # that does not exist matches nothing -- so a site whose fencing never evaluates at all
+      # would be invisible to both. This is the rule that sees it, and it is why
+      # regalia_fencing_evaluated is emitted at 0 rather than the series simply being dropped.
+      - alert: RegaliaFencingNeverEvaluated
+        expr: regalia_fencing_evaluated == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Fencing is configured but the lease has never been evaluated, so this site's active/passive state is unknown rather than passive. Neither LeaseLost nor EvaluationStale can fire in this state.
+      - alert: RegaliaFencingEvaluationStale
+        expr: time() - regalia_fencing_last_check_seconds > 120
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: The fencing lease has not been evaluated in over two minutes; the held/lost reading is a stale claim.
+      - alert: RegaliaFencingEpochChanged
+        expr: changes(regalia_fencing_lease_epoch[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The fencing lease epoch moved. Outside a planned failover that means a second site took the lease — confirm only one site believes it is active.
+      - alert: RegaliaBackendQuarantined
+        expr: regalia_backend_quarantined == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "A device is latched out of service: {{ $labels.device }} ({{ $labels.reason }}). Custody is degraded until an operator clears it."
+      - alert: RegaliaPINRetriesLow
+        expr: regalia_token_pin_retries_remaining <= 2
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.device }} has at most two PIN retries left; a lockout bricks the token."
+      - alert: RegaliaPINReadingStale
+        expr: time() - regalia_token_pin_retries_updated_at_seconds > 900
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The PIN retry reading for {{ $labels.device }} is over fifteen minutes old; the number is a blind spot, not a health signal."
+      - alert: RegaliaQuotaRejectionsSustained
+        expr: increase(regalia_policy_quota_rejections_total[1h]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Operations are being refused for exceeding a daily quota; a workload hit its cap or something is retrying into one.
+      - alert: RegaliaNotReady
+        expr: regalia_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: The daemon is not ready; the readiness sub-metrics say which dependency is down.
+      - alert: RegaliaReadinessFlapping
+        expr: increase(regalia_readiness_transitions_total[10m]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: Readiness has changed more than three times in ten minutes; the service is flapping.
+      - alert: RegaliaReadinessCheckStale
+        expr: time() - regalia_readiness_last_check_seconds > 120
+        labels:
+          severity: warning
+        annotations:
+          summary: Readiness has not been evaluated in two minutes; the load balancer may have stopped asking, which is itself odd.
+      - alert: RegaliaRouterRejections
+        expr: increase(regalia_http_router_decisions_total{decision="rejected"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The router is 404ing requests. If clients are configured correctly, a path nothing serves is the #72 signature — check whether the handler counters for the expected routes are flat.
+      - alert: RegaliaOperationErrors
+        expr: increase(regalia_http_requests_total{outcome="5xx"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Operations are failing server-side on {{ $labels.route }}."
+      - alert: RegaliaUnauthenticatedProbing
+        expr: increase(regalia_http_unauthenticated_total[10m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sustained authentication rejections; probing, or a client certificate expired unnoticed.
