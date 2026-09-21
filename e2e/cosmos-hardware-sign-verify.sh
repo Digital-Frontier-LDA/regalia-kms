@@ -66,6 +66,26 @@ if len(signature) != 64:
 r = int.from_bytes(signature[:32], "big")
 s = int.from_bytes(signature[32:], "big")
 public.verify(encode_dss_signature(r, s), digest, ec.ECDSA(Prehashed(hashes.SHA256())))
+
+# A GENERAL ECDSA VERIFIER IS NOT THE CHAIN. The verify() above accepts both of the two equivalent
+# signatures for a message; the Cosmos SDK accepts only the one with s <= N/2 and rejects the other
+# as malleable. So this script used to print "signature verified" for transactions no Cosmos node
+# would have accepted -- 11 of 24 signatures measured on DENK0404144 on 2026-09-21 were high-S.
+#
+# What goes on-chain is the NORMALISED signature, so that is what is verified and reported. The raw
+# form is reported too, because a token emitting high-S is normal and is not a fault; the fault
+# would be a signer that passes it on, which is what internal/backend/nitrokey/lows.go prevents.
+N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+if s > N // 2:
+    s_chain = N - s
+    form = "HIGH-S from the token, normalised for the chain"
+else:
+    s_chain = s
+    form = "low-S as returned by the token"
+public.verify(encode_dss_signature(r, s_chain), digest, ec.ECDSA(Prehashed(hashes.SHA256())))
+if s_chain > N // 2:
+    raise SystemExit("the signature that would go on-chain is still high-S; a Cosmos node would reject it")
+print(f"signature form: {form}")
 PY
 
-echo "Cosmos SignDoc hardware signature verified (token=${TOKEN_LABEL:-slot-$SLOT} object=$OBJECT_ID)"
+echo "Cosmos SignDoc hardware signature verified, low-S enforced (token=${TOKEN_LABEL:-slot-$SLOT} object=$OBJECT_ID)"
