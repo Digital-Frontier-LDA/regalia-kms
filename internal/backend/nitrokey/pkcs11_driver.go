@@ -243,7 +243,15 @@ func (session *pkcs11Session) Sign(ctx context.Context, objectID, algorithm stri
 		zero(result)
 		return nil, errors.New("PKCS#11 signing unavailable")
 	}
-	return result, nil
+	// LOW-S, OR THE COSMOS CHAIN REJECTS IT. The token returns whichever of the two equivalent
+	// signatures it computed; the Cosmos SDK accepts only s <= N/2. 11 of 24 signatures measured on
+	// DENK0404144 were high-S, so without this the signer fails roughly half the time, on-chain,
+	// with a signature every general-purpose verifier calls valid. See lows.go.
+	normalized, rewritten := normalizeLowS(algorithm, result)
+	if rewritten {
+		zero(result)
+	}
+	return normalized, nil
 }
 
 func (session *pkcs11Session) Unwrap(ctx context.Context, objectID, algorithm string, ciphertext, aad []byte) ([]byte, error) {
