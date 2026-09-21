@@ -72,6 +72,31 @@ func recordEvents(t *testing.T, path string, count int) {
 			t.Fatalf("record %d: %v", i, err)
 		}
 	}
+	// recordEvents MEANS "a host that ships" — every row that calls it and then reasons about the
+	// collector's memory depends on .shipped existing. That mark is written by the shipper's own
+	// goroutine after the sink acknowledges, and Close() stops the shipper "without draining it"
+	// (shipper.go), so whether it is there is a timing the test does not control. Alone the
+	// goroutine always won; under `go test ./...`, with every package running at once, it
+	// regularly lost and "truncated to one on a SHIPPING host is caught by the collector's
+	// memory" failed — because the host was not, in fact, shipping.
+	//
+	// The row below at "one event, mark absent, but the collector acknowledged it" already
+	// retired this same race by writing the mark explicitly, and says so. This does it once, in
+	// the helper, for every row that asks for a shipping host. recordOnly is deliberately NOT
+	// given this wait: it opens with a nil sink and means the opposite.
+	//
+	// Bounded, and a FAILURE if it never arrives: a recorder that stopped producing the mark
+	// would break these rows for a real reason, and that must still be caught.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(path + shippedSuffix); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the nullSink acknowledged nothing within 10s: no %s, so this is not a shipping host", path+shippedSuffix)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatal(err)
 	}

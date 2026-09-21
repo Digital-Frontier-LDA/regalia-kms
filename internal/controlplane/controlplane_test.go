@@ -86,6 +86,28 @@ func writeAuditJournal(t *testing.T, path string, events int) {
 			t.Fatalf("record audit event %d: %v", i, err)
 		}
 	}
+	// WAIT FOR THE SIDECARS BEFORE CLOSING. The .shipped mark is written by the shipper's own
+	// goroutine after the sink acknowledges, and Close() stops the shipper "without draining it"
+	// (shipper.go). So the mark is produced on a timing this test does not control: alone the
+	// goroutine always won, and under `go test ./...` with every package running at once it
+	// regularly lost, failing TestBuildSealsAndInspectsARoundTrip with "audit writer did not
+	// create .shipped; the export contract is stale" — a message about a stale contract, when
+	// what had happened was that nothing waited.
+	//
+	// Bounded, and a FAILURE if it never arrives: if the writer genuinely stopped producing the
+	// sidecar, the constant really would be stale and that must still be caught.
+	for _, suffix := range []string{highWaterSuffix, shippedSuffix} {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if _, err := os.Stat(path + suffix); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("audit writer never created %s%s within 10s of recording %d events", path, suffix, events)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
 	if err := recorder.Close(); err != nil {
 		t.Fatalf("close audit journal: %v", err)
 	}
