@@ -22,9 +22,13 @@ type attributeStub struct {
 	// key's origin (regalia#447). The embedded nil interface panicked when it was first asked.
 	model        string
 	manufacturer string
+	tokenInfoErr error
 }
 
 func (stub *attributeStub) GetTokenInfo(uint) (pkcs11.TokenInfo, error) {
+	if stub.tokenInfoErr != nil {
+		return pkcs11.TokenInfo{}, stub.tokenInfoErr
+	}
 	return pkcs11.TokenInfo{Model: stub.model, ManufacturerID: stub.manufacturer}, nil
 }
 
@@ -225,5 +229,23 @@ func TestTheDeviceClassIsIdentifiedByTheEmulationNotTheName(t *testing.T) {
 	err := (&pkcs11Session{module: stub}).AssertKEKGeneratedOnToken(context.Background(), "01")
 	if !errors.Is(err, ErrKEKNotTokenGenerated) {
 		t.Fatalf("err = %v; a non-emulated token keeps the attribute's ordinary meaning", err)
+	}
+}
+
+// UNREADABLE TOKEN METADATA IS NOT A LICENCE TO TRUST THE ATTRIBUTE. If the class cannot be
+// established, neither can CKA_LOCAL's meaning on it — and passing on a true reading would admit
+// an imported key from an SC-HSM whose token info happened not to read.
+func TestUnreadableTokenMetadataDoesNotLetTheAttributeThrough(t *testing.T) {
+	stub := &attributeStub{
+		values:       []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_LOCAL, true)},
+		tokenInfoErr: errors.New("C_GetTokenInfo failed"),
+	}
+	err := (&pkcs11Session{module: stub}).AssertKEKGeneratedOnToken(context.Background(), "01")
+	if err == nil {
+		t.Fatal("a CKA_LOCAL=true reading passed although the token could not be identified; on " +
+			"an SC-HSM that reading only means a certificate exists")
+	}
+	if !errors.Is(err, ErrKEKProvenanceUndeterminable) {
+		t.Fatalf("err = %v, want ErrKEKProvenanceUndeterminable", err)
 	}
 }

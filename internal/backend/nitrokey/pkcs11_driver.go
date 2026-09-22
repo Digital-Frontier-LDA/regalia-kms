@@ -675,8 +675,9 @@ func (session *pkcs11Session) AssertKEKGeneratedOnToken(ctx context.Context, obj
 	return nil
 }
 
-// tokenHidesKeyProvenance reports whether this token is one where CKA_LOCAL has been MEASURED to
-// mean something other than "generated here".
+// tokenHidesKeyProvenance reports whether CKA_LOCAL must NOT be read as provenance on this token:
+// either because the token is one where it has been MEASURED to mean something else, or because
+// the token could not be identified at all and therefore neither could the attribute's meaning.
 //
 // Identified by the PKCS#15-emulation signature rather than by a product name: OpenSC presents
 // every SmartCard-HSM — Nitrokey HSM 2 and Pico HSM alike — through the same sc-hsm driver, and it
@@ -689,9 +690,15 @@ func (session *pkcs11Session) tokenHidesKeyProvenance() bool {
 	}
 	info, err := session.module.GetTokenInfo(session.slot)
 	if err != nil {
-		// Unknown token behaviour is not a licence to trust the attribute, but this function only
-		// decides WHICH refusal is reported; the caller refuses either way.
-		return false
+		// FAIL CLOSED. The comment here used to say this function "only decides WHICH refusal is
+		// reported; the caller refuses either way" — which is false. When CKA_LOCAL reads true and
+		// the token class cannot be established, returning false lets the caller PASS the key on
+		// the strength of an attribute whose meaning on this device is exactly what is unknown.
+		// An SC-HSM whose token info momentarily failed to read would admit an imported key.
+		//
+		// Not knowing which device this is means not knowing what the attribute means, so the
+		// attribute cannot be trusted: treat it as undeterminable.
+		return true
 	}
 	model := strings.ToLower(strings.TrimSpace(info.Model))
 	manufacturer := strings.ToLower(strings.TrimSpace(info.ManufacturerID))
