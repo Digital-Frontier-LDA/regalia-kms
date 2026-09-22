@@ -139,7 +139,7 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 	if err != nil {
 		return nil, errors.New("PKCS#11 session unavailable")
 	}
-	return &pkcs11Session{module: driver.module, handle: handle, deviceID: deviceID, serial: expectedSerial, devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
+	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
 }
 
 func (driver *PKCS11Driver) Ready(ctx context.Context) bool {
@@ -162,6 +162,7 @@ func (driver *PKCS11Driver) Close() error {
 type pkcs11Session struct {
 	module   cryptoki
 	handle   pkcs11.SessionHandle
+	slot     uint
 	deviceID string
 	serial   string
 	devAuth  DevAuthProbe
@@ -639,10 +640,72 @@ func (session *pkcs11Session) AssertKEKGeneratedOnToken(ctx context.Context, obj
 		// Refuse, but do not claim to know where the key came from.
 		return errors.New("PKCS#11 key attributes unavailable")
 	}
+	// ON AN SC-HSM BEHIND OPENSC THIS ATTRIBUTE ANSWERS A DIFFERENT QUESTION, so its value must
+	// not be read as provenance. Measured on ESP41D722E2, 2026-09-22, with one key imported and
+	// one generated on the card:
+	//
+	//	akash-funding   (imported,  has a certificate)  CKA_LOCAL = true
+	//	pico-generated  (generated, no certificate)     CKA_LOCAL = false
+	//
+	// then writing a certificate for the GENERATED key, touching nothing else:
+	//
+	//	cert-for-generated                              CKA_LOCAL = true   <- was false
+	//
+	// CKA_LOCAL on the public object tracks whether a CERTIFICATE exists for that id. It says
+	// nothing about where the private key came from, and the public object disappears entirely
+	// when the certificate is deleted. The same reading holds on DENK0404144.
+	//
+	// That inverts this guard rather than merely blunting it: the ceremony's importer ALWAYS
+	// writes a certificate — gnupg-pkcs11-scd and `ssh-keygen -D` cannot see a key without one —
+	// so every imported key would pass a check whose whole purpose is to refuse imported keys.
+	// The worked example at the top of this comment, a host-generated key in a token-shaped box,
+	// is exactly what would get through.
+	//
+	// So on this device class the honest answer is that provenance CANNOT BE DETERMINED here. It
+	// still refuses — a KEK whose origin is unknown is not a hardware-rooted KEK — but it refuses
+	// with a distinct error, so a caller is not told "this key was imported" about a key that may
+	// well have been generated on the card. regalia#447 tracks where the answer should come from
+	// instead; key attestation over APDU is the candidate.
+	if session.tokenHidesKeyProvenance() {
+		return ErrKEKProvenanceUndeterminable
+	}
 	if !local {
 		return ErrKEKNotTokenGenerated
 	}
 	return nil
+}
+
+// tokenHidesKeyProvenance reports whether CKA_LOCAL must NOT be read as provenance on this token:
+// either because the token is one where it has been MEASURED to mean something else, or because
+// the token could not be identified at all and therefore neither could the attribute's meaning.
+//
+// Identified by the PKCS#15-emulation signature rather than by a product name: OpenSC presents
+// every SmartCard-HSM — Nitrokey HSM 2 and Pico HSM alike — through the same sc-hsm driver, and it
+// is the emulation that synthesises these objects. A narrow, named list is the right shape: this
+// is a statement about tokens whose behaviour was measured, not a guess about tokens in general,
+// and a token that is not on it keeps the attribute's ordinary meaning.
+func (session *pkcs11Session) tokenHidesKeyProvenance() bool {
+	if session == nil || session.module == nil {
+		return false
+	}
+	info, err := session.module.GetTokenInfo(session.slot)
+	if err != nil {
+		// FAIL CLOSED. The comment here used to say this function "only decides WHICH refusal is
+		// reported; the caller refuses either way" — which is false. When CKA_LOCAL reads true and
+		// the token class cannot be established, returning false lets the caller PASS the key on
+		// the strength of an attribute whose meaning on this device is exactly what is unknown.
+		// An SC-HSM whose token info momentarily failed to read would admit an imported key.
+		//
+		// Not knowing which device this is means not knowing what the attribute means, so the
+		// attribute cannot be trusted: treat it as undeterminable.
+		return true
+	}
+	model := strings.ToLower(strings.TrimSpace(info.Model))
+	manufacturer := strings.ToLower(strings.TrimSpace(info.ManufacturerID))
+	if !strings.Contains(model, "pkcs#15 emulated") {
+		return false
+	}
+	return strings.Contains(manufacturer, "cardcontact") || strings.Contains(manufacturer, "henarejos")
 }
 
 // AssertKEKNonExportable refuses a KEK whose private half the token will hand out.
@@ -876,7 +939,15 @@ func nativeUint(value []byte) uint {
 // reason strings in provider.go.
 var (
 	ErrKEKNotTokenGenerated = errors.New("KEK was not generated on this token")
-	ErrKEKExportable        = errors.New("KEK private key is exportable")
+
+	// ErrKEKProvenanceUndeterminable reports that this token cannot answer where the key came
+	// from. It is a refusal — an origin that cannot be established is not an established origin —
+	// but a different one from "this key was imported", which would be a claim the evidence does
+	// not support. See AssertKEKGeneratedOnToken and regalia#447.
+	ErrKEKProvenanceUndeterminable = errors.New(
+		"this token cannot establish whether the KEK was generated on it (CKA_LOCAL tracks the " +
+			"certificate here, not the key's origin)")
+	ErrKEKExportable = errors.New("KEK private key is exportable")
 	// ErrKEKLoginRequired is separate so a caller that got the order wrong is told that, rather
 	// than being handed the object-lookup failure it causes and reading it as a verdict.
 	ErrKEKLoginRequired = errors.New("PKCS#11 private key attributes require a logged-in session")

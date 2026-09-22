@@ -75,8 +75,12 @@ func TestNitrokeyHSM2Qualification(t *testing.T) {
 		if certPresent {
 			t.Fatalf("control: SoftHSM reported a device certificate (%q); the control token has none", fingerprint)
 		}
-		if fpErr == nil || fpErr.Error() != "device certificate is not present" {
-			t.Fatalf("control: device-cert probe error = %v, want \"device certificate is not present\"", fpErr)
+		// TYPED, not phrased. The caller that matters is the one deciding whether to fall back to
+		// EF 2F02 — where an SC-HSM actually keeps its device certificate — and it cannot make
+		// that decision on a substring. Pinning the wording also meant this assertion broke when
+		// the error gained the explanation that tells an operator what to do about it.
+		if !errors.Is(fpErr, ErrNoDeviceCertificate) {
+			t.Fatalf("control: device-cert probe error = %v, want ErrNoDeviceCertificate", fpErr)
 		}
 	}
 

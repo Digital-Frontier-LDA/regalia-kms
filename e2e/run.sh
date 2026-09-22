@@ -117,6 +117,11 @@ case "$MODE" in
     ;;
   pico-gate)
     evidence physical "the PicoHSM staging gate tier${HSM_CI_SERIAL:+ (serial $HSM_CI_SERIAL)}"
+    # A YubiKey in the run is a SECOND physical device, and the record must name it separately:
+    # "a real token was involved" does not say which, and the gate's PIV arm skips silently
+    # without HSM_CI_YUBIKEY_SERIAL — so a run without one must not read as covering it.
+    [ -n "${HSM_CI_YUBIKEY_SERIAL:-}" ] \
+      && evidence physical "YubiKey PIV 9A read-only qualification (serial $HSM_CI_YUBIKEY_SERIAL)"
     need_ceremony
     run "$CEREMONY/qubes/scripts/hsm-staging-ci.sh" --tier gate
     ;;
