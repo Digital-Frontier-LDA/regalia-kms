@@ -47,6 +47,16 @@ become test evidence.
 `cosmos-simapp-tx.sh` uses the same disposable node to submit and query a real
 `MsgSend`. It proves chain acceptance with the SDK's test keyring; it is not
 evidence that the KMS hardware signed that transaction.
+
+Every `run.sh` mode declares what CLASS of evidence its arms produce, and the run
+prints them together at the end — `software` (Go and host tooling, no token),
+`emulated` (SoftHSM or the ceremony emulator standing in for hardware), or
+`physical` (a real token). A SoftHSM pass and a Nitrokey pass look identical in a
+log and mean entirely different things, and the qualification record is assembled
+by people reading these logs. A run that produced nothing physical says so; a run
+that FAILED says its list is not evidence at all, because a trap that prints
+"EVIDENCE PRODUCED" after the run aborted is a record of things that did not
+happen.
 Select it through `e2e/run.sh --mode cosmos-devnet` when the reviewed binary is
 available.
 
