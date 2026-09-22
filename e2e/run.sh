@@ -44,28 +44,84 @@ run() {
   [ "$PLAN" = 1 ] || "$@"
 }
 
+# WHAT KIND OF EVIDENCE DID THIS PRODUCE? A run used to end in a list of "ok" lines that say
+# nothing about whether a real token was involved. The difference is the whole subject of
+# regalia#435 and #439: a SoftHSM pass and a Nitrokey pass look identical in the log and mean
+# entirely different things, and the qualification record is assembled by people reading these
+# logs. Each arm declares its class, and the run prints them together at the end.
+#
+#   software   pure Go and host tooling; no token of any kind
+#   emulated   a SoftHSM token or the ceremony emulator standing in for hardware
+#   physical   a real token, named by serial
+#
+# A mode that could be either says so per-arm rather than picking the flattering one.
+EVIDENCE=()
+evidence() { EVIDENCE+=("$1|$2"); }   # evidence <class> <what it covers>
+
+summarise_evidence() {
+  # THE EXIT STATUS DECIDES THE HEADING. The trap runs on failure too, and a list of arms printed
+  # under "EVIDENCE PRODUCED" after `set -e` aborted mid-run is a record of things that did not
+  # happen. Under --plan nothing ran at all.
+  local status=$?
+  local heading
+  if [ "$PLAN" = 1 ]; then
+    heading="EVIDENCE THIS PLAN WOULD PRODUCE (nothing ran)"
+  elif [ "$status" -ne 0 ]; then
+    heading="RUN FAILED (exit $status) — THE ARMS BELOW DID NOT ALL COMPLETE"
+  else
+    heading="EVIDENCE PRODUCED"
+  fi
+  printf '\n\033[1m========== %s ==========\033[0m\n' "$heading"
+  local physical=0 entry class what
+  for entry in ${EVIDENCE[@]+"${EVIDENCE[@]}"}; do
+    class="${entry%%|*}"; what="${entry#*|}"
+    case "$class" in
+      physical) physical=1; printf '  \033[32mPHYSICAL\033[0m  %s\n' "$what";;
+      emulated) printf '  \033[33mEMULATED\033[0m  %s\n' "$what";;
+      *)        printf '  SOFTWARE  %s\n' "$what";;
+    esac
+  done
+  if [ "$status" -ne 0 ] && [ "$PLAN" != 1 ]; then
+    printf '\n  A FAILED RUN PRODUCES NO EVIDENCE. The lines above say what this mode covers when\n'
+    printf '  it completes, not what it established. Do not record any of it.\n'
+    return
+  fi
+  if [ "$PLAN" != 1 ] && [ "$physical" -eq 0 ]; then
+    printf '\n  NOTHING HERE TOUCHED A REAL TOKEN. Do not file this as hardware qualification\n'
+    printf '  evidence: SoftHSM and the emulator model the interface, not the device, and every\n'
+    printf '  divergence that has cost us time was a place where they differ.\n'
+  fi
+}
+trap summarise_evidence EXIT
+
+evidence software "go test -race ./... and go vet, KMS and the sops adapter"
 run go -C "$ROOT" test -race ./...
 run go -C "$ROOT" vet ./...
 run env GOWORK=off go -C "$ROOT/adapters/sops" test -race ./...
 run env GOWORK=off go -C "$ROOT/adapters/sops" vet ./...
+evidence emulated "PKCS#11 plumbing and KMS policy against a disposable SoftHSM token"
 run "$ROOT/e2e/softhsm-pkcs11.sh"
 
 case "$MODE" in
   docker)
+    evidence emulated "the ceremony emulator suite, in Docker"
     need_ceremony
     run "$CEREMONY/qubes/emulator/build.sh" ceremony-emu
     run docker run --rm --privileged ceremony-emu all-tests
     ;;
   native-vm)
+    evidence emulated "the ceremony emulator suite, natively"
     [ "$(uname -s)" = Linux ] || { echo "native-vm mode requires disposable Debian/Linux" >&2; exit 2; }
     need_ceremony
     run sudo -E "$CEREMONY/qubes/emulator/run-tests.sh"
     ;;
   pico-gate)
+    evidence physical "the PicoHSM staging gate tier${HSM_CI_SERIAL:+ (serial $HSM_CI_SERIAL)}"
     need_ceremony
     run "$CEREMONY/qubes/scripts/hsm-staging-ci.sh" --tier gate
     ;;
   pico-nightly)
+    evidence physical "the DESTRUCTIVE PicoHSM nightly tier${HSM_CI_SERIAL:+ (serial $HSM_CI_SERIAL)}"
     [ "${REGALIA_ALLOW_DESTRUCTIVE_PICO:-}" = YES ] || {
       echo "REFUSING destructive Pico run: set REGALIA_ALLOW_DESTRUCTIVE_PICO=YES" >&2
       exit 2
@@ -75,9 +131,16 @@ case "$MODE" in
     run "$CEREMONY/qubes/scripts/hsm-staging-ci.sh" --tier nightly
     ;;
   cosmos-hardware)
+    # The token this signs with is named by module+slot/label, not by serial, so the serial is
+    # read back and reported: "a real token" is not evidence unless the record says WHICH.
+    evidence physical "Cosmos SignDoc signed by a real token (${REGALIA_COSMOS_PKCS11_TOKEN_LABEL:-slot ${REGALIA_COSMOS_PKCS11_SLOT:-?}} via ${REGALIA_COSMOS_PKCS11_MODULE:-?})"
     run "$ROOT/e2e/cosmos-hardware-sign-verify.sh"
     ;;
   cosmos-devnet)
+    # NOT hardware evidence, and the README says so: this arm proves a disposable node accepts a
+    # transaction signed with the SDK's OWN test keyring. regalia#439's first acceptance criterion
+    # — a node accepting a transaction signed through the KMS path — is not what this run shows.
+    evidence emulated "a disposable Cosmos node accepting a MsgSend signed by the SDK's test keyring (NOT the KMS)"
     run "$ROOT/e2e/cosmos-simapp-tx.sh"
     ;;
   *) echo "unsupported mode: $MODE" >&2; exit 2 ;;

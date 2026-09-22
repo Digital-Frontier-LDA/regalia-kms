@@ -17,12 +17,13 @@ import (
 
 type probeModule struct {
 	fakeCryptoki
-	slots    []uint
-	infos    map[uint]pkcs11.TokenInfo
-	certs    [][]byte
-	findErr  error
-	openErr  error
-	closedBy int
+	slots     []uint
+	infos     map[uint]pkcs11.TokenInfo
+	certs     [][]byte
+	lastClass uint
+	findErr   error
+	openErr   error
+	closedBy  int
 	// Error hooks for the PKCS#11 calls TokenProbes makes. Defaults preserve the
 	// happy-path behavior; setting any of them turns the named call into the
 	// failing path the production guard exists to handle.
@@ -53,10 +54,28 @@ func (module *probeModule) OpenSession(uint, uint) (pkcs11.SessionHandle, error)
 	return 1, module.openErr
 }
 func (module *probeModule) CloseSession(pkcs11.SessionHandle) error { module.closedBy++; return nil }
-func (module *probeModule) FindObjectsInit(pkcs11.SessionHandle, []*pkcs11.Attribute) error {
+
+// THE CLASS AND THE TEMPLATE ARE HONOURED. This fixture used to return the certificate handles
+// for EVERY FindObjects call whatever class was asked for, and to answer every
+// GetAttributeValue with CKA_VALUE whatever was requested. A probe that asks "which key ids are
+// on this token?" was therefore handed certificates, and their CKA_ID came back as certificate
+// bytes — so every certificate looked paired with itself. A model that answers questions it was
+// not asked cannot tell a correct probe from an incorrect one.
+func (module *probeModule) FindObjectsInit(_ pkcs11.SessionHandle, template []*pkcs11.Attribute) error {
+	module.lastClass = 0
+	for _, attribute := range template {
+		if attribute != nil && attribute.Type == pkcs11.CKA_CLASS && len(attribute.Value) > 0 {
+			module.lastClass = nativeUint(attribute.Value)
+		}
+	}
 	return module.findErr
 }
 func (module *probeModule) FindObjects(pkcs11.SessionHandle, int) ([]pkcs11.ObjectHandle, bool, error) {
+	if module.lastClass != pkcs11.CKO_CERTIFICATE {
+		// These tokens carry certificates and no keys, which is what a device certificate looks
+		// like when it is the only object on the card.
+		return nil, false, nil
+	}
 	handles := make([]pkcs11.ObjectHandle, len(module.certs))
 	for i := range module.certs {
 		handles[i] = pkcs11.ObjectHandle(i + 1)
@@ -64,7 +83,7 @@ func (module *probeModule) FindObjects(pkcs11.SessionHandle, int) ([]pkcs11.Obje
 	return handles, false, nil
 }
 func (module *probeModule) FindObjectsFinal(pkcs11.SessionHandle) error { return nil }
-func (module *probeModule) GetAttributeValue(_ pkcs11.SessionHandle, object pkcs11.ObjectHandle, _ []*pkcs11.Attribute) ([]*pkcs11.Attribute, error) {
+func (module *probeModule) GetAttributeValue(_ pkcs11.SessionHandle, object pkcs11.ObjectHandle, template []*pkcs11.Attribute) ([]*pkcs11.Attribute, error) {
 	if module.attrErr != nil {
 		return nil, module.attrErr
 	}
@@ -75,7 +94,18 @@ func (module *probeModule) GetAttributeValue(_ pkcs11.SessionHandle, object pkcs
 	if index < 0 || index >= len(module.certs) {
 		return nil, os.ErrNotExist
 	}
-	return []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_VALUE, module.certs[index])}, nil
+	out := make([]*pkcs11.Attribute, 0, len(template))
+	for _, attribute := range template {
+		switch attribute.Type {
+		case pkcs11.CKA_VALUE:
+			out = append(out, pkcs11.NewAttribute(pkcs11.CKA_VALUE, module.certs[index]))
+		case pkcs11.CKA_ID:
+			// Distinct per certificate, and never equal to a key id here because these tokens
+			// carry no keys.
+			out = append(out, pkcs11.NewAttribute(pkcs11.CKA_ID, []byte{byte(index + 1)}))
+		}
+	}
+	return out, nil
 }
 
 func moduleWithToken(serial string, flags uint) *probeModule {
@@ -353,8 +383,14 @@ func TestFingerprintMissingCertificateReportsNotPresent(t *testing.T) {
 	if err == nil {
 		t.Fatalf("empty certificate list produced a fingerprint: %q", got)
 	}
-	if !strings.Contains(err.Error(), "not present") {
-		t.Fatalf("expected 'not present' message, got %q", err)
+	// TYPED, not phrased. The caller that matters here is the one deciding whether to fall back to
+	// EF 2F02 — where an SC-HSM actually keeps its device certificate — and it cannot make that
+	// decision on a substring. errors.Is is what it checks.
+	if !errors.Is(err, ErrNoDeviceCertificate) {
+		t.Fatalf("expected ErrNoDeviceCertificate, got %q", err)
+	}
+	if !strings.Contains(err.Error(), "EF 2F02") {
+		t.Fatalf("the message does not say where the certificate actually lives: %q", err)
 	}
 }
 
