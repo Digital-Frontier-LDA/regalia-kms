@@ -17,6 +17,15 @@ type attributeStub struct {
 	cryptoki
 	values []*pkcs11.Attribute
 	getErr error
+	// The token this stub claims to be. AssertKEKGeneratedOnToken asks, because CKA_LOCAL means
+	// something different on an SC-HSM behind OpenSC — it tracks the certificate there, not the
+	// key's origin (regalia#447). The embedded nil interface panicked when it was first asked.
+	model        string
+	manufacturer string
+}
+
+func (stub *attributeStub) GetTokenInfo(uint) (pkcs11.TokenInfo, error) {
+	return pkcs11.TokenInfo{Model: stub.model, ManufacturerID: stub.manufacturer}, nil
 }
 
 func (*attributeStub) FindObjectsInit(pkcs11.SessionHandle, []*pkcs11.Attribute) error { return nil }
@@ -134,5 +143,87 @@ func TestAKEKLookupWithNoClassesIsRefused(t *testing.T) {
 	// the missing class rather than the stub failing to answer at all.
 	if _, err := session.findKEKObject("02", pkcs11.CKO_PUBLIC_KEY); err != nil {
 		t.Fatalf("findKEKObject with a class failed: %v — the case above proves nothing", err)
+	}
+}
+
+// TestSCHSMProvenanceIsReportedAsUndeterminable pins the measurement in regalia#447: on an SC-HSM
+// behind OpenSC, CKA_LOCAL on the public object tracks whether a CERTIFICATE exists for that id,
+// not where the private key came from.
+//
+// Measured on ESP41D722E2, 2026-09-22, with one imported key and one generated on the card:
+//
+//	akash-funding   (imported,  has a certificate)  CKA_LOCAL = true
+//	pico-generated  (generated, no certificate)     CKA_LOCAL = false
+//
+// then writing a certificate for the GENERATED key and touching nothing else:
+//
+//	cert-for-generated                              CKA_LOCAL = true   <- was false
+//
+// That inverts this guard rather than blunting it. The ceremony's importer ALWAYS writes a
+// certificate — gnupg-pkcs11-scd and `ssh-keygen -D` cannot see a key without one — so a
+// CKA_LOCAL=true reading on such a token is exactly what an IMPORTED key looks like.
+func TestSCHSMProvenanceIsReportedAsUndeterminable(t *testing.T) {
+	for _, token := range []struct{ name, model, manufacturer string }{
+		{"nitrokey hsm 2", "PKCS#15 emulated", "www.CardContact.de"},
+		{"pico hsm", "PKCS#15 emulated", "Pol Henarejos"},
+	} {
+		t.Run(token.name, func(t *testing.T) {
+			// CKA_LOCAL true — which on this token class means "there is a certificate", and is
+			// precisely the reading an imported ceremony key produces.
+			stub := &attributeStub{
+				values:       []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_LOCAL, true)},
+				model:        token.model,
+				manufacturer: token.manufacturer,
+			}
+			session := &pkcs11Session{module: stub}
+			err := session.AssertKEKGeneratedOnToken(context.Background(), "01")
+			if err == nil {
+				t.Fatal("a CKA_LOCAL=true reading was accepted as proof the key was generated on " +
+					"the token; on this token class that reading only means a certificate exists")
+			}
+			if !errors.Is(err, ErrKEKProvenanceUndeterminable) {
+				t.Fatalf("err = %v, want ErrKEKProvenanceUndeterminable", err)
+			}
+			if errors.Is(err, ErrKEKNotTokenGenerated) {
+				t.Fatal("reported as 'not generated on this token', which claims to know where the " +
+					"key came from — the whole point is that this token cannot say")
+			}
+		})
+	}
+}
+
+// A token whose CKA_LOCAL has NOT been measured to mean something else keeps the ordinary meaning.
+// SoftHSM is where the attribute was verified, and the guard's worked example depends on it.
+func TestAnOrdinaryTokenKeepsTheAttributesMeaning(t *testing.T) {
+	generated := &attributeStub{
+		values:       []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_LOCAL, true)},
+		model:        "SoftHSM v2",
+		manufacturer: "SoftHSM project",
+	}
+	if err := (&pkcs11Session{module: generated}).AssertKEKGeneratedOnToken(context.Background(), "01"); err != nil {
+		t.Fatalf("a locally generated SoftHSM key was refused: %v", err)
+	}
+	imported := &attributeStub{
+		values:       []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_LOCAL, false)},
+		model:        "SoftHSM v2",
+		manufacturer: "SoftHSM project",
+	}
+	err := (&pkcs11Session{module: imported}).AssertKEKGeneratedOnToken(context.Background(), "01")
+	if !errors.Is(err, ErrKEKNotTokenGenerated) {
+		t.Fatalf("err = %v, want ErrKEKNotTokenGenerated for an imported SoftHSM key", err)
+	}
+}
+
+// The signature is the PKCS#15 EMULATION, not a product name: a token that merely mentions one of
+// these manufacturers without being the emulated profile is not in the measured class.
+func TestTheDeviceClassIsIdentifiedByTheEmulationNotTheName(t *testing.T) {
+	stub := &attributeStub{
+		values:       []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_LOCAL, false)},
+		model:        "Some Other Applet",
+		manufacturer: "www.CardContact.de",
+	}
+	err := (&pkcs11Session{module: stub}).AssertKEKGeneratedOnToken(context.Background(), "01")
+	if !errors.Is(err, ErrKEKNotTokenGenerated) {
+		t.Fatalf("err = %v; a non-emulated token keeps the attribute's ordinary meaning", err)
 	}
 }
