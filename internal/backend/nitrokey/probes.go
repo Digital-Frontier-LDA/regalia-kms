@@ -1,10 +1,12 @@
 package nitrokey
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/miekg/pkcs11"
@@ -100,27 +102,127 @@ func (probes *TokenProbes) Fingerprint(ctx context.Context, _, serial string) (s
 	}
 	defer func() { _ = probes.module.CloseSession(handle) }()
 
-	template := []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_CERTIFICATE)}
-	if err := probes.module.FindObjectsInit(handle, template); err != nil {
-		return "", errors.New("PKCS#11 certificate lookup failed")
+	// A KEY'S CERTIFICATE IS NOT A DEVICE IDENTITY, and this used to hash whichever single
+	// CKO_CERTIFICATE it found. A COMMISSIONED SC-HSM carries exactly one, and it belongs to the
+	// imported key — measured on DENK0404144 on 2026-09-21, where the only certificate object was
+	// CN=cosmos-staging-qual, written beside the key minutes earlier.
+	//
+	// Hashing that is wrong in two directions at once. Rotating the key changes the "device
+	// identity", so the same physical card is refused as a different one. Worse, two cards holding
+	// the same imported key and certificate produce the SAME identity, so the probe cannot tell
+	// them apart — which is the entire job of the boundary this probe implements.
+	//
+	// A key's certificate is distinguishable: it shares its CKA_ID with a key object. Only an
+	// UNPAIRED certificate can be a device certificate.
+	certificates, err := probes.certificateHandles(handle)
+	if err != nil {
+		return "", err
 	}
-	objects, _, findErr := probes.module.FindObjects(handle, 2)
-	_ = probes.module.FindObjectsFinal(handle)
-	if findErr != nil || len(objects) == 0 {
-		return "", errors.New("device certificate is not present")
+	keyIDs, err := probes.keyIDs(handle)
+	if err != nil {
+		return "", err
 	}
-	// More than one device certificate means the identity is ambiguous; hashing the first would
+	var unpaired []pkcs11.ObjectHandle
+	for _, object := range certificates {
+		id, idErr := probes.objectID(handle, object)
+		if idErr != nil {
+			// A certificate whose CKA_ID cannot be read cannot be shown to belong to a key, and
+			// assuming it does not would let exactly the object this guard excludes back in.
+			return "", errors.New("certificate identifier is unreadable")
+		}
+		if !containsID(keyIDs, id) {
+			unpaired = append(unpaired, object)
+		}
+	}
+	if len(unpaired) == 0 {
+		// TYPED, so a caller can fall back to the CVC in EF 2F02 — which is where an SC-HSM's
+		// device certificate actually lives, on a Nitrokey HSM 2 and on a Pico alike — instead of
+		// concluding it is holding the wrong device. Distinct from every read failure above.
+		return "", fmt.Errorf("%w: this token exposes none as a PKCS#11 object (an SC-HSM keeps it "+
+			"in EF 2F02, which PKCS#11 does not surface)", ErrNoDeviceCertificate)
+	}
+	// More than one UNPAIRED certificate means the identity is ambiguous; hashing the first would
 	// pin whichever the middleware happened to enumerate first.
-	if len(objects) != 1 {
+	if len(unpaired) != 1 {
 		return "", errors.New("device certificate is ambiguous")
 	}
-	values, err := probes.module.GetAttributeValue(handle, objects[0],
+	values, err := probes.module.GetAttributeValue(handle, unpaired[0],
 		[]*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_VALUE, nil)})
 	if err != nil || len(values) == 0 || len(values[0].Value) == 0 {
 		return "", errors.New("device certificate is unreadable")
 	}
 	sum := sha256.Sum256(values[0].Value)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// ErrNoDeviceCertificate reports that the token exposes no device certificate as a PKCS#11
+// object. It is a statement about the MIDDLEWARE's view, not about the device: an SC-HSM's
+// C.DevAut is a card-verifiable certificate in EF 2F02 and OpenSC's PKCS#15 emulation does not
+// surface it. Callers that can read EF 2F02 should do so on this error; callers that cannot must
+// still refuse, because an identity that cannot be established is not an identity.
+var ErrNoDeviceCertificate = errors.New("no device certificate is exposed through PKCS#11")
+
+// certificateHandles lists every CKO_CERTIFICATE on the token. The cap is deliberately generous:
+// the previous code asked for 2 in order to detect ambiguity, which also meant it could not see a
+// device certificate sitting behind two key certificates.
+func (probes *TokenProbes) certificateHandles(handle pkcs11.SessionHandle) ([]pkcs11.ObjectHandle, error) {
+	template := []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_CLASS, pkcs11.CKO_CERTIFICATE)}
+	if err := probes.module.FindObjectsInit(handle, template); err != nil {
+		return nil, errors.New("PKCS#11 certificate lookup failed")
+	}
+	objects, _, findErr := probes.module.FindObjects(handle, 64)
+	_ = probes.module.FindObjectsFinal(handle)
+	if findErr != nil {
+		// NOT an absence. Reporting a read error as "no certificate" would invite a caller to
+		// fall back to another identity source on a card it could not read at all.
+		return nil, errors.New("PKCS#11 certificate lookup failed")
+	}
+	return objects, nil
+}
+
+// keyIDs collects the CKA_ID of every key object, public and private. A certificate sharing one
+// belongs to that key.
+func (probes *TokenProbes) keyIDs(handle pkcs11.SessionHandle) ([][]byte, error) {
+	var ids [][]byte
+	for _, class := range []uint{pkcs11.CKO_PRIVATE_KEY, pkcs11.CKO_PUBLIC_KEY} {
+		template := []*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_CLASS, class)}
+		if err := probes.module.FindObjectsInit(handle, template); err != nil {
+			return nil, errors.New("PKCS#11 key lookup failed")
+		}
+		objects, _, findErr := probes.module.FindObjects(handle, 64)
+		_ = probes.module.FindObjectsFinal(handle)
+		if findErr != nil {
+			return nil, errors.New("PKCS#11 key lookup failed")
+		}
+		for _, object := range objects {
+			id, err := probes.objectID(handle, object)
+			if err != nil {
+				// A key whose id cannot be read cannot be matched against, so a certificate that
+				// belongs to it would look unpaired. Refuse rather than guess.
+				return nil, errors.New("key identifier is unreadable")
+			}
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+func (probes *TokenProbes) objectID(handle pkcs11.SessionHandle, object pkcs11.ObjectHandle) ([]byte, error) {
+	values, err := probes.module.GetAttributeValue(handle, object,
+		[]*pkcs11.Attribute{pkcs11.NewAttribute(pkcs11.CKA_ID, nil)})
+	if err != nil || len(values) == 0 {
+		return nil, errors.New("attribute unavailable")
+	}
+	return values[0].Value, nil
+}
+
+func containsID(ids [][]byte, want []byte) bool {
+	for _, id := range ids {
+		if bytes.Equal(id, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // NewPKCS11DriverWithProbes builds the module once and derives the identity and retry probes from
