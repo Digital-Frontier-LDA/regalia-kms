@@ -6,7 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
@@ -73,11 +76,22 @@ func TestPIVPhysicalWrongPINLatchesAfterExactlyOneAttempt(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		restore()
-		if after := retries(); after != before {
-			t.Errorf("counter after restore = %d, want %d", after, before)
-		} else {
-			t.Logf("counter restored to %d", after)
+		// AFTER A SUCCESSFUL VERIFY THE CARD STOPS REPORTING THE COUNTER in this process: the retries
+		// query answers "already verified" rather than 63Cx (see Provider.pinReadings). Measured on
+		// 36345471, 2026-09-23 — the first physical run proved the latch and then failed HERE, with the
+		// card at 3/3. A successful VERIFY resets the counter to its maximum (NIST SP 800-73), so the
+		// restore above is itself the reset; this confirms it from OUTSIDE the process, with ykman.
+		out, err := exec.Command("ykman", "--device", serial, "piv", "info").CombinedOutput()
+		if err != nil {
+			t.Errorf("could not confirm the restore with ykman (%v); check the counter by hand: ykman --device %s piv info", err, serial)
+			return
 		}
+		want := fmt.Sprintf("PIN tries remaining:      %d/", before)
+		if !strings.Contains(string(out), want) {
+			t.Errorf("counter after restore is not %d: %s", before, out)
+			return
+		}
+		t.Logf("counter restored to %d (confirmed by ykman)", before)
 	})
 
 	provider, err := New(driver, &fakePIN{value: wrong})
