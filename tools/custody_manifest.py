@@ -354,7 +354,18 @@ def validate_object(raw: Any, path: str) -> str:
         require_string(recovery.get("authority_id"), f"{path}.recovery.authority_id")
         if recovery.get("minimum_replicas") != 2:
             fail(f"{path}.recovery.minimum_replicas", "must equal 2")
-    if custody in {"direct-hardware", "hardware-envelope"} and recovery_mode != "shamir-4-of-6":
+    # A KEY GENERATED ON A YUBIKEY CANNOT BE SHAMIR-RECOVERED: it never existed outside the token.
+    # ADR-0002 D5 makes that the rule for YubiKey keys, so their continuity is multi-enrollment —
+    # independent on-device keys on at least two tokens, held at separate sites, exactly as FIDO's
+    # (below). Requiring shamir-4-of-6 here made every D5-compliant YubiKey object unrepresentable.
+    # Anything that can be DKEK/seed-recovered (every other backend) still must be.
+    yubikey_only = bool(checked_bindings) and all(b["backend"] == "yubikey-piv" for b in checked_bindings)
+    if custody == "direct-hardware" and recovery_mode == "multi-enrollment":
+        if not yubikey_only:
+            fail(path, "multi-enrollment recovery for direct-hardware is only for YubiKey PIV keys generated on the device (ADR-0002 D5)")
+        if len(checked_bindings) < 2 or len({b.get("site") for b in checked_bindings}) < 2:
+            fail(f"{path}.bindings", "YubiKey multi-enrollment needs at least two tokens held at two distinct sites")
+    elif custody in {"direct-hardware", "hardware-envelope"} and recovery_mode != "shamir-4-of-6":
         fail(path, "hardware custody requires shamir-4-of-6 recovery")
     if custody == "fido-multi-enrollment" and recovery_mode != "multi-enrollment":
         fail(path, "FIDO custody requires multi-enrollment recovery")

@@ -695,11 +695,37 @@
                   {
                     "properties": {
                       "mode": {
-                        "const": "shamir-4-of-6"
+                        "enum": [
+                          "shamir-4-of-6",
+                          "multi-enrollment"
+                        ]
                       }
                     }
                   }
                 ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "custody": {
+                "const": "hardware-envelope"
+              }
+            },
+            "required": [
+              "custody"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recovery": {
+                "properties": {
+                  "mode": {
+                    "const": "shamir-4-of-6"
+                  }
+                }
               }
             }
           }
