@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -34,14 +33,10 @@ func (sink *synchronizedAuditSink) snapshot() []audit.Event {
 
 func TestSOPSCLIThroughMTLSPolicyAuditAndConcretePKCS11(t *testing.T) {
 	modulePath, serial := os.Getenv("REGALIA_PKCS11_E2E_MODULE"), os.Getenv("REGALIA_PKCS11_E2E_SERIAL")
-	sops, lookErr := exec.LookPath("sops")
-	if modulePath == "" || serial == "" || lookErr != nil {
-		t.Skip("requires the SoftHSM E2E environment and SOPS 3.13.x")
+	if modulePath == "" || serial == "" {
+		t.Skip("requires the SoftHSM E2E environment")
 	}
-	version, err := exec.Command(sops, "--version").CombinedOutput()
-	if err != nil || !strings.Contains(string(version), "sops 3.13.") {
-		t.Skipf("requires SOPS 3.13.x: %s", version)
-	}
+	sops := requireSOPS313(t)
 	pki := newSidecarPKI(t)
 	daemon := newSOPSE2EDaemon(t, modulePath, serial, pki)
 	httpClient, err := sopsadapter.NewMTLSHTTPClient(daemon.clientCertificate, daemon.roots, "kms.e2e.internal", 15*time.Second)
