@@ -260,3 +260,23 @@ func TestACoinWithALongFieldIsStillFramedCorrectly(t *testing.T) {
 		t.Fatalf("decoded denom of %d bytes and amount %d", len(denom), amount)
 	}
 }
+
+// PROTO3 DOES NOT ENCODE A ZERO SCALAR. An account's first transaction has sequence 0, and a genesis
+// account can have account_number 0, so a genuine SignDoc for either carries NO such field at all —
+// and the chain, which rebuilds the SignDoc from its own state, reads the absence as 0. The parser
+// required both to be present, so the KMS refused to sign the first transaction of every account it
+// would ever hold. Found by e2e/cosmos-simapp-kms-tx.sh against a live simd node (regalia#439): the
+// first cosmpy SignDoc it built was refused. The fixture is cosmpy-generated, like its siblings.
+func TestParseSignDocAcceptsAccountZeroAndSequenceZero(t *testing.T) {
+	raw := readReferenceHex(t, "signdoc-akashnet2-msgsend-account0-sequence0.hex")
+	got, err := ParseCosmosSignDoc(raw)
+	if err != nil {
+		t.Fatalf("DEFECT: a generated SignDoc for account 0 at sequence 0 was refused: %v", err)
+	}
+	if got.ChainID != "akashnet-2" || got.AccountNumber != 0 || got.Sequence != 0 || got.GasLimit != 200000 {
+		t.Fatalf("parsed = chain %q account %d sequence %d gas %d, want akashnet-2/0/0/200000", got.ChainID, got.AccountNumber, got.Sequence, got.GasLimit)
+	}
+	if len(got.Messages) != 1 || got.Messages[0].Destination != "akash1vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv" {
+		t.Fatalf("messages = %#v", got.Messages)
+	}
+}

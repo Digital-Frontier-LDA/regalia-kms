@@ -126,11 +126,11 @@ func cosmosOperandRows() []operandLeaf {
 	return []operandLeaf{
 		{
 			file:      "cosmos.go",
-			guard:     `if !seenBody || !seenAuth || !seenChain || !seenAccount {`,
+			guard:     `if !seenBody || !seenAuth || !seenChain {`,
 			operand:   "!seenBody",
 			direction: "(false && !seenBody)",
 			verdict:   verdictCovered,
-			why: "The three siblings are killed by TestParseCosmosSignDocRejectsMissingRequiredFields, " +
+			why: "The two siblings are killed by TestParseCosmosSignDocRejectsMissingRequiredFields, " +
 				"which asserts only that an error came back. body_bytes is the one field whose absence " +
 				"is refused DOWNSTREAM anyway -- an absent body parses as an empty TxBody and " +
 				"parseTxBodyMessages says 'TxBody carries no messages' -- so the operand does not guard " +

@@ -48,6 +48,16 @@ become test evidence.
 `MsgSend`. It proves chain acceptance with the SDK's test keyring; it is not
 evidence that the KMS hardware signed that transaction.
 
+`cosmos-simapp-kms-tx.sh` is the arm that is. Against the same kind of disposable node, the
+transaction is built by cosmpy's generated protobuf bindings (`cosmos_kms_tx.py`, never an encoder
+in this repository), signed by the KMS path — the production SignDoc parser, the production policy
+engine and the concrete PKCS#11 provider with low-S — over a secp256k1 key on a SoftHSM token, and
+broadcast. It then checks four things against the live chain: the KMS-signed `MsgSend` is committed
+and moves the balances by exactly the amount and fee; the same `TxRaw` replayed is rejected; a KMS
+signature over another chain id is rejected by the node; and a destination the policy does not
+allow is refused before the token. Needs `REGALIA_COSMOS_SIMD_BIN` and `REGALIA_COSMOS_PYTHON` (a
+Python with `cosmpy` and `cryptography`). Evidence class: **emulated** — the token is SoftHSM.
+
 Every `run.sh` mode declares what CLASS of evidence its arms produce, and the run
 prints them together at the end — `software` (Go and host tooling, no token),
 `emulated` (SoftHSM or the ceremony emulator standing in for hardware), or

@@ -66,3 +66,30 @@ Path("signdoc-akashnet2-msgsend.hex").write_text(sign_doc.SerializeToString().he
 
 `signdoc-akashnet2-msgdelegate.hex` is generated the same way with
 `cosmos.staking.v1beta1.MsgDelegate`; its validator address is treated as the policy destination.
+
+`signdoc-akashnet2-msgsend-account0-sequence0.hex` is the same shape of `SignDoc` for **account 0
+at sequence 0**. Proto3 does not encode a zero scalar, so this document has **no**
+`SignDoc.account_number` field and **no** `SignerInfo.sequence` field. That is the only way a real
+SignDoc for an account's first transaction can be written, and the parser used to refuse it as
+"missing" (found against a live node in regalia#439). Regenerate with:
+
+```python
+from pathlib import Path
+from cosmpy.protos.cosmos.bank.v1beta1.tx_pb2 import MsgSend
+from cosmpy.protos.cosmos.base.v1beta1.coin_pb2 import Coin
+from cosmpy.protos.cosmos.tx.v1beta1.tx_pb2 import AuthInfo, Fee, ModeInfo, SignDoc, SignerInfo, TxBody
+from cosmpy.protos.cosmos.tx.signing.v1beta1.signing_pb2 import SignMode
+from google.protobuf.any_pb2 import Any
+
+msg = Any()
+msg.Pack(MsgSend(from_address="akash1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                 to_address="akash1vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+                 amount=[Coin(denom="uakt", amount="1000000")]), type_url_prefix="/")
+auth = AuthInfo(signer_infos=[SignerInfo(mode_info=ModeInfo(single=ModeInfo.Single(mode=SignMode.SIGN_MODE_DIRECT)), sequence=0)],
+                fee=Fee(amount=[Coin(denom="uakt", amount="5000")], gas_limit=200000))
+doc = SignDoc(body_bytes=TxBody(messages=[msg]).SerializeToString(),
+              auth_info_bytes=auth.SerializeToString(), chain_id="akashnet-2", account_number=0)
+raw = doc.SerializeToString()
+assert len(raw) == 189, len(raw)
+Path("signdoc-akashnet2-msgsend-account0-sequence0.hex").write_text(raw.hex() + "\n")
+```

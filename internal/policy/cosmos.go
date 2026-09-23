@@ -137,7 +137,12 @@ func parseSignDoc(input []byte) (*CosmosTransaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !seenBody || !seenAuth || !seenChain || !seenAccount {
+	// account_number IS NOT REQUIRED TO BE PRESENT, because proto3 does not encode a zero scalar: a
+	// genuine SignDoc for account 0 has no field 4 at all, and the chain — which rebuilds the SignDoc
+	// from its own state — reads that absence as 0. Requiring it refused every such document. What
+	// can be signed for account 0 is still the policy's decision (AccountNumbers), not the parser's.
+	// body, auth_info and chain_id stay required: none of them has a zero value a real transaction uses.
+	if !seenBody || !seenAuth || !seenChain {
 		return nil, fmt.Errorf("%w: missing required SignDoc field", ErrCosmosSignDoc)
 	}
 	sequence, fee, gasLimit, err := parseAuthInfo([]byte(authBytes))
@@ -237,8 +242,11 @@ func parseSignerInfo(input []byte) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if !seenMode || !seenSequence {
-		return 0, fmt.Errorf("%w: SignerInfo missing mode or sequence", ErrCosmosSignDoc)
+	// sequence 0 — every account's FIRST transaction — is encoded by omitting the field (proto3), so
+	// its absence means 0, exactly as the chain reads it. mode_info is a message, not a scalar, and a
+	// signer with no mode is genuinely malformed, so it stays required.
+	if !seenMode {
+		return 0, fmt.Errorf("%w: SignerInfo missing mode_info", ErrCosmosSignDoc)
 	}
 	return sequence, nil
 }

@@ -167,7 +167,6 @@ func TestParseCosmosSignDocRejectsMissingRequiredFields(t *testing.T) {
 		"missing body":     append(append(append([]byte{}, auth...), chain...), acct...),
 		"missing auth":     append(append(append([]byte{}, body...), chain...), acct...),
 		"missing chain":    append(append(append([]byte{}, body...), auth...), acct...),
-		"missing account":  append(append(append([]byte{}, body...), auth...), chain...),
 		"unknown field 99": append(append(append(append([]byte{}, body...), auth...), chain...), encodeString(99, "smuggled")...),
 	}
 	for name, input := range cases {
@@ -180,6 +179,22 @@ func TestParseCosmosSignDocRejectsMissingRequiredFields(t *testing.T) {
 				t.Fatalf("error %v does not wrap ErrCosmosSignDoc", err)
 			}
 		})
+	}
+}
+
+// An absent account_number is account 0, not a malformed document: proto3 omits zero scalars, so
+// that is the only way a real SignDoc for account 0 can be written. (It was in the table above as a
+// refusal; the live-node e2e in regalia#439 showed that refusal was a bug.)
+func TestParseCosmosSignDocReadsAnAbsentAccountNumberAsZero(t *testing.T) {
+	body := encodeLengthDelimited(1, canonicalMsgSendTxBody())
+	auth := encodeLengthDelimited(2, encodeAuthInfo())
+	chain := encodeString(3, "cosmoshub-4")
+	got, err := ParseCosmosSignDoc(append(append(append([]byte{}, body...), auth...), chain...))
+	if err != nil {
+		t.Fatalf("a SignDoc with no account_number field was refused: %v", err)
+	}
+	if got.AccountNumber != 0 {
+		t.Fatalf("absent account_number parsed as %d, want 0", got.AccountNumber)
 	}
 }
 
