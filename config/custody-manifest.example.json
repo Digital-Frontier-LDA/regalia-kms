@@ -20,6 +20,7 @@
           "site": "sitea",
           "backend": "nitrokey-pkcs11",
           "device_id": "nitrokey-sitea",
+          "device_serial": "DENK0000001",
           "object_id": "01",
           "public_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "state": "planned"
@@ -28,6 +29,7 @@
           "site": "siteb",
           "backend": "nitrokey-pkcs11",
           "device_id": "nitrokey-siteb",
+          "device_serial": "DENK0000002",
           "object_id": "01",
           "public_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "state": "planned"
@@ -104,6 +106,7 @@
           "site": "sitea",
           "backend": "nitrokey-pkcs11",
           "device_id": "nitrokey-sitea",
+          "device_serial": "DENK0000001",
           "object_id": "20",
           "kek_algorithm": "rsa2048",
           "kek_version": "1",
@@ -114,6 +117,7 @@
           "site": "siteb",
           "backend": "nitrokey-pkcs11",
           "device_id": "nitrokey-siteb",
+          "device_serial": "DENK0000002",
           "object_id": "20",
           "kek_algorithm": "rsa2048",
           "kek_version": "1",

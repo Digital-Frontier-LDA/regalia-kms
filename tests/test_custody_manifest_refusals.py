@@ -187,6 +187,41 @@ class ManifestRefusalTests(unittest.TestCase):
             with self.subTest(pin=bad):
                 self.assert_refused(self._nitrokey(public_key_sha256=bad), "public_key_sha256")
 
+    # ADR-0002 D5: a YubiKey key is generated on the device, so it cannot be Shamir-recovered;
+    # continuity is multi-enrollment. Only for YubiKey PIV, and only with separate custody.
+    def _yubikey_pair(self, sites=("lisbon", "porto")):
+        obj = direct_key()
+        obj["algorithm"] = "p256"
+        obj["recovery"] = {"mode": "multi-enrollment", "status": "planned"}
+        obj["bindings"] = [
+            {"site": site, "backend": "yubikey-piv", "device_id": f"yubikey-{i}", "object_id": "9a",
+             "public_fingerprint": "sha256:" + "a" * 64, "pin_policy": "once", "touch_policy": "never",
+             "state": "planned"}
+            for i, site in enumerate(sites)]
+        return obj
+
+    def test_yubikey_keys_may_use_multi_enrollment_recovery(self):
+        validate_manifest(manifest_with(self._yubikey_pair()))
+
+    def test_yubikey_multi_enrollment_needs_two_sites(self):
+        self.assert_refused(self._yubikey_pair(sites=("lisbon", "lisbon")), "two distinct sites")
+
+    def test_multi_enrollment_is_not_a_way_around_shamir_for_other_hardware(self):
+        obj = direct_key()   # two Nitrokeys: DKEK/seed-recoverable, so Shamir stays mandatory
+        obj["recovery"] = {"mode": "multi-enrollment", "status": "planned"}
+        self.assert_refused(obj, "only for YubiKey PIV keys generated on the device")
+
+    def test_a_mixed_yubikey_and_nitrokey_object_cannot_use_multi_enrollment(self):
+        obj = self._yubikey_pair()
+        obj["bindings"][1].update(backend="nitrokey-pkcs11", device_id="nitrokey-porto", object_id="01")
+        obj["bindings"][1].pop("pin_policy"); obj["bindings"][1].pop("touch_policy")
+        self.assert_refused(obj, "only for YubiKey PIV keys generated on the device")
+
+    def test_envelope_custody_still_requires_shamir(self):
+        obj = self._yubikey_pair()
+        obj["custody"] = "hardware-envelope"
+        self.assert_refused(obj, "hardware custody requires shamir-4-of-6 recovery")
+
 
 if __name__ == "__main__":
     unittest.main()
