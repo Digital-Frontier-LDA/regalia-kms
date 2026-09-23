@@ -159,3 +159,23 @@ func TestHealthyChecksThePinToo(t *testing.T) {
 		t.Fatalf("reason = %q", reason)
 	}
 }
+
+// A PRESENT BUT MALFORMED PIN IS A PIN THAT FAILS, never "no pin" (review of #26). Otherwise a typo in
+// the manifest — on a binding the loader does not re-validate, such as a retired one still reachable
+// for unwrap — would silently switch the check off.
+func TestAMalformedPublicKeyPinIsRefusedNotIgnored(t *testing.T) {
+	for _, bad := range []string{"not-a-digest", "SHA256:" + strings.Repeat("a", 64), "sha256:" + strings.Repeat("A", 64)} {
+		t.Run(bad, func(t *testing.T) {
+			b := binding() // DevAut pinned and matching: the malformed pin is the only thing wrong
+			b.PublicKeySHA256 = bad
+			session := &fakeSession{serial: "serial-1", devaut: binding().DevAuthFingerprint}
+			provider, _ := New(&fakeDriver{session: session}, &fakePIN{value: []byte("123456")})
+			if _, err := unwrapPinned(provider, b); err == nil || session.logged {
+				t.Fatalf("a malformed public-key pin was treated as absent: err=%v logged=%v", err, session.logged)
+			}
+			if reason, _ := provider.QuarantineReason("hsm-sitea"); reason != "public-key-mismatch" {
+				t.Fatalf("reason = %q, want public-key-mismatch", reason)
+			}
+		})
+	}
+}

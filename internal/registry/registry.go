@@ -727,9 +727,9 @@ func validateBinding(binding Binding, algorithm string, operations []string) err
 		return fmt.Errorf("unsupported binding state %q", binding.State)
 	}
 	_, commissioned := commissionedStates[binding.State]
-	if binding.Backend == "nitrokey-pkcs11" && commissioned && !nitrokeyIdentityPinned(binding) {
-		// A serial plus a DevAut fingerprint OR public_key_sha256: ADR-0002 D1, see below.
-		return errors.New("commissioned Nitrokey requires pinned serial and DevAut fingerprint or public_key_sha256")
+	if err := nitrokeyPins(binding, algorithm, commissioned); binding.Backend == "nitrokey-pkcs11" && err != nil {
+		// A serial plus a DevAut fingerprint OR public_key_sha256: ADR-0002 D1, see nitrokeyPins.
+		return err
 	}
 	if binding.Backend == "yubikey-piv" || binding.Backend == "yubikey-openpgp" {
 		if commissioned && binding.DeviceSerial == "" {
@@ -1293,4 +1293,32 @@ func nitrokeyIdentityPinned(binding Binding) bool {
 		return false
 	}
 	return devAut || binding.PublicKeySHA256 != ""
+}
+
+// nitrokeyPins refuses the pin combinations a Nitrokey binding must never load with, in ANY state:
+//
+//   - a public_key_sha256 that is present but malformed. A pin that does not parse is a typo, and a
+//     typo that the daemon then treated as "no pin" would silently switch the check off — for a
+//     retired binding still reachable for unwrap, too. Refused at load, and refused again at use.
+//   - a public_key_sha256 on a SYMMETRIC key. An AES KEK is a single CKO_SECRET_KEY with no public
+//     half, so the pin could never be verified and the binding would only ever quarantine.
+//
+// and, once commissioned, requires the identity pins (nitrokeyIdentityPinned).
+func nitrokeyPins(binding Binding, algorithm string, commissioned bool) error {
+	if binding.PublicKeySHA256 != "" {
+		if !fingerprintPattern.MatchString(binding.PublicKeySHA256) {
+			return errors.New("public_key_sha256 must be sha256 followed by 64 lowercase hex digits")
+		}
+		keyAlgorithm := algorithm
+		if binding.KEKAlgorithm != "" {
+			keyAlgorithm = binding.KEKAlgorithm
+		}
+		if len(keyAlgorithm) >= 3 && keyAlgorithm[:3] == "aes" {
+			return fmt.Errorf("public_key_sha256 cannot pin %s: a symmetric key has no public half to check", keyAlgorithm)
+		}
+	}
+	if commissioned && !nitrokeyIdentityPinned(binding) {
+		return errors.New("commissioned Nitrokey requires pinned serial and DevAut fingerprint or public_key_sha256")
+	}
+	return nil
 }

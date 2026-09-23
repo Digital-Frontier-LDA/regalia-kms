@@ -288,6 +288,14 @@ def validate_object(raw: Any, path: str) -> str:
         fail(f"{path}.bindings", "must be a list")
     checked_bindings = [validate_binding(value, f"{path}.bindings[{i}]") for i, value in enumerate(bindings)]
     for index, binding in enumerate(checked_bindings):
+        # A PUBLIC-KEY PIN ON A SYMMETRIC KEY CAN NEVER BE CHECKED: an AES KEK is one CKO_SECRET_KEY
+        # with no public half, so the daemon would quarantine the binding on first use. Mirrors
+        # nitrokeyPins in internal/registry/registry.go (review of regalia-kms#26).
+        if "public_key_sha256" in binding:
+            key_algorithm = binding.get("kek_algorithm") or item["algorithm"]
+            if isinstance(key_algorithm, str) and key_algorithm.startswith("aes"):
+                fail(f"{path}.bindings[{index}].public_key_sha256",
+                     f"cannot pin {key_algorithm}: a symmetric key has no public half to check")
         supported = CAPABILITIES.get(binding["backend"], {}).get(item["algorithm"], set())
         unsupported = sorted(set(operations) - supported)
         if unsupported:

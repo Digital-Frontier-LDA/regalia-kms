@@ -25,6 +25,7 @@ package registry
 // operand deleted and would pin neither.
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -54,11 +55,13 @@ func TestACommissionedNitrokeyMustPinItsSerialAndFingerprint(t *testing.T) {
 	// public_key_sha256 (the commissioned public key, enforced on every use), because a genuine
 	// SmartCard-HSM cannot expose its DevAut through PKCS#11 (regalia#448). The advisory
 	// public_fingerprint every binding carries does NOT stand in: its encoding was never defined.
-	for _, row := range []struct{ name, public, extra string }{
-		{"no device serial", "sha256:" + strings.Repeat("a", 64), `,` + commissionedFingerprint},
-		{"no DevAut, and only the advisory public_fingerprint", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial"`},
-		{"no DevAut, and a public_key_sha256 that is not a sha256 digest", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial","public_key_sha256":"not-a-digest"`},
-		{"a DevAut fingerprint that is not a sha256 digest", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial","devaut_fingerprint":"not-a-digest"`},
+	const pinRule = "pinned serial and DevAut fingerprint"
+	for _, row := range []struct{ name, public, extra, want string }{
+		{"no device serial", "sha256:" + strings.Repeat("a", 64), `,` + commissionedFingerprint, pinRule},
+		{"no DevAut, and only the advisory public_fingerprint", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial"`, pinRule},
+		// A malformed pin is refused by the FORMAT rule, which fires in every state (nitrokeyPins).
+		{"no DevAut, and a public_key_sha256 that is not a sha256 digest", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial","public_key_sha256":"not-a-digest"`, "public_key_sha256 must be sha256"},
+		{"a DevAut fingerprint that is not a sha256 digest", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial","devaut_fingerprint":"not-a-digest"`, pinRule},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			document := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign",
@@ -68,7 +71,7 @@ func TestACommissionedNitrokeyMustPinItsSerialAndFingerprint(t *testing.T) {
 			if err == nil {
 				t.Fatal("a commissioned Nitrokey binding loaded without both pins — the manifest would name hardware it cannot prove it is talking to")
 			}
-			if !strings.Contains(err.Error(), "pinned serial and DevAut fingerprint") {
+			if !strings.Contains(err.Error(), row.want) {
 				t.Fatalf("refused, but by a different rule: %v — this row exists to prove the commissioned-pinning guard fires, and any other refusal means it did not", err)
 			}
 		})
@@ -90,5 +93,29 @@ func TestACommissionedNitrokeyMustPinItsSerialAndFingerprint(t *testing.T) {
 			nitrokeyBinding("siteb", "remote-hsm", pinnedSibling)))
 	if _, err := Load(strings.NewReader(d1), "sitea", &healthMap{states: map[string]bool{}}); err != nil {
 		t.Fatalf("a Nitrokey pinned by serial and public_key_sha256 was refused (%v) — every genuine SmartCard-HSM would be unbindable (ADR-0002 D1)", err)
+	}
+}
+
+// nitrokeyPins' two refusals that apply in EVERY state, not only commissioned ones (review of
+// regalia-kms#26): a malformed public-key pin must not load even on a retired binding, where the
+// daemon still reaches it for unwrap; and a public-key pin on a symmetric key can never be verified.
+func TestAPublicKeyPinIsRefusedWhereItCanNeverBeChecked(t *testing.T) {
+	pin := `"public_key_sha256":"sha256:` + strings.Repeat("c", 64) + `"`
+	for _, row := range []struct{ name, state, algorithm, extra, want string }{
+		{"a malformed pin on a retired binding", "retired", "secp256k1", `,"device_serial":"s","public_key_sha256":"not-a-digest"`, "public_key_sha256 must be sha256"},
+		{"a pin on an AES object", "active", "aes-256", `,"device_serial":"s",` + pin, "symmetric key has no public half"},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			raw := strings.Replace(nitrokeyBindingWithPublic("sitea", "local-hsm", "sha256:"+strings.Repeat("a", 64), row.extra),
+				`"state":"active"`, `"state":"`+row.state+`"`, 1)
+			var b Binding
+			if err := json.Unmarshal([]byte(raw), &b); err != nil {
+				t.Fatal(err)
+			}
+			err := validateBinding(b, row.algorithm, []string{"unwrap"})
+			if err == nil || !strings.Contains(err.Error(), row.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, row.want)
+			}
+		})
 	}
 }

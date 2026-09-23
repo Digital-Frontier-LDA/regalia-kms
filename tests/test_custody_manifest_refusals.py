@@ -182,6 +182,12 @@ class ManifestRefusalTests(unittest.TestCase):
         """The advisory public_fingerprint every binding carries does NOT stand in for a pin."""
         self.assert_refused(self._nitrokey(), "devaut_fingerprint or public_key_sha256")
 
+    def test_a_public_key_pin_on_a_symmetric_key_is_refused(self):
+        obj = self._nitrokey(public_key_sha256="sha256:" + "c" * 64)
+        obj["algorithm"] = "aes-256"
+        obj["operations"] = ["unwrap"]
+        self.assert_refused(obj, "symmetric key has no public half")
+
     def test_a_public_key_pin_must_be_a_sha256_string(self):
         for bad in ("not-a-digest", "SHA256:" + "c" * 64, {"a": 1}, 12345):
             with self.subTest(pin=bad):

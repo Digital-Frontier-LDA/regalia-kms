@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"regexp"
 	"sync"
 	"time"
 
@@ -436,10 +435,11 @@ func zero(value []byte) {
 //     card cannot carry the same private key, because the hardware will not let it out.
 //
 // A binding must pin the serial and at least one of the other two. Whatever it pins is enforced.
-var publicKeyPinPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-
+// pinnedPublicKey reports whether the binding carries a public-key pin AT ALL. Presence, not
+// validity: a malformed pin is still a pin, and verifyPinnedPublicKey refuses it. Treating it as
+// absent would let a typo switch the check off.
 func pinnedPublicKey(binding registry.Binding) (string, bool) {
-	return binding.PublicKeySHA256, publicKeyPinPattern.MatchString(binding.PublicKeySHA256)
+	return binding.PublicKeySHA256, binding.PublicKeySHA256 != ""
 }
 
 func identifiable(binding registry.Binding) bool {
@@ -469,6 +469,8 @@ func verifyPinnedPublicKey(ctx context.Context, session Session, binding registr
 	if !pinned {
 		return ""
 	}
+	// No separate format check: a malformed pin can never equal the "sha256:" + lowercase-hex digest
+	// computed below, so it is refused by the comparison — which is why it must count as PRESENT.
 	publicKey, err := session.PublicKey(ctx, binding.ObjectID)
 	if err != nil || len(publicKey) == 0 {
 		return "public-key-mismatch"
