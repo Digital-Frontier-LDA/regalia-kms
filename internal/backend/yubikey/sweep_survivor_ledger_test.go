@@ -43,7 +43,7 @@ import (
 // verify those facts at unit-test speed; the sweep itself remains the
 // distinct, slow, and separately scheduled run.
 //
-// THE 41 + 11 = 52 POPULATION BREAKDOWN.
+// THE 41 + 11 = 52 POPULATION BREAKDOWN (53 since 2026-09-23: see :88 below).
 //
 // 41 both-direction survivors (the audit's population) plus 11 one-direction-
 // killed operands equals the 52 total leaves guardenum enumerates in lines
@@ -71,7 +71,7 @@ import (
 // The count check below totals ALL three; the original 41 was a claim about
 // closedByTest alone, and the peer caught that the seam tests had been
 // promoted to closedByTest when only the FALSE direction was falsified.
-const expectedOperandPopulation = 52
+const expectedOperandPopulation = 53
 
 type survivorStatus int
 
@@ -92,7 +92,8 @@ type survivorEntry struct {
 }
 
 // PIV_DRIVER_GO_OPERANDS is the operand population across piv_driver.go lines
-// 43-219 — 52 leaves on the sites guardenum enumerates there. The 2026-09-06
+// 43-238 — 52 leaves on the sites guardenum enumerates there, plus the :88 guard
+// recorded on 2026-09-23 without a re-sweep (53). The 2026-09-06
 // sweep classified 41 of these as both-direction survivors and 11 as killed in
 // one direction; both kinds are listed below because the audit's 41 is a
 // subset of the 52 leaves in scope, and a count check that totals only the
@@ -142,6 +143,11 @@ var pivDriverGoOperands = []survivorEntry{
 
 	// piv_driver.go:79 — `if selected == nil {`
 	{line: 79, operand: 0, status: closedFalseDirectionOnly, closure: "TestOpenRefusesWhenNoCardMatchesTheCommissionedSerial", whyTrueOpen: "TRUE-direction test would need pivOpen to return a successful card whose Serial() matches the target — Serial() seam", site: "selected == nil"},
+
+	// piv_driver.go:88 — `if err := pivClearVerified(selected); err != nil {` (added 2026-09-23 by
+	// regalia-kms#33, recorded without a re-sweep; the physical guard is
+	// TestPIVPhysicalSessionNeitherInheritsNorLeavesPINVerification)
+	{line: 88, operand: 0, status: recordedMasked, closure: ":88 runs only after a card is selected, which needs pivOpen to return a card whose Serial() matches — the Serial() seam the package does not provide", masked: "piv_driver.go:79[0]", site: "pivClearVerified(selected); err != nil"},
 
 	// piv_driver.go:96 — `if driver == nil || ctx.Err() != nil {` (Ready)
 	{line: 96, operand: 0, status: closedFalseDirectionOnly, closure: "TestReadyRefusesBeforeTouchingADriverThatIsNil", whyTrueOpen: "TRUE-direction test would assert Ready=true on a non-nil driver with pivCards returning cards; the test only asserts Ready=false on a nil driver", site: "driver == nil"},
