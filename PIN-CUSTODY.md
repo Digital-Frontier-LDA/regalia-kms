@@ -92,6 +92,13 @@ automatic restart or retry. *Verified by:* unit tests in both providers, includi
   *Verified by:* `TestALegibleNearLockoutCountOverridesAStaleCachedReading` (the card wins over a stale
   reading) and `TestRepeatedOperationsUseTheLastSuccessfulPreLoginRetryReading` (the fallback keeps
   repeated operations working). Each is the sole failure under the mutation that reverts it.
+  **The verified state also outlives the connection** (measured 2026-09-23 on 5.7.4). A PC/SC
+  disconnect leaves the card as it was, so the NEXT connection, from any process, inherits the
+  verification. It reads no count, and it can use a PIN-policy-ONCE key without the PIN. The driver
+  therefore clears the PIV security status (an applet switch) when it opens a session, refusing the
+  session if it cannot, and again when it closes one. *Verified by:*
+  `TestPIVPhysicalSessionNeitherInheritsNorLeavesPINVerification` (physical, `piv` tag), which failed
+  on the driver before the fix.
 - **Nitrokey (PKCS#11 token flags).** The provider reads the count on every operation and refuses when
   the read fails, with no fallback. On the staging bench's SmartCard-HSM code path, the token flags
   stayed legible after login across repeated operations (measured 2026-09-14). Under D1 that is a measurement of the code

@@ -77,3 +77,23 @@ Using the staging USB hub's port-power control, the key on the controlled port d
 same pinned serial re-enumerate, and the dual qualification passed again. An earlier cycle on
 this hub required a physical unplug/reinsert; both outcomes are retained as evidence that the
 daemon must treat disappearance as unavailable and rediscover by serial after recovery.
+
+## Session-state observation (2026-09-23)
+
+Two YubiKey 5 NFC devices (firmware 5.7.4, serials 36345471 and 36344616) ran the two tests
+above **together**. The failover test passed on its own but failed when it ran after the addressing
+test: `site-a PIN retries = 0, YubiKey backend unavailable`. Cause, measured: **a PC/SC disconnect
+leaves the PIV PIN verified**, and the next connection inherits that, from any process.
+- The retries probe (an empty VERIFY) then answers `9000` instead of a count, so a restarted
+  daemon reports a healthy key as unavailable.
+- A raw connection that never presented the PIN **signed** with the PIN-policy-ONCE 9C key.
+
+The driver now clears the PIV security status (by switching applets and back) when it opens a
+session, and refuses the session if it cannot. It does the same again when it closes one. The
+physical regression test is `TestPIVPhysicalSessionNeitherInheritsNorLeavesPINVerification`
+(`REGALIA_PIV_SERIAL`, `REGALIA_PIV_PIN`, `REGALIA_PIV_SIGN_OBJECT=9c`; no retries spent). It
+failed twice on the old driver and passed three times on the new one. After the fix, both tests
+above pass together, three runs in a row.
+
+**Run the qualification as a sequence, not one test at a time.** A single-test run starts on a
+card that some other tool may have reset, and that hides this class of defect.
