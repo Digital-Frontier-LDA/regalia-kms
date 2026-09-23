@@ -43,13 +43,35 @@ jobs:
       # the umask, and every loader here refuses group-writable input. Fixtures that only pass
       # because the umask happened to trim the group bit would otherwise stay green until a
       # developer on a user-private-group system ran them (TESTING.md §13).
+      # WITHOUT promtool THE ALERT-RULE FIRING TESTS SKIP, and a skip is a pass. They did, on every
+      # run after regalia#487 moved this code out of the monorepo whose workflow installed it.
+      - name: Install checksum-pinned promtool for alert-rule fault injection
+        env:
+          PROMETHEUS_SHA256: 0e8c4d46101bd025ea8265e377d2caabc57f488fc1be1c367f37db69ea41be6f
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/prometheus.tar.gz" \
+            https://github.com/prometheus/prometheus/releases/download/v3.13.2/prometheus-3.13.2.linux-amd64.tar.gz
+          echo "$PROMETHEUS_SHA256  $RUNNER_TEMP/prometheus.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/prometheus.tar.gz" \
+            --directory "$RUNNER_TEMP" --strip-components=1 prometheus-3.13.2.linux-amd64/promtool
+          chmod 0755 "$RUNNER_TEMP/promtool"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
         # The Go suite does not cover the deployment tooling, the custody-manifest validator, the
         # alert rules or the documentation contracts — those are Python, and they gate the same
         # repository. Run them the way the tests expect to be discovered.
+        env:
+          # promtool is provisioned above, so a missing one is a failure here, not a skip.
+          ALERT_RULES_JOB: "1"
         run: python3 -m unittest discover -s tests -p 'test_*.py'
 
       - name: test (both modules, race + vet)
+        env:
+          # internal/pin's mlock refusal can only be exercised where mlock can be made to fail, and
+          # on linux it can. With this set the test fails rather than skips if that stops being true.
+          REGALIA_EXPECT_MLOCK_ENFORCED: "1"
         run: |
           umask 002
           go test -race ./...
@@ -85,3 +107,85 @@ jobs:
         run: |
           govulncheck ./...
           ( cd adapters/sops && govulncheck ./... )
+
+  # THE CONCRETE PKCS#11 DRIVER, AGAINST A REAL (SOFTWARE) MODULE. Every test that proves the driver,
+  # the KEK provenance guards, seal/release and the SOPS mTLS chain on a real PKCS#11 module skips
+  # without the token e2e/softhsm-pkcs11.sh provisions — and after regalia#487 nothing here ran it,
+  # so all of them passed by skipping. Closure evidence for regalia#12, #6 and #24 cites this run.
+  pkcs11-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install the PKCS#11 emulator
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends softhsm2 opensc
+          test -f /usr/lib/softhsm/libsofthsm2.so || { echo "libsofthsm2.so missing after install" >&2; exit 1; }
+
+      - name: Install checksum-pinned SOPS 3.13.3
+        env:
+          SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/sops" \
+            https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          echo "$SOPS_SHA256  $RUNNER_TEMP/sops" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/sops"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          # Set in THIS step: sops is provisioned here, so a SOPS test that skips is a failure.
+          echo "REGALIA_EXPECT_SOPS=1" >> "$GITHUB_ENV"
+
+      - name: SoftHSM battery — and NOTHING in it may skip
+        env:
+          GOFLAGS: -v
+        run: |
+          status=0
+          e2e/softhsm-pkcs11.sh > "$RUNNER_TEMP/e2e.log" 2>&1 || status=$?
+          grep -E -- '^--- (PASS|FAIL|SKIP)' "$RUNNER_TEMP/e2e.log" || true
+          [ "$status" -eq 0 ] || { tail -60 "$RUNNER_TEMP/e2e.log"; exit "$status"; }
+          # A SKIP HERE IS A GAP, NOT A PASS. This battery exists to run these tests; one that
+          # skipped (a missing env var in the script, a missing binary) proved nothing, and that
+          # is exactly how four KEK tests "passed" for their whole life without executing.
+          if grep -E -- '--- SKIP' "$RUNNER_TEMP/e2e.log"; then
+            echo "::error::a test in the SoftHSM battery skipped — it did not run" >&2
+            exit 1
+          fi
+          # And the battery must have run at all.
+          [ "$(grep -cE -- '^--- PASS' "$RUNNER_TEMP/e2e.log")" -ge 13 ] || {
+            echo "::error::fewer than 13 tests passed in the SoftHSM battery" >&2; exit 1; }
+
+  # Checks that need a context the main job does not have: root, and time.
+  privileged-and-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: The credential-ownership guard, which only root can reach
+        env:
+          # Refusing a credential owned by a THIRD uid needs a file that uid owns, which needs chown,
+          # which needs root — so as `runner` the test can only skip. This makes the skip a failure.
+          REGALIA_EXPECT_UID_GUARD_ENFORCED: "1"
+        run: |
+          # Compile as the normal user, run as root, so root never writes into GOCACHE.
+          go test -race -c -o "$RUNNER_TEMP/pin.test" ./internal/pin
+          status=0
+          sudo --preserve-env=REGALIA_EXPECT_UID_GUARD_ENFORCED \
+            "$RUNNER_TEMP/pin.test" -test.v \
+            -test.run '^TestACredentialOwnedByAThirdUserIsRefused$' || status=$?
+          exit $status
+
+      - name: Fuzz the unauthenticated and malformed operation boundary
+        run: go test ./internal/api -run='^$' -fuzz=FuzzOperationBoundaryNeverPanicsOrEchoesInput -fuzztime=20s

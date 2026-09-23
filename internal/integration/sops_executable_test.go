@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -46,14 +47,10 @@ import (
 // saw nothing: refused before any hardware call, not refused by it.
 func TestDeployedSOPSSidecarExecutableThroughMTLS(t *testing.T) {
 	modulePath, serial := os.Getenv("REGALIA_PKCS11_E2E_MODULE"), os.Getenv("REGALIA_PKCS11_E2E_SERIAL")
-	sops, lookErr := exec.LookPath("sops")
-	if modulePath == "" || serial == "" || lookErr != nil {
-		t.Skip("requires the SoftHSM E2E environment and SOPS 3.13.x")
+	if modulePath == "" || serial == "" {
+		t.Skip("requires the SoftHSM E2E environment")
 	}
-	version, err := exec.Command(sops, "--version").CombinedOutput()
-	if err != nil || !strings.Contains(string(version), "sops 3.13.") {
-		t.Skipf("requires SOPS 3.13.x: %s", version)
-	}
+	sops := requireSOPS313(t)
 
 	binary := buildSidecarExecutable(t)
 	pki := newSidecarPKI(t)
@@ -228,7 +225,10 @@ func TestDeployedSOPSSidecarExecutableThroughMTLS(t *testing.T) {
 // different one (and is already covered by TestSOPSCLIThroughMTLSPolicyAuditAndConcretePKCS11).
 func buildSidecarExecutable(t *testing.T) string {
 	t.Helper()
-	source, err := filepath.Abs(filepath.Join("..", "..", "..", "kms", "adapters", "sops", "cmd", "regalia-sops-kms"))
+	// Relative to THIS package (internal/integration). It pointed at ../../../kms/adapters/... — the
+	// layout of the monorepo this code left in regalia#487 — and nothing noticed, because the only
+	// run that reaches here needs sops on PATH and none did.
+	source, err := filepath.Abs(filepath.Join("..", "..", "adapters", "sops", "cmd", "regalia-sops-kms"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,4 +550,37 @@ func newSidecarPKI(t *testing.T) *sidecarPKI {
 		serverCertificatePEM:     serverPEM, serverCertificateKeyPEM: serverKeyPEM,
 		expiredClientPEM: expiredClientPEM, expiredClientKeyPEM: expiredClientKeyPEM,
 	}
+}
+
+// requireSOPS313 returns the sops binary, or skips — unless REGALIA_EXPECT_SOPS says this job
+// installed it, in which case its absence is a FAILURE. A skip is a pass: both SOPS end-to-end
+// tests here skipped on every CI run after regalia#487 moved this code, and one of them had been
+// broken the whole time. Same contract as adapters/sops/interop_test.go, including refusing an
+// unparseable value rather than letting a typo choose "skip".
+func requireSOPS313(t *testing.T) string {
+	t.Helper()
+	expect := false
+	if raw := os.Getenv("REGALIA_EXPECT_SOPS"); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			t.Fatalf("REGALIA_EXPECT_SOPS=%q is not a boolean (%v)", raw, err)
+		}
+		expect = parsed
+	}
+	missing := func(format string, args ...any) {
+		t.Helper()
+		if expect {
+			t.Fatalf("REGALIA_EXPECT_SOPS is set, but "+format, args...)
+		}
+		t.Skipf(format, args...)
+	}
+	sops, err := exec.LookPath("sops")
+	if err != nil {
+		missing("sops is not on PATH: %v", err)
+	}
+	version, err := exec.Command(sops, "--version").CombinedOutput()
+	if err != nil || !strings.Contains(string(version), "sops 3.13.") {
+		missing("this needs SOPS 3.13.x, found: %s", version)
+	}
+	return sops
 }

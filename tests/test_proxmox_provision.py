@@ -144,7 +144,11 @@ class ProvisionTests(unittest.TestCase):
         second = json.dumps(provision.build_plan(config, verify_image=True), sort_keys=True)
         self.assertEqual(first, second)
         self.assertNotIn("PRIVATE KEY", first)
-        self.assertNotIn("pin", first.lower())
+        # The temporary image path is part of the plan and may contain the
+        # substring ``pin`` by chance (for example ``/tmp/tmpinr...``).
+        # Exclude that non-secret path before checking for credential flags.
+        sanitized = first.replace(str(self.image), "<image>")
+        self.assertNotIn("pin", sanitized.lower())
         self.assertEqual(first.count("rpool/kms-lisbon"), 1)
 
     def test_network_probe_matrix_is_least_privilege(self):

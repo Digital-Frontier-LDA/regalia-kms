@@ -126,5 +126,8 @@ REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_
 REGALIA_COSMOS_PKCS11_MODULE="$MODULE" REGALIA_COSMOS_PKCS11_TOKEN_LABEL=regalia-kms-e2e REGALIA_COSMOS_PKCS11_SLOT='' \
   REGALIA_COSMOS_PKCS11_PIN="$E2E_PIN" REGALIA_COSMOS_PKCS11_OBJECT_ID=01 \
   "$ROOT/e2e/cosmos-hardware-sign-verify.sh"
-REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" \
+# THE PIN IS LOAD-BEARING. Four of these five read it through e2ePKCS11PIN, which SKIPS without it —
+# and a skip is a pass. This line once omitted it, so the hardware-rooted KEK guards, the release
+# refusal and the concrete ECDH path "passed" here on every run while never executing.
+REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_PKCS11_E2E_PIN="$E2E_PIN" \
   go -C "$ROOT" test -count=1 -run '^TestOnlyAHardwareRootedKEKIsUsable$|^TestReleaseRefusesAKEKTheTokenWillHandBack$|^TestKEKAttributesRequireALoggedInSession$|^TestKeyAgreementOnAConcretePKCS11Module$|^TestTheKEKGuardsSeeASymmetricKey$' ./internal/integration
