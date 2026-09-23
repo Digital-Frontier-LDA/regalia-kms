@@ -67,6 +67,10 @@
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
         },
+        "public_key_sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
         "object_id": {
           "type": "string",
           "minLength": 1
@@ -183,8 +187,19 @@
           },
           "then": {
             "required": [
-              "device_serial",
-              "devaut_fingerprint"
+              "device_serial"
+            ],
+            "anyOf": [
+              {
+                "required": [
+                  "devaut_fingerprint"
+                ]
+              },
+              {
+                "required": [
+                  "public_key_sha256"
+                ]
+              }
             ]
           }
         },

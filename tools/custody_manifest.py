@@ -22,7 +22,8 @@ OBJECT_FIELDS = {
 }
 BINDING_FIELDS = {
     "site", "backend", "device_id", "object_id", "public_fingerprint", "key_check", "state",
-    "pin_policy", "touch_policy", "device_serial", "devaut_fingerprint", "kek_algorithm", "kek_version",
+    "pin_policy", "touch_policy", "device_serial", "devaut_fingerprint", "public_key_sha256", "kek_algorithm",
+    "kek_version",
 }
 RECOVERY_FIELDS = {"mode", "authority_id", "minimum_replicas", "status", "last_drill"}
 # envelope_max_age_days is optional: absent means an envelope of this object never ages out.
@@ -225,16 +226,22 @@ def validate_binding(binding: Any, path: str) -> dict[str, Any]:
     require_enum(item["state"], STATES, f"{path}.state")
 
     if backend == "nitrokey-pkcs11" and item["state"] in COMMISSIONED_STATES:
-        if not item.get("device_serial") or not item.get("devaut_fingerprint"):
-            fail(path, "commissioned Nitrokey requires device_serial and devaut_fingerprint")
+        # ADR-0002 D1: the serial, plus a DevAut fingerprint OR public_key_sha256 (the commissioned
+        # public key, which the daemon enforces on every use). A genuine SmartCard-HSM cannot expose
+        # its DevAut through PKCS#11, so requiring it made every real Nitrokey unbindable. Mirrors
+        # nitrokeyIdentityPinned in internal/registry/registry.go.
+        if not item.get("device_serial") or not (item.get("devaut_fingerprint") or item.get("public_key_sha256")):
+            fail(path, "commissioned Nitrokey requires device_serial and devaut_fingerprint or public_key_sha256")
         # require_string first, exactly as the public_fingerprint check above does. Truthiness is
         # not a type: `{"a": 1}` and `["sha256:…"]` are both truthy, reach fullmatch and raise
         # TypeError — a traceback out of a validator whose whole contract is that a bad manifest
         # produces a named refusal.
         require_string(item["device_serial"], f"{path}.device_serial")
-        devaut = require_string(item["devaut_fingerprint"], f"{path}.devaut_fingerprint")
-        if not FINGERPRINT_PATTERN.fullmatch(devaut):
-            fail(f"{path}.devaut_fingerprint", "must be sha256 followed by 64 lowercase hex digits")
+        for pin in ("devaut_fingerprint", "public_key_sha256"):
+            if pin in item:
+                value = require_string(item[pin], f"{path}.{pin}")
+                if not FINGERPRINT_PATTERN.fullmatch(value):
+                    fail(f"{path}.{pin}", "must be sha256 followed by 64 lowercase hex digits")
 
     if backend in {"yubikey-piv", "yubikey-openpgp"}:
         if item["state"] in COMMISSIONED_STATES and not item.get("device_serial"):

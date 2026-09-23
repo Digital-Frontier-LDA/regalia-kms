@@ -89,6 +89,7 @@ type Binding struct {
 	DevAuthFingerprint string `json:"devaut_fingerprint,omitempty"`
 	ObjectID           string `json:"object_id"`
 	PublicFingerprint  string `json:"public_fingerprint,omitempty"`
+	PublicKeySHA256    string `json:"public_key_sha256,omitempty"` // enforced; see nitrokeyIdentityPinned
 	KeyCheck           string `json:"key_check,omitempty"`
 	// KEKAlgorithm names the wrapping key in this slot for objects whose own algorithm is not a
 	// key algorithm. See validateBinding.
@@ -726,9 +727,9 @@ func validateBinding(binding Binding, algorithm string, operations []string) err
 		return fmt.Errorf("unsupported binding state %q", binding.State)
 	}
 	_, commissioned := commissionedStates[binding.State]
-	if binding.Backend == "nitrokey-pkcs11" && commissioned &&
-		(binding.DeviceSerial == "" || !fingerprintPattern.MatchString(binding.DevAuthFingerprint)) {
-		return errors.New("commissioned Nitrokey requires pinned serial and DevAut fingerprint")
+	if binding.Backend == "nitrokey-pkcs11" && commissioned && (!nitrokeyIdentityPinned(binding) || (binding.PublicKeySHA256 != "" && (algorithm == "aes-256" || binding.KEKAlgorithm == "aes-256"))) {
+		// A serial plus a DevAut fingerprint OR public_key_sha256: ADR-0002 D1, see below.
+		return errors.New("commissioned Nitrokey requires pinned serial and DevAut fingerprint or public_key_sha256")
 	}
 	if binding.Backend == "yubikey-piv" || binding.Backend == "yubikey-openpgp" {
 		if commissioned && binding.DeviceSerial == "" {
@@ -1264,4 +1265,32 @@ func (registry *Registry) RequiredBackends() []string {
 func digest(contents []byte) string {
 	sum := sha256.Sum256(contents)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// PublicKeySHA256 is "sha256:" + the SHA-256 of the bound object's public key EXACTLY as the backend's
+// PublicKey returns it, recorded at commissioning after the card's attestation proved the key was
+// generated on it. Unlike PublicFingerprint — an advisory record whose encoding was never defined —
+// the Nitrokey backend ENFORCES it on every use (ADR-0002 D1). The bytes are the standard
+// SubjectPublicKeyInfo DER, so the ceremony computes the pin with nothing proprietary — measured
+// identical on DENK0404144 for the daemon, `pkcs11-tool --read-object --type pubkey | sha256sum` and
+// an openssl round trip (regalia#448):
+//
+//	pkcs11-tool --module … --slot … --read-object --type pubkey --id <id> | sha256sum
+//
+// nitrokeyIdentityPinned: a commissioned Nitrokey pins its serial and, to prove it is the right card,
+// its DevAut fingerprint or public_key_sha256, the commissioned public key of the bound object
+// (ADR-0002 D1). A genuine
+// SmartCard-HSM cannot expose the first through PKCS#11 (regalia#448), so requiring it made every real
+// Nitrokey unbindable. A pin that is present must still be well formed — a malformed pin is a typo
+// in the manifest, not an absent one. Kept out of line so the guard stays the four lines the sweep
+// ledgers cite by number.
+func nitrokeyIdentityPinned(binding Binding) bool {
+	devAut := fingerprintPattern.MatchString(binding.DevAuthFingerprint)
+	if binding.DeviceSerial == "" || (binding.DevAuthFingerprint != "" && !devAut) {
+		return false
+	}
+	if binding.PublicKeySHA256 != "" && !fingerprintPattern.MatchString(binding.PublicKeySHA256) {
+		return false
+	}
+	return devAut || binding.PublicKeySHA256 != ""
 }

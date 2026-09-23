@@ -164,6 +164,29 @@ class ManifestRefusalTests(unittest.TestCase):
                 obj["bindings"][0]["devaut_fingerprint"] = bad
                 self.assert_refused(obj, "devaut_fingerprint")
 
+    def _nitrokey(self, **pins):
+        obj = direct_key()
+        b = obj["bindings"][0]
+        b.update(backend="nitrokey-pkcs11", state="active", device_serial="DENK0404144")
+        b.pop("devaut_fingerprint", None)
+        b.update(pins)
+        return obj
+
+    def test_a_commissioned_nitrokey_may_be_pinned_by_its_public_key_alone(self):
+        """ADR-0002 D1. A genuine SmartCard-HSM cannot expose its DevAut through PKCS#11, so a
+        binding pinned by serial + public_key_sha256 must be admitted -- or no real Nitrokey could
+        ever be commissioned. Mirrors nitrokeyIdentityPinned in the daemon's registry."""
+        validate_manifest(manifest_with(self._nitrokey(public_key_sha256="sha256:" + "c" * 64)))
+
+    def test_a_commissioned_nitrokey_needs_one_of_the_two_pins(self):
+        """The advisory public_fingerprint every binding carries does NOT stand in for a pin."""
+        self.assert_refused(self._nitrokey(), "devaut_fingerprint or public_key_sha256")
+
+    def test_a_public_key_pin_must_be_a_sha256_string(self):
+        for bad in ("not-a-digest", "SHA256:" + "c" * 64, {"a": 1}, 12345):
+            with self.subTest(pin=bad):
+                self.assert_refused(self._nitrokey(public_key_sha256=bad), "public_key_sha256")
+
 
 if __name__ == "__main__":
     unittest.main()

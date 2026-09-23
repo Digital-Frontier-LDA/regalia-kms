@@ -123,6 +123,11 @@ REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_
   go -C "$ROOT" test -count=1 -run '^TestDeployedSOPSSidecarExecutableThroughMTLS$' ./internal/integration
 REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_PKCS11_E2E_PIN="$E2E_PIN" \
   go -C "$ROOT" test -count=1 -run '^TestSealOnConcretePKCS11ThenReleaseFromIt$' ./internal/integration
+# ADR-0002 D1 through the PRODUCTION driver constructor and the real probes: SoftHSM exposes no
+# device certificate, exactly like a genuine SmartCard-HSM, so it is identified by serial plus the
+# commissioned public key. "public-key" only — it never logs in.
+REGALIA_D1_MODULE="$MODULE" REGALIA_D1_SERIAL="$serial" REGALIA_D1_OBJECT_ID=01 \
+  go -C "$ROOT" test -count=1 -run '^TestTheProductionDriverIdentifiesATokenByItsCommissionedPublicKey$' ./internal/integration
 REGALIA_COSMOS_PKCS11_MODULE="$MODULE" REGALIA_COSMOS_PKCS11_TOKEN_LABEL=regalia-kms-e2e REGALIA_COSMOS_PKCS11_SLOT='' \
   REGALIA_COSMOS_PKCS11_PIN="$E2E_PIN" REGALIA_COSMOS_PKCS11_OBJECT_ID=01 \
   "$ROOT/e2e/cosmos-hardware-sign-verify.sh"
