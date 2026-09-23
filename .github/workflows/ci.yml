@@ -189,3 +189,53 @@ jobs:
 
       - name: Fuzz the unauthenticated and malformed operation boundary
         run: go test ./internal/api -run='^$' -fuzz=FuzzOperationBoundaryNeverPanicsOrEchoesInput -fuzztime=20s
+
+  # regalia#439 ACCEPTANCE CRITERION 1, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts a
+  # transaction the KMS signed, and rejects a replay, a wrong-chain signature and a policy-refused
+  # destination (e2e/cosmos-simapp-kms-tx.sh). ADR-0002 D7: simd is built HERE from a pinned Cosmos
+  # SDK commit — no binary is downloaded, so the node under test is exactly what the tag's source
+  # says. The build is cached by that commit; a cache miss costs one build, never a different binary.
+  cosmos-node:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      COSMOS_SDK_TAG: v0.50.15
+      COSMOS_SDK_COMMIT: 8c7741050ad8c7ef0b6afd9129fb2dd9a91d30d4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Restore simd built from the pinned commit
+        id: simd-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/simd
+          key: simd-${{ env.COSMOS_SDK_COMMIT }}-${{ runner.os }}
+
+      - name: Build simd from the pinned commit (cache miss only)
+        if: steps.simd-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --quiet --depth 1 --branch "$COSMOS_SDK_TAG" https://github.com/cosmos/cosmos-sdk.git "$RUNNER_TEMP/cosmos-sdk"
+          # A TAG CAN MOVE; A COMMIT CANNOT. Refuse a tag that no longer names the reviewed commit.
+          got="$(git -C "$RUNNER_TEMP/cosmos-sdk" rev-parse HEAD)"
+          [ "$got" = "$COSMOS_SDK_COMMIT" ] || { echo "::error::$COSMOS_SDK_TAG is $got, not the pinned $COSMOS_SDK_COMMIT"; exit 1; }
+          ( cd "$RUNNER_TEMP/cosmos-sdk/simapp" && GOFLAGS=-mod=mod go build -o "$RUNNER_TEMP/simd" ./simd )
+
+      - name: Install the PKCS#11 emulator and the pinned cosmpy
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends softhsm2 opensc jq
+          python3 -m venv "$RUNNER_TEMP/cosmpy"
+          "$RUNNER_TEMP/cosmpy/bin/pip" install --quiet cosmpy==0.12.2 cryptography==50.0.1
+
+      - name: A live node accepts a KMS-signed transaction, and 3 negative arms hold
+        env:
+          REGALIA_COSMOS_SIMD_BIN: ${{ runner.temp }}/simd
+          REGALIA_COSMOS_PYTHON: ${{ runner.temp }}/cosmpy/bin/python
+        run: |
+          "$REGALIA_COSMOS_SIMD_BIN" version
+          e2e/cosmos-simapp-kms-tx.sh
