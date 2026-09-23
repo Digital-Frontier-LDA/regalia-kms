@@ -34,8 +34,12 @@ const commissionedFingerprint = `"devaut_fingerprint":"sha256:dddddddddddddddddd
 // nitrokeyBinding writes the binding JSON directly rather than through binding(), which cannot
 // express a commissioned nitrokey missing either pin.
 func nitrokeyBinding(site, device, extra string) string {
+	return nitrokeyBindingWithPublic(site, device, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", extra)
+}
+
+func nitrokeyBindingWithPublic(site, device, public, extra string) string {
 	return `{"site":"` + site + `","backend":"nitrokey-pkcs11","device_id":"` + device + `","object_id":"01",` +
-		`"public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",` +
+		`"public_fingerprint":"` + public + `",` +
 		`"state":"active"` + extra + `}`
 }
 
@@ -46,14 +50,19 @@ func nitrokeyBinding(site, device, extra string) string {
 const pinnedSibling = `,"device_serial":"siteb-serial",` + commissionedFingerprint
 
 func TestACommissionedNitrokeyMustPinItsSerialAndFingerprint(t *testing.T) {
-	for _, row := range []struct{ name, extra string }{
-		{"no device serial", `,` + commissionedFingerprint},
-		{"no DevAut fingerprint", `,"device_serial":"test-serial"`},
-		{"a DevAut fingerprint that is not a sha256 digest", `,"device_serial":"test-serial","devaut_fingerprint":"not-a-digest"`},
+	// ADR-0002 D1: the card is proven by its serial plus EITHER a DevAut fingerprint OR
+	// public_key_sha256 (the commissioned public key, enforced on every use), because a genuine
+	// SmartCard-HSM cannot expose its DevAut through PKCS#11 (regalia#448). The advisory
+	// public_fingerprint every binding carries does NOT stand in: its encoding was never defined.
+	for _, row := range []struct{ name, public, extra string }{
+		{"no device serial", "sha256:" + strings.Repeat("a", 64), `,` + commissionedFingerprint},
+		{"no DevAut, and only the advisory public_fingerprint", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial"`},
+		{"no DevAut, and a public_key_sha256 that is not a sha256 digest", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial","public_key_sha256":"not-a-digest"`},
+		{"a DevAut fingerprint that is not a sha256 digest", "sha256:" + strings.Repeat("a", 64), `,"device_serial":"test-serial","devaut_fingerprint":"not-a-digest"`},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			document := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign",
-				nitrokeyBinding("sitea", "local-hsm", row.extra)+","+
+				nitrokeyBindingWithPublic("sitea", "local-hsm", row.public, row.extra)+","+
 					nitrokeyBinding("siteb", "remote-hsm", pinnedSibling)))
 			_, err := Load(strings.NewReader(document), "sitea", &healthMap{states: map[string]bool{}})
 			if err == nil {
@@ -72,5 +81,14 @@ func TestACommissionedNitrokeyMustPinItsSerialAndFingerprint(t *testing.T) {
 			nitrokeyBinding("siteb", "remote-hsm", pinnedSibling)))
 	if _, err := Load(strings.NewReader(document), "sitea", &healthMap{states: map[string]bool{}}); err != nil {
 		t.Fatalf("a fully pinned commissioned Nitrokey was refused (%v) — the refusals above would prove nothing", err)
+	}
+
+	// THE D1 CASE: serial + commissioned public-key pin, no DevAut — how a real Nitrokey HSM 2 is
+	// bound, since its DevAut is in EF 2F02. It must load.
+	d1 := manifest(object("wallet-key", "cosmos-transaction", "secp256k1", "sign",
+		nitrokeyBinding("sitea", "local-hsm", `,"device_serial":"test-serial","public_key_sha256":"sha256:`+strings.Repeat("c", 64)+`"`)+","+
+			nitrokeyBinding("siteb", "remote-hsm", pinnedSibling)))
+	if _, err := Load(strings.NewReader(d1), "sitea", &healthMap{states: map[string]bool{}}); err != nil {
+		t.Fatalf("a Nitrokey pinned by serial and public_key_sha256 was refused (%v) — every genuine SmartCard-HSM would be unbindable (ADR-0002 D1)", err)
 	}
 }

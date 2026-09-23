@@ -178,6 +178,14 @@ func (session *pkcs11Session) Identity(ctx context.Context) (string, string, err
 		return "", "", err
 	}
 	fingerprint, err := session.devAuth.Fingerprint(ctx, session.deviceID, session.serial)
+	// A TOKEN THAT EXPOSES NO DEVICE CERTIFICATE IS NOT AN UNIDENTIFIABLE ONE. A genuine
+	// SmartCard-HSM keeps C.DevAut in EF 2F02, out of PKCS#11's reach (regalia#448), so this
+	// reports the serial with no DevAut and the provider decides: a binding that pins a DevAut
+	// then fails its match, and one that pins the commissioned public key is checked against that
+	// instead (ADR-0002 D1). Any OTHER probe failure still means the identity is unreadable.
+	if errors.Is(err, ErrNoDeviceCertificate) {
+		return session.serial, "", nil
+	}
 	if err != nil || fingerprint == "" {
 		return "", "", errors.New("device authentication unavailable")
 	}

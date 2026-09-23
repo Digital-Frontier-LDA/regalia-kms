@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/hkdf"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
+	"regexp"
 	"sync"
 	"time"
 
@@ -109,8 +112,7 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 
 func (provider *Provider) Execute(ctx context.Context, route registry.Route, operation, format, contentType string, data, aad []byte) (output []byte, outputType string, err error) {
 	binding := route.Binding
-	if binding.Backend != "nitrokey-pkcs11" || binding.DeviceID == "" || binding.ObjectID == "" ||
-		binding.DeviceSerial == "" || binding.DevAuthFingerprint == "" {
+	if binding.Backend != "nitrokey-pkcs11" || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
 		return nil, "", ErrUnavailable
 	}
 	if provider.pinBlocked(binding.DeviceID) {
@@ -130,19 +132,22 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 			output, outputType, err = nil, "", ErrUnavailable
 		}
 	}()
-	serial, devaut, err := session.Identity(ctx)
-	if err != nil || serial != binding.DeviceSerial || devaut != binding.DevAuthFingerprint {
-		// A DEVICE ANSWERING WITH THE WRONG IDENTITY IS A SWAP, NOT A GLITCH. Failing only this
-		// call would let the next one try again against whatever is now in the slot, so the key is
-		// latched out of service until an operator clears it. An unreadable identity latches too:
-		// "cannot prove which device this is" is not a safer state than "provably the wrong one".
-		provider.quarantine(binding.DeviceID, "identity-mismatch")
+	// A DEVICE ANSWERING WITH THE WRONG IDENTITY IS A SWAP, NOT A GLITCH. Failing only this call
+	// would let the next one try again against whatever is now in the slot, so the key is latched
+	// out of service until an operator clears it. An unreadable identity latches too: "cannot prove
+	// which device this is" is not a safer state than "provably the wrong one".
+	if reason := verifyIdentity(ctx, session, binding); reason != "" {
+		provider.quarantine(binding.DeviceID, reason)
 		return nil, "", ErrUnavailable
 	}
 	if err := session.EstablishSecureChannel(ctx); err != nil {
 		// A channel that will not establish is a downgrade: everything after this would travel
 		// unprotected, so the key is latched rather than used over it.
 		provider.quarantine(binding.DeviceID, "secure-channel-failed")
+		return nil, "", ErrUnavailable
+	}
+	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
+		provider.quarantine(binding.DeviceID, reason)
 		return nil, "", ErrUnavailable
 	}
 	if operation == "public-key" {
@@ -162,9 +167,19 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		// A KEK THAT WAS NOT BORN ON THIS TOKEN IS NOT A HARDWARE-ROOTED KEK. Latched rather
 		// than failed, for the same reason as identity-mismatch above: the condition is a
 		// provisioning fault, not a glitch, and retrying would seal to it again.
-		if err := session.AssertKEKGeneratedOnToken(ctx, binding.ObjectID); err != nil {
-			provider.quarantine(binding.DeviceID, kekReason(err, ErrKEKNotTokenGenerated, "kek-not-token-generated"))
-			return nil, "", ErrUnavailable
+		//
+		// WHERE THAT IS PROVEN depends on what the binding pins (ADR-0002 D1). A binding that pins
+		// the KEK's public key had its provenance verified ONCE, at commissioning, from the card's
+		// own attestation (EF CExx, hsm-key-attestation-verify.py) — which PKCS#11 cannot reach —
+		// and verifyPinnedPublicKey above has just confirmed this is that key. Asking CKA_LOCAL
+		// again would only get the answer #447 measured: on an SC-HSM it tracks whether a
+		// certificate exists, not where the key was born. A binding without that pin still gets the
+		// runtime check, which is all it has.
+		if _, pinned := pinnedPublicKey(binding); !pinned {
+			if err := session.AssertKEKGeneratedOnToken(ctx, binding.ObjectID); err != nil {
+				provider.quarantine(binding.DeviceID, kekReason(err, ErrKEKNotTokenGenerated, "kek-not-token-generated"))
+				return nil, "", ErrUnavailable
+			}
 		}
 		publicKey, publicErr := session.PublicKey(ctx, binding.ObjectID)
 		if publicErr != nil {
@@ -275,7 +290,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 }
 
 func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding) (healthy bool) {
-	if binding.Backend != "nitrokey-pkcs11" || binding.DeviceSerial == "" || binding.DevAuthFingerprint == "" {
+	if binding.Backend != "nitrokey-pkcs11" || !identifiable(binding) {
 		return false
 	}
 	if provider.pinBlocked(binding.DeviceID) {
@@ -305,13 +320,16 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 			healthy = false
 		}
 	}()
-	serial, devaut, err := session.Identity(ctx)
-	if err != nil || serial != binding.DeviceSerial || devaut != binding.DevAuthFingerprint {
-		provider.quarantine(binding.DeviceID, "identity-mismatch")
+	if reason := verifyIdentity(ctx, session, binding); reason != "" {
+		provider.quarantine(binding.DeviceID, reason)
 		return false
 	}
 	if session.EstablishSecureChannel(ctx) != nil {
 		provider.quarantine(binding.DeviceID, "secure-channel-failed")
+		return false
+	}
+	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
+		provider.quarantine(binding.DeviceID, reason)
 		return false
 	}
 	retries, err := session.PINRetries(ctx)
@@ -404,4 +422,60 @@ func zero(value []byte) {
 	for index := range value {
 		value[index] = 0
 	}
+}
+
+// DEVICE IDENTITY (ADR-0002 D1). What a binding can pin, and what the daemon can check at runtime:
+//
+//   - device_serial, always — PKCS#11 reports it (CK_TOKEN_INFO).
+//   - devaut_fingerprint, when the token exposes its device certificate as a PKCS#11 object. A
+//     genuine SmartCard-HSM does not: it keeps C.DevAut in EF 2F02, which only an APDU reaches
+//     (regalia#448, measured on DENK0404144). Its genuineness is verified at commissioning instead.
+//   - public_key_sha256 — "sha256:" + the SHA-256 of the bound object's public key exactly as
+//     PublicKey returns it — recorded at commissioning, after the card's attestation proved the key
+//     was generated on it. Checking it here proves this is still that key on that card: a swapped
+//     card cannot carry the same private key, because the hardware will not let it out.
+//
+// A binding must pin the serial and at least one of the other two. Whatever it pins is enforced.
+var publicKeyPinPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+func pinnedPublicKey(binding registry.Binding) (string, bool) {
+	return binding.PublicKeySHA256, publicKeyPinPattern.MatchString(binding.PublicKeySHA256)
+}
+
+func identifiable(binding registry.Binding) bool {
+	_, pinned := pinnedPublicKey(binding)
+	return binding.DeviceSerial != "" && (binding.DevAuthFingerprint != "" || pinned)
+}
+
+// verifyIdentity returns a quarantine reason, or "" when the device is the one the binding names.
+func verifyIdentity(ctx context.Context, session Session, binding registry.Binding) string {
+	serial, devaut, err := session.Identity(ctx)
+	if err != nil || serial != binding.DeviceSerial {
+		return "identity-mismatch"
+	}
+	// A pinned DevAut must still match. A token that exposes none reports "", which cannot equal a
+	// pinned "sha256:…" — so pinning one keeps the strict check wherever it is actually possible.
+	if binding.DevAuthFingerprint != "" && devaut != binding.DevAuthFingerprint {
+		return "identity-mismatch"
+	}
+	return ""
+}
+
+// verifyPinnedPublicKey returns a quarantine reason, or "" when the binding pins no public key or
+// the bound object's public key hashes to the pin. Unreadable is refused like wrong: "cannot show
+// this is the commissioned key" is not safer than "provably another key".
+func verifyPinnedPublicKey(ctx context.Context, session Session, binding registry.Binding) string {
+	pin, pinned := pinnedPublicKey(binding)
+	if !pinned {
+		return ""
+	}
+	publicKey, err := session.PublicKey(ctx, binding.ObjectID)
+	if err != nil || len(publicKey) == 0 {
+		return "public-key-mismatch"
+	}
+	sum := sha256.Sum256(publicKey)
+	if subtle.ConstantTimeCompare([]byte("sha256:"+hex.EncodeToString(sum[:])), []byte(pin)) != 1 {
+		return "public-key-mismatch"
+	}
+	return ""
 }
