@@ -21,6 +21,7 @@ import pathlib
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from cryptography.hazmat.primitives import serialization
@@ -42,6 +43,10 @@ def compressed_pubkey(der_path):
 
 
 def http_json(url, body=None):
+    # urllib also opens file:// and ftp:// URLs. Every URL here is built from --rest, so refuse any
+    # scheme but http(s) rather than let a mistyped or hostile value read a local file.
+    if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
+        raise SystemExit(f"refusing non-HTTP URL: {url!r}")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"} if data else {})
     try:

@@ -129,7 +129,7 @@ r2="$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$STATE/
 say "ARM 2 PASS: replay rejected (code $(jq -r .code <<< "$r2"): $(jq -r .log <<< "$r2" | cut -c1-80))"
 
 # ---- arm 3: a valid KMS signature over the wrong chain id is rejected by the node ---------------
-read -r _ SEQ3 < <(build --chain-id "not-$CHAIN_ID" --to "$NODE0" --amount "$AMOUNT" --out "$STATE/tx3")
+read -r _ _ < <(build --chain-id "not-$CHAIN_ID" --to "$NODE0" --amount "$AMOUNT" --out "$STATE/tx3")
 kms_sign "$STATE/tx3" "not-$CHAIN_ID" "$NODE0" || fail "the KMS did not sign the wrong-chain SignDoc (the policy allowed that chain)"
 r3="$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$STATE/tx3" --signature "$STATE/tx3/sig.bin")"
 [ "$(jq -r .committed <<< "$r3")" != true ] && [ "$(jq -r .code <<< "$r3")" != 0 ] || fail "the node accepted a signature over another chain id: $r3"
