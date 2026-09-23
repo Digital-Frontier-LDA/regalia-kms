@@ -150,8 +150,22 @@ Rotation is create-new-blob, verify retry metadata, stop KMS, atomically install
 start, perform one bounded health/sign test, and retain the previous blob only in the witnessed
 recovery package.
 
-**Host rebuild, token replacement, HSM outage, rotation and total-loss drills (#20 AC4) have not been
-performed.** The only credential drill recorded, `doc/drills/2026-08-01-so-pin-reset.md`, ran on a Pico
+**Host rebuild, token replacement, HSM outage, rotation and total-loss drills (#20 AC4) were run on
+the staging bench on 2026-09-23** (`e2e/yubikey-pin-custody-drill.sh`, daemon half
+`TestYubiKeyPINCustodyDrill` run as a transient systemd service with `LoadCredentialEncrypted=`, on
+YubiKeys 36345471 and 36344616; record in regalia `doc/drills/`).
+- A stale credential after a card-PIN rotation spent **exactly one** retry and latched.
+- A credential whose host key is gone makes systemd refuse the service (exit 243) **before any PIN
+  is presented**.
+- The recovery kit reseals on a new host.
+- With the Nitrokey de-authorised, YubiKey custody still serves.
+- An absent token is refused with no PIN presented.
+- The replacement token serves with its own credential.
+
+**Bench substitute:** the qube has no TPM2, so the drill seals with systemd's host key. The TPM
+binding, and the PCR set in particular, is still #46's to prove on the target guest.
+
+Before that, the only credential drill recorded was `doc/drills/2026-08-01-so-pin-reset.md`. It ran on a Pico
 and says itself that its firmware conclusion does not transfer; under D1 it informs no production
 decision. Software and emulator results are not physical evidence.
 
