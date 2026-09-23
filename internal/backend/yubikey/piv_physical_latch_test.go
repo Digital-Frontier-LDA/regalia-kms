@@ -6,10 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
-	"strings"
+	"regexp"
 	"testing"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
@@ -86,12 +85,19 @@ func TestPIVPhysicalWrongPINLatchesAfterExactlyOneAttempt(t *testing.T) {
 			t.Errorf("could not confirm the restore with ykman (%v); check the counter by hand: ykman --device %s piv info", err, serial)
 			return
 		}
-		want := fmt.Sprintf("PIN tries remaining:      %d/", before)
-		if !strings.Contains(string(out), want) {
-			t.Errorf("counter after restore is not %d: %s", before, out)
+		// A successful VERIFY resets the counter to the card's configured MAXIMUM, which need not be
+		// the value the test started from (a card at 3/5 comes back at 5/5). So the check is
+		// "remaining == total", read from ykman, not "back to `before`".
+		m := regexp.MustCompile(`PIN tries remaining:\s*(\d+)/(\d+)`).FindStringSubmatch(string(out))
+		if m == nil {
+			t.Errorf("could not read the PIN counter from ykman: %s", out)
 			return
 		}
-		t.Logf("counter restored to %d (confirmed by ykman)", before)
+		if m[1] != m[2] {
+			t.Errorf("counter after restore is %s/%s, not at its maximum", m[1], m[2])
+			return
+		}
+		t.Logf("counter restored to its maximum %s/%s (confirmed by ykman)", m[1], m[2])
 	})
 
 	provider, err := New(driver, &fakePIN{value: wrong})
