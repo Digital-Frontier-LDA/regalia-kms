@@ -466,6 +466,9 @@ func verifyIdentity(ctx context.Context, session Session, binding registry.Bindi
 // this is the commissioned key" is not safer than "provably another key".
 func verifyPinnedPublicKey(ctx context.Context, session Session, binding registry.Binding) string {
 	pin, pinned := pinnedPublicKey(binding)
+	if binding.PublicKeySHA256 != "" && !pinned {
+		return "public-key-mismatch"
+	}
 	if !pinned {
 		return ""
 	}

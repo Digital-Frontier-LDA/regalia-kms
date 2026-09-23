@@ -727,7 +727,7 @@ func validateBinding(binding Binding, algorithm string, operations []string) err
 		return fmt.Errorf("unsupported binding state %q", binding.State)
 	}
 	_, commissioned := commissionedStates[binding.State]
-	if binding.Backend == "nitrokey-pkcs11" && commissioned && !nitrokeyIdentityPinned(binding) {
+	if binding.Backend == "nitrokey-pkcs11" && commissioned && (!nitrokeyIdentityPinned(binding) || (binding.PublicKeySHA256 != "" && (algorithm == "aes-256" || binding.KEKAlgorithm == "aes-256"))) {
 		// A serial plus a DevAut fingerprint OR public_key_sha256: ADR-0002 D1, see below.
 		return errors.New("commissioned Nitrokey requires pinned serial and DevAut fingerprint or public_key_sha256")
 	}
