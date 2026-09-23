@@ -79,6 +79,16 @@ func (driver *PIVDriver) Open(ctx context.Context, deviceID string) (Session, er
 	if selected == nil {
 		return nil, ErrUnavailable
 	}
+	// A PC/SC disconnect LEAVES the card as it was, so a new connection inherits whatever PIN
+	// verification the last connection left behind (measured on YubiKey 5.7.4, 2026-09-23). The
+	// empty-VERIFY retries probe then answers 9000 instead of a counter, and a restarted daemon
+	// reports a healthy key as unavailable. Selecting another applet and back clears the PIV
+	// security status; if that cannot be done, the session is refused rather than run on state it
+	// did not establish.
+	if err := pivClearVerified(selected); err != nil {
+		_ = selected.Close()
+		return nil, ErrUnavailable
+	}
 	return &pivSession{card: selected, serial: target}, nil
 }
 
@@ -234,6 +244,10 @@ func (session *pivSession) Close() error {
 	if session.card == nil {
 		return nil
 	}
+	// The same leak in the other direction: without this, the PIN this session verified stays
+	// verified after the disconnect, and ANY process on the host that connects next can use a
+	// PIN-policy-ONCE key without knowing the PIN. Best effort: a card already gone has no state.
+	_ = pivClearVerified(session.card)
 	return session.card.Close()
 }
 

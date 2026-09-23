@@ -18,3 +18,11 @@ import "github.com/go-piv/piv-go/v2/piv"
 // that adds one would silently race. -race is the guard.
 var pivCards = piv.Cards
 var pivOpen = piv.Open
+
+// pivClearVerified drops any PIN verification a previous connection left on the card. FormFactor
+// reads the management applet and re-selects PIV, and a YubiKey resets the PIV security status on
+// that applet switch; piv-go exposes no other way to send the SELECT.
+var pivClearVerified = func(card *piv.YubiKey) error {
+	_, err := card.FormFactor()
+	return err
+}
