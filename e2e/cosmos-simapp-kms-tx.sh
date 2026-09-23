@@ -26,15 +26,20 @@ SIMD="${REGALIA_COSMOS_SIMD_BIN:-}"
 PY="${REGALIA_COSMOS_PYTHON:-python3}"
 [ -n "$SIMD" ] && [ -x "$SIMD" ] || { echo "REGALIA_COSMOS_SIMD_BIN must name an executable simd" >&2; exit 2; }
 "$PY" -c 'import cosmpy, cryptography' 2>/dev/null || { echo "$PY lacks cosmpy/cryptography (set REGALIA_COSMOS_PYTHON)" >&2; exit 2; }
-for tool in curl jq softhsm2-util pkcs11-tool openssl go; do
+for tool in curl jq pkcs11-tool openssl go; do
   command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 2; }
 done
+# SoftHSM is needed only for the EMULATED run; a host with just OpenSC and a real token must be able
+# to run the physical one (review of #32).
 MODULE=""
-for candidate in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so \
-                 /usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so /opt/homebrew/lib/softhsm/libsofthsm2.so; do
-  [ -f "$candidate" ] && { MODULE="$candidate"; break; }
-done
-[ -n "$MODULE" ] || { echo "SoftHSM2 module not found" >&2; exit 2; }
+if [ -z "${REGALIA_COSMOS_TOKEN_SERIAL:-}" ]; then
+  command -v softhsm2-util >/dev/null || { echo "softhsm2-util is required for the emulated run" >&2; exit 2; }
+  for candidate in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so \
+                   /usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so /opt/homebrew/lib/softhsm/libsofthsm2.so; do
+    [ -f "$candidate" ] && { MODULE="$candidate"; break; }
+  done
+  [ -n "$MODULE" ] || { echo "SoftHSM2 module not found" >&2; exit 2; }
+fi
 
 STATE="$(mktemp -d "${TMPDIR:-/tmp}/regalia-kms-tx.XXXXXX")"
 chmod 700 "$STATE"
@@ -63,9 +68,10 @@ if [ -n "${REGALIA_COSMOS_TOKEN_SERIAL:-}" ]; then
   OBJECT_ID="${REGALIA_COSMOS_TOKEN_OBJECT_ID:?REGALIA_COSMOS_TOKEN_OBJECT_ID is required with a physical token}"
   SLOT_ID="$(pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | awk -v want="$SERIAL" '
       /^Slot [0-9]+ \(0x[0-9a-fA-F]+\)/ { match($0, /\(0x[0-9a-fA-F]+\)/); id = substr($0, RSTART + 1, RLENGTH - 2) }
-      /serial num *:/ { v = $NF; if (v == want) { if (found) { print "AMBIGUOUS"; exit } found = id } }
-      END { if (found != "") print found }' | tail -1)"
-  { [ -n "$SLOT_ID" ] && [ "$SLOT_ID" != AMBIGUOUS ]; } || fail "cannot resolve token $SERIAL to exactly one slot"
+      /serial num *:/ { v = $NF; if (v == want) { n++; found = id } }
+      END { if (n > 1) print "AMBIGUOUS"; else if (n == 1) print found }')"
+  [ "$SLOT_ID" != AMBIGUOUS ] || fail "more than one slot reports serial $SERIAL — refusing to guess which token signs"
+  [ -n "$SLOT_ID" ] || fail "no slot reports serial $SERIAL"
   P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$SLOT_ID" --login --pin env:REGALIA_E2E_PIN "$@"; }
   P11 --read-object --type pubkey --id "$OBJECT_ID" --output-file "$STATE/pub.der" >/dev/null 2>&1 \
     || fail "no public key at object $OBJECT_ID on $SERIAL"
