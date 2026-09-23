@@ -17,23 +17,29 @@
 #   3. a KMS signature over a SignDoc for ANOTHER chain id -> rejected by the node's signature check
 #   4. a destination the policy does not allow -> refused by the KMS BEFORE the token; nothing to send
 #
-# EVIDENCE CLASS: emulated. The token is SoftHSM; the chain, the encoding and the KMS path are real.
-# Pointing REGALIA_PKCS11_E2E_* at a physical token is what would make it physical.
+# EVIDENCE CLASS: emulated by default (SoftHSM); PHYSICAL with REGALIA_COSMOS_TOKEN_SERIAL (see below).
+# The chain, the encoding and the KMS path are real either way; the final line names the class.
+# Physical example: REGALIA_COSMOS_TOKEN_SERIAL=DENK0404144 REGALIA_COSMOS_TOKEN_OBJECT_ID=30 REGALIA_COSMOS_TOKEN_PIN=…
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIMD="${REGALIA_COSMOS_SIMD_BIN:-}"
 PY="${REGALIA_COSMOS_PYTHON:-python3}"
 [ -n "$SIMD" ] && [ -x "$SIMD" ] || { echo "REGALIA_COSMOS_SIMD_BIN must name an executable simd" >&2; exit 2; }
 "$PY" -c 'import cosmpy, cryptography' 2>/dev/null || { echo "$PY lacks cosmpy/cryptography (set REGALIA_COSMOS_PYTHON)" >&2; exit 2; }
-for tool in curl jq softhsm2-util pkcs11-tool openssl go; do
+for tool in curl jq pkcs11-tool openssl go; do
   command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 2; }
 done
+# SoftHSM is needed only for the EMULATED run; a host with just OpenSC and a real token must be able
+# to run the physical one (review of #32).
 MODULE=""
-for candidate in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so \
-                 /usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so /opt/homebrew/lib/softhsm/libsofthsm2.so; do
-  [ -f "$candidate" ] && { MODULE="$candidate"; break; }
-done
-[ -n "$MODULE" ] || { echo "SoftHSM2 module not found" >&2; exit 2; }
+if [ -z "${REGALIA_COSMOS_TOKEN_SERIAL:-}" ]; then
+  command -v softhsm2-util >/dev/null || { echo "softhsm2-util is required for the emulated run" >&2; exit 2; }
+  for candidate in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so \
+                   /usr/lib/aarch64-linux-gnu/softhsm/libsofthsm2.so /opt/homebrew/lib/softhsm/libsofthsm2.so; do
+    [ -f "$candidate" ] && { MODULE="$candidate"; break; }
+  done
+  [ -n "$MODULE" ] || { echo "SoftHSM2 module not found" >&2; exit 2; }
+fi
 
 STATE="$(mktemp -d "${TMPDIR:-/tmp}/regalia-kms-tx.XXXXXX")"
 chmod 700 "$STATE"
@@ -48,17 +54,41 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 say() { printf '  %s\n' "$*"; }
 
 # ---- the token ---------------------------------------------------------------------------------
-mkdir "$STATE/tokens"
-printf 'directories.tokendir = %s\nobjectstore.backend = file\nlog.level = ERROR\nslots.removable = false\n' "$STATE/tokens" > "$STATE/softhsm2.conf"
-export SOFTHSM2_CONF="$STATE/softhsm2.conf"
-PIN="$(openssl rand -hex 16)"
-softhsm2-util --init-token --free --label regalia-kms-tx --so-pin "$(openssl rand -hex 16)" --pin "$PIN" >/dev/null
-P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-tx --login --pin env:REGALIA_E2E_PIN "$@"; }
-P11 --keypairgen --key-type EC:secp256k1 --usage-sign --label regalia-kms-tx --id 01 >/dev/null
-P11 --read-object --type pubkey --id 01 --output-file "$STATE/pub.der" >/dev/null
-SERIAL="$(pkcs11-tool --module "$MODULE" --token-label regalia-kms-tx --list-slots 2>/dev/null \
-          | awk -F: '/serial num/{gsub(/[[:space:]]/, "", $2); print $2; exit}')"
-[ -n "$SERIAL" ] || fail "SoftHSM serial unavailable"
+# EMULATED by default: a disposable SoftHSM token and a fresh secp256k1 key. PHYSICAL when
+# REGALIA_COSMOS_TOKEN_SERIAL names a real token: the key at REGALIA_COSMOS_TOKEN_OBJECT_ID must
+# already exist on it (secp256k1, generated on the card), the slot is resolved BY SERIAL — never by
+# index — and the PIN comes from REGALIA_COSMOS_TOKEN_PIN. The KMS path is identical in both; only
+# the class of evidence the final line claims changes.
+OBJECT_ID=01
+if [ -n "${REGALIA_COSMOS_TOKEN_SERIAL:-}" ]; then
+  EVIDENCE="physical token ${REGALIA_COSMOS_TOKEN_SERIAL}"
+  MODULE="${REGALIA_COSMOS_TOKEN_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
+  SERIAL="$REGALIA_COSMOS_TOKEN_SERIAL"
+  PIN="${REGALIA_COSMOS_TOKEN_PIN:?REGALIA_COSMOS_TOKEN_PIN is required with a physical token}"
+  OBJECT_ID="${REGALIA_COSMOS_TOKEN_OBJECT_ID:?REGALIA_COSMOS_TOKEN_OBJECT_ID is required with a physical token}"
+  SLOT_ID="$(pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | awk -v want="$SERIAL" '
+      /^Slot [0-9]+ \(0x[0-9a-fA-F]+\)/ { match($0, /\(0x[0-9a-fA-F]+\)/); id = substr($0, RSTART + 1, RLENGTH - 2) }
+      /serial num *:/ { v = $NF; if (v == want) { n++; found = id } }
+      END { if (n > 1) print "AMBIGUOUS"; else if (n == 1) print found }')"
+  [ "$SLOT_ID" != AMBIGUOUS ] || fail "more than one slot reports serial $SERIAL — refusing to guess which token signs"
+  [ -n "$SLOT_ID" ] || fail "no slot reports serial $SERIAL"
+  P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$SLOT_ID" --login --pin env:REGALIA_E2E_PIN "$@"; }
+  P11 --read-object --type pubkey --id "$OBJECT_ID" --output-file "$STATE/pub.der" >/dev/null 2>&1 \
+    || fail "no public key at object $OBJECT_ID on $SERIAL"
+else
+  EVIDENCE="emulated token"
+  mkdir "$STATE/tokens"
+  printf 'directories.tokendir = %s\nobjectstore.backend = file\nlog.level = ERROR\nslots.removable = false\n' "$STATE/tokens" > "$STATE/softhsm2.conf"
+  export SOFTHSM2_CONF="$STATE/softhsm2.conf"
+  PIN="$(openssl rand -hex 16)"
+  softhsm2-util --init-token --free --label regalia-kms-tx --so-pin "$(openssl rand -hex 16)" --pin "$PIN" >/dev/null
+  P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-tx --login --pin env:REGALIA_E2E_PIN "$@"; }
+  P11 --keypairgen --key-type EC:secp256k1 --usage-sign --label regalia-kms-tx --id 01 >/dev/null
+  P11 --read-object --type pubkey --id 01 --output-file "$STATE/pub.der" >/dev/null
+  SERIAL="$(pkcs11-tool --module "$MODULE" --token-label regalia-kms-tx --list-slots 2>/dev/null \
+            | awk -F: '/serial num/{gsub(/[[:space:]]/, "", $2); print $2; exit}')"
+  [ -n "$SERIAL" ] || fail "SoftHSM serial unavailable"
+fi
 read -r KMS_ADDR _ < <("$PY" "$ROOT/e2e/cosmos_kms_tx.py" address --pubkey-der "$STATE/pub.der")
 say "KMS key address: $KMS_ADDR"
 
@@ -98,7 +128,7 @@ kms_sign() {
   local out
   out="$(REGALIA_COSMOS_NODE_SIGNDOC="$1/signdoc.bin" REGALIA_COSMOS_NODE_SIGNATURE_OUT="$1/sig.bin" \
      REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$SERIAL" REGALIA_PKCS11_E2E_PIN="$PIN" \
-     REGALIA_COSMOS_NODE_OBJECT_ID=01 REGALIA_COSMOS_NODE_CHAIN_ID="$2" REGALIA_COSMOS_NODE_ALLOWED_DESTINATION="$3" \
+     REGALIA_COSMOS_NODE_OBJECT_ID="$OBJECT_ID" REGALIA_COSMOS_NODE_CHAIN_ID="$2" REGALIA_COSMOS_NODE_ALLOWED_DESTINATION="$3" \
      REGALIA_COSMOS_NODE_EXPECT_DENY="${4:-0}" \
      go -C "$ROOT" test -count=1 -v -run '^TestCosmosKMSSignsASignDocForALiveNode$' ./internal/integration 2>&1)" \
      || { printf '%s\n' "$out" >&2; return 1; }
@@ -142,4 +172,4 @@ kms_sign "$STATE/tx4" "$CHAIN_ID" "$NODE0" 1 || fail "the policy did not refuse 
 [ ! -e "$STATE/tx4/sig.bin" ] || fail "a refused request still produced a signature"
 say "ARM 4 PASS: MsgSend to a disallowed destination refused by policy; no signature exists"
 
-echo "Cosmos KMS-signed transaction accepted by a live node, and 3 negative arms held (chain=$CHAIN_ID evidence=emulated token)"
+echo "Cosmos KMS-signed transaction accepted by a live node, and 3 negative arms held (chain=$CHAIN_ID evidence=$EVIDENCE)"
