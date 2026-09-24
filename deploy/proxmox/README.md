@@ -167,7 +167,7 @@ over a false claim still verifies. `guest_probe.py` reads the guest itself:
 - hibernation: `resume=`, the masked sleep targets or `sleep.conf`;
 - active swap: must be zram or dm-crypt;
 - the unit's user and `NoNewPrivileges`;
-- token client tools, and every holder of the pcscd socket.
+- token client tools, and every process connected to pcscd, identified by its binary.
 
 With `--evidence` it exits 1 when the evidence claims a control the guest does not have. Keep its
 JSON in the signed transcript:

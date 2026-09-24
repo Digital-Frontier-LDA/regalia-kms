@@ -19,8 +19,9 @@ WHAT IT MEASURES, AND HOW:
                               suspend-then-hibernate
   swap_disabled_or_encrypted  every active swap is zram (RAM) or a dm-crypt device
   kms_service_unprivileged    the unit runs as a non-root User= with NoNewPrivileges=yes
-  direct_token_clients_absent no token client tool is installed on PATH, and nothing but pcscd and
-                              the KMS holds the pcscd socket
+  direct_token_clients_absent no token client tool is installed on PATH, and every process connected
+                              to pcscd runs the KMS binary (matched by socket inode, identified by
+                              /proc/<pid>/exe, never by the name a process gives itself)
 
 WHAT IT CANNOT MEASURE, and says so rather than guessing: runtime_credentials_excluded_from_backup
 (a property of the HOST's backup jobs) and credential_tpm2_pcrs (the PCR set inside a sealed blob).
@@ -44,6 +45,9 @@ HIBERNATING_TARGETS = ("hibernate.target", "hybrid-sleep.target", "suspend-then-
 TOKEN_CLIENTS = ("ykman", "yubico-piv-tool", "pkcs11-tool", "pkcs15-tool", "opensc-tool", "sc-hsm-tool",
                  "pcsc_scan", "scdaemon", "gpg-card", "yubikey-agent", "age-plugin-yubikey")
 PCSCD_SOCKET = "/run/pcscd/pcscd.comm"
+# A pcscd client is identified by the binary its pid runs, not by the name ss prints: a process
+# name is whatever the process set it to.
+ALLOWED_TOKEN_CLIENT_EXES = ("/usr/local/sbin/regalia-kms",)
 
 
 class Host:
@@ -72,6 +76,12 @@ class Host:
     def which(self, tool):
         return shutil.which(tool)
 
+    def readlink(self, path):
+        try:
+            return os.readlink(path)
+        except OSError:
+            return None
+
 
 def unit_properties(host, *names):
     rc, out = host.run(["systemctl", "show", SERVICE, "-p", ",".join(names)])
@@ -82,15 +92,20 @@ def unit_properties(host, *names):
     return rc, props
 
 
-def config_value(text, key):
-    """The last effective `key=` in systemd-analyze cat-config output ('' if never set)."""
-    value = ""
+def config_value(text, section, key):
+    """The last effective `key=` inside `[section]` in systemd-analyze cat-config output ('' if never
+    set). A key outside its section is ignored by systemd, so it is ignored here: a misplaced
+    `Storage=none` must not make the probe report a control systemd does not apply."""
+    value, current = "", None
     for line in (text or "").splitlines():
         line = line.strip()
-        if line.startswith(("#", ";")):
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1].strip()
             continue
         k, sep, v = line.partition("=")
-        if sep and k.strip() == key:
+        if sep and current == section and k.strip() == key:
             value = v.strip()
     return value
 
@@ -105,9 +120,14 @@ def core_dumps(host):
     if suid != "0":
         return False, f"fs.suid_dumpable={suid or 'unreadable'}, not 0"
     pattern = (host.read("/proc/sys/kernel/core_pattern") or "").strip()
-    if pattern.startswith("|") and "systemd-coredump" in pattern:
+    if pattern.startswith("|"):
+        # The kernel IGNORES RLIMIT_CORE for a piped core_pattern: the handler receives the memory
+        # whatever LimitCORE says. Only a handler whose storage is verifiably off is acceptable.
+        handler = pattern[1:].split()[0] if pattern[1:].split() else ""
+        if os.path.basename(handler) != "systemd-coredump":
+            return False, f"core_pattern pipes to an unrecognised handler {handler!r}; LimitCORE does not stop a pipe"
         _, conf = host.run(["systemd-analyze", "cat-config", "systemd/coredump.conf"])
-        storage = config_value(conf, "Storage")
+        storage = config_value(conf, "Coredump", "Storage")
         if storage.lower() != "none":
             return False, f"core_pattern pipes to systemd-coredump with Storage={storage or 'external (default)'}"
     return True, f"LimitCORE=0, suid_dumpable=0, core_pattern {pattern!r}"
@@ -125,7 +145,7 @@ def hibernation(host):
     if len(masked) == len(HIBERNATING_TARGETS):
         return True, "hibernate, hybrid-sleep and suspend-then-hibernate targets are masked"
     _, conf = host.run(["systemd-analyze", "cat-config", "systemd/sleep.conf"])
-    allow = {k: config_value(conf, k).lower() for k in ("AllowHibernation", "AllowHybridSleep", "AllowSuspendThenHibernate")}
+    allow = {k: config_value(conf, "Sleep", k).lower() for k in ("AllowHibernation", "AllowHybridSleep", "AllowSuspendThenHibernate")}
     if all(v == "no" for v in allow.values()):
         return True, "sleep.conf forbids hibernation, hybrid sleep and suspend-then-hibernate"
     unmasked = [t for t in HIBERNATING_TARGETS if t not in masked]
@@ -166,18 +186,34 @@ def token_clients(host):
     installed = [t for t in TOKEN_CLIENTS if host.which(t)]
     if installed:
         return False, f"token client tools installed: {', '.join(installed)}"
-    # Who holds the pcscd socket right now. `ss -xp` names each unix-socket peer's process.
+    # Who is connected to pcscd right now. `ss -xpn` prints each unix-socket endpoint on its own line:
+    # the server side carries the socket path, the CLIENT side usually shows `*`. So match
+    # endpoints by inode (the server line's peer inode is the client line's local inode), then
+    # identify each client by the binary its pid runs.
     rc, out = host.run(["ss", "-xpn"])
     if rc != 0:
         return False, "cannot list unix-socket peers (ss failed), so other token clients cannot be ruled out"
-    holders = set()
+    endpoints, client_inodes = {}, set()
     for line in out.splitlines():
-        if PCSCD_SOCKET in line:
-            holders.update(re.findall(r'\("([^"]+)",pid=', line))
-    others = sorted(holders - {"pcscd", "regalia-kms"})
+        fields = line.split()
+        if len(fields) < 8 or not fields[5].isdigit() or not fields[7].isdigit():
+            continue
+        endpoints[fields[5]] = re.findall(r'\("([^"]*)",pid=(\d+),', line)
+        if fields[4] == PCSCD_SOCKET and fields[7] != "0":   # peer 0: a listener, not a connection
+            client_inodes.add(fields[7])
+    others = []
+    for inode in sorted(client_inodes):
+        holders = endpoints.get(inode)
+        if not holders:
+            others.append(f"an unidentified client (inode {inode})")
+            continue
+        for name, pid in holders:
+            exe = host.readlink(f"/proc/{pid}/exe")
+            if exe not in ALLOWED_TOKEN_CLIENT_EXES:
+                others.append(f"{name} (pid {pid}, {exe or 'exe unreadable'})")
     if others:
-        return False, f"processes other than the KMS hold the pcscd socket: {', '.join(others)}"
-    return True, "no token client tools installed; only pcscd and the KMS hold the pcscd socket"
+        return False, f"pcscd clients other than the KMS: {', '.join(others)}"
+    return True, f"no token client tools installed; {len(client_inodes)} pcscd client(s), all the KMS binary"
 
 
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,

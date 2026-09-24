@@ -28,9 +28,12 @@ class FakeGuest:
                 "User=regalia-kms\nNoNewPrivileges=yes\nLoadState=loaded\n",
             ("systemd-analyze", "cat-config", "systemd/coredump.conf"): "[Coredump]\n#Storage=external\nStorage=none\n",
             ("systemd-analyze", "cat-config", "systemd/sleep.conf"): "[Sleep]\n",
+            # The real layout (measured with pcsc_scan): the server endpoint carries the socket path,
+            # the client endpoint shows `*` and is found by inode.
             ("ss", "-xpn"): 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 111 * 222 users:(("pcscd",pid=10,fd=5))\n'
                             'u_str ESTAB 0 0 * 222 * 111 users:(("regalia-kms",pid=20,fd=9))\n',
         }
+        self.links = {"/proc/20/exe": "/usr/local/sbin/regalia-kms", "/proc/10/exe": "/usr/sbin/pcscd"}
         for target in guest_probe.HIBERNATING_TARGETS:
             self.commands[("systemctl", "is-enabled", target)] = "masked\n"
         self.installed = set()
@@ -48,6 +51,18 @@ class FakeGuest:
     def which(self, tool):
         return f"/usr/bin/{tool}" if tool in self.installed else None
 
+    def readlink(self, path):
+        return self.links.get(path)
+
+
+def add_pcscd_client(guest, inode, name, pid, exe):
+    server = str(900 + inode)
+    guest.commands[("ss", "-xpn")] += (
+        f'u_str ESTAB 0 0 /run/pcscd/pcscd.comm {server} * {inode} users:(("pcscd",pid=10,fd=7))\n'
+        f'u_str ESTAB 0 0 * {inode} * {server} users:(("{name}",pid={pid},fd=3))\n')
+    if exe:
+        guest.links[f"/proc/{pid}/exe"] = exe
+
 
 class GuestProbeTests(unittest.TestCase):
     def verdict(self, guest, control):
@@ -64,6 +79,11 @@ class GuestProbeTests(unittest.TestCase):
                                                  "LimitCORE=infinity\nLoadState=loaded\n"),
                 lambda g: g.files.__setitem__("/proc/sys/fs/suid_dumpable", "2\n"),
                 lambda g: g.commands.__setitem__(("systemd-analyze", "cat-config", "systemd/coredump.conf"), "[Coredump]\n"),
+                # A Storage=none systemd ignores, because it is outside [Coredump].
+                lambda g: g.commands.__setitem__(("systemd-analyze", "cat-config", "systemd/coredump.conf"),
+                                                 "[Coredump]\nStorage=external\n[Other]\nStorage=none\n"),
+                # The kernel ignores LimitCORE for ANY pipe: an unknown handler gets the memory.
+                lambda g: g.files.__setitem__("/proc/sys/kernel/core_pattern", "|/usr/share/apport/apport %p %s\n"),
                 lambda g: g.commands.__setitem__(("systemctl", "show", guest_probe.SERVICE, "-p", "LimitCORE,LoadState"),
                                                  "LimitCORE=0\nLoadState=not-found\n"),
             ],
@@ -84,8 +104,13 @@ class GuestProbeTests(unittest.TestCase):
             ],
             "direct_token_clients_absent": [
                 lambda g: g.installed.add("ykman"),
+                # Another client, visible only through the inode of its `*` endpoint.
+                lambda g: add_pcscd_client(g, 444, "pcsc_scan", 30, "/usr/bin/pcsc_scan"),
+                # A process that NAMES itself regalia-kms but runs another binary.
+                lambda g: add_pcscd_client(g, 555, "regalia-kms", 31, "/tmp/regalia-kms"),
+                # A client whose endpoint ss cannot attribute at all.
                 lambda g: g.commands.__setitem__(("ss", "-xpn"), g.commands[("ss", "-xpn")] +
-                                                 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 333 * 444 users:(("pcscd",pid=10,fd=6)) users:(("python3",pid=30,fd=3))\n'),
+                                                 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 666 * 777 users:(("pcscd",pid=10,fd=8))\n'),
                 lambda g: g.commands.pop(("ss", "-xpn")),
             ],
         }
@@ -106,6 +131,9 @@ class GuestProbeTests(unittest.TestCase):
         guest.commands[("systemd-analyze", "cat-config", "systemd/sleep.conf")] = \
             "[Sleep]\nAllowHibernation=no\nAllowHybridSleep=no\nAllowSuspendThenHibernate=no\n"
         self.assertTrue(self.verdict(guest, "hibernation_disabled"))
+        guest.commands[("systemd-analyze", "cat-config", "systemd/sleep.conf")] = \
+            "[Sleep]\n[Other]\nAllowHibernation=no\nAllowHybridSleep=no\nAllowSuspendThenHibernate=no\n"
+        self.assertFalse(self.verdict(guest, "hibernation_disabled"), "keys outside [Sleep] are ignored by systemd")
 
         guest = FakeGuest()
         guest.files["/proc/sys/kernel/core_pattern"] = "core\n"
