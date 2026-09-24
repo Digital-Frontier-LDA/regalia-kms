@@ -53,13 +53,16 @@ phase(){ REGALIA_ENVDRILL_PHASE="$1" REGALIA_ENVDRILL_MODULE="$MODULE" REGALIA_E
          go -C "$ROOT" test -count=1 -v -run '^TestEnvelopeSurvivesTokenWipeAndDKEKRestore$' ./internal/integration 2>&1 \
          | tee -a "$LOG" | grep -E -- '--- (PASS|FAIL|SKIP)|_test.go:' ; }
 passed(){ grep -q -- "--- PASS: TestEnvelopeSurvivesTokenWipeAndDKEKRestore" <(tail -40 "$LOG"); }
+# PINs and the DKEK password are typed into sc-hsm-tool's prompts over a pty, never put on argv
+# (sc-hsm-tool has no env: form). See e2e/lib/sc-hsm-pty.py.
+schsm(){ SCHSM_SO_PIN="$HSM_SO_PIN" SCHSM_USER_PIN="$HSM_USER_PIN" SCHSM_DKEK_PW="$DKEK_PW" "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 initialise(){
-  sc-hsm-tool --reader "$READER" --initialize --so-pin "$HSM_SO_PIN" --pin "$HSM_USER_PIN" \
+  schsm --reader "$READER" --initialize \
     --dkek-shares 1 --label regalia-drill >>"$LOG" 2>&1 || die "initialise failed"
   READER="$(reader)"; [ -n "$READER" ] || die "card not found after initialise"
 }
 import_share(){
-  sc-hsm-tool --reader "$READER" --import-dkek-share "$STATE/dkek.pbe" --password "$DKEK_PW" >>"$LOG" 2>&1 \
+  schsm --reader "$READER" --import-dkek-share "$STATE/dkek.pbe" >>"$LOG" 2>&1 \
     || die "DKEK share import failed"
 }
 
@@ -67,7 +70,7 @@ DKEK_PW="$(openssl rand -hex 16)"
 
 say "STEP 1 — initialise, create and import a drill-only DKEK share"
 initialise
-sc-hsm-tool --create-dkek-share "$STATE/dkek.pbe" --password "$DKEK_PW" >>"$LOG" 2>&1 || die "create DKEK share failed"
+schsm --create-dkek-share "$STATE/dkek.pbe" >>"$LOG" 2>&1 || die "create DKEK share failed"
 import_share
 
 say "STEP 2 — generate an RSA-2048 KEK on the card and wrap-export it under the DKEK"
@@ -80,7 +83,7 @@ KEY_REF="$(pkcs15-tool --reader "$READER" --list-keys 2>/dev/null \
       /^[ \t]*Key ref[ \t]*:/    { ref = $4 }
       /^[ \t]*ID[ \t]*:/         { if ($NF == want && ref != "") { print ref; exit } }')"
 [ -n "$KEY_REF" ] || die "cannot find the key reference of ID $KEY_ID"
-sc-hsm-tool --reader "$READER" --wrap-key "$STATE/kek.wrapped" --key-reference "$KEY_REF" --pin "$HSM_USER_PIN" >>"$LOG" 2>&1 \
+schsm --reader "$READER" --wrap-key "$STATE/kek.wrapped" --key-reference "$KEY_REF" >>"$LOG" 2>&1 \
   || die "wrap-export failed"
 [ -s "$STATE/kek.wrapped" ] || die "empty wrapped backup"
 say "  KEK at key reference $KEY_REF, backup $(wc -c < "$STATE/kek.wrapped") bytes"
@@ -100,7 +103,7 @@ say "STEP 6 — import the DKEK share and unwrap the KEK backup"
 import_share
 # sc-hsm-tool --unwrap-key exits 1 even on success (measured 2026-08-06; see the ceremony's
 # hsm-recovery-drill.sh), so success is decided by the key being back, not by the exit status.
-sc-hsm-tool --reader "$READER" --unwrap-key "$STATE/kek.wrapped" --key-reference "$KEY_REF" --pin "$HSM_USER_PIN" >>"$LOG" 2>&1 || true
+schsm --reader "$READER" --unwrap-key "$STATE/kek.wrapped" --key-reference "$KEY_REF" >>"$LOG" 2>&1 || true
 has_kek || die "the KEK is not back after --unwrap-key"
 say "  KEK restored at key reference $KEY_REF"
 
@@ -109,5 +112,5 @@ phase open; passed || die "open phase"
 
 say "DRILL PASSED: sealed → wiped → refused → restored from the DKEK backup → opened, byte-identical"
 # The wrapped backup and the share are drill-only, but they ARE key material: removed, not kept.
-rm -f "$STATE/kek.wrapped" "$STATE/dkek.pbe"
+rm -f "$STATE/kek.wrapped" "$STATE/dkek.pbe" "$STATE/envelope-drill.json"   # the seal record holds the drill secret
 say "transcript: $LOG"
