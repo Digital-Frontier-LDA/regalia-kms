@@ -70,7 +70,7 @@
       "operation": "release-secret",
       "algorithm": "opaque",
       "content_types": [
-        "application/octet-stream"
+        "application/vnd.regalia.data-key"
       ],
       "max_payload_bytes": 65536,
       "max_future_seconds": 300,
