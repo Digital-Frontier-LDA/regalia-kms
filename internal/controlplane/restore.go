@@ -50,7 +50,7 @@ func Restore(export *Export, root string) ([]RestoredFile, error) {
 		return nil, fmt.Errorf("controlplane: restore root %q is not a directory", root)
 	}
 	for _, pair := range [][2]Entry{{export.AuditJournal, export.AuditHighWater}, {export.PolicyState, export.PolicyMark}} {
-		if pair[0].Absent != pair[1].Absent {
+		if pair[0].Absent != pair[1].Absent || pair[0].NotConfigured != pair[1].NotConfigured {
 			return nil, fmt.Errorf("controlplane: %s and its mark must be restored together, and the export carries only one", pair[0].Path)
 		}
 	}
@@ -70,6 +70,8 @@ func Restore(export *Export, root string) ([]RestoredFile, error) {
 				note = fmt.Sprintf("recorded %q; %s", string(named.entry.Data), note)
 			}
 			report = append(report, RestoredFile{Label: named.label, Note: note})
+		case named.entry.NotConfigured:
+			report = append(report, RestoredFile{Label: named.label, Note: "not configured on this site"})
 		case named.entry.Absent:
 			report = append(report, RestoredFile{Label: named.label, Note: "absent in the export: the site had not created it"})
 		default:

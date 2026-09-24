@@ -47,11 +47,19 @@ type Sources struct {
 // Entry is one exported file. Absent marks a file the daemon has not created yet (a site that
 // has never held a lease has no epochs file; that is a valid early state and travels as an
 // explicit marker, not as silence).
+//
+// NotConfigured marks a source this site does not configure at all (a single-site host has no
+// fencing journal): no path, no data, no digest. It is a third state, deliberately distinct from
+// Absent ("configured, not created yet"). Before it existed, an unconfigured source became an
+// entry that was neither present nor absent, the verifier refused it, and a supported single-site
+// configuration could not be exported at all (found by the 2026-09-24 bench restore drill). A
+// journal and its marks are configured together or not at all.
 type Entry struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-	Data   []byte `json:"data"`
-	Absent bool   `json:"absent,omitempty"`
+	Path          string `json:"path"`
+	SHA256        string `json:"sha256"`
+	Data          []byte `json:"data"`
+	Absent        bool   `json:"absent,omitempty"`
+	NotConfigured bool   `json:"not_configured,omitempty"`
 }
 
 // Export is the sealed payload: the complete control plane of one site at one moment.
@@ -175,7 +183,7 @@ func Build(s Sources, site string, now time.Time) (*Export, error) {
 	}
 	read := func(path string, bound int64, label string, emptyIsAbsent bool) (Entry, error) {
 		if path == "" {
-			return Entry{}, nil
+			return Entry{NotConfigured: true}, nil
 		}
 		data, err := readBounded(path, bound)
 		if errors.Is(err, os.ErrNotExist) {
@@ -212,10 +220,10 @@ func Build(s Sources, site string, now time.Time) (*Export, error) {
 		Site:           site,
 		CreatedAt:      now.UTC(),
 		AuditJournal:   entry(s.AuditJournal, maxJournalBytes, "audit journal", true),
-		AuditHighWater: entry(s.AuditJournal+highWaterSuffix, maxPlainFileBytes, "audit high-water mark", false),
-		AuditShipped:   entry(s.AuditJournal+shippedSuffix, maxPlainFileBytes, "audit shipped mark", false),
+		AuditHighWater: entry(sidecar(s.AuditJournal, highWaterSuffix), maxPlainFileBytes, "audit high-water mark", false),
+		AuditShipped:   entry(sidecar(s.AuditJournal, shippedSuffix), maxPlainFileBytes, "audit shipped mark", false),
 		PolicyState:    entry(s.PolicyState, maxJournalBytes, "policy state journal", true),
-		PolicyMark:     entry(s.PolicyState+highWaterSuffix, maxPlainFileBytes, "policy state mark", false),
+		PolicyMark:     entry(sidecar(s.PolicyState, highWaterSuffix), maxPlainFileBytes, "policy state mark", false),
 		FencingEpochs:  entry(s.FencingState, maxJournalBytes, "fencing epoch journal", true),
 		SiteVersion:    entry(s.SiteVersion, maxPlainFileBytes, "deployment version", false),
 	}
@@ -239,6 +247,16 @@ func Build(s Sources, site string, now time.Time) (*Export, error) {
 		return nil, fmt.Errorf("controlplane: refusing to export: secret-shaped content in control-plane state: %s", findings[0])
 	}
 	return export, nil
+}
+
+// sidecar is a journal's mark path, or "" (not configured) for an unconfigured journal. Appending
+// the suffix to "" produced the RELATIVE path ".high-water", read from whatever the working
+// directory happened to be.
+func sidecar(journal, suffix string) string {
+	if journal == "" {
+		return ""
+	}
+	return journal + suffix
 }
 
 type namedEntry struct {
@@ -272,8 +290,19 @@ func exportEntries(export *Export) []namedEntry {
 func verifyExport(export *Export) error {
 	// STRUCTURE: every entry is present-with-digest or explicitly absent. A half-formed
 	// field is refused rather than guessed at.
+	configured := 0
 	for _, named := range exportEntries(export) {
 		label, e := named.label, named.entry
+		if e.NotConfigured {
+			// NOT CONFIGURED carries nothing, and the deployment version always has a path.
+			if e.Path != "" || e.Absent || len(e.Data) > 0 || e.SHA256 != "" || label == "deployment version" {
+				return fmt.Errorf("controlplane: %s is malformed as a not-configured marker — it must carry nothing at all", label)
+			}
+			continue
+		}
+		if label == "audit journal" || label == "policy state journal" || label == "fencing epoch journal" {
+			configured++
+		}
 		if e.Absent {
 			// ABSENCE IS CHECKED, NOT OBEYED. A marker that arrives with a body contradicts
 			// itself: bytes claiming to be absent would ride past the digest, the secret
@@ -304,6 +333,24 @@ func verifyExport(export *Export) error {
 			return fmt.Errorf("controlplane: %s: %w", label, err)
 		}
 	}
+	// CONFIGURED TOGETHER: a journal and its marks are one source. A journal present with its mark
+	// "not configured" would travel with truncation detection silently off.
+	for _, group := range []struct {
+		label string
+		all   []Entry
+	}{
+		{"audit journal", []Entry{export.AuditJournal, export.AuditHighWater, export.AuditShipped}},
+		{"policy state journal", []Entry{export.PolicyState, export.PolicyMark}},
+	} {
+		for _, e := range group.all[1:] {
+			if e.NotConfigured != group.all[0].NotConfigured {
+				return fmt.Errorf("controlplane: the %s and its marks must be configured together", group.label)
+			}
+		}
+	}
+	if configured == 0 {
+		return ErrNoSources
+	}
 	// AMPUTATION: a journal may be absent only if nothing remembers history it should have.
 	// A sidecar recording a non-zero position beside an absent journal is a deletion, and an
 	// export carrying that pair would restore a site whose history was amputated with the
@@ -324,7 +371,7 @@ func verifyExport(export *Export) error {
 	// configuration rather than verifying the wrong bytes.
 	seen := make(map[string]string)
 	for _, named := range exportEntries(export) {
-		if named.entry.Absent {
+		if named.entry.Absent || named.entry.NotConfigured {
 			continue
 		}
 		base := filepath.Base(named.entry.Path)
@@ -466,7 +513,7 @@ func verifyExport(export *Export) error {
 }
 
 func checkSidecarJSON(label string, entry Entry) error {
-	if entry.Absent {
+	if entry.Absent || entry.NotConfigured {
 		return nil
 	}
 	var mark map[string]any
@@ -569,6 +616,10 @@ func SummaryLines(export *Export) []string {
 	}
 	for _, named := range exportEntries(export) {
 		e := named.entry
+		if e.NotConfigured {
+			lines = append(lines, fmt.Sprintf("  not configured %s", named.label))
+			continue
+		}
 		if e.Absent {
 			// %q throughout: validation is remembered per field and can be forgotten when
 			// a fifth one appears; quoting is structural and covers whatever slips past.

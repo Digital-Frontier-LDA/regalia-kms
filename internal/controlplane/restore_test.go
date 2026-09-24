@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,5 +127,64 @@ func TestRestoreOfAVirginSiteWritesNothingAndSaysWhy(t *testing.T) {
 		if r.Path != "" {
 			t.Fatalf("a virgin site's restore wrote %s", r.Label)
 		}
+	}
+}
+
+// A single-site host without fencing: export, seal, inspect and restore all succeed, the fencing
+// journal is reported as not configured, and nothing is written for it (found by the 2026-09-24
+// bench drill, where such a host could not be exported at all).
+func TestAHostWithoutFencingExportsInspectsAndRestores(t *testing.T) {
+	f := newFixture(t, true)
+	f.sources.FencingState = ""
+	export := inspected(t, f)
+	if !export.FencingEpochs.NotConfigured {
+		t.Fatalf("the fencing journal is not marked not-configured: %+v", export.FencingEpochs)
+	}
+	report, err := Restore(export, t.TempDir())
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, r := range report {
+		if r.Label == "fencing epoch journal" && (r.Path != "" || r.Note != "not configured on this site") {
+			t.Fatalf("the unconfigured fencing journal was not reported as such: %+v", r)
+		}
+	}
+}
+
+func TestANotConfiguredMarkerThatCarriesAnythingIsRefused(t *testing.T) {
+	cases := map[string]func(*Export){
+		"carries data":          func(e *Export) { e.FencingEpochs = Entry{NotConfigured: true, Data: []byte("{}\n")} },
+		"carries a path":        func(e *Export) { e.FencingEpochs = Entry{NotConfigured: true, Path: "/state/epochs.jsonl"} },
+		"is also absent":        func(e *Export) { e.FencingEpochs = Entry{NotConfigured: true, Absent: true} },
+		"on the version":        func(e *Export) { e.SiteVersion = Entry{NotConfigured: true} },
+		"journal without marks": func(e *Export) { e.PolicyMark = Entry{NotConfigured: true} },
+		"marks without journal": func(e *Export) { e.AuditJournal = Entry{NotConfigured: true} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, true)
+			export, err := Build(f.sources, "sitea", time.Unix(1, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(export)
+			if err := verifyExport(export); err == nil {
+				t.Fatal("a malformed not-configured marker verified")
+			}
+		})
+	}
+}
+
+func TestAnExportWithEveryJournalNotConfiguredIsNoControlPlane(t *testing.T) {
+	f := newFixture(t, true)
+	export, err := Build(f.sources, "sitea", time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := Entry{NotConfigured: true}
+	export.AuditJournal, export.AuditHighWater, export.AuditShipped = nc, nc, nc
+	export.PolicyState, export.PolicyMark, export.FencingEpochs = nc, nc, nc
+	if err := verifyExport(export); !errors.Is(err, ErrNoSources) {
+		t.Fatalf("an export with nothing configured verified as a control plane: %v", err)
 	}
 }
