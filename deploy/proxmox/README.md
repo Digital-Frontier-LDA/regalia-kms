@@ -160,6 +160,26 @@ port identity, administrator separation, negative network paths, and cluster
 job selection cannot be honestly inferred by `provision.py`; missing evidence
 keeps the site out of production.
 
+Measure the guest's memory and credential controls **inside the guest** before signing
+(regalia#49). The evidence's `guest` section is otherwise a set of typed booleans, and a signature
+over a false claim still verifies. `guest_probe.py` reads the guest itself:
+- core limits: the unit's `LimitCORE`, `fs.suid_dumpable` and systemd-coredump storage;
+- hibernation: `resume=`, the masked sleep targets or `sleep.conf`;
+- active swap: must be zram or dm-crypt;
+- the unit's user and `NoNewPrivileges`;
+- token client tools, and every process connected to pcscd, identified by its binary.
+
+With `--evidence` it exits 1 when the evidence claims a control the guest does not have. Keep its
+JSON in the signed transcript:
+
+```sh
+sudo python3 deploy/proxmox/guest_probe.py --evidence evidence.json
+```
+
+It cannot see `runtime_credentials_excluded_from_backup`, which belongs to the host's backup jobs,
+or `credential_tpm2_pcrs`, which is inside the sealed blob. It reports both as *attested, not
+measured*.
+
 Run the network matrix from a host in each named zone. `--source-ip` is bound on
 the socket so a routing default cannot silently test through a different
 interface. Preserve the four JSON lines in the signed transcript:
