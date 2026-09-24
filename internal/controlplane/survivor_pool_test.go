@@ -170,12 +170,18 @@ func TestBuildCanonicalisesAnOmittedSiteVersionPath(t *testing.T) {
 	}
 }
 
-func TestAnOmittedConfiguredPathReachesStructuralValidation(t *testing.T) {
+// An omitted source used to become an entry that was neither present nor absent, and Build refused
+// it — which made a supported configuration (a host with no policy engine, or no fencing) impossible
+// to export at all. It now travels as an explicit not-configured marker, journal and marks together.
+func TestAnOmittedSourceTravelsAsNotConfiguredWithItsMarks(t *testing.T) {
 	f := newFixture(t, true)
 	f.sources.PolicyState = ""
-	_, err := Build(f.sources, "sitea", time.Unix(1, 0))
-	if err == nil || !strings.Contains(err.Error(), "policy state journal is neither present nor absent") {
-		t.Fatalf("omitted policy path was refused by the wrong boundary: %v", err)
+	exported, err := Build(f.sources, "sitea", time.Unix(1, 0))
+	if err != nil {
+		t.Fatalf("a host without a policy state journal could not be exported: %v", err)
+	}
+	if !exported.PolicyState.NotConfigured || !exported.PolicyMark.NotConfigured || exported.PolicyMark.Path != "" {
+		t.Fatalf("the omitted journal and its mark are not both not-configured (and pathless): %+v / %+v", exported.PolicyState, exported.PolicyMark)
 	}
 }
 

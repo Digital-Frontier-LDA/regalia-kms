@@ -57,7 +57,7 @@ var controlplaneSurvivorsAt1cb2af1 = []survivorRow{
 	{"export.go:161/op1 policy source", reachable, "a policy path means the configuration is not source-empty even when later structure rejects missing peers", "TestEachConfiguredJournalPreventsTheNoSourcesDiagnosis"},
 	{"export.go:161/op2 fencing source", reachable, "a fencing path means the configuration is not source-empty even when later structure rejects missing peers", "TestEachConfiguredJournalPreventsTheNoSourcesDiagnosis"},
 	{"export.go:173 default site-version path", reachable, "a populated fixture can omit only the optional provenance path", "TestBuildCanonicalisesAnOmittedSiteVersionPath"},
-	{"export.go:177 empty read path", reachable, "a partially configured source reaches the zero Entry and structural diagnosis", "TestAnOmittedConfiguredPathReachesStructuralValidation"},
+	{"export.go:185 empty read path", reachable, "an omitted source becomes the not-configured marker, journal and marks together", "TestAnOmittedSourceTravelsAsNotConfiguredWithItsMarks"},
 	{"export.go:230/op0 Build scan absent", masked, "verifyExport's malformed-absence guard refuses any absent entry carrying scan-worthy bytes", ""},
 	{"export.go:230/op1 Build scan nonempty", masked, "verifyExport's present-empty guard refuses the only present entry this operand can newly include", ""},
 	{"export.go:235 Build armedScan error", reachable, "markerShapes can be empty while a valid populated export reaches the scan", "TestBuildPropagatesAnUnarmedPayloadScan"},
