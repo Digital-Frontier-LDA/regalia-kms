@@ -209,8 +209,10 @@ runtime credentials, vTPM state, memory, swap, core dumps, PINs, plaintext outpu
 are excluded. Rebuild recovers credentials through the witnessed custody procedure rather than by
 restoring a machine image containing operational authority.
 
-That exporter and its offline inspection exist: `regalia-kms --export-control-plane` (on the
-guest), `--inspect-export` and `--scan-tree` (from the ceremony checkout), with custody defined
-in `doc/CONTROL-PLANE-EXPORT.md`. Until the physical drill has been run at a real site, #49
+That exporter, its offline inspection and the restore exist: `regalia-kms --export-control-plane`
+(on the guest), `--inspect-export` and `--scan-tree` (from the ceremony checkout), and
+`--restore-export F --authority-key-pem K --expect-site S --restore-root /` on the rebuilt guest.
+The restore writes the verified journals at their recorded paths: all or nothing, never over
+existing state, and each journal with its mark. Custody is defined in `doc/CONTROL-PLANE-EXPORT.md`. Until the physical drill has been run at a real site, #49
 remains open — and until then, still do not configure any Proxmox VM backup as a substitute:
 the guard will quarantine the guest.

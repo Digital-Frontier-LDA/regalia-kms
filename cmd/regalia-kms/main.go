@@ -85,6 +85,8 @@ func run() error {
 	exportRecipientPEM := flag.String("export-recipient-pem", "", "custody authority P-256 public key (PEM) the export is sealed to")
 	exportVersionFile := flag.String("export-version-file", "/etc/regalia-kms/deployment-version", "provenance file carried in the export; a missing file travels as an explicit absent marker, and an empty one is refused")
 	inspectExport := flag.String("inspect-export", "", "open and fully verify a sealed control-plane export and exit")
+	restoreExport := flag.String("restore-export", "", "verify a sealed control-plane export for -expect-site and place its journals under -restore-root, then exit")
+	restoreRoot := flag.String("restore-root", "", "the directory the export's guest paths are restored under (\"/\" on the rebuilt guest itself)")
 	expectSite := flag.String("expect-site", "", "bind an inspected export to the site it is being restored as; a file naming any other site is refused")
 	authorityKeyPEM := flag.String("authority-key-pem", "", "custody authority P-256 private key (PEM) that opens an export")
 	scanTree := flag.String("scan-tree", "", "scan a restored directory tree for secret shapes and exit")
@@ -125,6 +127,17 @@ func run() error {
 		}
 		if err := inspectControlPlaneExport(*inspectExport, *authorityKeyPEM, *expectSite); err != nil {
 			return reported("export inspection FAILED", err)
+		}
+		return nil
+	}
+	if *restoreExport != "" {
+		// A restore names its site and its root explicitly: both are the operator's statement of
+		// WHICH site is being rebuilt and WHERE, and neither has a safe default.
+		if *authorityKeyPEM == "" || *expectSite == "" || *restoreRoot == "" {
+			return errors.New("-restore-export requires -authority-key-pem, -expect-site and -restore-root")
+		}
+		if err := restoreControlPlaneExport(*restoreExport, *authorityKeyPEM, *expectSite, *restoreRoot); err != nil {
+			return reported("control-plane restore REFUSED", err)
 		}
 		return nil
 	}
@@ -868,6 +881,41 @@ func exportControlPlaneState(settings config.Config, outputPath, recipientPath, 
 // inspectControlPlaneExport is the offline verdict over a carried-out export: decrypt with the
 // authority key, re-verify every digest and journal chain, and secret-scan with the canary in
 // the same pass. Run it from the trusted ceremony checkout before any restore.
+// restoreControlPlaneExport is the restore half of #49's carry-out procedure: the same full
+// inspection as -inspect-export, bound to the site, and then controlplane.Restore, which writes
+// nothing unless every target is absent and every journal travels with its mark.
+func restoreControlPlaneExport(envelopePath, authorityKeyPath, expectedSite, root string) error {
+	keyPEM, err := os.ReadFile(authorityKeyPath)
+	if err != nil {
+		return fmt.Errorf("read authority key: %w", err)
+	}
+	key, err := controlplane.ParseAuthorityKey(keyPEM)
+	if err != nil {
+		return err
+	}
+	encoded, err := os.ReadFile(envelopePath)
+	if err != nil {
+		return fmt.Errorf("read export: %w", err)
+	}
+	export, err := controlplane.InspectForSite(encoded, key, expectedSite)
+	if err != nil {
+		return err
+	}
+	report, err := controlplane.Restore(export, root)
+	if err != nil {
+		return err
+	}
+	for _, r := range report {
+		if r.Path != "" {
+			fmt.Printf("restored %s -> %s sha256:%s\n", r.Label, r.Path, r.SHA256)
+		} else {
+			fmt.Printf("skipped  %s: %s\n", r.Label, r.Note)
+		}
+	}
+	fmt.Printf("control plane of site %s restored under %s; run -verify-audit and -verify-policy-state on the placed journals before accepting the site\n", expectedSite, root)
+	return nil
+}
+
 func inspectControlPlaneExport(envelopePath, authorityKeyPath, expectedSite string) error {
 	keyPEM, err := os.ReadFile(authorityKeyPath)
 	if err != nil {
