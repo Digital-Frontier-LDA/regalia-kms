@@ -191,7 +191,8 @@ def main():
                     REGALIA_ENVDRILL_OBJECT_ID=args.object_id, REGALIA_ENVDRILL_PIN=pin, REGALIA_ENVDRILL_STATE=str(custody))
     out = run(["go", "-C", str(ROOT), "test", "-count=1", "-run", "^TestEnvelopeSurvivesTokenWipeAndDKEKRestore$",
                "./internal/integration"], env=seal_env, check=False)
-    if "ok" not in out.stdout:
+    # The exit status decides, not a substring: "ok" also matches "token" in a failure's output.
+    if out.returncode != 0 or not (custody / "envelope-drill.json").exists():
         die(f"seal phase failed: {out.stdout[-800:]}")
     record = json.loads((custody / "envelope-drill.json").read_text())
     blob, secret, pinned = base64.b64decode(record["envelope"]), base64.b64decode(record["secret"]), record["public_key_sha256"]
@@ -323,6 +324,7 @@ def main():
     shutil.rmtree(state)
     state.mkdir(mode=0o700)
 
+    restore_started = time.monotonic()
     say("STEP 5 — inspect, restore, scan, verify")
     inspect = run([str(binary), "-inspect-export", str(export), "-authority-key-pem", str(custody / "authority.key"), "-expect-site", SITE])
     say("  " + inspect.stdout.strip().splitlines()[-2])
@@ -344,6 +346,7 @@ def main():
     try:
         if not wait_ready(ctx, args.port, daemon):
             die(f"the daemon did not become ready on the restored state: {daemon_log.read_text()[-1200:]}")
+        ready_after = time.monotonic() - restore_started
         status, body = release(ctx, args.port, blob, nonces[1])
         if status != 409:
             die(f"DEFECT: a nonce consumed BEFORE the wipe was accepted after the restore: HTTP {status} — history was not restored")
@@ -351,7 +354,11 @@ def main():
         status, body = release(ctx, args.port, blob, f"drill-nonce-{uuid.uuid4().hex}")
         if status != 200 or base64.b64decode(body.get("result_base64", "")) != secret:
             die(f"a new release failed on the restored state: HTTP {status} {body}")
+        served_after = time.monotonic() - restore_started
         say("  a new release is served, byte-identical")
+        # CONTROL-PLANE RTO: from the start of the restore (inspection) to the first operation served.
+        # It excludes carry-out and re-commissioning, which are human steps a real site adds.
+        say(f"  control-plane RTO: ready {ready_after:.0f}s, first operation served {served_after:.0f}s after the restore began")
     finally:
         daemon.stop()
     say(f"  -verify-audit across the restore: {run([str(binary), '-verify-audit', str(state / 'audit.jsonl')]).stdout.strip().splitlines()[-1]}")
