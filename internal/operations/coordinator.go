@@ -196,7 +196,7 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	}
 	contentType := request.ContentType
 	if contentType == "" {
-		contentType = "application/vnd.regalia.data-key"
+		contentType = DataKeyContentType
 	}
 	policyRequest := policy.Request{
 		RequestID: request.RequestID, Principal: request.Principal, ObjectID: request.ObjectID,
