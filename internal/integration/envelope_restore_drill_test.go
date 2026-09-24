@@ -163,7 +163,13 @@ func TestEnvelopeSurvivesTokenWipeAndDKEKRestore(t *testing.T) {
 			if err == nil {
 				t.Fatal("DEFECT OR NO WIPE: the envelope opened on a card whose KEK has not been restored — either the card was not wiped, or something other than the card opened it")
 			}
+			// The refusal must be the RIGHT one: the card is reachable and its key is not the pinned one.
+			// Any error at all used to count, and an unreachable card refuses too, which proves nothing
+			// about the key (it happened: the first cross-card run, 2026-09-24, OpenSC's hidden slot).
 			reason, _ := provider.QuarantineReason("drill-nitrokey")
+			if reason != "public-key-mismatch" {
+				t.Fatalf("refused, but not because the key differs (err=%v, quarantine=%q): the negative control proves nothing", err, reason)
+			}
 			t.Logf("refused as required before the restore (err=%v, quarantine=%q)", err, reason)
 			return
 		}
