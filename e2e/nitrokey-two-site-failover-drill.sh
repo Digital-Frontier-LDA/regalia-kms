@@ -80,9 +80,10 @@ provision(){ local card="$1" r kcv pw
   say "provision $card — initialise, its OWN DKEK share, import the wallet under it"
   schsm "$card" "" --reader "$r" --initialize --dkek-shares 1 --label "regalia-2site-$card" >>"$LOG" 2>&1 \
     || die "initialise $card failed"
+  slot_of "$card"; local s="$SLOT"
   ( umask 077; openssl rand -hex 16 > "$STATE/$card.dkek.pw" )
   pw="$(cat "$STATE/$card.dkek.pw")"
-  schsm "$card" "$pw" --create-dkek-share "$STATE/$card.pbe" >>"$LOG" 2>&1 || die "DKEK share for $card"
+  schsm "$card" "$pw" --reader "$r" --create-dkek-share "$STATE/$card.pbe" >>"$LOG" 2>&1 || die "DKEK share for $card"
   schsm "$card" "$pw" --reader "$r" --import-dkek-share "$STATE/$card.pbe" > "$STATE/$card.import.log" 2>&1 \
     || die "DKEK import into $card"
   cat "$STATE/$card.import.log" >> "$LOG"
@@ -91,13 +92,14 @@ provision(){ local card="$1" r kcv pw
   ( umask 077; pin_of "$card" user > "$STATE/$card.pin" )
   "$IMPORT" --p12 "$STATE/wallet.p12" --pw-file "$STATE/wallet.p12.pw" --id "$KEY_REF" --label two-site-wallet \
     --dkek "$STATE/$card.pbe" --dkek-pw "$STATE/$card.dkek.pw" --pin-file "$STATE/$card.pin" \
-    --reader "$r" --slot "$(slot "$card")" --cert "$STATE/wallet.crt" >>"$LOG" 2>&1 || die "wallet import into $card failed"
-  local pub; pub="$(REGALIA_DRILL_PIN="$(pin_of "$card" user)" pkcs11-tool --module "$MODULE" --slot "$(slot "$card")" \
+    --reader "$r" --slot "$s" --cert "$STATE/wallet.crt" >>"$LOG" 2>&1 || die "wallet import into $card failed"
+  local pub; pub="$(REGALIA_DRILL_PIN="$(pin_of "$card" user)" pkcs11-tool --module "$MODULE" --slot "$s" \
      --login --pin env:REGALIA_DRILL_PIN --read-object --type pubkey --id "$OBJECT_ID" 2>/dev/null | sha256sum | cut -d' ' -f1)"
   [ "$pub" = "$WALLET_SPKI" ] || die "$card does not expose the wallet key after the import"
   say "  $card: DKEK KCV $kcv, wallet key present at ID $OBJECT_ID"
 }
 provision "$A"; provision "$B"
+slot_of "$A"; SLOT_A="$SLOT"; slot_of "$B"; SLOT_B="$SLOT"
 [ "$(cat "$STATE/$A.kcv")" != "$(cat "$STATE/$B.kcv")" ] || die "both cards share one DKEK: the sites are not independent restore domains"
 say "the two sites hold DIFFERENT DKEKs and the SAME wallet key"
 

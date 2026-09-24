@@ -68,9 +68,17 @@ def main(argv):
                 until = time.monotonic() + 5
                 while termios.tcgetattr(fd)[3] & termios.ECHO and time.monotonic() < until:
                     time.sleep(0.02)
+                if termios.tcgetattr(fd)[3] & termios.ECHO:
+                    os.kill(pid, 9)
+                    _, status = os.waitpid(pid, 0)
+                    return os.waitstatus_to_exitcode(status)
                 os.write(fd, (value + "\n").encode())
                 line = ""
                 break
+    if time.monotonic() >= deadline:
+        os.kill(pid, 9)
+        _, status = os.waitpid(pid, 0)
+        return os.waitstatus_to_exitcode(status)
     _, status = os.waitpid(pid, 0)
     return os.waitstatus_to_exitcode(status)
 
