@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,17 +93,21 @@ func TestCosmosSigningFailsOverBetweenTwoCards(t *testing.T) {
 	t.Log("2 site B, promoted, signed sequence 42 on ITS card; the signature verifies under the same wallet key")
 
 	// 3 sequence discipline across the failover.
-	if err := state.Reserve(ctx, reservationAt(epochB, "two-site-nonce-0044", account, 44)); err == nil {
-		t.Fatal("a reservation that SKIPPED sequence 43 was accepted")
+	// Each refusal must be the RIGHT one: any error at all (quota, journal) would otherwise pass.
+	if err := state.Reserve(ctx, reservationAt(epochB, "two-site-nonce-0044", account, 44)); !errors.Is(err, policy.ErrSequence) {
+		t.Fatalf("a reservation that SKIPPED sequence 43 was not refused as a sequence error: %v", err)
 	}
-	if err := state.Reserve(ctx, reservationAt(epochB, "two-site-nonce-0042b", account, 42)); err == nil {
-		t.Fatal("sequence 42 was reserved twice")
+	if err := state.Reserve(ctx, reservationAt(epochB, "two-site-nonce-0042b", account, 42)); !errors.Is(err, policy.ErrSequence) {
+		t.Fatalf("sequence 42 reserved twice was not refused as a sequence error: %v", err)
 	}
 
 	// 4 the demoted site, with a working card and a valid PIN, is refused at its stale epoch.
 	err = state.Reserve(ctx, reservationAt(epochA, "two-site-nonce-0043", account, 43))
 	if err == nil {
 		t.Fatal("DEFECT: site A reserved sequence 43 at the SUPERSEDED epoch — two sites could sign the same account")
+	}
+	if !errors.Is(err, policy.ErrEpoch) {
+		t.Fatalf("site A was refused, but not by the epoch rule (%v): the fencing refusal is unproven", err)
 	}
 	t.Logf("4 demoted site A refused at stale epoch %d: %v", epochA, err)
 

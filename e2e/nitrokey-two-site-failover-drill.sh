@@ -45,8 +45,18 @@ IMPORT="$CEREMONY/qubes/scripts/hsm-import-key-nojvm.sh"
 
 pin_of(){ case "$1:$2" in "$A:so") echo "$A_SO_PIN";; "$A:user") echo "$A_USER_PIN";; "$B:so") echo "$B_SO_PIN";; "$B:user") echo "$B_USER_PIN";; esac; }
 for s in "$A" "$B"; do hsm_assert_staging_card "$s" || die "$s is not a registered staging card: refusing"; done
-reader(){ hsm_reader_for "$1" 2>/dev/null; }
-slot(){ local s; s="$(hsm_slot_id_for "$1" 2>/dev/null || true)"; [ -n "$s" ] || die "PKCS#11 cannot see $1"; echo "$s"; }
+# Readers resolve in the MAIN shell into $READER: a failed inline lookup passes --reader "", which
+# OpenSC reads as reader 0, another card.
+reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER" ] || die "cannot resolve $1 to a PC/SC reader"; }
+reader(){ reader_of "$1"; echo "$READER"; }
+# Secrets go into sc-hsm-tool's own prompts over a pty, never on argv (e2e/lib/sc-hsm-pty.py).
+schsm(){ local card="$1" pw="$2"; shift 2
+  SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$pw" \
+    "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
+# Also main-shell: a slot that does not resolve stops the drill here, not as an empty --slot later.
+slot_of(){ SLOT="$(hsm_slot_id_for "$1" 2>/dev/null || true)"; [ -n "$SLOT" ] || die "PKCS#11 cannot see $1"; }
+slot_of "$A"; SLOT_A="$SLOT"; slot_of "$B"; SLOT_B="$SLOT"
+slot(){ case "$1" in "$A") echo "$SLOT_A";; "$B") echo "$SLOT_B";; esac; }
 counters(){ local list line r s sw
   list="$(opensc-tool -l 2>/dev/null || true)"
   while read -r line; do
@@ -64,16 +74,16 @@ openssl rand -hex 16 > "$STATE/wallet.p12.pw"
 openssl pkcs12 -export -inkey "$STATE/wallet.key" -in "$STATE/wallet.crt" -out "$STATE/wallet.p12" -passout "file:$STATE/wallet.p12.pw"
 WALLET_SPKI="$(openssl ec -in "$STATE/wallet.key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)"
 say "sites: A=$A (reader $(reader "$A"), slot $(slot "$A")), B=$B (reader $(reader "$B"), slot $(slot "$B")); wallet SPKI sha256:$WALLET_SPKI"
-BEFORE="$(counters)"; say "PIN tries before: $BEFORE"
 
-provision(){ local card="$1" r kcv
-  r="$(reader "$card")"
+provision(){ local card="$1" r kcv pw
+  reader_of "$card"; r="$READER"
   say "provision $card — initialise, its OWN DKEK share, import the wallet under it"
-  sc-hsm-tool --reader "$r" --initialize --so-pin "$(pin_of "$card" so)" --pin "$(pin_of "$card" user)" \
-    --dkek-shares 1 --label "regalia-2site-$card" >>"$LOG" 2>&1 || die "initialise $card failed"
-  openssl rand -hex 16 > "$STATE/$card.dkek.pw"
-  sc-hsm-tool --create-dkek-share "$STATE/$card.pbe" --password "$(cat "$STATE/$card.dkek.pw")" >>"$LOG" 2>&1 || die "DKEK share for $card"
-  sc-hsm-tool --reader "$r" --import-dkek-share "$STATE/$card.pbe" --password "$(cat "$STATE/$card.dkek.pw")" > "$STATE/$card.import.log" 2>&1 \
+  schsm "$card" "" --reader "$r" --initialize --dkek-shares 1 --label "regalia-2site-$card" >>"$LOG" 2>&1 \
+    || die "initialise $card failed"
+  ( umask 077; openssl rand -hex 16 > "$STATE/$card.dkek.pw" )
+  pw="$(cat "$STATE/$card.dkek.pw")"
+  schsm "$card" "$pw" --create-dkek-share "$STATE/$card.pbe" >>"$LOG" 2>&1 || die "DKEK share for $card"
+  schsm "$card" "$pw" --reader "$r" --import-dkek-share "$STATE/$card.pbe" > "$STATE/$card.import.log" 2>&1 \
     || die "DKEK import into $card"
   cat "$STATE/$card.import.log" >> "$LOG"
   kcv="$(kcv_of "$STATE/$card.import.log" || true)"; [ -n "$kcv" ] || die "no DKEK KCV from $card"
@@ -91,6 +101,11 @@ provision "$A"; provision "$B"
 [ "$(cat "$STATE/$A.kcv")" != "$(cat "$STATE/$B.kcv")" ] || die "both cards share one DKEK: the sites are not independent restore domains"
 say "the two sites hold DIFFERENT DKEKs and the SAME wallet key"
 
+# BEFORE is read HERE, after provisioning: initialising a card resets its user-PIN counter, so a
+# reading taken earlier would measure the reset, not the failover test (review of #39).
+BEFORE="$(counters)"; say "PIN tries before the failover test: $BEFORE"
+# Both drill cards must have a numeric counter, or an unreadable pair would compare equal.
+for s in "$A" "$B"; do [[ "$BEFORE" =~ (^| )$s=[0-9]( |$) ]] || die "no PIN counter read for $s ('$BEFORE')"; done
 say "FAILOVER — TestCosmosSigningFailsOverBetweenTwoCards"
 REGALIA_TWOSITE_MODULE="$MODULE" REGALIA_TWOSITE_OBJECT_ID="$OBJECT_ID" \
 REGALIA_TWOSITE_SLOT_A="$(slot "$A")" REGALIA_TWOSITE_PIN_A="$A_USER_PIN" \
@@ -99,6 +114,7 @@ REGALIA_TWOSITE_SLOT_B="$(slot "$B")" REGALIA_TWOSITE_PIN_B="$B_USER_PIN" \
 cat "$STATE/test.out" >> "$LOG"
 grep -E -- '--- (PASS|FAIL|SKIP)|_test.go:' "$STATE/test.out" | sed 's/^/    /'
 AFTER="$(counters)"; say "PIN tries after:  $AFTER"
+for s in "$A" "$B"; do [[ "$AFTER" =~ (^| )$s=[0-9]( |$) ]] || die "no PIN counter read for $s after the test ('$AFTER')"; done
 grep -q -- "--- PASS: TestCosmosSigningFailsOverBetweenTwoCards" "$STATE/test.out" || die "the failover test failed"
 [ "$BEFORE" = "$AFTER" ] || die "a PIN retry counter moved: before '$BEFORE', after '$AFTER'"
 say "DRILL PASSED: one wallet on two genuine cards under two DKEKs; signing failed over from $A to $B; the demoted site was refused at its stale epoch; no counter moved"
