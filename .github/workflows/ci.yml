@@ -190,6 +190,15 @@ jobs:
       - name: Fuzz the unauthenticated and malformed operation boundary
         run: go test ./internal/api -run='^$' -fuzz=FuzzOperationBoundaryNeverPanicsOrEchoesInput -fuzztime=20s
 
+      # The two parsers that read client bytes before anything is verified. The SignDoc target
+      # fuzzes the INNER parser: the exported one recovers panics into a refusal, which would hide
+      # every crash a fuzzer finds.
+      - name: Fuzz the Cosmos SignDoc parser (panics and refusal class)
+        run: go test ./internal/policy -run='^$' -fuzz=FuzzParseSignDocNeverPanicsAndRefusesAsSignDocErrors -fuzztime=20s
+
+      - name: Fuzz envelope parsing (refusal class and round-trip stability)
+        run: go test ./internal/envelope -run='^$' -fuzz=FuzzParseAcceptsOnlyWhatItCanReproduce -fuzztime=20s
+
   # regalia#439 ACCEPTANCE CRITERION 1, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts a
   # transaction the KMS signed, and rejects a replay, a wrong-chain signature and a policy-refused
   # destination (e2e/cosmos-simapp-kms-tx.sh). ADR-0002 D7: simd is built HERE from a pinned Cosmos
