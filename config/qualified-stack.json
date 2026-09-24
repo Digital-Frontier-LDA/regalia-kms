@@ -1,0 +1,48 @@
+{
+  "schema": "regalia.qualified-stack/v1",
+  "note": "The exact token and middleware combination the drills of 2026-09-22..24 ran on. A component outside this list is UNQUALIFIED: it may work, but no evidence says so. Change a version here only together with a hardware run on the new one, recorded under regalia doc/drills. Evidence paths are in the regalia repository.",
+  "tokens": [
+    {
+      "backend": "yubikey-piv",
+      "model": "YubiKey 5 NFC",
+      "firmware": [
+        "5.7.4"
+      ],
+      "evidence": [
+        "doc/drills/2026-09-23-dual-yubikey-piv-qualification.md",
+        "doc/drills/2026-09-23-yubikey-multi-enrollment.md",
+        "doc/drills/2026-09-23-yubikey-pin-custody.md"
+      ]
+    },
+    {
+      "backend": "nitrokey-pkcs11",
+      "model": "Nitrokey HSM 2",
+      "applet": [
+        "4.1"
+      ],
+      "evidence": [
+        "doc/drills/2026-09-24-nitrokey-cross-card-restore.md",
+        "doc/drills/2026-09-24-kms-fault-drills.md",
+        "doc/drills/2026-09-24-two-site-cosmos-failover.md"
+      ]
+    }
+  ],
+  "host": {
+    "opensc": [
+      "0.26.1"
+    ],
+    "pcscd": [
+      "2.3.3"
+    ],
+    "libccid": [
+      "1.6.2"
+    ],
+    "yubikey-manager": [
+      "5.6.1"
+    ]
+  },
+  "go_modules": {
+    "github.com/go-piv/piv-go/v2": "v2.6.0",
+    "github.com/miekg/pkcs11": "v1.1.2"
+  }
+}
