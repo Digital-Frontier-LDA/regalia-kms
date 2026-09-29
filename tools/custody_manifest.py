@@ -64,7 +64,7 @@ SHAMIR_MODE = re.compile(r"^shamir-([0-9]{1,2})-of-([0-9]{1,2})$")
 
 
 def is_shamir(mode: str) -> bool:
-    m = SHAMIR_MODE.match(mode)
+    m = SHAMIR_MODE.fullmatch(mode)   # not match(): "$" also matches before a trailing newline
     return bool(m) and 2 <= int(m.group(1)) <= int(m.group(2)) <= 16 and not m.group(1).startswith("0") \
         and not m.group(2).startswith("0")
 RECOVERY_STATES = {"planned", "tested", "accepted", "overdue"}

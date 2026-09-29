@@ -230,7 +230,7 @@ class ManifestRefusalTests(unittest.TestCase):
                 obj = direct_key()
                 obj["recovery"]["mode"] = mode
                 validate_manifest(manifest_with(obj))
-        for mode in ("shamir-1-of-6", "shamir-7-of-5", "shamir-4-of-17", "shamir-04-of-6", "shamir-4-of-", "shamir-4-6"):
+        for mode in ("shamir-1-of-6", "shamir-7-of-5", "shamir-4-of-17", "shamir-04-of-6", "shamir-4-of-", "shamir-4-6", "shamir-4-of-6\n"):
             with self.subTest(mode=mode):
                 obj = direct_key()
                 obj["recovery"]["mode"] = mode
