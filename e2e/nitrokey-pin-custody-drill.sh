@@ -16,8 +16,9 @@
 # NOT DESTRUCTIVE to the card's contents: each card gets one throwaway P-256 key at PKCS#11 ID 0x51
 # (refused if that ID is taken) and loses it at the end; its PIN is rotated and put back. On a card
 # initialised with RESET RETRY COUNTER OFF (hsm-init-hardened.sh --rrc off) a lost PIN cannot be
-# unblocked, so the drill refuses to start unless every card is at 3 tries, spends exactly ONE retry
-# on purpose (the stale row), and a correct PIN restores the counter at once.
+# unblocked, so the drill records each card's starting counter, refuses to start below 3 (the
+# production posture is 10), spends exactly ONE retry on purpose (the stale row), and a correct PIN
+# restores the counter at once. Counters are compared with the start, never with a fixed number.
 #
 #   R  ROTATION        seal v1 → serve; rotate the card PIN, seal v2; the STALE v1 must spend exactly
 #                      one retry and latch; v2 serves and restores the counter
@@ -60,11 +61,16 @@ for s in $CARDS; do
   SLOT[$s]="$(hsm_slot_id_for "$s" 2>/dev/null || true)"; [ -n "${SLOT[$s]}" ] || die "PKCS#11 cannot see $s"
 done
 # The user-PIN counter, read with an empty VERIFY: no attempt is spent.
-tries(){ local sw; sw="$(opensc-tool --reader "${READER[$1]}" -s "00 A4 04 00 0B E8 2B 06 01 04 01 81 C3 1F 02 01 00" -s "00 20 00 81" 2>&1 \
+# The count is the low nibble of 63Cx, in HEX (a 10-try card answers 63CA); printed in decimal.
+tries(){ local sw x; sw="$(opensc-tool --reader "${READER[$1]}" -s "00 A4 04 00 0B E8 2B 06 01 04 01 81 C3 1F 02 01 00" -s "00 20 00 81" 2>&1 \
           | grep -oE 'SW1=0x[0-9A-F]+, SW2=0x[0-9A-F]+' | tail -1 || true)"
-        sed -n 's/SW1=0x63, SW2=0xC\([0-9A-F]\)/\1/p' <<< "$sw"; }
+        x="$(sed -n 's/SW1=0x63, SW2=0xC\([0-9A-F]\)/\1/p' <<< "$sw")"; [ -n "$x" ] && printf '%d' "0x$x"; }
 counters(){ local s line="  counters:"; for s in $CARDS; do line="$line $s=$(tries "$s" || true)"; done; say "$line"; }
-for s in $CARDS; do [ "$(tries "$s")" = 3 ] || die "$s does not start at 3 user-PIN tries: a drill that starts low cannot measure what it spends"; done
+declare -A FULL
+for s in $CARDS; do
+  FULL[$s]="$(tries "$s")"
+  [ -n "${FULL[$s]}" ] && [ "${FULL[$s]}" -ge 3 ] || die "$s has ${FULL[$s]:-an unreadable number of} user-PIN tries: a drill that starts below 3 could lock the card"
+done
 say "cards: $CARDS; state $STATE"
 
 # ---- helpers ------------------------------------------------------------------------------------
@@ -141,25 +147,28 @@ say "R1 — seal the primary's PIN (v1) and serve through it"
 printf '%s' "$NK_PIN_PRIMARY" | seal nk-drill.pin "$STATE/v1.cred"
 phase serve "$PRIMARY" "$STATE/v1.cred" || die "v1 did not serve"; counters
 say "R2 — rotate: new PIN on the card, sealed as v2 BEFORE anything restarts"
-NEWPIN="$(python3 -c 'import secrets; print("".join(secrets.choice("0123456789") for _ in range(8)))')"
+# The same LENGTH as the card's PIN: a card provisioned at the production posture (10 digits, 10
+# tries) refuses a shorter new PIN with CKR_DATA_INVALID (measured on DENK0404144, 2026-09-29).
+NEWPIN="$(python3 -c 'import secrets,sys; print("".join(secrets.choice("0123456789") for _ in range(int(sys.argv[1]))))' "${#NK_PIN_PRIMARY}")"
 printf '%s' "$NEWPIN" | age -r "$BG" -o "$STATE/rotated.age"   # so a failed run can still restore it
 change_pin "$PRIMARY" "$NK_PIN_PRIMARY" "$NEWPIN" || die "PIN change on $PRIMARY"
 ROTATED="$NEWPIN"   # only now does the card hold it: set earlier, a failed change would make restore spend a retry
 printf '%s' "$ROTATED" | seal nk-drill.pin "$STATE/v2.cred"
-[ "$(tries "$PRIMARY")" = 3 ] || die "retry counter not at 3 after the rotation"; counters
+F="${FULL[$PRIMARY]}"
+[ "$(tries "$PRIMARY")" = "$F" ] || die "retry counter not at its full $F after the rotation"; counters
 say "R3 — the STALE v1 against the rotated card: exactly one retry, then latched"
 phase stale "$PRIMARY" "$STATE/v1.cred" || die "stale phase"
-[ "$(tries "$PRIMARY")" = 2 ] || die "the stale credential spent $((3 - $(tries "$PRIMARY"))) retries, not exactly one"; counters
+[ "$(tries "$PRIMARY")" = "$((F - 1))" ] || die "the stale credential spent $((F - $(tries "$PRIMARY"))) retries, not exactly one"; counters
 say "R4 — v2 installed: serves, and the correct PIN restores the counter"
 phase serve "$PRIMARY" "$STATE/v2.cred" || die "v2 did not serve"
-[ "$(tries "$PRIMARY")" = 3 ] || die "counter not restored by the correct PIN"; counters
+[ "$(tries "$PRIMARY")" = "$F" ] || die "counter not restored by the correct PIN"; counters
 
 # ---- H: HOST REBUILD -------------------------------------------------------------------------------
 say "H1 — the host credential key is gone (a rebuilt host): v2 must not even start the service"
 sudo mv "$HOSTKEY" "$STATE/host-key.orig"
 if phase serve "$PRIMARY" "$STATE/v2.cred"; then die "DEFECT: a credential sealed to the old host opened on the new one"; fi
 refused_by_systemd || die "v2 failed, but not as an undecryptable credential (exit $PHASE_RC): the row proves nothing"
-[ "$(tries "$PRIMARY")" = 3 ] || die "a service that could not decrypt its credential spent a retry"; counters
+[ "$(tries "$PRIMARY")" = "$F" ] || die "a service that could not decrypt its credential spent a retry"; counters
 say "H2 — reseal from the recovery kit on the new host → serve"
 age -d -i "$STATE/breakglass.id" "$STATE/rotated.age" | seal nk-drill.pin "$STATE/v3.cred"
 phase serve "$PRIMARY" "$STATE/v3.cred" || die "the resealed credential did not serve"; counters
@@ -171,7 +180,7 @@ authorize "$NK" 0
 pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | grep -q "$PRIMARY" && die "$PRIMARY still visible"
 phase absent "$PRIMARY" "$STATE/v3.cred" || die "absent phase"
 authorize "$NK" 1; sleep 2
-[ "$(tries "$PRIMARY")" = 3 ] || die "the outage spent a retry"
+[ "$(tries "$PRIMARY")" = "$F" ] || die "the outage spent a retry"
 phase serve "$PRIMARY" "$STATE/v3.cred" || die "did not serve after the card came back"; counters
 
 # ---- Y: REPLACEMENT --------------------------------------------------------------------------------

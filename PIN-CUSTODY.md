@@ -59,10 +59,11 @@ The encrypted credential is created interactively on the target guest with
 `deploy/seal-hsm-pin.sh`, which **names the PCR set explicitly** and **names the credential**:
 
 ```sh
-sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs "$KMS_CREDENTIAL_PCRS"
+sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs "$KMS_CREDENTIAL_PCRS"   # --retries 10 is the default
 ```
 
-It checks the card (attached, that serial, 3 tries left), takes the PIN hidden from the paper PIN
+It checks the card (attached, that serial, its FULL counter: `--retries`, default 10, the production
+posture of a 10-digit PIN with a 10-try counter, regalia `PLAN.md` 1.3), takes the PIN hidden from the paper PIN
 card, tests it on the card before sealing, reports the counter the card actually shows on a refusal,
 decrypts the blob back before installing it, and keeps a replaced credential. Underneath it runs:
 
@@ -188,6 +189,12 @@ transient systemd service with `LoadCredentialEncrypted=`, on DENK0404144 initia
 - O: the card de-authorised on USB was absent and refused with no PIN presented; back, it served.
 - T: total loss (host key gone, recovery kit and break-glass only) resealed and served.
 - The card's own PIN was put back and the drill key removed; the transcript holds no PIN.
+- Run twice: at 3 tries with a 6-digit PIN, and at the **production posture** (10-digit PIN, 10
+  tries): there the stale credential took the counter 10 → 9, and the correct PIN restored 10.
+- A rotated PIN must keep the card's PIN length: the 10-digit card refused an 8-digit new PIN with
+  `CKR_DATA_INVALID`, spending nothing. The drill rotates to a same-length PIN.
+- The counter is the low nibble of `63Cx` **in hex** (a 10-try card answers `63CA`); both the drill
+  and `seal-hsm-pin.sh` decode it to decimal and compare it with the card's full count, never with 3.
 - Not run: **Y** (replacement), which needs a second card attached (`… <primary> <replacement>`).
 
 **Bench substitute:** the qube has no TPM2, so both drills seal with systemd's host key. The TPM
