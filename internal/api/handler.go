@@ -283,14 +283,9 @@ func rejectDuplicateJSONKeys(contents []byte) error {
 		}
 		return nil
 	}
-	if err := walk(); err != nil {
-		return err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		return errors.New("request must contain exactly one JSON document")
-	}
-	return nil
+	// Only the first document is walked. Anything after it is refused by decodeRequest's
+	// second Decode, which is the one place the exactly-one-document rule lives.
+	return walk()
 }
 
 func validateRequest(operation, principal, requestID, idempotencyKey string, document requestDocument) (Request, error) {

@@ -289,7 +289,9 @@ func TestCoordinatorFailureOutsideTheErrorRangeIsNormalisedToInternal(t *testing
 //
 // TestUnknownRequestFieldsAreRejectedNotIgnored does not cover this: it kills only the first
 // Decode. DisallowUnknownFields sits one line above the guard tested here and applies to the
-// members of a document, not to a document that follows one.
+// members of a document, not to a document that follows one. rejectDuplicateJSONKeys walks only
+// the first document and deliberately does not repeat this check: when it did, it refused the same
+// bytes first and this guard could be deleted with the suite still green (regalia-czm).
 func TestABodyWithATrailingSecondDocumentIsRefused(t *testing.T) {
 	cases := []struct {
 		name       string
