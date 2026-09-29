@@ -92,8 +92,10 @@ printf '%s' "$PIN" | systemd-creds encrypt "${KEYARGS[@]}" --name="$NAME" - "$tm
   || fail "systemd-creds encrypt failed; nothing was installed"
 back="$(systemd-creds decrypt --name="$NAME" "$tmp" - 2>/dev/null | sha256sum)"
 [ "$back" = "$(printf '%s' "$PIN" | sha256sum)" ] || fail "the sealed blob does not decrypt back to the PIN; nothing was installed"
-if [ -e "$DEST" ]; then mv "$DEST" "$DEST.prev-$(date -u +%Y%m%dT%H%M%SZ)" || fail "cannot keep the old credential"; fi
-chmod 600 "$tmp" && mv "$tmp" "$DEST" || fail "cannot install $DEST"
+# The old credential stays IN PLACE until the new one replaces it in one rename: moving it aside
+# first would leave the service with no credential (243 at its next start) if the install failed.
+if [ -e "$DEST" ]; then cp -p "$DEST" "$DEST.prev-$(date -u +%Y%m%dT%H%M%SZ)" || fail "cannot keep a copy of the old credential; nothing was changed"; fi
+chmod 600 "$tmp" && mv -f "$tmp" "$DEST" || fail "cannot install $DEST; the previous credential (if any) is still in place"
 PIN=""; PIN2=""
 
 cat <<REC

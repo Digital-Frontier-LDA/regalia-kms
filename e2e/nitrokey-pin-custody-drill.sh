@@ -109,16 +109,22 @@ kit_pin(){ age -d -i "$STATE/breakglass.id" "$STATE/recovery-kit.age" | sed -n "
 say "recovery kit: the card PINs encrypted to break-glass recipient $BG"
 
 HOSTKEY_EXISTED=0; sudo test -e "$HOSTKEY" && HOSTKEY_EXISTED=1
-ROTATED=""; KEYS_MADE=""
+ROTATED=""; KEYS_MADE=""; DISABLED_USB=""
 restore(){ # always: the card PIN, the drill keys, the host key, USB authorisation
   set +e
-  for d in /sys/bus/usb/devices/*; do [ "$(cat "$d/authorized" 2>/dev/null)" = 0 ] && authorize "$d" 1; done
+  # Only the device THIS drill turned off: others may be off on purpose (Qubes, usbguard).
+  [ -z "$DISABLED_USB" ] || authorize "$DISABLED_USB" 1
   local keep=0 s
   if [ -n "$ROTATED" ]; then
     if change_pin "$PRIMARY" "$ROTATED" "$NK_PIN_PRIMARY"; then say "restore: $PRIMARY PIN put back"
     else keep=1; say "RESTORE FAILED: $PRIMARY still has the rotated PIN; it is in $STATE/rotated.age, openable with $STATE/breakglass.id"; fi
   fi
   for s in $KEYS_MADE; do
+    # If the PIN could not be put back, the card still has the ROTATED PIN: logging in with the
+    # original would spend another retry. Leave the key; the rotated PIN is in rotated.age.
+    if [ "$keep" = 1 ] && [ "$s" = "$PRIMARY" ]; then
+      say "RESTORE: drill key left on $PRIMARY (ID $OBJECT_ID): its PIN was not put back"; continue
+    fi
     p11 "$s" --login --pin env:PKCS11_PIN --delete-object --type privkey --id "$OBJECT_ID" >>"$LOG" 2>&1 \
       && say "restore: drill key removed from $s" || { keep=1; say "RESTORE: could not remove the drill key from $s (ID $OBJECT_ID)"; }
   done
@@ -176,10 +182,10 @@ phase serve "$PRIMARY" "$STATE/v3.cred" || die "the resealed credential did not 
 # ---- O: OUTAGE -------------------------------------------------------------------------------------
 say "O1 — the card is out (de-authorised on USB): absent, no PIN presented; back: serves"
 NK="$(usb_of "$PRIMARY")" || die "cannot find $PRIMARY on USB"
-authorize "$NK" 0
+DISABLED_USB="$NK"; authorize "$NK" 0
 pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | grep -q "$PRIMARY" && die "$PRIMARY still visible"
 phase absent "$PRIMARY" "$STATE/v3.cred" || die "absent phase"
-authorize "$NK" 1; sleep 2
+authorize "$NK" 1; DISABLED_USB=""; sleep 2
 [ "$(tries "$PRIMARY")" = "$F" ] || die "the outage spent a retry"
 phase serve "$PRIMARY" "$STATE/v3.cred" || die "did not serve after the card came back"; counters
 
