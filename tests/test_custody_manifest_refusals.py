@@ -220,7 +220,21 @@ class ManifestRefusalTests(unittest.TestCase):
     def test_envelope_custody_still_requires_shamir(self):
         obj = self._yubikey_pair()
         obj["custody"] = "hardware-envelope"
-        self.assert_refused(obj, "hardware custody requires shamir-4-of-6 recovery")
+        self.assert_refused(obj, r"hardware custody requires shamir-<k>-of-<n> recovery")
+
+    def test_the_shamir_scheme_is_a_parameter(self):
+        """ADR-0002 D13: any shamir-<k>-of-<n> with 2 <= k <= n <= 16, not only 4-of-6. The schema's
+        pattern checks the shape; k <= n and the bounds are the validator's (a regex cannot compare)."""
+        for mode in ("shamir-4-of-6", "shamir-3-of-5", "shamir-3-of-4", "shamir-2-of-2", "shamir-16-of-16"):
+            with self.subTest(mode=mode):
+                obj = direct_key()
+                obj["recovery"]["mode"] = mode
+                validate_manifest(manifest_with(obj))
+        for mode in ("shamir-1-of-6", "shamir-7-of-5", "shamir-4-of-17", "shamir-04-of-6", "shamir-4-of-", "shamir-4-6"):
+            with self.subTest(mode=mode):
+                obj = direct_key()
+                obj["recovery"]["mode"] = mode
+                self.assert_refused(obj, "must be shamir-<k>-of-<n>")
 
 
 if __name__ == "__main__":

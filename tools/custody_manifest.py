@@ -56,7 +56,17 @@ COMMISSIONED_STATES = {"qualified", "active", "standby"}
 # Must accept exactly what an envelope KEK reference can carry; registry.kekVersionPattern is the
 # Go half of the same rule.
 KEK_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
-RECOVERY_MODES = {"shamir-4-of-6", "multi-enrollment", "rebuild-public", "exception"}
+RECOVERY_MODES = {"multi-enrollment", "rebuild-public", "exception"}
+# The Shamir scheme is a parameter (ADR-0002 D13): "shamir-<k>-of-<n>", 2 <= k <= n <= 16 (the SLIP-39
+# group limit), 4-of-6 by default. The schema's pattern checks the shape; k <= n is checked here,
+# because a regular expression cannot compare the two numbers.
+SHAMIR_MODE = re.compile(r"^shamir-([0-9]{1,2})-of-([0-9]{1,2})$")
+
+
+def is_shamir(mode: str) -> bool:
+    m = SHAMIR_MODE.match(mode)
+    return bool(m) and 2 <= int(m.group(1)) <= int(m.group(2)) <= 16 and not m.group(1).startswith("0") \
+        and not m.group(2).startswith("0")
 RECOVERY_STATES = {"planned", "tested", "accepted", "overdue"}
 MIGRATION_STATES = {"planned", "in-progress", "migrated", "exception", "not-applicable"}
 # The backend capability table is NOT defined here.
@@ -348,16 +358,19 @@ def validate_object(raw: Any, path: str) -> str:
 
     recovery = require_dict(item["recovery"], f"{path}.recovery")
     require_fields(recovery, {"mode", "status"}, RECOVERY_FIELDS, f"{path}.recovery")
-    recovery_mode = require_enum(recovery["mode"], RECOVERY_MODES, f"{path}.recovery.mode")
+    recovery_mode = require_string(recovery["mode"], f"{path}.recovery.mode")
+    if not is_shamir(recovery_mode) and recovery_mode not in RECOVERY_MODES:
+        fail(f"{path}.recovery.mode", "must be shamir-<k>-of-<n> with 2 <= k <= n <= 16, or one of: "
+             + ", ".join(sorted(RECOVERY_MODES)))
     require_enum(recovery["status"], RECOVERY_STATES, f"{path}.recovery.status")
-    if recovery_mode == "shamir-4-of-6":
+    if is_shamir(recovery_mode):
         require_string(recovery.get("authority_id"), f"{path}.recovery.authority_id")
         if recovery.get("minimum_replicas") != 2:
             fail(f"{path}.recovery.minimum_replicas", "must equal 2")
     # A KEY GENERATED ON A YUBIKEY CANNOT BE SHAMIR-RECOVERED: it never existed outside the token.
     # ADR-0002 D5 makes that the rule for YubiKey keys, so their continuity is multi-enrollment —
     # independent on-device keys on at least two tokens, held at separate sites, exactly as FIDO's
-    # (below). Requiring shamir-4-of-6 here made every D5-compliant YubiKey object unrepresentable.
+    # (below). Requiring Shamir recovery here made every D5-compliant YubiKey object unrepresentable.
     # Anything that can be DKEK/seed-recovered (every other backend) still must be.
     yubikey_only = bool(checked_bindings) and all(b["backend"] == "yubikey-piv" for b in checked_bindings)
     if custody == "direct-hardware" and recovery_mode == "multi-enrollment":
@@ -365,8 +378,8 @@ def validate_object(raw: Any, path: str) -> str:
             fail(path, "multi-enrollment recovery for direct-hardware is only for YubiKey PIV keys generated on the device (ADR-0002 D5)")
         if len(checked_bindings) < 2 or len({b.get("site") for b in checked_bindings}) < 2:
             fail(f"{path}.bindings", "YubiKey multi-enrollment needs at least two tokens held at two distinct sites")
-    elif custody in {"direct-hardware", "hardware-envelope"} and recovery_mode != "shamir-4-of-6":
-        fail(path, "hardware custody requires shamir-4-of-6 recovery")
+    elif custody in {"direct-hardware", "hardware-envelope"} and not is_shamir(recovery_mode):
+        fail(path, "hardware custody requires shamir-<k>-of-<n> recovery")
     if custody == "fido-multi-enrollment" and recovery_mode != "multi-enrollment":
         fail(path, "FIDO custody requires multi-enrollment recovery")
 
