@@ -85,7 +85,7 @@ Two HSMs you buy once, on hosts you already run, instead of a metered cloud serv
 |---|---|---|
 | **cost** | ~$25,400/yr (2 HSMs for HA × [$1.45/hr](https://aws.amazon.com/cloudhsm/pricing/) × 8,760 h) | ~€220 once — two Nitrokey HSM 2 (~€99–109 each) |
 | **who holds the keys** | the provider, in their regions | you, in your racks |
-| **recovery** | provider-dependent | 4-of-6 Shamir shares on metal, offline, no original device needed |
+| **recovery** | provider-dependent | k-of-n Shamir shares (4-of-6 by default) on metal, offline, no original device needed |
 
 What you give up — this is a real trade, not a free lunch:
 - **Throughput:** ~12–14 signatures/sec (with a large spread by key type), not thousands. Fine for

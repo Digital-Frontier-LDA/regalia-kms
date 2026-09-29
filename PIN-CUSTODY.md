@@ -156,7 +156,7 @@ which can inspect guest memory or roll back VM and vTPM state. Therefore:
     against, and `README.md` records that no production off-host sink is configured today.
   - A rollback of **vTPM state alone**, without the disk, is not detectable by anything in this
     repository. It is mitigated by the snapshot and backup prohibitions above, not detected.
-- **Keep a separately sealed encrypted credential export in the 4-of-6 recovery kit** so a rebuilt
+- **Keep a separately sealed encrypted credential export in the k-of-n recovery kit (4-of-6 by default)** so a rebuilt
   guest can reseal it to a replacement TPM without requiring the failed primary HSM. *Verified by:*
   nothing — prose only.
 - **Never use the Nitrokey to wrap the YubiKey fallback PIN**, which would make fallback depend on the
