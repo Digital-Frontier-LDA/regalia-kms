@@ -54,6 +54,11 @@ func RSAOAEP(publicDER, plaintext, label []byte, algorithm string) ([]byte, erro
 	if !ok || key.N.BitLen() != expectedBits(algorithm) || len(plaintext) == 0 || len(label) == 0 {
 		return nil, ErrInvalid
 	}
+	// The frame is one OAEP block: at most k - 2*hLen - 2 bytes. Refuse a larger plaintext here,
+	// before sizing a buffer from it, rather than after EncryptOAEP rejects the full frame.
+	if len(plaintext) > key.Size()-2*OAEPHash.Size()-2-frameHeaderLen {
+		return nil, ErrInvalid
+	}
 	frame := make([]byte, 0, frameHeaderLen+len(plaintext))
 	frame = append(frame, frameMagic[:]...)
 	digest := sha256.Sum256(label)

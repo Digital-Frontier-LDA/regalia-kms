@@ -284,6 +284,11 @@ func (session *card) Decipher(ctx context.Context, algorithm string, ciphertext 
 	var payload []byte
 	switch algorithm {
 	case "rsa2048", "rsa3072", "rsa4096":
+		// A raw RSA ciphertext is at most the modulus size (256/384/512 bytes); it may be shorter
+		// when leading zero bytes are dropped. Refuse anything else before sizing the command.
+		if maxLen := map[string]int{"rsa2048": 256, "rsa3072": 384, "rsa4096": 512}[algorithm]; len(ciphertext) == 0 || len(ciphertext) > maxLen {
+			return nil, fmt.Errorf("%w: %s ciphertext must be 1 to %d bytes, got %d", errTransport, algorithm, maxLen, len(ciphertext))
+		}
 		payload = make([]byte, 0, 1+len(ciphertext))
 		payload = append(payload, 0x00) // padding indicator: no padding, raw RSA recovery
 		payload = append(payload, ciphertext...)
