@@ -142,3 +142,29 @@ func TestOpenFrameRefusesAV1Frame(t *testing.T) {
 		t.Fatalf("OpenFrame accepted a v1 frame: %v; the version byte must refuse old envelopes cleanly", err)
 	}
 }
+
+// The frame is one OAEP block. A plaintext one byte over what fits is refused before any buffer is
+// sized from it (CodeQL go/allocation-size-overflow); the largest that fits still wraps and opens.
+func TestRSAOAEPRefusesAPlaintextThatCannotFitOneBlock(t *testing.T) {
+	private, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, _ := x509.MarshalPKIXPublicKey(&private.PublicKey)
+	fits := private.PublicKey.Size() - 2*OAEPHash.Size() - 2 - frameHeaderLen
+	largest := bytes.Repeat([]byte{0x5A}, fits)
+	wrapped, err := RSAOAEP(public, largest, []byte("context"), "rsa2048")
+	if err != nil {
+		t.Fatalf("the largest plaintext that fits (%d bytes) was refused: %v", fits, err)
+	}
+	frame, err := rsa.DecryptOAEP(OAEPHash.New(), rand.Reader, private, wrapped, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain, err := OpenFrame(frame, []byte("context")); err != nil || !bytes.Equal(plain, largest) {
+		t.Fatalf("the largest frame did not round-trip: %v", err)
+	}
+	if _, err := RSAOAEP(public, append(largest, 0x5A), []byte("context"), "rsa2048"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a plaintext one byte over one OAEP block was not refused as ErrInvalid: %v", err)
+	}
+}

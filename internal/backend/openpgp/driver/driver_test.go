@@ -317,6 +317,21 @@ func TestDecipherBuildsTheTwoAlgorithmShapes(t *testing.T) {
 		}
 	})
 
+	t.Run("an empty or longer-than-the-modulus RSA ciphertext is refused before the card sees anything", func(t *testing.T) {
+		for _, tc := range []struct {
+			algorithm string
+			length    int
+		}{{"rsa2048", 0}, {"rsa2048", 257}, {"rsa3072", 385}, {"rsa4096", 513}} {
+			card, script := openStatused(t, statusSteps(1, 0, 0)...)
+			if _, err := card.Decipher(context.Background(), tc.algorithm, make([]byte, tc.length)); err == nil {
+				t.Fatalf("%s: a %d-byte ciphertext was accepted", tc.algorithm, tc.length)
+			}
+			if script.callCount() != 5 { // SELECT + four GET DATA; no VERIFY, no PSO
+				t.Fatalf("%s: the %d-byte ciphertext reached the card: %d commands sent", tc.algorithm, tc.length, script.callCount())
+			}
+		}
+	})
+
 	t.Run("an unmapped algorithm is refused", func(t *testing.T) {
 		card, script := openStatused(t, statusSteps(1, 0, 0)...)
 		if _, err := card.Decipher(context.Background(), "aes256", []byte{1}); err == nil || !strings.Contains(err.Error(), "aes256") {
