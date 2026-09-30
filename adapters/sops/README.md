@@ -60,3 +60,24 @@ non-symlinked protected files. The example unit delivers the key through a TPM-s
 credential; it is not stored in the repository or passed in an environment variable or command
 argument. A workload-agent or hardware `crypto.Signer` is preferred where available. Remaining
 production evidence is physical-backend dependency loss and firewall probing, not adapter code.
+
+## Replacing the breakglass recipient
+
+The organisation-wide breakglass age recipient is replaced in two stages, because the same key is in
+every repository and removing it in some but not others leaves recovery working in some places only:
+
+1. **`add`**, one repository at a time: the new recipient is written next to the old one in every
+   `.sops.yaml` rule (keeping each rule's form and the file's comments), and every encrypted file is
+   re-keyed (`sops updatekeys`, then `sops rotate`). Both keys open everything.
+2. **`check --require <new>`** in every repository, and a recovery drill that opens a file with the
+   new key rebuilt from its shares.
+3. **`remove`**, in every repository in one sitting: the old recipient leaves every rule and every
+   file. It refuses to start while any file lacks the new recipient.
+
+`tools/sops_breakglass.py` does each stage locally; `.github/workflows/sops-breakglass.yml` is the
+reusable workflow that runs a stage in a repository with its own CI key and opens a pull request.
+Only the new key's public recipient is an input: its secret half never reaches CI.
+
+Re-keying does not reach **git history**: every earlier commit of a file stays openable by the old
+key. If copies of the old key are unaccounted for, rotate the secret values themselves, not only
+the recipients.

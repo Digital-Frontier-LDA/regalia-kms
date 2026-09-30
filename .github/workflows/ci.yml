@@ -58,6 +58,19 @@ jobs:
           chmod 0755 "$RUNNER_TEMP/promtool"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      - name: provision pinned sops 3.13.1 and age 1.3.2 (the breakglass swap test runs, not skips)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/sops" https://github.com/getsops/sops/releases/download/v3.13.1/sops-v3.13.1.linux.amd64
+          echo "620a9d7e3352ababeca6908cea24a6e8b14ce89a448ddbd3f94f1ef3398f470a  $RUNNER_TEMP/sops" | sha256sum --check --strict
+          curl -fsSL -o "$RUNNER_TEMP/age.tgz" https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  $RUNNER_TEMP/age.tgz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/age.tgz" -C "$RUNNER_TEMP" --strip-components=1 age/age age/age-keygen
+          printf '%s  %s\n' eb7dd1b518f0a307c99cd97782623c5321da049154b04acd2d98d21aa7bc9b2c "$RUNNER_TEMP/age" \
+            0a0009db842259d6717f7eeb30acb6b90d2a2eb924c6acd0a0db0ca1f1537899 "$RUNNER_TEMP/age-keygen" | sha256sum --check --strict
+          chmod 0755 "$RUNNER_TEMP/sops" "$RUNNER_TEMP/age" "$RUNNER_TEMP/age-keygen"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
         # The Go suite does not cover the deployment tooling, the custody-manifest validator, the
         # alert rules or the documentation contracts — those are Python, and they gate the same
