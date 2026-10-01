@@ -101,7 +101,7 @@ class HostProbe(unittest.TestCase):
             "ima_policy_loaded": (lambda h: h.files.pop("/sys/kernel/security/ima/policy"), "no IMA policy"),
             "pin_import_key_present": (lambda h: h.runs.pop(("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)), "--init-import-key"),
             "hsm_token_attached": (lambda h: h.files.__setitem__(USB + "/1-1.4/idProduct", "4108\n"), "no Nitrokey HSM"),
-            "token_clients_root_only": (lambda h: h.stats.__setitem__("/usr/bin/opensc-tool", (0, 0, 0o100755)), "the KMS user can run"),
+            "token_clients_root_only": (lambda h: h.stats.__setitem__("/usr/bin/opensc-tool", (0, 0, 0o100755)), "others can run or change"),
         }
         for name, (breakit, reason) in cases.items():
             with self.subTest(name=name):
@@ -200,6 +200,30 @@ class HostProbe(unittest.TestCase):
         value, why = host_probe.root_unlock(h)
         self.assertFalse(value)
         self.assertIn("no systemd-tpm2 token", why)
+
+    def test_the_disk_token_must_bind_exactly_pcr_7(self):
+        for pcrs in ([], [9], [7, 9]):
+            with self.subTest(pcrs=pcrs):
+                h = FakeHost()
+                h.runs[("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sda3")] = (0, json.dumps(
+                    {"tokens": {"0": {"type": "systemd-tpm2", "keyslots": ["1"], "tpm2-pcrs": pcrs}}}))
+                value, why = host_probe.root_unlock(h)
+                self.assertFalse(value)
+                self.assertIn("not exactly [7]", why)
+
+    def test_a_group_or_other_writable_client_fails(self):
+        for mode in (0o100702, 0o100720, 0o100740):
+            with self.subTest(mode=oct(mode)):
+                h = FakeHost()
+                h.stats["/usr/bin/pkcs11-tool"] = (0, 0, mode)
+                self.assertFalse(host_probe.token_clients_root_only(h)[0])
+
+    def test_a_bprm_rule_with_a_read_mask_is_not_executable_measurement(self):
+        h = FakeHost()
+        h.files["/sys/kernel/security/ima/policy"] = "measure func=BPRM_CHECK mask=MAY_READ\n"
+        self.assertFalse(host_probe.ima(h)[0])
+        h.files["/sys/kernel/security/ima/policy"] = "measure func=BPRM_CHECK\n"
+        self.assertTrue(host_probe.ima(h)[0], "no mask is MAY_EXEC for BPRM_CHECK")
 
     def test_ima_must_measure_into_pcr_10(self):
         h = FakeHost()

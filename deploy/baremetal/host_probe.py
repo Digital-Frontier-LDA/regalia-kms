@@ -170,6 +170,12 @@ def root_unlock(host):
         if not tpm:
             return False, "%s (%s) has no systemd-tpm2 token in its LUKS2 header: enrol it with " \
                 "systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7" % (name, dev)
+        # The commissioning policy binds the disk to PCR 7 exactly (README, section 3): a token with no
+        # PCRs, or other ones, would release the disk key whatever the Secure Boot state.
+        wrong = [t.get("tpm2-pcrs") for t in tpm if sorted(t.get("tpm2-pcrs") or []) != [7]]
+        if wrong:
+            return False, "%s (%s) has a TPM2 token bound to PCRs %s, not exactly [7]: re-enrol with " \
+                "systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7" % (name, dev, wrong)
     return True, "%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (
         ", ".join(crypts), "; ".join(entries[n] for n in crypts))
 
@@ -184,8 +190,10 @@ def ima(host):
         if not f or f[0] != "measure":
             continue
         opts = dict(o.split("=", 1) for o in f[1:] if "=" in o)
-        if (opts.get("func") == "BPRM_CHECK" or (opts.get("func") == "MMAP_CHECK" and "MAY_EXEC" in opts.get("mask", ""))) \
-                and opts.get("pcr", "10") == "10":
+        # BPRM_CHECK measures executables only with no mask or MAY_EXEC; MMAP_CHECK only with MAY_EXEC.
+        executable = (opts.get("func") == "BPRM_CHECK" and opts.get("mask", "MAY_EXEC").lstrip("^") == "MAY_EXEC") \
+            or (opts.get("func") == "MMAP_CHECK" and opts.get("mask", "").lstrip("^") == "MAY_EXEC")
+        if executable and opts.get("pcr", "10") == "10":
             # PCR 10: the PCR that attestation quotes (README, section 3); a rule extending another PCR
             # would leave the quoted one silent about the binary.
             exec_rules.append("%s, PCR 10" % opts["func"])
@@ -264,10 +272,11 @@ def token_clients_root_only(host):
         st = host.stat(path)
         if st is None:
             loose.append("%s (cannot stat)" % path)
-        elif st[0] != 0 or st[1] != 0 or st[2] & 0o011:
+        elif st[0] != 0 or st[1] != 0 or st[2] & 0o077:
+            # no group or other bit at all: a writable root-owned client is code root runs later
             loose.append("%s (uid %d, gid %d, mode %o)" % (path, st[0], st[1], st[2] & 0o7777))
     if loose:
-        return False, "token client tools the KMS user can run: %s (chown root:root, chmod 0700)" % ", ".join(loose)
+        return False, "token client tools others can run or change: %s (chown root:root, chmod 0700)" % ", ".join(loose)
     ok, why = guest_probe.pcscd_clients(host)
     return ok, ("token client tools root-only; %s" % why if ok else why)
 
