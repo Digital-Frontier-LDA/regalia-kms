@@ -144,6 +144,17 @@ if [ "$BENCH" = 0 ]; then systemd-creds has-tpm2 >/dev/null 2>&1 || fail "no usa
 NAME="$ID.pin"; DEST="$CREDSTORE/regalia-kms-$ID.pin"
 if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace to rotate it (the old one is kept)"; fi
 
+# ---- a blob is decrypted FIRST, before any card is touched ------------------------------------------
+# A blob made for another host's TPM, or altered, is refused here without reading a card at all.
+PIN=""; PIN2=""; trap 'PIN=""; PIN2=""' EXIT
+if [ -n "$FROM_BLOB" ]; then
+  # Decrypted inside the TPM; the PIN goes straight into this variable, never to a file or argv.
+  PIN="$(tpm2_rsadecrypt -c "$IMPORT_HANDLE" -s oaep -o /dev/stdout "$FROM_BLOB" 2>/dev/null | tr -d '\0')" \
+    || PIN=""
+  [ -n "$PIN" ] || fail "the TPM could not decrypt $FROM_BLOB: made for another host's TPM, altered, or the import key at $IMPORT_HANDLE is gone. No card was touched; nothing was sealed"
+  say "PIN decrypted by the TPM from $FROM_BLOB"
+fi
+
 # ---- the card: attached, the right serial, a full counter --------------------------------------------
 if [ "$KIND" = yubikey ]; then
   ykman list --serials 2>/dev/null | grep -qx "$SERIAL" || fail "no YubiKey $SERIAL attached (ykman list --serials)"
@@ -166,13 +177,8 @@ t="$(tries)"; [ "$t" = "$RETRIES" ] || fail "$SERIAL has ${t:-an unreadable numb
 say "card $SERIAL: reader $reader, PKCS#11 slot $slot, $t tries left (full)"
 
 # ---- the PIN ---------------------------------------------------------------------------------------
-PIN=""; PIN2=""; trap 'PIN=""; PIN2=""' EXIT
 if [ -n "$FROM_BLOB" ]; then
-  # Decrypted inside the TPM; the PIN goes straight into this variable, never to a file or argv.
-  PIN="$(tpm2_rsadecrypt -c "$IMPORT_HANDLE" -s oaep -o /dev/stdout "$FROM_BLOB" 2>/dev/null | tr -d '\0')" \
-    || PIN=""
-  [ -n "$PIN" ] || fail "the TPM could not decrypt $FROM_BLOB: made for another host's TPM, altered, or the import key at $IMPORT_HANDLE is gone. No card try was spent; nothing was sealed"
-  say "PIN decrypted by the TPM from $FROM_BLOB"
+  : # decrypted above, before any card was touched
 elif [ -t 0 ]; then
   read -r -s -p "User PIN for $SERIAL, from the PIN card (hidden): " PIN; echo >&2
   read -r -s -p "Again: " PIN2; echo >&2
