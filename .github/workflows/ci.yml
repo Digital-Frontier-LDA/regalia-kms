@@ -67,6 +67,12 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools opensc
           bash e2e/pin-import-swtpm.sh
 
+      - name: signed PCR 11 policy for the PIN, against a software TPM (swtpm; stub card)
+        # seal-hsm-pin.sh --tpm2-public-key/--tpm2-public-key-pcrs 11 (#57): sealed under PCR 7 plus a
+        # systemd-measure-signed PCR 11, opened across a signed kernel update without re-sealing, and
+        # refused for an unsigned kernel, another key, a changed PCR 7 or an uncovered boot phase.
+        run: bash e2e/pcr-signed-policy-swtpm.sh
+
       - name: Bare-metal host firewall, by behaviour, in network namespaces
         # The rendered default-deny ruleset is loaded only inside a throwaway namespace; the zones probe
         # it with network_probe.py, and outbound is checked against the declared sinks.

@@ -53,9 +53,12 @@ Commissioning has two halves:
   - **Not PCR 10 (IMA).** systemd decrypts `LoadCredentialEncrypted` before it executes regalia-kms, so
     a policy expecting that binary's measurement could never unseal at an unattended start; PCR 10
     also depends on the order everything else ran in.
-  - **Not PCR 11 directly.** It measures the kernel image, which changes at every update. Binding it
-    needs a *signed* PCR policy (`systemd-measure` + `--tpm2-public-key`), which these scripts do not
-    provision yet; `seal-hsm-pin.sh` refuses `--pcrs` with 10 or 11.
+  - **Not PCR 11 directly.** It measures the kernel image, which changes at every update, so
+    `seal-hsm-pin.sh` refuses `--pcrs` with 10 or 11. PCR 11 is bound only through a *signed* PCR
+    policy: `seal-hsm-pin.sh --pcrs 7 --tpm2-public-key FILE --tpm2-public-key-pcrs 11`
+    (PIN-CUSTODY.md, "Binding the kernel as well"). That is proven on a software TPM only; the
+    PCR-signing key's custody, signed UKIs, the root disk and the commissioning evidence for it are
+    not provisioned yet (#57), so production binds PCR 7 alone until they are.
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by `deploy/baremetal/os_probe.py`.
