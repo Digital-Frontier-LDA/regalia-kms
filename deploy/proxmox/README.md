@@ -1,5 +1,12 @@
 # Proxmox KMS VM provisioning and commissioning
 
+> **DEPRECATED AND UNSUPPORTED.** The KMS runs on dedicated bare metal with a discrete TPM 2.0
+> ([`deploy/baremetal`](../baremetal/README.md); ADR-0002 D21/D22). A virtual TPM's state is a file on
+> the hypervisor host, so a Proxmox guest cannot give the PIN sealing, PIN import, non-exportable TLS
+> key and rollback counters the KMS now relies on. Do not deploy a KMS as a Proxmox guest. This
+> directory gets no new features or fixes. The parts bare metal still uses (the OS-hardening probes,
+> the network matrix, the evidence verifier) are being moved out, then the rest is removed (#55).
+
 `provision.py` targets Proxmox VE 9 and renders a deterministic, secret-free Proxmox plan from a strict
 site configuration. It creates only a full q35/OVMF QEMU VM, fixes CPU and
 memory, disables ballooning and hotplug, imports a SHA-256-pinned Debian 12 cloud image,

@@ -355,6 +355,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm-site")
     args = parser.parse_args(argv[1:])
+    print("provision.py: DEPRECATED AND UNSUPPORTED: the KMS runs on bare metal (deploy/baremetal, "
+          "ADR-0002 D22); do not deploy a KMS as a Proxmox guest", file=sys.stderr)
     try:
         document = load_json(args.config)
         config = validate_config(document)
