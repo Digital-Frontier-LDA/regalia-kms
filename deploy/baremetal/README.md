@@ -66,6 +66,27 @@ Commissioning has two halves:
   brings its own client is caught by the pcscd check only while it is connected; restricting pcscd
   access with a polkit rule (root and the KMS user only) is recommended on top.
 
+### Host firewall (default deny, both directions)
+
+The site config (`site.example.json`, validated by `sitecfg.py`) declares the host's address, the
+KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
+(the audit and NTP sinks at least). From it:
+
+```sh
+python3 deploy/baremetal/firewall.py site.json > /etc/nftables.d/regalia-kms.nft
+nft -c -f /etc/nftables.d/regalia-kms.nft && nft -f /etc/nftables.d/regalia-kms.nft
+```
+
+Measured: `firewall_default_deny` (the table is loaded, with input, output and forward on policy
+drop). Checked by behaviour from each zone after commissioning:
+
+```sh
+python3 deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
+```
+
+(`monitoring`, `admin`, `unauthorized` likewise). `e2e/baremetal-firewall-netns.sh` runs the whole
+matrix in network namespaces in CI. Never load the ruleset on a workstation: it is default-deny.
+
 ## 4. TPM provisioning
 
 1. **PIN import key:** `sudo deploy/seal-hsm-pin.sh --init-import-key`. Copy the printed fingerprint

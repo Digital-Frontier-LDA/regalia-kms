@@ -32,6 +32,12 @@ exponent: 65537
 bits: 3072
 """
 USB = "/sys/bus/usb/devices"
+# nft -j list table inet regalia_kms, trimmed (captured from the rendered table in a network namespace)
+NFT_JSON = json.dumps({"nftables": [
+    {"table": {"family": "inet", "name": "regalia_kms"}},
+    {"chain": {"family": "inet", "table": "regalia_kms", "name": "input", "type": "filter", "hook": "input", "prio": 0, "policy": "drop"}},
+    {"chain": {"family": "inet", "table": "regalia_kms", "name": "forward", "type": "filter", "hook": "forward", "prio": 0, "policy": "drop"}},
+    {"chain": {"family": "inet", "table": "regalia_kms", "name": "output", "type": "filter", "hook": "output", "prio": 0, "policy": "drop"}}]})
 # cryptsetup luksDump --dump-json-metadata, trimmed: a passphrase slot 0 and the TPM2 slot 1 with the
 # token systemd-cryptenroll --tpm2-device writes
 LUKS_JSON = json.dumps({"keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
@@ -64,6 +70,7 @@ class FakeHost:
             ("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sda3"): (0, LUKS_JSON),
             ("tpm2_readpublic", "-Q", "-c", host_probe.IMPORT_HANDLE, "-f", "pem", "-o", "/dev/stdout"): (0, PEM),
             ("ss", "-xpn"): (0, ""),
+            ("nft", "-j", "list", "table", "inet", "regalia_kms"): (0, NFT_JSON),
         }
 
     def read(self, path): return self.files.get(path)
@@ -102,6 +109,7 @@ class HostProbe(unittest.TestCase):
             "pin_import_key_present": (lambda h: h.runs.pop(("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)), "--init-import-key"),
             "hsm_token_attached": (lambda h: h.files.__setitem__(USB + "/1-1.4/idProduct", "4108\n"), "no Nitrokey HSM"),
             "token_clients_root_only": (lambda h: h.stats.__setitem__("/usr/bin/opensc-tool", (0, 0, 0o100755)), "others can run or change"),
+            "firewall_default_deny": (lambda h: h.runs.pop(("nft", "-j", "list", "table", "inet", "regalia_kms")), "not loaded"),
         }
         for name, (breakit, reason) in cases.items():
             with self.subTest(name=name):
@@ -224,6 +232,19 @@ class HostProbe(unittest.TestCase):
         self.assertFalse(host_probe.ima(h)[0])
         h.files["/sys/kernel/security/ima/policy"] = "measure func=BPRM_CHECK\n"
         self.assertTrue(host_probe.ima(h)[0], "no mask is MAY_EXEC for BPRM_CHECK")
+
+    def test_an_accept_policy_on_any_chain_fails_the_firewall(self):
+        for hook in ("input", "output", "forward"):
+            with self.subTest(hook=hook):
+                h = FakeHost()
+                d = json.loads(NFT_JSON)
+                for c in d["nftables"]:
+                    if c.get("chain", {}).get("hook") == hook:
+                        c["chain"]["policy"] = "accept"
+                h.runs[("nft", "-j", "list", "table", "inet", "regalia_kms")] = (0, json.dumps(d))
+                value, why = host_probe.firewall(h)
+                self.assertFalse(value)
+                self.assertIn(hook, why)
 
     def test_ima_must_measure_into_pcr_10(self):
         h = FakeHost()

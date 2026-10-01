@@ -67,6 +67,13 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools opensc
           bash e2e/pin-import-swtpm.sh
 
+      - name: Bare-metal host firewall, by behaviour, in network namespaces
+        # The rendered default-deny ruleset is loaded only inside a throwaway namespace; the zones probe
+        # it with network_probe.py, and outbound is checked against the declared sinks.
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends nftables iproute2
+          sudo bash e2e/baremetal-firewall-netns.sh
+
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
         # The Go suite does not cover the deployment tooling, the custody-manifest validator, the
         # alert rules or the documentation contracts — those are Python, and they gate the same
