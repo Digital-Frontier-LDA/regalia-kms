@@ -106,16 +106,16 @@ no "a key that is not RSA is refused" 'not an RSA public key' --pcrs 7 --tpm2-pu
 no "a signature made by another key is refused" 'holds no signature by' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig1-other.json
 no "a signature file with no signature is refused" 'holds no signature by' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature nosig.json
 no "--bench-host-key with a signed policy is refused" 'are exclusive' --bench-host-key --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11
+# Signed by the right key, but for kernel 2 while kernel 1 runs: only the TPM can tell.
+no "a signature by the right key for another kernel is refused" 'for the PCR 11 of the RUNNING boot' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig2.json
 if ls /etc/systemd/tpm2-pcr-signature.json /run/systemd/tpm2-pcr-signature.json /usr/lib/systemd/tpm2-pcr-signature.json >/dev/null 2>&1; then
   echo "  SKIP no signature anywhere (this host boots a UKI with its own)"
 else no "with no signature for this boot anywhere, nothing is sealed" 'not a UKI with a signed PCR policy' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11; fi
 
 hdr "2  sealing under PCR 7 + signed PCR 11"
-# The running boot is kernel 3, which the PCR key never signed: the read-back must refuse to install.
+# The running boot is kernel 3, which the PCR key never signed.
 boot 3
-out="$(seal --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig1.json)"; rc=$?
-[ "$rc" != 0 ] && grep -q "does not open with the running boot's PCR 11 signature" <<< "$out" && [ ! -e "$BLOB" ] \
-  && P "on a boot the signature does not cover, nothing is installed (exit $rc)" || F "unsigned running boot: $out"
+no "on a kernel the key never signed, nothing is sealed" 'for the PCR 11 of the RUNNING boot' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig1.json
 boot 1
 out="$(seal --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig1.json)"; rc=$?
 [ "$rc" = 0 ] && grep -q '^SEALED' <<< "$out" && sudo test -s "$BLOB" && P "sealed and installed" || F "seal failed (exit $rc): $out"
@@ -160,8 +160,10 @@ tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 
 
 hdr "6  why the script checks the binding itself"
 printf '%s' "$PIN" | sudo systemd-creds encrypt --with-key=tpm2 --tpm2-device="$D" --tpm2-pcrs=7 \
-  --tpm2-public-key=pcr.pub --tpm2-public-key-pcrs=11 --name=t.pin - "$W/plain.cred" 2>/dev/null
-if [ "$(sudo systemd-creds decrypt --tpm2-device="$D" --tpm2-signature=nosig.json --name=t.pin "$W/plain.cred" - 2>/dev/null)" = "$PIN" ]; then
+  --tpm2-public-key=pcr.pub --tpm2-public-key-pcrs=11 --name=t.pin - "$W/plain.cred" 2>/dev/null; rc=$?
+if [ "$rc" != 0 ] || ! sudo test -s "$W/plain.cred"; then
+  F "the control blob could not be made (systemd-creds encrypt --with-key=tpm2 with a public key: exit $rc)"
+elif [ "$(sudo systemd-creds decrypt --tpm2-device="$D" --tpm2-signature=nosig.json --name=t.pin "$W/plain.cred" - 2>/dev/null)" = "$PIN" ]; then
   P "systemd-creds --with-key=tpm2 ignores --tpm2-public-key: its blob opens with no signature (the script uses tpm2-with-public-key and tests for this)"
 else
   echo "  NOTE this systemd's --with-key=tpm2 honours --tpm2-public-key; the script's check stays as a guard"

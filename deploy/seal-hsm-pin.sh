@@ -48,9 +48,10 @@
 #       the same key unseals without re-sealing; an unsigned one, or one signed by another key, does
 #       not. --tpm2-signature is the signature JSON for the RUNNING boot; without it systemd looks for
 #       tpm2-pcr-signature.json in /etc/systemd, /run/systemd (where systemd-stub puts the UKI's) and
-#       /usr/lib/systemd. Refused: a signed PCR other than 11; a key that is not RSA; a signature file
-#       not made by that key; and, after sealing, a blob that the running boot's signature cannot
-#       open or that opens WITHOUT one. The last matters: `systemd-creds --with-key=tpm2` ignores
+#       /usr/lib/systemd. Refused, before any card is touched: a signed PCR other than 11; a key that
+#       is not RSA; a signature file not made by that key, or not covering the RUNNING boot (tried on
+#       the TPM with a throwaway value). And, after sealing, a PIN blob that this boot's signature
+#       cannot open or that opens WITHOUT one. The last matters: `systemd-creds --with-key=tpm2` ignores
 #       --tpm2-public-key silently and binds PCR 7 alone (measured, systemd 257, 2026-10-01); the key
 #       type that honours it is tpm2-with-public-key.
 #
@@ -190,6 +191,25 @@ if [ "$BENCH" = 0 ]; then
   if [ -n "${REGALIA_TPM2_DEVICE:-}" ]; then
     TPMDEV=("--tpm2-device=$REGALIA_TPM2_DEVICE"); say "TEST: sealing to the TPM named in REGALIA_TPM2_DEVICE ($REGALIA_TPM2_DEVICE), NOT this host's. This credential is not production."
   else systemd-creds has-tpm2 >/dev/null 2>&1 || fail "no usable TPM2 on this guest (systemd-creds has-tpm2)"; fi
+fi
+# ---- a signed policy is tried on the TPM FIRST, with a value that is not the PIN ----------------------
+# The fingerprint checks above say who signed the file, not that it covers the PCR 11 of THIS boot
+# (the signature of another kernel by the same key passes them). Only the TPM can say: a throwaway
+# value is sealed under the very policy the PIN will get, and must open with the running boot's
+# signature and not with a signature file that holds none. No card is touched until it does.
+if [ -n "$PUBKEY" ]; then
+  probe="$(mktemp -d)" || fail "cannot create a temporary directory"
+  trap 'rm -rf "$probe"' EXIT
+  printf '{}\n' > "$probe/nosig.json"
+  printf 'probe' | systemd-creds encrypt "${KEYARGS[@]}" "${TPMDEV[@]}" --name=probe - "$probe/cred" 2>/dev/null \
+    || fail "systemd-creds cannot seal under the signed policy (PCRs $PCRS, signed PCR $PUBKEY_PCRS, $PUBKEY). No card was touched; nothing was sealed"
+  [ "$(systemd-creds decrypt "${TPMDEV[@]}" "${DECARGS[@]}" --name=probe "$probe/cred" - 2>/dev/null)" = probe ] \
+    || fail "${SIGNATURE:-tpm2-pcr-signature.json} holds no signature by this key for the PCR 11 of the RUNNING boot: the service could not load the PIN. Is this boot the signed UKI? No card was touched; nothing was sealed"
+  if systemd-creds decrypt "${TPMDEV[@]}" "--tpm2-signature=$probe/nosig.json" --name=probe "$probe/cred" - >/dev/null 2>&1; then
+    fail "a value sealed with these options opens WITHOUT a PCR 11 signature: this systemd does not bind the signed policy. No card was touched; nothing was sealed"
+  fi
+  rm -rf "$probe"; trap - EXIT
+  say "signed policy: the TPM accepts this boot's PCR 11 signature by $PKFP, and refuses none"
 fi
 NAME="$ID.pin"; DEST="$CREDSTORE/regalia-kms-$ID.pin"
 if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace to rotate it (the old one is kept)"; fi
