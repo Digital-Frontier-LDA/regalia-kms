@@ -88,6 +88,39 @@ input. Install the provided service drop-in only after its credential IDs match 
 IDs in the custody manifest. *Verified by:* `hsm-host-role/files/verify-deployment.py`, which requires
 every `LoadCredentialEncrypted=` source to sit under `/etc/credstore.encrypted/regalia-kms-`.
 
+## Binding the kernel as well: a signed PCR 11 policy
+
+PCR 7 says which Secure Boot keys the firmware trusted, not which kernel and initrd ran. PCR 11 does,
+for a Unified Kernel Image: systemd-stub measures each UKI section into it, and systemd-pcrphase the
+boot phases. Bound **directly**, PCR 11 would strand the PIN at every kernel update, so
+`seal-hsm-pin.sh` refuses it in `--pcrs`. It binds PCR 11 through a **signed** policy instead: the
+TPM releases the PIN when PCR 11 holds *any* value signed by one PCR-signing key.
+
+```sh
+sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7 \
+  --tpm2-public-key /run/systemd/tpm2-pcr-public-key.pem --tpm2-public-key-pcrs 11
+```
+
+- Each UKI is signed once, at build time, for its expected PCR 11 (`systemd-measure sign`, or
+  `ukify build --pcr-private-key=…`, which embeds the signature); systemd-stub hands it to the
+  running system as `/run/systemd/tpm2-pcr-signature.json`. A kernel update signed by the same key
+  opens the same blob: nothing is re-sealed. A kernel nobody signed, one signed by another key, a
+  changed PCR 7, or a boot phase the signature does not cover (the initrd, shutdown) does not.
+- The key is RSA: the TPM policy systemd builds takes nothing else. The record prints its `pkfp`
+  (SHA-256 of the PKCS#1 DER public key), the same fingerprint each signature file carries.
+- Underneath, the key type is **`--with-key=tpm2-with-public-key`**. `--with-key=tpm2` accepts
+  `--tpm2-public-key` and `--tpm2-public-key-pcrs`, says nothing, and binds PCR 7 alone (measured,
+  systemd 257, 2026-10-01). So the script proves the binding by behaviour before it installs
+  anything: the blob must open with the running boot's signature and must **not** open with a
+  signature file that holds none.
+
+*Verified by:* `e2e/pcr-signed-policy-swtpm.sh` in CI (a software TPM, real `systemd-creds` and
+`systemd-measure`, a stub card). **Not done yet (#57):** the PCR-signing key's custody (its private
+half offline or in the HSM under the ceremony roots, ADR-0002 D19), signing the real UKIs, the same
+policy for the root disk (`systemd-cryptenroll --tpm2-public-key=… --tpm2-public-key-pcrs=11`), and
+the evidence schema and `host_probe` recording the signed PCRs and the key's fingerprint. Until those
+land, production binds PCR 7 alone.
+
 ## Delivering the PIN to the host's TPM without typing it (TPM import)
 
 The ceremony runs on an air-gapped laptop; the PIN must reach each KMS host's TPM. Instead of typing
@@ -238,6 +271,7 @@ results are not physical evidence.
 | no snapshots/backups/live migration/hibernation; credentials excluded from backup; no other token client | evidence (signed JSON, not the VM) |
 | PCR set chosen and recorded | evidence (schema v4) |
 | **blob actually sealed to the recorded PCR set** | **none** |
+| signed PCR 11 policy: opens across a signed kernel update, refused otherwise | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`); **no real host yet** |
 | whole-guest rollback refused at next start | unit — **only with an audit sink configured** |
 | **vTPM-only rollback** | **none** (mitigated, not detected) |
 | sealed export in the recovery kit; no Nitrokey-wrapped YubiKey PIN | **none** (prose) |
