@@ -58,7 +58,7 @@ Commissioning has two halves:
     provision yet; `seal-hsm-pin.sh` refuses `--pcrs` with 10 or 11.
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
-  encrypted): measured by the same probes as the Proxmox guest.
+  encrypted): measured by `deploy/baremetal/os_probe.py`.
 - **Token clients root-only.** Unlike the guest, this host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
