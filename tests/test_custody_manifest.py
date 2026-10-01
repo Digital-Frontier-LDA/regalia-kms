@@ -305,6 +305,8 @@ class CustodyManifestTests(unittest.TestCase):
         samples = [
             "-----BEGIN " + "EC PRIVATE KEY-----",
             "AGE-SECRET-KEY-1" + "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+            # post-quantum age identity (age >= 1.3): it does NOT contain "AGE-SECRET-KEY-1"
+            "AGE-SECRET-KEY-PQ-1" + "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
             "ghp_" + "0123456789abcdef0123456789abcdef0123",
             "github_pat_" + "11ABCDEFG0aBcDeFgHiJkL_mNoPqRsTuVwXyZ",
             "AKIA" + "IOSFODNN7EXAMPLE",

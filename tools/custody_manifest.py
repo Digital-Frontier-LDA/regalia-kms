@@ -127,7 +127,8 @@ FORBIDDEN_FIELD_NAMES = {
 # manifest exists to avoid having about custody.
 PRIVATE_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----"),
-    re.compile(r"AGE-SECRET-KEY-1", re.IGNORECASE),
+    # Both age identity formats: classical and post-quantum (age >= 1.3, AGE-SECRET-KEY-PQ-1…).
+    re.compile(r"AGE-SECRET-KEY-(PQ-)?1", re.IGNORECASE),
     # GitHub classic personal-access, OAuth, user-to-server, server-to-server and refresh
     # tokens, which all use a two-letter prefix and 36+ characters.
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}"),
