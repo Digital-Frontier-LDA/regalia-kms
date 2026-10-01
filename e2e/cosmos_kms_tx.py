@@ -9,8 +9,11 @@ upstream-generated classes the chain itself was built from.
 
     address   --pubkey-der F --prefix P            -> "<address> <compressed-pubkey-hex>"
     build     --rest URL --chain-id C --from A --to B --amount N --denom D --fee N --gas N
-              --pubkey-der F --out DIR [--account-number N --sequence N]
+              --pubkey-der F --out DIR [--account-number N] [--sequence N] [--memo TEXT]
               -> DIR/signdoc.bin, DIR/body.bin, DIR/authinfo.bin; prints "<account> <sequence>"
+              --to and --amount may be repeated, in pairs, for one MsgSend each. --account-number
+              and --sequence each override what the chain reports: that is how the negative arms
+              ask the KMS to sign something the chain will not accept.
     broadcast --rest URL --dir DIR --signature F   -> prints JSON {txhash, code, committed, log}
     balance   --rest URL --address A --denom D     -> prints the amount
 """
@@ -67,18 +70,25 @@ def cmd_address(a):
 
 def cmd_build(a):
     pub = compressed_pubkey(a.pubkey_der)
-    if a.account_number is None or a.sequence is None:
+    if len(a.to) != len(a.amount):
+        sys.exit("--to and --amount must be given in pairs")
+    account_number, sequence = a.account_number, a.sequence
+    if account_number is None or sequence is None:
         acct = http_json(f"{a.rest}/cosmos/auth/v1beta1/accounts/{getattr(a, 'from')}")["account"]
-        account_number, sequence = int(acct["account_number"]), int(acct.get("sequence") or 0)
-    else:
-        account_number, sequence = a.account_number, a.sequence
+        if account_number is None:
+            account_number = int(acct["account_number"])
+        if sequence is None:
+            sequence = int(acct.get("sequence") or 0)
 
-    msg = MsgSend(from_address=getattr(a, "from"), to_address=a.to, amount=[Coin(denom=a.denom, amount=str(a.amount))])
-    packed = Any()
-    packed.Pack(msg, type_url_prefix="/")
-    # No memo: the KMS parser admits only TxBody.messages (fail-closed allowlist). Whether it should
-    # ever sign a memo is a policy decision, not this harness's.
-    body = TxBody(messages=[packed])
+    messages = []
+    for to, amount in zip(a.to, a.amount):
+        msg = MsgSend(from_address=getattr(a, "from"), to_address=to, amount=[Coin(denom=a.denom, amount=str(amount))])
+        packed = Any()
+        packed.Pack(msg, type_url_prefix="/")
+        messages.append(packed)
+    # No memo by default: the KMS parser admits only TxBody.messages (fail-closed allowlist, ADR-0002
+    # D7). --memo exists so an arm can prove the parser refuses one.
+    body = TxBody(messages=messages, memo=a.memo)
     pk = Any()
     pk.Pack(PubKey(key=pub), type_url_prefix="/")
     auth = AuthInfo(
@@ -129,11 +139,12 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("address"); p.add_argument("--pubkey-der", required=True); p.add_argument("--prefix", default="cosmos")
     p = sub.add_parser("build")
-    for flag in ("--rest", "--chain-id", "--from", "--to", "--denom", "--pubkey-der", "--out"):
+    for flag in ("--rest", "--chain-id", "--from", "--denom", "--pubkey-der", "--out"):
         p.add_argument(flag, required=True)
-    for flag in ("--amount", "--fee", "--gas"):
+    p.add_argument("--to", required=True, action="append"); p.add_argument("--amount", required=True, type=int, action="append")
+    for flag in ("--fee", "--gas"):
         p.add_argument(flag, required=True, type=int)
-    p.add_argument("--account-number", type=int); p.add_argument("--sequence", type=int)
+    p.add_argument("--account-number", type=int); p.add_argument("--sequence", type=int); p.add_argument("--memo", default="")
     p = sub.add_parser("broadcast"); p.add_argument("--rest", required=True); p.add_argument("--dir", required=True); p.add_argument("--signature", required=True)
     p = sub.add_parser("balance"); p.add_argument("--rest", required=True); p.add_argument("--address", required=True); p.add_argument("--denom", required=True)
     a = ap.parse_args()
