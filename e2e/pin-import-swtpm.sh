@@ -37,8 +37,8 @@ out="$(seal swtpm:port=2521 --init-import-key --import-pub "$W/A.pem")" && grep 
   && P "created inside TPM A" || F "init failed: $out"
 [ "$(stat -c %a "$W/A.pem")" = 644 ] && P "public key exported 0644" || F "public key mode $(stat -c %a "$W/A.pem")"
 grep -q "$(fp "$W/A.pem")" <<< "$out" && P "the printed fingerprint is the sha256 of the exported key" || F "fingerprint mismatch"
-out="$(seal swtpm:port=2521 --init-import-key --import-pub "$W/A2.pem")"
-grep -q 'already holds a key' <<< "$out" && P "a second init is refused" || F "a second init was not refused: $out"
+out="$(seal swtpm:port=2521 --init-import-key --import-pub "$W/A2.pem")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'already holds a key' <<< "$out" && P "a second init is refused (exit $rc)" || F "a second init was not refused: $out"
 fp1="$(fp "$W/A.pem")"
 out="$(seal swtpm:port=2521 --init-import-key --replace-import-key --import-pub "$W/A3.pem")"
 [ "$(fp "$W/A3.pem")" != "$fp1" ] && P "--replace-import-key makes a different key" || F "replace kept the same key"
@@ -47,18 +47,18 @@ seal swtpm:port=2531 --init-import-key --import-pub "$W/B.pem" >/dev/null || F "
 
 hdr "2  a blob for this TPM decrypts (then the script looks for the card)"
 enc "$APUB" "$W/a.blob"
-out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-blob "$W/a.blob")"
-grep -q 'PIN decrypted by the TPM' <<< "$out" && grep -q 'no card DENK0000001 attached' <<< "$out" \
+out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-blob "$W/a.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'PIN decrypted by the TPM' <<< "$out" && grep -q 'no card DENK0000001 attached' <<< "$out" \
   && P "decrypted by the TPM, then stopped at the card check (no card in CI)" || F "unexpected: $out"
 grep -qF "$PIN" <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"
 
 hdr "3  wrong or altered blobs are refused before any card is looked at"
 enc "$W/B.pem" "$W/b.blob"
-out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-blob "$W/b.blob")"
-grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "a blob for TPM B is refused on A, before the card check" || F "B's blob: $out"
+out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-blob "$W/b.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "a blob for TPM B is refused on A, before the card check (exit $rc)" || F "B's blob: $out"
 python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/a.blob" "$W/bad.blob"
-out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-blob "$W/bad.blob")"
-grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "an altered blob is refused before the card check" || F "altered blob: $out"
+out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
+[ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "an altered blob is refused before the card check (exit $rc)" || F "altered blob: $out"
 
 echo; echo "pin-import-swtpm: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
