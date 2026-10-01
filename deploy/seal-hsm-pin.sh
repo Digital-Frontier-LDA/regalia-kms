@@ -4,6 +4,10 @@
 # with the card attached, typing the PIN from the sealed paper PIN card.
 #
 #   sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7+11 [--retries 10] [--replace]
+#   sudo deploy/seal-hsm-pin.sh --id pico-staging --serial ESP41D722E2 --pcrs 7+11   (Pico HSM: staging only)
+#   sudo deploy/seal-hsm-pin.sh --id yubikey-site-a --yubikey 36345471 --pcrs 7+11 [--retries 3]
+#       the same for the PIV PIN of a YubiKey the KMS uses unattended (ADR-0002 D2; touch never): its
+#       counter is read from PIV metadata (ykman), the PIN is tested through ykcs11.
 #
 # What it does, and refuses:
 #   1. the credential is named "<id>.pin" INSIDE the blob. systemd checks that embedded name against
@@ -38,7 +42,7 @@
 # TPM cannot be production). The record then says BENCH. REGALIA_CREDSTORE overrides the credstore
 # directory, for tests.
 set -uo pipefail
-ID=""; SERIAL=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=10
+ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
 CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
 fail(){ printf 'seal-hsm-pin: FAIL: %s\n' "$*" >&2; exit 1; }
@@ -49,6 +53,7 @@ INIT_IMPORT=0; FROM_BLOB=""; IMPORT_HANDLE="0x81000101"; IMPORT_PUB="/root/regal
 need(){ [ $# -ge 2 ] && [ -n "$2" ] || fail "$1 needs a value"; }
 while [ $# -gt 0 ]; do case "$1" in
   --id) need "$@"; ID="$2"; shift 2;; --serial) need "$@"; SERIAL="$2"; shift 2;; --pcrs) need "$@"; PCRS="$2"; shift 2;;
+  --yubikey) need "$@"; YUBIKEY="$2"; shift 2;;
   --replace) REPLACE=1; shift;; --bench-host-key) BENCH=1; shift;; --retries) need "$@"; RETRIES="$2"; shift 2;;
   --init-import-key) INIT_IMPORT=1; shift;; --replace-import-key) REPLACE_IMPORT=1; shift;;
   --from-blob) need "$@"; FROM_BLOB="$2"; shift 2;; --import-handle) need "$@"; IMPORT_HANDLE="$2"; shift 2;;
@@ -101,8 +106,23 @@ REC
 fi
 
 [[ "$ID" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || fail "--id must be lower-case words joined by '-', e.g. hsm-site-a"
-[[ "$SERIAL" =~ ^DENK[0-9]{7}$ ]] || fail "--serial must be a Nitrokey serial like DENK0404144"
-[[ "$RETRIES" =~ ^([1-9]|1[0-5])$ ]] || fail "--retries is the card's configured user-PIN counter, 1-15"
+# Two devices: a Nitrokey HSM (--serial DENK…, PIN tested through OpenSC) or a YubiKey whose PIV PIN
+# the KMS uses unattended (--yubikey <serial>, PIN tested through ykcs11). Same sealing either way.
+if [ -n "$YUBIKEY" ]; then
+  [ -z "$SERIAL" ] || fail "--serial (Nitrokey) and --yubikey are exclusive: one device per credential"
+  [[ "$YUBIKEY" =~ ^[0-9]{7,10}$ ]] || fail "--yubikey must be a YubiKey serial, e.g. 36345471"
+  KIND=yubikey; SERIAL="$YUBIKEY"; RETRIES="${RETRIES:-3}"
+  MODULE="${YKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/libykcs11.so}"
+  [[ "$RETRIES" =~ ^([1-9]|1[0-5])$ ]] || fail "--retries is the YubiKey's PIV PIN counter, 1-15"
+else
+  # A Nitrokey HSM 2 (production, ADR-0002 D1) or a Pico HSM (staging only: the same SmartCard-HSM
+  # applet and PIN/counter commands, so the same checks apply; its serial is 11 upper-case hex/letters).
+  if [[ "$SERIAL" =~ ^DENK[0-9]{7}$ ]]; then KIND=nitrokey
+  elif [[ "$SERIAL" =~ ^[0-9A-Z]{11}$ ]]; then KIND=pico; say "STAGING: $SERIAL is a Pico HSM; production PINs belong to a Nitrokey (ADR-0002 D1)."
+  else fail "--serial must be a Nitrokey (DENK0404144) or Pico HSM (ESP41D722E2) serial, or use --yubikey <serial>"; fi
+  RETRIES="${RETRIES:-10}"
+  [[ "$RETRIES" =~ ^([1-9]|1[0-5])$ ]] || fail "--retries is the card's configured user-PIN counter, 1-15"
+fi
 if [ "$BENCH" = 1 ]; then
   [ -z "$PCRS" ] || fail "--bench-host-key and --pcrs are exclusive: the host key has no PCR binding"
   KEYARGS=(--with-key=host); say "BENCH: sealing with the host key, NOT the TPM. This credential is not production."
@@ -112,6 +132,10 @@ else
 fi
 [ "$(id -u)" = 0 ] || fail "run as root (sudo): systemd-creds and the credstore need it"
 for t in systemd-creds opensc-tool pkcs11-tool sha256sum; do command -v "$t" >/dev/null || fail "$t is required"; done
+if [ "$KIND" = yubikey ]; then
+  command -v ykman >/dev/null || fail "ykman is required for --yubikey (yubikey-manager)"
+  [ -r "$MODULE" ] || fail "ykcs11 is required for --yubikey ($MODULE; package ykcs11, or set YKCS11_MODULE)"
+fi
 if [ -n "$FROM_BLOB" ]; then
   [ -r "$FROM_BLOB" ] || fail "--from-blob: cannot read $FROM_BLOB"
   command -v tpm2_rsadecrypt >/dev/null || fail "tpm2_rsadecrypt is required for --from-blob (tpm2-tools)"
@@ -121,6 +145,13 @@ NAME="$ID.pin"; DEST="$CREDSTORE/regalia-kms-$ID.pin"
 if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace to rotate it (the old one is kept)"; fi
 
 # ---- the card: attached, the right serial, a full counter --------------------------------------------
+if [ "$KIND" = yubikey ]; then
+  ykman list --serials 2>/dev/null | grep -qx "$SERIAL" || fail "no YubiKey $SERIAL attached (ykman list --serials)"
+  # PIN metadata (firmware 5.3+): read without verifying anything, so it spends no try.
+  tries(){ ykman --device "$SERIAL" piv info 2>/dev/null | sed -n 's/^PIN tries remaining: *\([0-9]*\)\/.*/\1/p'; }
+  reader="ykman --device $SERIAL"
+  slot="$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | awk -v s="#$SERIAL" '/^Slot [0-9]+ \(0x/{sl=$3} index($0,s){gsub(/[():]/,"",sl); print sl; exit}')"
+else
 reader=""; while read -r line; do
   case "$line" in *"($SERIAL"*) [ -z "$reader" ] || fail "$SERIAL appears in more than one reader"; reader="$(awk '{print $1}' <<< "$line")";; esac
 done < <(opensc-tool -l 2>/dev/null | grep -E '^[0-9]+[[:space:]]+Yes[[:space:]]' || true)
@@ -128,8 +159,9 @@ done < <(opensc-tool -l 2>/dev/null | grep -E '^[0-9]+[[:space:]]+Yes[[:space:]]
 # The count is the LOW NIBBLE of 63Cx, in hex: a 10-try card answers 63CA. Printed in decimal.
 tries(){ local x; x="$(opensc-tool --reader "$reader" -s "00 A4 04 00 0B E8 2B 06 01 04 01 81 C3 1F 02 01 00" -s "00 20 00 81" 2>&1 \
   | grep -oE 'SW1=0x63, SW2=0xC[0-9A-F]' | tail -1 | sed 's/.*0xC//')"; [ -n "$x" ] && printf '%d' "0x$x"; }
-t="$(tries)"; [ "$t" = "$RETRIES" ] || fail "$SERIAL has ${t:-an unreadable number of} user-PIN tries left, not its full $RETRIES: someone has tried PINs (or pass the card's real --retries); investigate before sealing"
 slot="$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | sed -n "s/^Slot [0-9]* (\(0x[0-9a-f]*\)): .*($SERIAL.*/\1/p" | head -1)"
+fi
+t="$(tries)"; [ "$t" = "$RETRIES" ] || fail "$SERIAL has ${t:-an unreadable number of} user-PIN tries left, not its full $RETRIES: someone has tried PINs (or pass the card's real --retries); investigate before sealing"
 [ -n "$slot" ] || fail "PKCS#11 cannot see $SERIAL"
 say "card $SERIAL: reader $reader, PKCS#11 slot $slot, $t tries left (full)"
 
@@ -148,7 +180,11 @@ elif [ -t 0 ]; then
 else
   IFS= read -r PIN || true
 fi
-[[ "$PIN" =~ ^[0-9]{6,16}$ ]] || fail "a SmartCard-HSM user PIN here is 6-16 digits; nothing was sealed"
+if [ "$KIND" = yubikey ]; then
+  [[ "$PIN" =~ ^[0-9]{6,8}$ ]] || fail "a YubiKey PIV PIN here is 6-8 digits; nothing was sealed"
+else
+  [[ "$PIN" =~ ^[0-9]{6,16}$ ]] || fail "a SmartCard-HSM user PIN here is 6-16 digits; nothing was sealed"
+fi
 if ! err="$(PKCS11_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$slot" --login --pin env:PKCS11_PIN --list-objects 2>&1 >/dev/null)"; then
   # Report what the counter SAYS, not what a failure usually means: OpenSC refuses some PINs itself
   # (e.g. CKR_DATA_LEN_RANGE, the wrong length for this card) without the card ever seeing them.
@@ -177,7 +213,7 @@ SEALED
   credential id : $NAME
   file          : $DEST
   sha256        : $(sha256sum "$DEST" | cut -d' ' -f1)
-  card          : $SERIAL
+  device        : $KIND $SERIAL
   key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "tpm2, PCRs $PCRS")
   sealed at     : $(date -u +%FT%TZ)
 Service drop-in line (/etc/systemd/system/regalia-kms.service.d/credentials.conf):

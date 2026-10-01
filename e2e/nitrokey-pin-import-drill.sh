@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nitrokey-pin-import-drill.sh — the PIN reaches a host's TPM ENCRYPTED, never typed or carried in
+# nitrokey-pin-import-drill.sh — (Nitrokey HSM PIN, or a YubiKey's PIV PIN) the PIN reaches a host's TPM ENCRYPTED, never typed or carried in
 # clear (ADR-0002 D21): seal-hsm-pin.sh --init-import-key on "host A", the ceremony-side encryption
 # (openssl RSA-OAEP SHA-256, exactly what step 0 does), then seal-hsm-pin.sh --from-blob on host A
 # against a REAL Nitrokey. Two software TPMs (swtpm) stand in for two hosts' TPMs; the sealing itself
@@ -13,7 +13,9 @@
 #   D  --init-import-key refuses to replace an existing key without --replace-import-key
 # The card keeps its PIN and contents; its counter is checked at full before and after.
 set -uo pipefail
-SERIAL="${1:?serial, e.g. DENK0404144}"; RETRIES="${2:?the full user-PIN counter of the card, e.g. 3}"
+SERIAL="${1:?serial: a Nitrokey (DENK0404144) or a YubiKey (36345471)}"; RETRIES="${2:?the full PIN counter of the device, e.g. 3}"
+# A Nitrokey serial selects the HSM path; a numeric one selects a YubiKey's PIV PIN (--yubikey).
+case "$SERIAL" in DENK*) DEV=(--serial "$SERIAL");; *) DEV=(--yubikey "$SERIAL");; esac
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
 pass=0; fail=0
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; pass=$((pass+1)); }
@@ -33,7 +35,9 @@ tpm(){ local name="$1" port="$2"; mkdir -p "$W/$name"
 tpm A 2421; tpm B 2431; sleep 1
 TA="swtpm:port=2421"; TB="swtpm:port=2431"
 seal(){ local tcti="$1"; shift; sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$CRED" "$SEAL" "$@" 2>&1; }
-tries(){ local r; r="$(opensc-tool -l 2>/dev/null | awk -v s="($SERIAL" 'index($0,s){print $1; exit}')"
+tries(){ local r
+  if [ "${DEV[0]}" = --yubikey ]; then ykman --device "$SERIAL" piv info 2>/dev/null | sed -n 's/^PIN tries remaining: *\([0-9]*\)\/.*/\1/p'; return; fi
+  r="$(opensc-tool -l 2>/dev/null | awk -v s="($SERIAL" 'index($0,s){print $1; exit}')"
   opensc-tool --reader "$r" -s "00 A4 04 00 0B E8 2B 06 01 04 01 81 C3 1F 02 01 00" -s "00 20 00 81" 2>&1 \
   | grep -oE 'SW1=0x63, SW2=0xC[0-9A-F]' | tail -1 | sed 's/.*0xC//' | xargs -I{} printf '%d' 0x{}; }
 encrypt(){ printf '%s' "$NK_PIN" | openssl pkeyutl -encrypt -pubin -inkey "$1" -pkeyopt rsa_padding_mode:oaep \
@@ -54,7 +58,7 @@ encrypt "$W/A.pub.pem" "$W/pin-A.blob" && encrypt "$W/B.pub.pem" "$W/pin-B.blob"
 grep -qF "$NK_PIN" "$W/pin-A.blob" && F "the PIN is visible in the blob" || P "the blob does not contain the PIN"
 
 hdr "B: a blob made for another host's TPM is refused"
-out="$(seal "$TA" --id drill-import --serial "$SERIAL" --retries "$RETRIES" --bench-host-key --from-blob "$W/pin-B.blob")"; rc=$?
+out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-host-key --from-blob "$W/pin-B.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && P "refused: $(grep -o 'could not decrypt[^:]*' <<< "$out" | head -1)" || F "a blob for B was accepted on A: $out"
 [ "$(tries)" = "$RETRIES" ] && P "no card try was spent" || F "a try was spent: $(tries) left"
 
@@ -62,12 +66,12 @@ hdr "C: an altered blob is refused"
 # Flip one byte unconditionally (XOR with 0xFF), and prove the copy now differs.
 python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
 cmp -s "$W/pin-A.blob" "$W/bad.blob" && F "the altered blob is identical to the original"
-out="$(seal "$TA" --id drill-import --serial "$SERIAL" --retries "$RETRIES" --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
+out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && P "an altered blob is refused" || F "an altered blob was accepted: $out"
 [ "$(tries)" = "$RETRIES" ] && P "no card try was spent" || F "a try was spent: $(tries) left"
 
 hdr "A: the right blob is decrypted by the TPM, tested on the card, sealed and read back"
-out="$(seal "$TA" --id drill-import --serial "$SERIAL" --retries "$RETRIES" --bench-host-key --from-blob "$W/pin-A.blob")"; rc=$?
+out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-host-key --from-blob "$W/pin-A.blob")"; rc=$?
 [ "$rc" = 0 ] && grep -q '^SEALED' <<< "$out" && P "sealed from the blob" || F "seal from blob failed: $out"
 grep -q 'PIN decrypted by the TPM' <<< "$out" && P "the PIN came from the TPM, not a prompt" || F "no TPM decryption reported"
 back="$(sudo systemd-creds decrypt --name=drill-import.pin "$CRED/regalia-kms-drill-import.pin" - 2>/dev/null | sha256sum)"
