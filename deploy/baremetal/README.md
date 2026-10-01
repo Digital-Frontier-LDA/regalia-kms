@@ -6,9 +6,10 @@ guest. Three DL360 Gen9 with the HPE TPM 2.0 module: Lisbon, Porto, and a spare 
 Commissioning has two halves:
 - **Firmware and hardware** (below): BIOS/RBSU and iLO settings the operating system cannot read.
   They are done at the console and **attested** in the signed evidence.
-- **The running host:** `sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 <hex> --evidence E.json`
-  **measures** the platform, TPM and OS controls. It exits 1 unless every measured control is true AND
-  the evidence agrees (evidence never lowers the bar).
+- **The running host:** `host_probe.py` **measures** the platform, TPM and OS controls, and checks
+  the signed evidence (`deploy/baremetal/evidence.py`: exact schema, every firmware setting attested,
+  signed by the commissioning evidence key, which is trusted only by its recorded SHA-256). It exits 1
+  unless every measured control is true AND the evidence is valid and agrees (section 5).
 
 ## 1. Intake of a used server (before trusting it)
 
@@ -40,11 +41,17 @@ Commissioning has two halves:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
   `tpm2-device=auto` in `/etc/crypttab`. Keep a recovery passphrase in the escrow. Measured:
   `root_disk_tpm_unlocked`.
-- **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`),
-  so the regalia-kms binary is in the PCR the PIN is sealed to. Measured: `ima_policy_loaded`, which
-  also requires `/usr/local/sbin/regalia-kms` in the IMA measurement log (start the service first).
-- **Signed PCR policies** (systemd-measure / systemd-pcrlock), so a signed kernel or KMS update doesn't
-  strand the sealed PIN.
+- **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
+  This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
+  appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
+  `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/local/sbin/regalia-kms` to
+  carry the digest of the binary there now (start the service first).
+- **The PIN is NOT sealed to the IMA PCR (10).** systemd decrypts `LoadCredentialEncrypted` before it
+  executes regalia-kms, so a policy expecting that binary's measurement could never unseal at an
+  unattended start; PCR 10 also depends on the order everything else ran in. Seal the PIN and the
+  disk to the boot chain instead: **PCR 7** (Secure Boot state and keys) plus a **signed policy for
+  PCR 11** (the unified kernel image, systemd-measure), so a signed kernel update does not strand them.
+  The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by the same probes as the Proxmox guest.
 - **Token clients root-only.** Unlike the guest, this host seals and re-seals its own PINs, so
@@ -59,9 +66,9 @@ Commissioning has two halves:
 1. **PIN import key:** `sudo deploy/seal-hsm-pin.sh --init-import-key`. Copy the printed fingerprint
    **by hand** at the console (the ceremony checks it) and record it in the evidence as
    `host.pin_import_key_sha256`. Measured: `pin_import_key_present`, which compares the key at the
-   handle with that recorded value and checks its template (RSA-3072, fixedtpm, fixedparent,
-   sensitivedataorigin, decrypt, no sign). Any other key at the handle fails.
-2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7+… --from-blob
+   handle with that recorded value and checks its template: RSA-3072 with exactly
+   fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt. Any other key at the handle fails.
+2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7+11 --from-blob
    pin-hsm_<x>.blob`, and `--yubikey <serial> … --from-blob pin-yubikey_<x>.blob` for the KMS YubiKey
    (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
@@ -69,6 +76,15 @@ Commissioning has two halves:
 
 ## 5. Pass criteria
 
-`host_probe.py --import-key-sha256 <recorded> --evidence E.json` exits 0 (every measured control
-true, and the evidence agrees with it), and an unattended
+Sign the evidence with the commissioning evidence key (`openssl dgst -sha256 -sign key.pem -out
+E.json.sig E.json`), then:
+
+```sh
+sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+  --evidence-key commissioning-p256.pem --evidence-key-sha256 <recorded fingerprint>
+```
+
+It must exit 0: every measured control true; the evidence complete, signed by the recorded key,
+attesting every firmware setting, and agreeing with every measurement (including the import key's
+fingerprint). Then an unattended
 **reboot** brings the KMS back with no one present (the disk and the PIN both unseal from the TPM).

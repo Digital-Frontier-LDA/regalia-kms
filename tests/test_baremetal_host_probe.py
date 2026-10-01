@@ -2,6 +2,8 @@
 platform control true, each control broken on its own measures false with a reason, and evidence that
 claims a control the host lacks is refused (ADR-0002 D21, regalia#46)."""
 import base64
+import shutil
+import subprocess
 import hashlib
 import io
 import json
@@ -11,7 +13,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from deploy.baremetal import host_probe
+from deploy.baremetal import evidence, host_probe
 
 SB_ON = b"\x06\x00\x00\x00\x01"
 DER = b"stand-in DER public key of the import key"
@@ -29,6 +31,8 @@ exponent: 65537
 bits: 3072
 """
 USB = "/sys/bus/usb/devices"
+KMS_BYTES = b"stand-in regalia-kms executable"
+KMS_SHA256 = hashlib.sha256(KMS_BYTES).hexdigest()
 
 
 class FakeHost:
@@ -37,11 +41,11 @@ class FakeHost:
             "/sys/class/tpm/tpm0/tpm_version_major": "2\n",
             "/etc/crypttab": "# <name> <device> <key> <options>\nroot_crypt UUID=abcd none tpm2-device=auto,tpm2-pcrs=7\n",
             "/sys/kernel/security/ima/policy": "dont_measure fsmagic=0x9fa0\nmeasure func=BPRM_CHECK mask=MAY_EXEC\n",
-            host_probe.IMA_LOG: "10 ab ima-ng sha256:cd /usr/bin/bash\n10 ef ima-ng sha256:01 %s\n" % host_probe.KMS_BINARY,
+            host_probe.IMA_LOG: "10 ab ima-ng sha256:cd /usr/bin/bash\n10 ef ima-ng sha256:%s %s\n" % (KMS_SHA256, host_probe.KMS_BINARY),
             USB + "/1-1.4/idVendor": "20a0\n", USB + "/1-1.4/idProduct": "4230\n",
             USB + "/1-1/idVendor": "1d6b\n", USB + "/1-1/idProduct": "0002\n",
         }
-        self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON}
+        self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON, host_probe.KMS_BINARY: KMS_BYTES}
         self.dirs = {"/sys/class/tpm/tpm0/pcr-sha256": [str(i) for i in range(24)], USB: ["1-1", "1-1.4", "usb1"]}
         self.paths = {"/sys/firmware/efi", "/dev/tpmrm0"}
         self.tools = {"tpm2_readpublic", "opensc-tool", "pkcs11-tool"}
@@ -160,35 +164,116 @@ class HostProbe(unittest.TestCase):
         h.stats["/usr/bin/pkcs11-tool"] = (1000, 0, 0o100700)
         self.assertFalse(host_probe.token_clients_root_only(h)[0])
 
-    def test_evidence_mode_still_requires_every_control(self):
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-            json.dump({"host": {"pin_import_key_sha256": FP}}, f)   # claims nothing the host lacks
-        self.addCleanup(os.unlink, f.name)
-        everything = {n: {"value": True, "why": ""} for n in host_probe.MEASURED}
-        with mock.patch.object(host_probe, "measure", return_value=everything), redirect_stdout(io.StringIO()):
-            self.assertEqual(host_probe.main(["--evidence", f.name], host=FakeHost()), 0)
-        one_missing = dict(everything, uefi_boot={"value": False, "why": "legacy BIOS"})
-        with mock.patch.object(host_probe, "measure", return_value=one_missing), redirect_stdout(io.StringIO()):
-            self.assertEqual(host_probe.main(["--evidence", f.name], host=FakeHost()), 1,
-                             "a host missing a control passed because the evidence was silent about it")
-
     def test_the_token_usb_path_is_reported(self):
         self.assertIn("1-1.4", host_probe.hsm_token(FakeHost())[1])
 
-    def test_evidence_claiming_a_missing_control_is_refused(self):
+    def test_a_stale_ima_entry_for_a_replaced_binary_fails(self):
         h = FakeHost()
-        h.paths.discard("/sys/firmware/efi")
-        measured = {n: dict(zip(("value", "why"), host_probe.PROBES[n](h))) for n in host_probe.PLATFORM}
-        problems = host_probe.compare(
-            {**measured, **{n: {"value": True, "why": ""} for n in host_probe.guest_probe.MEASURED}},
-            {"host": {"uefi_boot": True, "secure_boot_enabled": True}})
-        self.assertEqual(len(problems), 1)
-        self.assertIn("uefi_boot", problems[0])
+        h.bytes[host_probe.KMS_BINARY] = b"replaced after it last ran"
+        value, why = host_probe.ima(h)
+        self.assertFalse(value)
+        self.assertIn("replaced after it last ran", why)
+        h.files[host_probe.IMA_LOG] += "10 aa ima-ng sha256:%s %s\n" % (
+            hashlib.sha256(b"replaced after it last ran").hexdigest(), host_probe.KMS_BINARY)
+        self.assertTrue(host_probe.ima(h)[0], "the newest entry matches the current bytes")
+
+    def test_crypttab_tpm2_device_must_be_an_exact_nonempty_option(self):
+        for opts in ("tpm2-device=", "x-tpm2-device=disabled", "luks,discard"):
+            with self.subTest(opts=opts):
+                h = FakeHost()
+                h.files["/etc/crypttab"] = "root_crypt UUID=abcd none %s\n" % opts
+                self.assertFalse(host_probe.root_unlock(h)[0])
+
+    def test_the_import_key_needs_exactly_the_init_template_attributes(self):
+        for attrs in ("fixedtpm|fixedparent|sensitivedataorigin|decrypt",
+                      "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt"):
+            with self.subTest(attrs=attrs):
+                h = FakeHost()
+                h.runs[("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)] = (
+                    0, IMPORT_YAML.replace("fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt", attrs))
+                self.assertFalse(host_probe.import_key(h, FP[:16])[0])
 
     def test_firmware_only_settings_are_attested_not_measured(self):
         for n in ("ilo_isolated_or_disabled", "ac_power_recovery", "chassis_intrusion_armed", "used_hardware_intake"):
             self.assertIn(n, host_probe.UNMEASURED)
             self.assertNotIn(n, host_probe.MEASURED)
+
+
+@unittest.skipUnless(shutil.which("openssl"), "needs openssl")
+class SignedEvidence(unittest.TestCase):
+    """The commissioning pass criterion: measured controls AND signed, complete, agreeing evidence."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        self.key, self.pub = os.path.join(self.d, "k.pem"), os.path.join(self.d, "pub.pem")
+        subprocess.run(["openssl", "genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", self.key],
+                       check=True, capture_output=True)
+        subprocess.run(["openssl", "pkey", "-in", self.key, "-pubout", "-out", self.pub], check=True, capture_output=True)
+        der = subprocess.run(["openssl", "pkey", "-pubin", "-in", self.pub, "-outform", "DER"], check=True,
+                             capture_output=True).stdout
+        self.key_sha = hashlib.sha256(der).hexdigest()
+        self.everything = {n: {"value": True, "why": ""} for n in host_probe.MEASURED}
+
+    def doc(self, **host_overrides):
+        host = {n: True for n in host_probe.MEASURED}
+        host.update({n: True for n in evidence.ATTESTED})
+        host.update(pin_import_key_sha256=FP, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7+11")
+        host.update(host_overrides)
+        return {"schema": evidence.SCHEMA, "site": "site-a", "host_serial": "CZJ1234567",
+                "captured_at": "2026-09-30T10:00:00Z", "host": host}
+
+    def write(self, doc):
+        path = os.path.join(self.d, "e.json")
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        subprocess.run(["openssl", "dgst", "-sha256", "-sign", self.key, "-out", path + ".sig", path], check=True)
+        return path, path + ".sig"
+
+    def run_probe(self, path, sig, measured=None, key_sha=None):
+        args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub,
+                "--evidence-key-sha256", key_sha or self.key_sha]
+        with mock.patch.object(host_probe, "measure", return_value=measured or self.everything), \
+                redirect_stdout(io.StringIO()) as out:
+            rc = host_probe.main(args, host=FakeHost())
+        return rc, json.loads(out.getvalue())
+
+    def test_complete_signed_agreeing_evidence_passes(self):
+        rc, report = self.run_probe(*self.write(self.doc()))
+        self.assertEqual(rc, 0, report.get("evidence_problems"))
+
+    def test_evidence_mode_still_requires_every_control(self):
+        missing = dict(self.everything, uefi_boot={"value": False, "why": "legacy BIOS"})
+        rc, report = self.run_probe(*self.write(self.doc()), measured=missing)
+        self.assertEqual(rc, 1)
+        self.assertTrue(any("uefi_boot" in p for p in report["evidence_problems"]))
+
+    def test_refusals(self):
+        full = self.doc()
+        cases = {
+            "an empty document": ({}, "fields mismatch"),
+            "an unattested firmware setting": (self.doc(chassis_intrusion_armed=False), "chassis_intrusion_armed"),
+            "a missing firmware setting": (dict(full, host={k: v for k, v in full["host"].items()
+                                                           if k != "ilo_isolated_or_disabled"}), "missing"),
+            "a bad import key record": (self.doc(pin_import_key_sha256="abc"), "64 lowercase hex"),
+            "a PIN sealed to the IMA PCR": (self.doc(credential_tpm2_pcrs="7+10"), "PCR 10"),
+        }
+        for label, (doc, why) in cases.items():
+            with self.subTest(label):
+                rc, report = self.run_probe(*self.write(doc))
+                self.assertEqual(rc, 1)
+                self.assertTrue(any(why in p for p in report["evidence_problems"]), report["evidence_problems"])
+
+    def test_an_altered_or_foreign_signed_document_is_refused(self):
+        path, sig = self.write(self.doc())
+        with open(path, "a") as f:
+            f.write(" ")
+        rc, report = self.run_probe(path, sig)
+        self.assertEqual(rc, 1)
+        self.assertIn("signature does not verify", " ".join(report["evidence_problems"]))
+        rc, report = self.run_probe(*self.write(self.doc()), key_sha="0" * 64)
+        self.assertEqual(rc, 1)
+        self.assertIn("recorded fingerprint", " ".join(report["evidence_problems"]))
 
 
 if __name__ == "__main__":

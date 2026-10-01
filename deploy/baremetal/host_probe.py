@@ -3,13 +3,15 @@
 
 The KMS runs on dedicated bare metal with a discrete TPM 2.0 (regalia#46: HPE DL360 Gen9). This probe
 reads the running host and reports each control with the reason for its verdict; with an evidence
-file it also refuses one that claims a control the host does not have. Same contract as
+file it also checks the SIGNED commissioning evidence (deploy/baremetal/evidence.py: schema,
+signature, every attested firmware setting) and refuses one that disagrees with the host. Same contract as
 deploy/proxmox/guest_probe.py, whose OS probes (core dumps, hibernation, swap, an unprivileged service)
 it reuses; its token-client probe is replaced (below), because on bare metal the host itself seals and
 re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 
-    sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 HEX                 # exit 1 unless every control is true
-    sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 HEX --evidence E.json   # and E agrees
+    sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
+    sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+        --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX      # the commissioning pass criterion
 
 PLATFORM AND TPM, measured:
   uefi_boot                 booted through UEFI (/sys/firmware/efi): TPM 2.0 measured boot needs it
@@ -19,24 +21,29 @@ PLATFORM AND TPM, measured:
   tpm_sha256_bank           the TPM exposes an active SHA-256 PCR bank (/sys/class/tpm/tpm0/pcr-sha256)
   root_disk_tpm_unlocked    a dm-crypt device is among the root filesystem's block-device ancestors
                             (lsblk -s: LUKS directly or under LVM), and its crypttab entry unlocks with
-                            the TPM (tpm2-device=)
+                            the TPM (a tpm2-device=<value> option, parsed exactly)
   ima_policy_loaded         the IMA policy has an executable-measurement rule (measure func=BPRM_CHECK,
-                            or MMAP_CHECK with MAY_EXEC), AND the regalia-kms binary is in the IMA
-                            measurement log: the log, not the policy text, proves it was measured
+                            or MMAP_CHECK with MAY_EXEC), AND the newest IMA log entry for the
+                            regalia-kms binary carries the digest of the bytes at that path NOW (a
+                            stale entry for a since-replaced binary fails). For attestation (quotes):
+                            the PIN is not sealed to the IMA PCR (README, section 3)
   pin_import_key_present    the persistent key at the import handle (default 0x81000101) IS the one
                             recorded at --init-import-key: the sha256 of its DER public key starts with
                             --import-key-sha256 (or the evidence's host.pin_import_key_sha256), and it
-                            is RSA-3072 with fixedtpm|fixedparent|sensitivedataorigin|decrypt, no sign
+                            is RSA-3072 with EXACTLY the attributes --init-import-key sets:
+                            fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt
   hsm_token_attached        a Nitrokey HSM 2 (USB 20a0:4230) is on the bus (sysfs; no token client
                             needed); its USB path is reported so the evidence can pin the INTERNAL port
   token_clients_root_only   replaces the guest's direct_token_clients_absent: every token client tool on
                             PATH is root:root and not executable by group or others, so the KMS user
                             cannot run them, and every process connected to pcscd runs the KMS binary
 
-ATTESTED, NOT MEASURED (firmware settings the OS cannot read; they stay in the signed evidence):
-  ilo_isolated_or_disabled, ac_power_recovery, chassis_intrusion_armed, used_hardware_intake.
+ATTESTED, NOT MEASURED (what the OS cannot read; in the signed evidence, deploy/baremetal/evidence.py):
+  ilo_isolated_or_disabled, ac_power_recovery, chassis_intrusion_armed, used_hardware_intake,
+  runtime_credentials_excluded_from_backup; and the records the measurements are checked against:
+  pin_import_key_sha256, hsm_usb_path, credential_tpm2_pcrs (never PCR 10).
 
-Standard library only, plus the tpm2-tools and opensc binaries the host already needs.
+Standard library only, plus the tpm2-tools and openssl binaries the host already needs.
 """
 import argparse
 import base64
@@ -49,19 +56,20 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "proxmox"))
 import guest_probe  # noqa: E402  (the same Host and the five OS probes)
+sys.path.insert(0, HERE)
+import evidence as evidence_mod  # noqa: E402
 
 SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 IMPORT_HANDLE = os.environ.get("REGALIA_PIN_IMPORT_HANDLE", "0x81000101")
 IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = guest_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
 NITROKEY_HSM = ("20a0", "4230")
-IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "decrypt"}
+IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "decrypt"}
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank",
             "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present", "hsm_token_attached",
             "token_clients_root_only")
 MEASURED = PLATFORM + tuple(n for n in guest_probe.MEASURED if n != "direct_token_clients_absent")
-UNMEASURED = ("ilo_isolated_or_disabled", "ac_power_recovery", "chassis_intrusion_armed",
-              "used_hardware_intake") + guest_probe.UNMEASURED
+UNMEASURED = evidence_mod.ATTESTED + evidence_mod.RECORDS
 
 
 class Host(guest_probe.Host):
@@ -129,7 +137,8 @@ def root_unlock(host):
     for name in crypts:
         if name not in entries:
             return False, "%s (under the root filesystem) is not listed in /etc/crypttab" % name
-        if "tpm2-device=" not in entries[name]:
+        opts = dict((o.split("=", 1) + [""])[:2] for o in entries[name].split(",") if o)
+        if not opts.get("tpm2-device"):
             return False, "%s is in crypttab but not TPM-unlocked (options: %s)" % (name, entries[name] or "none")
     return True, "%s unlocks with the TPM (%s)" % (", ".join(crypts), "; ".join(entries[n] for n in crypts))
 
@@ -148,11 +157,27 @@ def ima(host):
             exec_rules.append("%s, PCR %s" % (opts["func"], opts.get("pcr", "10")))
     if not exec_rules:
         return False, "the IMA policy has no executable-measurement rule (measure func=BPRM_CHECK)"
-    log = host.read(IMA_LOG) or ""
-    if not any(l.rstrip().endswith(" " + KMS_BINARY) for l in log.splitlines()):
+    # ascii_runtime_measurements: PCR, template hash, template (ima-ng / ima-sig / ima-ngv2), file
+    # digest "[ima:]alg:hex", path. IMA appends a new entry when changed bytes are executed, so the
+    # NEWEST entry for the path is the one that must match the file as it is now.
+    newest = None
+    for line in (host.read(IMA_LOG) or "").splitlines():
+        f = line.split()
+        if len(f) >= 5 and f[2] in ("ima-ng", "ima-sig", "ima-ngv2", "ima-sigv2") and f[4] == KMS_BINARY:
+            newest = f[3].split(":")
+    if not newest:
         return False, "the IMA policy measures executables (%s) but %s is not in the measurement log: " \
             "start regalia-kms, then re-run" % (exec_rules[0], KMS_BINARY)
-    return True, "executables measured (%s); %s is in the IMA log" % (exec_rules[0], KMS_BINARY)
+    alg, logged = newest[-2], newest[-1]
+    current = host.read_bytes(KMS_BINARY)
+    if current is None or alg not in hashlib.algorithms_available:
+        return False, "cannot hash %s (%s) to compare with its IMA entry" % (KMS_BINARY, alg)
+    now = hashlib.new(alg, current).hexdigest()
+    if now != logged:
+        return False, "the newest IMA entry for %s (%s:%s…) is not the binary there now (%s…): it was " \
+            "replaced after it last ran; restart regalia-kms, then re-run" % (KMS_BINARY, alg, logged[:12], now[:12])
+    return True, "executables measured (%s); the running %s is in the IMA log (%s:%s…)" % (
+        exec_rules[0], KMS_BINARY, alg, now[:12])
 
 
 def import_key(host, expected=None):
@@ -164,7 +189,7 @@ def import_key(host, expected=None):
     attrs = set((re.search(r"^attributes:\s*\n\s+value:\s*(\S+)", yaml, re.M) or [None, ""])[1].split("|")) - {""}
     kind = (re.search(r"^type:\s*\n\s+value:\s*(\S+)", yaml, re.M) or [None, "?"])[1]
     bits = (re.search(r"^bits:\s*(\d+)", yaml, re.M) or [None, "?"])[1]
-    if kind != "rsa" or bits != "3072" or not IMPORT_KEY_ATTRS <= attrs or "sign" in attrs:
+    if kind != "rsa" or bits != "3072" or attrs != IMPORT_KEY_ATTRS:
         return False, "the key at %s is not the import key's template (%s-%s, %s)" % (IMPORT_HANDLE, kind, bits, "|".join(sorted(attrs)))
     rc, pem = host.run(["tpm2_readpublic", "-Q", "-c", IMPORT_HANDLE, "-f", "pem", "-o", "/dev/stdout"])
     body = "".join(l for l in pem.splitlines() if l and not l.startswith("-----"))
@@ -222,31 +247,48 @@ def measure(host, import_key_sha256=None):
     return {name: dict(zip(("value", "why"), run(name))) for name in MEASURED}
 
 
-def compare(measured, evidence):
-    claims = dict(evidence.get("host", {}), **evidence.get("guest", {}))
-    return ["evidence claims %s, the host measures false: %s" % (n, measured[n]["why"])
-            for n in MEASURED if claims.get(n) is True and not measured[n]["value"]]
+def compare(measured, host):
+    """Every measured control the evidence records must agree with the host, both ways."""
+    out = ["evidence records %s=%s, the host measures %s: %s" % (n, host.get(n), measured[n]["value"], measured[n]["why"])
+           for n in MEASURED if host.get(n) is not measured[n]["value"]]
+    return out
 
 
-def main(argv=None, host=None):
+def main(argv=None, host=None, run=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--evidence", help="signed evidence JSON whose host section must agree with the host")
-    ap.add_argument("--import-key-sha256", help="the import key fingerprint written down at --init-import-key "
-                    "(at least 16 hex); default: the evidence's host.pin_import_key_sha256")
+    ap.add_argument("--evidence", help="the signed commissioning evidence (deploy/baremetal/evidence.py)")
+    ap.add_argument("--signature", help="its detached signature (openssl dgst -sha256 -sign)")
+    ap.add_argument("--evidence-key", help="the commissioning evidence public key (P-256 PEM)")
+    ap.add_argument("--evidence-key-sha256", help="that key's recorded SHA-256 (DER), from the commissioning record")
+    ap.add_argument("--import-key-sha256", help="without evidence: the import key fingerprint written down at "
+                    "--init-import-key (at least 16 hex)")
     args = ap.parse_args(argv)
     host = host or Host()
-    evidence = None
+    report = {"attested_not_measured": list(UNMEASURED)}
+    problems, want = [], args.import_key_sha256
     if args.evidence:
-        with open(args.evidence, encoding="utf-8") as f:
-            evidence = json.load(f)
-    want = args.import_key_sha256 or (evidence or {}).get("host", {}).get("pin_import_key_sha256")
+        if not (args.signature and args.evidence_key and args.evidence_key_sha256):
+            ap.error("--evidence needs --signature, --evidence-key and --evidence-key-sha256")
+        try:
+            with open(args.evidence, "rb") as f:
+                doc = evidence_mod.load(f.read())
+            ev_host = evidence_mod.validate(doc, MEASURED)
+            evidence_mod.verify_signature(args.evidence, args.signature, args.evidence_key, args.evidence_key_sha256,
+                                          **({"run": run} if run else {}))
+            want = ev_host["pin_import_key_sha256"]
+        except (OSError, evidence_mod.InvalidEvidence) as error:
+            problems.append("evidence REFUSED: %s" % error)
+            ev_host = None
     measured = measure(host, want)
-    report = {"measured": measured, "attested_not_measured": list(UNMEASURED)}
-    if evidence is not None:
-        report["disagreements"] = compare(measured, evidence)
+    report["measured"] = measured
+    if args.evidence:
+        if ev_host is not None:
+            problems += compare(measured, ev_host)
+        report["evidence_problems"] = problems
     print(json.dumps(report, indent=2))
-    # Evidence never lowers the bar: every measured control must be true, AND the evidence must agree.
-    ok = all(v["value"] for v in measured.values()) and not report.get("disagreements")
+    # Evidence never lowers the bar: every measured control must be true, AND, when given, the evidence
+    # must be well-formed, signed by the recorded key, attest every firmware setting, and agree.
+    ok = all(v["value"] for v in measured.values()) and not problems
     return 0 if ok else 1
 
 
