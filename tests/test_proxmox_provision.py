@@ -159,9 +159,6 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(network_probe.expected_ports(config, "unauthorized"), {8443: False, 22: False})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class DeprecationWarningOnEveryRun(unittest.TestCase):
     """provision.py is deprecated (ADR-0002 D22, #55): every invocation says so, including --help
@@ -182,3 +179,7 @@ class DeprecationWarningOnEveryRun(unittest.TestCase):
         for argv in (["--help"], [], ["--no-such-option"]):
             with self.subTest(argv=argv):
                 self.assertIn("DEPRECATED AND UNSUPPORTED", self.run_main(argv))
+
+
+if __name__ == "__main__":
+    unittest.main()
