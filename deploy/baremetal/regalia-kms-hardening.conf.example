@@ -1,0 +1,29 @@
+[Service]
+# Install as /etc/systemd/system/regalia-kms.service.d/hardening.conf on a bare-metal KMS host (#61).
+# It states every setting deploy/baremetal/os_probe.py measures for the unit's sandbox, so the host
+# passes or fails on this file and not on what deploy/systemd/regalia-kms.service happens to carry.
+# Check the result on the host with: systemctl show regalia-kms.service -p <property>
+
+# kms_service_sandboxed
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# kms_capabilities_minimal: an empty assignment is the EMPTY set. Leaving the line out is every
+# capability the kernel knows. The KMS runs as an unprivileged user, listens on a high port and locks
+# its PIN pages within LimitMEMLOCK, so it needs none; a capability added here must also be added to
+# ALLOWED_CAPABILITIES in os_probe.py, as a recorded decision.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# kms_apparmor_enforced: no leading "-". With "-regalia-kms" systemd starts the service UNCONFINED
+# when the profile is not loaded; without it the service refuses to start, which is the point.
+# The profile itself is not shipped yet: it is written against the real service on the lab host,
+# in complain mode first (#61, PoC 1.2), and this control fails until it is loaded and enforcing.
+AppArmorProfile=regalia-kms
