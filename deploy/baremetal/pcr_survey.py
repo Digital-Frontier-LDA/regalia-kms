@@ -16,6 +16,9 @@ must be `same` (the baseline). `classify` then reports, per SHA-256 PCR:
 and refuses a survey whose labels it cannot interpret (two changes between snapshots, or none
 recorded).
 
+Run one survey per boot packaging mode (#65 compares GRUB+initramfs with a signed UKI): each snapshot
+records the packaging mode it found (`grub+initramfs`, `systemd-boot`, or `uki`, from systemd-stub's
+EFI variables) and, on a UKI boot, the sha256 of the selected UKI; a survey mixing modes is refused.
 Each snapshot records the boot ID, the kernel release and command line, Secure Boot state, the system
 firmware version (DMI), the sha256 of the running kernel image, the initramfs and the bootloader
 configuration, and the sha256 of the TPM event log. Nothing secret is read.
@@ -57,11 +60,30 @@ def snapshot(label, root="/"):
         v = _read(p("%s/%d" % (PCR_DIR, n)))
         if v is not None:
             pcrs[str(n)] = v.strip().lower()
-    if not pcrs:
-        raise SystemExit("no SHA-256 PCRs readable at %s: is this a TPM 2.0 host with the SHA-256 bank?" % PCR_DIR)
+    if len(pcrs) != 24:
+        raise SystemExit("read %d of the 24 SHA-256 PCRs at %s: a survey needs all of them (a TPM 2.0 host with "
+                         "the SHA-256 bank active)" % (len(pcrs), PCR_DIR))
     release = platform.release() if root == "/" else (_read(p("/proc/sys/kernel/osrelease")) or "").strip()
     sb = _read(p(SECURE_BOOT), binary=True)
     files = {}
+    # Packaging mode: a unified kernel image (UKI) is one signed EFI binary holding kernel, initramfs
+    # and command line; systemd-stub leaves LoaderEntrySelected / StubInfo EFI variables behind. On a
+    # UKI boot the measured artifact is that binary, so hash it rather than /boot/vmlinuz.
+    efivars = p("/sys/firmware/efi/efivars")
+    names = os.listdir(efivars) if os.path.isdir(efivars) else []
+    stub = any(n.startswith("StubInfo-") for n in names)
+    entry = next((n for n in names if n.startswith("LoaderEntrySelected-")), None)
+    selected = None
+    if entry:
+        raw = _read(os.path.join(efivars, entry), binary=True) or b""
+        selected = raw[4:].decode("utf-16-le", errors="replace").rstrip("\x00") or None
+    packaging = "uki" if stub else ("systemd-boot" if entry else "grub+initramfs")
+    if stub and selected:
+        for c in (p("/boot/efi/EFI/Linux/" + selected), p("/efi/EFI/Linux/" + selected), p("/boot/EFI/Linux/" + selected)):
+            h = _sha(c)
+            if h:
+                files["uki"] = h
+                break
     for name, candidates in BOOT_FILES.items():
         for c in candidates:
             h = _sha(p(c % release if "%s" in c else c))
@@ -75,6 +97,7 @@ def snapshot(label, root="/"):
         "kernel_release": release, "cmdline": (_read(p("/proc/cmdline")) or "").strip(),
         "secure_boot": None if not sb else bool(sb[-1]),
         "firmware_version": (_read(p("/sys/class/dmi/id/bios_version")) or "").strip(),
+        "boot_packaging": packaging, "boot_entry": selected,
         "boot_files_sha256": files, "event_log_sha256": _sha(p(EVENT_LOG)), "pcrs": pcrs,
     }
 
@@ -89,7 +112,13 @@ def classify(snaps):
     for s in snaps:
         if s["label"] not in LABELS:
             raise ValueError("unknown label %r" % s["label"])
-    pcr_ids = sorted(set().union(*(s["pcrs"] for s in snaps)), key=int)
+    for s in snaps:
+        if set(s["pcrs"]) != {str(i) for i in range(24)}:
+            raise ValueError("snapshot %s does not hold all 24 PCRs" % s.get("boot_id"))
+    packs = {s.get("boot_packaging") for s in snaps}
+    if len(packs) > 1:
+        raise ValueError("the survey mixes boot packaging modes %s: survey each mode separately" % sorted(map(str, packs)))
+    pcr_ids = [str(i) for i in range(24)]
     result = {}
     for n in pcr_ids:
         volatile = any(snaps[i]["label"] == "same" and snaps[i]["pcrs"].get(n) != snaps[i - 1]["pcrs"].get(n)
