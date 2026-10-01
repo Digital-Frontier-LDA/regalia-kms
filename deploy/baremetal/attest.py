@@ -1,0 +1,523 @@
+"""Fresh TPM attestation of a bare-metal KMS node, verified by a peer (regalia-kms#65, PoC 5.1/5.4/5.5;
+THREE-SITE-THREAT-MODEL.md S3).
+
+A peer decides whether to help a node boot from a TPM quote. Three things make the quote mean something:
+
+  1  THE KEY IS IN THE KNOWN TPM. The node's Attestation Key (AK) is a restricted ECDSA P-256 signing
+     key: the TPM signs with it only structures it built itself, so a quote cannot be forged by handing
+     the AK a digest. The verifier binds it to the Endorsement Key (EK) recorded at intake with
+     TPM2_MakeCredential / TPM2_ActivateCredential: a secret wrapped to that EK and to the AK's Name
+     comes back only from the TPM that holds both.
+  2  THE QUOTE IS ABOUT THIS BOOT SESSION. Its qualifying data is the SHA-256 of a canonical transcript:
+     node ID, manifest epoch, boot session ID, the boot session's ephemeral public key and the nonce the
+     peer issued. Replaying a quote, or substituting any one field, fails.
+  3  THE TPM'S OWN COUNTERS AGREE. The quote carries TPMS_CLOCK_INFO (resetCount, restartCount, clock)
+     and the firmware version. The counters never go backwards, one boot carries one boot session, and
+     a boot session never outlives a reboot.
+
+The verifier needs no TPM: tpm2_makecredential runs with no TCTI, the signature is checked by OpenSSL,
+and the structures are parsed here from the exact bytes that were signed. Nothing below implements a
+cryptographic primitive.
+
+    policy (the verifier's reference values, written at intake):
+      {"schema": "regalia-kms/attest-policy/v1",
+       "nodes": {"site-a": {"ek_name": "000b<64 hex>",            # the Name of the EK's public area
+                            "tpm_firmware_version": "<16 hex>",    # TPMS_ATTEST.firmwareVersion
+                            "pcrs": {"0": "<64 hex>", "7": "<64 hex>"}}}}   # SHA-256 bank, expected values
+
+    state (what the verifier has learned; 0600, updated under a lock):
+      enrolled AKs, outstanding nonces (single use, 120 s), and each node's last accepted counters.
+
+NOT covered here: the EK certificate chain to the TPM manufacturer (the swtpm EK has none; the DL360's
+is checked at intake, #65 PoC 5.2), and which PCRs to expect (PoC 5.2/5.3 on the real hardware).
+"""
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import hmac
+import json
+import os
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+
+POLICY_SCHEMA = "regalia-kms/attest-policy/v1"
+STATE_SCHEMA = "regalia-kms/attest-state/v1"
+TRANSCRIPT_LABEL = b"regalia-kms/attest/v1"
+MAX_BYTES = 128 * 1024
+NONCE_TTL = 120
+SESSION_HISTORY = 32
+
+TPM_GENERATED = 0xFF544347
+ST_ATTEST_QUOTE = 0x8018
+ALG_SHA256, ALG_NULL, ALG_ECDSA, ALG_ECC, CURVE_P256 = 0x000B, 0x0010, 0x0018, 0x0023, 0x0003
+RH_ENDORSEMENT = 0x4000000B
+# fixedTPM | fixedParent | sensitiveDataOrigin | userWithAuth | restricted | sign, and nothing else:
+# no decrypt (a key that also decrypts is not an attestation key), not duplicable, made in the TPM
+AK_ATTRIBUTES = 0x00050072
+P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
+EK_HANDLE, AK_HANDLE = "0x81010001", "0x81010002"
+
+
+class Refused(Exception):
+    pass
+
+
+def require(cond, message):
+    if not cond:
+        raise Refused(message)
+
+
+# ---- TPM structures, parsed from the signed bytes ----
+
+class Reader:
+    def __init__(self, data, label):
+        self.data, self.at, self.label = data, 0, label
+
+    def take(self, n):
+        require(self.at + n <= len(self.data), "%s is truncated" % self.label)
+        out = self.data[self.at:self.at + n]
+        self.at += n
+        return out
+
+    def u(self, fmt):
+        return struct.unpack(">" + fmt, self.take(struct.calcsize(fmt)))[0]
+
+    def sized(self):
+        return self.take(self.u("H"))
+
+    def end(self):
+        require(self.at == len(self.data), "%s has trailing bytes" % self.label)
+
+
+def name_of(public_area):
+    return struct.pack(">H", ALG_SHA256) + hashlib.sha256(public_area).digest()
+
+
+def public_area(blob, label):
+    """The TPMT_PUBLIC inside a TPM2B_PUBLIC (tpm2-tools' -u output)."""
+    r = Reader(blob, label)
+    area = r.sized()
+    r.end()
+    return area
+
+
+def ak_identity(ak_public):
+    """An AK's Name and PEM public key, both computed from its public area and never taken on the node's
+    word. Refuses anything that is not a restricted, TPM-made, sign-only ECDSA P-256/SHA-256 key."""
+    area = public_area(ak_public, "the AK public area")
+    r = Reader(area, "the AK public area")
+    require(r.u("H") == ALG_ECC, "the AK must be an ECC key")
+    require(r.u("H") == ALG_SHA256, "the AK's name algorithm must be SHA-256")
+    attributes = r.u("I")
+    require(attributes == AK_ATTRIBUTES, "the AK must be a restricted, sign-only, fixedTPM key made in the TPM "
+            "(attributes 0x%08x, not 0x%08x)" % (attributes, AK_ATTRIBUTES))
+    require(r.sized() == b"", "the AK must not carry an auth policy")
+    require(r.u("H") == ALG_NULL, "a restricted signing key has no symmetric algorithm")
+    require((r.u("H"), r.u("H")) == (ALG_ECDSA, ALG_SHA256), "the AK's scheme must be ECDSA with SHA-256")
+    require(r.u("H") == CURVE_P256, "the AK's curve must be NIST P-256")
+    require(r.u("H") == ALG_NULL, "the AK must not carry a KDF")
+    x, y = r.sized(), r.sized()
+    r.end()
+    require(len(x) == 32 and len(y) == 32, "the AK's public point is not a P-256 point")
+    return name_of(area), P256_SPKI_PREFIX + b"\x04" + x + y
+
+
+def qualified_name(ek_name, ak_name):
+    """The AK's Qualified Name under the EK in the endorsement hierarchy: what TPMS_ATTEST.qualifiedSigner
+    must be if the signing key is this AK under this EK."""
+    def h(data):
+        return struct.pack(">H", ALG_SHA256) + hashlib.sha256(data).digest()
+    return h(h(struct.pack(">I", RH_ENDORSEMENT) + ek_name) + ak_name)
+
+
+def parse_quote(blob):
+    """TPMS_ATTEST for a quote over one SHA-256 PCR selection."""
+    r = Reader(blob, "the quote")
+    require(r.u("I") == TPM_GENERATED, "the quote was not generated by a TPM (magic)")
+    require(r.u("H") == ST_ATTEST_QUOTE, "the attestation is not a quote")
+    out = {"qualified_signer": r.sized(), "extra_data": r.sized(), "clock": r.u("Q"), "reset_count": r.u("I"),
+           "restart_count": r.u("I"), "safe": r.u("B"), "firmware_version": "%016x" % r.u("Q")}
+    require(r.u("I") == 1, "the quote must select exactly one PCR bank")
+    require(r.u("H") == ALG_SHA256, "the quote must select the SHA-256 PCR bank")
+    bitmap = r.take(r.u("B"))
+    out["pcrs"] = [i for i in range(len(bitmap) * 8) if bitmap[i // 8] >> (i % 8) & 1]
+    out["pcr_digest"] = r.sized()
+    r.end()
+    return out
+
+
+def transcript(node_id, epoch, session_id, ephemeral_public, nonce):
+    """The canonical transcript the quote is bound to. Every field is length-prefixed under a fixed
+    label, so no two different field tuples encode to the same bytes."""
+    fields = (TRANSCRIPT_LABEL, node_id.encode(), struct.pack(">Q", epoch), session_id, ephemeral_public, nonce)
+    return b"".join(struct.pack(">I", len(f)) + f for f in fields)
+
+
+def qualifying_data(*fields):
+    return hashlib.sha256(transcript(*fields)).digest()
+
+
+def check_session(node_id, epoch, session_id, ephemeral_public, nonce):
+    require(isinstance(node_id, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", node_id), "the node ID is not a plain name")
+    require(isinstance(epoch, int) and not isinstance(epoch, bool) and 0 <= epoch < 2 ** 64, "the manifest epoch must be a uint64")
+    require(len(session_id) == 32, "the boot session ID must be 32 bytes")
+    require(1 <= len(ephemeral_public) <= 512, "the ephemeral public key must be 1-512 bytes")
+    require(len(nonce) == 32, "the nonce must be 32 bytes")
+
+
+# ---- policy and state ----
+
+def load_json(raw, label):
+    require(len(raw) <= MAX_BYTES, "%s exceeds 128 KiB" % label)
+
+    def unique(pairs):
+        out = {}
+        for k, v in pairs:
+            require(k not in out, "duplicate %s field: %s" % (label, k))
+            out[k] = v
+        return out
+    try:
+        return json.loads(raw, object_pairs_hook=unique)
+    except ValueError as error:
+        raise Refused("%s is not valid JSON" % label) from error
+
+
+def exact_keys(value, keys, label):
+    require(isinstance(value, dict), "%s must be an object" % label)
+    missing, unknown = set(keys) - set(value), set(value) - set(keys)
+    require(not missing and not unknown, "%s fields mismatch: missing=%s unknown=%s" % (label, sorted(missing), sorted(unknown)))
+    return value
+
+
+def is_hex(value, n):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % n, value) is not None
+
+
+def validate_policy(doc):
+    root = exact_keys(doc, ("schema", "nodes"), "policy")
+    require(root["schema"] == POLICY_SCHEMA, "policy schema must be %s" % POLICY_SCHEMA)
+    require(isinstance(root["nodes"], dict) and root["nodes"], "policy.nodes must name at least one node")
+    for node_id, node in root["nodes"].items():
+        label = "policy.nodes.%s" % node_id
+        require(re.fullmatch(r"[A-Za-z0-9._-]{1,64}", node_id), "%s is not a plain name" % label)
+        exact_keys(node, ("ek_name", "tpm_firmware_version", "pcrs"), label)
+        require(is_hex(node["ek_name"], 68) and node["ek_name"].startswith("000b"), "%s.ek_name must be a SHA-256 Name (000b + 64 hex)" % label)
+        require(is_hex(node["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
+        pcrs = node["pcrs"]
+        require(isinstance(pcrs, dict) and pcrs, "%s.pcrs must expect at least one PCR" % label)
+        for index, value in pcrs.items():
+            require(re.fullmatch(r"0|[1-9]\d?", index) and int(index) <= 23, "%s.pcrs: %r is not a PCR 0-23" % (label, index))
+            require(is_hex(value, 64), "%s.pcrs.%s must be 64 lowercase hex" % (label, index))
+    return root["nodes"]
+
+
+def expected_pcr_digest(pcrs):
+    """What TPMS_QUOTE_INFO.pcrDigest is when the selected PCRs hold the expected values."""
+    return hashlib.sha256(b"".join(bytes.fromhex(pcrs[i]) for i in sorted(pcrs, key=int))).digest()
+
+
+@contextlib.contextmanager
+def locked_state(path):
+    """The verifier's state, read and rewritten under an exclusive lock: two verifications of the same
+    nonce cannot both find it outstanding."""
+    lock = os.open(path + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(path, "rb") as f:
+                state = load_json(f.read(MAX_BYTES + 1), "state")
+            require(isinstance(state, dict) and state.get("schema") == STATE_SCHEMA, "state schema must be %s" % STATE_SCHEMA)
+        except FileNotFoundError:
+            state = {"schema": STATE_SCHEMA, "nodes": {}, "nonces": {}}
+        def save():
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".attest-state-")
+            with os.fdopen(fd, "w") as f:
+                json.dump(state, f, indent=1, sort_keys=True)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        yield state, save
+    finally:
+        os.close(lock)
+
+
+# ---- the verifier ----
+
+def make_credential(ek_public, ak_name, secret, run=subprocess.run):
+    """TPM2_MakeCredential in software (no TPM): the secret, wrapped to the EK and to the AK's Name."""
+    with tempfile.TemporaryDirectory(prefix="attest-") as d:
+        paths = {n: os.path.join(d, n) for n in ("ek.pub", "secret", "credential")}
+        for name, data in (("ek.pub", ek_public), ("secret", secret)):
+            with open(os.open(paths[name], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                f.write(data)
+        made = run(["tpm2_makecredential", "--tcti", "none", "-u", paths["ek.pub"], "-s", paths["secret"],
+                    "-n", ak_name.hex(), "-o", paths["credential"]], capture_output=True, text=True)
+        require(made.returncode == 0, "tpm2_makecredential failed: %s" % made.stderr.strip()[-200:])
+        with open(paths["credential"], "rb") as f:
+            return f.read()
+
+
+def verify_signature(spki_der, message, signature, run=subprocess.run):
+    with tempfile.TemporaryDirectory(prefix="attest-") as d:
+        paths = {n: os.path.join(d, n) for n in ("ak.der", "quote", "signature")}
+        for name, data in (("ak.der", spki_der), ("quote", message), ("signature", signature)):
+            with open(os.open(paths[name], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                f.write(data)
+        checked = run(["openssl", "dgst", "-sha256", "-verify", paths["ak.der"], "-keyform", "DER",
+                       "-signature", paths["signature"], paths["quote"]], capture_output=True, text=True)
+        require(checked.returncode == 0, "the quote's signature does not verify under the enrolled AK")
+
+
+class Verifier:
+    """One peer's view: its policy, and the state it keeps between calls."""
+
+    def __init__(self, policy, state_path, now=time.time, rand=os.urandom, run=subprocess.run):
+        self.nodes, self.state_path, self.now, self.rand, self.run = validate_policy(policy), state_path, now, rand, run
+
+    def node(self, node_id):
+        require(isinstance(node_id, str) and node_id in self.nodes, "unknown node: not in the policy")
+        return self.nodes[node_id]
+
+    def challenge(self, node_id, ek_public, ak_public, replace=False):
+        """Step 1 of enrollment: a credential only the TPM holding this EK and this AK can open."""
+        expected = self.node(node_id)
+        require(len(ek_public) <= 1024 and len(ak_public) <= 1024, "a public area exceeds 1 KiB")
+        ek_name = name_of(public_area(ek_public, "the EK public area"))
+        require(hmac.compare_digest(ek_name.hex(), expected["ek_name"]), "the EK is not the one recorded for this node at intake")
+        ak_name, _ = ak_identity(ak_public)
+        secret = self.rand(32)
+        credential = make_credential(ek_public, ak_name, secret, self.run)
+        with locked_state(self.state_path) as (state, save):
+            record = state["nodes"].setdefault(node_id, {})
+            require(replace or "ak_public" not in record, "the node already has an enrolled AK: enrolling another "
+                    "replaces its attestation identity (pass replace to do that deliberately)")
+            record["pending"] = {"ak_public": ak_public.hex(), "secret_sha256": hashlib.sha256(secret).hexdigest(),
+                                 "expires": self.now() + NONCE_TTL}
+            save()
+        return credential
+
+    def enroll(self, node_id, secret):
+        """Step 2: the node returned the secret, so the AK lives in the TPM with the recorded EK."""
+        self.node(node_id)
+        with locked_state(self.state_path) as (state, save):
+            record = state["nodes"].get(node_id, {})
+            pending = record.pop("pending", None)
+            save()   # one attempt per challenge, right or wrong
+            require(pending is not None, "no enrollment challenge is outstanding for this node")
+            require(self.now() <= pending["expires"], "the enrollment challenge expired")
+            require(hmac.compare_digest(hashlib.sha256(secret).hexdigest(), pending["secret_sha256"]),
+                    "the activated credential is not the secret that was wrapped: the AK is not in the TPM with this EK")
+            # the counters and the session history are kept: a new AK must not rewind the node's boot history
+            record["ak_public"] = pending["ak_public"]
+            save()
+        return ak_identity(bytes.fromhex(pending["ak_public"]))[0]
+
+    def nonce(self, node_id):
+        self.node(node_id)
+        nonce = self.rand(32)
+        with locked_state(self.state_path) as (state, save):
+            require("ak_public" in state["nodes"].get(node_id, {}), "the node has no enrolled AK")
+            now = self.now()
+            state["nonces"] = {n: v for n, v in state["nonces"].items() if v["expires"] >= now}
+            state["nonces"][nonce.hex()] = {"node": node_id, "expires": now + NONCE_TTL}
+            save()
+        return nonce
+
+    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature):
+        """A quote for one boot session. `node_id`, `epoch` and `nonce` are what THIS verifier holds (the
+        node it is talking to, its manifest epoch, the nonce it issued); the session ID and the ephemeral
+        key are what the node sent. Returns the verdict, or raises Refused with the reason."""
+        expected = self.node(node_id)
+        check_session(node_id, epoch, session_id, ephemeral_public, nonce)
+        require(len(quote) <= 1024 and len(signature) <= 256, "the quote or its signature is oversized")
+        with locked_state(self.state_path) as (state, save):
+            issued = state["nonces"].pop(nonce.hex(), None)
+            save()   # consumed by the first attempt, whatever its outcome
+            require(issued is not None, "the nonce is not outstanding (never issued, or already used)")
+            require(issued["node"] == node_id, "the nonce was issued to another node")
+            require(self.now() <= issued["expires"], "the nonce expired")
+            record = state["nodes"].get(node_id, {})
+            require("ak_public" in record, "the node has no enrolled AK")
+            ak_name, spki = ak_identity(bytes.fromhex(record["ak_public"]))
+            verify_signature(spki, quote, signature, self.run)
+            q = parse_quote(quote)
+            require(q["qualified_signer"] == qualified_name(bytes.fromhex(expected["ek_name"]), ak_name),
+                    "the quote's signer is not the enrolled AK under the recorded EK")
+            require(hmac.compare_digest(q["extra_data"], qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce)),
+                    "the quote is not bound to this transcript (node ID, manifest epoch, boot session ID, ephemeral key, nonce)")
+            require(q["pcrs"] == sorted(int(i) for i in expected["pcrs"]),
+                    "the quote covers PCRs %s, not the expected %s" % (q["pcrs"], sorted(int(i) for i in expected["pcrs"])))
+            require(hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(expected["pcrs"])),
+                    "the quoted PCR digest is not the expected PCR values")
+            require(q["firmware_version"] == expected["tpm_firmware_version"],
+                    "the TPM firmware version %s is not the recorded %s" % (q["firmware_version"], expected["tpm_firmware_version"]))
+            self.check_counters(record, q, session_id, ephemeral_public)
+            save()
+        return {"node": node_id, "epoch": epoch, "session_id": session_id.hex(), "reset_count": q["reset_count"],
+                "restart_count": q["restart_count"], "clock": q["clock"], "pcrs": q["pcrs"]}
+
+    @staticmethod
+    def check_counters(record, q, session_id, ephemeral_public):
+        """TPMS_CLOCK_INFO against the node's last accepted quote. One boot (resetCount, restartCount)
+        carries one boot session; a session, or its ephemeral key, never appears in a later boot."""
+        boot = [q["reset_count"], q["restart_count"]]
+        session = hashlib.sha256(session_id).hexdigest()
+        key = hashlib.sha256(ephemeral_public).hexdigest()
+        last = record.get("boot")
+        history = record.setdefault("sessions", [])
+        if last is not None:
+            require(boot >= last["counters"], "the TPM's reset/restart counters went backwards (%s after %s): "
+                    "rolled-back TPM state" % (boot, last["counters"]))
+            if boot == last["counters"]:
+                require(session == last["session"] and key == last["key"],
+                        "a second boot session in the same boot: one boot carries one session and one ephemeral key")
+                require(q["clock"] >= last["clock"], "the TPM clock went backwards within one boot")
+            else:
+                require(session not in history and key not in history,
+                        "a boot session or ephemeral key from an earlier boot was presented after a reboot")
+        if last is None or boot != last["counters"]:
+            history.extend((session, key))
+            del history[:-2 * SESSION_HISTORY]
+        record["boot"] = {"counters": boot, "clock": q["clock"], "session": session, "key": key}
+
+
+# ---- the node (tpm2-tools against the TPM named by TPM2TOOLS_TCTI) ----
+
+def tpm2(*args, run=subprocess.run):
+    done = run(["tpm2_" + args[0], *args[1:]], capture_output=True, text=True)
+    require(done.returncode == 0, "tpm2_%s failed: %s" % (args[0], done.stderr.strip()[-300:]))
+
+
+def node_init(out_dir, run=subprocess.run):
+    """Create the EK and a restricted ECDSA P-256 AK under it, both persistent; export their public areas."""
+    ek, ak = os.path.join(out_dir, "ek.pub"), os.path.join(out_dir, "ak.pub")
+    with tempfile.TemporaryDirectory(prefix="attest-") as d:
+        ctx = os.path.join(d, "ak.ctx")
+        tpm2("createek", "-c", EK_HANDLE, "-G", "rsa", "-u", ek, run=run)
+        tpm2("createak", "-C", EK_HANDLE, "-c", ctx, "-G", "ecc", "-g", "sha256", "-s", "ecdsa", "-u", ak, run=run)
+        tpm2("evictcontrol", "-C", "o", "-c", ctx, AK_HANDLE, run=run)
+        tpm2("flushcontext", "-t", run=run)
+
+
+def node_activate(credential_path, secret_path, run=subprocess.run):
+    """TPM2_ActivateCredential under the EK's policy (endorsement auth). The secret goes to a 0600 file;
+    tpm2_activatecredential also prints it, so its output is never passed on."""
+    with tempfile.TemporaryDirectory(prefix="attest-") as d:
+        session = os.path.join(d, "session.ctx")
+        tpm2("startauthsession", "--policy-session", "-S", session, run=run)
+        try:
+            tpm2("policysecret", "-S", session, "-c", "e", run=run)
+            fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(fd)
+            done = run(["tpm2_activatecredential", "-c", AK_HANDLE, "-C", EK_HANDLE, "-i", credential_path,
+                        "-o", secret_path, "-P", "session:" + session], capture_output=True, text=True)
+            require(done.returncode == 0, "tpm2_activatecredential failed: this TPM does not hold the EK and AK "
+                    "the credential was made for")
+        finally:
+            run(["tpm2_flushcontext", session], capture_output=True)
+
+
+def node_quote(node_id, epoch, session_id, ephemeral_public, nonce, pcrs, quote_path, signature_path, run=subprocess.run):
+    check_session(node_id, epoch, session_id, ephemeral_public, nonce)
+    require(pcrs and all(isinstance(i, int) and 0 <= i <= 23 for i in pcrs), "PCRs must be 0-23")
+    tpm2("quote", "-c", AK_HANDLE, "-g", "sha256", "-l", "sha256:" + ",".join(str(i) for i in sorted(set(pcrs))),
+         "-q", qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce).hex(),
+         "-m", quote_path, "-s", signature_path, "-f", "plain", run=run)
+
+
+# ---- command line ----
+
+def read(path, limit=MAX_BYTES):
+    with open(path, "rb") as f:
+        data = f.read(limit + 1)
+    require(len(data) <= limit, "%s is oversized" % path)
+    return data
+
+
+def unhex(value, label):
+    require(re.fullmatch(r"([0-9a-f]{2})+", value or "") is not None, "%s must be lowercase hex" % label)
+    return bytes.fromhex(value)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    sub = p.add_subparsers(dest="command", required=True)
+
+    def session_args(c):
+        c.add_argument("--node-id", required=True)
+        c.add_argument("--epoch", required=True, type=int)
+        c.add_argument("--session-id", required=True, help="32 bytes, hex")
+        c.add_argument("--ephemeral-public", required=True, help="file: the boot session's public key (DER)")
+        c.add_argument("--nonce", required=True, help="32 bytes, hex")
+        c.add_argument("--quote", required=True)
+        c.add_argument("--signature", required=True)
+
+    def verifier_args(c, node=True):
+        c.add_argument("--policy", required=True)
+        c.add_argument("--state", required=True)
+        if node:
+            c.add_argument("--node-id", required=True)
+
+    c = sub.add_parser("node-init", help="node: create the EK and AK, export ek.pub and ak.pub")
+    c.add_argument("--out", required=True)
+    c = sub.add_parser("node-activate", help="node: open an enrollment credential")
+    c.add_argument("--credential", required=True)
+    c.add_argument("--secret", required=True)
+    c = sub.add_parser("node-quote", help="node: quote the PCRs, bound to the boot-session transcript")
+    session_args(c)
+    c.add_argument("--pcrs", required=True, help="comma-separated, SHA-256 bank")
+    c = sub.add_parser("challenge", help="verifier: wrap an enrollment secret to the node's EK and AK")
+    verifier_args(c)
+    c.add_argument("--ek-public", required=True)
+    c.add_argument("--ak-public", required=True)
+    c.add_argument("--credential", required=True)
+    c.add_argument("--replace", action="store_true")
+    c = sub.add_parser("enroll", help="verifier: accept the AK if the node returned the secret")
+    verifier_args(c)
+    c.add_argument("--secret", required=True)
+    c = sub.add_parser("nonce", help="verifier: issue a single-use nonce")
+    verifier_args(c)
+    c = sub.add_parser("verify", help="verifier: decide on a quote")
+    verifier_args(c, node=False)
+    session_args(c)
+    a = p.parse_args(argv)
+
+    try:
+        if a.command == "node-init":
+            node_init(a.out)
+            return 0
+        if a.command == "node-activate":
+            node_activate(a.credential, a.secret)
+            return 0
+        if a.command == "node-quote":
+            require(re.fullmatch(r"\d{1,2}(,\d{1,2})*", a.pcrs) is not None, "--pcrs must be a list such as 0,7")
+            node_quote(a.node_id, a.epoch, unhex(a.session_id, "--session-id"), read(a.ephemeral_public, 512),
+                       unhex(a.nonce, "--nonce"), [int(i) for i in a.pcrs.split(",")], a.quote, a.signature)
+            return 0
+        v = Verifier(load_json(read(a.policy), "policy"), a.state)
+        if a.command == "challenge":
+            credential = v.challenge(a.node_id, read(a.ek_public, 1024), read(a.ak_public, 1024), a.replace)
+            with open(a.credential, "wb") as f:
+                f.write(credential)
+            print("challenge issued to %s" % a.node_id)
+        elif a.command == "enroll":
+            print("ENROLLED %s AK %s" % (a.node_id, v.enroll(a.node_id, read(a.secret, 64)).hex()))
+        elif a.command == "nonce":
+            print(v.nonce(a.node_id).hex())
+        else:
+            verdict = v.verify(a.node_id, a.epoch, unhex(a.session_id, "--session-id"), read(a.ephemeral_public, 512),
+                               unhex(a.nonce, "--nonce"), read(a.quote, 1024), read(a.signature, 256))
+            print("ACCEPTED " + json.dumps(verdict, sort_keys=True))
+        return 0
+    except (Refused, OSError) as refusal:
+        print("REFUSED: %s" % refusal, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
