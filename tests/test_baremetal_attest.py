@@ -459,6 +459,17 @@ class Node(unittest.TestCase):
         self.assertEqual(argv[argv.index("-l") + 1], "sha256:0,7")
         self.assertEqual(argv[argv.index("-q") + 1], attest.qualifying_data("site-a", EPOCH, SESSION, KEY, b"N" * 32).hex())
 
+    def test_transient_objects_are_flushed_globally_only_on_a_private_simulator(self):
+        for tcti, flushed in (("swtpm:path=/x", True), ("mssim:port=1", True), ("device:/dev/tpmrm0", False), (None, False)):
+            with self.subTest(tcti=tcti), mock.patch.dict(os.environ):
+                os.environ.pop("TPM2TOOLS_TCTI", None)
+                if tcti:
+                    os.environ["TPM2TOOLS_TCTI"] = tcti
+                self.calls = []
+                attest.node_init(self.d, run=self.run_tool)
+                self.assertEqual([c[0] for c in self.calls][:3], ["tpm2_createek", "tpm2_createak", "tpm2_evictcontrol"])
+                self.assertEqual(["tpm2_flushcontext", "-t"] in self.calls, flushed)
+
     def test_a_bad_pcr_list_or_a_tpm_failure_is_a_refusal(self):
         for pcrs in ([], [24], [-1], ["7"]):
             with self.subTest(pcrs=pcrs):

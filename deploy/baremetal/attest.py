@@ -14,7 +14,9 @@ A peer decides whether to help a node boot from a TPM quote. Three things make t
   3  THE TPM'S OWN COUNTERS AGREE. The quote carries TPMS_CLOCK_INFO (resetCount, restartCount, clock)
      and the firmware version. The counters never go backwards, one boot carries one boot session (it
      may be verified again in that boot, with a fresh nonce each time), and a boot session never
-     outlives a reboot.
+     outlives a reboot. The clock and its `safe` flag are INFORMATIONAL: they are reported in the
+     verdict and never refuse a quote. `safe` is NO after a power loss, which is exactly when a node
+     needs its peers, and two quotes of one boot may arrive in either order.
 
 The verifier needs no TPM: tpm2_makecredential runs with no TCTI, the signature is checked by OpenSSL,
 and the structures are parsed here from the exact bytes that were signed. Nothing below implements a
@@ -428,7 +430,11 @@ def node_init(out_dir, run=subprocess.run):
         tpm2("createek", "-c", EK_HANDLE, "-G", "rsa", "-u", ek, run=run)
         tpm2("createak", "-C", EK_HANDLE, "-c", ctx, "-G", "ecc", "-g", "sha256", "-s", "ecdsa", "-u", ak, run=run)
         tpm2("evictcontrol", "-C", "o", "-c", ctx, AK_HANDLE, run=run)
-        tpm2("flushcontext", "-t", run=run)
+        # Production goes through the kernel resource manager (/dev/tpmrm0), which cleans up after each
+        # connection; flushing every transient object (-t) there would break the TPM's other users. Only a
+        # private simulator has no manager and keeps what each tool call loaded (deploy/seal-hsm-pin.sh).
+        if os.environ.get("TPM2TOOLS_TCTI", "").startswith(("swtpm", "mssim")):
+            tpm2("flushcontext", "-t", run=run)
 
 
 def node_activate(credential_path, secret_path, run=subprocess.run):
