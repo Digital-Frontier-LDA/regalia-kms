@@ -60,7 +60,7 @@
 # directory, for tests. REGALIA_TPM2_DEVICE names another TPM for systemd-creds (a private swtpm, e.g.
 # swtpm:path=/…/tpm.sock), also for tests: the record then says so, and it is not production.
 set -uo pipefail
-PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=()
+PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=(); LOOKUP_WARN=""
 ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
 CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
@@ -291,6 +291,13 @@ if [ -n "$PUBKEY" ]; then
     fail "the sealed blob opens WITHOUT a PCR 11 signature: it is not bound to the signed policy; nothing was installed"
   fi
   rm -f "$nosig"
+  # The service is given no --tpm2-signature: systemd loads the credential with the first
+  # tpm2-pcr-signature.json it finds in /etc/systemd, /run/systemd, /usr/lib/systemd, and tries no
+  # other. So with an explicit file, the lookup the service will use is tried too (an older file in
+  # /etc/systemd shadows the UKI's in /run/systemd); a failure is a warning in the record.
+  if [ -n "$SIGNATURE" ] && [ "$(systemd-creds decrypt "${TPMDEV[@]}" --name="$NAME" "$tmp" - 2>/dev/null | sha256sum)" != "$back" ]; then
+    LOOKUP_WARN="$(printf '\n  WARNING       : opened with %s, but NOT by systemd'"'"'s own lookup. regalia-kms will start only\n                  when the first tpm2-pcr-signature.json in /etc/systemd, /run/systemd (a signed UKI\n                  puts it there), /usr/lib/systemd is this boot'"'"'s signature by this key' "$SIGNATURE")"
+  fi
 fi
 # The old credential stays IN PLACE until the new one replaces it in one rename: moving it aside
 # first would leave the service with no credential (243 at its next start) if the install failed.
@@ -299,10 +306,7 @@ chmod 600 "$tmp" && mv -f "$tmp" "$DEST" || fail "cannot install $DEST; the prev
 PIN=""; PIN2=""
 SIGNED_REC=""
 [ -z "$PUBKEY" ] || SIGNED_REC="$(printf '\n  signed PCRs   : %s (any value signed by the key below)\n  signing key   : %s\n  pkfp          : %s   (sha256 of the PKCS#1 DER key; "pkfp" in a signature file)' "$PUBKEY_PCRS" "$PUBKEY" "$PKFP")"
-# The service is given no --tpm2-signature: systemd loads the credential with the signature it finds
-# in its own three directories. One checked here from anywhere else proves the policy, not the start.
-case "$SIGNATURE" in ""|/etc/systemd/tpm2-pcr-signature.json|/run/systemd/tpm2-pcr-signature.json|/usr/lib/systemd/tpm2-pcr-signature.json) ;;
-  *) SIGNED_REC="$SIGNED_REC$(printf '\n  WARNING       : checked with %s. regalia-kms will start only if this boot'"'"'s signature is\n                  tpm2-pcr-signature.json in /etc/systemd, /run/systemd (a signed UKI puts it there) or /usr/lib/systemd' "$SIGNATURE")";; esac
+SIGNED_REC="$SIGNED_REC$LOOKUP_WARN"
 
 cat <<REC
 SEALED

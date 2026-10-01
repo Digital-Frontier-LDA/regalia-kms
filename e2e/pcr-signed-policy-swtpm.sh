@@ -32,6 +32,7 @@ for t in swtpm tpm2_pcrextend tpm2_pcrread openssl systemd-creds "$MEASURE"; do
   command -v "$t" >/dev/null || { echo "pcr-signed-policy-swtpm: $t is required (swtpm, tpm2-tools, openssl, systemd)"; exit 2; }
 done
 sudo -n true 2>/dev/null || { echo "pcr-signed-policy-swtpm: needs sudo"; exit 2; }
+echo "pcr-signed-policy-swtpm: $(systemd-creds --version | head -1), swtpm $(swtpm --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 W="$(mktemp -d)"; cd "$W" || exit 2
 # An orderly TPM2_Shutdown first: the TPM counts a restart without one as a failed authorization try.
 stop(){ [ -f "$W/tpm.pid" ] || return 0; tpm2_shutdown -c >/dev/null 2>&1; kill "$(cat "$W/tpm.pid")" 2>/dev/null; rm -f "$W/tpm.pid"; }
@@ -122,7 +123,9 @@ out="$(seal --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-
 grep -q 'tpm2, PCRs 7 (TEST TPM' <<< "$out" && grep -q 'signed PCRs   : 11' <<< "$out" && P "the record: PCR 7 direct, PCR 11 signed, and a TEST TPM" || F "record: $out"
 fp="$(pkfp pcr.pub)"; grep -q "pkfp          : $fp" <<< "$out" && grep -q "\"pkfp\":\"$fp\"" sig1.json \
   && P "the record's key fingerprint is the pkfp in the signature file" || F "fingerprint $fp not in both the record and sig1.json"
-grep -q 'WARNING       : checked with sig1.json' <<< "$out" && P "the record warns that the service reads the signature only from systemd's own directories" || F "no warning for a signature outside systemd's directories: $out"
+# Tried, not guessed from the path: the blob is opened once more the way the service will, with no
+# signature named. Here systemd's own directories hold none for this boot, so the record must warn.
+grep -q "WARNING       : opened with sig1.json, but NOT by systemd's own lookup" <<< "$out" && P "the record warns that systemd's own signature lookup, the one the service uses, does not open the blob" || F "no warning though systemd's own lookup cannot open the blob: $out"
 grep -qF "$PIN" <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"
 sudo sh -c "ls -A '$W/cred'" | grep -qv '^regalia-kms-t\.pin$' && F "temporary files left in the credstore" || P "no temporary file left in the credstore"
 
