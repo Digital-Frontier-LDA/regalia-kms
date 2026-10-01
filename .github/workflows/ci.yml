@@ -10,6 +10,16 @@ permissions:
   contents: read
 
 jobs:
+  bootstrap-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Debian 13 software TPM and LUKS2 bootstrap experiments
+        run: bash lab/bootstrap/run.sh
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20

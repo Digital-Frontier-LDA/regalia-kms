@@ -15,3 +15,6 @@ services:
     environment:
       REGALIA_LAB_REPORT: /evidence/report.json
       REGALIA_LAB_COMMIT: "${REGALIA_LAB_COMMIT:-unknown}"
+      REGALIA_LAB_IMAGE_ID: "${REGALIA_LAB_IMAGE_ID:-unknown}"
+      REGALIA_LAB_DAEMON_PLATFORM: "${REGALIA_LAB_DAEMON_PLATFORM:-unknown}"
+      REGALIA_LAB_SWTPM_SECCOMP: "${REGALIA_LAB_SWTPM_SECCOMP:-kill}"

@@ -4,6 +4,13 @@ This layer intentionally reuses the existing ceremony test estate instead of
 duplicating its device selection, DevAut, PIN retry, signing, recovery, JUnit,
 and transcript logic.
 
+For the three-site architecture's software TPM/bootstrap experiments, run
+`bash lab/bootstrap/run.sh`. The [Debian 13 Docker lab](../lab/bootstrap/README.md)
+exercises fresh attestation, PCR-bound sealing, and independent LUKS2 keyslot
+credentials without attached devices or privileged containers. Its evidence is
+emulated; real measured boot, initramfs networking, encrypted-root boot, and HSM
+authentication require separate qualification.
+
 ```sh
 # Default: build the established Debian emulator image and run its full suite
 # (including the real SoftHSM PKCS#11 route and wizard dress rehearsal), plus
