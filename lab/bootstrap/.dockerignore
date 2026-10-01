@@ -1,3 +1,5 @@
 *
 !Dockerfile
 !lab.py
+!peer.py
+!peer_cases.py

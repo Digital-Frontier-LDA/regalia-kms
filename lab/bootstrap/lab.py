@@ -74,9 +74,9 @@ class TPM:
     def call(self, *args, **kwargs):
         return run(*args, env=self.env, **kwargs)
 
-    def quote(self, challenge, prefix):
+    def quote(self, challenge, prefix, selection="sha256:7"):
         paths = [self.root / f"{prefix}.{suffix}" for suffix in ["msg", "sig", "pcrs"]]
-        self.call("tpm2_quote", "-c", "0x81010002", "-l", "sha256:7", "-q", challenge.hex(),
+        self.call("tpm2_quote", "-c", "0x81010002", "-l", selection, "-q", challenge.hex(),
                   "-m", paths[0], "-s", paths[1], "-o", paths[2], "-F", "values", "-g", "sha256", "-Q")
         return paths
 
@@ -107,17 +107,15 @@ class TPM:
                 self.process.wait(timeout=5)
 
 
-def verify_quote(public, paths, challenge, approved_pcr=None):
-    pcr_args = ["-f", paths[2] if approved_pcr is None else approved_pcr, "-l", "sha256:7"]
+def verify_quote(public, paths, challenge, approved_pcr=None, selection="sha256:7"):
+    pcr_args = ["-f", paths[2] if approved_pcr is None else approved_pcr, "-l", selection]
     return run("tpm2_checkquote", "-u", public, "-m", paths[0], "-s", paths[1],
                *pcr_args, "-g", "sha256", "-q", challenge.hex(),
                env=dict(os.environ, TPM2TOOLS_TCTI="none"), required=False).returncode == 0
 
 
-def luks_cases(root, local_secret):
+def luks_cases(root, local_secret, peer_b, peer_c):
     """Real LUKS2 header/keyslot checks; no device-mapper privileges required."""
-    peer_b, peer_c = os.urandom(32), os.urandom(32)
-
     def derive(local, peer, source):
         if len(local) != 32 or len(peer) != 32:
             raise ValueError("lab contributions must be 32 bytes")
@@ -180,6 +178,8 @@ def main():
         "source_commit": os.environ.get("REGALIA_LAB_COMMIT", "unknown"),
         "image_id": os.environ.get("REGALIA_LAB_IMAGE_ID", "unknown"),
         "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "sources_sha256": {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+                           for name in ["lab.py", "peer.py", "peer_cases.py"]},
         "status": "failed",
         "debian_version": Path("/etc/debian_version").read_text().strip(),
         "packages": Path("/opt/packages.tsv").read_text().splitlines(),
@@ -187,7 +187,7 @@ def main():
     }
     nodes = []
     try:
-        for tool in ["swtpm", "tpm2_quote", "tpm2_checkquote", "cryptsetup", "wg"]:
+        for tool in ["swtpm", "tpm2_quote", "tpm2_checkquote", "tpm2_print", "cryptsetup", "wg"]:
             if shutil.which(tool) is None:
                 raise RuntimeError(f"missing lab tool: {tool}")
         print("PASS Debian 13 arm64/amd64 lab toolchain")
@@ -240,6 +240,9 @@ def main():
                                  ("peer_nonce", os.urandom(32).hex())]:
                 changed = dict(request, **{field: value})
                 cases.append((f"changed {field} is rejected", not verify_quote(a.root / "ak.pem", bound, qualification(changed))))
+            from peer_cases import peer_cases
+            peer_checks, peer_b, peer_c = peer_cases(root, a, b, verify_quote)
+            cases.extend(peer_checks)
             a.call("tpm2_pcrextend", "7:sha256=" + hashlib.sha256(b"unexpected boot change").hexdigest())
             changed_quote = a.quote(challenge, "changed")
             cases.extend([
@@ -248,7 +251,7 @@ def main():
                 ("changed PCR prevents WireGuard key release", tpm_refused(a.unseal("0x81010004"), 0x99D)),
                 ("changed PCR prevents local contribution release", tpm_refused(a.unseal("0x81010005"), 0x99D)),
             ])
-            cases.extend(luks_cases(root, unsealed.stdout))
+            cases.extend(luks_cases(root, unsealed.stdout, peer_b, peer_c))
             for name, passed in cases:
                 report["checks"].append({"name": name, "status": "passed" if passed else "failed"})
                 print(("PASS " if passed else "FAIL ") + name)

@@ -24,8 +24,10 @@ chain, initramfs networking, dm-crypt mapping, or physical HSM authentication.
 
 ## Experiments
 
-Two independent `swtpm` instances use Unix sockets inside the container. A pinned
-lab AK public key is used by the offline `tpm2_checkquote` verifier.
+Two independent `swtpm` instances use Unix sockets inside the container. Separate
+B/C verifier subprocesses use pinned lab AK and measurement policy, issue fresh
+challenges, and release signed contributions encrypted to a boot-session key.
+The current runner executes 75 checks.
 
 | Area | What the lab exercises |
 |---|---|
@@ -37,14 +39,22 @@ lab AK public key is used by the offline `tpm2_checkquote` verifier.
 | LUKS2 | HKDF-derived local + B or local + C credentials authenticate independent slots in a disposable real LUKS2 header |
 | Missing/wrong factors | Either factor alone, an incorrect factor, or a substituted peer path is refused |
 | Path removal | Removing the B slot invalidates that credential while C still authenticates |
+| Peer release | Separate B/C workers verify fresh quotes/current fixture policy and return Ed25519-signed RSA-OAEP contributions |
+| Response handling | Wrong recipient, forged/altered responses, cross-session replay, duplicates, and late second-peer responses are rejected |
+| State and concurrency | State capability checks, epoch advancement, expiry, bounded pending challenges, and exactly one grant from racing workers |
+| Input boundary | Strict types/fields/hex, duplicate JSON keys, malformed/oversized input, and client filesystem-path substitution are refused |
 
 `cryptsetup open --test-passphrase` checks actual LUKS2 keyslot credentials
 without creating a device-mapper mapping or mounting a filesystem. It does not
-prove that a machine can boot its encrypted root. Peer contributions are random
-local test fixtures, not responses from a remote bootstrap server. A bound
-ephemeral key is exercised in the quote, but response encryption is not yet
-implemented. There is no signed membership, policy freshness, revocation,
-runtime lease, HSM, or physical-node recovery implementation here.
+prove that a machine can boot its encrypted root. Contributions are generated
+and retained in separate software verifier state in tmpfs, and the received
+session-encrypted values supply the actual LUKS credential derivation. Transport
+is local stdin/stdout IPC in one trusted container, not remote bootstrap over
+WireGuard. Policy is an unsigned fixture: the state/epoch checks do not prove
+signed membership, global policy freshness, rollback resistance, or production
+revocation. Runtime leases, HSMs, and physical-node recovery remain separate work.
+Read the [local peer contract](PROTOCOL.md) for the request/response and challenge
+lifecycle. Verifier signing keys are software test fixtures, not KMS service keys.
 
 PCR 7 is chosen solely to exercise the software TPM API. No claim is made that
 PCR 7 measures the kernel/initramfs. A real measurement survey and boot-package
@@ -62,7 +72,7 @@ Read [the lab threat model and secret inventory](THREAT-MODEL.md).
 
 A successful run exits zero and writes an `emulated` report containing overall
 status, each check, timestamp, architecture, Debian/package versions, Git commit,
-image ID, and SHA-256 of the exact harness. A failed assertion/tool invocation exits
+image ID, and SHA-256 of each lab source file. A failed assertion/tool invocation exits
 nonzero and writes a failed report when the harness starts. A Docker build failure
 does not produce new experiment evidence; check report timestamps. Each rerun
 replaces the latest report; copy it elsewhere to retain previous evidence.
@@ -93,8 +103,8 @@ falling back. See [swtpm's documented seccomp option](https://github.com/stefanb
 
 ## Next slices
 
-1. Add session-encrypted contributions from an independently running verifier
-   with explicit requester/authorizer policy and transport authentication.
+1. Replace local IPC with authenticated cross-node transport and exercise
+   reachability/failover, keeping cryptographic recipient and authorizer binding.
 2. Prepare a Debian VM/physical-node initramfs lab for actual early networking
    and encrypted-root boot, then run the DL360 PCR survey.
 3. Integrate signed membership and revocation freshness before claiming safe
@@ -106,3 +116,5 @@ Tool references: [tpm2_quote](https://tpm2-tools.readthedocs.io/en/latest/man/tp
 [tpm2_checkquote](https://tpm2-tools.readthedocs.io/en/latest/man/tpm2_checkquote.1/),
 [policy-based unsealing](https://tpm2-tools.readthedocs.io/en/latest/man/tpm2_unseal.1/),
 and [cryptsetup source/documentation](https://gitlab.com/cryptsetup/cryptsetup).
+Response primitives: [RSA-OAEP](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/rsa/)
+and [Ed25519](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ed25519/).
