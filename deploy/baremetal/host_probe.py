@@ -4,9 +4,9 @@
 The KMS runs on dedicated bare metal with a discrete TPM 2.0 (regalia#46: HPE DL360 Gen9). This probe
 reads the running host and reports each control with the reason for its verdict; with an evidence
 file it also checks the SIGNED commissioning evidence (deploy/baremetal/evidence.py: schema,
-signature, every attested firmware setting) and refuses one that disagrees with the host. Same contract as
-deploy/proxmox/guest_probe.py, whose OS probes (core dumps, hibernation, swap, an unprivileged service)
-it reuses; its token-client probe is replaced (below), because on bare metal the host itself seals and
+signature, every attested firmware setting) and refuses one that disagrees with the host. The OS
+probes (core dumps, hibernation, swap, an unprivileged service) are deploy/baremetal/os_probe.py's.
+Token clients are checked by token_clients_root_only (below): on bare metal the host itself seals and
 re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 
     sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
@@ -54,26 +54,25 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(HERE, "..", "proxmox"))
-import guest_probe  # noqa: E402  (the same Host and the five OS probes)
 sys.path.insert(0, HERE)
+import os_probe  # noqa: E402  (the Host and the OS-hardening probes)
 import evidence as evidence_mod  # noqa: E402
 
 SECURE_BOOT_VAR = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
 IMPORT_HANDLE = os.environ.get("REGALIA_PIN_IMPORT_HANDLE", "0x81000101")
 IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
-KMS_BINARY = guest_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
+KMS_BINARY = os_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
 NITROKEY_HSM = ("20a0", "4230")
 SYSTEM_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/opt/bin")
 IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "decrypt"}
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank",
             "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present", "hsm_token_attached",
             "token_clients_root_only")
-MEASURED = PLATFORM + tuple(n for n in guest_probe.MEASURED if n != "direct_token_clients_absent")
+MEASURED = PLATFORM + os_probe.MEASURED
 UNMEASURED = evidence_mod.ATTESTED + evidence_mod.RECORDS
 
 
-class Host(guest_probe.Host):
+class Host(os_probe.Host):
     def read_bytes(self, path):
         try:
             with open(path, "rb") as f:
@@ -268,7 +267,7 @@ def hsm_token(host):
 def token_clients_root_only(host):
     loose = []
     # Every copy, not only the first on PATH: a root-only wrapper must not hide a runnable one.
-    for path in (p for tool in guest_probe.TOKEN_CLIENTS for p in host.which_all(tool)):
+    for path in (p for tool in os_probe.TOKEN_CLIENTS for p in host.which_all(tool)):
         st = host.stat(path)
         if st is None:
             loose.append("%s (cannot stat)" % path)
@@ -277,11 +276,11 @@ def token_clients_root_only(host):
             loose.append("%s (uid %d, gid %d, mode %o)" % (path, st[0], st[1], st[2] & 0o7777))
     if loose:
         return False, "token client tools others can run or change: %s (chown root:root, chmod 0700)" % ", ".join(loose)
-    ok, why = guest_probe.pcscd_clients(host)
+    ok, why = os_probe.pcscd_clients(host)
     return ok, ("token client tools root-only; %s" % why if ok else why)
 
 
-PROBES = dict(guest_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot, tpm2_present=tpm2,
+PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot, tpm2_present=tpm2,
               tpm_sha256_bank=sha256_bank, root_disk_tpm_unlocked=root_unlock, ima_policy_loaded=ima,
               pin_import_key_present=import_key, hsm_token_attached=hsm_token,
               token_clients_root_only=token_clients_root_only)
