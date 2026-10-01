@@ -79,9 +79,21 @@ try:
     s.connect(('$dst', $port)); sys.exit(0)
 except OSError:
     sys.exit(1)"; }
+udpok(){ x kms python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(1)
+try:
+    s.sendto(b'x', ('${IP[ntp]}', $1)); s.recvfrom(64); sys.exit(0)
+except OSError:
+    sys.exit(1)"; }
 hdr "0  control: before the ruleset, the lab really connects (so a later refusal is the firewall's)"
 tcpok unauth "${IP[kms]}" 9999 && P "port 9999 on the KMS host is reachable before the ruleset" || F "the lab cannot connect at all: every refusal below would prove nothing"
 tcpok kms "${IP[unauth]}" 443 && P "the KMS host reaches an undeclared host before the ruleset" || F "outbound control failed"
+# Every listener a negative check below relies on must answer now; a listener that failed to bind would
+# otherwise make "not reachable" pass whatever the firewall does.
+tcpok kms "${IP[audit]}" 7000 && P "control: audit:7000 answers before the ruleset" || F "control: audit:7000 not listening"
+tcpok kms "${IP[unauth]}" 6514 && P "control: unauth:6514 answers before the ruleset" || F "control: unauth:6514 not listening"
+udpok 124 && P "control: ntp:124/udp answers before the ruleset" || F "control: ntp:124/udp not listening"
 
 hdr "4  the rendered ruleset: nft -c, then loaded in the KMS namespace only"
 python3 "$BM/firewall.py" "$T/site.json" > "$T/kms.nft" && P "rendered" || F "render failed"
@@ -112,13 +124,6 @@ tcpok kms "${IP[audit]}" 6514 && P "audit sink 6514/tcp reachable" || F "audit s
 tcpok kms "${IP[audit]}" 7000 && F "the audit host on an undeclared port was reachable" || P "the audit host on another port is not"
 tcpok kms "${IP[unauth]}" 6514 && F "an undeclared host was reachable" || P "an undeclared host (even on 6514) is not"
 tcpok kms "${IP[unauth]}" 443 && F "an undeclared host:443 was reachable" || P "an undeclared host on 443 is not"
-udpok(){ x kms python3 -c "
-import socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(1)
-try:
-    s.sendto(b'x', ('${IP[ntp]}', $1)); s.recvfrom(64); sys.exit(0)
-except OSError:
-    sys.exit(1)"; }
 udpok 123 && P "NTP sink 123/udp reachable" || F "NTP sink unreachable"
 udpok 124 && F "the NTP host on an undeclared UDP port was reachable" || P "the NTP host on another UDP port is not"
 

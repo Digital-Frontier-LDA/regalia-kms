@@ -75,6 +75,12 @@ def validate(doc):
            "client_cidrs": _networks(doc["client_cidrs"], "client_cidrs"),
            "monitoring_cidrs": _networks(doc["monitoring_cidrs"], "monitoring_cidrs"),
            "admin_cidrs": _networks(doc["admin_cidrs"], "admin_cidrs"), "outbound": []}
+    # The zones carry different permissions (admin: SSH only; client and monitoring: the KMS port only),
+    # so an address in both would be allowed both and fail the probe matrix: admin must not overlap them.
+    for a in cfg["admin_cidrs"]:
+        for c in cfg["client_cidrs"] + cfg["monitoring_cidrs"]:
+            require(not ipaddress.ip_network(a).overlaps(ipaddress.ip_network(c)),
+                    "admin network %s overlaps the KMS-caller network %s: zones must be disjoint" % (a, c))
     require(isinstance(doc["outbound"], list) and doc["outbound"], "outbound must list the audit and NTP sinks at least")
     names = set()
     for i, o in enumerate(doc["outbound"]):

@@ -233,6 +233,15 @@ class HostProbe(unittest.TestCase):
         h.files["/sys/kernel/security/ima/policy"] = "measure func=BPRM_CHECK\n"
         self.assertTrue(host_probe.ima(h)[0], "no mask is MAY_EXEC for BPRM_CHECK")
 
+    def test_a_dormant_table_fails_the_firewall(self):
+        h = FakeHost()
+        d = json.loads(NFT_JSON)
+        d["nftables"][0]["table"]["flags"] = "dormant"     # the shape nft -j prints (captured)
+        h.runs[("nft", "-j", "list", "table", "inet", "regalia_kms")] = (0, json.dumps(d))
+        value, why = host_probe.firewall(h)
+        self.assertFalse(value)
+        self.assertIn("DORMANT", why)
+
     def test_an_accept_policy_on_any_chain_fails_the_firewall(self):
         for hook in ("input", "output", "forward"):
             with self.subTest(hook=hook):

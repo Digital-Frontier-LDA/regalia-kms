@@ -33,6 +33,8 @@ class SiteConfig(unittest.TestCase):
             "bad proto": (lambda d: d["outbound"][0].__setitem__("proto", "icmp"), "tcp or udp"),
             "loopback host": (lambda d: d.__setitem__("host_ipv4", "127.0.0.1"), "host address"),
             "duplicate net": (lambda d: d.__setitem__("client_cidrs", ["198.51.100.0/24", "198.51.100.0/24"]), "twice"),
+            "admin overlaps clients": (lambda d: d.__setitem__("admin_cidrs", ["198.51.100.16/28"]), "must be disjoint"),
+            "admin overlaps monitoring": (lambda d: d.__setitem__("admin_cidrs", ["203.0.113.128/25"]), "must be disjoint"),
         }
         for label, (breakit, why) in cases.items():
             with self.subTest(label):

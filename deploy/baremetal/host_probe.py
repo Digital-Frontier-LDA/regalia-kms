@@ -290,9 +290,14 @@ def firewall(host):
     if rc != 0:
         return False, "the table inet regalia_kms is not loaded (nft -f the firewall.py output)"
     try:
-        chains = {c["chain"].get("hook"): c["chain"] for c in json.loads(out).get("nftables", []) if "chain" in c}
+        items = json.loads(out).get("nftables", [])
+        chains = {c["chain"].get("hook"): c["chain"] for c in items if "chain" in c}
+        flags = [t["table"].get("flags") for t in items if "table" in t]
     except (ValueError, AttributeError):
         return False, "cannot parse nft -j output"
+    # A dormant table still lists its chains, but they are detached from the hooks and filter nothing.
+    if any(f and "dormant" in (f if isinstance(f, list) else [f]) for f in flags):
+        return False, "inet regalia_kms is loaded but DORMANT: its chains filter nothing (nft add table inet regalia_kms '{ flags ; }')"
     bad = [h for h in ("input", "output", "forward") if (chains.get(h) or {}).get("policy") != "drop"]
     if bad:
         return False, "inet regalia_kms is loaded, but %s %s not on policy drop" % (", ".join(bad), "is" if len(bad) == 1 else "are")

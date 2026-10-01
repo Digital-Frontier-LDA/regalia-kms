@@ -73,9 +73,23 @@ KMS and SSH ports, the zones allowed to reach each, and the only destinations th
 (the audit and NTP sinks at least). From it:
 
 ```sh
+install -d -m 0755 /etc/nftables.d
 python3 deploy/baremetal/firewall.py site.json > /etc/nftables.d/regalia-kms.nft
 nft -c -f /etc/nftables.d/regalia-kms.nft && nft -f /etc/nftables.d/regalia-kms.nft
 ```
+
+It must also survive a reboot, and the KMS must never start without it:
+- **Load it at boot:** in `/etc/nftables.conf`, keep Debian's `flush ruleset` first, then add
+  `include "/etc/nftables.d/*.nft"`, and `systemctl enable nftables.service`.
+- **Order the KMS after it**, with a drop-in `/etc/systemd/system/regalia-kms.service.d/firewall.conf`:
+  ```ini
+  [Unit]
+  Requires=nftables.service
+  After=nftables.service
+  ```
+  If the ruleset fails to load, nftables.service fails and the KMS does not start.
+- **Check again after the reboot** (section 5): `firewall_default_deny` is measured on the running
+  host, so a ruleset that loaded once but not at boot fails commissioning.
 
 Measured: `firewall_default_deny` (the table is loaded, with input, output and forward on policy
 drop). Checked by behaviour from each zone after commissioning:
