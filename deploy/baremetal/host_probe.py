@@ -208,11 +208,16 @@ def import_key(host, expected=None):
     return True, "the recorded import key is at %s (sha256 %s)" % (IMPORT_HANDLE, fp)
 
 
-def hsm_token(host):
+def hsm_ports(host):
+    """The sysfs USB paths of every Nitrokey HSM 2 on the bus."""
     base = "/sys/bus/usb/devices"
-    ports = sorted(d for d in host.listdir(base)
-                   if ((host.read("%s/%s/idVendor" % (base, d)) or "").strip(),
-                       (host.read("%s/%s/idProduct" % (base, d)) or "").strip()) == NITROKEY_HSM)
+    return sorted(d for d in host.listdir(base)
+                  if ((host.read("%s/%s/idVendor" % (base, d)) or "").strip(),
+                      (host.read("%s/%s/idProduct" % (base, d)) or "").strip()) == NITROKEY_HSM)
+
+
+def hsm_token(host):
+    ports = hsm_ports(host)
     if not ports:
         return False, "no Nitrokey HSM (USB %s:%s) on the bus" % NITROKEY_HSM
     return True, "Nitrokey HSM attached at USB %s" % ", ".join(ports)
@@ -247,10 +252,14 @@ def measure(host, import_key_sha256=None):
     return {name: dict(zip(("value", "why"), run(name))) for name in MEASURED}
 
 
-def compare(measured, host):
-    """Every measured control the evidence records must agree with the host, both ways."""
+def compare(measured, host, ports=()):
+    """Every measured control the evidence records must agree with the host, both ways; and the token
+    must be on the USB port the evidence pins (the INTERNAL one)."""
     out = ["evidence records %s=%s, the host measures %s: %s" % (n, host.get(n), measured[n]["value"], measured[n]["why"])
            for n in MEASURED if host.get(n) is not measured[n]["value"]]
+    if host.get("hsm_usb_path") not in ports:
+        out.append("evidence pins the Nitrokey HSM to USB %s, the host has it at %s" % (
+            host.get("hsm_usb_path"), ", ".join(ports) or "no port"))
     return out
 
 
@@ -283,7 +292,7 @@ def main(argv=None, host=None, run=None):
     report["measured"] = measured
     if args.evidence:
         if ev_host is not None:
-            problems += compare(measured, ev_host)
+            problems += compare(measured, ev_host, hsm_ports(host))
         report["evidence_problems"] = problems
     print(json.dumps(report, indent=2))
     # Evidence never lowers the bar: every measured control must be true, AND, when given, the evidence

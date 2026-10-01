@@ -10,6 +10,7 @@
 #   2  a blob made the ceremony's way (openssl RSA-OAEP SHA-256) for THIS TPM decrypts, and the
 #      script goes on to look for the card (and stops there: there is none)
 #   3  a blob for ANOTHER TPM, and an altered blob, are refused BEFORE any card is looked at
+#   4  --pcrs with 10 (IMA) or 11 (kernel image) is refused
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
 pass=0; fail=0
@@ -59,6 +60,12 @@ out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-
 python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/a.blob" "$W/bad.blob"
 out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "an altered blob is refused before the card check (exit $rc)" || F "altered blob: $out"
+
+hdr "4  a PIN is never bound to PCR 10 (IMA) or 11 (kernel image) directly"
+for p in 7+10 7+11 11; do
+  out="$(seal swtpm:port=2521 --id t --serial DENK0000001 --pcrs "$p")"; rc=$?
+  [ "$rc" != 0 ] && grep -q 'must not include 10 (IMA) or 11' <<< "$out" && P "--pcrs $p refused (exit $rc)" || F "--pcrs $p: $out"
+done
 
 echo; echo "pin-import-swtpm: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

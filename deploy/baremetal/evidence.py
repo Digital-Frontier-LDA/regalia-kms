@@ -14,7 +14,7 @@ evidence.
         "<every control host_probe measures>": true,
         "pin_import_key_sha256": "<64 hex>",           # written by hand at --init-import-key
         "hsm_usb_path": "<sysfs USB path>",             # the INTERNAL port
-        "credential_tpm2_pcrs": "7+11",
+        "credential_tpm2_pcrs": "7",                    # bound directly; never 10 or 11
         "ilo_isolated_or_disabled": true, "ac_power_recovery": true,
         "chassis_intrusion_armed": true, "used_hardware_intake": true,
         "runtime_credentials_excluded_from_backup": true
@@ -88,10 +88,15 @@ def validate(doc, measured_names, now=None):
     require(isinstance(host["hsm_usb_path"], str) and re.fullmatch(r"\d+-\d+(\.\d+)*", host["hsm_usb_path"]),
             "host.hsm_usb_path must be a sysfs USB path such as 1-1.4")
     require(isinstance(host["credential_tpm2_pcrs"], str) and re.fullmatch(r"\d{1,2}(\+\d{1,2})*", host["credential_tpm2_pcrs"]),
-            "host.credential_tpm2_pcrs must be a PCR list such as 7+11")
-    require("10" not in host["credential_tpm2_pcrs"].split("+"),
-            "host.credential_tpm2_pcrs must not include PCR 10 (IMA): the credential is decrypted before "
-            "regalia-kms runs, so it could never unseal at an unattended start (README, section 3)")
+            "host.credential_tpm2_pcrs must be a PCR list such as 7")
+    pcrs = [int(x) for x in host["credential_tpm2_pcrs"].split("+")]
+    require(all(0 <= x <= 23 for x in pcrs) and len(set(pcrs)) == len(pcrs),
+            "host.credential_tpm2_pcrs must be distinct PCRs 0-23")
+    require(7 in pcrs, "host.credential_tpm2_pcrs must include PCR 7 (Secure Boot state; README, section 3)")
+    require(10 not in pcrs, "host.credential_tpm2_pcrs must not include PCR 10 (IMA): the credential is decrypted "
+            "before regalia-kms runs, so it could never unseal at an unattended start (README, section 3)")
+    require(11 not in pcrs, "host.credential_tpm2_pcrs must not include PCR 11 directly: the kernel image changes "
+            "at every update; only a signed PCR policy could bind it (README, section 3)")
     return host
 
 

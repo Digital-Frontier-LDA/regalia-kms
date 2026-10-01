@@ -46,11 +46,15 @@ Commissioning has two halves:
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
   `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/local/sbin/regalia-kms` to
   carry the digest of the binary there now (start the service first).
-- **The PIN is NOT sealed to the IMA PCR (10).** systemd decrypts `LoadCredentialEncrypted` before it
-  executes regalia-kms, so a policy expecting that binary's measurement could never unseal at an
-  unattended start; PCR 10 also depends on the order everything else ran in. Seal the PIN and the
-  disk to the boot chain instead: **PCR 7** (Secure Boot state and keys) plus a **signed policy for
-  PCR 11** (the unified kernel image, systemd-measure), so a signed kernel update does not strand them.
+- **The PIN and the disk are sealed to PCR 7** (Secure Boot state and the keys it trusts), as
+  `systemd-cryptenroll` does by default. A kernel or KMS update does not change PCR 7, so nothing is
+  stranded; turning Secure Boot off, or enrolling other keys, does change it.
+  - **Not PCR 10 (IMA).** systemd decrypts `LoadCredentialEncrypted` before it executes regalia-kms, so
+    a policy expecting that binary's measurement could never unseal at an unattended start; PCR 10
+    also depends on the order everything else ran in.
+  - **Not PCR 11 directly.** It measures the kernel image, which changes at every update. Binding it
+    needs a *signed* PCR policy (`systemd-measure` + `--tpm2-public-key`), which these scripts do not
+    provision yet; `seal-hsm-pin.sh` refuses `--pcrs` with 10 or 11.
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by the same probes as the Proxmox guest.
@@ -68,7 +72,7 @@ Commissioning has two halves:
    `host.pin_import_key_sha256`. Measured: `pin_import_key_present`, which compares the key at the
    handle with that recorded value and checks its template: RSA-3072 with exactly
    fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt. Any other key at the handle fails.
-2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7+11 --from-blob
+2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7 --from-blob
    pin-hsm_<x>.blob`, and `--yubikey <serial> … --from-blob pin-yubikey_<x>.blob` for the KMS YubiKey
    (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in

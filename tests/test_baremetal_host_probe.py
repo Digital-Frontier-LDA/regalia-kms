@@ -218,7 +218,7 @@ class SignedEvidence(unittest.TestCase):
     def doc(self, **host_overrides):
         host = {n: True for n in host_probe.MEASURED}
         host.update({n: True for n in evidence.ATTESTED})
-        host.update(pin_import_key_sha256=FP, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7+11")
+        host.update(pin_import_key_sha256=FP, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7")
         host.update(host_overrides)
         return {"schema": evidence.SCHEMA, "site": "site-a", "host_serial": "CZJ1234567",
                 "captured_at": "2026-09-30T10:00:00Z", "host": host}
@@ -257,6 +257,11 @@ class SignedEvidence(unittest.TestCase):
                                                            if k != "ilo_isolated_or_disabled"}), "missing"),
             "a bad import key record": (self.doc(pin_import_key_sha256="abc"), "64 lowercase hex"),
             "a PIN sealed to the IMA PCR": (self.doc(credential_tpm2_pcrs="7+10"), "PCR 10"),
+            "a PIN sealed to PCR 11 directly": (self.doc(credential_tpm2_pcrs="7+11"), "PCR 11"),
+            "a policy without PCR 7": (self.doc(credential_tpm2_pcrs="1"), "include PCR 7"),
+            "a PCR out of range": (self.doc(credential_tpm2_pcrs="7+24"), "0-23"),
+            "a duplicated PCR": (self.doc(credential_tpm2_pcrs="7+7"), "distinct"),
+            "the token on another port": (self.doc(hsm_usb_path="2-1"), "the host has it at 1-1.4"),
         }
         for label, (doc, why) in cases.items():
             with self.subTest(label):

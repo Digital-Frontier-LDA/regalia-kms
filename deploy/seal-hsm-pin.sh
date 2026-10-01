@@ -3,9 +3,9 @@
 # credential regalia-kms loads (ADR-0002 D2; PIN-CUSTODY.md). Run ONCE per site, as root, on the guest,
 # with the card attached, typing the PIN from the sealed paper PIN card.
 #
-#   sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7+11 [--retries 10] [--replace]
-#   sudo deploy/seal-hsm-pin.sh --id pico-staging --serial ESP41D722E2 --pcrs 7+11   (Pico HSM: staging only)
-#   sudo deploy/seal-hsm-pin.sh --id yubikey-site-a --yubikey 36345471 --pcrs 7+11 [--retries 3]
+#   sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7 [--retries 10] [--replace]
+#   sudo deploy/seal-hsm-pin.sh --id pico-staging --serial ESP41D722E2 --pcrs 7   (Pico HSM: staging only)
+#   sudo deploy/seal-hsm-pin.sh --id yubikey-site-a --yubikey 36345471 --pcrs 7 [--retries 3]
 #       the same for the PIV PIN of a YubiKey the KMS uses unattended (ADR-0002 D2; touch never): its
 #       counter is read from PIV metadata (ykman), the PIN is tested through ykcs11.
 #
@@ -127,7 +127,11 @@ if [ "$BENCH" = 1 ]; then
   [ -z "$PCRS" ] || fail "--bench-host-key and --pcrs are exclusive: the host key has no PCR binding"
   KEYARGS=(--with-key=host); say "BENCH: sealing with the host key, NOT the TPM. This credential is not production."
 else
-  [[ "$PCRS" =~ ^[0-9]{1,2}(\+[0-9]{1,2})*$ ]] || fail "--pcrs is required, e.g. 7+11: the PCR set recorded at commissioning (no default)"
+  [[ "$PCRS" =~ ^[0-9]{1,2}(\+[0-9]{1,2})*$ ]] || fail "--pcrs is required, e.g. 7: the PCR set recorded at commissioning (no default)"
+  # Bound directly, PCR 10 (IMA) can never unseal: systemd decrypts the credential before regalia-kms
+  # runs. PCR 11 (the kernel image) changes at every kernel update and would strand the PIN; it is
+  # usable only through a signed PCR policy, which this script does not provision.
+  case "+$PCRS+" in *+10+*|*+11+*) fail "--pcrs must not include 10 (IMA) or 11 (kernel image): bind 7 (deploy/baremetal/README.md, section 3)";; esac
   KEYARGS=(--with-key=tpm2 "--tpm2-pcrs=$PCRS")
 fi
 [ "$(id -u)" = 0 ] || fail "run as root (sudo): systemd-creds and the credstore need it"
