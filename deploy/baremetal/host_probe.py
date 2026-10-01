@@ -153,7 +153,25 @@ def root_unlock(host):
         opts = dict((o.split("=", 1) + [""])[:2] for o in entries[name].split(",") if o)
         if not opts.get("tpm2-device"):
             return False, "%s is in crypttab but not TPM-unlocked (options: %s)" % (name, entries[name] or "none")
-    return True, "%s unlocks with the TPM (%s)" % (", ".join(crypts), "; ".join(entries[n] for n in crypts))
+        # crypttab only ASKS for the TPM; the LUKS2 header must actually carry a TPM2 token (what
+        # systemd-cryptenroll --tpm2-device writes), or a passphrase-only volume would pass here.
+        rc, status = host.run(["cryptsetup", "status", name])
+        dev = next((l.split(":", 1)[1].strip() for l in status.splitlines() if l.strip().startswith("device:")), "")
+        if rc != 0 or not dev:
+            return False, "cannot find the LUKS device under %s (cryptsetup status)" % name
+        rc, meta = host.run(["cryptsetup", "luksDump", "--dump-json-metadata", dev])
+        try:
+            tokens = json.loads(meta).get("tokens", {}) if rc == 0 else None
+        except ValueError:
+            tokens = None
+        if tokens is None:
+            return False, "cannot read the LUKS2 header of %s (cryptsetup luksDump --dump-json-metadata)" % dev
+        tpm = [t for t in tokens.values() if t.get("type") == "systemd-tpm2" and t.get("keyslots")]
+        if not tpm:
+            return False, "%s (%s) has no systemd-tpm2 token in its LUKS2 header: enrol it with " \
+                "systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7" % (name, dev)
+    return True, "%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (
+        ", ".join(crypts), "; ".join(entries[n] for n in crypts))
 
 
 def ima(host):
@@ -166,17 +184,20 @@ def ima(host):
         if not f or f[0] != "measure":
             continue
         opts = dict(o.split("=", 1) for o in f[1:] if "=" in o)
-        if opts.get("func") == "BPRM_CHECK" or (opts.get("func") == "MMAP_CHECK" and "MAY_EXEC" in opts.get("mask", "")):
-            exec_rules.append("%s, PCR %s" % (opts["func"], opts.get("pcr", "10")))
+        if (opts.get("func") == "BPRM_CHECK" or (opts.get("func") == "MMAP_CHECK" and "MAY_EXEC" in opts.get("mask", ""))) \
+                and opts.get("pcr", "10") == "10":
+            # PCR 10: the PCR that attestation quotes (README, section 3); a rule extending another PCR
+            # would leave the quoted one silent about the binary.
+            exec_rules.append("%s, PCR 10" % opts["func"])
     if not exec_rules:
-        return False, "the IMA policy has no executable-measurement rule (measure func=BPRM_CHECK)"
+        return False, "the IMA policy has no executable-measurement rule into PCR 10 (measure func=BPRM_CHECK)"
     # ascii_runtime_measurements: PCR, template hash, template (ima-ng / ima-sig / ima-ngv2), file
     # digest "[ima:]alg:hex", path. IMA appends a new entry when changed bytes are executed, so the
     # NEWEST entry for the path is the one that must match the file as it is now.
     newest = None
     for line in (host.read(IMA_LOG) or "").splitlines():
         f = line.split()
-        if len(f) >= 5 and f[2] in ("ima-ng", "ima-sig", "ima-ngv2", "ima-sigv2") and f[4] == KMS_BINARY:
+        if len(f) >= 5 and f[0] == "10" and f[2] in ("ima-ng", "ima-sig", "ima-ngv2", "ima-sigv2") and f[4] == KMS_BINARY:
             newest = f[3].split(":")
     if not newest:
         return False, "the IMA policy measures executables (%s) but %s is not in the measurement log: " \

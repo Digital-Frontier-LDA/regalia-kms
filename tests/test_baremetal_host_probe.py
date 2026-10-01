@@ -32,6 +32,10 @@ exponent: 65537
 bits: 3072
 """
 USB = "/sys/bus/usb/devices"
+# cryptsetup luksDump --dump-json-metadata, trimmed: a passphrase slot 0 and the TPM2 slot 1 with the
+# token systemd-cryptenroll --tpm2-device writes
+LUKS_JSON = json.dumps({"keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
+                        "tokens": {"0": {"type": "systemd-tpm2", "keyslots": ["1"], "tpm2-pcrs": [7]}}})
 KMS_BYTES = b"stand-in regalia-kms executable"
 KMS_SHA256 = hashlib.sha256(KMS_BYTES).hexdigest()
 
@@ -56,6 +60,8 @@ class FakeHost:
             ("findmnt", "-n", "-o", "SOURCE", "/"): (0, "/dev/mapper/vg-root\n"),
             ("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/mapper/vg-root"): (0, "vg-root lvm\nroot_crypt crypt\nsda3 part\nsda disk\n"),
             ("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE): (0, IMPORT_YAML),
+            ("cryptsetup", "status", "root_crypt"): (0, "/dev/mapper/root_crypt is active and is in use.\n  type:    LUKS2\n  device:  /dev/sda3\n"),
+            ("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sda3"): (0, LUKS_JSON),
             ("tpm2_readpublic", "-Q", "-c", host_probe.IMPORT_HANDLE, "-f", "pem", "-o", "/dev/stdout"): (0, PEM),
             ("ss", "-xpn"): (0, ""),
         }
@@ -186,6 +192,22 @@ class HostProbe(unittest.TestCase):
         h.files[host_probe.IMA_LOG] += "10 aa ima-ng sha256:%s %s\n" % (
             hashlib.sha256(b"replaced after it last ran").hexdigest(), host_probe.KMS_BINARY)
         self.assertTrue(host_probe.ima(h)[0], "the newest entry matches the current bytes")
+
+    def test_a_volume_without_a_tpm2_token_fails_even_if_crypttab_asks(self):
+        h = FakeHost()
+        h.runs[("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sda3")] = (
+            0, json.dumps({"keyslots": {"0": {"type": "luks2"}}, "tokens": {}}))
+        value, why = host_probe.root_unlock(h)
+        self.assertFalse(value)
+        self.assertIn("no systemd-tpm2 token", why)
+
+    def test_ima_must_measure_into_pcr_10(self):
+        h = FakeHost()
+        h.files["/sys/kernel/security/ima/policy"] = "measure func=BPRM_CHECK mask=MAY_EXEC pcr=9\n"
+        self.assertFalse(host_probe.ima(h)[0])
+        h = FakeHost()
+        h.files[host_probe.IMA_LOG] = h.files[host_probe.IMA_LOG].replace("10 ef ima-ng", "9 ef ima-ng")
+        self.assertFalse(host_probe.ima(h)[0], "an entry in another PCR does not count")
 
     def test_crypttab_tpm2_device_must_be_an_exact_nonempty_option(self):
         for opts in ("tpm2-device=", "x-tpm2-device=disabled", "luks,discard"):
