@@ -161,3 +161,24 @@ class ProvisionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeprecationWarningOnEveryRun(unittest.TestCase):
+    """provision.py is deprecated (ADR-0002 D22, #55): every invocation says so, including --help
+    and malformed arguments, which exit inside argument parsing."""
+
+    def run_main(self, argv):
+        import contextlib
+        import io
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                provision.main(["provision.py", *argv])
+            except SystemExit:
+                pass
+        return err.getvalue()
+
+    def test_help_and_bad_arguments_show_the_deprecation(self):
+        for argv in (["--help"], [], ["--no-such-option"]):
+            with self.subTest(argv=argv):
+                self.assertIn("DEPRECATED AND UNSUPPORTED", self.run_main(argv))
