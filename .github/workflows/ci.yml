@@ -58,6 +58,15 @@ jobs:
           chmod 0755 "$RUNNER_TEMP/promtool"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      - name: PIN delivery by TPM import, against a software TPM (swtpm; no card)
+        # seal-hsm-pin.sh --init-import-key / --from-blob: key creation, refusal, replacement,
+        # decryption of a ceremony-made blob, and refusal of a foreign or altered blob BEFORE any card
+        # is looked at. The card half is the hardware drill (e2e/nitrokey-pin-import-drill.sh).
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools opensc
+          bash e2e/pin-import-swtpm.sh
+
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
         # The Go suite does not cover the deployment tooling, the custody-manifest validator, the
         # alert rules or the documentation contracts — those are Python, and they gate the same
