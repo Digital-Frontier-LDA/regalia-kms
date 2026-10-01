@@ -1,6 +1,6 @@
 """deploy/baremetal/os_probe.py: the KMS host's OS-hardening probes (core dumps, hibernation, swap, an
 unprivileged service) and the pcscd client check, against a fake host. Moved here with the probes from
-the deprecated Proxmox guest probe (ADR-0002 D22, #55)."""
+the deprecated Proxmox host probe (ADR-0002 D22, #55)."""
 import unittest
 
 from deploy.baremetal import os_probe
@@ -10,7 +10,7 @@ def measure(host):
     return {name: dict(zip(("value", "why"), os_probe.PROBES[name](host))) for name in os_probe.MEASURED}
 
 
-class FakeGuest:
+class FakeHost:
     """A hardened KMS host by default; each test breaks exactly one thing and asks for the verdict."""
 
     def __init__(self):
@@ -53,21 +53,21 @@ class FakeGuest:
         return self.links.get(path)
 
 
-def add_pcscd_client(guest, inode, name, pid, exe):
+def add_pcscd_client(host, inode, name, pid, exe):
     server = str(900 + inode)
-    guest.commands[("ss", "-xpn")] += (
+    host.commands[("ss", "-xpn")] += (
         f'u_str ESTAB 0 0 /run/pcscd/pcscd.comm {server} * {inode} users:(("pcscd",pid=10,fd=7))\n'
         f'u_str ESTAB 0 0 * {inode} * {server} users:(("{name}",pid={pid},fd=3))\n')
     if exe:
-        guest.links[f"/proc/{pid}/exe"] = exe
+        host.links[f"/proc/{pid}/exe"] = exe
 
 
 class OSProbeTests(unittest.TestCase):
-    def verdict(self, guest, control):
-        return measure(guest)[control]["value"]
+    def verdict(self, host, control):
+        return measure(host)[control]["value"]
 
-    def test_a_hardened_guest_passes_every_measured_control(self):
-        results = measure(FakeGuest())
+    def test_a_hardened_host_passes_every_measured_control(self):
+        results = measure(FakeHost())
         self.assertEqual({k: v["value"] for k, v in results.items()}, {k: True for k in os_probe.MEASURED})
 
     def test_each_control_fails_on_the_one_thing_that_breaks_it(self):
@@ -104,45 +104,45 @@ class OSProbeTests(unittest.TestCase):
         for control, breakers in cases.items():
             for index, breaker in enumerate(breakers):
                 with self.subTest(control=control, case=index):
-                    guest = FakeGuest()
-                    breaker(guest)
-                    self.assertFalse(self.verdict(guest, control), measure(guest)[control]["why"])
+                    host = FakeHost()
+                    breaker(host)
+                    self.assertFalse(self.verdict(host, control), measure(host)[control]["why"])
                     # One broken thing breaks one control, not the whole report.
-                    others = {k: v["value"] for k, v in measure(guest).items() if k != control}
+                    others = {k: v["value"] for k, v in measure(host).items() if k != control}
                     self.assertTrue(all(others.values()), others)
 
     def test_the_alternatives_that_are_also_hardened(self):
-        guest = FakeGuest()
+        host = FakeHost()
         for target in os_probe.HIBERNATING_TARGETS:
-            guest.commands[("systemctl", "is-enabled", target)] = "static\n"
-        guest.commands[("systemd-analyze", "cat-config", "systemd/sleep.conf")] = \
+            host.commands[("systemctl", "is-enabled", target)] = "static\n"
+        host.commands[("systemd-analyze", "cat-config", "systemd/sleep.conf")] = \
             "[Sleep]\nAllowHibernation=no\nAllowHybridSleep=no\nAllowSuspendThenHibernate=no\n"
-        self.assertTrue(self.verdict(guest, "hibernation_disabled"))
-        guest.commands[("systemd-analyze", "cat-config", "systemd/sleep.conf")] = \
+        self.assertTrue(self.verdict(host, "hibernation_disabled"))
+        host.commands[("systemd-analyze", "cat-config", "systemd/sleep.conf")] = \
             "[Sleep]\n[Other]\nAllowHibernation=no\nAllowHybridSleep=no\nAllowSuspendThenHibernate=no\n"
-        self.assertFalse(self.verdict(guest, "hibernation_disabled"), "keys outside [Sleep] are ignored by systemd")
+        self.assertFalse(self.verdict(host, "hibernation_disabled"), "keys outside [Sleep] are ignored by systemd")
 
-        guest = FakeGuest()
-        guest.files["/proc/sys/kernel/core_pattern"] = "core\n"
-        guest.commands.pop(("systemd-analyze", "cat-config", "systemd/coredump.conf"))
-        self.assertTrue(self.verdict(guest, "core_dumps_disabled"), "a non-piped pattern relies on LimitCORE=0")
+        host = FakeHost()
+        host.files["/proc/sys/kernel/core_pattern"] = "core\n"
+        host.commands.pop(("systemd-analyze", "cat-config", "systemd/coredump.conf"))
+        self.assertTrue(self.verdict(host, "core_dumps_disabled"), "a non-piped pattern relies on LimitCORE=0")
 
-        guest = FakeGuest()
-        guest.files["/proc/swaps"] = "Filename\tType\n/dev/dm-3 partition 1 0 -2\n"
-        guest.files["/sys/class/block/dm-3/dm/uuid"] = "CRYPT-PLAIN-swap\n"
-        self.assertTrue(self.verdict(guest, "swap_disabled_or_encrypted"))
-        guest.files["/sys/class/block/dm-3/dm/uuid"] = "LVM-abcdef\n"
-        self.assertFalse(self.verdict(guest, "swap_disabled_or_encrypted"), "a plain LVM volume is not encrypted")
+        host = FakeHost()
+        host.files["/proc/swaps"] = "Filename\tType\n/dev/dm-3 partition 1 0 -2\n"
+        host.files["/sys/class/block/dm-3/dm/uuid"] = "CRYPT-PLAIN-swap\n"
+        self.assertTrue(self.verdict(host, "swap_disabled_or_encrypted"))
+        host.files["/sys/class/block/dm-3/dm/uuid"] = "LVM-abcdef\n"
+        self.assertFalse(self.verdict(host, "swap_disabled_or_encrypted"), "a plain LVM volume is not encrypted")
 
     def test_pcscd_clients_must_all_be_the_kms_binary(self):
-        self.assertTrue(os_probe.pcscd_clients(FakeGuest())[0])
+        self.assertTrue(os_probe.pcscd_clients(FakeHost())[0])
         for breaker in (lambda g: add_pcscd_client(g, 444, "pcsc_scan", 30, "/usr/bin/pcsc_scan"),
                         lambda g: add_pcscd_client(g, 555, "regalia-kms", 31, "/tmp/regalia-kms"),
                         lambda g: g.commands.pop(("ss", "-xpn"))):
             with self.subTest():
-                guest = FakeGuest()
-                breaker(guest)
-                self.assertFalse(os_probe.pcscd_clients(guest)[0])
+                host = FakeHost()
+                breaker(host)
+                self.assertFalse(os_probe.pcscd_clients(host)[0])
 
 
 if __name__ == "__main__":
