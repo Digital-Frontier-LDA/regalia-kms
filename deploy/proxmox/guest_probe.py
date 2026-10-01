@@ -186,6 +186,13 @@ def token_clients(host):
     installed = [t for t in TOKEN_CLIENTS if host.which(t)]
     if installed:
         return False, f"token client tools installed: {', '.join(installed)}"
+    ok, why = pcscd_clients(host)
+    return ok, (f"no token client tools installed; {why}" if ok else why)
+
+
+def pcscd_clients(host):
+    """(True, "<n> pcscd client(s), all the KMS binary") when every process connected to pcscd runs the
+    KMS binary; (False, why) otherwise. Shared with deploy/baremetal/host_probe.py."""
     # Who is connected to pcscd right now. `ss -xpn` prints each unix-socket endpoint on its own line:
     # the server side carries the socket path, the CLIENT side usually shows `*`. So match
     # endpoints by inode (the server line's peer inode is the client line's local inode), then
@@ -213,7 +220,7 @@ def token_clients(host):
                 others.append(f"{name} (pid {pid}, {exe or 'exe unreadable'})")
     if others:
         return False, f"pcscd clients other than the KMS: {', '.join(others)}"
-    return True, f"no token client tools installed; {len(client_inodes)} pcscd client(s), all the KMS binary"
+    return True, f"{len(client_inodes)} pcscd client(s), all the KMS binary"
 
 
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
