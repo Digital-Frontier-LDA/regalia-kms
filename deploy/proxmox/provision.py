@@ -349,14 +349,15 @@ def apply(config: dict[str, Any], plan: dict[str, Any]) -> None:
 
 
 def main(argv: list[str]) -> int:
+    # First, before argument parsing, so --help and malformed invocations show it too.
+    print("provision.py: DEPRECATED AND UNSUPPORTED: the KMS runs on bare metal (deploy/baremetal, "
+          "ADR-0002 D22); do not deploy a KMS as a Proxmox guest", file=sys.stderr)
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm-site")
     args = parser.parse_args(argv[1:])
-    print("provision.py: DEPRECATED AND UNSUPPORTED: the KMS runs on bare metal (deploy/baremetal, "
-          "ADR-0002 D22); do not deploy a KMS as a Proxmox guest", file=sys.stderr)
     try:
         document = load_json(args.config)
         config = validate_config(document)
