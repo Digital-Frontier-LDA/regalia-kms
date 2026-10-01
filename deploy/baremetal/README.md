@@ -6,8 +6,9 @@ guest. Three DL360 Gen9 with the HPE TPM 2.0 module: Lisbon, Porto, and a spare 
 Commissioning has two halves:
 - **Firmware and hardware** (below): BIOS/RBSU and iLO settings the operating system cannot read.
   They are done at the console and **attested** in the signed evidence.
-- **The running host:** `sudo python3 deploy/baremetal/host_probe.py --evidence E.json` **measures**
-  the platform, TPM and OS controls and refuses evidence that claims what the host lacks.
+- **The running host:** `sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 <hex> --evidence E.json`
+  **measures** the platform, TPM and OS controls. It exits 1 unless every measured control is true AND
+  the evidence agrees (evidence never lowers the bar).
 
 ## 1. Intake of a used server (before trusting it)
 
@@ -31,7 +32,7 @@ Commissioning has two halves:
 | Power supplies | both fitted, on **A and B feeds** where the datacenter offers them | attested |
 | Chassis intrusion | the detection kit **fitted and armed** (it is optional on Gen9: check) | attested: `chassis_intrusion_armed` |
 | iLO 4 | default password changed; on an **isolated management network**, or disabled | attested: `ilo_isolated_or_disabled` |
-| Internal USB port | the **Nitrokey HSM 2** goes here, inside the chassis | measured: `hsm_token_attached` (USB path pinned in the evidence) |
+| Internal USB port | the **Nitrokey HSM 2** goes here, inside the chassis | measured: `hsm_token_attached` (USB 20a0:4230 in sysfs; path pinned in the evidence) |
 
 ## 3. Operating system (Debian 13)
 
@@ -39,17 +40,27 @@ Commissioning has two halves:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
   `tpm2-device=auto` in `/etc/crypttab`. Keep a recovery passphrase in the escrow. Measured:
   `root_disk_tpm_unlocked`.
-- **IMA** policy measuring executables (so the regalia-kms binary is in the PCR the PIN is sealed to).
-  Measured: `ima_policy_loaded`.
+- **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`),
+  so the regalia-kms binary is in the PCR the PIN is sealed to. Measured: `ima_policy_loaded`, which
+  also requires `/usr/local/sbin/regalia-kms` in the IMA measurement log (start the service first).
 - **Signed PCR policies** (systemd-measure / systemd-pcrlock), so a signed kernel or KMS update doesn't
   strand the sealed PIN.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
-  encrypted, no token client tools on PATH): measured by the same probes as the Proxmox guest.
+  encrypted): measured by the same probes as the Proxmox guest.
+- **Token clients root-only.** Unlike the guest, this host seals and re-seals its own PINs, so
+  `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
+  (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
+  connected to pcscd must be the KMS binary. Measured: `token_clients_root_only`. A KMS user that
+  brings its own client is caught by the pcscd check only while it is connected; restricting pcscd
+  access with a polkit rule (root and the KMS user only) is recommended on top.
 
 ## 4. TPM provisioning
 
 1. **PIN import key:** `sudo deploy/seal-hsm-pin.sh --init-import-key`. Copy the printed fingerprint
-   **by hand** at the console (the ceremony checks it). Measured: `pin_import_key_present`.
+   **by hand** at the console (the ceremony checks it) and record it in the evidence as
+   `host.pin_import_key_sha256`. Measured: `pin_import_key_present`, which compares the key at the
+   handle with that recorded value and checks its template (RSA-3072, fixedtpm, fixedparent,
+   sensitivedataorigin, decrypt, no sign). Any other key at the handle fails.
 2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7+… --from-blob
    pin-hsm_<x>.blob`, and `--yubikey <serial> … --from-blob pin-yubikey_<x>.blob` for the KMS YubiKey
    (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card.
@@ -58,5 +69,6 @@ Commissioning has two halves:
 
 ## 5. Pass criteria
 
-`host_probe.py` exits 0 (every measured control true), the evidence agrees with it, and an unattended
+`host_probe.py --import-key-sha256 <recorded> --evidence E.json` exits 0 (every measured control
+true, and the evidence agrees with it), and an unattended
 **reboot** brings the KMS back with no one present (the disk and the PIN both unseal from the TPM).
