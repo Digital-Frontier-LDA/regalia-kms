@@ -16,11 +16,19 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 - **A3.** A total outage (all three down) is restored by one manual recovery at one node, after which
   A1/A2 restore the rest.
 - **A4.** No single provider, datacenter, network path or device failure stops the cluster from
-  serving (one serving site at a time under fencing; the others are standby).
+  serving (one serving site at a time under fencing; the others are standby) **provided the fencing
+  authority is reachable from a surviving site.** Every site needs a short-lived lease, and recovery
+  does not grant one (FENCING.md), so the authority must sit in a failure domain independent of both
+  providers (its own host outside providers X and Y, with its state backed up off-host). If it is
+  lost, the surviving site stops serving at lease expiry until the authority is restored: an explicit
+  availability limit, not a gap.
 
 **Security.**
-- **S1.** No single location holds what unlocks a node's disk: the node's TPM contribution and one
-  authorized peer's contribution are both required. Local possession of the hardware is not enough.
+- **S1.** In unattended bootstrap, no single location holds what unlocks a node's disk: the node's
+  TPM contribution and one authorized peer's contribution are both required, so local possession of
+  the hardware is not enough. **The one exception is the A3 manual recovery path:** the per-node
+  recovery keyslot credential unlocks a node by itself. It is therefore held apart from every site,
+  by the Owner under formal physical custody, and every use is logged (S6) and followed by rotation.
 - **S2.** Eligibility is defined separately for the two roles, from the current signed membership:
   - **to receive** a peer contribution (be unlocked): ACTIVE or MAINTENANCE;
   - **to authorize** (give a contribution): ACTIVE only.
@@ -45,7 +53,7 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 | Network partition | Peers cannot reach each other or the revocation authority | Fail closed: a peer whose membership is older than the freshness bound authorizes nothing (design question 1); serving continues only under a valid lease |
 | A malicious or compromised peer | It can refuse to help (availability) or try to help the wrong node | The alternate peer path (A1); it holds only its own contribution, never a whole unlock credential (S1); it cannot mint membership (offline root) |
 | Stale membership on one peer | It may still help a node revoked elsewhere | Freshness bound (question 1); revocation is restrictive-only and propagates to every reachable peer |
-| Rollback of a node's disk or TPM state | Old manifest, old epoch | Highest accepted epoch kept outside restorable disk state (TPM NV), checked at every decision |
+| Rollback of a node's disk, or of its manifest | Old manifest, old epoch | Highest accepted epoch kept in physical TPM NV, which disk restore cannot roll back, checked at every decision. **Rolling back the TPM NV itself** (a physical attack on the TPM) defeats that node's own anchor; the independent anchor is its peers, which each keep their own highest epoch and refuse a requester whose transcript names an older one. A whole-cluster NV rollback is out of scope |
 | TPM (vendor bug, fTPM, physical attack) | Sealed local secrets on that node | S1 still needs a peer contribution; measured-boot claims are only as good as #65's real PCR mapping |
 | HSM model or batch (Nitrokey batch defect seen on one unit; Pico disclosure GHSA-wq3w-g2fj-q2jq) | Availability of that device kind; for Pico, key protection is unqualified | Heterogeneous fleet only after #62–#64; until then production stays Nitrokey (decision record) |
 | YubiKey | Its PIV/OpenPGP keys if the PIN leaks | PIN retry counters; admin credentials never online (S5) |
@@ -69,8 +77,9 @@ baseline) remain authoritative. The secrets and their lifecycles are in
    (then: one contribution only, never a whole credential).
 4. **Stale membership.** Covered by epochs, TPM-anchored highest-epoch, the freshness bound and
    restrictive-only revocation.
-5. **Rollback.** Disk snapshots, old TPM NV contents, old manifests and old boot images: refused by
-   the epoch anchor (#68) and by retiring old measured policies (#75).
+5. **Rollback.** Disk snapshots, old manifests and old boot images: refused by the TPM-NV epoch
+   anchor (#68) and by retiring old measured policies (#75). Old TPM NV contents on one node: refused
+   by the peers' own anchors (the failure-domain row above).
 6. **Independent provider or site failure.** A4 and A3; two sites at one provider are one domain.
 
 ## The Phase 0 design questions, answered (to be confirmed by the phases)
