@@ -88,6 +88,26 @@ input. Install the provided service drop-in only after its credential IDs match 
 IDs in the custody manifest. *Verified by:* `hsm-host-role/files/verify-deployment.py`, which requires
 every `LoadCredentialEncrypted=` source to sit under `/etc/credstore.encrypted/regalia-kms-`.
 
+## Delivering the PIN to the host's TPM without typing it (TPM import)
+
+The ceremony runs on an air-gapped laptop; the PIN must reach each KMS host's TPM. Instead of typing
+it at the site, it travels **encrypted to a key that lives only in that host's TPM**:
+
+1. **Commissioning, on the host:** `sudo deploy/seal-hsm-pin.sh --init-import-key` creates an
+   RSA-3072 decryption key inside the TPM (`fixedTPM`, `fixedParent`, `sensitiveDataOrigin`: made
+   there, never leaves), persists it (default handle `0x81000101`) and writes its public key and
+   SHA-256 fingerprint. Copy the fingerprint by hand from the console.
+2. **Ceremony, on the laptop:** step 0 checks the public key against that fingerprint and encrypts
+   the site's PIN to it (RSA-OAEP, SHA-256). The blob is safe on any medium.
+3. **On the host:** `sudo deploy/seal-hsm-pin.sh --id … --serial … --pcrs … --from-blob pin-<site>.blob`.
+   The TPM decrypts it; then every check of the typed path runs (card serial, full counter, PIN tested
+   on the card, sealed, read back). A blob for another TPM, or altered, fails to decrypt **before PIN
+   verification**: the card's serial and counter are read, but no PIN try is spent.
+
+Typing the PIN from the PIN card stays as the fallback (re-sealing later, a host commissioned after
+the ceremony). Proven on DENK0404144 with two software TPMs as the two hosts:
+`e2e/nitrokey-pin-import-drill.sh` (14/0, 2026-10-01).
+
 ## Retry circuit breaker
 
 Both providers refuse to present a PIN when the card reports one or zero remaining attempts, latch the
