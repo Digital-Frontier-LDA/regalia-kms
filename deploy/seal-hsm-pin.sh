@@ -44,12 +44,15 @@ CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
 fail(){ printf 'seal-hsm-pin: FAIL: %s\n' "$*" >&2; exit 1; }
 say(){ printf 'seal-hsm-pin: %s\n' "$*" >&2; }
 INIT_IMPORT=0; FROM_BLOB=""; IMPORT_HANDLE="0x81000101"; IMPORT_PUB="/root/regalia-pin-import.pub.pem"; REPLACE_IMPORT=0
+# A value-taking option with no value must fail, not loop: without set -e a failed `shift 2` would
+# leave the argument in place and the loop would spin forever.
+need(){ [ $# -ge 2 ] && [ -n "$2" ] || fail "$1 needs a value"; }
 while [ $# -gt 0 ]; do case "$1" in
-  --id) ID="${2:-}"; shift 2;; --serial) SERIAL="${2:-}"; shift 2;; --pcrs) PCRS="${2:-}"; shift 2;;
-  --replace) REPLACE=1; shift;; --bench-host-key) BENCH=1; shift;; --retries) RETRIES="${2:-}"; shift 2;;
+  --id) need "$@"; ID="$2"; shift 2;; --serial) need "$@"; SERIAL="$2"; shift 2;; --pcrs) need "$@"; PCRS="$2"; shift 2;;
+  --replace) REPLACE=1; shift;; --bench-host-key) BENCH=1; shift;; --retries) need "$@"; RETRIES="$2"; shift 2;;
   --init-import-key) INIT_IMPORT=1; shift;; --replace-import-key) REPLACE_IMPORT=1; shift;;
-  --from-blob) FROM_BLOB="${2:-}"; shift 2;; --import-handle) IMPORT_HANDLE="${2:-}"; shift 2;;
-  --import-pub) IMPORT_PUB="${2:-}"; shift 2;;
+  --from-blob) need "$@"; FROM_BLOB="$2"; shift 2;; --import-handle) need "$@"; IMPORT_HANDLE="$2"; shift 2;;
+  --import-pub) need "$@"; IMPORT_PUB="$2"; shift 2;;
   -h|--help) sed -n '2,45p' "$0"; exit 0;; *) fail "unknown argument '$1' (see --help)";; esac; done
 [[ "$IMPORT_HANDLE" =~ ^0x81[0-9a-fA-F]{6}$ ]] || fail "--import-handle must be a persistent handle, 0x81xxxxxx"
 
@@ -58,20 +61,31 @@ if [ "$INIT_IMPORT" = 1 ]; then
   [ "$(id -u)" = 0 ] || fail "run as root (sudo)"
   for t in tpm2_createprimary tpm2_create tpm2_load tpm2_evictcontrol tpm2_readpublic tpm2_flushcontext openssl; do
     command -v "$t" >/dev/null || fail "$t is required (tpm2-tools, openssl)"; done
-  work="$(mktemp -d)"; trap 'rm -rf "$work"; tpm2_flushcontext -t >/dev/null 2>&1' EXIT
+  # Production goes through the kernel resource manager (/dev/tpmrm0, the tpm2-tools default), which
+  # gives each connection its own transient objects and cleans them up: nothing to flush globally,
+  # and flushing all transient objects or sessions (-t / -s) on a shared TPM would break other users.
+  # A raw /dev/tpm0 has no resource manager and is refused. Only a PRIVATE simulator named in
+  # TPM2TOOLS_TCTI (swtpm, mssim: the test's own TPM) has no manager and needs the transient objects
+  # that each tool call leaves behind flushed between steps.
+  case "${TPM2TOOLS_TCTI:-}" in
+    *tpm0|*"/dev/tpm0"*) fail "TPM2TOOLS_TCTI points at /dev/tpm0 (no resource manager); use /dev/tpmrm0" ;;
+  esac
+  work="$(mktemp -d)"
+  flush_own(){ local c; for c in "$work"/*.ctx; do [ -f "$c" ] && tpm2_flushcontext "$c" >/dev/null 2>&1; done
+    case "${TPM2TOOLS_TCTI:-}" in swtpm*|mssim*) tpm2_flushcontext -t >/dev/null 2>&1 ;; esac; }
+  trap 'flush_own; rm -rf "$work"' EXIT
   if tpm2_readpublic -Q -c "$IMPORT_HANDLE" >/dev/null 2>&1; then
     [ "$REPLACE_IMPORT" = 1 ] || fail "the TPM already holds a key at $IMPORT_HANDLE; pass --replace-import-key to make a new one (PIN blobs made for the old key stop working)"
     tpm2_evictcontrol -Q -C o -c "$IMPORT_HANDLE" >/dev/null || fail "cannot remove the old key at $IMPORT_HANDLE"
   fi
-  flush(){ tpm2_flushcontext -t >/dev/null 2>&1; tpm2_flushcontext -s >/dev/null 2>&1; }
-  flush
+  flush_own
   tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb -c "$work/primary.ctx" || fail "tpm2_createprimary failed"
   tpm2_create -Q -C "$work/primary.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt' \
     -u "$work/k.pub" -r "$work/k.priv" || fail "tpm2_create failed"
-  flush
+  flush_own
   tpm2_load -Q -C "$work/primary.ctx" -u "$work/k.pub" -r "$work/k.priv" -c "$work/k.ctx" || fail "tpm2_load failed"
   tpm2_evictcontrol -Q -C o -c "$work/k.ctx" "$IMPORT_HANDLE" >/dev/null || fail "cannot persist the key at $IMPORT_HANDLE"
-  flush
+  flush_own
   # tpm2_readpublic creates the file 0660 whatever the umask; it is a public key, readable by anyone.
   tpm2_readpublic -Q -c "$IMPORT_HANDLE" -f pem -o "$IMPORT_PUB" && chmod 0644 "$IMPORT_PUB" || fail "cannot export the public key"
   fp="$(openssl pkey -pubin -in "$IMPORT_PUB" -outform der | sha256sum | cut -d' ' -f1)"

@@ -5,7 +5,7 @@
 # against a REAL Nitrokey. Two software TPMs (swtpm) stand in for two hosts' TPMs; the sealing itself
 # uses the bench host key (this bench has no TPM for systemd-creds; the TPM2 seal is #46's).
 #
-#   NK_PIN=… sudo -v && e2e/nitrokey-pin-import-drill.sh <serial> <retries>
+#   sudo -v && NK_PIN=… e2e/nitrokey-pin-import-drill.sh <serial> <retries>
 #
 #   A  a blob made for A's TPM seals, and the sealed credential reads back as the PIN
 #   B  a blob made for B's TPM is refused on A, and no card try is spent
@@ -59,7 +59,9 @@ out="$(seal "$TA" --id drill-import --serial "$SERIAL" --retries "$RETRIES" --be
 [ "$(tries)" = "$RETRIES" ] && P "no card try was spent" || F "a try was spent: $(tries) left"
 
 hdr "C: an altered blob is refused"
-cp "$W/pin-A.blob" "$W/bad.blob"; printf '\x01' | dd of="$W/bad.blob" bs=1 seek=100 conv=notrunc 2>/dev/null
+# Flip one byte unconditionally (XOR with 0xFF), and prove the copy now differs.
+python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
+cmp -s "$W/pin-A.blob" "$W/bad.blob" && F "the altered blob is identical to the original"
 out="$(seal "$TA" --id drill-import --serial "$SERIAL" --retries "$RETRIES" --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && P "an altered blob is refused" || F "an altered blob was accepted: $out"
 [ "$(tries)" = "$RETRIES" ] && P "no card try was spent" || F "a try was spent: $(tries) left"

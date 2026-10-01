@@ -101,8 +101,8 @@ it at the site, it travels **encrypted to a key that lives only in that host's T
    the site's PIN to it (RSA-OAEP, SHA-256). The blob is safe on any medium.
 3. **On the host:** `sudo deploy/seal-hsm-pin.sh --id … --serial … --pcrs … --from-blob pin-<site>.blob`.
    The TPM decrypts it; then every check of the typed path runs (card serial, full counter, PIN tested
-   on the card, sealed, read back). A blob for another TPM, or altered, fails to decrypt before the
-   card is touched.
+   on the card, sealed, read back). A blob for another TPM, or altered, fails to decrypt **before PIN
+   verification**: the card's serial and counter are read, but no PIN try is spent.
 
 Typing the PIN from the PIN card stays as the fallback (re-sealing later, a host commissioned after
 the ceremony). Proven on DENK0404144 with two software TPMs as the two hosts:
