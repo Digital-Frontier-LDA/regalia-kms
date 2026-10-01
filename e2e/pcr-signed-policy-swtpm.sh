@@ -96,7 +96,7 @@ want="$("$MEASURE" calculate $(uki 1) --bank=sha256 --phase=enter-initrd:leave-i
 
 hdr "1  refusals, before any card is looked at"
 no(){ local what="$1" msg="$2" out rc; shift 2; out="$(seal "$@")"; rc=$?
-  [ "$rc" != 0 ] && grep -q -- "$msg" <<< "$out" && ! grep -q 'tries left (full)' <<< "$out" && [ ! -e "$BLOB" ] \
+  [ "$rc" != 0 ] && grep -q -- "$msg" <<< "$out" && ! grep -q 'tries left (full)' <<< "$out" && ! sudo test -e "$BLOB" \
     && P "$what (exit $rc)" || F "$what: $out"; }
 no "a direct PCR 11 is still refused" 'must not include 10 (IMA) or 11' --pcrs 7+11 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig1.json
 no "a signed PCR other than 11 is refused" 'must be 11' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 7 --tpm2-signature sig1.json
