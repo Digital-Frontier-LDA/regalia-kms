@@ -64,6 +64,7 @@ IMPORT_HANDLE = os.environ.get("REGALIA_PIN_IMPORT_HANDLE", "0x81000101")
 IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = guest_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
 NITROKEY_HSM = ("20a0", "4230")
+SYSTEM_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/opt/bin")
 IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "decrypt"}
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank",
             "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present", "hsm_token_attached",
@@ -82,6 +83,18 @@ class Host(guest_probe.Host):
 
     def exists(self, path):
         return os.path.exists(path)
+
+    def which_all(self, tool):
+        """Every executable named tool on PATH or in the standard system directories, by real path."""
+        dirs = os.environ.get("PATH", "").split(os.pathsep) + list(SYSTEM_BIN_DIRS)
+        found = []
+        for d in dirs:
+            p = os.path.join(d, tool)
+            if d and os.path.isfile(p) and os.access(p, os.X_OK):
+                real = os.path.realpath(p)
+                if real not in found:
+                    found.append(real)
+        return found
 
     def stat(self, path):
         try:
@@ -225,10 +238,8 @@ def hsm_token(host):
 
 def token_clients_root_only(host):
     loose = []
-    for tool in guest_probe.TOKEN_CLIENTS:
-        path = host.which(tool)
-        if not path:
-            continue
+    # Every copy, not only the first on PATH: a root-only wrapper must not hide a runnable one.
+    for path in (p for tool in guest_probe.TOKEN_CLIENTS for p in host.which_all(tool)):
         st = host.stat(path)
         if st is None:
             loose.append("%s (cannot stat)" % path)
@@ -279,11 +290,11 @@ def main(argv=None, host=None, run=None):
         if not (args.signature and args.evidence_key and args.evidence_key_sha256):
             ap.error("--evidence needs --signature, --evidence-key and --evidence-key-sha256")
         try:
-            with open(args.evidence, "rb") as f:
-                doc = evidence_mod.load(f.read())
-            ev_host = evidence_mod.validate(doc, MEASURED)
-            evidence_mod.verify_signature(args.evidence, args.signature, args.evidence_key, args.evidence_key_sha256,
-                                          **({"run": run} if run else {}))
+            # One snapshot of all three inputs: the bytes validated are the bytes verified.
+            with evidence_mod.Snapshot(evidence=args.evidence, signature=args.signature, key=args.evidence_key) as snap:
+                ev_host = evidence_mod.validate(evidence_mod.load(snap.data["evidence"]), MEASURED)
+                evidence_mod.verify_signature(snap.paths["evidence"], snap.paths["signature"], snap.paths["key"],
+                                              args.evidence_key_sha256, **({"run": run} if run else {}))
             want = ev_host["pin_import_key_sha256"]
         except (OSError, evidence_mod.InvalidEvidence) as error:
             problems.append("evidence REFUSED: %s" % error)

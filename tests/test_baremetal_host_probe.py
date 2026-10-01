@@ -2,6 +2,7 @@
 platform control true, each control broken on its own measures false with a reason, and evidence that
 claims a control the host lacks is refused (ADR-0002 D21, regalia#46)."""
 import base64
+import datetime
 import shutil
 import subprocess
 import hashlib
@@ -66,6 +67,7 @@ class FakeHost:
     def which(self, tool): return "/usr/bin/" + tool if tool in self.tools else None
     def readlink(self, path): return None
     def stat(self, path): return self.stats.get(path)
+    def which_all(self, tool): return [p for p in self.stats if p.rsplit("/", 1)[1] == tool]
     def run(self, argv): return self.runs.get(tuple(argv), (1, ""))
 
 
@@ -159,6 +161,14 @@ class HostProbe(unittest.TestCase):
         h.tools.clear()
         self.assertTrue(host_probe.hsm_token(h)[0])
 
+    def test_a_runnable_copy_behind_a_root_only_one_fails(self):
+        h = FakeHost()
+        h.stats["/usr/local/sbin/opensc-tool"] = (0, 0, 0o100700)     # root-only, first on PATH
+        h.stats["/usr/bin/opensc-tool"] = (0, 0, 0o100755)            # world-executable, later
+        value, why = host_probe.token_clients_root_only(h)
+        self.assertFalse(value)
+        self.assertIn("/usr/bin/opensc-tool", why)
+
     def test_token_clients_owned_by_another_user_fail(self):
         h = FakeHost()
         h.stats["/usr/bin/pkcs11-tool"] = (1000, 0, 0o100700)
@@ -214,14 +224,17 @@ class SignedEvidence(unittest.TestCase):
                              capture_output=True).stdout
         self.key_sha = hashlib.sha256(der).hexdigest()
         self.everything = {n: {"value": True, "why": ""} for n in host_probe.MEASURED}
+        self.now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def doc(self, **host_overrides):
         host = {n: True for n in host_probe.MEASURED}
         host.update({n: True for n in evidence.ATTESTED})
-        host.update(pin_import_key_sha256=FP, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7")
+        host.update(pin_import_key_sha256=FP, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7",
+                    system_rom_version="P89 v3.40 (2024-03-22)", ilo_firmware_version="2.82",
+                    tpm_ek_certificate_present=True)
         host.update(host_overrides)
         return {"schema": evidence.SCHEMA, "site": "site-a", "host_serial": "CZJ1234567",
-                "captured_at": "2026-09-30T10:00:00Z", "host": host}
+                "captured_at": self.now, "host": host}
 
     def write(self, doc):
         path = os.path.join(self.d, "e.json")
@@ -262,12 +275,33 @@ class SignedEvidence(unittest.TestCase):
             "a PCR out of range": (self.doc(credential_tpm2_pcrs="7+24"), "0-23"),
             "a duplicated PCR": (self.doc(credential_tpm2_pcrs="7+7"), "distinct"),
             "the token on another port": (self.doc(hsm_usb_path="2-1"), "the host has it at 1-1.4"),
+            "no PSU attestation": (dict(full, host={k: v for k, v in full["host"].items()
+                                                    if k != "redundant_power_supplies"}), "missing"),
+            "no ROM version recorded": (self.doc(system_rom_version=""), "version string"),
+            "evidence older than 24 hours": (dict(full, captured_at="2026-01-01T00:00:00Z"), "older than 24 hours"),
         }
         for label, (doc, why) in cases.items():
             with self.subTest(label):
                 rc, report = self.run_probe(*self.write(doc))
                 self.assertEqual(rc, 1)
                 self.assertTrue(any(why in p for p in report["evidence_problems"]), report["evidence_problems"])
+
+    def test_the_signature_is_checked_over_the_validated_snapshot(self):
+        path, sig = self.write(self.doc())
+        seen = {}
+        real = host_probe.evidence_mod.verify_signature
+
+        def spy(ev, sg, key, key_sha, **kw):
+            seen.update(ev=ev, sg=sg, key=key)
+            with open(path, "w") as f:          # the original changes after validation...
+                f.write("{}")
+            real(ev, sg, key, key_sha)                  # ...the snapshot does not
+        with mock.patch.object(host_probe.evidence_mod, "verify_signature", side_effect=spy):
+            rc, report = self.run_probe(path, sig)
+        self.assertEqual(rc, 0, report.get("evidence_problems"))
+        self.assertNotIn(seen["ev"], (path,))
+        self.assertNotEqual(seen["key"], self.pub)
+        self.assertFalse(os.path.exists(seen["ev"]), "the snapshot is removed afterwards")
 
     def test_an_altered_or_foreign_signed_document_is_refused(self):
         path, sig = self.write(self.doc())

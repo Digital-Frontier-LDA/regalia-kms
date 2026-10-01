@@ -18,8 +18,9 @@ Commissioning has two halves:
    it, and the updates carry the Spectre-class microcode fixes.
 2. In RBSU (F9): **Restore Default System Settings**, then **clear the TPM**.
 3. Replace the disks, or securely erase them.
-4. Record the server serial, the ROM and iLO versions, and the TPM's EK certificate presence
-   (`tpm2_getekcertificate`) in the evidence: `used_hardware_intake`.
+4. Record them in the evidence: the server serial (`host_serial`), `system_rom_version`,
+   `ilo_firmware_version`, `tpm_ek_certificate_present` (`tpm2_getekcertificate`), and
+   `used_hardware_intake: true` once steps 1-3 are done.
 
 ## 2. Firmware settings (RBSU / iLO)
 
@@ -30,7 +31,7 @@ Commissioning has two halves:
 | TPM | **TPM 2.0 visible and enabled**; SHA-256 PCR bank active | measured: `tpm2_present`, `tpm_sha256_bank` |
 | TPM module | **never moved**: the HPE module is bound to its system board | — |
 | AC power recovery ("Automatic Power-On") | **Restore last state / always on** | attested: `ac_power_recovery` |
-| Power supplies | both fitted, on **A and B feeds** where the datacenter offers them | attested |
+| Power supplies | both fitted, on **A and B feeds** where the datacenter offers them | attested: `redundant_power_supplies` |
 | Chassis intrusion | the detection kit **fitted and armed** (it is optional on Gen9: check) | attested: `chassis_intrusion_armed` |
 | iLO 4 | default password changed; on an **isolated management network**, or disabled | attested: `ilo_isolated_or_disabled` |
 | Internal USB port | the **Nitrokey HSM 2** goes here, inside the chassis | measured: `hsm_token_attached` (USB 20a0:4230 in sysfs; path pinned in the evidence) |
@@ -88,7 +89,8 @@ sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json
   --evidence-key commissioning-p256.pem --evidence-key-sha256 <recorded fingerprint>
 ```
 
-It must exit 0: every measured control true; the evidence complete, signed by the recorded key,
+It must exit 0: every measured control true; the evidence at most 24 hours old (the firmware settings
+are not re-measured, so sign fresh evidence for each run), complete, signed by the recorded key,
 attesting every firmware setting, and agreeing with every measurement (including the import key's
 fingerprint). Then an unattended
 **reboot** brings the KMS back with no one present (the disk and the PIN both unseal from the TPM).
