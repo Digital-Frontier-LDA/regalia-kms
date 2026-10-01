@@ -61,7 +61,7 @@ p11l(){ p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 ID_EC="$(printf '7e%06x' $((RANDOM*RANDOM % 16777215)))"; ID_RSA="$(printf '7f%06x' $((RANDOM*RANDOM % 16777215)))"
 
 hdr "1  identity and versions"
-log "date: $UTC"; log "module: $MODULE"; log "opensc: $(pkcs11-tool --version 2>&1 | head -1)"; log "openssl: $(openssl version)"
+log "date: $UTC"; log "module: $MODULE"; log "opensc: $(opensc-tool --info 2>&1 | head -1)"; log "openssl: $(openssl version)"
 info="$(p11 -T 2>&1)"; log "$info"
 grep -q "$SERIAL" <<< "$info" && P "token $SERIAL in slot $SLOT ($(sed -n 's/.*token model *: *//p' <<< "$info" | head -1), firmware $(sed -n 's/.*firmware version *: *//p' <<< "$info" | head -1))" || F "token info does not name $SERIAL"
 
