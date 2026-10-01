@@ -62,7 +62,13 @@ def create_exposed_ec_key(module, key_id):
         lib.C_Finalize(None)
 
 
-@unittest.skipUnless(MODULE and shutil.which("softhsm2-util") and shutil.which("pkcs11-tool"), "needs SoftHSM2 and OpenSC")
+# In the CI job that installs SoftHSM2, REGALIA_EXPECT_SOFTHSM=1 turns a skip into a failure.
+HAVE = bool(MODULE and shutil.which("softhsm2-util") and shutil.which("pkcs11-tool"))
+if not HAVE and os.environ.get("REGALIA_EXPECT_SOFTHSM") == "1":
+    raise RuntimeError("REGALIA_EXPECT_SOFTHSM=1 but SoftHSM2 or OpenSC is missing: the calibration would skip")
+
+
+@unittest.skipUnless(HAVE, "needs SoftHSM2 and OpenSC")
 class ExtractProbe(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())
@@ -88,6 +94,7 @@ class ExtractProbe(unittest.TestCase):
         self.assertEqual(report["CKA_VALUE"], {"rv": "0x11", "bytes_returned": 0})
         self.assertFalse(report["secret_bytes_returned"])
         self.assertIs(report["CKA_NEVER_EXTRACTABLE"], True)
+        self.assertEqual((report["key_type"], report["verdict"]), ("EC", "REFUSED"))
 
     def test_an_exposed_key_is_reported_as_leaking(self):
         create_exposed_ec_key(MODULE, "0e")
@@ -95,6 +102,7 @@ class ExtractProbe(unittest.TestCase):
         self.assertEqual(rc, 1, "the probe must fail on a key whose secret the token returns")
         self.assertTrue(report["secret_bytes_returned"])
         self.assertEqual(report["CKA_VALUE"]["bytes_returned"], 32)
+        self.assertEqual(report["verdict"], "LEAK")
 
     def test_the_pin_never_reaches_argv(self):
         self.assertNotIn("sys.argv[4]", PROBE.read_text())

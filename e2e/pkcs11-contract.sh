@@ -39,9 +39,15 @@ export REGALIA_Q_PIN="$HSM_USER_PIN"; unset HSM_USER_PIN
 
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"
 EVID="${EVIDENCE_DIR:-.}/evidence-pkcs11-$SERIAL-$UTC.log"
-W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d)"; ID_EC=""; ID_RSA=""
+# On any exit, interrupted or not: delete the test keys from the token (best effort), then the temp dir.
+cleanup_keys(){ local id; for id in $ID_EC $ID_RSA; do
+  p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
+trap 'cleanup_keys; rm -rf "$W"' EXIT
 pass=0; fail=0
-log(){ printf '%s\n' "$*" | sed "s/$REGALIA_Q_PIN/<pin>/g" >> "$EVID"; }
+# Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
+# program would carry it in argv) and never interpreted as regex syntax.
+log(){ printf '%s\n' "$*" | python3 -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
@@ -125,7 +131,7 @@ again session && P "a new process re-logs in and signs" || F "new session failed
 if sudo -n systemctl restart pcscd 2>/dev/null; then
   sleep 3; SLOT="$(slot_of)"
   [ -n "$SLOT" ] && again restart && P "after a pcscd restart the token is found again by serial and signs" || F "after pcscd restart: slot '${SLOT}'"
-else echo "  (pcscd restart skipped: no passwordless sudo)"; log "pcscd restart skipped"; fi
+else F "the pcscd restart could not be run (needs passwordless sudo): the contract is incomplete"; fi
 
 hdr "7  cleanup"
 for id in "$ID_EC" "$ID_RSA"; do

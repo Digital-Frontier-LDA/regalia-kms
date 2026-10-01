@@ -34,7 +34,9 @@ USBDEV="${devs[0]}"
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"; EVID="${EVIDENCE_DIR:-.}/evidence-removal-$SERIAL-$UTC.log"
 W="$(mktemp -d)"
 pass=0; fail=0
-log(){ printf '%s\n' "$*" | sed "s/$REGALIA_Q_PIN/<pin>/g" >> "$EVID"; }
+# Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
+# program would carry it in argv) and never interpreted as regex syntax.
+log(){ printf '%s\n' "$*" | python3 -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
@@ -43,7 +45,11 @@ hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 # that tests pcscd, not the token.
 remove(){ echo 0 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null; log "removed $USBDEV at $(date -u +%T.%N)"; }
 restore(){ echo 1 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null 2>&1; log "restored $USBDEV at $(date -u +%T.%N)"; }
-trap 'restore; rm -rf "$W"' EXIT
+ID_EC=""; ID_RSA=""
+# On any exit: the token back on the bus, then its test keys deleted (best effort), then the temp dir.
+cleanup_keys(){ local id; wait_back 2>/dev/null; for id in $ID_EC $ID_RSA; do
+  p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
+trap 'restore; cleanup_keys; rm -rf "$W"' EXIT
 
 slot_of(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
 import re, sys
@@ -80,7 +86,7 @@ hdr "2  removal during a stream of signatures"
 sp=$!; sleep 3; remove; sleep 3; restore; wait "$sp"
 ok=$(grep -c '^ok' "$W/stream"); er=$(grep -c '^err' "$W/stream"); log "stream: $ok ok, $er err"
 bad=0; for i in $(sed -n 's/^ok //p' "$W/stream"); do openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/s$i" "$W/m$i" >/dev/null 2>&1 || bad=$((bad+1)); done
-[ "$er" -gt 0 ] && P "the removal interrupted the stream ($ok done, $er failed)" || F "no operation failed: the removal did not land mid-stream ($ok ok)"
+[ "$ok" -gt 0 ] && [ "$er" -gt 0 ] && P "the removal interrupted the stream ($ok done, $er failed)" || F "the stream needs both outcomes: $ok done, $er failed"
 [ "$bad" = 0 ] && P "every signature reported as done verifies ($ok of $ok)" || F "$bad signature(s) reported done do not verify"
 wait_back && sign_once after && openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/safter" "$W/mafter" >/dev/null 2>&1 \
   && P "signing resumes after restore" || F "signing does not resume"
@@ -88,16 +94,30 @@ same_keys && P "the same keys are there" || F "keys changed after removal during
 
 hdr "3  removal during a stream of decryptions"
 head -c 32 /dev/urandom > "$W/pt"
-openssl pkeyutl -encrypt -pubin -inkey "$W/rsa.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 -in "$W/pt" -out "$W/ct"
+# A mechanism PROVEN to work before the removal (OAEP first, PKCS#1 v1.5 otherwise), so a stream in
+# which nothing ever decrypts cannot pass this section vacuously.
+MECH=(); for m in OAEP PKCS; do
+  if [ "$m" = OAEP ]; then
+    openssl pkeyutl -encrypt -pubin -inkey "$W/rsa.pem" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 -in "$W/pt" -out "$W/ct" 2>/dev/null
+    try=(--mechanism RSA-PKCS-OAEP --hash-algorithm SHA256 --mgf MGF1-SHA256)
+  else
+    openssl pkeyutl -encrypt -pubin -inkey "$W/rsa.pem" -pkeyopt rsa_padding_mode:pkcs1 -in "$W/pt" -out "$W/ct" 2>/dev/null
+    try=(--mechanism RSA-PKCS)
+  fi
+  if p11l --decrypt "${try[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d0" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/d0"; then MECH=("${try[@]}"); break; fi
+done
+[ "${#MECH[@]}" -gt 0 ] && P "before the removal, ${MECH[1]} decrypts exactly" || F "no RSA mechanism decrypts before the removal: section 3 cannot test anything"
 ( for i in $(seq 1 30); do
-    if p11l --decrypt --mechanism RSA-PKCS-OAEP --hash-algorithm SHA256 --mgf MGF1-SHA256 --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" >/dev/null 2>&1; then echo "ok $i"; else echo "err $i"; fi
+    if p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" >/dev/null 2>&1; then echo "ok $i"; else echo "err $i"; fi
   done ) > "$W/dstream" 2>&1 &
 dp=$!; sleep 3; remove; sleep 3; restore; wait "$dp"
-ok=$(grep -c '^ok' "$W/dstream"); er=$(grep -c '^err' "$W/dstream"); log "decrypt stream: $ok ok, $er err"
+ok=$(grep -c '^ok' "$W/dstream"); er=$(grep -c '^err' "$W/dstream"); log "decrypt stream (${MECH[1]}): $ok ok, $er err"
 bad=0; for i in $(sed -n 's/^ok //p' "$W/dstream"); do cmp -s "$W/pt" "$W/d$i" || bad=$((bad+1)); done
-[ "$er" -gt 0 ] && P "the removal interrupted the decryptions ($ok done, $er failed)" || F "no decryption failed: the removal did not land mid-stream ($ok ok)"
+[ "$ok" -gt 0 ] && [ "$er" -gt 0 ] && P "the removal interrupted the decryptions ($ok done, $er failed)" || F "the stream needs both outcomes: $ok done, $er failed"
 [ "$bad" = 0 ] && P "every decryption reported as done is exact ($ok of $ok)" || F "$bad decryption(s) reported done are wrong"
-wait_back && same_keys && P "the same keys are there" || F "keys changed after removal during decryption"
+wait_back && p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/dafter" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/dafter" \
+  && P "after reinsertion, decryption is exact again" || F "no exact decryption after reinsertion"
+same_keys && P "the same keys are there" || F "keys changed after removal during decryption"
 
 hdr "4  startup without the token"
 remove; sleep 2

@@ -4,14 +4,19 @@
 pkcs11-tool refuses `--read-object --type privkey` by itself ("reading private keys not (yet)
 supported"), so it cannot show what the token would do. This calls C_GetAttributeValue directly,
 through the module's exported C_* functions, for CKA_VALUE (EC) and CKA_PRIVATE_EXPONENT / CKA_PRIME_1
-(RSA), and reports the token's answer. A hardware-protected key must answer CKR_ATTRIBUTE_SENSITIVE
-(0x11) and return no bytes. It also reports CKA_SENSITIVE, CKA_EXTRACTABLE, CKA_ALWAYS_SENSITIVE,
-CKA_NEVER_EXTRACTABLE and CKA_LOCAL as the token states them.
+(RSA), and reports the token's answer. The verdict is per key type (CKA_KEY_TYPE): each secret
+attribute that APPLIES to the key (EC: CKA_VALUE; RSA: CKA_PRIVATE_EXPONENT and CKA_PRIME_1) must be
+answered with no bytes and either CKR_ATTRIBUTE_SENSITIVE (0x11), the standard refusal, or
+CKR_ATTRIBUTE_TYPE_INVALID (0x12), meaning the token does not expose that attribute at all (OpenSC's
+SmartCard-HSM emulation answers 0x12 for an EC key's CKA_VALUE: measured on a Nitrokey HSM 2, #62).
+CKA_SENSITIVE must be true and CKA_EXTRACTABLE false. Any other answer is INCONCLUSIVE, not a pass.
 
     REGALIA_Q_PIN=... p11_extract_probe.py <module.so> <token serial> <hex key id>
 
-The PIN is read from the environment, never argv. Output: one JSON line. Exit 0 when every secret
-attribute is refused and no secret byte is returned; 1 otherwise; 2 on a usage or PKCS#11 error.
+The PIN is read from the environment, never argv. Output: one JSON line, with a "verdict". Exit 0
+(REFUSED): every applicable secret attribute refused, the key sensitive and not extractable. Exit 1
+(LEAK or EXPOSABLE): a secret byte returned, or the key is not sensitive / is extractable. Exit 2: a
+usage or PKCS#11 error, or an INCONCLUSIVE answer (e.g. CKR_GENERAL_ERROR, or CKR_OK with no length).
 Linux/x86-64 PKCS#11 ABI (CK_ULONG = unsigned long).
 """
 import ctypes
@@ -111,10 +116,20 @@ def main(argv):
             if got or (rv == CKR_OK and a.ulValueLen not in (0, CK_UNAVAILABLE)):
                 leaked = True
         report["secret_bytes_returned"] = leaked
+        kt = U(CK_UNAVAILABLE)
+        a = Attr(CKA_KEY_TYPE, ctypes.cast(ctypes.byref(kt), ctypes.c_void_p), ctypes.sizeof(kt))
+        rv = call("C_GetAttributeValue", h, U(obj), ctypes.byref(a), U(1))
+        key_type = {0x0: "RSA", 0x3: "EC"}.get(kt.value) if rv == CKR_OK else None
+        report["key_type"] = key_type or "unknown"
+        applicable = {"EC": ("CKA_VALUE",), "RSA": ("CKA_PRIVATE_EXPONENT", "CKA_PRIME_1")}.get(key_type, ())
+        refused = all(report[n]["rv"] in ("0x11", "0x12") and report[n]["bytes_returned"] == 0 for n in applicable)
+        exposed = report["CKA_SENSITIVE"] is not True or report["CKA_EXTRACTABLE"] is not False
+        verdict = "LEAK" if leaked else ("EXPOSABLE" if exposed else ("REFUSED" if applicable and refused else "INCONCLUSIVE"))
+        report["verdict"] = verdict
         print(json.dumps(report, sort_keys=True))
         call("C_Logout", h)
         call("C_CloseSession", h)
-        return 1 if leaked else 0
+        return {"REFUSED": 0, "LEAK": 1, "EXPOSABLE": 1}.get(verdict, 2)
     finally:
         call("C_Finalize", None)
 

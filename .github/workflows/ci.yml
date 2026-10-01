@@ -151,6 +151,11 @@ jobs:
           # Set in THIS step: sops is provisioned here, so a SOPS test that skips is a failure.
           echo "REGALIA_EXPECT_SOPS=1" >> "$GITHUB_ENV"
 
+      - name: PKCS#11 extraction probe calibration (protected key REFUSED, exposed key LEAK) — may not skip
+        env:
+          REGALIA_EXPECT_SOFTHSM: "1"
+        run: python3 -m unittest -v tests.test_p11_extract_probe
+
       - name: SoftHSM battery — and NOTHING in it may skip
         env:
           GOFLAGS: -v
