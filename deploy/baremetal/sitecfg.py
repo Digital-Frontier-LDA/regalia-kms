@@ -95,9 +95,19 @@ def validate(doc):
     return cfg
 
 
+def _unique(pairs):
+    """json object_pairs_hook: a repeated key is refused at every level. json.load would keep only the
+    last value, so a second admin_cidrs could silently replace the SSH allowlist."""
+    out = {}
+    for k, v in pairs:
+        require(k not in out, "duplicate field %r in the site config" % k)
+        out[k] = v
+    return out
+
+
 def load(path):
     with open(path, encoding="utf-8") as f:
         try:
-            return validate(json.load(f))
+            return validate(json.load(f, object_pairs_hook=_unique))
         except json.JSONDecodeError as error:
             raise InvalidSite("not valid JSON: %s" % error)

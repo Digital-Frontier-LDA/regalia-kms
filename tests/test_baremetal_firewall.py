@@ -45,6 +45,21 @@ class SiteConfig(unittest.TestCase):
                 self.assertIn(why, str(ctx.exception))
 
 
+class DuplicateKeys(unittest.TestCase):
+    def test_a_repeated_key_is_refused_at_every_level(self):
+        import tempfile
+        text = EXAMPLE.read_text()
+        cases = (text.replace('"admin_cidrs":', '"admin_cidrs": ["0.0.0.1/32"], "admin_cidrs":', 1),
+                 text.replace('"proto": "tcp",', '"proto": "tcp", "proto": "udp",', 1))
+        for bad in cases:
+            with self.subTest(), tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+                f.write(bad)
+            with self.assertRaises(sitecfg.InvalidSite) as ctx:
+                sitecfg.load(f.name)
+            self.assertIn("duplicate field", str(ctx.exception))
+            Path(f.name).unlink()
+
+
 class Render(unittest.TestCase):
     def setUp(self):
         self.cfg = sitecfg.validate(json.loads(EXAMPLE.read_text()))
