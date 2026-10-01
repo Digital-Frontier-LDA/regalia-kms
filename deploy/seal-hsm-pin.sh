@@ -38,10 +38,28 @@
 #       a typed PIN (card, counter, tested on the card, sealed, read back). A blob made for another
 #       TPM, or altered, fails to decrypt and no card try is spent.
 #
+# SIGNED PCR 11 POLICY (#57): PCR 11 (the kernel image, as systemd-stub measures a UKI) is never bound
+# directly, since every kernel update would strand the PIN. It is bound through a SIGNED policy:
+#   sudo deploy/seal-hsm-pin.sh --id … --serial … --pcrs 7 \
+#        --tpm2-public-key /run/systemd/tpm2-pcr-public-key.pem --tpm2-public-key-pcrs 11 \
+#        [--tpm2-signature FILE]
+#       PCR 7 stays bound to its value; PCR 11 must have a value SIGNED by the PCR-signing key
+#       (RSA; `systemd-measure sign`, or `ukify --pcr-private-key`, per UKI). A new kernel signed by
+#       the same key unseals without re-sealing; an unsigned one, or one signed by another key, does
+#       not. --tpm2-signature is the signature JSON for the RUNNING boot; without it systemd looks for
+#       tpm2-pcr-signature.json in /etc/systemd, /run/systemd (where systemd-stub puts the UKI's) and
+#       /usr/lib/systemd. Refused: a signed PCR other than 11; a key that is not RSA; a signature file
+#       not made by that key; and, after sealing, a blob that the running boot's signature cannot
+#       open or that opens WITHOUT one. The last matters: `systemd-creds --with-key=tpm2` ignores
+#       --tpm2-public-key silently and binds PCR 7 alone (measured, systemd 257, 2026-10-01); the key
+#       type that honours it is tpm2-with-public-key.
+#
 # BENCH ONLY: --bench-host-key seals with systemd's host key instead of the TPM (a guest without a
 # TPM cannot be production). The record then says BENCH. REGALIA_CREDSTORE overrides the credstore
-# directory, for tests.
+# directory, for tests. REGALIA_TPM2_DEVICE names another TPM for systemd-creds (a private swtpm, e.g.
+# swtpm:path=/…/tpm.sock), also for tests: the record then says so, and it is not production.
 set -uo pipefail
+PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=()
 ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
 CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
@@ -58,7 +76,9 @@ while [ $# -gt 0 ]; do case "$1" in
   --init-import-key) INIT_IMPORT=1; shift;; --replace-import-key) REPLACE_IMPORT=1; shift;;
   --from-blob) need "$@"; FROM_BLOB="$2"; shift 2;; --import-handle) need "$@"; IMPORT_HANDLE="$2"; shift 2;;
   --import-pub) need "$@"; IMPORT_PUB="$2"; shift 2;;
-  -h|--help) sed -n '2,45p' "$0"; exit 0;; *) fail "unknown argument '$1' (see --help)";; esac; done
+  --tpm2-public-key) need "$@"; PUBKEY="$2"; shift 2;; --tpm2-public-key-pcrs) need "$@"; PUBKEY_PCRS="$2"; shift 2;;
+  --tpm2-signature) need "$@"; SIGNATURE="$2"; shift 2;;
+  -h|--help) sed -n '2,/^set -uo pipefail$/{/^set -uo pipefail$/!p}' "$0"; exit 0;; *) fail "unknown argument '$1' (see --help)";; esac; done
 [[ "$IMPORT_HANDLE" =~ ^0x81[0-9a-fA-F]{6}$ ]] || fail "--import-handle must be a persistent handle, 0x81xxxxxx"
 
 # ---- commissioning: the TPM-resident import key ---------------------------------------------------
@@ -125,14 +145,36 @@ else
 fi
 if [ "$BENCH" = 1 ]; then
   [ -z "$PCRS" ] || fail "--bench-host-key and --pcrs are exclusive: the host key has no PCR binding"
+  [ -z "$PUBKEY$PUBKEY_PCRS$SIGNATURE" ] || fail "--bench-host-key and a signed PCR policy are exclusive: the host key has no PCR binding"
   KEYARGS=(--with-key=host); say "BENCH: sealing with the host key, NOT the TPM. This credential is not production."
 else
   [[ "$PCRS" =~ ^[0-9]{1,2}(\+[0-9]{1,2})*$ ]] || fail "--pcrs is required, e.g. 7: the PCR set recorded at commissioning (no default)"
   # Bound directly, PCR 10 (IMA) can never unseal: systemd decrypts the credential before regalia-kms
   # runs. PCR 11 (the kernel image) changes at every kernel update and would strand the PIN; it is
-  # usable only through a signed PCR policy, which this script does not provision.
-  case "+$PCRS+" in *+10+*|*+11+*) fail "--pcrs must not include 10 (IMA) or 11 (kernel image): bind 7 (deploy/baremetal/README.md, section 3)";; esac
+  # bound only through a signed PCR policy (--tpm2-public-key, below).
+  case "+$PCRS+" in *+10+*|*+11+*) fail "--pcrs must not include 10 (IMA) or 11 (kernel image): bind 7 directly, and 11 only through --tpm2-public-key FILE --tpm2-public-key-pcrs 11 (deploy/baremetal/README.md, section 3)";; esac
   KEYARGS=(--with-key=tpm2 "--tpm2-pcrs=$PCRS")
+  if [ -n "$PUBKEY$PUBKEY_PCRS$SIGNATURE" ]; then
+    [ -n "$PUBKEY" ] || fail "--tpm2-public-key-pcrs and --tpm2-signature need --tpm2-public-key FILE (the PCR-signing public key)"
+    # No default here either, and one value: 11 is the PCR systemd-measure predicts and signs.
+    [ "$PUBKEY_PCRS" = 11 ] || fail "--tpm2-public-key-pcrs must be 11 (the UKI measurement systemd-measure signs); it is required with --tpm2-public-key"
+    command -v openssl >/dev/null || fail "openssl is required for --tpm2-public-key"
+    [ -r "$PUBKEY" ] || fail "--tpm2-public-key: cannot read $PUBKEY"
+    # The fingerprint systemd writes as "pkfp" in a signature file: SHA-256 of the PKCS#1 DER key.
+    PKFP="$(openssl rsa -pubin -in "$PUBKEY" -RSAPublicKey_out -outform der 2>/dev/null | sha256sum | cut -d' ' -f1)" \
+      || fail "--tpm2-public-key: $PUBKEY is not an RSA public key in PEM (the TPM policy systemd builds takes RSA only)"
+    if [ -n "$SIGNATURE" ]; then
+      [ -r "$SIGNATURE" ] || fail "--tpm2-signature: cannot read $SIGNATURE"
+      grep -q "$PKFP" "$SIGNATURE" || fail "--tpm2-signature: $SIGNATURE holds no signature by $PUBKEY (pkfp $PKFP). No card was touched; nothing was sealed"
+      DECARGS=("--tpm2-signature=$SIGNATURE")
+    else
+      sig=""; for d in /etc/systemd /run/systemd /usr/lib/systemd; do [ -r "$d/tpm2-pcr-signature.json" ] && { sig="$d/tpm2-pcr-signature.json"; break; }; done
+      [ -n "$sig" ] || fail "no tpm2-pcr-signature.json in /etc/systemd, /run/systemd or /usr/lib/systemd: this boot is not a UKI with a signed PCR policy (or pass --tpm2-signature FILE). No card was touched; nothing was sealed"
+      grep -q "$PKFP" "$sig" || fail "$sig holds no signature by $PUBKEY (pkfp $PKFP). No card was touched; nothing was sealed"
+    fi
+    # NOT --with-key=tpm2: that key type ignores the public key without a word and binds --tpm2-pcrs alone.
+    KEYARGS=(--with-key=tpm2-with-public-key "--tpm2-pcrs=$PCRS" "--tpm2-public-key=$PUBKEY" "--tpm2-public-key-pcrs=$PUBKEY_PCRS")
+  fi
 fi
 [ "$(id -u)" = 0 ] || fail "run as root (sudo): systemd-creds and the credstore need it"
 for t in systemd-creds opensc-tool pkcs11-tool sha256sum; do command -v "$t" >/dev/null || fail "$t is required"; done
@@ -144,7 +186,11 @@ if [ -n "$FROM_BLOB" ]; then
   [ -r "$FROM_BLOB" ] || fail "--from-blob: cannot read $FROM_BLOB"
   command -v tpm2_rsadecrypt >/dev/null || fail "tpm2_rsadecrypt is required for --from-blob (tpm2-tools)"
 fi
-if [ "$BENCH" = 0 ]; then systemd-creds has-tpm2 >/dev/null 2>&1 || fail "no usable TPM2 on this guest (systemd-creds has-tpm2)"; fi
+if [ "$BENCH" = 0 ]; then
+  if [ -n "${REGALIA_TPM2_DEVICE:-}" ]; then
+    TPMDEV=("--tpm2-device=$REGALIA_TPM2_DEVICE"); say "TEST: sealing to the TPM named in REGALIA_TPM2_DEVICE ($REGALIA_TPM2_DEVICE), NOT this host's. This credential is not production."
+  else systemd-creds has-tpm2 >/dev/null 2>&1 || fail "no usable TPM2 on this guest (systemd-creds has-tpm2)"; fi
+fi
 NAME="$ID.pin"; DEST="$CREDSTORE/regalia-kms-$ID.pin"
 if [ -e "$DEST" ] && [ "$REPLACE" = 0 ]; then fail "$DEST exists; pass --replace to rotate it (the old one is kept)"; fi
 
@@ -208,15 +254,31 @@ say "the PIN opens $SERIAL (counter back at $(tries))"
 mkdir -p "$CREDSTORE" && chmod 700 "$CREDSTORE" || fail "cannot prepare $CREDSTORE"
 tmp="$(mktemp "$CREDSTORE/.seal-XXXXXX")" || fail "cannot create a temporary file in $CREDSTORE"
 trap 'PIN=""; PIN2=""; rm -f "$tmp"' EXIT
-printf '%s' "$PIN" | systemd-creds encrypt "${KEYARGS[@]}" --name="$NAME" - "$tmp" 2>/dev/null \
+printf '%s' "$PIN" | systemd-creds encrypt "${KEYARGS[@]}" "${TPMDEV[@]}" --name="$NAME" - "$tmp" 2>/dev/null \
   || fail "systemd-creds encrypt failed; nothing was installed"
-back="$(systemd-creds decrypt --name="$NAME" "$tmp" - 2>/dev/null | sha256sum)"
-[ "$back" = "$(printf '%s' "$PIN" | sha256sum)" ] || fail "the sealed blob does not decrypt back to the PIN; nothing was installed"
+back="$(systemd-creds decrypt "${TPMDEV[@]}" "${DECARGS[@]}" --name="$NAME" "$tmp" - 2>/dev/null | sha256sum)"
+if [ "$back" != "$(printf '%s' "$PIN" | sha256sum)" ]; then
+  [ -z "$PUBKEY" ] || fail "the sealed blob does not open with the running boot's PCR 11 signature (${SIGNATURE:-tpm2-pcr-signature.json}): the service could not load it either. Is this boot the signed UKI? Nothing was installed"
+  fail "the sealed blob does not decrypt back to the PIN; nothing was installed"
+fi
+if [ -n "$PUBKEY" ]; then
+  # The binding itself, by behaviour: handed a signature file with no signature in it, a blob under
+  # the signed policy must NOT open. One that does is bound to --pcrs alone.
+  nosig="$(mktemp "$CREDSTORE/.nosig-XXXXXX")" || fail "cannot create a temporary file in $CREDSTORE"
+  trap 'PIN=""; PIN2=""; rm -f "$tmp" "$nosig"' EXIT
+  printf '{}\n' > "$nosig"
+  if systemd-creds decrypt "${TPMDEV[@]}" "--tpm2-signature=$nosig" --name="$NAME" "$tmp" - >/dev/null 2>&1; then
+    fail "the sealed blob opens WITHOUT a PCR 11 signature: it is not bound to the signed policy; nothing was installed"
+  fi
+  rm -f "$nosig"
+fi
 # The old credential stays IN PLACE until the new one replaces it in one rename: moving it aside
 # first would leave the service with no credential (243 at its next start) if the install failed.
 if [ -e "$DEST" ]; then cp -p "$DEST" "$DEST.prev-$(date -u +%Y%m%dT%H%M%SZ)" || fail "cannot keep a copy of the old credential; nothing was changed"; fi
 chmod 600 "$tmp" && mv -f "$tmp" "$DEST" || fail "cannot install $DEST; the previous credential (if any) is still in place"
 PIN=""; PIN2=""
+SIGNED_REC=""
+[ -z "$PUBKEY" ] || SIGNED_REC="$(printf '\n  signed PCRs   : %s (any value signed by the key below)\n  signing key   : %s\n  pkfp          : %s   (sha256 of the PKCS#1 DER key; "pkfp" in a signature file)' "$PUBKEY_PCRS" "$PUBKEY" "$PKFP")"
 
 cat <<REC
 SEALED
@@ -224,8 +286,8 @@ SEALED
   file          : $DEST
   sha256        : $(sha256sum "$DEST" | cut -d' ' -f1)
   device        : $KIND $SERIAL
-  key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "tpm2, PCRs $PCRS")
-  sealed at     : $(date -u +%FT%TZ)
+  key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "tpm2, PCRs $PCRS")$([ "${#TPMDEV[@]}" -gt 0 ] && echo " (TEST TPM $REGALIA_TPM2_DEVICE, not production)")$SIGNED_REC
+  sealed at    : $(date -u +%FT%TZ)
 Service drop-in line (/etc/systemd/system/regalia-kms.service.d/credentials.conf):
   LoadCredentialEncrypted=$NAME:$DEST
 REC
