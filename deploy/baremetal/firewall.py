@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Render the bare-metal KMS host's nftables ruleset from its site config (deploy/baremetal/sitecfg.py).
 
-    python3 deploy/baremetal/firewall.py site.json > /etc/nftables.d/regalia-kms.nft
-    nft -c -f /etc/nftables.d/regalia-kms.nft && nft -f /etc/nftables.d/regalia-kms.nft
+    tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"      # not *.nft: never included half-written
+    python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp" \
+      && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft || rm -f "$tmp"      (README.md: the full sequence)
 
 One table, `inet regalia_kms`, default-deny in BOTH directions:
   input   loopback; established/related; kms_port from client and monitoring CIDRs; ssh_port and ping

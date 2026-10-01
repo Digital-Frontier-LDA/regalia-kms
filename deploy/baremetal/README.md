@@ -77,8 +77,14 @@ KMS and SSH ports, the zones allowed to reach each, and the only destinations th
 
 ```sh
 install -d -m 0755 /etc/nftables.d
-python3 deploy/baremetal/firewall.py site.json > /etc/nftables.d/regalia-kms.nft
-nft -c -f /etc/nftables.d/regalia-kms.nft && nft -f /etc/nftables.d/regalia-kms.nft
+# Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
+# a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
+tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
+if python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
+  chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
+else
+  rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
+fi
 ```
 
 It must also survive a reboot, and the KMS must never start without it:
