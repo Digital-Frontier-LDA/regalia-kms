@@ -35,7 +35,7 @@ ALLOWED_TOKEN_CLIENT_EXES = ("/usr/local/sbin/regalia-kms",)
 
 
 class Host:
-    """Every read of the guest goes through here, so a test can stand in a fake guest."""
+    """Every read of the KMS host goes through here, so a test can stand in a fake host."""
 
     def read(self, path):
         try:
