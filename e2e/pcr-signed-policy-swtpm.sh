@@ -108,7 +108,7 @@ no "a signature file with no signature is refused" 'holds no signature by' --pcr
 no "--bench-host-key with a signed policy is refused" 'are exclusive' --bench-host-key --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11
 # Signed by the right key, but for kernel 2 while kernel 1 runs: only the TPM can tell.
 no "a signature by the right key for another kernel is refused" 'for the PCR 11 of the RUNNING boot' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig2.json
-if ls /etc/systemd/tpm2-pcr-signature.json /run/systemd/tpm2-pcr-signature.json /usr/lib/systemd/tpm2-pcr-signature.json >/dev/null 2>&1; then
+if [ -e /etc/systemd/tpm2-pcr-signature.json ] || [ -e /run/systemd/tpm2-pcr-signature.json ] || [ -e /usr/lib/systemd/tpm2-pcr-signature.json ]; then
   echo "  SKIP no signature anywhere (this host boots a UKI with its own)"
 else no "with no signature for this boot anywhere, nothing is sealed" 'not a UKI with a signed PCR policy' --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11; fi
 
@@ -122,6 +122,7 @@ out="$(seal --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-
 grep -q 'tpm2, PCRs 7 (TEST TPM' <<< "$out" && grep -q 'signed PCRs   : 11' <<< "$out" && P "the record: PCR 7 direct, PCR 11 signed, and a TEST TPM" || F "record: $out"
 fp="$(pkfp pcr.pub)"; grep -q "pkfp          : $fp" <<< "$out" && grep -q "\"pkfp\":\"$fp\"" sig1.json \
   && P "the record's key fingerprint is the pkfp in the signature file" || F "fingerprint $fp not in both the record and sig1.json"
+grep -q 'WARNING       : checked with sig1.json' <<< "$out" && P "the record warns that the service reads the signature only from systemd's own directories" || F "no warning for a signature outside systemd's directories: $out"
 grep -qF "$PIN" <<< "$out" && F "the PIN appeared in the output" || P "the PIN never appears in the output"
 sudo sh -c "ls -A '$W/cred'" | grep -qv '^regalia-kms-t\.pin$' && F "temporary files left in the credstore" || P "no temporary file left in the credstore"
 

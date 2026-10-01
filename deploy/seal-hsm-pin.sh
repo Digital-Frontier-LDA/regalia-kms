@@ -299,6 +299,10 @@ chmod 600 "$tmp" && mv -f "$tmp" "$DEST" || fail "cannot install $DEST; the prev
 PIN=""; PIN2=""
 SIGNED_REC=""
 [ -z "$PUBKEY" ] || SIGNED_REC="$(printf '\n  signed PCRs   : %s (any value signed by the key below)\n  signing key   : %s\n  pkfp          : %s   (sha256 of the PKCS#1 DER key; "pkfp" in a signature file)' "$PUBKEY_PCRS" "$PUBKEY" "$PKFP")"
+# The service is given no --tpm2-signature: systemd loads the credential with the signature it finds
+# in its own three directories. One checked here from anywhere else proves the policy, not the start.
+case "$SIGNATURE" in ""|/etc/systemd/tpm2-pcr-signature.json|/run/systemd/tpm2-pcr-signature.json|/usr/lib/systemd/tpm2-pcr-signature.json) ;;
+  *) SIGNED_REC="$SIGNED_REC$(printf '\n  WARNING       : checked with %s. regalia-kms will start only if this boot'"'"'s signature is\n                  tpm2-pcr-signature.json in /etc/systemd, /run/systemd (a signed UKI puts it there) or /usr/lib/systemd' "$SIGNATURE")";; esac
 
 cat <<REC
 SEALED
