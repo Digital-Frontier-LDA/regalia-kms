@@ -149,9 +149,8 @@ Commissioning has two halves:
   pulled while an operation is in flight is seen too (it stops answering for its identity); a request the
   token merely refuses, or one whose caller hung up, is not an absence. A token pulled during the PIN
   login also leaves the PIN latch set: after its return it needs the fresh lease **and** an operator's
-  PIN-block reset, as any failed login does. This holds for the HSM's keys and for a YubiKey's OpenPGP applet.
-  interim: until the PIV provider has the hook, a YubiKey PIV key pulled and put back serves on the lease
-  already held; the daemon says so at startup, and refuses to start with any other provider that lacks it. Measured: `kms_runtime_admission_required` (the
+  PIN-block reset, as any failed login does. This holds for every key the daemon serves: the HSM's, a
+  YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
 
 ### Host firewall (default deny, both directions)
