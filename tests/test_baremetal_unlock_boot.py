@@ -153,6 +153,9 @@ class OnQemu(tub.OnSwtpm):
         out = "%s/initrd-%s" % (self.d, label)
         with open(BOOT + "/initrd", "rb") as base, open(out, "wb") as f:
             shutil.copyfileobj(base, f)
+            # the kernel looks for the next archive at a 4-byte boundary and skips zeros before it: without
+            # the padding it reads "invalid magic at start of compressed archive" and drops the second one
+            f.write(bytes(-f.tell() % 4))
             f.write(archive)
         return out
 
