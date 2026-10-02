@@ -1,16 +1,16 @@
 x-node: &node
-  image: regalia-bootstrap-mesh:dev
+  image: "${REGALIA_MESH_IMAGE:-regalia-bootstrap-mesh:dev}"
   platform: "${REGALIA_LAB_PLATFORM:-linux/amd64}"
   build:
     context: .
-    target: network
+    target: "${REGALIA_MESH_TARGET:-network}"
   user: "0:0"
   read_only: true
   cap_drop: [ALL]
   cap_add: [NET_ADMIN, SETUID, SETGID]
   security_opt: [no-new-privileges:true]
   tmpfs:
-    - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
+    - /tmp:rw,nosuid,nodev,noexec,size=${REGALIA_LAB_TMPFS_SIZE:-256m},mode=1777
   environment:
     REGALIA_LAB_SWTPM_SECCOMP: "${REGALIA_LAB_SWTPM_SECCOMP:-kill}"
 

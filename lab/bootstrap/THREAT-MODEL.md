@@ -88,3 +88,23 @@ Immediate global revocation cannot be inferred from asynchronous manifests.
 Any-node bootstrap eligibility does not grant permission for simultaneous KMS
 signers under the existing `FENCING.md` contract. Pico software/staging results do
 not qualify Nitrokey or heterogeneous production key domains.
+
+## Network and guest extensions
+
+The [network lab](NETWORK.md) separates three process/container identities and
+private state stores, while trusting the shared Docker host and fixture controller.
+Namespace setup requires limited network/user capabilities; services and software
+TPMs run as UID 10000 with no effective capabilities. Temporary recovery
+credentials exist in host controller memory for actual keyslot verification.
+
+The [guest lab](VM.md) passes only the disposable virtual TPM, encrypted image,
+public initramfs and userspace network into QEMU. The commissioning fixture
+temporarily caches existing local plaintext factors before surveying firmware
+PCRs, reseals those same factors to the observed guest baseline, and drops those
+references. These local controls are lab-only and never exposed by the bootstrap
+endpoint. The guest's private recipient key and unsealed values live in guest RAM
+and pipes. No guest recovery credential or peer private factor is packaged in the
+initramfs. Software TPM permanent state survives backend restarts but remains
+cloneable/rollbackable by the trusted host. Neither extension supplies hardware
+custody, secure zeroization, signed membership freshness, or qualified early-code
+measurements. Their limitation scenarios are observations, not production passes.

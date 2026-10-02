@@ -216,9 +216,74 @@ def main():
         check("MAINTENANCE node cannot authorize another node", not control("B", "bootstrap", peers=["A"])["active"])
         check("ACTIVE peer recovers the remaining node", control("B", "bootstrap", peers=["C"])["active"])
         policy(active, epoch=4)
-        control("A", "extend_pcr")
-        check("changed target PCR prevents bootstrap despite healthy reachable peers",
-              control("A", "bootstrap", peers=["B", "C"]) == {"active": False, "reason": "local_policy"})
+        if os.environ.get("REGALIA_LAB_GUEST") == "1":
+            report["evidence_class"] = "emulated-guest-boot"
+            for name in ["vm.py", "guest.py", "guest-init.sh", "root-init.sh"]:
+                report["sources_sha256"][name] = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+            control("A", "lock")
+            admin("A", "ip", "link", "set", "wg-bootstrap", "down")
+            control("A", "guest_prepare")
+            fixture = {"epoch": 4, "selected": ["B"], "peers": {
+                peer: {"wg_public": identities[peer]["wg_public"], "signing_public": signing[peer]} for peer in "BC"}}
+            report["guest_boots"] = []
+
+            def boot(selected, *options, restart=True):
+                if restart:
+                    control("A", "tpm_restart")
+                fixture["selected"] = selected
+                result = command("exec", "-T", "--user", "10000:10000", "a", "python3", "/opt/vm.py", *options,
+                                 data=(json.dumps(fixture) + "\n").encode(), timeout=300)
+                record = json.loads(result.stdout)
+                report["guest_boots"].append(dict(record, selected=selected, options=list(options)))
+                if record["exit_code"] != 0 or record["diagnostics"]:
+                    raise RuntimeError("guest emulator or dependency failure")
+                return record
+
+            surveyed = boot(["B"], "--survey", restart=False)
+            measured = surveyed["pcr7"]
+            check("guest firmware PCR survey completes with disk closed",
+                  isinstance(measured, str) and len(measured) == 64 and "REGALIA_MEASUREMENT_SURVEY_COMPLETE" in surveyed["markers"]
+                  and "REGALIA_UNLOCK_REFUSED_ROOT_CLOSED" in surveyed["markers"])
+            control("A", "tpm_restart")
+            control("A", "guest_rebind", pcr7=measured)
+            for node in "BC":
+                control(node, "guest_approve", pcr7=measured)
+            for index, peer in enumerate("BCB"):
+                record = boot([peer], *( ["--format"] if index == 0 else []))
+                check(f"cold guest boot {index + 1}: {peer} opens dm-crypt and encrypted root",
+                      record["pcr7"] == measured and "REGALIA_PEER_AUTHORIZED_" + peer in record["markers"]
+                      and "REGALIA_DISK_OPENED" in record["markers"] and "REGALIA_ENCRYPTED_ROOT_BOOTED" in record["markers"])
+            report["guest_kernel"] = record["kernel"]
+            for node in "BC":
+                control(node, "lock")
+            record = boot(["B", "C"])
+            check("cold guest cannot unlock without an active peer", "REGALIA_PEER_DENIED_B" in record["markers"]
+                  and "REGALIA_PEER_DENIED_C" in record["markers"] and "REGALIA_UNLOCK_REFUSED_ROOT_CLOSED" in record["markers"]
+                  and "REGALIA_DISK_OPENED" not in record["markers"])
+            control("B", "manual", key=recovery["B"])
+            record = boot(["B", "C"])
+            check("one manual peer recovery restores an encrypted-root guest", "REGALIA_ENCRYPTED_ROOT_BOOTED" in record["markers"]
+                  and "REGALIA_PEER_AUTHORIZED_B" in record["markers"])
+            control("C", "manual", key=recovery["C"])
+            policy(revoked_a, epoch=5, nodes="BC")
+            record = boot(["B", "C"])
+            check("current revoked-target policy keeps cold guest disk closed", "REGALIA_PEER_DENIED_B" in record["markers"]
+                  and "REGALIA_PEER_DENIED_C" in record["markers"] and "REGALIA_UNLOCK_REFUSED_ROOT_CLOSED" in record["markers"]
+                  and "REGALIA_DISK_OPENED" not in record["markers"])
+            policy(active, epoch=6, nodes="BC")
+            fixture["epoch"] = 6
+            record = boot(["B"], "--tamper-pcr")
+            check("unexpected guest PCR state blocks local release and disk unlock", "REGALIA_UNSEAL_POLICY_REFUSED" in record["markers"]
+                  and "REGALIA_UNLOCK_REFUSED_ROOT_CLOSED" in record["markers"] and "REGALIA_DISK_OPENED" not in record["markers"])
+            record = boot(["B"], "--modified-initramfs")
+            not_bound = (record["pcr7"] == measured and "REGALIA_MODIFIED_INITRAMFS_EXECUTED" in record["markers"]
+                         and "REGALIA_ENCRYPTED_ROOT_BOOTED" in record["markers"])
+            report["limitations_observed"]["guest_pcr7_does_not_bind_initramfs"] = not_bound
+            check("PCR 7 initramfs coverage gap is reproduced", not_bound)
+        else:
+            control("A", "extend_pcr")
+            check("changed target PCR prevents bootstrap despite healthy reachable peers",
+                  control("A", "bootstrap", peers=["B", "C"]) == {"active": False, "reason": "local_policy"})
         report["packages"] = command("exec", "-T", "a", "cat", "/opt/packages.tsv").stdout.decode().splitlines()
         report["status"] = "passed"
     finally:
@@ -226,7 +291,8 @@ def main():
         report["cleanup"] = "passed" if cleanup.returncode == 0 else "failed"
         if cleanup.returncode:
             report["status"] = "failed"
-        (ROOT / ".artifacts/network-report.json").write_text(json.dumps(report, indent=2) + "\n")
+        filename = "vm-report.json" if os.environ.get("REGALIA_LAB_GUEST") == "1" else "network-report.json"
+        (ROOT / ".artifacts" / filename).write_text(json.dumps(report, indent=2) + "\n")
     if report["status"] != "passed":
         raise RuntimeError("mesh run failed")
 

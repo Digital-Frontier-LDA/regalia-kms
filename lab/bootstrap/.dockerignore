@@ -4,3 +4,7 @@
 !peer.py
 !peer_cases.py
 !network.py
+!vm.py
+!guest.py
+!guest-init.sh
+!root-init.sh

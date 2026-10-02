@@ -31,6 +31,11 @@ def exchange(host, port, command, timeout=4):
         if len(raw) > MAX_INPUT or response.status != 200:
             raise Refusal()
         result = parse_command_response(raw)
+        if set(result) == {"error"}:
+            error = result["error"]
+            if isinstance(error, dict) and error.get("code") in ["DENIED", "INVALID_REQUEST"]:
+                raise Refusal(error["code"])
+            raise RuntimeError("remote endpoint failed")
         if set(result) != {"result"}:
             raise Refusal()
         return result["result"]
@@ -99,6 +104,7 @@ class Node:
         self.boot_lock = threading.Lock()
         self.drop_next = False
         self.generation = 0
+        self.guest_material = None
 
     def worker(self, command):
         result = subprocess.run(["python3", "/opt/peer.py", "--state", str(self.state)],
@@ -269,6 +275,32 @@ class Node:
             return {}
         if op == "extend_pcr":
             self.tpm.call("tpm2_pcrextend", "7:sha256=" + os.urandom(32).hex())
+            return {}
+        if op == "guest_prepare":
+            self.guest_material = [self.tpm.unseal(handle).stdout for handle in ["0x81010004", "0x81010005"]]
+            if [len(value) for value in self.guest_material] != [45, 32]:
+                raise RuntimeError("guest commissioning material unavailable")
+            return {}
+        if op == "tpm_restart":
+            self.tpm.restart()
+            return {}
+        if op == "guest_rebind":
+            pcr = hex_bytes(command["pcr7"], 32)
+            expected = self.tpm.root / "guest-approved.pcr"
+            expected.write_bytes(pcr)
+            self.tpm.call("tpm2_createpolicy", "--policy-pcr", "-l", "sha256:7", "-f", expected,
+                          "-L", self.tpm.root / "pcr.policy", "-Q")
+            for name, value, handle in zip(["wg", "local"], self.guest_material, ["0x81010004", "0x81010005"]):
+                self.tpm.call("tpm2_evictcontrol", "-C", "o", "-c", handle, "-Q")
+                self.tpm.seal(name, value, handle)
+            self.guest_material = None
+            return {}
+        if op == "guest_approve":
+            with self.lock:
+                state = json.loads(self.state.read_bytes())
+                state["targets"]["A"]["approved_pcr"] = hex_bytes(command["pcr7"], 32).hex()
+                from peer import persist
+                persist(self.state, state)
             return {}
         raise Refusal("INVALID_REQUEST")
 

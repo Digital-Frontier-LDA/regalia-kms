@@ -101,10 +101,11 @@ report. `REGALIA_LAB_SWTPM_SECCOMP=kill` can require the additional filter even 
 a translated run; an unsupported filter then fails the run rather than silently
 falling back. See [swtpm's documented seccomp option](https://github.com/stefanberger/swtpm/blob/master/man/man8/swtpm.pod).
 
-## Next slices
+## Additional software labs
 
 The [three-container WireGuard experiment](NETWORK.md) now extends these IPC
-checks with 66 assertions covering actual encrypted cross-container transport, all six recovery paths,
+checks with 66 assertions covering actual encrypted cross-container transport,
+all six recovery paths,
 simultaneous recovery, total-outage/manual recovery, and network-failure tests.
 
 ```sh
@@ -116,8 +117,20 @@ drops service privileges, and removes its project resources after the run. It
 writes sanitized `network-report.json` evidence. Its stale-policy scenario
 explicitly reproduces an unresolved revocation-freshness risk.
 
-1. Prepare a Debian VM/physical-node initramfs lab for actual early networking
-   and encrypted-root boot, then run the DL360 PCR survey.
+The [encrypted-root guest experiment](VM.md) uses an amd64 Debian kernel, QEMU
+TPM frontend, early WireGuard, actual dm-crypt mapping, ext4, and `switch_root`.
+It writes a separate `vm-report.json` with guest stages and public PCR values.
+Its modified-initramfs scenario tests a boot measurement coverage limit rather
+than qualifying PCR 7 as a production policy.
+
+```sh
+bash lab/bootstrap/run-vm.sh
+```
+
+## Next slices
+
+1. Qualify complete Debian boot packaging and the DL360 measurement chain. The
+   small emulated BusyBox root is software-path evidence, not an appliance build.
 2. Integrate signed membership and revocation freshness before claiming safe
    unattended bootstrap. Keep service signing fencing independent.
 3. Qualify native/cross-vendor PKA and wrapped-key recovery on designated physical

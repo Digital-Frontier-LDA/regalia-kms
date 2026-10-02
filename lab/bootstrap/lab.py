@@ -44,12 +44,12 @@ class TPM:
         self.socket = self.root / "tpm.sock"
         self.env = dict(os.environ, TPM2TOOLS_TCTI=f"swtpm:path={self.socket}")
 
-    def start(self):
+    def start(self, provision=True):
         seccomp = os.environ.get("REGALIA_LAB_SWTPM_SECCOMP", "kill")
         if seccomp not in ["kill", "none"]:
             raise ValueError("lab swtpm seccomp must be kill or none")
         state = self.root / "state"
-        state.mkdir()
+        state.mkdir(exist_ok=not provision)
         self.process = subprocess.Popen([
             "swtpm", "socket", "--tpm2", "--tpmstate", f"dir={state}",
             "--server", f"type=unixio,path={self.socket}",
@@ -65,11 +65,19 @@ class TPM:
             time.sleep(0.1)
         else:
             raise RuntimeError(f"swtpm {self.name} startup timed out")
+        if not provision:
+            return
         self.call("tpm2_createek", "-G", "rsa", "-c", "0x81010001", "-Q")
         self.call("tpm2_createak", "-C", "0x81010001", "-G", "rsa", "-g", "sha256",
                   "-s", "rsassa", "-c", self.root / "ak.ctx", "-u", self.root / "ak.pem", "-f", "pem", "-Q")
         self.call("tpm2_evictcontrol", "-C", "o", "-c", self.root / "ak.ctx", "0x81010002", "-Q")
         self.call("tpm2_flushcontext", "-t")
+
+    def restart(self):
+        self.close()
+        self.socket.unlink(missing_ok=True)
+        Path(str(self.socket) + ".ctrl").unlink(missing_ok=True)
+        self.start(provision=False)
 
     def call(self, *args, **kwargs):
         return run(*args, env=self.env, **kwargs)

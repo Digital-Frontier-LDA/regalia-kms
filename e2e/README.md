@@ -7,9 +7,15 @@ and transcript logic.
 For the three-site architecture's software TPM/bootstrap experiments, run
 `bash lab/bootstrap/run.sh`. The [Debian 13 Docker lab](../lab/bootstrap/README.md)
 exercises fresh attestation, PCR-bound sealing, and independent LUKS2 keyslot
-credentials without attached devices or privileged containers. Its evidence is
-emulated; real measured boot, initramfs networking, encrypted-root boot, and HSM
-authentication require separate qualification.
+credentials without attached devices or privileged containers. For actual
+cross-container WireGuard and recovery-matrix tests, run
+`bash lab/bootstrap/run-network.sh`; namespace setup uses only the documented
+network/user capabilities before dropping service privileges. For emulated
+initramfs networking, dm-crypt mapping and encrypted-root boot, run
+`bash lab/bootstrap/run-vm.sh`. All three produce emulated evidence. Read the
+[guest measurement limits](../lab/bootstrap/VM.md) before interpreting boot
+success. Physical measured boot, policy freshness, and HSM authentication remain
+separate qualification gates.
 
 ```sh
 # Default: build the established Debian emulator image and run its full suite
