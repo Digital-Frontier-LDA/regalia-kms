@@ -18,8 +18,18 @@ authority that stopped signing. So, at every step():
   * A WARNING goes to the sink (the log and the audit trail) when the life left falls to 50 %, to 25 % and
     to 10 % of the heartbeat's own lifetime, once each; from 10 % it is repeated every hour until a newer
     heartbeat arrives. A heartbeat that is expired, missing or unusable (time not authenticated, a
-    rollback) is an ERROR, at once and every hour while it lasts. The first step after a warning that
-    finds a live heartbeat above every threshold says RENEWED.
+    rollback) is an ERROR, at once and then at most every hour, each kind on its own clock.
+  * After something was said: a NEWER heartbeat (a higher sequence) says RENEWED; the SAME heartbeat usable
+    again (time re-authenticated, a read that failed once) says RECOVERED, once it has been usable for
+    TWO steps in a row. The words differ because an audit trail must not say a heartbeat arrived when
+    none did; the second step is there because it must not say "recovered" of a reading that is down
+    again at the next look.
+
+A READING THAT FLAPS DOES NOT FLOOD THE TRAIL, AND THE TRAIL'S LAST WORD IS NOT WRONG. What has been said
+about a heartbeat is remembered by its sequence and survives the steps in which it could not be read; an
+ERROR of a kind is repeated only after the hour; RECOVERED is said only for an outage that was announced,
+and only after two live steps. A reading that alternates between live and unusable at every step
+therefore costs one ERROR an hour and no RECOVERED: the trail goes on saying it is down, which it is.
 
 THE FRACTION IS OF THE HEARTBEAT'S OWN LIFETIME, not of the manifest's bound: an authority that signs
 12-hour heartbeats under a 24-hour bound would otherwise be at "50 % left" the moment each one arrives.
@@ -37,7 +47,10 @@ anything: the security bound is the manifest's and the refusal at expiry is hear
 state file costs one repeated warning.
 
 READING IS THE REAL CHECK (Freshness.window): the same authenticated time, floor, counter and signature
-a peer's decision uses, so "live" here means what it means there. Like any check it moves the time floor.
+a peer's decision uses, so "live" here means what it means there. IT IS NOT READ-ONLY: like any check it
+takes the freshness lock, moves the time floor, and finishes an interrupted accept() by advancing the TPM
+counter. So whatever runs the watch needs the peer service's own authority over the freshness state and
+the NV counter; a separate low-privilege monitoring user cannot run it (it can read the metrics file).
 
 The manifest is injected as a callable (the peer's membership.Store.load). Running this from a timer or a
 loop on the host belongs with the heartbeat's transport (#80).
@@ -55,7 +68,6 @@ Refused, require = membership.Refused, membership.require
 THRESHOLDS = (50, 25, 10)       # percent of the heartbeat's lifetime left
 REPEAT = 3600                   # seconds between repeated warnings
 MAX_BYTES = 4096
-DOWN = "down"
 
 
 def _printable(text):
@@ -87,16 +99,27 @@ def reading(freshness, manifest):
     return dict(result, live=True, seconds_left=expires - now, lifetime=expires - issued, sequence=sequence)
 
 
+STATE_KEYS = ("sequence", "level", "last", "down", "announced", "recovering", "errors")
+KINDS = ("EXPIRED", "UNUSABLE")
+
+
 def decide(current, previous, now, thresholds=THRESHOLDS, repeat=REPEAT):
     """The warning due for the reading `current`, if any, and what to remember. `previous` is what the last
-    call returned to remember ({} at first): {"key": the heartbeat's sequence or "down", "level": the
-    lowest threshold warned about for it (0 for down) or None, "last": when the last warning went}.
+    call returned to remember ({} at first):
+        sequence   the heartbeat the next two are about (0: none seen yet)
+        level      the lowest threshold warned about for it, or None
+        last       when that warning last went, or None
+        down       whether the last reading was not live
+        announced  whether an ERROR was sent for the outage that reading belongs to (or the one just ended)
+        recovering whether the last reading was the first live one after an announced outage
+        errors     {kind: when an ERROR of that kind last went}
     Returns (event or None, remembered). `now` only spaces the repeats: a clock set back repeats at once."""
-    key = current["sequence"] if current["live"] else DOWN
-    same = previous.get("key") == key
-    level, last = (previous.get("level"), previous.get("last")) if same else (None, None)
-    waited = last is None or now < last or now - last >= repeat
-    remembered = {"key": key, "level": level, "last": last}
+    sequence, level, last = previous.get("sequence", 0), previous.get("level"), previous.get("last")
+    down, announced, errors = previous.get("down", False), previous.get("announced", False), dict(previous.get("errors", {}))
+    recovering = previous.get("recovering", False)
+
+    def waited(at):
+        return at is None or now < at or now - at >= repeat
 
     def event(severity, kind, threshold):
         return {"event": "heartbeat-freshness", "severity": severity, "kind": kind, "epoch": current["epoch"],
@@ -104,22 +127,33 @@ def decide(current, previous, now, thresholds=THRESHOLDS, repeat=REPEAT):
                 "seconds_left": current["seconds_left"], "lifetime_s": current["lifetime"],
                 "max_lifetime_s": current["max_lifetime"], "threshold_percent": threshold, "reason": current["reason"]}
 
+    def remembered():
+        return {"sequence": sequence, "level": level, "last": last, "down": down, "announced": announced, "recovering": recovering,
+                "errors": errors}
+
     if not current["live"]:
-        if not waited:
-            return None, remembered
-        kind = "EXPIRED" if current["reason"].startswith("EXPIRED") else "UNUSABLE"
-        return event("ERROR", kind, 0), dict(remembered, level=0, last=int(now))
+        kind, down, recovering, due = ("EXPIRED" if current["reason"].startswith("EXPIRED") else "UNUSABLE"), True, False, None
+        if waited(errors.get(kind)):
+            errors[kind], announced, due = int(now), True, event("ERROR", kind, 0)
+        return due, remembered()
+    due = None
+    if current["sequence"] != sequence:             # another heartbeat: what was said about the old one is over
+        if current["sequence"] > sequence and (level is not None or announced):
+            due = event("INFO", "RENEWED", 0)       # a newer one; a LOWER sequence (a state file from elsewhere) is not news
+        sequence, level, last, announced, recovering = current["sequence"], None, None, False, False
+    elif announced and recovering:                  # the same heartbeat, usable for the second step running
+        due, announced, recovering = event("INFO", "RECOVERED", 0), False, False
+    elif announced:                                 # usable again, for one step so far: said at the next, if it holds
+        recovering = True
+    down = False
     crossed = [t for t in thresholds if current["seconds_left"] * 100 <= t * current["lifetime"]]
-    if not crossed:
-        if previous.get("level") is not None and not same:
-            return event("INFO", "RENEWED", 0), remembered
-        return None, remembered
-    lowest = min(crossed)
-    if level is None or lowest < level:
-        return event("WARN", "RUNNING_OUT", lowest), dict(remembered, level=lowest, last=int(now))
-    if lowest == min(thresholds) and waited:
-        return event("WARN", "RUNNING_OUT", lowest), dict(remembered, last=int(now))
-    return None, remembered
+    if crossed:
+        lowest = min(crossed)
+        if level is None or lowest < level:
+            level, last, due = lowest, int(now), event("WARN", "RUNNING_OUT", lowest)
+        elif lowest == min(thresholds) and waited(last):
+            last, due = int(now), event("WARN", "RUNNING_OUT", lowest)
+    return due, remembered()
 
 
 def metrics(current, now):
@@ -168,11 +202,16 @@ class Watch:
             with open(self.state_path, "rb") as f:
                 raw = f.read(MAX_BYTES + 1)
             state = membership.load(raw[:MAX_BYTES])
-            membership.exact(state, ("key", "level", "last"), "watch state")
-            key, level, last = state["key"], state["level"], state["last"]
-            require(key == DOWN or (isinstance(key, int) and not isinstance(key, bool)), "key")
-            require(level is None or level == 0 or level in self.thresholds, "level")
-            require(last is None or (isinstance(last, int) and not isinstance(last, bool)), "last")
+            membership.exact(state, STATE_KEYS, "watch state")
+
+            def moment(value):
+                return value is None or (isinstance(value, int) and not isinstance(value, bool))
+            require(isinstance(state["sequence"], int) and not isinstance(state["sequence"], bool) and state["sequence"] >= 0, "sequence")
+            require(state["level"] is None or state["level"] in self.thresholds, "level")
+            require(moment(state["last"]), "last")
+            require(all(isinstance(state[k], bool) for k in ("down", "announced", "recovering")), "down, announced, recovering")
+            errors = state["errors"]
+            require(isinstance(errors, dict) and set(errors) <= set(KINDS) and all(moment(v) and v is not None for v in errors.values()), "errors")
             return state
         except (OSError, Refused):
             return {}
