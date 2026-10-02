@@ -1,0 +1,67 @@
+# Three-site KMS: secret inventory and lifecycles (Phase 0, #60)
+
+Every secret the three-site design (#59) uses, each with all eight lifecycle fields and a custody
+role; "n/a" always carries its reason. Companion to [THREE-SITE-THREAT-MODEL.md](THREE-SITE-THREAT-MODEL.md).
+*Existing* secrets are in use today; *proposed* ones belong to a phase and do not exist until it lands.
+
+Custody roles: **Owner** (the principal, sole shareholder); **Technical director** (reaches the
+datacenter tokens, never the PINs); **Shareholders** (k-of-n case holders); **Node** (the machine,
+no human); **Fencing authority** (the independent activation signer, FENCING.md).
+
+## Disk unlock (Phases 6, 7, 11)
+
+| Secret | Generated | Stored | Exportable | Authorized use | Rotation | Revocation | Recovery | Custody |
+|---|---|---|---|---|---|---|---|---|
+| **LUKS2 volume key** (per node; LUKS existing, this use proposed) | `cryptsetup luksFormat`, on the node | at rest only wrapped in keyslots; **in kernel memory while the volume is open**, as for any dm-crypt key | yes, to anyone holding a valid keyslot credential (`--dump-volume-key`) or root on the running node: the credentials and the running node are what protect it | dm-crypt for the root filesystem | `cryptsetup reencrypt` on suspected exposure | n/a: a volume key is replaced, not revoked | through the recovery keyslot | Node |
+| **Local TPM contribution** (per node, proposed) | 256-bit random, on the node at enrollment | sealed in its TPM under the measured-boot policy (#65) | the sealed object cannot migrate (`fixedTPM`), but **once unsealed it is plaintext in the pre-root process** that runs the HKDF, so privileged or compromised pre-root code can copy it: the measured-boot policy is what keeps that code honest | one HKDF input for each of the node's peer-path keyslots | with a measured-policy change (#75) or node replacement | TPM clear / node retirement | not recoverable by design; the recovery keyslot covers its loss | Node |
+| **Peer contribution `P→T`** (one per target T and peer P, six in all; proposed) | 256-bit random, by P for T at enrollment | inside P's own encrypted root, so a powered-off P yields nothing | sent only through the bootstrap protocol, encrypted to T's freshly attested ephemeral key, when T may receive (threat model S2); **plaintext in T's pre-root process** after decryption, and readable by root on a running P | `credential = HKDF-SHA256(local_T ‖ P→T, info = "regalia/luks/v1/<T>/<P>/<path epoch>")` opens the `P→T` keyslot; neither input alone opens anything | per pair: new contribution, new keyslot, old keyslot killed | kill the pair's keyslot on T; P drops contributions for a revoked T | re-enroll the pair | Node (P) |
+| **Recovery keyslot credential** (one per node: decided, so one envelope reaches one node) | ≥128-bit passphrase, offline, at enrollment | on paper in the Owner's safe (own sealed envelope); escrowed encrypted to the breakglass recipient | only by its custodian; the escrow copy needs k shares | a total outage (A3), or a node with no healthy peer: unlock one node, then A1/A2 | after every use | kill the keyslot | the escrow copy, through k shares (ADR-0002 D19) | Owner |
+
+## Attestation and networking (Phases 5, 6)
+
+| Secret | Generated | Stored | Exportable | Authorized use | Rotation | Revocation | Recovery | Custody |
+|---|---|---|---|---|---|---|---|---|
+| **Endorsement key (EK)** (existing) | by the TPM manufacturer | in the TPM | no | anchors the attestation key; its certificate is recorded at intake | n/a: permanent to the TPM | node retirement (manifest) | n/a: replaced with the node | Node |
+| **Attestation key (AK)** (proposed) | in the TPM, restricted signing key, bound to the EK by credential activation | in the TPM (persistent handle) | no (`fixedTPM`) | quotes binding node ID, manifest epoch, boot session, ephemeral key and peer nonce (S3) | node replacement, or a new enrollment | manifest (each node's AK is listed) | re-create and re-enroll through the membership root | Node |
+| **WG-BOOT key pair** (per node, proposed) | in the initramfs build at enrollment | private half sealed to the TPM under the boot policy | no (sealed) | the peer bootstrap endpoints only, before root; removed after boot | with each boot-policy change (#75) | manifest + peers' WireGuard peer lists | re-enroll | Node |
+| **WG-SERVICE key pair** (per node, proposed) | on the node | in the encrypted root | yes to root on the running node (it is a file); protected by disk encryption at rest | the service plane after boot (peer traffic, optional admin SSH) | yearly, or on suspicion | manifest + peer lists | re-enroll | Node |
+| **Boot-session ephemeral key** (per boot, proposed) | in the initramfs, per boot | RAM only | not stored, but **plaintext in the initramfs process's memory for its lifetime**: compromised pre-root code can copy it before it is wiped; the measured-boot policy is what keeps that code honest. Destroyed with the bootstrap buffers after unlock | receiving the encrypted peer contributions for that one boot | every boot | n/a: it never outlives the boot | n/a: a new boot makes a new one | Node |
+| **TPM-held mTLS server key** (proposed, ADR-0002 D21 point 3) | in the TPM | in the TPM | no (`fixedTPM`) | the KMS server's TLS identity, certified only after attestation | with each certificate renewal or on suspicion | certificate expiry (short-lived) and revocation | re-create and re-certify | Node |
+
+## Membership and authority (Phases 8, 9, 14)
+
+| Secret | Generated | Stored | Exportable | Authorized use | Rotation | Revocation | Recovery | Custody |
+|---|---|---|---|---|---|---|---|---|
+| **Membership root key** (Ed25519, proposed) | offline, in a ceremony-grade session | offline; its backup wrapped under the ceremony roots (D19) | only as that wrapped backup | every *permissive* transition: enroll, replace, change identities, restore trust | rare, by a signed hand-over manifest | a hand-over manifest from a new root, distributed out of band | from the wrapped backup with k shares | Owner (offline) |
+| **Revocation authority key** (Ed25519, proposed) | on a separate host, or as an HSM key | that host or HSM | no if HSM-held; otherwise only by its host's administrator | *restrictive* transitions (QUARANTINED, RETIRED, REVOKED_STOLEN) and freshness heartbeats; cannot enroll or activate | yearly, or on suspicion, by a root-signed manifest | a root-signed manifest naming its successor | a new key, named by the root | Owner |
+| **Highest accepted epoch and heartbeat sequence** (state, proposed) | by each node as it accepts manifests and heartbeats | **two TPM NV counter indices** (`TPM_NT_COUNTER`), one for the epoch and one for the heartbeat sequence, outside restorable disk state. To accept value N above the counter, the node increments the counter until it reads N, then acts; a jump larger than a bound (proposed 1000) is refused as an anomaly. Epochs change rarely and heartbeats daily, well inside NV write endurance | n/a: not secret, but integrity-critical | refusing a manifest or heartbeat at or below the counter | n/a: monotonic | n/a: monotonic state is not revoked | a counter cannot go down: a replacement node starts new counters at 0. Its **root-signed admission manifest carries the current epoch and heartbeat sequence**, and at enrollment, once and only on that root-signed value, the node increments both counters to them; the 1000-step jump bound applies only after enrollment. A replacement therefore accepts the current heartbeat immediately, however many have been issued | Node |
+| **Fencing authority key** (Ed25519, existing, FENCING.md) | by `regalia-fence` on its own host | on that host, in a failure domain independent of both providers (threat model A4) | only by that host's administrator | activation leases, never overlapping across sites | yearly or on suspicion: a new key on the authority host; every site's configured authority public key is replaced through its signed commissioning configuration before the old key's last lease expires | on compromise: replace the configured public key at every site; until then a site serves only on an unexpired lease, then stops | lost key: a new key and reconfiguration of every site, with no lease (no serving) in between; the issuer state (epochs) is backed up off-host so the new key never reuses an epoch | Fencing authority |
+| **Commissioning evidence key** (ECDSA P-256, existing) | offline | offline | by its custodian only | signing each node's commissioning evidence; trusted by recorded fingerprint | on suspicion, with a new recorded fingerprint | replace the recorded fingerprint | a new key and fingerprint | Owner |
+
+## Hardware credentials (existing; Phases 2–4, 12, 13 may change the user-PIN rows)
+
+| Secret | Generated | Stored | Exportable | Authorized use | Rotation | Revocation | Recovery | Custody |
+|---|---|---|---|---|---|---|---|---|
+| **HSM user PIN** | at the ceremony (generated, or chosen and checked) | PIN card (Owner's safe); TPM-sealed systemd credential per host; MAC-authenticated escrow to breakglass | by the Owner (card); not from a host (TPM-sealed) | unattended HSM login (ADR-0002 D4: no runtime PKA unless #63 changes it) | after an unexplained card opening, or on suspicion: change on the card, re-seal, new escrow | change it (the old value stops working) | escrow (newest verified), else the tier-0 payload, through k shares | Owner |
+| **HSM SO-PIN** | at the ceremony | tier-0 payload only | only through k shares | HSM administration at the ceremony | at a re-initialisation | n/a: changed only by re-initialising | the payload, through k shares | Shareholders |
+| **YubiKey PIV PIN** | at the ceremony | as the HSM user PIN (TPM-sealed on hosts with a TPM) | as the HSM user PIN | unattended YubiKey use on TPM profiles; profiles C/D cannot hold it unattended (threat model) | as the HSM user PIN | change it | as the HSM user PIN | Owner |
+| **YubiKey PUK and management key** | at the ceremony | tier-0 payload only | only through k shares | unblock and administration | at a re-provisioning | n/a: changed only by re-provisioning | the payload, through k shares | Shareholders |
+| **YubiKey OpenPGP PW1** (only if #73 adopts the OpenPGP adapter; distinct from the PIV PIN, OPENPGP-COMPATIBILITY.md) | at provisioning | as the PIV PIN: TPM-sealed on TPM profiles, PIN card, escrow | as the PIV PIN | OpenPGP signing/decryption by the bootstrap adapter | as the PIV PIN | change it | escrow, else the payload | Owner |
+| **YubiKey OpenPGP Admin PIN (PW3)** (only if #73 adopts it) | at provisioning | tier-0 payload only, never online | only through k shares | OpenPGP administration and unblocking a blocked PW1 | at a re-provisioning | n/a: changed only by re-provisioning | the payload, through k shares | Shareholders |
+| **DKEK and its k-of-n shares** | at the ceremony | shares in the sealed cases | only by assembling k shares | restoring HSM keys | at a new ceremony (D19 avoids it) | n/a: a DKEK is replaced, not revoked | k shares | Shareholders |
+| **KMS service private keys** | in the HSM | in the HSM; backups DKEK-wrapped (D19) | no (never-extractable; #62); only as DKEK-wrapped blobs | KMS operations | per key policy | KMS key revocation (policy) | from the wrapped backup with the DKEK | Node (HSM) |
+| **Breakglass age key** | at the ceremony (step 3) | split into k-of-n shares; its public recipient in the repository | only by assembling k shares | SOPS recovery; decrypting the payload and the PIN escrows | by the staged SOPS swap (df-cicd) | the swap's remove stage drops the old recipient everywhere | k shares | Shareholders |
+| **Escrow MAC key** | at the ceremony (step 0) | tier-0 payload; PIN card (Owner's safe); its check value (KCV) in the repository | by the Owner (card); otherwise only through k shares | authenticating PIN escrow files | payload re-issue (after an unexplained card opening) | as for rotation: escrows under the old key stop verifying | the payload, through k shares | Owner |
+| **PIN escrow files** (`escrow/pins-NNNN.age` + `.mac`) | at each PIN change, by the disc's escrow tool | the private repository: ciphertext and MAC, copyable by anyone with read access | the ciphertext freely; the plaintext only through the breakglass key (k shares) | recovering current PINs after a lost card | every PIN change writes a new one | a re-keyed MAC key makes old files stop verifying | the newest verified file, through k shares | Owner (writes); Shareholders (open) |
+
+## Service trust (Phase 14)
+
+**Service TLS certificates**: short-lived, issued to the TPM-held mTLS key above after attestation;
+expiry is a control in itself. **Peer runtime leases**: proposed in #74; issued by an independent
+authority, never self-issued by bootstrap peers (ADR-0002 D23).
+
+## Open items this inventory leaves to the phases
+
+- The heartbeat expiry and the authenticated-time source (#69).
+- The exact PCR set for the local TPM contribution and the WG-BOOT key (#65).
+- A non-TPM PIN mechanism for profiles C/D, if they are ever needed unattended (needs its own decision).
