@@ -79,6 +79,36 @@ class Device:
             self.session.closeSession()
             self.session = None
 
+    def logout_probe(self):
+        if self.session is None:
+            raise RuntimeError("probe needs an authenticated positive control")
+        session, key = self.session, self.private
+        session.logout()
+        self.session = None
+        try:
+            session.sign(key, b"logout-probe", p11.Mechanism(p11.CKM_SHA256_RSA_PKCS, None))
+            return False
+        except p11.PyKCS11Error as error:
+            if error.value not in [p11.CKR_USER_NOT_LOGGED_IN, p11.CKR_OBJECT_HANDLE_INVALID]:
+                raise
+            return True
+        finally:
+            session.closeSession()
+
+    def wrong_pin_probe(self):
+        self.logout()
+        session = self.lib.openSession(self.slot(), p11.CKF_SERIAL_SESSION)
+        try:
+            session.login(("0" if self.pin[0] != "0" else "1") + self.pin[1:])
+            session.logout()
+            return False
+        except p11.PyKCS11Error as error:
+            if error.value != p11.CKR_PIN_INCORRECT:
+                raise
+            return True
+        finally:
+            session.closeSession()
+
     def remove(self):
         if self.present:
             self.logout()

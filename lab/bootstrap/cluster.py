@@ -112,6 +112,9 @@ class ClusterNode(Node):
             try:
                 challenge = exchange(service_address(peer), 8445, {"op": "lease_challenge", "node_id": self.node_id},
                                      timeout=1, route="/lease")
+                fields(challenge, {"challenge_id", "nonce"})
+                hex_bytes(challenge["challenge_id"], 16)
+                hex_bytes(challenge["nonce"], 32)
                 request = {"version": 1, "cluster_id": policy["authorities"]["cluster_id"],
                            "node_id": self.node_id, "issuer_id": peer, "epoch": policy["epoch"],
                            "manifest_digest": policy["manifest_digest"], "boot_generation": generation,
@@ -122,6 +125,8 @@ class ClusterNode(Node):
                     self.current()
                     verify_lease(response, self.pins, self.policy(), self.clock, self.node_id,
                                  self.device.fingerprint, self.generation)
+                    if response["payload"]["issuer_id"] != peer or response["payload"]["challenge_id"] != challenge["challenge_id"]:
+                        raise Refusal()
                     if self.generation != generation or not self.active:
                         raise Refusal()
                     self.device.authenticate()
@@ -168,10 +173,37 @@ class ClusterNode(Node):
                 raise Refusal("INVALID_REQUEST")
             return exchange(service_address(command["peer"]), 8445, command["command"], route="/lease")
         if op == "service_request":
+            # This proxy issues requests as this node's runtime WireGuard identity.
             fields(command, {"op", "peer", "command"})
             if command["peer"] not in list("ABC"):
                 raise Refusal("INVALID_REQUEST")
             return exchange(service_address(command["peer"]), 8446, command["command"], route="/kms")
+        if op == "prepare_lease_request":
+            fields(command, {"op", "peer"})
+            peer = command["peer"]
+            if peer not in list("ABC") or peer == self.node_id:
+                raise Refusal("INVALID_REQUEST")
+            with self.lock:
+                self.current()
+                policy = self.policy()
+                challenge = exchange(service_address(peer), 8445, {"op": "lease_challenge", "node_id": self.node_id}, route="/lease")
+                fields(challenge, {"challenge_id", "nonce"})
+                body = {"version": 1, "cluster_id": policy["authorities"]["cluster_id"], "epoch": policy["epoch"],
+                        "manifest_digest": policy["manifest_digest"], "node_id": self.node_id, "issuer_id": peer,
+                        "boot_generation": self.generation, "service_public": self.device.fingerprint, **challenge}
+                key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes.fromhex(policy["signing_key"]))
+                return {"op": "renew_lease", "envelope": signed_token(key, REQUEST_DOMAIN, body)}
+        if op == "adopt_lease":
+            fields(command, {"op", "lease"})
+            with self.lock:
+                self.current()
+                if not self.active:
+                    raise Refusal()
+                verify_lease(command["lease"], self.pins, self.policy(), self.clock, self.node_id,
+                             self.device.fingerprint, self.generation)
+                self.device.authenticate()
+                self.lease = command["lease"]
+            return {}
         if op == "clock_fault":
             fields(command, {"op", "offset"})
             if type(command["offset"]) is not int or abs(command["offset"]) > 86400000:
@@ -194,6 +226,7 @@ class ClusterNode(Node):
                 getattr(self.device, "remove" if op == "device_remove" else "insert")()
             return {}
         if op == "malicious_sign":
+            # Trusted fault instrumentation; never available on a runtime route.
             fields(command, {"op", "request_id", "message", "lease"})
             with self.lock:
                 self.device.authenticate()
@@ -201,6 +234,24 @@ class ClusterNode(Node):
                 signature = self.device.sign(SERVICE_DOMAIN + canonical(statement))
                 self.device.logout()
                 return {"statement": statement, "lease": command["lease"], "signature": signature.hex()}
+        if op == "device_probe":
+            with self.lock:
+                try:
+                    self.device.slot()
+                    visible = True
+                except Refusal:
+                    visible = False
+                return {"token_visible": visible}
+        if op == "device_auth_probe":
+            with self.lock:
+                self.ready()
+                refused = self.device.logout_probe()
+                self.invalidate()
+                return {"refused": refused}
+        if op == "device_bad_pin":
+            with self.lock:
+                self.invalidate()
+                return {"refused": self.device.wrong_pin_probe()}
         if op == "status":
             try:
                 self.current()

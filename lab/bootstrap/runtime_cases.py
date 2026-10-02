@@ -3,6 +3,10 @@
 import copy
 import os
 import time
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from leases import SERVICE_DOMAIN
+from peer import canonical
 
 from mesh import admin, probe
 
@@ -48,10 +52,12 @@ def runtime_cases(c):
     c.denied("expired access lease prevents normal signing", lambda: c.sign("A"))
     c.denied("independent client rejects an expired cached response", lambda: c.verify("A", reply, nonce, data))
     malicious = c.rpc("A", "malicious_sign", request_id=nonce, message=data.hex(), lease=renewed["lease"])
+    public = serialization.load_der_public_key(bytes.fromhex(c.identities["A"]["device_public"]))
+    public.verify(bytes.fromhex(malicious["signature"]), SERVICE_DOMAIN + canonical(malicious["statement"]), padding.PKCS1v15(), hashes.SHA256())
+    c.check("bypass test produces a genuine PKCS11 signature", True)
     c.denied("independent client rejects a cryptographically valid bypass signature with an expired lease",
              lambda: c.verify("A", malicious, nonce, data))
     c.rpc("A", "renew", peers=["C"])
-    before_reboot, old_nonce, old_data = c.sign("A")
     c.rpc("A", "lock")
     c.check("logical reboot drops lease and HSM authentication", not c.rpc("A", "status")["device_session"])
     c.rpc("A", "bootstrap", peers=["C"])
@@ -59,6 +65,7 @@ def runtime_cases(c):
     c.rpc("A", "renew", peers=["C"])
     c.check("fresh runtime authorization restores service after reboot", c.verify("A", *c.sign("A")))
     for offset in [-60000, 60000]:
+        c.fresh()
         c.rpc("A", "clock_fault", offset=offset)
         c.denied(f"clock jump {offset} cannot obtain a lease", lambda: c.rpc("A", "renew", peers=["C"]))
         c.denied(f"clock jump {offset} stops signing", lambda: c.sign("A"))
@@ -69,6 +76,7 @@ def runtime_cases(c):
     c.denied("independent client detects its own rollback clock fault", lambda: c.verify("A", *c.sign("A")))
     c.client_clock.offset = 0
     c.client_clock.reset()
+    c.fresh()
     c.rpc("A", "renew", peers=["C"])
     valid, nonce, message = c.sign("A")
     c.publish(c.authority.update({"A": "REVOKED_STOLEN"}, authority="revocation"))

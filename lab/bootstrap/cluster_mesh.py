@@ -177,7 +177,7 @@ def main():
               "image_id": os.environ["REGALIA_LAB_IMAGE_ID"], "platform": os.environ["REGALIA_LAB_PLATFORM"],
               "sources_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in [
                   "cluster.py", "cluster_mesh.py", "tokens.py", "leases.py", "device.py", "policy_cases.py",
-                  "runtime_cases.py", "peer.py", "network.py", "Dockerfile"]}}
+                  "runtime_cases.py", "device_cases.py", "peer.py", "network.py", "Dockerfile"]}}
     cluster = Cluster(report)
     try:
         cluster.start()
@@ -185,6 +185,8 @@ def main():
         policy_cases(cluster)
         from runtime_cases import runtime_cases
         runtime_cases(cluster)
+        from device_cases import device_cases
+        device_cases(cluster)
         report["packages"] = command("exec", "-T", "a", "cat", "/opt/packages.tsv").stdout.decode().splitlines()
         report["status"] = "passed"
     finally:
