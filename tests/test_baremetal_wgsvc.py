@@ -343,6 +343,15 @@ class Reconciling(Case):
         self.refused("could not be taken down or deleted", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=Stuck(dict(self.table(self.m1), **{KEY["c"]: ["fd72:6567:6c61::/48"]})))
         self.assertEqual(wide.calls[-2:], [["ip", "link", "set", "dev", "wg-svc", "down"], ["ip", "link", "del", "dev", "wg-svc"]])
 
+        class Interrupted(Stuck):
+            def __call__(self, argv, **kw):
+                if argv[:2] == ["wg", "syncconf"]:
+                    raise KeyboardInterrupt()
+                return super().__call__(argv, **kw)
+        with self.assertRaises(KeyboardInterrupt) as caught:                   # not turned into a refusal
+            wgsvc.reconcile(self.m1, "a", {}, PRIVATE, run=Interrupted(self.table(self.m1)))
+        self.assertIn("could not be taken down or deleted", " ".join(getattr(caught.exception, "__notes__", [])))
+
     def test_a_result_that_is_not_the_manifest_s_takes_the_interface_down(self):
         revoked = hbt.manifest(c="REVOKED_STOLEN")
         host = self.Host(self.table(self.m1))                                      # the kernel still has c, whatever was applied

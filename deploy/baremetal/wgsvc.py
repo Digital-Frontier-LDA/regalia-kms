@@ -265,6 +265,9 @@ def reconcile(manifest, node_id, underlays, private_key, authority=None, listen_
         try:
             down(name, run)
         except Refused as stuck:
+            if not isinstance(failure, Exception):      # an interrupt stays an interrupt; the stuck interface is said beside it
+                failure.add_note(str(stuck))
+                raise
             raise Refused("%s; and %s" % (failure, stuck)) from None
         raise
     return own
