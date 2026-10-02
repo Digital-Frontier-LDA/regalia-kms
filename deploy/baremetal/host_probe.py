@@ -44,8 +44,13 @@ PLATFORM AND TPM, measured:
                             every keyslot of those volumes is named by exactly one such token. A token of any other type (clevis, an unknown name) fails: this
                             check cannot say what releases its keyslot. NOT measured: that the NV index
                             holds that file's policy, and that a retired image is in fact refused on this
-                            host (#65 checklist, section D). The peer contribution of #67 will be a
-                            second passing shape. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY
+                            host (#65 checklist, section D). THE SECOND PASSING SHAPE is peer-assisted
+                            unlock (#67, deploy/baremetal/unlock.py): regalia-peer-unlock tokens and no
+                            systemd-tpm2 token at all, judged by unlock.judge_tokens against --node-id
+                            and --unlock-peer (this node, and exactly the peers that hold a path), each
+                            path's local share sealed to the TPM alone under PCR 7 (with or without a
+                            signed PCR 11 policy). root_disk_tpm_unlocked accepts the same shape, with
+                            no tpm2-device in crypttab. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY
                             DESIGN: it is the known blocker for production, and there is no option to
                             skip it. Signed commissioning evidence records every measured control as
                             true, so no evidence can be signed for such a host either.
@@ -263,7 +268,43 @@ def token_keyslots(token, meta):
     return slots
 
 
-def root_unlock(host):
+PEER_TOKEN = "regalia-peer-unlock"      # deploy/baremetal/unlock.py: one token per peer path
+
+
+def peer_paths(meta, where, unlock_record):
+    """Judge a volume that carries peer-path tokens (#67): (ok, why). unlock.judge_tokens decides whether
+    the paths are well-formed, for this node, from the recorded peers, each with a keyslot of its own,
+    with NO systemd-tpm2 token beside them; here the local share of each path must also be sealed to the
+    TPM under PCR 7 exactly (with or without a signed PCR 11 policy), as the disk policy is.
+    `unlock_record` is (this host's node ID, its unlock peers), from --node-id and --unlock-peer."""
+    if unlock_record is None:
+        return False, "%s carries %s tokens, and this run was not told which node this is: pass --node-id and one " \
+            "--unlock-peer per peer (the tokens are judged against that record)" % (where, PEER_TOKEN)
+    node, peers = unlock_record
+    try:
+        if os.path.dirname(os.path.dirname(HERE)) not in sys.path:
+            sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
+        from deploy.baremetal import unlock
+    except Exception as error:      # noqa: BLE001  without the judge the shape cannot be accepted
+        return False, "%s carries %s tokens, but deploy/baremetal/unlock.py cannot be loaded (%s: %s)" % (
+            where, PEER_TOKEN, type(error).__name__, error)
+    ok, why, _slots = unlock.judge_tokens(meta, node, list(peers))
+    if not ok:
+        return False, "%s: %s" % (where, why)
+    for token_id, token in sorted(meta["tokens"].items()):
+        if token.get("type") != PEER_TOKEN:
+            continue
+        try:
+            direct, signed, _pkfp = local_share_binding(token.get("local"))
+        except ValueError as error:
+            return False, "%s: the local share of token %s is %s" % (where, token_id, error)
+        if direct != [7] or signed not in ([], [11]):
+            return False, "%s: the local share of token %s is sealed to %s, not to PCR 7 exactly (with or without a signed " \
+                "PCR 11 policy)" % (where, token_id, binding_text(direct, signed, _pkfp))
+    return True, why
+
+
+def root_unlock(host, unlock_record=None):
     crypts, why = root_crypt_devices(host)
     if crypts is None:
         return False, why
@@ -272,18 +313,30 @@ def root_unlock(host):
         f = line.split()
         if f and not f[0].startswith("#"):
             entries[f[0]] = f[3] if len(f) > 3 else ""
+    how = []
     for name in crypts:
-        if name not in entries:
-            return False, "%s (under the root filesystem) is not listed in /etc/crypttab" % name
-        opts = dict((o.split("=", 1) + [""])[:2] for o in entries[name].split(",") if o)
-        if not opts.get("tpm2-device"):
-            return False, "%s is in crypttab but not TPM-unlocked (options: %s)" % (name, entries[name] or "none")
-        # crypttab only ASKS for the TPM; the LUKS2 header must actually carry a TPM2 token (what
-        # systemd-cryptenroll --tpm2-device writes), or a passphrase-only volume would pass here.
         dev, meta = luks_header(host, name)
         if dev is None:
             return False, meta
         tokens = meta["tokens"]
+        opts = dict((o.split("=", 1) + [""])[:2] for o in entries.get(name, "").split(",") if o)
+        # The peer-assisted shape (#67): the TPM AND a peer, never the TPM alone. systemd is not asked to
+        # unlock it (no tpm2-device in crypttab: the unlock client does), and there is no systemd-tpm2 token.
+        if any(t.get("type") == PEER_TOKEN for t in tokens.values()):
+            if opts.get("tpm2-device"):
+                return False, "%s (%s) carries %s tokens, but crypttab still asks systemd to unlock it with the TPM alone " \
+                    "(tpm2-device=%s)" % (name, dev, PEER_TOKEN, opts["tpm2-device"])
+            ok, why = peer_paths(meta, "%s (%s)" % (name, dev), unlock_record)
+            if not ok:
+                return False, why
+            how.append("%s unlocks with the TPM and a peer (%s)" % (name, why))
+            continue
+        if name not in entries:
+            return False, "%s (under the root filesystem) is not listed in /etc/crypttab" % name
+        if not opts.get("tpm2-device"):
+            return False, "%s is in crypttab but not TPM-unlocked (options: %s)" % (name, entries[name] or "none")
+        # crypttab only ASKS for the TPM; the LUKS2 header must actually carry a TPM2 token (what
+        # systemd-cryptenroll --tpm2-device writes), or a passphrase-only volume would pass here.
         tpm = [t for t in tokens.values() if t.get("type") == "systemd-tpm2" and token_keyslots(t, meta)]
         if not tpm:
             return False, "%s (%s) has no systemd-tpm2 token in its LUKS2 header: enrol it with " \
@@ -302,8 +355,8 @@ def root_unlock(host):
             if pcrs is None or 7 not in pcrs:
                 return False, "%s (%s) has an NV-backed TPM2 token, but %s: nothing shows that its policy binds PCR 7" % (
                     name, dev, why or "%s does not cover PCR 7 (it covers %s)" % (PCRLOCK_POLICY, sorted(pcrs)))
-    return True, "%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (
-        ", ".join(crypts), "; ".join(entries[n] for n in crypts))
+        how.append("%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (name, entries[name]))
+    return True, "; ".join(how)
 
 
 def nv_backed(token):
@@ -395,15 +448,16 @@ def secret_volumes(host):
 NOT_REVOCABLE = (
     "%s (%s) is unlocked by the local TPM alone, under a policy that cannot retire a boot image (%s). An old signed "
     "kernel image unlocks this disk, reads the host key and opens the HSM PIN. BLOCKING FOR PRODUCTION (#135). "
-    "What clears it: a peer's contribution to the unlock (#67, not built yet), or an NV-backed policy "
+    "What clears it: a peer's contribution to the unlock (#67: deploy/baremetal/unlock.py), or an NV-backed policy "
     "(systemd-cryptenroll --tpm2-pcrlock; measured on a software TPM only, e2e/pcrlock-luks-swtpm.sh). "
     "There is no option to skip this check")
 
 
-def unlock_revocable(host):
+def unlock_revocable(host, unlock_record=None):
     volumes, why = secret_volumes(host)
     if volumes is None:
         return False, why
+    any_nv, by_peer = False, []
     for name, paths in volumes.items():
         dev, meta = luks_header(host, name)
         if dev is None:
@@ -428,10 +482,21 @@ def unlock_revocable(host):
         if shared:
             return False, "%s: keyslot %s is named by more than one token (%s): what releases it cannot be judged. BLOCKING FOR " \
                 "PRODUCTION (#135)" % (where, ", ".join(shared), ", ".join("token " + i for i in named[shared[0]]))
+        # The peer-assisted shape (#67): every TPM-held share needs a peer's contribution, and a peer gives it
+        # only to an image its manifest accepts now. unlock.judge_tokens refuses it if ANY systemd-tpm2 token
+        # sits beside the paths, NV-backed or not: a keyslot the local TPM opens by itself bypasses the peers.
+        peer_shape = any(t.get("type") == PEER_TOKEN for t in meta["tokens"].values())
+        if peer_shape:
+            ok, why = peer_paths(meta, where, unlock_record)
+            if not ok:
+                return False, "%s. BLOCKING FOR PRODUCTION (#135)" % why
+            by_peer.append("%s: %s" % (name, why))
         for token_id, token in sorted(meta["tokens"].items()):
             if not token.get("keyslots"):
                 continue                       # a token that names no keyslot releases nothing
             kind = token.get("type")
+            if peer_shape and kind == PEER_TOKEN:
+                continue                       # judged above, with its local share
             if kind == "systemd-recovery":
                 recovery += 1                  # the recovery key: root_disk_recovery_keyslot judges the root volume's
                 continue
@@ -451,21 +516,28 @@ def unlock_revocable(host):
         if recovery > 1:
             return False, "%s has %d systemd-recovery tokens: one volume has one recovery key (a second is a second secret " \
                 "that opens it). BLOCKING FOR PRODUCTION (#135)" % (where, recovery)
-        if not nv:
+        any_nv = any_nv or bool(nv)
+        if not nv and not peer_shape:
             return False, "%s has no systemd-tpm2 token that names a keyslot: nothing to judge (root_disk_tpm_unlocked says " \
                 "what is missing on the root volume; a volume opened by a key file cannot be judged here). BLOCKING FOR " \
                 "PRODUCTION (#135)" % where
-    pcrs, why = pcrlock_pcrs(host)
-    if pcrs is None:
-        return False, "the TPM tokens are NV-backed, but %s: nothing shows what their policy binds. BLOCKING FOR PRODUCTION (#135)" % why
-    if 7 not in pcrs or not pcrs & IMAGE_PCRS:
-        return False, "the TPM tokens are NV-backed, but %s binds PCRs %s (with measured values): it must bind PCR 7 and a PCR " \
-            "that tells boot images apart (11, or 4). systemd-pcrlock leaves out a PCR it cannot predict, a PCR nothing was " \
-            "measured into is all zeros for every image, and a policy without the image is satisfied by every old one. " \
-            "BLOCKING FOR PRODUCTION (#135)" % (PCRLOCK_POLICY, sorted(pcrs))
-    return True, "%s: every token that names a keyslot is NV-backed (tpm2_pcrlock) or the recovery key, and %s covers PCRs %s. " \
-        "NOT measured: that the NV index holds this policy, and that a retired image is refused on this host" % (
-            ", ".join(volumes), PCRLOCK_POLICY, ", ".join(str(n) for n in sorted(pcrs)))
+    said = []
+    if any_nv:
+        pcrs, why = pcrlock_pcrs(host)
+        if pcrs is None:
+            return False, "the TPM tokens are NV-backed, but %s: nothing shows what their policy binds. BLOCKING FOR PRODUCTION (#135)" % why
+        if 7 not in pcrs or not pcrs & IMAGE_PCRS:
+            return False, "the TPM tokens are NV-backed, but %s binds PCRs %s (with measured values): it must bind PCR 7 and a PCR " \
+                "that tells boot images apart (11, or 4). systemd-pcrlock leaves out a PCR it cannot predict, a PCR nothing was " \
+                "measured into is all zeros for every image, and a policy without the image is satisfied by every old one. " \
+                "BLOCKING FOR PRODUCTION (#135)" % (PCRLOCK_POLICY, sorted(pcrs))
+        said.append("NV-backed (tpm2_pcrlock) tokens, and %s covers PCRs %s. NOT measured: that the NV index holds this policy"
+                    % (PCRLOCK_POLICY, ", ".join(str(n) for n in sorted(pcrs))))
+    if by_peer:
+        said.append("peer-assisted unlock (%s). NOT measured: that the peers refuse a retired image (they judge by the "
+                    "manifest and measurements they hold)" % "; ".join(by_peer))
+    return True, "%s: every token that names a keyslot is the recovery key or needs more than a fixed TPM policy: %s; nor that a " \
+        "retired image is refused on this host" % (", ".join(volumes), "; ".join(said))
 
 
 def recovery_keyslots(meta):
@@ -662,33 +734,22 @@ def pcr_list(mask):
     return [i for i in range(64) if mask >> i & 1]
 
 
-def credential_header(text):
-    """What a systemd encrypted credential is sealed to, read from its header:
-    (PCRs bound directly, PCRs bound through a signed policy, the signing key's pkfp or "").
-    ValueError, with the reason, for anything that is not sealed to the host key and the TPM together.
+def _sealed_binding(raw, signed):
+    """The binding in a systemd encrypted credential's header (the bytes after base64): (PCRs bound
+    directly, PCRs bound through a signed policy, the signing key's pkfp or ""). `signed` says whether the
+    key type carries a signed-policy header. ValueError with the reason.
 
     Layout (little-endian; measured on systemd 257): id[16], key size, block size, IV size, tag size
     (u32 each), the IV; then, aligned to 8: PCR mask u64, PCR bank u16, primary algorithm u16, blob
     size u32, policy hash size u32, the blob and the policy hash; then, for a signed policy, aligned
     to 8: PCR mask u64, key size u32, the PCR-signing public key as the PEM it was given."""
     try:
-        raw = base64.b64decode("".join((text or "").split()), validate=True)
-    except ValueError:
-        raise ValueError("not base64")
-    if len(raw) < 32:
-        raise ValueError("too short to be an encrypted credential")
-    kind = raw[:16].hex()
-    if kind in CRED_REFUSED:
-        raise ValueError("sealed with %s" % CRED_REFUSED[kind])
-    if kind not in (CRED_HOST_TPM2, CRED_HOST_TPM2_PK):
-        raise ValueError("an unknown credential type (id %s)" % kind)
-    try:
         tag_size = struct.unpack_from("<I", raw, 28)[0]
         at = (32 + struct.unpack_from("<I", raw, 24)[0] + 7) & ~7
         mask, bank, _alg, blob, policy = struct.unpack_from("<QHHII", raw, at)
         at = (at + 20 + blob + policy + 7) & ~7
         signed_mask, key = 0, b""
-        if kind == CRED_HOST_TPM2_PK:
+        if signed:
             signed_mask, size = struct.unpack_from("<QI", raw, at)
             key = raw[at + 12:at + 12 + size]
             if len(key) != size:
@@ -705,12 +766,52 @@ def credential_header(text):
     # binding, whatever its mask says: tpm_sha256_bank measures the bank the record means.
     if bank != TPM2_ALG_SHA256:
         raise ValueError("bound to PCR bank 0x%04x, not SHA-256 (0x000b)" % bank)
-    if kind == CRED_HOST_TPM2:
+    if not signed:
         return pcr_list(mask), [], ""
     try:
         return pcr_list(mask), pcr_list(signed_mask), rsa_pkfp(key)
     except ValueError as error:
         raise ValueError("its PCR-signing key is unreadable (%s)" % error)
+
+
+def _credential_bytes(text):
+    try:
+        raw = base64.b64decode("".join((text or "").split()), validate=True)
+    except (ValueError, AttributeError):
+        raise ValueError("not base64")
+    if len(raw) < 32:
+        raise ValueError("too short to be an encrypted credential")
+    return raw
+
+
+def credential_header(text):
+    """What a PIN credential is sealed to, read from its header: (PCRs bound directly, PCRs bound through
+    a signed policy, the signing key's pkfp or ""). ValueError, with the reason, for anything that is not
+    sealed to the host key and the TPM together."""
+    raw = _credential_bytes(text)
+    kind = raw[:16].hex()
+    if kind in CRED_REFUSED:
+        raise ValueError("sealed with %s" % CRED_REFUSED[kind])
+    if kind not in (CRED_HOST_TPM2, CRED_HOST_TPM2_PK):
+        raise ValueError("an unknown credential type (id %s)" % kind)
+    return _sealed_binding(raw, kind == CRED_HOST_TPM2_PK)
+
+
+# The local share of a peer-assisted disk unlock (deploy/baremetal/unlock.py, #67) is the ONE credential
+# sealed to the TPM alone: the host key is on the disk it helps to open. It opens nothing by itself (the
+# keyslot needs the peer's contribution as well), which is why what credential_header refuses for a PIN
+# is required here. This function is for that share and nothing else.
+LOCAL_SHARE_TPM2, LOCAL_SHARE_TPM2_PK = "0c7cc07b117645919c4b0bea08bc20fe", "faf7eb9341e3412ca1a436f95a29362f"
+
+
+def local_share_binding(text):
+    """What a peer path's local share is sealed to: (PCRs bound directly, signed PCRs, pkfp or "").
+    ValueError unless it is a credential sealed to the TPM alone."""
+    raw = _credential_bytes(text)
+    kind = raw[:16].hex()
+    if kind not in (LOCAL_SHARE_TPM2, LOCAL_SHARE_TPM2_PK):
+        raise ValueError("not sealed to the TPM alone (credential type id %s): it could not open before the root disk does" % kind)
+    return _sealed_binding(raw, kind == LOCAL_SHARE_TPM2_PK)
 
 
 def binding_text(direct, signed, pkfp):
@@ -836,12 +937,14 @@ PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_b
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
 
-def measure(host, import_key_sha256=None, credential_binding=None):
+def measure(host, import_key_sha256=None, credential_binding=None, unlock_record=None):
     def run(name):
         if name == "pin_import_key_present":
             return import_key(host, import_key_sha256)
         if name == "pin_credentials_sealed_as_recorded":
             return pin_credentials(host, credential_binding)
+        if name in ("root_disk_tpm_unlocked", "root_disk_unlock_revocable"):
+            return PROBES[name](host, unlock_record)
         return PROBES[name](host)
 
     def judged(name):
@@ -877,10 +980,23 @@ def main(argv=None, host=None, run=None):
                     "--tpm2-public-key-pcrs 11")
     ap.add_argument("--credential-pcr-key-pkfp", default="", help="without evidence: the PCR-signing key's pkfp, "
                     "from seal-hsm-pin.sh's record")
+    ap.add_argument("--node-id", help="this host's node ID in the membership manifest: needed to judge a root disk "
+                    "enrolled for peer-assisted unlock (deploy/baremetal/unlock.py)")
+    ap.add_argument("--unlock-peer", action="append", default=[], metavar="NODE_ID",
+                    help="a peer that holds an unlock path for this host; repeat for each. With --node-id")
     args = ap.parse_args(argv)
     host = host or Host()
     report = {"attested_not_measured": list(UNMEASURED)}
     problems, want, binding = [], args.import_key_sha256, None
+    node_form = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+    if args.unlock_peer and not args.node_id:
+        ap.error("--unlock-peer needs --node-id")
+    for value in ([args.node_id] if args.node_id else []) + args.unlock_peer:
+        if not node_form.fullmatch(value):
+            ap.error("%r is not a node ID" % value)
+    if len(set(args.unlock_peer)) != len(args.unlock_peer) or args.node_id in args.unlock_peer:
+        ap.error("--unlock-peer names each peer once, and never this node")
+    unlock_record = (args.node_id, tuple(args.unlock_peer)) if args.node_id else None
     if args.credential_pcrs is not None and not args.evidence:
         try:
             binding = evidence_mod.credential_binding(args.credential_pcrs, args.credential_signed_pcrs,
@@ -902,7 +1018,7 @@ def main(argv=None, host=None, run=None):
         except (OSError, evidence_mod.InvalidEvidence) as error:
             problems.append("evidence REFUSED: %s" % error)
             ev_host = None
-    measured = measure(host, want, binding)
+    measured = measure(host, want, binding, unlock_record)
     report["measured"] = measured
     if args.evidence:
         if ev_host is not None:
