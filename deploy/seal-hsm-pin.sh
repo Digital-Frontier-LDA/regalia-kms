@@ -105,8 +105,14 @@ if [ "$INIT_IMPORT" = 1 ]; then
     tpm2_evictcontrol -Q -C o -c "$IMPORT_HANDLE" >/dev/null || fail "cannot remove the old key at $IMPORT_HANDLE"
   fi
   flush_own
-  tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb -c "$work/primary.ctx" || fail "tpm2_createprimary failed"
-  tpm2_create -Q -C "$work/primary.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt' \
+  # noda, on the key and on its parent: neither is subject to the TPM's dictionary-attack counter.
+  # The key has no authorization value to guess (anyone on this host may ask it to decrypt; what it
+  # protects is that only THIS TPM can), so that protection guards nothing here, and it has a cost:
+  # the TPM adds a failed try at the next start whenever such a key was used and the power then went
+  # without a TPM2_Shutdown, and at the limit it refuses every key (measured on swtpm, #57).
+  tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb \
+    -a 'restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda' -c "$work/primary.ctx" || fail "tpm2_createprimary failed"
+  tpm2_create -Q -C "$work/primary.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda' \
     -u "$work/k.pub" -r "$work/k.priv" || fail "tpm2_create failed"
   flush_own
   tpm2_load -Q -C "$work/primary.ctx" -u "$work/k.pub" -r "$work/k.priv" -c "$work/k.ctx" || fail "tpm2_load failed"

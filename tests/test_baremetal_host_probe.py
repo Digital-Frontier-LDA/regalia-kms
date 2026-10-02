@@ -23,7 +23,7 @@ PEM = "-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n" % base64.b64e
 # tpm2_readpublic's YAML for the template seal-hsm-pin.sh --init-import-key creates (captured from swtpm)
 IMPORT_YAML = """name: 000b87fe
 attributes:
-  value: fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt
+  value: fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|decrypt
   raw: 0x20072
 type:
   value: rsa
@@ -31,6 +31,32 @@ type:
 exponent: 65537
 bits: 3072
 """
+# tpm2_getcap properties-variable after deploy/baremetal/tpm-lockout.sh --set (captured from swtpm, tpm2-tools 5.7)
+GETCAP = """TPM2_PT_PERMANENT:
+  ownerAuthSet:              0
+  endorsementAuthSet:        0
+  lockoutAuthSet:            1
+  reserved1:                 0
+  disableClear:              0
+  inLockout:                 0
+  tpmGeneratedEPS:           1
+  reserved2:                 0
+TPM2_PT_STARTUP_CLEAR:
+  phEnable:                  1
+  shEnable:                  1
+  ehEnable:                  1
+  phEnableNV:                1
+  reserved1:                 0
+  orderly:                   0
+TPM2_PT_HR_NV_INDEX: 0x0
+TPM2_PT_HR_PERSISTENT: 0x1
+TPM2_PT_LOCKOUT_COUNTER: 0x0
+TPM2_PT_MAX_AUTH_FAIL: 0x20
+TPM2_PT_LOCKOUT_INTERVAL: 0x258
+TPM2_PT_LOCKOUT_RECOVERY: 0x15180
+TPM2_PT_NV_WRITE_RECOVERY: 0x0
+"""
+GETCAP_CMD = ("tpm2_getcap", "properties-variable")
 USB = "/sys/bus/usb/devices"
 # nft -j list table inet regalia_kms, trimmed (captured from the rendered table in a network namespace)
 NFT_JSON = json.dumps({"nftables": [
@@ -93,7 +119,7 @@ class FakeHost:
                      # a replaced credential's backup sits beside it and is not a credential the service loads
                      host_probe.CREDSTORE: ["regalia-kms-hsm-site-a.pin", "regalia-kms-hsm-site-a.pin.prev-20260930T100000Z"]}
         self.paths = {"/sys/firmware/efi", "/dev/tpmrm0"}
-        self.tools = {"tpm2_readpublic", "opensc-tool", "pkcs11-tool"}
+        self.tools = {"tpm2_readpublic", "tpm2_getcap", "opensc-tool", "pkcs11-tool"}
         self.stats = {"/usr/bin/opensc-tool": (0, 0, 0o100700), "/usr/bin/pkcs11-tool": (0, 0, 0o100700)}
         self.runs = {
             # LVM on LUKS: the root is a logical volume whose ancestor is the crypt device
@@ -105,6 +131,7 @@ class FakeHost:
             ("tpm2_readpublic", "-Q", "-c", host_probe.IMPORT_HANDLE, "-f", "pem", "-o", "/dev/stdout"): (0, PEM),
             ("ss", "-xpn"): (0, ""),
             ("nft", "-j", "list", "table", "inet", "regalia_kms"): (0, NFT_JSON),
+            GETCAP_CMD: (0, GETCAP),
             OPEN_PIN: (0, ""),
         }
 
@@ -148,6 +175,7 @@ class HostProbe(unittest.TestCase):
             "hsm_token_attached": (lambda h: h.files.__setitem__(USB + "/1-1.4/idProduct", "4108\n"), "no Nitrokey HSM"),
             "token_clients_root_only": (lambda h: h.stats.__setitem__("/usr/bin/opensc-tool", (0, 0, 0o100755)), "others can run or change"),
             "firewall_default_deny": (lambda h: h.runs.pop(("nft", "-j", "list", "table", "inet", "regalia_kms")), "not loaded"),
+            "tpm_lockout_policy": (lambda h: h.runs.__setitem__(GETCAP_CMD, (0, GETCAP.replace("MAX_AUTH_FAIL: 0x20", "MAX_AUTH_FAIL: 0x3"))), "not the commissioned ones"),
         }
         for name, (breakit, reason) in cases.items():
             with self.subTest(name=name):
@@ -308,13 +336,52 @@ class HostProbe(unittest.TestCase):
                 h.files["/etc/crypttab"] = "root_crypt UUID=abcd none %s\n" % opts
                 self.assertFalse(host_probe.root_unlock(h)[0])
 
+    def test_the_tpm_lockout_policy_fails_on_each_drift(self):
+        value, why = host_probe.lockout_policy(FakeHost())
+        self.assertTrue(value, why)
+        self.assertIn("32 failed tries, one forgiven every 600 s", why)
+        cases = {
+            "the limit": ("TPM2_PT_MAX_AUTH_FAIL: 0x20", "TPM2_PT_MAX_AUTH_FAIL: 0x3", "TPM2_PT_MAX_AUTH_FAIL is 3, not 32"),
+            "the healing time": ("TPM2_PT_LOCKOUT_INTERVAL: 0x258", "TPM2_PT_LOCKOUT_INTERVAL: 0x1C20", "TPM2_PT_LOCKOUT_INTERVAL is 7200, not 600"),
+            "the lockout recovery": ("TPM2_PT_LOCKOUT_RECOVERY: 0x15180", "TPM2_PT_LOCKOUT_RECOVERY: 0x3E8", "TPM2_PT_LOCKOUT_RECOVERY is 1000, not 86400"),
+            "no lockout authorization": ("lockoutAuthSet:            1", "lockoutAuthSet:            0", "no authorization value"),
+            "in lockout": ("inLockout:                 0", "inLockout:                 1", "in dictionary-attack lockout"),
+            "a property the TPM did not report": ("TPM2_PT_LOCKOUT_INTERVAL: 0x258\n", "", "did not report TPM2_PT_LOCKOUT_INTERVAL"),
+        }
+        for label, (old, new, reason) in cases.items():
+            with self.subTest(label):
+                h = FakeHost()
+                self.assertIn(old, GETCAP)
+                h.runs[GETCAP_CMD] = (0, GETCAP.replace(old, new))
+                value, why = host_probe.lockout_policy(h)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
+        # Counted tries are reported, not refused: a power cut counts one and it heals (#57).
+        h = FakeHost()
+        h.runs[GETCAP_CMD] = (0, GETCAP.replace("TPM2_PT_LOCKOUT_COUNTER: 0x0", "TPM2_PT_LOCKOUT_COUNTER: 0x4"))
+        value, why = host_probe.lockout_policy(h)
+        self.assertTrue(value, why)
+        self.assertIn("4 failed tries counted now", why)
+        for broken in (lambda h: h.runs.pop(GETCAP_CMD), lambda h: h.tools.discard("tpm2_getcap")):
+            h = FakeHost()
+            broken(h)
+            self.assertFalse(host_probe.lockout_policy(h)[0])
+
+    def test_the_commissioning_script_sets_the_policy_the_probe_measures(self):
+        script = open(os.path.join(os.path.dirname(CREDS), "..", "..", "deploy", "baremetal", "tpm-lockout.sh"), encoding="utf-8").read()
+        policy = host_probe.LOCKOUT_POLICY
+        self.assertIn("MAX_TRIES=%d; HEAL_SECONDS=%d; LOCKOUT_RECOVERY=%d" % (
+            policy["TPM2_PT_MAX_AUTH_FAIL"], policy["TPM2_PT_LOCKOUT_INTERVAL"], policy["TPM2_PT_LOCKOUT_RECOVERY"]), script)
+
     def test_the_import_key_needs_exactly_the_init_template_attributes(self):
-        for attrs in ("fixedtpm|fixedparent|sensitivedataorigin|decrypt",
+        for attrs in ("fixedtpm|fixedparent|sensitivedataorigin|noda|decrypt",
+                      # the template before #57's decision: subject to the dictionary-attack counter
+                      "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt",
                       "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|decrypt"):
             with self.subTest(attrs=attrs):
                 h = FakeHost()
                 h.runs[("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)] = (
-                    0, IMPORT_YAML.replace("fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt", attrs))
+                    0, IMPORT_YAML.replace("fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda|decrypt", attrs))
                 self.assertFalse(host_probe.import_key(h, FP[:16])[0])
 
     def test_a_real_credential_header_says_what_the_blob_is_sealed_to(self):
