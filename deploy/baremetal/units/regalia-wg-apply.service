@@ -1,0 +1,44 @@
+# The service tunnel (wg-svc) and the unlock tunnel (wg-unlock), made what the CURRENT manifest says and
+# read back from the kernel (deploy/baremetal/wgsvc.py, bootnet.py). A oneshot: at boot, and again each
+# time regalia-sync publishes a new chain (regalia-wg-apply.path). It reads the published chain and
+# verifies it itself against the root key and the TPM anchor. It holds CAP_NET_ADMIN, and nothing that
+# parses what a peer sends ever runs here.
+[Unit]
+Description=Regalia KMS: the WireGuard tunnels, from the manifest
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip, tpm2_*, chronyc and openssl are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json wg-apply
+User=root
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

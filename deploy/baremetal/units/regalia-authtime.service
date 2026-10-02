@@ -1,0 +1,45 @@
+# Whether this host's time is authenticated (#69, #80): asks chrony every 15 s and writes
+# /run/regalia/authtime.json, which the other services believe for 60 s (deploy/baremetal/authtime.py).
+# Root, because chrony's command socket answers root only; and nothing else: no capability, no network.
+[Unit]
+Description=Regalia KMS: is time authenticated (chrony, NTS)
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=chrony.service
+Wants=chrony.service
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip, tpm2_*, chronyc and openssl are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json authtime
+Restart=always
+RestartSec=5s
+User=root
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/regalia
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target
