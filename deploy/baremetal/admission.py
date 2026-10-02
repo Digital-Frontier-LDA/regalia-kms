@@ -83,7 +83,8 @@ def boot_id(path=BOOT_ID_PATH):
 
 def process_started_ms(pid, proc="/proc"):
     """When process `pid` started, in CLOCK_BOOTTIME milliseconds: field 22 of /proc/<pid>/stat, which the
-    kernel counts in clock ticks. The command name (field 2) is in parentheses and may contain spaces and
+    kernel counts in clock ticks, rounded down; this returns the tick AFTER, as the daemon does for itself,
+    so it is never before the true start. The command name (field 2) is in parentheses and may contain spaces and
     parentheses, so the fields are counted from the LAST ")". Go's reader assumes 100 ticks a second
     (internal/admission.parseProcessStart); another rate here is refused rather than disagreed with."""
     require(os.sysconf("SC_CLK_TCK") == 100, "the kernel clock tick is not 100 Hz: the daemon would read another start time")
@@ -91,7 +92,7 @@ def process_started_ms(pid, proc="/proc"):
         stat = f.read(4096)
     fields = stat[stat.rfind(")") + 1:].split() if ")" in stat else []
     require(len(fields) > 19 and re.fullmatch(r"[1-9][0-9]{0,15}", fields[19]) is not None, "the process start time cannot be read")
-    return int(fields[19]) * 10
+    return (int(fields[19]) + 1) * 10
 
 
 def unit_started(unit="regalia-kms.service", run=subprocess.run, proc="/proc"):
@@ -184,11 +185,17 @@ class Service:
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
-            if self.holder.due(manifest) or self._daemon_waits():
+            waits = self._daemon_waits()
+            if waits or self.holder.due(manifest):
                 request = self.holder.request()
                 self._remember(request["nonce"], self.boottime())
                 try:
-                    self.holder.install(self.renew(request), manifest)
+                    # asked for the daemon's sake: this lease is the one to hold, even if a peer whose clock
+                    # runs behind, or whose heartbeat ends sooner, gave it less life than the one held.
+                    # If it has no more than MARGIN left (the peer's heartbeat is about to end), this round
+                    # writes "not admitted" where the tokens alone were waiting: no key was being served
+                    # either way, and the next round's scheduled renewal takes the longer lease.
+                    self.holder.install(self.renew(request), manifest, prefer=waits)
                 except Exception as failure:      # a peer is down, or refused: what the node still holds decides
                     reason = "renewal failed: %s" % failure
             before = self.boottime()              # read BEFORE the check: the bound can only come out earlier

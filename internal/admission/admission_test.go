@@ -509,7 +509,7 @@ func TestParseProcessStartCountsFromTheLastParenthesis(t *testing.T) {
 	tail := " S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 123456 20 21\n"
 	for _, name := range []string{"(regalia-kms)", "(a b)", "(evil) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 20)", "(()"} {
 		got, err := parseProcessStart("4242 " + name + tail)
-		if err != nil || got != 1234560 {
+		if err != nil || got != 1234570 { // tick 123456 at 100 Hz, and one tick more: never before the true start
 			t.Fatalf("%q: %d, %v", name, got, err)
 		}
 	}

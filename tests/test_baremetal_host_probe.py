@@ -316,11 +316,12 @@ class HostProbe(unittest.TestCase):
         return dict({"type": "regalia-peer-unlock", "keyslots": [slot], "version": 1, "target": "a", "peer": peer,
                      "path_epoch": 1, "local": cred(local)}, **change)
 
-    def peer_host(self, *tokens, crypttab="root_crypt UUID=abcd none luks\n", keyslots=None):
+    def peer_host(self, *tokens, crypttab="root_crypt UUID=abcd /run/regalia-unlock/key.sock luks\n", keyslots=None):
         recovery = LUKS_META["tokens"]["1"]
         tokens = tokens or (self.path("b", "1"), recovery, self.path("c", "3"))
         h = self.judge(*tokens, keyslots=keyslots)
         h.files["/etc/crypttab"] = crypttab
+        h.files["/proc/cmdline"] = "BOOT_IMAGE=/vmlinuz root=/dev/mapper/vg-root ro quiet\n"
         return h
 
     def test_a_disk_that_needs_a_peer_passes_both_root_disk_controls(self):
@@ -343,8 +344,8 @@ class HostProbe(unittest.TestCase):
                              "--unlock-peer", "b", "--unlock-peer", "c"], host=self.peer_host())
         report = json.loads(out.getvalue())["measured"]
         self.assertEqual([n for n in host_probe.PLATFORM if not report[n]["value"]], [])
-        # a signed PCR 11 policy on the local share is the other accepted binding; crypttab need not list the volume
-        signed = self.peer_host(self.path("b", "1", "pk-7-11.cred"), LUKS_META["tokens"]["1"], self.path("c", "3", "pk-7-11.cred"), crypttab="")
+        # a signed PCR 11 policy on the local share is the other accepted binding
+        signed = self.peer_host(self.path("b", "1", "pk-7-11.cred"), LUKS_META["tokens"]["1"], self.path("c", "3", "pk-7-11.cred"))
         self.assertTrue(host_probe.root_unlock(signed, self.RECORD)[0])
         self.assertTrue(host_probe.unlock_revocable(signed, self.RECORD)[0])
 
@@ -398,10 +399,52 @@ class HostProbe(unittest.TestCase):
         value, why = host_probe.unlock_revocable(self.peer_host(keyslots=("0", "1", "2", "3")), self.RECORD)
         self.assertFalse(value, why)
         self.assertIn("keyslot 0 is named by no token", why)
-        # crypttab still asking systemd for a TPM-only unlock
-        value, why = host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd none tpm2-device=auto\n"), self.RECORD)
-        self.assertFalse(value, why)
-        self.assertIn("crypttab still asks systemd to unlock it with the TPM alone (tpm2-device=auto)", why)
+
+    def test_the_peer_shaped_volume_takes_its_key_from_the_unlock_clients_socket_and_nowhere_else(self):
+        from deploy.baremetal import unlock
+        self.assertEqual(host_probe.PEER_KEY_SOCKET, unlock.KEY_SOCKET)       # one path, in two files
+        sock = host_probe.PEER_KEY_SOCKET
+        self.assertTrue(host_probe.root_unlock(self.peer_host(crypttab="# root\nroot_crypt UUID=abcd %s luks,discard\n" % sock), self.RECORD)[0])
+        every = ",".join(sorted(o + "=1" if o in ("tries", "timeout", "token-timeout", "tpm2-measure-pcr", "tpm2-measure-bank") else o
+                                for o in host_probe.PEER_CRYPTTAB_OPTIONS))
+        self.assertTrue(host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd %s %s\n" % (sock, every)), self.RECORD)[0])
+        self.assertEqual(host_probe.PEER_CRYPTTAB_OPTIONS, {"luks", "x-initrd.attach", "discard", "tries", "timeout", "token-timeout",
+                                                             "no-read-workqueue", "no-write-workqueue", "same-cpu-crypt",
+                                                             "submit-from-crypt-cpus", "tpm2-measure-pcr", "tpm2-measure-bank"})
+        # ONLY options known to leave the unlock alone: each of these changes what opens the volume or where its key goes
+        for option in ("header=/boot/root.hdr", "link-volume-key=@u::%logon:rootkey", "plain", "tcrypt", "bitlk", "swap", "tmp",
+                       "try-empty-password", "noauto", "headless", "headless=true", "key-slot=1", "keyfile-size=16", "nofail",
+                       "an-option-of-tomorrow"):
+            with self.subTest(option=option):
+                value, why = host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd %s luks,%s\n" % (sock, option)), self.RECORD)
+                self.assertFalse(value, why)
+                self.assertIn("its crypttab entry has %s: not among the options known to leave" % option, why)
+        # the kernel command line configuring LUKS means the initrd did not go by crypttab
+        for cmdline, named in (("root=/dev/mapper/vg-root rd.luks.name=abcd=root_crypt rd.luks.key=abcd=/etc/root.key", "rd.luks.key, rd.luks.name"),
+                               ("rd.luks.options=tpm2-device=auto", "rd.luks.options"), ("rd.luks=0", "rd.luks"), ("luks.uuid=abcd", "luks.uuid")):
+            with self.subTest(cmdline=cmdline):
+                h = self.peer_host()
+                h.files["/proc/cmdline"] = cmdline + "\n"
+                value, why = host_probe.root_unlock(h, self.RECORD)
+                self.assertFalse(value, why)
+                self.assertIn("the kernel command line configures LUKS (%s)" % named, why)
+        h = self.peer_host()
+        h.files.pop("/proc/cmdline")
+        self.assertIn("cannot read /proc/cmdline", host_probe.root_unlock(h, self.RECORD)[1])
+        for label, crypttab, reason in (
+                ("no entry", "", "is not listed in /etc/crypttab: nothing asks the unlock client for its key at boot"),
+                ("only another volume listed", "swap UUID=ef01 %s luks\n" % sock, "is not listed in /etc/crypttab"),
+                ("no key file", "root_crypt UUID=abcd none luks\n", "its crypttab key file is 'none', not the unlock client's socket"),
+                ("no key file field at all", "root_crypt UUID=abcd\n", "its crypttab key file is 'none'"),
+                ("a key file on disk", "root_crypt UUID=abcd /etc/keys/root.key luks\n", "its crypttab key file is '/etc/keys/root.key'"),
+                ("another socket", "root_crypt UUID=abcd /run/other/key.sock luks\n", "its crypttab key file is '/run/other/key.sock'"),
+                ("the TPM as well", "root_crypt UUID=abcd %s tpm2-device=auto\n" % sock, "its crypttab entry has tpm2-device=auto: not among"),
+                ("a FIDO2 token as well", "root_crypt UUID=abcd %s luks,fido2-device=auto\n" % sock, "its crypttab entry has fido2-device=auto: not among"),
+                ("a PKCS#11 token as well", "root_crypt UUID=abcd %s pkcs11-uri=auto\n" % sock, "its crypttab entry has pkcs11-uri=auto: not among")):
+            with self.subTest(label):
+                value, why = host_probe.root_unlock(self.peer_host(crypttab=crypttab), self.RECORD)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
 
     def test_the_local_share_is_sealed_to_the_tpm_alone_under_pcr_7(self):
         """The one credential that must NOT need the host key (it is on the disk being opened), and the one

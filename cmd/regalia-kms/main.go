@@ -826,12 +826,20 @@ func requireReauthorization(provider *nitrokey.Provider, gate *admission.Gate, p
 	if provider == nil || gate == nil {
 		return nil
 	}
+	now, err := admission.Boottime()
+	if err != nil {
+		return fmt.Errorf("token reauthorization: %w", err)
+	}
 	since, err := processStart()
 	if err != nil {
 		slog.Warn("KMS process start time unavailable; token reauthorization dates from now, and waits for the lease service's next scheduled renewal", "error", err)
-		if since, err = admission.Boottime(); err != nil {
-			return fmt.Errorf("token reauthorization: %w", err)
-		}
+		since = now
+	}
+	// The start time is the tick after the true start, so in the first 10 ms of a process it is ahead
+	// of the clock. Then "now" is the baseline: still not before the start, and a lease can be asked
+	// for after it. A start time far in the future is not a clock this daemon can reason about.
+	if since > now && since-now <= 10 {
+		since = now
 	}
 	if err := provider.RequireReauthorization(gate, admission.Boottime, since); err != nil {
 		return fmt.Errorf("token reauthorization: %w", err)
