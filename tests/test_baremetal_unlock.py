@@ -464,6 +464,54 @@ class Exchange(Case):
             with self.subTest(str(message)[:60]):
                 self.assertEqual(peer.handle(json.dumps(message).encode()), denied)
 
+    def test_a_request_must_name_the_node_the_tunnel_identified(self):
+        """The boot mesh knows which node a connection comes from. A request made in another node's name is
+        refused before the peer looks at it, and a connection from an address of no node is not answered."""
+        epoch, secret = self.enrolled("b")
+        peer, hello = self.served["b"], b'{"v":1,"op":"hello","node_id":"a"}'
+        self.assertIn("nonce", peer.handle(hello, caller="a"))
+        self.assertEqual(peer.handle(hello, caller="c"), {"v": 1, "error": "DENIED"})
+        self.assertEqual((self.events[-1]["event"], self.events[-1]["subject"], self.events[-1]["outcome"]), ("unlock-caller", "a", "DENY"))
+        self.assertIn("not the one the tunnel identified (c)", self.events[-1]["reason"])
+        self.assertEqual(peer.handle(b'{"v":1,"op":"unlock","node_id":"a"}', caller="c"), {"v": 1, "error": "DENIED"})
+        self.assertEqual(peer.handle(b'{"v":1,"op":"hello"}', caller="a"), {"v": 1, "error": "DENIED"})
+        # over the transport: the address names the node
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        send = unlock.tcp_transport("127.0.0.1:%d" % listener.getsockname()[1])
+        owners, seen = iter(["a", "c", None]), []
+        server = threading.Thread(target=unlock.serve, args=(peer, listener, 4),
+                                  kwargs={"caller": lambda address: seen.append(address) or next(owners, "a")}, daemon=True)
+        server.start()
+        self.assertIn("nonce", json.loads(send(hello)))                # the address is a's
+        self.assertEqual(json.loads(send(hello)), {"v": 1, "error": "DENIED"})   # the address is c's, the request says a
+        try:                                                          # an address of no node: closed, unanswered
+            self.assertEqual(send(hello), b"")
+        except OSError:
+            pass                                                      # (closed before the request was read: a reset)
+        self.assertIn("nonce", json.loads(send(hello)))                # and the server went on serving
+        server.join(10)
+        self.assertFalse(server.is_alive())
+        self.assertEqual(seen, ["127.0.0.1"] * 4)
+        # a dual-stack listener reports an IPv4 caller as ::ffff:a.b.c.d: the same node, not a stranger
+        dual = socket.create_server(("::", 0), family=socket.AF_INET6, dualstack_ipv6=True)
+        self.addCleanup(dual.close)
+        mapped = []
+        # and a sink that fails does not end the loop: the second connection is still served
+        broken = unittest.mock.patch.object(peer, "audit", side_effect=OSError("the sink is down"))
+        server = threading.Thread(target=unlock.serve, args=(peer, dual, 2), kwargs={"caller": lambda address: mapped.append(address) or "c"}, daemon=True)
+        with broken:
+            server.start()
+            via = unlock.tcp_transport("127.0.0.1:%d" % dual.getsockname()[1])
+            for _ in range(2):
+                try:
+                    via(hello)                                        # refused (c's address, a's name); the audit of it fails
+                except OSError:
+                    pass
+            server.join(10)
+        self.assertFalse(server.is_alive())
+        self.assertEqual(mapped, ["127.0.0.1"] * 2)
+
     def test_the_ephemeral_key_must_be_the_one_kind_a_contribution_is_encrypted_to(self):
         epoch, _ = self.enrolled("b")
         session = self.session

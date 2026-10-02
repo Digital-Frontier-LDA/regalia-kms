@@ -60,7 +60,7 @@ cat > "$T/site.json" <<EOF
 {"schema": "regalia.baremetal-site/v1", "site": "lab", "host_ipv4": "${IP[kms]}", "kms_port": 8443, "ssh_port": 22,
  "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["${IP[mon]}/32"], "admin_cidrs": ["203.0.113.0/28"],
  "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514},
-              {"name": "ntp", "cidr": "${IP[ntp]}/32", "proto": "udp", "port": 123}]}
+              {"name": "ntp", "cidr": "${IP[ntp]}/32", "proto": "udp", "port": 123}], "boot_mesh": null}
 EOF
 
 # Listeners: a TCP server answers on each port given; a UDP echo answers one datagram.

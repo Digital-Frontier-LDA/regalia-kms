@@ -439,6 +439,25 @@ jobs:
       - name: The recovery key alone opens the volume (loop device, LUKS2)
         run: sudo bash e2e/luks-recovery-key.sh
 
+  # regalia-kms#66: the boot mesh, by behaviour, in network namespaces with real WireGuard interfaces.
+  # A booting node reaches its peers' unlock port through the tunnel and nothing else; an outsider, a
+  # key from an undeclared address (the stolen server elsewhere) and a revoked node get no answer;
+  # loss, latency, an unreachable peer and a wrong key each end within a bound. Every ruleset is
+  # loaded only inside a throwaway namespace.
+  wg-boot-netns:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install WireGuard tools, nftables, conntrack, and the kernel's extra modules (netem)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wireguard-tools nftables iproute2 conntrack "linux-modules-extra-$(uname -r)"
+      - name: The boot mesh, by behaviour (WireGuard, the initrd ruleset, the host firewall)
+        run: sudo bash e2e/wg-boot-netns.sh
+
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
   # restores the node, no peer leaves it locked, and a retired boot image, another machine and a

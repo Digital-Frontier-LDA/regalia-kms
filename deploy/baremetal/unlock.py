@@ -348,8 +348,11 @@ class Peer:
         self.peer_id, self.store, self.freshness, self.attester_for = node_id(peer_id, "peer_id"), store, freshness, attester_for
         self.contributions, self.signer, self.audit, self.run = contributions, signer, audit, run
 
-    def handle(self, raw):
-        """One request (bytes) to one reply (a dict). A refusal tells the requester nothing but its kind."""
+    def handle(self, raw, caller=None):
+        """One request (bytes) to one reply (a dict). A refusal tells the requester nothing but its kind.
+        `caller` is the node the transport identified (the boot mesh knows which key a tunnel address
+        belongs to): a request that names another node is refused before anything else is looked at.
+        It narrows who may ask in a node's name; it authorizes nothing (the attestation does)."""
         try:
             try:
                 message = membership.load(raw, MAX_BYTES)
@@ -359,6 +362,11 @@ class Peer:
                 require(handler is not None, "unknown operation")
             except (Refused, RecursionError):      # tens of thousands of nested brackets fit in one message
                 return {"v": VERSION, "error": "INVALID_REQUEST"}
+            if caller is not None and message.get("node_id") != caller:
+                self.audit({"event": "unlock-caller", "epoch": 0, "manifest_digest": "", "subject": convergence._printable(message.get("node_id")),
+                            "peer": self.peer_id, "outcome": "DENY", "reason": "the request names a node that is not the one the tunnel identified (%s)"
+                            % convergence._printable(caller)})
+                return {"v": VERSION, "error": "DENIED"}
             return handler(message)
         except (Refused, attest.Refused):
             return {"v": VERSION, "error": "DENIED"}
@@ -563,16 +571,18 @@ def _read_all(conn, deadline):
     return data            # too long: the caller's parser refuses it
 
 
-def serve(peer, listener, count=None):
+def serve(peer, listener, count=None, caller=None):
     """Answer unlock requests on `listener`, a bound and listening socket: one request per connection (the
     sender closes its side to end it), one at a time, each bounded in size and in time from accept to the
     last byte. A connection that breaks, stalls, sends too much, or makes the handler fail in a way nobody
     foresaw costs only itself: the failure goes to the peer's audit sink by its kind, and the next
-    connection is served. The loop ends when the listener is closed, or after `count` connections."""
+    connection is served. The loop ends when the listener is closed, or after `count` connections.
+    `caller(source address)` names the node that address belongs to, or None (bootnet.caller_of): with it,
+    a connection from an address of no node is closed unanswered, and a request must name that node."""
     served = 0
     while count is None or served < count:
         try:
-            conn, _ = listener.accept()
+            conn, source = listener.accept()
         except OSError:
             if listener.fileno() == -1:
                 return
@@ -580,15 +590,27 @@ def serve(peer, listener, count=None):
         served += 1
         with conn:
             try:
+                node = None
+                if caller is not None:
+                    address = source[0]
+                    if address.startswith("::ffff:"):       # an IPv4 connection on a dual-stack listener
+                        address = address[len("::ffff:"):]
+                    node = caller(address)
+                    if node is None:
+                        continue
                 deadline = time.monotonic() + IO_TIMEOUT
-                reply = membership.canonical(peer.handle(_read_all(conn, deadline)))
+                reply = membership.canonical(peer.handle(_read_all(conn, deadline), caller=node) if caller is not None
+                                             else peer.handle(_read_all(conn, deadline)))
                 conn.settimeout(max(deadline - time.monotonic(), 0.001))
                 conn.sendall(reply)
             except OSError:
                 continue
             except Exception as error:      # never a reason to stop answering the nodes that reboot next
-                peer.audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
-                            "outcome": "ERROR", "reason": type(error).__name__})
+                try:
+                    peer.audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
+                                "outcome": "ERROR", "reason": type(error).__name__})
+                except Exception:           # the sink itself failed: the request was not answered, and the loop goes on
+                    pass
 
 
 def tcp_transport(endpoint):
