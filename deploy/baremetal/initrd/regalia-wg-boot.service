@@ -1,0 +1,33 @@
+# The boot mesh, before root exists (regalia-kms#66): the initrd's default-deny ruleset, then WireGuard
+# with the node's WG-BOOT key.
+#
+# systemd unseals the key with the TPM (LoadCredentialEncrypted=); on another machine, or on a boot the
+# TPM's policy refuses, that fails and the interface never comes up. The key is added to the rendered
+# configuration in memory and never written anywhere (deploy/baremetal/bootnet.py says why it must be
+# there at all). Everything is taken down again before the root filesystem takes over: a booted host
+# has no wg-boot and uses no WG-BOOT key.
+#
+# WG-BOOT is a transport identity, never an authorization: its key is not sealed to anything that
+# retires a boot image, so a retired but signed image brings this up too. The peer refuses it at
+# attestation.
+
+[Unit]
+Description=Boot mesh: WireGuard to the peers, before root
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+DefaultDependencies=no
+Before=regalia-unlock.service cryptsetup-pre.target
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/regalia/boot.env
+LoadCredentialEncrypted=regalia-wg-boot-key:/etc/regalia/wg-boot.cred
+ExecStart=/usr/lib/regalia/wg-boot up
+ExecStop=/usr/lib/regalia/wg-boot down
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077

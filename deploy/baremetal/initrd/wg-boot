@@ -1,0 +1,46 @@
+#!/bin/sh
+# wg-boot up|down — the boot mesh of an initrd (regalia-kms#66), run by regalia-wg-boot.service.
+#
+# From /etc/regalia/boot.env (written with the boot configuration after each accepted manifest):
+#   BOOT_NIC       the network interface, e.g. eno1
+#   BOOT_ADDRESS   this node's declared address with its prefix, e.g. 198.51.100.4/24
+#   BOOT_GATEWAY   the gateway to the peers' declared addresses; empty when they are on the link
+#   BOOT_TUNNEL    this node's address inside the tunnel, e.g. 10.89.0.1
+# and beside it: boot.nft (bootnet.boot_ruleset) and wg-boot.conf (bootnet.boot_wg_conf). The private
+# key is the credential regalia-wg-boot-key, unsealed by systemd.
+#
+# The ruleset is loaded BEFORE the interface has an address: there is no moment in which the node is
+# on the network without it.
+set -eu
+IF=wg-boot
+ETC="${REGALIA_ETC:-/etc/regalia}"      # another directory only in tests
+down() {
+  ip link del "$IF" 2>/dev/null || true
+  ip addr flush dev "$BOOT_NIC" 2>/dev/null || true
+  nft delete table inet regalia_boot 2>/dev/null || true
+}
+case "${1:-}" in
+  up)
+    i=0
+    until ip link show "$BOOT_NIC" >/dev/null 2>&1; do      # the driver may still be loading
+      i=$((i + 1)); [ "$i" -le 150 ] || { echo "wg-boot: no interface $BOOT_NIC after 30 s" >&2; exit 1; }
+      sleep 0.2
+    done
+    nft -f "$ETC/boot.nft"
+    ip link set "$BOOT_NIC" up
+    ip addr add "$BOOT_ADDRESS" dev "$BOOT_NIC"
+    if [ -n "${BOOT_GATEWAY:-}" ]; then ip route add default via "$BOOT_GATEWAY" dev "$BOOT_NIC"; else ip route add default dev "$BOOT_NIC"; fi
+    ip link add "$IF" type wireguard
+    # the rendered configuration with the key added after its first line ([Interface]), on a pipe: applied
+    # without its key it would unset the interface's key
+    { read -r key < "$CREDENTIALS_DIRECTORY/regalia-wg-boot-key"
+      read -r first
+      printf '%s\nPrivateKey = %s\n' "$first" "$key"
+      cat; } < "$ETC/wg-boot.conf" | wg syncconf "$IF" /dev/stdin
+    ip addr add "$BOOT_TUNNEL/32" dev "$IF"
+    ip link set "$IF" up
+    sed -n 's/^AllowedIPs = //p' "$ETC/wg-boot.conf" | while read -r peer; do ip route add "$peer" dev "$IF"; done
+    ;;
+  down) down ;;
+  *) echo "usage: wg-boot up|down" >&2; exit 2 ;;
+esac
