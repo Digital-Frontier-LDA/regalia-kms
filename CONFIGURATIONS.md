@@ -42,6 +42,10 @@ that has been independently validated counts as more secure than code written he
   applet. Proven on a card, with the KMS's own driver and provider: an Ed25519 key generated on the applet
   signs through `CKM_EDDSA` and the signature verifies. **Proposed, not decided**: the KMS does not serve it yet (gap 3).
 - **Signature formats come from maintained open-source libraries**, not from encoders written here.
+  One recorded exception: for an Ed25519 OpenPGP signature, `regalia-sign` has the library build the
+  packet and then replaces the two signature integers itself, because the library accepts no
+  external Ed25519 signer ([`adapters/gpgsign/README.md`](adapters/gpgsign/README.md)). It ends
+  when the library does.
 
 ### Relation to the three-site device profiles
 
@@ -112,7 +116,8 @@ rule and works in every configuration once a `signtool` adapter exists.
    manifest that binds such a key validates, the daemon starts, and every operation fails as
    unavailable. The token's own mechanism list should be checked against its bindings at startup.
 2. **Ed25519 has no served home yet.** It is not reachable on either HSM, the OpenPGP applet is not
-   wired, the PIV backend does not offer it, and `regalia-sign` refuses Ed25519 keys.
+   wired, and the PIV backend does not offer it. `regalia-sign` accepts an Ed25519 key, so the
+   missing piece is a served token, not the client: today such a key works end to end on SoftHSM only.
 3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4),
    and the only driver wired for it is hand-written. Through OpenSC and PKCS#11 the driver, its
    probes and the provider already sign Ed25519 on the applet (regalia-kms#119: OpenSC presents the
