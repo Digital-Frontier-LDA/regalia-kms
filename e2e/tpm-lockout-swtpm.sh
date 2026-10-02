@@ -14,7 +14,7 @@
 #   4  the PIN import key that seal-hsm-pin.sh --init-import-key creates is used and the power cut,
 #      four times: no try is counted. Control: a key with the template before #57 counts every cut
 #   5  what the settings are for: unsealing a PIN credential, then a power cut, counts one try each
-#      time; the PIN is still released after four cuts under the policy; and the counted tries heal
+#      time; the PIN is still released after four cuts under the policy; --clear forgives them; and they heal
 #      on their own (shown with a short healing time, since 600 s is too long for a test)
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; LOCKOUT="$HERE/deploy/baremetal/tpm-lockout.sh"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
@@ -124,6 +124,11 @@ ok=1; for _ in 1 2 3 4; do [ "$(open)" = 7310048261 ] || ok=0; cut_power; done
 counted="$(get TPM2_PT_LOCKOUT_COUNTER)"
 [ "$ok" = 1 ] && [ "$counted" = 4 ] && P "unsealed, then the power cut, four times: 4 tries counted (one per cut)" || F "after 4 cuts: unsealed=$ok, counter $counted"
 [ "$(open)" = 7310048261 ] && [ "$(get inLockout)" = 0 ] && P "under the policy (32 tries) the PIN is still released" || F "the PIN is not released after 4 cuts under the policy"
+# The manual way back, for an operator who cannot wait for the tries to heal.
+out="$(printf '%s\n' "$AUTH" | lockout --clear)"; rc=$?
+[ "$rc" = 0 ] && [ "$(get TPM2_PT_LOCKOUT_COUNTER)" = 0 ] && P "--clear with the authorization forgives the counted tries (4 -> 0)" || F "--clear (exit $rc, counter $(get TPM2_PT_LOCKOUT_COUNTER)): $out"
+out="$(lockout --clear < /dev/null)"; rc=$?
+[ "$rc" = 0 ] && grep -q 'nothing to clear' <<< "$out" && P "--clear with nothing counted asks for nothing" || F "--clear with nothing counted (exit $rc): $out"
 down; up e
 tpm2_dictionarylockout -Q -s -n 32 -t 2 -l 86400 >/dev/null 2>&1      # a 2 s healing time, to watch it happen
 printf 7310048261 | sudo systemd-creds encrypt --with-key=tpm2 --tpm2-device="$D" --tpm2-pcrs=7 --name=t.pin - "$W/pin.cred" 2>/dev/null
