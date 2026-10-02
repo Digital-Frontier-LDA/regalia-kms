@@ -90,15 +90,15 @@ def run(script, output):
                     invoke()
                     if not final_valid():raise ValueError('explicit same-selection retry did not reconcile')
                     report['cases'].append({'point':point,'call':baseline[point-1][0],'fault':fault,'injection_reached':True,'exit_code':code,'retry_reconciled':True,'unknown_slots_preserved':True})
-            # Wrong cards and a slot owned by another hardware token must refuse
+            # Wrong cards and a slot owned by another non-recovery token must refuse
             # before any mutation, even though the operator names explicit slots.
             for supplied in [[keys['old'],keys['old']],[keys['new'],keys['unknown']]]:
                 shutil.copyfile(base,image);before=observer.header(executable,image);invoke(supplied=supplied)
                 if observer.header(executable,image)!=before:raise ValueError('bad card changed the header')
             shutil.copyfile(base,image)
-            subprocess.run([executable,'token','import','--json-file','-',str(image)],input=json.dumps({'type':'systemd-tpm2','keyslots':['2']}),text=True,capture_output=True,check=True,timeout=30)
+            subprocess.run([executable,'token','add','--key-description','regalia-fixture-reference','--key-slot','2',str(image)],capture_output=True,check=True,timeout=30)
             before=observer.header(executable,image);invoke()
-            if observer.header(executable,image)!=before:raise ValueError('hardware-owned slot was changed')
+            if observer.header(executable,image)!=before:raise ValueError('non-recovery-owned slot was changed')
             report.update(status='passed',cases_executed=len(report['cases']),fault_points_reached=len(report['cases']),
                           negative_controls=3,unknown_keys_retained=True,scope='Command boundaries and explicit same-card retries, not internal sector writes')
     finally:

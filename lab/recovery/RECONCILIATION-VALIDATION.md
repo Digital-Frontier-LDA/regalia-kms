@@ -13,7 +13,7 @@ same-card/same-selection retry finished, leaving one normal-priority recovery
 mapping and no orphan recovery tokens. The installer and an additional unknown
 keyslot remained byte-for-byte unchanged in metadata and usable through normal
 boot unlock tests. Three negative controls (wrong kept card, wrong retired card,
-hardware/shared ownership) refused before any mutation. Four unit guards also
+non-recovery/shared ownership) refused before any mutation. Four unit guards also
 passed, including mutual exclusion across device aliases.
 
 Script SHA-256: `a08f98831ffa70278019dbe301d0d8de042deed56be845316ba82f78517712b6`.

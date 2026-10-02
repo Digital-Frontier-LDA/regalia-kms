@@ -59,7 +59,7 @@ disposable private file-backed volumes, an installer key, old/new recovery keys,
 and an additional unknown key. It interrupts every successful command boundary,
 repeats identical operator selections, and independently checks normal unlocks,
 keyslot metadata, orphan cleanup and preservation of the unknown slot. Wrong
-cards and hardware-owned mappings refuse without changing the header. See
+cards and non-recovery-owned mappings refuse without changing the header. See
 `lab/recovery/RECONCILIATION-VALIDATION.md` for measured results.
 
 ## Residual risk
