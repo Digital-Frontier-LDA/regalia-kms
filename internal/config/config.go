@@ -409,17 +409,24 @@ func (cfg Config) Validate() error {
 		hardwareFields++
 	}
 	if cfg.PKCS11ModulePath != "" {
-		if len(cfg.YubiKeyDevices) > 0 || hardwareFields != 4 {
+		// The PKCS#11 backend needs its three companions. YubiKey PIV devices may be served
+		// beside it, in the same daemon: the HSM plus one YubiKey for what the HSM cannot do
+		// (CONFIGURATIONS.md). yubikey_devices is then the fifth field, not a conflict.
+		complete := 4
+		if len(cfg.YubiKeyDevices) > 0 {
+			complete = 5
+		}
+		if hardwareFields != complete {
 			return errors.New("pkcs11_module_path, pin_paths, secure_channel_evidence_path and audit_journal_path must be configured together")
 		}
 	} else if len(cfg.YubiKeyDevices) > 0 {
 		if cfg.SecureChannelEvidence != "" || hardwareFields != 3 {
 			return errors.New("yubikey_devices, pin_paths and audit_journal_path must be configured together")
 		}
-		for device := range cfg.YubiKeyDevices {
-			if _, ok := cfg.PINPaths[device]; !ok {
-				return fmt.Errorf("yubikey device %q has no PIN credential mapping", device)
-			}
+	}
+	for device := range cfg.YubiKeyDevices {
+		if _, ok := cfg.PINPaths[device]; !ok {
+			return fmt.Errorf("yubikey device %q has no PIN credential mapping", device)
 		}
 	}
 	if hardwareFields > 0 && (cfg.RegistryPath == "" || cfg.PolicyPath == "" || cfg.RBACPolicyPath == "") {

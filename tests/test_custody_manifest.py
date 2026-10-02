@@ -461,12 +461,22 @@ class CustodyManifestTests(unittest.TestCase):
         obj["bindings"][0].update(backend="yubikey-piv", state="active", pin_policy="once", touch_policy="never")
         self.assert_invalid(manifest_with(obj), "device_serial")
 
-    def test_yubikey_piv_does_not_claim_ed25519(self):
-        obj = direct_key()
-        obj["algorithm"] = "ed25519"
-        for binding in obj["bindings"]:
-            binding.update(backend="yubikey-piv", pin_policy="once", touch_policy="never")
-        self.assert_invalid(manifest_with(obj), "does not support ed25519/sign")
+    def test_yubikey_piv_claims_ed25519_for_signing_and_nothing_else(self):
+        """Firmware 5.7 signs Ed25519 in a PIV slot (measured on 35718625, regalia#541).
+
+        Signing is all it is advertised for: an Ed25519 key is not a CA key here, and it cannot
+        unwrap.
+        """
+        def piv_ed25519(*operations):
+            obj = direct_key()
+            obj.update(algorithm="ed25519", operations=list(operations))
+            for binding in obj["bindings"]:
+                binding.update(backend="yubikey-piv", pin_policy="once", touch_policy="never")
+            return manifest_with(obj)
+
+        validate_manifest(piv_ed25519("sign"))
+        self.assert_invalid(piv_ed25519("certificate-sign"), "does not support ed25519/certificate-sign")
+        self.assert_invalid(piv_ed25519("unwrap"), "does not support ed25519/unwrap")
 
     def test_fido_continuity_requires_two_enrollments(self):
         obj = direct_key()
