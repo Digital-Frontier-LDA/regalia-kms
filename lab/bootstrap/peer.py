@@ -67,17 +67,18 @@ def signed_response(private, recipient, request, secret):
 
 
 class BootSession:
-    def __init__(self, pins):
+    def __init__(self, pins, node_id="A"):
         self.private = rsa.generate_private_key(public_exponent=65537, key_size=3072)
         self.pins = pins
         self.requests = {}
         self.consumed = False
+        self.node_id = node_id
 
     def request(self, challenge, session_id):
         fields(challenge, {"peer_id", "peer_nonce", "manifest_epoch", "challenge_id"})
         public = self.private.public_key().public_bytes(serialization.Encoding.DER,
                                                         serialization.PublicFormat.SubjectPublicKeyInfo)
-        request = dict(challenge, node_id="A", boot_session_id=session_id,
+        request = dict(challenge, node_id=self.node_id, boot_session_id=session_id,
                        ephemeral_public_key=public.hex())
         self.requests[request["peer_id"]] = request
         return request
@@ -137,36 +138,44 @@ def persist(path, state):
 
 def permitted(state, node_id):
     nodes = state["nodes"]
-    if node_id != "A" or nodes.get(node_id) not in ["ACTIVE", "MAINTENANCE"]:
+    if node_id not in state["targets"] or nodes.get(node_id) not in ["ACTIVE", "MAINTENANCE"]:
         raise Refusal()
     if nodes.get(state["peer_id"]) != "ACTIVE":
         raise Refusal()
 
 
 def commission(command, path):
-    fields(command, {"op", "peer_id", "ak_pem", "approved_pcr"})
-    if path.exists() or command["peer_id"] not in ["B", "C"]:
+    fields(command, {"op", "peer_id", "targets"})
+    if path.exists() or command["peer_id"] not in ["A", "B", "C"]:
         raise Refusal()
-    if not isinstance(command["ak_pem"], str) or len(command["ak_pem"]) > 2048:
+    targets = command["targets"]
+    if not isinstance(targets, dict) or not targets or not set(targets) <= {"A", "B", "C"}:
         raise Refusal("INVALID_REQUEST")
-    try:
-        ak = serialization.load_pem_public_key(command["ak_pem"].encode())
-    except ValueError:
-        raise Refusal("INVALID_REQUEST") from None
-    if not isinstance(ak, rsa.RSAPublicKey) or ak.key_size < 2048:
+    if command["peer_id"] in targets:
         raise Refusal("INVALID_REQUEST")
-    hex_bytes(command["approved_pcr"], 32)
+    for target in targets.values():
+        fields(target, {"ak_pem", "approved_pcr"})
+        if not isinstance(target["ak_pem"], str) or len(target["ak_pem"]) > 2048:
+            raise Refusal("INVALID_REQUEST")
+        try:
+            ak = serialization.load_pem_public_key(target["ak_pem"].encode())
+        except ValueError:
+            raise Refusal("INVALID_REQUEST") from None
+        if not isinstance(ak, rsa.RSAPublicKey) or ak.key_size < 2048:
+            raise Refusal("INVALID_REQUEST")
+        hex_bytes(target["approved_pcr"], 32)
     signing = ed25519.Ed25519PrivateKey.generate()
     state = {"peer_id": command["peer_id"], "epoch": 1, "nodes": {"A": "ACTIVE", "B": "ACTIVE", "C": "ACTIVE"},
-             "ak_pem": command["ak_pem"], "approved_pcr": command["approved_pcr"], "pending": {},
-             "signing_key": signing.private_bytes_raw().hex(), "contribution": os.urandom(32).hex()}
+             "targets": targets, "pending": {}, "signing_key": signing.private_bytes_raw().hex(),
+             "contributions": {node: os.urandom(32).hex() for node in targets}}
     persist(path, state)
     return {"peer_public_key": signing.public_key().public_bytes_raw().hex()}
 
 
 def checked_request(request):
     fields(request, REQUEST_FIELDS)
-    if request["node_id"] != "A" or request["peer_id"] not in ["B", "C"]:
+    if (request["node_id"] not in ["A", "B", "C"] or request["peer_id"] not in ["A", "B", "C"]
+            or request["node_id"] == request["peer_id"]):
         raise Refusal()
     if type(request["manifest_epoch"]) is not int or not 0 < request["manifest_epoch"] < 2 ** 64:
         raise Refusal("INVALID_REQUEST")
@@ -182,13 +191,14 @@ def checked_request(request):
 
 
 def verify_attestation(state, request, command):
+    enrolled = state["targets"][request["node_id"]]
     with tempfile.TemporaryDirectory(prefix="regalia-verifier-") as directory:
         root = Path(directory)
         message, signature, public, pcr = [root / name for name in ["quote", "signature", "ak.pem", "pcr"]]
         message.write_bytes(hex_bytes(command["quote"], maximum=4096))
         signature.write_bytes(hex_bytes(command["signature"], maximum=1024))
-        public.write_text(state["ak_pem"])
-        pcr.write_bytes(bytes.fromhex(state["approved_pcr"]))
+        public.write_text(enrolled["ak_pem"])
+        pcr.write_bytes(bytes.fromhex(enrolled["approved_pcr"]))
         result = subprocess.run([
             "tpm2_checkquote", "-u", str(public), "-m", str(message), "-s", str(signature),
             "-f", str(pcr), "-l", "sha256:7", "-g", "sha256", "-q", qualification(request).hex(),
@@ -245,7 +255,7 @@ def execute(command, path):
         raise Refusal()
     verify_attestation(state, request, command)
     signing = ed25519.Ed25519PrivateKey.from_private_bytes(bytes.fromhex(state["signing_key"]))
-    return signed_response(signing, recipient, request, bytes.fromhex(state["contribution"]))
+    return signed_response(signing, recipient, request, bytes.fromhex(state["contributions"][request["node_id"]]))
 
 
 def main():

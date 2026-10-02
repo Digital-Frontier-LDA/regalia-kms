@@ -16,8 +16,8 @@ class Peer:
         self.state = root / f"peer-{peer_id}.json"
         self.peer_id = peer_id
         result = self.invoke({"op": "init", "peer_id": peer_id,
-                              "ak_pem": (target.root / "ak.pem").read_text(),
-                              "approved_pcr": (target.root / "approved.pcr").read_bytes().hex()})
+                              "targets": {"A": {"ak_pem": (target.root / "ak.pem").read_text(),
+                                                "approved_pcr": (target.root / "approved.pcr").read_bytes().hex()}}})
         self.pin = bytes.fromhex(result["result"]["peer_public_key"])
 
     def invoke(self, command=None, raw=None):

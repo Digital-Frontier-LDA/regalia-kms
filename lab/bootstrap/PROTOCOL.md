@@ -5,7 +5,8 @@ This is a disposable lab contract, not a production protocol. A separate
 JSON response on stdout. Transport is private local IPC; there is no network
 listener, WireGuard transport, or authenticated OS separation between roles.
 The trusted lab harness commissions state, pins keys/policy, and injects policy
-changes. Node A is the recovering target and B/C are possible authorizers.
+changes. The original IPC cases recover A through B/C; enrollment also supports
+the other directed paths between A, B and C, with independent per-target secrets.
 
 Commands use exact field sets. Duplicate fields, unknown fields, invalid types,
 malformed encodings, and input above 64 KiB fail closed. Results have the shape
@@ -15,7 +16,7 @@ Raw requests, private keys, secrets, and tool output are never logged.
 
 | Operation | Input fields | Result |
 |---|---|---|
-| `init` (trusted fixture commissioning) | `op`, `peer_id`, `ak_pem`, `approved_pcr` | Pinned Ed25519 public key; refuses an already commissioned state |
+| `init` (trusted fixture commissioning) | `op`, `peer_id`, `targets` | Pinned Ed25519 public key; refuses an already commissioned state |
 | `challenge` | `op`, `node_id` | Fresh nonce, challenge ID, peer ID, manifest epoch |
 | `authorize` | `op`, `request`, `quote`, `signature` | Signed, session-encrypted peer contribution |
 
@@ -27,6 +28,10 @@ SubjectPublicKeyInfo for RSA-3072 with exponent 65537. The TPM qualification is
 SHA-256 of canonical sorted JSON for this request. `quote` and `signature` carry
 bounded hex-encoded outputs from tpm2-tools; clients cannot provide verifier
 paths, pinned keys, or approved measurements.
+
+`targets` maps enrolled node IDs to exact `ak_pem`/`approved_pcr` records. A peer
+cannot enroll itself as a target. Release selects the AK, measurement, and
+independent contribution belonging to the requested target.
 
 The verifier checks requester bootstrap capability (ACTIVE or MAINTENANCE),
 authorizer capability (ACTIVE), exact current pinned epoch, enrolled AK, fresh
