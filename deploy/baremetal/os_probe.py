@@ -27,8 +27,16 @@ and the KMS unit's sandbox (#61):
                               profile in enforce mode (read from /proc/<MainPID>/attr, not from the
                               unit: AppArmorProfile=-name starts unconfined when the profile is missing)
 
+and that the daemon needs a runtime lease to serve (#74):
+
+  kms_runtime_admission_required  the configuration the unit starts the daemon with (the file after
+                              -config in ExecStart) states "runtime_admission": "required" with its
+                              admission file, this node's ID and the boot session file. "disabled-for-lab"
+                              is a lab setting: a host carrying it is not commissioned
+
 Standard library only.
 """
+import json
 import os
 import re
 import shutil
@@ -37,7 +45,7 @@ import sys
 
 SERVICE = "regalia-kms.service"
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
-            "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced")
+            "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required")
 # property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
 # directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
 SANDBOX_PROPERTIES = {
@@ -257,6 +265,40 @@ def apparmor(host):
     return True, f"pid {pid} is confined by {profile!r} in enforce mode"
 
 
+def runtime_admission(host):
+    """The daemon is started with a configuration that REQUIRES a runtime lease. Read from the unit's own
+    ExecStart, not from a path assumed here: what matters is the file the running service was given."""
+    rc, props = unit_properties(host, "ExecStart", "LoadState")
+    if props.get("LoadState") != "loaded":
+        return False, f"{SERVICE} is not loaded"
+    found = re.search(r"argv\[\]=(.*?) ;", props.get("ExecStart", ""))
+    argv = found.group(1).split() if found else []
+    paths = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a in ("-config", "--config")]
+    paths += [a.split("=", 1)[1] for a in argv if a.startswith(("-config=", "--config="))]
+    if len(paths) != 1 or not paths[0].startswith("/"):
+        return False, f"{SERVICE} is not started with exactly one absolute -config file (ExecStart: {' '.join(argv) or 'unreadable'})"
+    text = host.read(paths[0])
+    if text is None:
+        return False, f"cannot read the daemon's configuration {paths[0]}"
+    try:
+        config = json.loads(text)
+    except ValueError:
+        return False, f"{paths[0]} is not valid JSON"
+    if not isinstance(config, dict):
+        return False, f"{paths[0]} is not a JSON object"
+    stated = config.get("runtime_admission")
+    if stated == "disabled-for-lab":
+        return False, f"{paths[0]} says runtime_admission \"disabled-for-lab\": this daemon serves with no runtime lease"
+    if stated != "required":
+        return False, f"{paths[0]} does not state runtime_admission \"required\" (it says {stated!r})"
+    missing = [k for k in ("runtime_admission_path", "node_id", "boot_session_path")
+               if not (isinstance(config.get(k), str) and config[k])]
+    if missing:
+        return False, f"{paths[0]} requires runtime admission but lacks {', '.join(missing)}"
+    return True, (f"{paths[0]}: runtime_admission required, node {config['node_id']}, "
+                  f"admission file {config['runtime_admission_path']}")
+
+
 def pcscd_clients(host):
     """(True, "<n> pcscd client(s), all the KMS binary") when every process connected to pcscd runs the
     KMS binary; (False, why) otherwise. Shared with deploy/baremetal/host_probe.py."""
@@ -293,4 +335,4 @@ def pcscd_clients(host):
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
-          "kms_apparmor_enforced": apparmor}
+          "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission}
