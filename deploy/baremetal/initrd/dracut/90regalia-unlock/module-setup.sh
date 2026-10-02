@@ -7,6 +7,10 @@
 # WireGuard configuration, the ruleset and boot.env. They are taken when present.
 #
 # Not included by default: add it with `dracut --add regalia-unlock` (or add_dracutmodules+=).
+#
+# dracut sources this file and provides $moddir, $initdir, $systemdsystemunitdir, $SYSTEMCTL and the
+# inst_* functions.
+# shellcheck disable=SC2154
 
 check() {
     require_binaries regalia-unlock wg nft ip || return 1

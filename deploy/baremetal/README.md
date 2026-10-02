@@ -381,6 +381,17 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     opens the volume.
   NOT shown: measured boot (the guest boots a plain kernel and initrd, so PCR 11 is zero and a changed
   initrd is not told apart: that needs a unified kernel image), and any physical machine.
+- **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
+  keeps no record of it: after switch-root the unit that opened the volume is gone, and `/etc/crypttab`
+  on the root is not what the initrd used (measured in the boot test). So it is checked on the image,
+  before the image is approved:
+  ```sh
+  lsinitrd IMAGE | grep -E 'regalia|etc/crypttab|etc/cmdline\.d|usr/bin/(wg|nft)$'   # what it holds
+  lsinitrd -f etc/crypttab IMAGE          # one entry: root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach
+  lsinitrd -f etc/regalia/unlock.json IMAGE   # this node, its disk, the PCRs it quotes, its peers
+  ```
+  No file under `etc/cmdline.d` may configure LUKS (`rd.luks.*`), and no other crypttab entry may
+  name the root volume.
 - **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
   keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
   disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
