@@ -134,3 +134,16 @@ there is no claim of immutable repository snapshots. The recipe removes the
 build compiler and interactive editors (`vim-tiny`, `vim-common`, `nano`) and
 acceptance refuses images retaining them. These changes address an observed PCRE2
 update gap and unnecessary parser packages; a new scan still decides release status.
+
+### Enforced daemon acceptance
+
+The recipe installs the bare-metal AppArmor profile and hardening drop-in already
+shipped in this repository. Guest acceptance temporarily starts the real daemon
+with an empty configuration, then measures the running process: enforcing profile,
+zero effective capabilities, no-new-privileges and seccomp filtering. Liveness
+must succeed while readiness remains 503 without credentials. The daemon's
+configuration check must accept the permitted path and specifically report
+permission denied for an otherwise readable configuration outside the profile.
+All temporary configuration/commissioning markers are removed before export;
+service startup must again be blocked and no TCP listener may remain. This checks
+startup and OS confinement; it does not qualify token operations or a physical HSM.

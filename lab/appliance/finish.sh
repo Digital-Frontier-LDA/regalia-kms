@@ -30,6 +30,12 @@ go build -trimpath -buildvcs=false -ldflags="-buildid= -X main.version=appliance
 go version -m /usr/local/sbin/regalia-kms >/var/log/regalia-binary-build.txt
 install -m 0644 deploy/systemd/regalia-kms.service /etc/systemd/system/regalia-kms.service
 mkdir -p /etc/systemd/system/regalia-kms.service.d /etc/regalia-kms
+install -m 0644 deploy/baremetal/regalia-kms-hardening.conf.example \
+  /etc/systemd/system/regalia-kms.service.d/hardening.conf
+install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
+# Compilation checks the exact installed profile; kernel enforcement is checked
+# during guest acceptance. No '-' prefix permits a missing profile fallback.
+apparmor_parser --skip-kernel-load -Q /etc/apparmor.d/usr.local.sbin.regalia-kms
 cat >/etc/systemd/system/regalia-kms.service.d/commissioning.conf <<'EOF'
 [Unit]
 ConditionPathExists=/etc/regalia-kms/commissioned

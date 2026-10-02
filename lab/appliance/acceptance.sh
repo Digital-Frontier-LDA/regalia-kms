@@ -21,6 +21,7 @@ check test "$(systemctl show regalia-kms.service -p ConditionResult --value)" = 
 check test "$(systemctl show regalia-kms.service -p NoNewPrivileges --value)" = yes
 check test "$(systemctl show regalia-kms.service -p ProtectSystem --value)" = strict
 check test -z "$(systemctl show regalia-kms.service -p CapabilityBoundingSet --value)"
+check test "$(systemctl show regalia-kms.service -p AppArmorProfile --value)" = regalia-kms
 check systemctl is-active nftables.service
 check sh -c 'nft list chain inet regalia input | grep -q "policy drop"'
 check sh -c 'nft list chain inet regalia output | grep -q "policy drop"'
@@ -36,6 +37,65 @@ for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vi
     fail "unexpected-package-$package"
   fi
 done
+# Temporarily start the real daemon with an empty, credential-free configuration.
+# It must run under the installed policy while remaining cryptographically unready.
+# These public fixtures are removed before exporting the reusable disk.
+printf '{}\n' >/etc/regalia-kms/config.json
+chmod 0644 /etc/regalia-kms/config.json
+touch /etc/regalia-kms/commissioned
+check systemctl start regalia-kms.service
+check systemctl is-active regalia-kms.service
+pid=$(systemctl show regalia-kms.service -p MainPID --value)
+check test "$pid" -gt 1
+check sh -c "grep -qx 'regalia-kms (enforce)' /proc/$pid/attr/current"
+check sh -c "grep -Eq '^CapEff:[[:space:]]+0000000000000000$' /proc/$pid/status"
+check sh -c "grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/$pid/status"
+check sh -c "grep -Eq '^Seccomp:[[:space:]]+2$' /proc/$pid/status"
+check python3 - <<'PY'
+import time
+import urllib.error
+import urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def status(path):
+    try:
+        with opener.open('http://127.0.0.1:8443' + path, timeout=2) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        return error.code
+for attempt in range(30):
+    try:
+        if status('/v1/health/live') == 200:
+            break
+    except OSError:
+        pass
+    time.sleep(0.2)
+else:
+    raise SystemExit('daemon did not become live')
+assert status('/v1/health/ready') == 503, 'credential-free daemon declared ready'
+PY
+check systemctl stop regalia-kms.service
+# The same config check is valid at the allowed path, and permission denied at a
+# DAC-readable path outside AppArmor policy. Check the specific error, not any
+# failing exit. Neither fixture has private material.
+check systemd-run --quiet --wait --pipe --unit=regalia-config-positive \
+  -p User=regalia-kms -p NoNewPrivileges=yes -p AppArmorProfile=regalia-kms \
+  /usr/local/sbin/regalia-kms -check-config -config /etc/regalia-kms/config.json
+printf '{}\n' >/tmp/regalia-denied.json
+chmod 0644 /tmp/regalia-denied.json
+if systemd-run --quiet --wait --pipe --unit=regalia-config-negative \
+  -p User=regalia-kms -p NoNewPrivileges=yes -p AppArmorProfile=regalia-kms \
+  /usr/local/sbin/regalia-kms -check-config -config /tmp/regalia-denied.json \
+  >/tmp/regalia-denial.log 2>&1; then
+  fail apparmor-accepted-forbidden-config
+fi
+check grep -q 'permission denied' /tmp/regalia-denial.log
+rm -f /etc/regalia-kms/config.json /etc/regalia-kms/commissioned \
+  /tmp/regalia-denied.json /tmp/regalia-denial.log
+check systemctl start regalia-kms.service
+check test "$(systemctl show regalia-kms.service -p ActiveState --value)" = inactive
+check test "$(systemctl show regalia-kms.service -p ConditionResult --value)" = no
+check sh -c 'test -z "$(ss -H -lnt)"'
+echo REGALIA_ENFORCED_DAEMON_PASS
 echo REGALIA_PACKAGE_INVENTORY_BEGIN
 cat /var/log/regalia-packages.tsv
 echo REGALIA_PACKAGE_INVENTORY_END
