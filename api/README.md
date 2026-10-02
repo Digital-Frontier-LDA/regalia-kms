@@ -56,5 +56,5 @@ Validate the contract with:
 
 ```sh
 python3 -I -m json.tool api/openapi.json >/dev/null
-python3 -Es -m unittest kms.tests.test_openapi_contract
+python3 -Es -m unittest tests.test_openapi_contract
 ```

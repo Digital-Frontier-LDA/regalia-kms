@@ -196,7 +196,7 @@ except OSError:
     sys.exit(1)" "$2" "$3"; }
 # stray <namespace> <address> <port>: a lone ACK segment, belonging to no connection, sent to that port.
 # Exit 0 when the host's TCP answered it (a RST): the segment reached the stack. Exit 1 when nothing came.
-stray(){ x "$1" python3 -c "
+stray(){ x "$1" python3 -I -c "
 import os, socket, struct, sys, time
 there, port = sys.argv[1], int(sys.argv[2])
 probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect((there, port)); here = probe.getsockname()[0]; probe.close()
