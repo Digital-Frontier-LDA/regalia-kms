@@ -341,11 +341,11 @@ class Verification(unittest.TestCase):
     def test_during_an_update_either_accepted_set_passes_and_the_verdict_names_it(self):
         self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
         self.assertEqual(self.attempt()["measurement"], "image-1")
-        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": None})
         # the same node after its update: a new boot, the NEXT image
         verdict = self.attempt(session=b"T" * 32, key=b"k2", reset=2, digest=attest.expected_pcr_digest(NEXT_PCRS))
         self.assertEqual(verdict["measurement"], "image-2")
-        self.assertEqual(self.measurement(), {"label": "image-2", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-2", "epoch": EPOCH, "phase": None})
         # and a node that fell back to CURRENT is still accepted while both are approved
         self.assertEqual(self.attempt(session=b"U" * 32, key=b"k3", reset=3)["measurement"], "image-1")
 
@@ -353,7 +353,7 @@ class Verification(unittest.TestCase):
         self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
         self.attempt()
         self.refused("none of the accepted measurement sets (image-1, image-2)", digest=hashlib.sha256(b"image 3").digest())
-        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": None})
 
     def test_after_retirement_the_old_image_is_refused(self):
         self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
@@ -563,9 +563,12 @@ class Verification(unittest.TestCase):
     def test_a_refused_phase_leaves_the_record_alone(self):
         self.phased(self.one("image-1", self.IMAGE1), self.one("image-2", self.IMAGE2))
         self.attempt(phase="initrd", **self.boot(self.IMAGE1, "initrd"))
-        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": "initrd"})
         self.refused("the node is in the system phase of image-2", phase="initrd", **self.boot(self.IMAGE2, "system"))
-        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": "initrd"})
+        # the record says in which phase the node was last seen: asking for its disk is not being up (rollout.py)
+        self.attempt(phase="system", **self.boot(self.IMAGE1, "system"))
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": "system"})
 
     def test_per_phase_sets_refuse_a_verification_that_names_no_phase(self):
         self.phased(self.one("image-1", self.IMAGE1))
@@ -580,6 +583,21 @@ class Verification(unittest.TestCase):
         with self.assertRaises(attest.Refused):
             self.v.verify("site-a", EPOCH, SESSION, KEY, nonce, b"q", b"s")
         self.attempt(nonce=nonce, phase="initrd", **self.boot(self.IMAGE1, "initrd"))
+
+    def test_another_phase_under_another_firmware_set_is_still_called_a_wrong_phase(self):
+        """Two sets may share a PCR state when their TPM firmware differs. A's initrd quote asking for a lease
+        then matches B's system values and not B's firmware: the refusal is the phase, not the firmware."""
+        newer = "2026010100000001"
+        shared = {"11": "ab" * 32}
+        self.phased(self.one("old-fw", {"initrd": shared, "system": {"11": "a2" * 32}}),
+                    self.one("new-fw", {"initrd": {"11": "b1" * 32}, "system": shared}, fw=newer))
+        quote = self.fresh(pcrs=(0, 7, 11), digest=attest.expected_pcr_digest(dict(PCRS, **shared)))
+        self.refused("the node is in the initrd phase of old-fw; this request is accepted only from the system phase", phase="system", **quote)
+        self.assertEqual(self.attempt(phase="initrd", **self.fresh(pcrs=(0, 7, 11), digest=quote["digest"]))["measurement"], "old-fw")
+        self.assertEqual(self.attempt(phase="system", firmware=newer, **self.fresh(pcrs=(0, 7, 11), digest=quote["digest"]))["measurement"], "new-fw")
+        # a firmware that is neither set's is still a firmware refusal
+        self.refused("the TPM firmware version 2019102300163637 is not the recorded", phase="system", firmware="2019102300163637",
+                     **self.fresh(pcrs=(0, 7, 11), digest=quote["digest"]))
 
     def test_a_set_with_one_value_per_pcr_is_judged_the_same_in_any_phase(self):
         """A host that does not boot a UKI: its PCR 11 never moves. Naming the phase changes nothing."""

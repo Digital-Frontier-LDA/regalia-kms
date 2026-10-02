@@ -33,8 +33,8 @@ cryptographic primitive.
     with one or two sets: CURRENT, and NEXT while an update rolls through the nodes (measurements.py
     builds these from the document the membership manifest commits to). A quote is accepted when it
     matches one set whole, its PCR values and its firmware version together; the verdict names the
-    set, and the verifier's state remembers the set and the epoch of each node's last accepted quote
-    (rollout.py reads that). Never more than two: a list that only grows is how a retired image
+    set, and the verifier's state remembers the set, the epoch and the boot phase of each node's last
+    accepted quote (rollout.py reads that). Never more than two: a list that only grows is how a retired image
     stays accepted. All sets of a node select the same PCRs, since the node quotes one selection.
 
     PCR VALUES PER BOOT PHASE (#57, #156). On a host that boots a unified kernel image, systemd extends
@@ -482,27 +482,31 @@ class Verifier:
             # One set must match WHOLE: its PCR values and its firmware version together. A new image
             # under the old TPM firmware's set, or the reverse, is a combination nobody approved.
             on_pcrs = [s for s in sets if hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(values(s, phase)))]
-            if not on_pcrs and phase is not None:
-                # an accepted image, in its other phase: say so, since "not the expected values" would send
-                # an operator looking for a wrong image
+            matched = [s for s in on_pcrs if q["firmware_version"] == s["tpm_firmware_version"]]
+            if not matched and phase is not None:
+                # an accepted image, whole, in its other phase: say so, since "not the expected values" or "not
+                # the recorded firmware" would send an operator looking for a wrong image or a wrong TPM
                 other = PHASES[1 - PHASES.index(phase)]
-                elsewhere = [s["label"] for s in sets if "phases" in s and hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(values(s, other)))]
+                elsewhere = [s["label"] for s in sets if "phases" in s and q["firmware_version"] == s["tpm_firmware_version"]
+                             and hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(values(s, other)))]
                 require(not elsewhere, "the node is in the %s phase of %s; this request is accepted only from the %s phase"
                         % (other, elsewhere[0] if elsewhere else "", phase))
             require(on_pcrs, "the quoted PCR digest is not the expected PCR values" if len(sets) == 1 else
                     "the quoted PCR digest is none of the accepted measurement sets (%s)" % ", ".join(s["label"] for s in sets))
-            matched = [s for s in on_pcrs if q["firmware_version"] == s["tpm_firmware_version"]]
             require(matched, "the TPM firmware version %s is not the recorded %s" % (
                 q["firmware_version"], " or ".join(s["tpm_firmware_version"] for s in on_pcrs)))
             self.check_counters(record, q, session_id, ephemeral_public)
-            # Which set, and under which manifest epoch: what a rollout asks before it retires CURRENT.
-            record["measurement"] = {"label": matched[0]["label"], "epoch": epoch}
+            # Which set, under which manifest epoch, and in which phase: what a rollout asks before the next
+            # node reboots and before it retires CURRENT. A node verified in its initrd has asked for its disk;
+            # it is not yet a node that came up (rollout.py counts only "system" where the set is per phase).
+            seen_phase = phase if "phases" in matched[0] else None
+            record["measurement"] = {"label": matched[0]["label"], "epoch": epoch, "phase": seen_phase}
             save()
         # ak_name: the AK this quote was verified under, read inside the same lock as the verification, so
         # a caller that requires a particular AK (a runtime lease, lease.py) compares what was actually used
         return {"node": node_id, "epoch": epoch, "session_id": session_id.hex(), "ak_name": ak_name.hex(), "reset_count": q["reset_count"],
                 "restart_count": q["restart_count"], "clock": q["clock"], "clock_safe": bool(q["safe"]), "pcrs": q["pcrs"],
-                "measurement": matched[0]["label"], "phase": phase if "phases" in matched[0] else None}
+                "measurement": matched[0]["label"], "phase": seen_phase}
 
     @staticmethod
     def check_counters(record, q, session_id, ephemeral_public):
