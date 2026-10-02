@@ -76,8 +76,8 @@ type PKCS11Driver struct {
 	module  cryptoki
 	devAuth DevAuthProbe
 	secure  SecureChannel
-	// local is the attestation for tokens that have no secure messaging. It is nil unless the
-	// daemon was given such evidence, and then the OpenPGP applet backend is not served at all.
+	// local is the attestation for tokens that have no secure messaging. While it is nil (the
+	// daemon was given no such evidence) the OpenPGP applet backend is not served at all.
 	local   SecureChannel
 	retries PINRetryProbe
 	close   func() error

@@ -13,9 +13,10 @@ open-source middleware over code written here, so the daemon reaches the applet 
 driver it already uses for the HSM. That is a new use of the applet, which ADR-0001 §4 had limited
 to legacy card integration; the decision is recorded in ADR-0002.
 
-**What is served.** `sign`, on a binding with backend `yubikey-openpgp`, and nothing else. `unwrap`
-stays in the capability row for the legacy `sops-pgp` path and is refused here before the token is
-opened.
+**What is served.** `sign` with an Ed25519 key, on a binding with backend `yubikey-openpgp`, and
+nothing else. The capability row also lists RSA keys and `unwrap`, for the legacy path below; here
+both are refused before the token is opened, and a registry that declares either is refused when the
+daemon starts. RSA keys belong on an HSM.
 
 **What a binding needs**, checked when the daemon starts:
 - `token_label`: OpenSC presents the applet as two tokens under one serial, `OpenPGP card (User PIN)`

@@ -115,11 +115,11 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	if !servedBackend(binding.Backend) || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
 		return nil, "", ErrUnavailable
 	}
-	// THE OPENPGP APPLET SIGNS, AND DOES NOTHING ELSE HERE. Its capability row also lists unwrap,
-	// which belongs to the legacy sops-pgp path this driver does not implement, and wrapping to an
-	// applet key would create material only that applet can open. Refused before the token is
-	// opened, so no PIN is presented for an operation that cannot be served.
-	if binding.Backend == OpenPGPAppletBackend && operation != "sign" && operation != "public-key" {
+	// THE OPENPGP APPLET SIGNS WITH ED25519, AND DOES NOTHING ELSE HERE. Its capability row also
+	// lists unwrap, which belongs to the legacy sops-pgp path this driver does not implement, and
+	// RSA keys, which belong on an HSM: the applet is served for the one algorithm no HSM offers.
+	// Refused before the token is opened, so no PIN is presented for what cannot be served.
+	if binding.Backend == OpenPGPAppletBackend && (route.Algorithm != "ed25519" || (operation != "sign" && operation != "public-key")) {
 		return nil, "", ErrUnavailable
 	}
 	if provider.pinBlocked(binding.DeviceID) {

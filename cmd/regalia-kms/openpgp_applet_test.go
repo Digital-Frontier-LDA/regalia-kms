@@ -8,9 +8,10 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
 
-// appletRegistry loads a one-object manifest bound to the OpenPGP applet. operations and the three
-// binding fields the startup check reads are the caller's; everything else is a servable binding.
-func appletRegistry(t *testing.T, operations, serial, label, pin string) *registry.Registry {
+// appletRegistry loads a one-object manifest bound to the OpenPGP applet. The algorithm, the
+// operations and the three binding fields the startup check reads are the caller's; everything else
+// is a servable binding.
+func appletRegistry(t *testing.T, algorithm, operations, serial, label, pin string) *registry.Registry {
 	t.Helper()
 	optional := ""
 	if serial != "" {
@@ -21,10 +22,6 @@ func appletRegistry(t *testing.T, operations, serial, label, pin string) *regist
 	}
 	if pin != "" {
 		optional += fmt.Sprintf(`"public_key_sha256":%q,`, pin)
-	}
-	algorithm := "ed25519"
-	if strings.Contains(operations, "unwrap") {
-		algorithm = "rsa4096" // the one row of this backend that lists both sign and unwrap
 	}
 	manifest := fmt.Sprintf(`{"schema_version":1,"manifest_id":"applet","generated_at":"2026-10-02T00:00:00Z","objects":[
 	 {"id":"release-ed25519","name":"Release key","kind":"asymmetric-key","classification":"restricted","environment":"staging",
@@ -52,16 +49,18 @@ func appletRegistry(t *testing.T, operations, serial, label, pin string) *regist
 // request at a time as a retryable error.
 func TestAppletBindingsTheDaemonCannotServeAreRefusedAtStartup(t *testing.T) {
 	const serial, label, pin = "000635718625", "OpenPGP card (User PIN (sig))", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	if err := requireOpenPGPAppletBindingsAreServable(appletRegistry(t, `"sign"`, serial, label, pin)); err != nil {
+	if err := requireOpenPGPAppletBindingsAreServable(appletRegistry(t, "ed25519", `"sign"`, serial, label, pin)); err != nil {
 		t.Fatalf("a servable applet binding was refused: %v", err)
 	}
 	for name, test := range map[string]struct {
 		registry *registry.Registry
 		reason   string
 	}{
-		"an operation other than sign": {appletRegistry(t, `"sign","unwrap"`, serial, label, pin), "unwrap"},
-		"no token label":               {appletRegistry(t, `"sign"`, serial, "", pin), "token_label"},
-		"no pinned public key":         {appletRegistry(t, `"sign"`, serial, label, ""), "public_key_sha256"},
+		// rsa4096 is the row of this backend that lists both sign and unwrap.
+		"an operation other than sign": {appletRegistry(t, "rsa4096", `"sign","unwrap"`, serial, label, pin), "unwrap"},
+		"a key that is not Ed25519":    {appletRegistry(t, "rsa4096", `"sign"`, serial, label, pin), "ed25519 only"},
+		"no token label":               {appletRegistry(t, "ed25519", `"sign"`, serial, "", pin), "token_label"},
+		"no pinned public key":         {appletRegistry(t, "ed25519", `"sign"`, serial, label, ""), "public_key_sha256"},
 	} {
 		err := requireOpenPGPAppletBindingsAreServable(test.registry)
 		if err == nil || !strings.Contains(err.Error(), "release-ed25519") || !strings.Contains(err.Error(), test.reason) {

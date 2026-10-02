@@ -14,12 +14,14 @@ var openPGPAppletKeyPin = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 // requireOpenPGPAppletBindingsAreServable refuses a registry whose OpenPGP-applet objects the
 // daemon could not actually serve.
 //
-// The applet is served through OpenSC's PKCS#11 module, for signing only (regalia#541). Three
-// things the capability matrix and the manifest loader do not say would otherwise surface one
+// The applet is served through OpenSC's PKCS#11 module, for Ed25519 signing only (regalia#541).
+// Four things the capability matrix and the manifest loader do not say would otherwise surface one
 // request at a time, as a retryable "unavailable" that never stops being retried:
 //
-//   - the matrix row for this backend also lists unwrap, which belongs to the legacy sops-pgp path
-//     and is not implemented here;
+//   - the matrix row for this backend also lists RSA keys, which the decision does not cover: the
+//     applet is served as the home of Ed25519 and of nothing an HSM can hold;
+//   - the row also lists unwrap, which belongs to the legacy sops-pgp path and is not implemented
+//     here;
 //   - OpenSC presents the applet as two tokens under one serial, so a binding with no token_label
 //     names no token;
 //   - the applet has no device certificate, so the commissioned public key is the only thing that
@@ -29,6 +31,9 @@ var openPGPAppletKeyPin = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 func requireOpenPGPAppletBindingsAreServable(keyRegistry *registry.Registry) error {
 	var problems []string
 	for _, object := range keyRegistry.RoutedTo(nitrokey.OpenPGPAppletBackend) {
+		if object.Algorithm != "ed25519" {
+			problems = append(problems, fmt.Sprintf("%s is an %s key (the applet is served for ed25519 only)", object.ObjectID, object.Algorithm))
+		}
 		for _, operation := range object.Operations {
 			if operation != "sign" {
 				problems = append(problems, fmt.Sprintf("%s declares %s (the applet is served for sign only)", object.ObjectID, operation))

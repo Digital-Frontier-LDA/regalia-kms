@@ -117,6 +117,11 @@ func LoadSecureChannelEvidence(path string, now func() time.Time) (*AttestedSecu
 			if device.SecureMsg {
 				return nil, fmt.Errorf("secure-channel evidence for %q claims both local-usb and established secure messaging", serial)
 			}
+			// What was verified is a card on a firmware. An attestation that does not say which
+			// is not the commissioning record it stands for.
+			if strings.TrimSpace(device.Firmware) == "" {
+				return nil, fmt.Errorf("local-usb evidence for %q does not name the firmware that was verified", serial)
+			}
 		default:
 			return nil, fmt.Errorf("secure-channel evidence for %q names an unknown channel", serial)
 		}

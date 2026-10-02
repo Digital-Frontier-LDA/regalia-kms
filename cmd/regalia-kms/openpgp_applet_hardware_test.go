@@ -81,7 +81,7 @@ func TestBuildHardwareServesTheOpenPGPAppletOverLocalTokenEvidence(t *testing.T)
 		PKCS11ModulePath: modulePath, SecureChannelEvidence: localEvidence,
 		PINPaths: map[string]string{"yubikey-sitea": pinPath},
 	}
-	keyRegistry := appletRegistry(t, `"sign"`, serial, label, keyPin)
+	keyRegistry := appletRegistry(t, "ed25519", `"sign"`, serial, label, keyPin)
 	_, manager, _, closer, err := buildHardware(settings, keyRegistry)
 	if err != nil {
 		t.Fatalf("buildHardware refused a servable applet configuration: %v", err)
@@ -114,7 +114,7 @@ func TestBuildHardwareServesTheOpenPGPAppletOverLocalTokenEvidence(t *testing.T)
 
 	// And a registry the daemon could not serve is refused here, not at the first signature.
 	settings.SecureChannelEvidence = localEvidence
-	if _, _, _, closer, err := buildHardware(settings, appletRegistry(t, `"sign"`, serial, "", keyPin)); err == nil {
+	if _, _, _, closer, err := buildHardware(settings, appletRegistry(t, "ed25519", `"sign"`, serial, "", keyPin)); err == nil {
 		closer()
 		t.Fatal("buildHardware accepted an applet binding with no token_label")
 	}

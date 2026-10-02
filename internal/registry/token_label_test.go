@@ -138,7 +138,7 @@ func TestRoutedToListsTheObjectsOfOneBackend(t *testing.T) {
 		t.Fatalf("RoutedTo(yubikey-openpgp) = %+v, want alpha then zulu", routed)
 	}
 	for _, object := range routed {
-		if len(object.Operations) != 1 || object.Operations[0] != "sign" || object.Binding.TokenLabel != "OpenPGP card (User PIN (sig))" || object.Binding.DeviceID != "yk-"+object.ObjectID {
+		if object.Algorithm != "ed25519" || len(object.Operations) != 1 || object.Operations[0] != "sign" || object.Binding.TokenLabel != "OpenPGP card (User PIN (sig))" || object.Binding.DeviceID != "yk-"+object.ObjectID {
 			t.Fatalf("%s: operations %v, binding %+v", object.ObjectID, object.Operations, object.Binding)
 		}
 	}

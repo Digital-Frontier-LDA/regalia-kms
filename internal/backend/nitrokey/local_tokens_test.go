@@ -97,15 +97,17 @@ func TestEvidenceWithNoLocalTokenOffersNoLocalAttestation(t *testing.T) {
 func TestContradictoryOrUnknownChannelClaimsAreRefusedAtLoad(t *testing.T) {
 	entry := func(extra string) string {
 		return `{"schema_version":1,"devices":[{"device_serial":"000600000001","verified_by":"custodian",
-		  "verified_at":"2026-09-01T00:00:00Z","expires_at":"2026-12-01T00:00:00Z","firmware":"5.7.4",` + extra + `}]}`
+		  "verified_at":"2026-09-01T00:00:00Z","expires_at":"2026-12-01T00:00:00Z",` + extra + `}]}`
 	}
-	if _, err := LoadSecureChannelEvidence(writeEvidence(t, entry(`"secure_messaging_established":false,"channel":"local-usb"`)), time.Now); err != nil {
+	if _, err := LoadSecureChannelEvidence(writeEvidence(t, entry(`"firmware":"5.7.4","secure_messaging_established":false,"channel":"local-usb"`)), time.Now); err != nil {
 		t.Fatalf("the control entry does not load: %v", err)
 	}
 	for name, extra := range map[string]string{
-		"local-usb together with established secure messaging": `"secure_messaging_established":true,"channel":"local-usb"`,
-		"an unknown channel":        `"secure_messaging_established":false,"channel":"bluetooth"`,
-		"a channel in another case": `"secure_messaging_established":false,"channel":"Local-USB"`,
+		"local-usb together with established secure messaging": `"firmware":"5.7.4","secure_messaging_established":true,"channel":"local-usb"`,
+		"an unknown channel":            `"firmware":"5.7.4","secure_messaging_established":false,"channel":"bluetooth"`,
+		"a channel in another case":     `"firmware":"5.7.4","secure_messaging_established":false,"channel":"Local-USB"`,
+		"local-usb with no firmware":    `"secure_messaging_established":false,"channel":"local-usb"`,
+		"local-usb on a blank firmware": `"firmware":"  ","secure_messaging_established":false,"channel":"local-usb"`,
 	} {
 		if _, err := LoadSecureChannelEvidence(writeEvidence(t, entry(extra)), time.Now); err == nil {
 			t.Fatalf("evidence claiming %s loaded", name)
@@ -202,6 +204,17 @@ func TestTheAppletBackendServesSigningAndNothingElse(t *testing.T) {
 	for _, operation := range []string{"unwrap", "wrap", "key-agreement", "certificate-sign", "release-secret", "seal-envelope", "authenticate", ""} {
 		if _, _, err := provider.Execute(context.Background(), route, operation, "regalia-envelope-v2", "", []byte("payload"), []byte("aad")); err == nil {
 			t.Fatalf("%q was served on the applet backend", operation)
+		}
+	}
+	// Nor any key but Ed25519: the token would sign with an RSA key, and the applet is not served
+	// as a second home for what an HSM holds.
+	for _, algorithm := range []string{"rsa2048", "rsa3072", "rsa4096", "p256", ""} {
+		other := route
+		other.Algorithm = algorithm
+		for _, operation := range []string{"sign", "public-key"} {
+			if _, _, err := provider.Execute(context.Background(), other, operation, "", "application/vnd.regalia.digest", []byte("digest"), nil); err == nil {
+				t.Fatalf("%s on a %q key was served on the applet backend", operation, algorithm)
+			}
 		}
 	}
 	if driver.opens != 0 {

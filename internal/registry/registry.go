@@ -1343,6 +1343,7 @@ func nitrokeyIdentityPinned(binding Binding) bool {
 // RoutedObject is one object the daemon routes, with the binding it routes to at this site.
 type RoutedObject struct {
 	ObjectID   string
+	Algorithm  string
 	Operations []string
 	Binding    Binding
 }
@@ -1367,7 +1368,7 @@ func (registry *Registry) RoutedTo(backend string) []RoutedObject {
 			operations = append(operations, operation)
 		}
 		sort.Strings(operations)
-		routed = append(routed, RoutedObject{ObjectID: id, Operations: operations, Binding: item.route.Binding})
+		routed = append(routed, RoutedObject{ObjectID: id, Algorithm: item.route.Algorithm, Operations: operations, Binding: item.route.Binding})
 	}
 	sort.Slice(routed, func(i, j int) bool { return routed[i].ObjectID < routed[j].ObjectID })
 	return routed
