@@ -87,6 +87,21 @@ class Snapshot(unittest.TestCase):
         self.assertEqual((s["boot_packaging"], s["boot_entry"]), ("uki", "kms.efi"))
         self.assertIn("uki", s["boot_files_sha256"])
 
+    def test_a_uki_boot_without_its_image_refuses_the_snapshot(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        (root / "sys/class/tpm/tpm0/pcr-sha256").mkdir(parents=True)
+        for i in range(24):
+            (root / "sys/class/tpm/tpm0/pcr-sha256" / str(i)).write_text("%064x\n" % i)
+        ev = root / "sys/firmware/efi/efivars"
+        ev.mkdir(parents=True)
+        (ev / "StubInfo-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f").write_bytes(b"\x06\x00\x00\x00x\x00")
+        with self.assertRaisesRegex(SystemExit, "LoaderEntrySelected"):
+            pcr_survey.snapshot("same", root=str(root))
+        (ev / "LoaderEntrySelected-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f").write_bytes(b"\x06\x00\x00\x00" + "kms.efi".encode("utf-16-le"))
+        with self.assertRaisesRegex(SystemExit, "not readable"):
+            pcr_survey.snapshot("same", root=str(root))
+
     def test_a_partial_bank_refuses_the_snapshot(self):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(root))

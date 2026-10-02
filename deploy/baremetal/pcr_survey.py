@@ -78,12 +78,18 @@ def snapshot(label, root="/"):
         raw = _read(os.path.join(efivars, entry), binary=True) or b""
         selected = raw[4:].decode("utf-16-le", errors="replace").rstrip("\x00") or None
     packaging = "uki" if stub else ("systemd-boot" if entry else "grub+initramfs")
-    if stub and selected:
+    if stub:
+        # A UKI boot must name and hash its image, or a labelled UKI change could not be shown to have
+        # changed the measured artifact.
+        if not selected:
+            raise SystemExit("a UKI boot (systemd-stub) without LoaderEntrySelected: cannot identify the active UKI")
         for c in (p("/boot/efi/EFI/Linux/" + selected), p("/efi/EFI/Linux/" + selected), p("/boot/EFI/Linux/" + selected)):
             h = _sha(c)
             if h:
                 files["uki"] = h
                 break
+        else:
+            raise SystemExit("the selected UKI %s is not readable under EFI/Linux on the ESP: mount the ESP and retry" % selected)
     for name, candidates in BOOT_FILES.items():
         for c in candidates:
             h = _sha(p(c % release if "%s" in c else c))
