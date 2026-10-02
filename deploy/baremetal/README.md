@@ -125,8 +125,26 @@ Commissioning has two halves:
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
   connected to pcscd must be the KMS binary. Measured: `token_clients_root_only`. A KMS user that
-  brings its own client is caught by the pcscd check only while it is connected; restricting pcscd
-  access with a polkit rule (root and the KMS user only) is recommended on top.
+  brings its own client is caught by the pcscd check only while it is connected.
+- **pcscd admits the KMS user and root, and nobody else.** Install
+  `deploy/polkit/50-regalia-kms-pcscd.rules` as `/etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules`,
+  byte for byte, `root:root`, mode `0644` (polkitd reads it as its own user: a file only root can
+  read is silently not loaded). **It is required, not an extra:** Debian's pcscd asks polkit, and its
+  policy lets in only a user with an active local session. The daemon's user has none, so without the
+  rule pcscd refuses it and the daemon reaches neither the HSM nor the YubiKey: it starts, is never
+  ready, and every key is unavailable (measured with pcscd 2.3.3 under the shipped unit,
+  `e2e/kms-two-token-systemd.sh`). The same rule is written to refuse every other user, an operator
+  at the console included, because whoever can talk to pcscd can present PINs and spend retry
+  counters; that refusal follows from the rule and from no other rules file deciding first, and has
+  been observed only for users without a session. polkit runs every rules file in one shared
+  JavaScript context, in name order, and the first answer wins: any other rules file could grant
+  first or rewrite polkit under the KMS rule. **So a KMS host carries no polkit rules file but the
+  distribution's own and this one.** Measured: `kms_pcscd_access_rule` (the file is the shipped one
+  byte for byte, root's, readable by polkitd; every other rules file in the four polkit directories
+  is one of the distribution's, by path and sha256 as measured on Debian 13, and each of those
+  directories that exists, and its parent, is root's alone to change; and `pkcheck` says polkit admits the running daemon to both of pcscd's actions). A
+  distribution update that changes one of those files fails the control until its digest is renewed
+  in `os_probe.KNOWN_RULES_FILES`.
 - **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
   `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
   capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name
