@@ -173,10 +173,21 @@ class Document(Case):
         for sets in ([one("image-1", IMAGE1), one("image-2", IMAGE2)], [one("image-9", IMAGE3)], [one("zzz", IMAGE1)]):
             with self.subTest(labels=[e["label"] for e in sets]):
                 doc = document("v1n", **dict({n: [one("image-1", IMAGE1)] for n in "bc"}, d=sets))
-                self.refused("a replacement gives the new node the sets another node already has (['image-1'])",
+                self.refused("a replacement gives the new node the sets a node that attests already has (['image-1'])",
                              measurements.check_replacement, m1, replaced(doc), CURRENT, doc, "a", "d")
         own_hardware = document("v1h", **dict({n: [one("image-1", IMAGE1)] for n in "bc"}, d=[one("image-1", {"7": "dd" * 32, "11": "a1" * 32})]))
         measurements.check_replacement(m1, replaced(own_hardware), CURRENT, own_hardware, "a", "d")   # its own PCR values are fine
+        # ... and "a node that attests" is not a quarantined one with a stale list: its retired image-0 must
+        # not come back for the new node (bind() lets a node with nothing to do keep any entry)
+        zero = {"7": "00" * 32, "11": "a0" * 32}
+        stale = document("stale", a=[one("image-1", IMAGE1)], b=[one("image-1", IMAGE1)], c=[one("image-0", zero), one("image-1", IMAGE1)])
+        m1q = dict(self.under(stale), nodes=[dict(n, state="QUARANTINED") if n["node_id"] == "c" else n for n in self.under(stale)["nodes"]])
+        revived = document("revived", b=[one("image-1", IMAGE1)], c=[one("image-0", zero), one("image-1", IMAGE1)],
+                           d=[one("image-0", IMAGE3), one("image-1", IMAGE1)])
+        m2q = dict(m1q, epoch=2, prev_digest=m.digest(m1q), policy_version=measurements.version(revived),
+                   nodes=[entry("a", 0, "RETIRED"), entry("b", 1), dict(entry("c", 2), state="QUARANTINED"), entry("d", 3)])
+        self.refused("d is enrolled with the sets ['image-0', 'image-1']; a replacement gives the new node the sets a node that attests "
+                     "already has (['image-1'])", measurements.check_replacement, m1q, m2q, stale, revived, "a", "d")
         # the switch that lets policy_version change is not on the public function
         self.assertNotIn("measurements_change", replacement.check_replacement.__code__.co_varnames)
         self.assertNotIn("policy_version_may_change", replacement.check_replacement.__code__.co_varnames[:replacement.check_replacement.__code__.co_argcount])
@@ -246,11 +257,23 @@ class Transition(Case):
         self.refused("b: the set 'image-1' has other measurements than before", measurements.transition, CURRENT, relabel_b, emergency=True)
         and_approve = document("e", a=[one("image-2", IMAGE2)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)], c=[one("image-1", IMAGE1)])
         self.refused("an emergency replacement (a) must not also approve (b)", measurements.transition, CURRENT, and_approve, emergency=True)
-        # the replacing set is the target: listed last, in an emergency too
-        backwards = document("e", **{n: [one("image-3", IMAGE3), one("image-2", IMAGE2)] for n in "abc"})
-        self.refused("the replacing set must be listed last", measurements.transition, BOTH, backwards, emergency=True)
+        # a replaced node ends on the replacing image alone: nothing kept beside it, no second new set
+        for label, sets in (("the target moved past a set it had", [one("image-2", IMAGE2), one("image-3", IMAGE3)]),
+                            ("the new set listed first", [one("image-3", IMAGE3), one("image-2", IMAGE2)])):
+            with self.subTest(label):
+                self.refused("an emergency replacement leaves the node on the replacing image alone", measurements.transition,
+                             BOTH, document("e", **{n: sets for n in "abc"}), emergency=True)
+        four = {"7": "00" * 32, "11": "d4" * 32}
+        two_new = document("e", **{n: [one("image-3", IMAGE3), one("image-4", four)] for n in "abc"})
+        self.refused("leaves the node on the replacing image alone, not on image-3, image-4", measurements.transition, CURRENT, two_new, emergency=True)
+        # and every replaced node goes to the SAME image
+        split = document("e", a=[one("image-3", IMAGE3)], b=[one("image-4", four)], c=[one("image-3", IMAGE3)])
+        self.refused("puts every replaced node on ONE image, not on image-3, image-4", measurements.transition, CURRENT, split, emergency=True)
+        # dropping both sets of a node for the one replacing image is still one emergency
+        self.assertEqual(measurements.transition(BOTH, document("e", **{n: [one("image-3", IMAGE3)] for n in "abc"}), emergency=True),
+                         "replace-without-overlap")
 
-        swapped_c = document("e", a=[one("image-1", IMAGE1), one("image-3", IMAGE3)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
+        swapped_c = document("e", a=[one("image-3", IMAGE3)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
                              c=[one("image-2", IMAGE2), one("image-1", IMAGE1)])
         self.refused("c: its two sets changed places", measurements.transition, BOTH, swapped_c, emergency=True)
 
@@ -286,6 +309,28 @@ class Transition(Case):
         # a newly enrolled node may not bring the compromised image back either
         with_d = document("drop-2d", a=[one("image-3", IMAGE3)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1)], d=[one("image-2", IMAGE2)])
         self.refused("drops image-2, but d would still accept it", measurements.transition, retired_on_a, with_d, emergency=True)
+
+    def test_a_set_keeps_its_label(self):
+        """The same measurements under a new name are the same image. Renamed, a set would be neither added
+        nor removed, and the image an emergency drops could stay on under another label."""
+        renamed = document("r", a=[one("clean", IMAGE1)], b=[one("image-3", IMAGE3)], c=[one("image-3", IMAGE3)])
+        self.refused("a: the set 'image-1' is renamed 'clean' with the same measurements; a set keeps its label",
+                     measurements.transition, CURRENT, renamed, emergency=True)
+        only_a = document("a-first", a=[one("image-1", IMAGE1), one("image-2", IMAGE2)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1)])
+        beside = document("r", a=[one("image-1b", IMAGE1), one("image-2", IMAGE2)], b=[one("image-2", IMAGE2)], c=[one("image-2", IMAGE2)])
+        self.refused("is renamed 'image-1b' with the same measurements", measurements.transition, only_a, beside, emergency=True)
+        # the same rule with no emergency: a rename is not "unchanged", an approval or an abandonment
+        for label, old, new in (
+                ("one set renamed", CURRENT, document("r", **{n: [one("image-9", IMAGE1)] for n in "abc"})),
+                ("both renamed", BOTH, document("r", **{n: [one("x", IMAGE1), one("y", IMAGE2)] for n in "abc"})),
+                ("renamed while approving", CURRENT, document("r", **{n: [one("image-1b", IMAGE1), one("image-3", IMAGE3)] for n in "abc"})),
+                ("renamed while abandoning", BOTH, document("r", **{n: [one("new", IMAGE1)] for n in "abc"}))):
+            with self.subTest(label):
+                self.refused("with the same measurements; a set keeps its label", measurements.transition, old, new)
+        # a NEW node carrying the dropped image's measurements under a fresh label: found by measurement
+        fresh = document("r", **dict({n: [one("image-3", IMAGE3)] for n in "abc"}, d=[one("fresh", IMAGE1)]))
+        self.refused("drops image-1, but d would still accept the same measurements under another label",
+                     measurements.transition, CURRENT, fresh, emergency=True)
 
     def test_dropped_is_a_list_of_node_ids(self):
         for bad in (None, 5, "ab", "c", {"c": 1}, [1], [["c"]]):
@@ -418,7 +463,8 @@ class Reboot(Case):
     def test_with_stale_records_too_never_more_than_one_node_may_reboot(self):
         """Every combination of what the three nodes run and what their peers last saw them on (64). A
         record goes stale when a node reboots or falls back and has not been re-attested yet; its leases
-        are then from the boot the peers last saw. Never two nodes at once."""
+        are then from the boot the peers last saw. Never two nodes at once. The model: ALL of a node's
+        peers hold the same record of it. When only some have re-attested it, see the limit below."""
         labels = ("image-1", "image-2")
         combos = [dict(a=a, b=b, c=c) for a in labels for b in labels for c in labels]
         more_than_one = [(running, seen, self.allowed(running, seen)) for running in combos for seen in combos]
@@ -427,6 +473,19 @@ class Reboot(Case):
         # and with every record current, it is exactly the first node not on its target (none when all are)
         self.assertEqual([who for running, seen, who in more_than_one if running == seen],
                          [[n for n in lt.NAMES if running[n] == "image-1"][:1] for running in combos])
+
+    def test_the_limit_a_node_may_pass_on_a_record_it_has_not_refreshed(self):
+        """Stated in rollout.py's LIMITS, pinned here so nobody reads "one at a time" as more than it is. a
+        fell back to CURRENT in a new boot; c has re-attested it, b has not yet. a is refused (b's lease
+        is for its previous boot). b, whose own record of a is from before the fallback, still passes:
+        for up to the lease lifetime two nodes can be off their feet. Three cannot."""
+        self.refused("its lease is for another boot session of a", self.ask, "a",
+                     leases=[self.lease_for("a", "b", session_id=lt.OTHER_SESSION), self.lease_for("a", "c")])
+        self.assertEqual(self.ask("b", self.state(a="image-2"))["authorizers"], ["a", "c"])
+        # once b re-attests a (its next lease renewal for a), b's record says image-1 and b waits
+        self.refused("a updates first", self.ask, "b", self.state(a="image-1"))
+        # c, which has seen the fallback, waits throughout
+        self.refused("a updates first", self.ask, "c", self.state(a="image-1", b="image-1"))
 
     def test_a_lease_from_before_a_fallback_is_for_another_boot_and_is_refused(self):
         """a booted NEXT, both peers vouched, and within the five minutes a fell back to CURRENT. Its leases
@@ -594,11 +653,32 @@ class Retire(Case):
         self.refused("state from nodes the manifest does not list: z", rollout.retire_ready, self.manifest2, BOTH, self.states(z={}))
         self.refused("is not the one the root approved", rollout.retire_ready, self.manifest2, NEXT, self.states(a={}, b={}, c={}))
         # a state file that is not a state file refuses; it does not crash
-        # a state with records that are not records refuses; it does not crash
-        for nodes in ({"b": "x"}, {"b": {"measurement": "image-2"}}, {"b": {"measurement": {"label": "image-2", "epoch": 2.0}}}):
-            with self.subTest(nodes=repr(nodes)):
-                junk = {"schema": attest.STATE_SCHEMA, "nodes": nodes}
-                self.refused("NOT YET", rollout.retire_ready, self.manifest2, BOTH, {"a": junk, "b": junk, "c": junk})
+
+    def test_a_witness_whose_record_cannot_be_read_or_is_from_a_later_manifest_is_not_silence(self):
+        """a and c report everyone on NEXT. b's record of a node is unreadable, or b saw it fall back under
+        a NEWER manifest than the one the operator is judging. Neither may count as "b says nothing"."""
+        good = self.states(a={"b": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+
+        def b_says(**nodes):
+            return dict(good, b={"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": nodes})
+        for label, reason, nodes in (
+                ("a record that is text", "b's state has a record of a that is not a record", {"a": "x"}),
+                ("a record that is null... is no record", None, {"a": None}),
+                ("a measurement that is text", "b's state has an unreadable measurement for a", {"a": {"measurement": "image-1"}}),
+                ("an epoch that is a float", "b's state has an unreadable measurement for a", {"a": {"measurement": {"label": "image-1", "epoch": 2.0}}}),
+                ("an epoch that is text", "b's state has an unreadable measurement for c", {"c": {"measurement": {"label": "image-1", "epoch": "2"}}}),
+                ("a label that is a list", "b's state has an unreadable measurement for a", {"a": {"measurement": {"label": ["image-2"], "epoch": 2}}}),
+                ("a fallback seen under a later manifest", "b last verified a under epoch 3, later than the manifest given (epoch 2): use the current manifest",
+                 {"a": {"measurement": {"label": "image-1", "epoch": 3}}})):
+            with self.subTest(label):
+                if reason is None:
+                    self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, b_says(**nodes))["a"], ["c"])
+                else:
+                    self.refused(reason, rollout.retire_ready, self.manifest2, BOTH, b_says(**nodes))
+        # an enrolled node that was never verified has a record with no measurement: that is silence
+        self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, b_says(a={"ak_public": "00"}, c={"ak_public": "00"}))["a"], ["c"])
+        # and a record from an EARLIER epoch is silence too (the node was not seen under this manifest)
+        self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, b_says(a={"measurement": {"label": "image-1", "epoch": 1}}))["a"], ["c"])
 
 
 def sign(manifest, key=hbt.ROOT, signer="root"):

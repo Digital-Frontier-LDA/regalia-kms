@@ -18,8 +18,9 @@ may_reboot(...)    asked ON the node, before it reboots into NEXT. Refused unles
     3  IT IS THIS NODE'S TURN. Nodes update in the order of their node IDs. Every node before this
        one must have been verified ON ITS TARGET, under this manifest epoch, BY THIS NODE'S OWN
        verifier (the record attest.py keeps each time this node re-attests a peer for a lease or an
-       unlock). With 2 and 3 together exactly one node can pass at a time: the first one, in order,
-       that is not on its target, and only once everybody before it has been seen back;
+       unlock). With 2 and 3, and every record current, exactly one node can pass at a time: the
+       first one, in order, that is not on its target, and only once everybody before it has been
+       seen back. (A record is current once this node has re-attested that peer; see LIMITS.);
     4  every other node that may authorize has vouched for this node IN ITS CURRENT BOOT, within the
        lease lifetime: a runtime lease (lease.py) issued to this node, for this boot session, by that
        peer, under this same manifest epoch, still valid at the node's authenticated time. A lease is
@@ -51,11 +52,16 @@ LIMITS, stated:
     stopped by it, and a node that lies to itself is not either.
   * A lease proves the peer could authorize up to five minutes ago, not that it still can when this
     node comes back. One remaining authorizer is accepted when the manifest leaves only one.
-  * "Never more than one node" rests on one fact outside this function: a peer writes its record of a
-    node BEFORE it signs that node a lease (lease.issue re-attests first), and a node has one boot
-    session per boot. So a lease for this boot means the issuer's record of this node is of this boot.
-    `own_state` must be the state file of the verifier this node issues leases with; it is an argument,
-    and nothing here can check that it is.
+  * WHAT "ONE AT A TIME" RESTS ON, and where it stops. A peer writes its record of a node BEFORE it
+    signs that node a lease (lease.issue re-attests first), and a node has one boot session per boot.
+    So a lease for this boot means the ISSUER's record of this node is of this boot: a node that fell
+    back cannot pass on leases from before. The turn rule, though, reads THIS node's record of the
+    EARLIER node, which is refreshed only when this node next re-attests that one (at its next lease
+    renewal, or when it comes back for an unlock). In between, for up to the lease lifetime, this node
+    may still believe an earlier node is on its target after it fell back or went down, and pass.
+    Two nodes down at once for that long is possible; three are not, since each needs the others'
+    fresh leases. `own_state` must be the state file of the verifier this node issues leases with;
+    it is an argument, and nothing here can check that it is.
   * Nothing here reboots, installs an image or signs a manifest, and nothing is wired into a
     service yet. Boot counting and the automatic fallback to CURRENT are systemd-boot's, on the real
     hosts.
@@ -172,6 +178,22 @@ def retire_ready(manifest, document, states):
         isinstance(state, dict) and state.get("schema") == attest.STATE_SCHEMA and isinstance(state.get("nodes"), dict)))
     require(not hollow, "the state given for %s is not an attestation verifier's state (%s, with its nodes): a failed "
             "collection is not a witness" % (", ".join(hollow), attest.STATE_SCHEMA))
+    # A witness's record of a node of the rollout is readable, or it is not a witness. A record with no
+    # measurement is an enrolled node not verified yet, and says nothing. One from a LATER epoch means the
+    # peer holds a newer manifest than the one being judged: what it saw there is hidden from this check.
+    for peer_id in sorted(states):
+        for node_id in attesting(manifest):
+            record = states[peer_id]["nodes"].get(node_id)
+            if record is None:
+                continue
+            require(isinstance(record, dict), "%s's state has a record of %s that is not a record" % (peer_id, node_id))
+            if "measurement" not in record:
+                continue
+            last = record["measurement"]
+            require(isinstance(last, dict) and type(last.get("epoch")) is int and isinstance(last.get("label"), str),
+                    "%s's state has an unreadable measurement for %s: it cannot be counted, and it cannot be ignored" % (peer_id, node_id))
+            require(last["epoch"] <= manifest["epoch"], "%s last verified %s under epoch %d, later than the manifest given "
+                    "(epoch %d): use the current manifest and its document" % (peer_id, node_id, last["epoch"], manifest["epoch"]))
     seen, behind = {}, []
     for node_id in attesting(manifest):
         want = measurements.target(document, node_id)["label"]
