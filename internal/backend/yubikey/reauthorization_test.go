@@ -211,6 +211,7 @@ func TestACardPulledDuringAHealthCheckWaitsAlthoughTheNextOpenSucceeds(t *testin
 func TestAPolicyMismatchSeenByTheHealthCheckIsNotAnAbsence(t *testing.T) {
 	w := newReauthWorld(t)
 	w.requireServing("before")
+	w.now = 2_000
 	w.card.pinPolicy = "always"
 	if w.healthy() {
 		t.Fatal("setup: a slot with another PIN policy should be unhealthy")
@@ -240,6 +241,7 @@ func TestACardPulledDuringAnOperationWaitsAlthoughTheNextOpenSucceeds(t *testing
 func TestARefusedRequestDoesNotTakeTheCardOutOfService(t *testing.T) {
 	w := newReauthWorld(t)
 	w.requireServing("before the refused request")
+	w.now = 2_000 // after the lease was asked for: an absence wrongly recorded now would keep the card out
 	w.card.failSign = errors.New("the payload is not what this key type is sent")
 	reads := w.card.identityRead
 	if w.sign() == nil {
@@ -257,6 +259,7 @@ func TestARefusedRequestDoesNotTakeTheCardOutOfService(t *testing.T) {
 func TestACancelledRequestDoesNotTakeTheCardOutOfService(t *testing.T) {
 	w := newReauthWorld(t)
 	w.requireServing("before the cancelled request")
+	w.now = 2_000 // after the lease was asked for: an absence wrongly recorded now would keep the card out
 	ctx, cancel := context.WithCancel(context.Background())
 	w.card.cancelOnSign = cancel
 	if _, _, err := w.provider.Execute(ctx, route(), "sign", "", "application/octet-stream", []byte("payload"), nil); err == nil {
@@ -278,6 +281,7 @@ func TestACancelledRequestDoesNotTakeTheCardOutOfService(t *testing.T) {
 
 func TestARefusedPINDoesNotCountAsAnAbsence(t *testing.T) {
 	w := newReauthWorld(t)
+	w.now = 2_000
 	w.card.loginErr = errors.New("bad PIN")
 	if w.sign() == nil {
 		t.Fatal("setup: the PIN should be refused")
