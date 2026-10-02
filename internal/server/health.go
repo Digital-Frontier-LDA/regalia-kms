@@ -161,6 +161,10 @@ type Dependencies struct {
 	// Fencing reports whether this site currently holds the active lease. A passive site is
 	// healthy and NOT ready: it is running correctly and must not be sent work.
 	Fencing ReadinessProbe
+	// Admission reports whether this node holds a runtime trust lease (regalia-kms#74). Optional
+	// in the same way as Fencing: nil where the configuration says a lab host needs none. A node
+	// without a lease is healthy and NOT ready.
+	Admission ReadinessProbe
 }
 
 type allProbes struct{ probes []ReadinessProbe }
@@ -222,6 +226,9 @@ func NewRequired(dependencies Dependencies) *Handler {
 	// readiness answer did not depend on it.
 	if dependencies.Fencing != nil {
 		probes = append(probes, dependencies.Fencing)
+	}
+	if dependencies.Admission != nil {
+		probes = append(probes, dependencies.Admission)
 	}
 	return New(probes)
 }

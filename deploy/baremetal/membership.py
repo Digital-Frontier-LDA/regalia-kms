@@ -36,9 +36,12 @@ Transition rules (accept(current, candidate)):
     REVOKED_STOLEN). Its hardware can then never be enrolled again, under any name: the uniqueness rule
     sees the tombstone. The manifest therefore grows by one entry per retired node, for ever, and that is
     intended. Hardware that may return belongs in MAINTENANCE or QUARANTINED, which the root can reverse;
-  * the TPM-backed high-water mark (HighWater) anchors the accepted epoch: Store keeps the signed chain
-    on disk, refuses at load a chain older than the high-water (a restored disk; recovered by fetching
-    the newer chain from a peer), and advances the high-water after each durable commit.
+  * the TPM-backed high-water mark (HighWater) anchors the accepted epoch AND which manifest it was: a
+    counter for the epoch, and beside it a record of (epoch, SHA-256 of the manifest at that epoch). Store
+    keeps the signed chain on disk, refuses at load a chain older than the high-water (a restored disk)
+    or one whose manifest at the anchored epoch is not the recorded one (a substituted disk); either is
+    recovered by fetching the chain from a peer. After each durable commit it advances the counter, then
+    writes the record.
 
 Capabilities by state (the #59 matrix): ACTIVE serves, requests bootstrap and authorizes peers;
 MAINTENANCE only requests; DRAINING only serves; QUARANTINED, RETIRED and REVOKED_STOLEN nothing.
@@ -290,15 +293,32 @@ class HighWater:
     increment is exactly +1. Deleting the counter fails closed (`value` refuses) and a redefined one
     starts above the old value. Deleting and redefining the base index needs owner authorization on
     the running host, which this anchor does not defend against (it defends against a restored disk).
+
+    THE RECORD. The counter says how far this node got, not by which chain: two validly signed chains can
+    reach one epoch if a key signed twice for it. So a third, ordinary index holds
+    `epoch (u64, big-endian) || SHA-256(canonical manifest at that epoch)`, 40 bytes. `define()` creates it
+    at epoch 0 with an all-zero digest. Only Store writes it, through `anchor()`, and always AFTER the
+    counter: for each epoch the counter is incremented, then the record written. The record's epoch is
+    therefore the counter's, or one below it after a crash between the two; `anchor()` and `verify()`
+    accept exactly those two, compare the digest with the chain they are given, and refuse anything else
+    (a record that cannot be read, another epoch, another digest). In the crash window the manifest AT the
+    counter's epoch is not yet recorded: `pinned()` is False until `anchor()` has repaired it.
+    The same limit as the counter: owner authorization on the running host can rewrite the record. And a
+    record whose write was torn by a power cut reads as neither epoch and fails closed, until an operator
+    redefines the anchor.
     """
 
     MAX_JUMP = 1000
+    RECORD = True                        # heartbeat.Counter is this counter without the record
+    RECORD_BYTES, ZERO = 40, "00" * 32
     NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
     WRITTEN, WRITELOCKED = 0x20000000, 0x800
 
-    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None):
+    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_index=None):
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
+        # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
+        self.record_index = (record_index or "0x%x" % (int(index, 16) + 4)) if self.RECORD else None
         # Two processes advancing at once could both increment and push the counter past any manifest.
         self.lock_path = lock_path or "/run/lock/regalia-highwater-%s.lock" % self.index
 
@@ -325,7 +345,7 @@ class HighWater:
             return self._define()
 
     def _define(self):
-        for index in (self.index, self.base_index):
+        for index in filter(None, (self.index, self.base_index, self.record_index)):
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
         r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
@@ -336,6 +356,10 @@ class HighWater:
         r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
         require(r.returncode == 0, "cannot write the base index")
         require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
+        if self.record_index:
+            r = self._tpm("nvdefine", self.record_index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
+            require(r.returncode == 0, "cannot define the record index %s" % self.record_index)
+            self._write_record(0, self.ZERO)
         return base
 
     def _base(self):
@@ -359,7 +383,7 @@ class HighWater:
         with _exclusive(self.lock_path):
             return self._advance(epoch)
 
-    def _advance(self, epoch):
+    def _advance(self, epoch, digest_of=None):
         base = self._base()
         now = self._epoch(base)
         require(epoch >= now, "refusing to accept epoch %d below the TPM high-water %d" % (epoch, now))
@@ -370,7 +394,60 @@ class HighWater:
             nxt = self._epoch(base)
             require(nxt == now + 1, "the NV counter did not advance by one (%d -> %d)" % (now, nxt))
             now = nxt
+            if digest_of:
+                self._write_record(now, digest_of(now))
         return now
+
+    def _record(self):
+        require(self.record_index is not None, "this counter keeps no record")
+        a = self._attributes(self.record_index)
+        require(a & self.NT_MASK == self.NT_ORDINARY and a & self.WRITTEN, "record index %s is not a written ordinary index" % self.record_index)
+        r = self._tpm("nvread", self.record_index, "-C", "o", "-s", str(self.RECORD_BYTES))
+        require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
+                "is unavailable (fail closed)" % (self.RECORD_BYTES, self.record_index))
+        return int.from_bytes(r.stdout[:8], "big"), r.stdout[8:].hex()
+
+    def _write_record(self, epoch, manifest_digest):
+        hex_field(manifest_digest, 64, "a manifest digest")
+        r = self._tpm("nvwrite", self.record_index, "-C", "o", "-i", "-", input=epoch.to_bytes(8, "big") + bytes.fromhex(manifest_digest))
+        require(r.returncode == 0, "cannot write the record index %s" % self.record_index)
+        require(self._record() == (epoch, manifest_digest), "the record index %s did not take the write" % self.record_index)
+
+    def _verify(self, hw, digest_of, repair):
+        """The record against a chain (`digest_of(epoch)` is its manifest digest there, ZERO at epoch 0)."""
+        epoch, held = self._record()
+        require(epoch in (hw, hw - 1), "the TPM record is for epoch %d but the TPM high-water is %d: the anchor is inconsistent "
+                "(fail closed)" % (epoch, hw))
+        require(held == digest_of(epoch), "CONFLICT: the manifest at epoch %d is not the one this node's TPM recorded: a substituted "
+                "chain is never anchored; record an incident" % epoch)
+        if epoch != hw and repair:           # a crash after the counter moved and before the record was written
+            self._write_record(hw, digest_of(hw))
+
+    def record(self):
+        """(epoch, manifest digest) as last written."""
+        with _exclusive(self.lock_path):
+            return self._record()
+
+    def pinned(self):
+        """Whether the record names the manifest AT the high-water epoch (False in the crash window, where
+        it still names the one before): only then does the TPM alone tell two chains of that length apart."""
+        with _exclusive(self.lock_path):
+            return self._record()[0] == self._epoch(self._base())
+
+    def verify(self, digest_of):
+        """Refuses a chain that is not the anchored one; changes nothing. Returns the high-water epoch."""
+        with _exclusive(self.lock_path):
+            hw = self._epoch(self._base())
+            self._verify(hw, digest_of, repair=False)
+            return hw
+
+    def anchor(self, epoch, digest_of):
+        """Store's way to move the anchor to `epoch` of a chain it has verified and made durable: the chain
+        must be the recorded one (a record one epoch behind the counter is repaired), then for every epoch up
+        to `epoch` the counter is incremented and the record written, in that order."""
+        with _exclusive(self.lock_path):
+            self._verify(self._epoch(self._base()), digest_of, repair=True)
+            return self._advance(epoch, digest_of)
 
     def check(self, disk_epoch):
         """The disk epoch must EQUAL the high-water: older is a rollback, newer was never anchored
@@ -390,22 +467,40 @@ class Store:
     sequences, so concurrent callers cannot interleave.
 
     load()            verifies the chain from the pinned root, refuses it if it is older than the TPM
-                      high-water (a restored or deleted file: ROLLBACK), anchors a verified newer chain
-                      (a crash after the disk write), and returns the current manifest (None before
-                      enrollment).
+                      high-water (a restored or deleted file: ROLLBACK) or if its manifest at the anchored
+                      epoch is not the one the TPM recorded (a substituted file, even of the same length:
+                      CONFLICT), anchors a verified newer chain (a crash after the disk write), and returns
+                      the current manifest (None before enrollment).
     envelopes(n)      the signed envelopes above epoch n, verified and anchored as load() does: what a
                       peer at epoch n lacks (convergence.py).
     restore(chain)    replaces the stored chain by one fetched whole from a peer, when load() refuses with
-                      ROLLBACK: verified from the root, at least as new as the TPM high-water, and a
-                      continuation of what is on disk.
+                      ROLLBACK or CONFLICT: verified from the root, at least as new as the TPM high-water,
+                      the recorded manifest at the recorded epoch, and a continuation of what is on disk.
     commit(envelope)  accepts the next manifest onto the loaded chain, writes the file durably
-                      (temp file, fsync, rename, fsync of the directory), THEN advances the TPM; a crash
-                      in between is completed by the next load(), never strands the node.
+                      (temp file, fsync, rename, fsync of the directory), THEN increments the TPM counter,
+                      THEN writes the TPM record; a crash between any two is completed by the next load(),
+                      never strands the node.
+
+    The two crash windows, with hw the counter's epoch. After the disk write and before the counter: the
+    disk is one epoch ahead, the record names the manifest at hw, and load() anchors the newer manifest.
+    After the counter and before the record: the record names the manifest at hw - 1, which must match,
+    and load() writes the record for hw. In that second window the manifest at hw is vouched for by the
+    disk alone (pinned() is False): convergence.recover then asks for two sources, as it did before the
+    record existed.
     """
 
     def __init__(self, path, root_key, highwater):
         self.path, self.root_key, self.hw = path, root_key, highwater
         self.lock_path = path + ".lock"
+
+    @staticmethod
+    def _digests(manifests):
+        """digest_of for HighWater: the chain's manifest digest at an epoch it reaches, ZERO at epoch 0."""
+        return lambda epoch: digest(manifests[epoch - 1]) if epoch else HighWater.ZERO
+
+    def pinned(self):
+        """Whether the TPM names the manifest at the anchored epoch: one source is then enough to restore."""
+        return self.hw.pinned()
 
     def _read_chain(self):
         try:
@@ -423,19 +518,20 @@ class Store:
 
     def _load(self):
         chain = self._read_chain()
-        current = None
+        current, manifests = None, []
         for envelope in chain:
             nxt = accept(current, envelope, self.root_key)
             require(nxt is not current, "the stored chain repeats epoch %d" % nxt["epoch"])
+            manifests.append(nxt)
             current = nxt
         epoch = current["epoch"] if current else 0
         hw = self.hw.value()
         require(epoch >= hw, "ROLLBACK: the membership on disk is epoch %d but the TPM high-water is %d; "
                 "fetch the chain from a peer" % (epoch, hw))
-        if epoch > hw:
-            self.hw.advance(epoch)
+        # the recorded manifest, or refused; then a record or a counter left behind by a crash is completed
+        self.hw.anchor(epoch, self._digests(manifests))
         self.hw.check(epoch)
-        self.chain = chain
+        self.chain, self.manifests = chain, manifests
         return current
 
     def envelopes(self, after_epoch=0):
@@ -449,16 +545,23 @@ class Store:
     def restore(self, envelopes):
         """Replace the stored chain by one fetched whole from a peer: the recovery when load() refuses
         with ROLLBACK (the disk was restored to an older chain, or the file was lost). The fetched chain is
-        verified from the pinned root at epoch 1, must reach at least the TPM high-water, and must continue
-        whatever valid chain is still on disk (a different manifest at an epoch held there is a CONFLICT).
-        Written durably, then anchored; returns the current manifest."""
+        verified from the pinned root at epoch 1, must reach at least the TPM high-water, must hold the
+        manifest the TPM recorded at the recorded epoch, and must continue whatever valid chain is still on
+        disk (a different manifest at an epoch held there is a CONFLICT, also when it is the disk that was
+        substituted: the operator records the incident and removes the file). Written durably, then
+        anchored; returns the current manifest.
+
+        One source is enough when pinned(): the record then names the manifest at the anchored epoch, and
+        the hash chain fixes every manifest below it. When it is not (a crash between counter and record),
+        the fetched manifest at the anchored epoch is checked only through the one before it."""
         with _exclusive(self.lock_path):
             require(isinstance(envelopes, list) and envelopes, "a chain to restore is a non-empty list of envelopes")
             require(len(canonical(envelopes)) <= MAX_CHAIN_BYTES, "the chain to restore is oversized")
-            current = None
+            current, manifests = None, []
             for envelope in envelopes:
                 nxt = accept(current, envelope, self.root_key)
                 require(nxt is not current, "the fetched chain repeats epoch %d" % nxt["epoch"])
+                manifests.append(nxt)
                 current = nxt
             hw = self.hw.value()
             require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
@@ -467,6 +570,8 @@ class Store:
             # leaving a disk ahead of the TPM that load() could never anchor
             require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
                     "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
+            # also before anything is written: a chain that is not the anchored one never reaches the disk
+            self.hw.verify(self._digests(manifests))
             # What is still on disk counts only as far as it is itself a valid chain: a corrupt or unsigned
             # tail is what recovery is for, and must neither block it nor be compared.
             held, previous = [], None
@@ -484,10 +589,9 @@ class Store:
                         "stored one at epoch %d: record an incident" % mine["epoch"])
             require(len(held) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
             self._write(copy.deepcopy(envelopes))
-            if current["epoch"] > hw:
-                self.hw.advance(current["epoch"])
+            self.hw.anchor(current["epoch"], self._digests(manifests))
             self.hw.check(current["epoch"])
-            self.chain = copy.deepcopy(envelopes)
+            self.chain, self.manifests = copy.deepcopy(envelopes), manifests
             return current
 
     def commit(self, envelope):
@@ -500,8 +604,8 @@ class Store:
         if nxt is current:
             return current
         self._write(self.chain + [envelope])
-        self.hw.advance(nxt["epoch"])
-        self.chain = self.chain + [envelope]
+        self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))
+        self.chain, self.manifests = self.chain + [envelope], self.manifests + [nxt]
         return nxt
 
     def _write(self, chain):

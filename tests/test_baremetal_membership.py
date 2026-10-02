@@ -1,11 +1,11 @@
 """deploy/baremetal/membership.py (#68, Phase 8): signed manifests, the capability matrix, root versus
-revocation authority, the epoch chain, and the TPM-backed high-water mark (PoC 8.3 runs on swtpm)."""
+revocation authority, the epoch chain, and the TPM-backed high-water mark with its manifest-digest record
+(PoC 8.3 runs on swtpm)."""
 import copy
 import fcntl
 import json
 import os
 import shutil
-import socket
 import subprocess
 import tempfile
 import time
@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deploy.baremetal import membership as m
+from tests.test_baremetal_heartbeat import FakeTpm
 
 
 def raw_pub(priv):
@@ -135,12 +136,6 @@ class Manifests(unittest.TestCase):
             m.accept(None, sign(manifest(1, "", three()), REVOKE, "revocation"), ROOT_PUB)
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_nvdefine"), "needs swtpm and tpm2-tools")
 class _Swtpm(unittest.TestCase):
     """A fresh swtpm per test, with the HighWater defined on it."""
@@ -148,20 +143,18 @@ class _Swtpm(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
-        for _ in range(5):                                   # a port taken between free_port() and bind: retry
-            port = free_port()
-            r = subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.d, "--server", "type=tcp,port=%d" % port,
-                                "--ctrl", "type=tcp,port=%d" % (port + 1), "--flags", "not-need-init,startup-clear", "--daemon",
-                                "--pid", "file=%s/pid" % self.d], capture_output=True)
-            if r.returncode == 0:
-                break
-        else:
-            self.fail("swtpm did not start: %s" % r.stderr.decode(errors="replace"))
+        # Unix sockets in the test's own directory. With TCP the control port was the server's + 1, which
+        # nothing reserved: on a busy runner five tries in a row found it taken (CI on #146).
+        sock = self.d + "/swtpm.sock"
+        r = subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.d, "--server", "type=unixio,path=" + sock,
+                            "--ctrl", "type=unixio,path=" + sock + ".ctrl", "--flags", "not-need-init,startup-clear", "--daemon",
+                            "--pid", "file=%s/pid" % self.d], capture_output=True)
+        self.assertEqual(r.returncode, 0, "swtpm did not start: %s" % r.stderr.decode(errors="replace"))
         with open(self.d + "/pid") as f:
             pid = int(f.read())
         self.addCleanup(os.kill, pid, 15)
         time.sleep(0.5)
-        self.tcti = "swtpm:port=%d" % port
+        self.tcti = "swtpm:path=" + sock
         self.env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
         self.hw = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock")
         self.hw.define()
@@ -190,7 +183,7 @@ class HighWaterOnSwtpm(_Swtpm):
         other = m.HighWater("0x1500030", tcti=self.tcti, lock_path=self.d + "/other.lock")
         other.define()
         other.advance(5)
-        for idx in ("0x1500030", "0x1500031", "0x1500016", "0x1500017"):
+        for idx in ("0x1500030", "0x1500031", "0x1500034", "0x1500016", "0x1500017", "0x150001a"):
             subprocess.run(["tpm2_nvundefine", idx, "-C", "o"], env=self.env, check=True, capture_output=True)
         fresh = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock")
         self.assertGreater(fresh.define(), 5)
@@ -237,6 +230,131 @@ class HighWaterOnSwtpm(_Swtpm):
         with self.assertRaisesRegex(m.Refused, "anomaly"):
             self.hw.advance(m.HighWater.MAX_JUMP + 5)
 
+    def nv(self, *argv, **kw):
+        return subprocess.run(["tpm2_" + argv[0], *argv[1:]], env=self.env, capture_output=True, **kw)
+
+    def test_define_creates_the_record_at_epoch_0_with_a_zero_digest(self):
+        self.assertEqual((self.hw.record_index, self.hw.record(), self.hw.pinned()), ("0x150001a", (0, "00" * 32), True))
+        public = self.nv("nvreadpublic", "0x150001a").stdout.decode()
+        self.assertRegex(public, r"size: 40\b")
+        self.assertRegex(public, r"value: 0x20060006\b")                 # ordinary, owner/auth read and write, written
+        self.assertEqual(self.hw.verify(lambda epoch: "00" * 32), 0)
+        # a counter without a record (the heartbeat's) defines no third index, and has none to read
+        class Plain(m.HighWater):
+            RECORD = False
+        plain = Plain("0x1500030", tcti=self.tcti, lock_path=self.d + "/plain.lock")
+        plain.define()
+        self.assertEqual((plain.record_index, plain.advance(2)), (None, 2))
+        self.assertNotEqual(self.nv("nvreadpublic", "0x1500034").returncode, 0)
+        with self.assertRaisesRegex(m.Refused, "this counter keeps no record"):
+            plain.record()
+
+    def test_define_refuses_a_record_index_that_exists(self):
+        self.assertEqual(self.nv("nvdefine", "0x1500034", "-C", "o", "-s", "40").returncode, 0)
+        other = m.HighWater("0x1500030", tcti=self.tcti, lock_path=self.d + "/other.lock")
+        with self.assertRaisesRegex(m.Refused, "NV index 0x1500034 already exists"):
+            other.define()
+        self.assertNotEqual(self.nv("nvreadpublic", "0x1500030").returncode, 0)     # refused before anything was defined
+
+    def test_a_record_that_cannot_be_read_fails_closed(self):
+        zero = lambda epoch: "00" * 32
+        cases = (
+            ("missing", (), "cannot read NV index 0x150001a: the high-water anchor is unavailable \\(fail closed\\)"),
+            ("defined and never written", (("nvdefine", "0x150001a", "-C", "o", "-s", "40", "-a", "ownerread|ownerwrite|authread|authwrite"),),
+             "record index 0x150001a is not a written ordinary index"),
+            ("a counter", (("nvdefine", "0x150001a", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite"),
+                           ("nvincrement", "0x150001a", "-C", "o")), "record index 0x150001a is not a written ordinary index"),
+            ("too short", (("nvdefine", "0x150001a", "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite"),
+                           ("nvwrite", "0x150001a", "-C", "o", "-i", "-")), "cannot read 40 bytes from the record index 0x150001a"),
+        )
+        for label, commands, reason in cases:
+            with self.subTest(label):
+                self.nv("nvundefine", "0x150001a", "-C", "o")
+                self.assertNotEqual(self.nv("nvreadpublic", "0x150001a").returncode, 0)
+                for argv in commands:
+                    self.assertEqual(self.nv(*argv, input=b"\0" * 8 if argv[0] == "nvwrite" else None).returncode, 0, argv)
+                for call in (self.hw.record, self.hw.pinned, lambda: self.hw.verify(zero), lambda: self.hw.anchor(1, zero)):
+                    with self.assertRaisesRegex(m.Refused, reason):
+                        call()
+                self.assertEqual(self.hw.value(), 0)                     # and the counter did not move
+
+
+class RecordWrites(unittest.TestCase):
+    """What the TPM can refuse or get wrong when the record is written (a TPM that says no cannot be had
+    from swtpm on demand: FakeTpm)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.tpm = FakeTpm()
+        self.calls = []
+
+    def run_tpm(self, argv, **kw):
+        self.calls.append(argv[0])
+        verdict = self.fault(argv)
+        if isinstance(verdict, bytes):                       # the tool succeeds and prints this
+            return subprocess.CompletedProcess(argv, 0, verdict, b"")
+        if verdict is not None:
+            return subprocess.CompletedProcess(argv, verdict, b"", b"")
+        return self.tpm(argv, **kw)
+
+    def anchor(self):
+        return m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.run_tpm)
+
+    def test_a_record_index_that_cannot_be_defined(self):
+        self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvdefine", "0x150001a"] else None
+        with self.assertRaisesRegex(m.Refused, "cannot define the record index 0x150001a"):
+            self.anchor().define()
+
+    def test_a_record_write_the_tpm_refuses(self):
+        self.fault = lambda argv: None
+        hw = self.anchor()
+        hw.define()
+        self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvwrite", "0x150001a"] else None
+        with self.assertRaisesRegex(m.Refused, "cannot write the record index 0x150001a"):
+            hw.anchor(1, lambda epoch: "ab" * 32 if epoch else "00" * 32)
+        self.assertEqual((hw.value(), hw.record(), hw.pinned()), (1, (0, "00" * 32), False))     # the crash window, as left
+
+    def test_a_record_write_that_does_not_take(self):
+        self.fault = lambda argv: None
+        hw = self.anchor()
+        hw.define()
+        self.fault = lambda argv: 0 if argv[:2] == ["tpm2_nvwrite", "0x150001a"] else None      # says yes, stores nothing
+        with self.assertRaisesRegex(m.Refused, "the record index 0x150001a did not take the write"):
+            hw.anchor(1, lambda epoch: "ab" * 32 if epoch else "00" * 32)
+
+    def test_a_record_read_of_another_length_is_refused(self):
+        # tpm2_nvread -s 40 gives 40 bytes or fails; a tool that gave fewer or more must not be parsed as a record
+        self.fault = lambda argv: None
+        hw = self.anchor()
+        hw.define()
+        for out in (b"", b"\0" * 39, b"\0" * 41):
+            self.fault = lambda argv: out if argv[:2] == ["tpm2_nvread", "0x150001a"] else None
+            for call in (hw.record, hw.pinned, lambda: hw.verify(lambda epoch: "00" * 32), lambda: hw.anchor(1, lambda epoch: "00" * 32)):
+                with self.subTest(length=len(out)), self.assertRaisesRegex(m.Refused, "cannot read 40 bytes from the record index 0x150001a"):
+                    call()
+        self.fault = lambda argv: None
+        self.assertEqual((hw.value(), hw.record()), (0, (0, "00" * 32)))
+
+    def test_a_digest_that_is_not_one_is_never_written(self):
+        self.fault = lambda argv: None
+        hw = self.anchor()
+        hw.define()
+        del self.calls[:]
+        for bad in ("AB" * 32, "ab" * 31, None, b"\0" * 32):
+            with self.subTest(bad=bad), self.assertRaisesRegex(m.Refused, "a manifest digest must be 64 lowercase hex"):
+                hw._write_record(1, bad)
+        self.assertNotIn("tpm2_nvwrite", self.calls)
+
+    def test_the_order_is_counter_then_record_for_every_epoch(self):
+        self.fault = lambda argv: None
+        hw = self.anchor()
+        hw.define()
+        del self.calls[:]
+        self.assertEqual(hw.anchor(3, lambda epoch: "%02x" % epoch * 32), 3)
+        self.assertEqual([c[len("tpm2_"):] for c in self.calls if c in ("tpm2_nvincrement", "tpm2_nvwrite")], ["nvincrement", "nvwrite"] * 3)
+        self.assertEqual((hw.record(), hw.pinned()), ((3, "03" * 32), True))
+
 
 class StoreOnSwtpm(_Swtpm):
     """The persisted-state API: the chain on disk anchored to the TPM (PoC 8.3 through Store)."""
@@ -279,9 +397,165 @@ class StoreOnSwtpm(_Swtpm):
         for env in self.envs[:2]:
             self.store.commit(env)
         self.store._write(self.envs[:3])                          # written, then the TPM never advanced
-        self.assertEqual(self.hw.value(), 2)
+        self.assertEqual((self.hw.value(), self.hw.record()), (2, (2, self.digest(2))))
         self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).load()["epoch"], 3)
-        self.assertEqual(self.hw.value(), 3)
+        self.assertEqual((self.hw.value(), self.hw.record()), (3, (3, self.digest(3))))     # the counter, then the record
+
+    def digest(self, epoch):
+        return m.digest(self.envs[epoch - 1]["manifest"])
+
+    def rivals(self, upto):
+        """A second validly signed chain that leaves the real one after epoch 1: what a key that signed twice
+        for one epoch makes possible. Same length, same signer, every link verifies."""
+        chain, cur = [self.envs[0]], self.envs[0]["manifest"]
+        for e in range(2, upto + 1):
+            env = sign(manifest(e, m.digest(cur), three(c="QUARANTINED")), ROOT)
+            cur = m.accept(cur, env, ROOT_PUB)
+            chain.append(env)
+        return chain
+
+    def put(self, chain):
+        with open(self.path, "wb") as f:
+            f.write(m.canonical(chain))
+
+    def test_every_commit_records_the_manifest_it_anchored(self):
+        self.assertEqual(self.hw.record(), (0, "00" * 32))
+        for epoch, env in enumerate(self.envs, 1):
+            self.store.commit(env)
+            self.assertEqual((self.hw.value(), self.hw.record(), self.store.pinned()), (epoch, (epoch, self.digest(epoch)), True))
+
+    def test_a_same_length_substituted_chain_is_refused_by_load(self):
+        for env in self.envs[:3]:
+            self.store.commit(env)
+        rival = self.rivals(3)
+        self.assertEqual(m.accept_chain(None, rival, ROOT_PUB)["epoch"], 3)       # valid by itself, and as long as the real one
+        self.put(rival)
+        fresh = m.Store(self.path, ROOT_PUB, self.hw)
+        for call in (fresh.load, fresh.envelopes):
+            with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded"):
+                call()
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 3"):
+            fresh.commit(sign(manifest(4, m.digest(rival[-1]["manifest"]), three()), ROOT))     # nothing is built on it either
+        # nor a LONGER substituted chain: it is the anchored epoch that is compared, and nothing above it is anchored
+        self.put(self.rivals(4))
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 3"):
+            fresh.load()
+        self.assertEqual((self.hw.value(), self.hw.record()), (3, (3, self.digest(3))))
+        self.put(self.envs[:3])                                                  # the real chain is still accepted
+        self.assertEqual(fresh.load()["epoch"], 3)
+
+    def test_a_crash_after_the_counter_and_before_the_record_is_repaired(self):
+        for env in self.envs[:2]:
+            self.store.commit(env)
+        self.store._write(self.envs[:3])
+        self.hw.advance(3)                                                       # the counter moved; the record was never written
+        self.assertEqual((self.hw.value(), self.hw.record(), self.store.pinned()), (3, (2, self.digest(2)), False))
+        self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).load()["epoch"], 3)
+        self.assertEqual((self.hw.value(), self.hw.record(), self.store.pinned()), (3, (3, self.digest(3)), True))
+
+    def test_in_the_crash_window_a_substituted_chain_is_still_refused(self):
+        for env in self.envs[:2]:
+            self.store.commit(env)
+        self.store._write(self.envs[:3])
+        self.hw.advance(3)
+        self.put(self.rivals(3))                                                 # differs at epoch 2, which the record names
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 2 is not the one this node's TPM recorded"):
+            m.Store(self.path, ROOT_PUB, self.hw).load()
+        self.assertEqual(self.hw.record(), (2, self.digest(2)))                  # and the record was not repaired onto it
+        self.put(self.envs[:2])                                                  # the disk from before the write: a rollback
+        with self.assertRaisesRegex(m.Refused, "ROLLBACK: the membership on disk is epoch 2 but the TPM high-water is 3"):
+            m.Store(self.path, ROOT_PUB, self.hw).load()
+        self.assertEqual(self.hw.record(), (2, self.digest(2)))
+
+    def test_a_record_for_any_other_epoch_fails_closed(self):
+        self.store.commit(self.envs[0])
+        self.store._write(self.envs[:3])
+        self.hw.advance(3)                                                       # two epochs past the record: no crash leaves this
+        for call in (m.Store(self.path, ROOT_PUB, self.hw).load, lambda: self.store.restore(self.envs[:3])):
+            with self.assertRaisesRegex(m.Refused, "the TPM record is for epoch 1 but the TPM high-water is 3: the anchor is inconsistent"):
+                call()
+        self.assertEqual(self.hw.record(), (1, self.digest(1)))
+        # and a record AHEAD of the counter: written with owner authorization, by something that is not Store
+        ahead = (9).to_bytes(8, "big") + bytes.fromhex(self.digest(3))
+        subprocess.run(["tpm2_nvwrite", "0x150001a", "-C", "o", "-i", "-"], input=ahead, env=self.env, check=True, capture_output=True)
+        with self.assertRaisesRegex(m.Refused, "the TPM record is for epoch 9 but the TPM high-water is 3"):
+            m.Store(self.path, ROOT_PUB, self.hw).load()
+
+    def test_restore_from_one_source_is_accepted_when_it_matches_the_record(self):
+        for env in self.envs[:3]:
+            self.store.commit(env)
+        for label, lose in (("the file is lost", lambda: os.unlink(self.path)), ("the disk is rolled back", lambda: self.put(self.envs[:1]))):
+            with self.subTest(label):
+                lose()
+                fresh = m.Store(self.path, ROOT_PUB, self.hw)
+                with self.assertRaisesRegex(m.Refused, "ROLLBACK"):
+                    fresh.load()
+                self.assertEqual(fresh.restore(self.envs[:3])["epoch"], 3)
+                self.assertEqual((fresh.load()["epoch"], self.hw.value(), self.hw.record()), (3, 3, (3, self.digest(3))))
+        os.unlink(self.path)                                                     # and a longer one that passes through the record
+        self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).restore(self.envs)["epoch"], 4)
+        self.assertEqual((self.hw.value(), self.hw.record()), (4, (4, self.digest(4))))
+
+    def test_restore_from_one_source_is_refused_when_it_diverges_from_the_record(self):
+        for env in self.envs[:3]:
+            self.store.commit(env)
+        os.unlink(self.path)
+        fresh = m.Store(self.path, ROOT_PUB, self.hw)
+        for label, chain in (("the same length", self.rivals(3)), ("longer", self.rivals(4))):
+            with self.subTest(label):
+                with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded"):
+                    fresh.restore(chain)
+                self.assertFalse(os.path.exists(self.path))                      # refused before anything was written
+                self.assertEqual((self.hw.value(), self.hw.record()), (3, (3, self.digest(3))))
+
+    def test_restore_in_the_crash_window_matches_the_epoch_below_and_repairs(self):
+        for env in self.envs[:2]:
+            self.store.commit(env)
+        self.hw.advance(3)                                                       # counter at 3, record at 2
+        fresh = m.Store(self.path, ROOT_PUB, self.hw)
+        os.unlink(self.path)
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 2 is not the one this node's TPM recorded"):
+            fresh.restore(self.rivals(3))
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual((self.hw.record(), fresh.pinned()), ((2, self.digest(2)), False))      # a refusal repairs nothing
+        self.assertEqual(fresh.restore(self.envs[:3])["epoch"], 3)
+        self.assertEqual((self.hw.value(), self.hw.record(), fresh.pinned()), (3, (3, self.digest(3)), True))
+
+    def test_a_restore_refused_after_the_record_check_repairs_nothing(self):
+        """The crash window, with the disk intact through epoch 3. A fetched chain that matches the record
+        at epoch 2 and forks at epoch 3 passes the record check and is refused by the disk. The check must
+        not have written the fork's epoch 3 into the record on the way."""
+        for env in self.envs[:2]:
+            self.store.commit(env)
+        self.store._write(self.envs[:3])
+        self.hw.advance(3)
+        fork3 = sign(manifest(3, self.digest(2), three(c="QUARANTINED")), ROOT)
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the fetched chain differs from the stored one at epoch 3"):
+            m.Store(self.path, ROOT_PUB, self.hw).restore(self.envs[:2] + [fork3])
+        self.assertEqual(self.hw.record(), (2, self.digest(2)))
+        with open(self.path, "rb") as f:
+            self.assertEqual(f.read(), m.canonical(self.envs[:3]))
+        self.assertEqual((self.hw.verify(self.digest), self.hw.record()), (3, (2, self.digest(2))))     # verify() changes nothing
+        self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).load()["epoch"], 3)
+        self.assertEqual(self.hw.record(), (3, self.digest(3)))                  # the disk's epoch 3, by load()
+
+    def interrupted_restore(self, counter_too):
+        """restore() wrote epochs 1-4 over a node at epoch 1 and stopped part-way through anchoring them:
+        after the record for epoch 2, or after the counter for epoch 3 as well."""
+        self.store.commit(self.envs[0])
+        self.store._write(self.envs)
+        self.hw.anchor(2, self.digest)
+        if counter_too:
+            self.hw.advance(3)
+        self.assertEqual((self.hw.value(), self.hw.record()), (3 if counter_too else 2, (2, self.digest(2))))
+        self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).load()["epoch"], 4)
+        self.assertEqual((self.hw.value(), self.hw.record()), (4, (4, self.digest(4))))
+
+    def test_a_restore_interrupted_after_a_record_is_completed_by_load(self):
+        self.interrupted_restore(counter_too=False)
+
+    def test_a_restore_interrupted_after_a_counter_is_completed_by_load(self):
+        self.interrupted_restore(counter_too=True)
 
     def test_a_tampered_or_unsigned_chain_is_refused_and_does_not_move_the_tpm(self):
         self.store.commit(self.envs[0])

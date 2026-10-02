@@ -175,7 +175,7 @@ yes "control: the signed kernel, PCR 7 and phase as sealed, opens again" --tpm2-
 # A TPM in dictionary-attack lockout refuses everything, which would make every refusal above pass
 # for the wrong reason (it did, until stop() shut the TPM down in order: three killed swtpms = three
 # failed tries = lockout, at swtpm's default limit of 3).
-tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' <<< "$(tpm2_getcap properties-variable 2>/dev/null)" \
   && P "the TPM's lockout counter is still 0: no refusal above was a lockout" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 hdr "6  host_probe reads the binding from the blob, and a header that lies does not open"
@@ -251,7 +251,7 @@ from deploy.baremetal import host_probe
 try: host_probe.credential_header(sys.stdin.read()); print("accepted")
 except ValueError as e: print(e)')"
 grep -q "the TPM alone, with no host key" <<< "$refusal" && P "host_probe refuses that credential and says to reseal it" || F "host_probe on a TPM-only blob: $refusal"
-tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' <<< "$(tpm2_getcap properties-variable 2>/dev/null)" \
   && P "the TPM's lockout counter is still 0: no refusal in this section was a lockout" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 hdr "9  no signed policy: --pcrs 7 alone is sealed to the host key and the TPM too"
@@ -273,7 +273,7 @@ print("+".join(map(str, direct)), "+".join(map(str, signed)) or "-", pkfp or "-"
 [ "$header" = "7 - -" ] && P "host_probe reads it as PCR 7, no signed policy" || F "host_probe read '$header', want '7 - -'"
 boot 1 another-secure-boot-state
 o="$(plain host.secret)"; [ $? != 0 ] && [ -z "$o" ] && P "under a different PCR 7 it does not open, host key or not" || F "the unsigned blob opened under another PCR 7"
-tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' <<< "$(tpm2_getcap properties-variable 2>/dev/null)" \
   && P "the TPM's lockout counter is still 0" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 echo; echo "pcr-signed-policy-swtpm: $pass passed, $fail failed"

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
@@ -331,7 +332,26 @@ func run() error {
 
 	var coordinator *operations.Coordinator
 	var coordErr error
-	if settings.PKCS11ModulePath != "" || len(settings.YubiKeyDevices) > 0 {
+	// RUNTIME ADMISSION (regalia-kms#74). The node serves key operations only while it holds a
+	// runtime trust lease, which deploy/baremetal/admission.py keeps and reports in the admission
+	// file. The gate wraps the fenced runner, so an operation needs BOTH: the fencing lease says this
+	// site may sign, the runtime lease says a peer still vouches for this node. Neither stands in for
+	// the other. The gate is opened without the file having to exist: until the lease service has
+	// written it, the node is not admitted, which is an answer and not a missing configuration.
+	admittedRunner, admissionGate, admissionErr := admitRunner(settings, fencedRunner, func(status admission.Status) {
+		reportAdmission(ctx, settings.NodeID, status, coordinator)
+	})
+	if admissionErr != nil {
+		return admissionErr
+	}
+	var admissionProbe server.ReadinessProbe
+	if admissionGate != nil {
+		admissionProbe = admissionGate
+		slog.Info("KMS runtime admission required", "node", settings.NodeID, "file", settings.RuntimeAdmissionPath)
+	} else if settings.RuntimeAdmission == config.RuntimeAdmissionDisabledForLab {
+		slog.Warn("KMS runtime admission is DISABLED FOR LAB: this daemon serves with no runtime lease; never on a production host")
+	}
+	if tokenConfigured(settings) {
 		hardware, manager, observer, closer, buildErr := buildHardware(settings, keyRegistry)
 		if buildErr != nil {
 			return buildErr
@@ -371,19 +391,23 @@ func run() error {
 		recorder.StartVerifier(ctx, audit.DefaultVerifyInterval)
 
 		coordinator, coordErr = operations.New(rbacPolicy, keyRegistry, policyEngine, recorder,
-			fencedRunner, hardware, purposePolicyDigest, approverKeys, time.Now)
+			admittedRunner, hardware, purposePolicyDigest, approverKeys, time.Now)
 		if coordErr != nil {
 			return coordErr
+		}
+		if admissionGate != nil {
+			coordinator.RequireAdmission(admissionGate)
 		}
 		slog.Info("KMS hardware backend ready", "module", settings.PKCS11ModulePath)
 	}
 
 	healthHandler := server.NewRequired(server.Dependencies{
-		Policy:   server.RequireAll(rbacPolicy, policyEngine),
-		Registry: keyRegistry,
-		Audit:    auditProbe,
-		Token:    tokenProbe,
-		Fencing:  fencingProbe,
+		Policy:    server.RequireAll(rbacPolicy, policyEngine),
+		Registry:  keyRegistry,
+		Audit:     auditProbe,
+		Token:     tokenProbe,
+		Fencing:   fencingProbe,
+		Admission: admissionProbe,
 	})
 	// THE METRICS SURFACE. The collector counts what only the request path can see
 	// (router decisions, per-route outcomes, authentication rejections); the sources
@@ -541,6 +565,18 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 				return nil, nil, nil, nil, err
 			}
 			providers[nitrokey.OpenPGPAppletBackend] = provider
+		}
+		// With every token this host serves now openable: does each one offer what its objects
+		// declare? Asked of the token itself, without a login. No deadline: one that expired would
+		// leave the remaining tokens unchecked, and it could not interrupt a PKCS#11 call anyway.
+		unchecked, mechanismErr := requireTokensOfferBoundMechanisms(context.Background(), driver, keyRegistry)
+		if mechanismErr != nil {
+			_ = driver.Close()
+			return nil, nil, nil, nil, mechanismErr
+		}
+		if len(unchecked) > 0 {
+			slog.Warn("KMS could not ask these tokens which mechanisms they offer: an object they cannot serve will fail per operation, unnamed",
+				"tokens", strings.Join(unchecked, ", "))
 		}
 	}
 	if len(settings.YubiKeyDevices) > 0 {
@@ -737,6 +773,59 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 		return nil, nil, err
 	}
 	return fencing.NewRunner(standby, base), standby, nil
+}
+
+// tokenConfigured reports whether the daemon gets a cryptographic backend, and with it a
+// coordinator. Without one there is nothing to route a key operation to and every one of them is
+// refused (api.Handler answers DEPENDENCY_UNAVAILABLE).
+//
+// It is a function so that one thing can be tested: config.Validate lets a configuration leave
+// runtime_admission out only when no token is configured. That exemption is safe exactly as long as
+// "no token" there and "no coordinator" here are the same condition; if a backend were ever built
+// from a setting config does not count as a token, a daemon could serve keys with no runtime lease
+// and no statement about it. TestNoTokenMeansNoKeyOperation holds the two together.
+func tokenConfigured(settings config.Config) bool {
+	return settings.PKCS11ModulePath != "" || len(settings.YubiKeyDevices) > 0
+}
+
+// admitRunner puts the runtime-admission gate in front of a runner, when the configuration requires
+// one. It returns the runner unchanged and a nil gate for "disabled-for-lab" and for a host with no
+// token (config.Validate has already refused a token with the setting left out), so readiness does
+// not gain a dependency such a host has no lease service to satisfy.
+//
+// Callable for the same reason fenceRunner is: a wiring step nothing can call is one nothing
+// notices the absence of.
+func admitRunner(settings config.Config, base operations.Runner, onTransition func(admission.Status)) (operations.Runner, *admission.Gate, error) {
+	if settings.RuntimeAdmission != config.RuntimeAdmissionRequired {
+		return base, nil, nil
+	}
+	gate, err := admission.Open(admission.Options{
+		Path: settings.RuntimeAdmissionPath, NodeID: settings.NodeID, SessionPath: settings.BootSessionPath,
+		OnTransition: onTransition,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime admission: %w", err)
+	}
+	return admission.NewRunner(gate, base), gate, nil
+}
+
+// reportAdmission logs a change in this node's admission and writes its audit event. The
+// coordinator is nil on a host with no token: there is then no audit journal, and the log line is
+// the record.
+func reportAdmission(ctx context.Context, nodeID string, status admission.Status, coordinator *operations.Coordinator) {
+	if status.Admitted {
+		slog.Info("KMS node admitted: it holds a runtime lease", "node", nodeID, "epoch", status.Epoch)
+	} else {
+		slog.Warn("KMS node NOT admitted: key operations are refused", "node", nodeID, "epoch", status.Epoch, "reason", status.Reason)
+	}
+	if coordinator == nil {
+		return
+	}
+	// Not the request's context: a transition seen while serving a cancelled request is still a
+	// transition, and its record must not be dropped with that request.
+	if err := coordinator.RecordAdmission(context.WithoutCancel(ctx), nodeID, status.Admitted, status.Epoch); err != nil {
+		slog.Error("KMS admission transition could not be audited", "node", nodeID, "admitted", status.Admitted, "error", err.Error())
+	}
 }
 
 // bindBackendToRegistry refuses a key registry that routes to a backend the daemon cannot serve.

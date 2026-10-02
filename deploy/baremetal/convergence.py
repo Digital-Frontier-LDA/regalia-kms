@@ -119,27 +119,32 @@ def catch_up(store, envelopes):
 AUTHORITY = "@authority"
 
 
-def recover(store, sources, minimum=2):
-    """A node whose store refuses with ROLLBACK (its disk is older than its TPM anchor, or lost) installs a
-    whole chain fetched from its peers, through Store.restore. Returns the summary.
+def recover(store, sources, minimum=None):
+    """A node whose store refuses with ROLLBACK or CONFLICT (its disk is older than its TPM anchor, lost, or
+    not the chain the TPM recorded) installs a whole chain fetched from its peers, through Store.restore.
+    Returns the summary.
 
     `sources` maps WHO a chain came from to the whole chain it gave (peer_store.envelopes()): a peer's node
-    ID, or AUTHORITY. The TPM anchors an epoch, not a digest: a node that has lost its chain cannot tell two
-    validly signed chains of the same length apart, so one source could hand it a branch it never accepted
-    (the signing key would have had to sign two manifests for one epoch). Therefore at least `minimum`
-    DIFFERENT sources must each give a valid chain that reaches the anchored epoch, and they must agree at
-    every epoch they share; any difference is a CONFLICT and nothing is installed. The longest is restored,
-    and every node named as a source must be one that manifest lets authorize. `minimum=1` is an operator's
-    decision, for when only one peer can be reached; it is never the default.
+    ID, or AUTHORITY. The TPM anchors the epoch and, beside it, the digest of the manifest at that epoch
+    (membership.HighWater's record). While the record names the manifest at the anchored epoch
+    (store.pinned()), Store.restore refuses every chain but the one this node accepted, so ONE source is
+    enough and `minimum` defaults to 1. After a crash between the counter and the record, the record names
+    the manifest one epoch below: the node cannot tell apart two validly signed chains that differ only at
+    the anchored epoch (the signing key would have had to sign two manifests for it), and `minimum`
+    defaults to 2, as it was before the record existed. At least `minimum` DIFFERENT sources must each give
+    a valid chain that reaches the anchored epoch, and they must agree at every epoch they share; any
+    difference is a CONFLICT and nothing is installed. The longest is restored, and every node named as a
+    source must be one that manifest lets authorize. An explicit `minimum` is an operator's decision.
 
     Being a mapping, one source cannot be counted twice. That the chain really came from the peer it is
     filed under is the transport's to establish (the peer's WireGuard and mTLS identities, pinned in the
     manifest: #80); this function cannot."""
+    if minimum is None:
+        minimum = 1 if store.pinned() else 2
     require(isinstance(minimum, int) and not isinstance(minimum, bool) and minimum >= 1, "minimum must be an integer >= 1")
     require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
             "sources must map each source (a node ID, or %r) to the non-empty chain it gave" % AUTHORITY)
-    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given): the TPM anchors "
-            "an epoch, not which chain" % (minimum, len(sources)))
+    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given)" % (minimum, len(sources)))
     anchored = store.hw.value()
     verified, last = {}, {}
     for source, chain in sources.items():
