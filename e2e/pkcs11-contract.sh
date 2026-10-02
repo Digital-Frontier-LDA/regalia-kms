@@ -47,13 +47,13 @@ trap 'cleanup_keys; rm -rf "$W"' EXIT
 pass=0; fail=0
 # Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
 # program would carry it in argv) and never interpreted as regex syntax.
-log(){ printf '%s\n' "$*" | python3 -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
+log(){ printf '%s\n' "$*" | python3 -I -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 
 # The slot holding the token with this serial; exactly one, or refuse.
-slot_of(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+slot_of(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
@@ -90,7 +90,7 @@ out="$(p11l --keypairgen --key-type rsa:2048 --id "$ID_RSA" --label "q62-rsa-$UT
 hdr "3  private halves: sensitive, never extractable, local; reading one fails"
 objs="$(p11l --list-objects --type privkey 2>&1)"; log "$objs"
 for id in "$ID_EC" "$ID_RSA"; do
-  acc="$(python3 -c '
+  acc="$(python3 -I -c '
 import re, sys
 id_, text = sys.argv[1], sys.stdin.read()
 for b in text.split("Private Key Object")[1:]:
@@ -100,8 +100,8 @@ for b in text.split("Private Key Object")[1:]:
     P "$id: pkcs11-tool reports Access = $acc"
   else F "$id: Access = ${acc:-not reported}"; fi
   # pkcs11-tool will not read a private key at all, so ask the TOKEN directly (C_GetAttributeValue).
-  out="$(python3 "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"; rc=$?; log "extract probe $id: $out"
-  [ "$rc" = 0 ] && P "$id: the token refuses its secret attributes ($(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print("CKA_VALUE "+d["CKA_VALUE"]["rv"]+", PRIVATE_EXPONENT "+d["CKA_PRIVATE_EXPONENT"]["rv"])' <<< "$out" 2>/dev/null))" \
+  out="$(python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"; rc=$?; log "extract probe $id: $out"
+  [ "$rc" = 0 ] && P "$id: the token refuses its secret attributes ($(python3 -I -c 'import json,sys; d=json.loads(sys.stdin.read()); print("CKA_VALUE "+d["CKA_VALUE"]["rv"]+", PRIVATE_EXPONENT "+d["CKA_PRIVATE_EXPONENT"]["rv"])' <<< "$out" 2>/dev/null))" \
     || F "$id: extraction probe: $out"
 done
 

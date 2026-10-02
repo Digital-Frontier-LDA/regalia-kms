@@ -41,7 +41,7 @@ NEW_KEY="vvuuttrr-nnllkkjj-iihhggff-eeddccbb-cbdefghi-jklnrtuv-bcdefghi-jklnrtuc
 FAST=(--pbkdf pbkdf2 --pbkdf-force-iterations 1000)
 # unlock <secret>: open the volume for real, as the boot prompt does with what was typed there.
 unlock(){ cryptsetup open --key-file <(printf '%s' "$1") "$LOOP" "$NAME" </dev/null >/dev/null 2>&1; }
-judge(){ cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -c '
+judge(){ cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -I -c '
 import json, sys
 sys.path.insert(0, "deploy/baremetal")
 import host_probe
@@ -73,7 +73,7 @@ bash "$S" --status "$LOOP" >/dev/null 2>&1 && P "2: --status: one recovery keysl
 cryptsetup luksKillSlot --batch-mode "$LOOP" 1 </dev/null 2>/dev/null
 unlock "$INSTALLER" && { F "3: the installer's passphrase still opens the volume"; cryptsetup close "$NAME"; }
 cryptsetup open --key-file "$W/standin.key" "$LOOP" "$NAME" </dev/null >/dev/null 2>&1 && { F "3: the TPM stand-in still opens the volume"; cryptsetup close "$NAME"; }
-[ "$(cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["keyslots"]))')" = 1 ] \
+[ "$(cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)["keyslots"]))')" = 1 ] \
   && P "3: total outage: one keyslot is left, the recovery key's" || F "3: more than the recovery keyslot is left"
 if unlock "$KEY" && mount -o ro "/dev/mapper/$NAME" "$W/mnt" && [ "$(cat "$W/mnt/marker")" = "regalia-kms root volume marker $$" ]; then
   P "3: the recovery key ALONE opened the volume; the filesystem mounted and the marker read back"

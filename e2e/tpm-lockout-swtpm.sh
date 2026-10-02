@@ -43,7 +43,7 @@ down(){ tpm2_shutdown -c >/dev/null 2>&1; kill "$(cat "$W/$cur.pid")" 2>/dev/nul
 # get <property>: in decimal (tpm2_getcap prints hexadecimal, which awk's %d reads as 0).
 get(){ local v; v="$(tpm2_getcap properties-variable 2>/dev/null | awk -v n="$1:" '$1==n{print $2; exit}')"; [ -n "$v" ] && printf '%d' "$v"; }
 lockout(){ sudo env TPM2TOOLS_TCTI="$D" "$LOCKOUT" "$@" 2>&1; }
-probe(){ PYTHONPATH="$HERE" python3 -c 'from deploy.baremetal import host_probe
+probe(){ PYTHONPATH="$HERE" python3 -P -c 'from deploy.baremetal import host_probe
 ok, why = host_probe.lockout_policy(host_probe.Host())
 print(("true" if ok else "false") + "\t" + why)'; }
 AUTH="lockout-auth-for-this-test-0001"
@@ -89,7 +89,7 @@ out="$(printf '%s\n' "$AUTH" | lockout --set)"; rc=$?
 [ "$rc" = 0 ] && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 32 ] && P "--set with the authorization repairs it (so the refusal above cost no attempt)" || F "repair (exit $rc): $out"
 # At a TERMINAL the value is typed twice and compared before the TPM hears anything.
 # tty_set <first entry> <second entry>: tpm-lockout.sh --set on a pseudo-terminal, each hidden prompt answered in turn.
-tty_set(){ python3 - "$D" "$LOCKOUT" "$1" "$2" <<'PY'
+tty_set(){ python3 -I - "$D" "$LOCKOUT" "$1" "$2" <<'PY'
 import os, pty, select, sys, time
 tcti, script, first, second = sys.argv[1:5]
 pid, fd = pty.fork()

@@ -83,20 +83,20 @@ for spec in sys.argv[1:]:
     proto, port = spec.split(":"); threading.Thread(target={"tcp": tcp, "tcp6": tcp6, "udp": udp}[proto], args=(int(port),), daemon=True).start()
 threading.Event().wait()
 PY
-x kms python3 "$T/listen.py" tcp:8443 tcp:22 tcp:9999 tcp6:8443 &
-x inside python3 "$T/listen.py" tcp:80 &
-x audit python3 "$T/listen.py" tcp:6514 tcp:7000 &
-x ntp python3 "$T/listen.py" udp:123 udp:124 &
-x unauth python3 "$T/listen.py" tcp:6514 tcp:443 &
+x kms python3 -Es "$T/listen.py" tcp:8443 tcp:22 tcp:9999 tcp6:8443 &
+x inside python3 -Es "$T/listen.py" tcp:80 &
+x audit python3 -Es "$T/listen.py" tcp:6514 tcp:7000 &
+x ntp python3 -Es "$T/listen.py" udp:123 udp:124 &
+x unauth python3 -Es "$T/listen.py" tcp:6514 tcp:443 &
 sleep 1
 
-tcpok(){ local h="$1" dst="$2" port="$3"; x "$h" python3 -c "
+tcpok(){ local h="$1" dst="$2" port="$3"; x "$h" python3 -I -c "
 import socket, sys
 try:
     socket.create_connection(('$dst', $port), timeout=1).close(); sys.exit(0)
 except OSError:
     sys.exit(1)"; }
-udpok(){ x kms python3 -c "
+udpok(){ x kms python3 -I -c "
 import socket, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(1)
 try:
@@ -115,10 +115,10 @@ tcpok kms "${IP[unauth]}" 6514 && P "control: unauth:6514 answers before the rul
 udpok 124 && P "control: ntp:124/udp answers before the ruleset" || F "control: ntp:124/udp not listening"
 
 hdr "4  the rendered ruleset: nft -c, then loaded in the KMS namespace only"
-python3 "$BM/firewall.py" "$T/site.json" > "$T/kms.nft" && P "rendered" || F "render failed"
+python3 -Es "$BM/firewall.py" "$T/site.json" > "$T/kms.nft" && P "rendered" || F "render failed"
 x kms nft -c -f "$T/kms.nft" && P "nft -c accepts it" || F "nft -c refuses it"
 x kms nft -f "$T/kms.nft" && P "loaded inside the KMS namespace" || F "load failed"
-pol="$(x kms nft -j list table inet regalia_kms | python3 -c '
+pol="$(x kms nft -j list table inet regalia_kms | python3 -I -c '
 import json, sys
 d = json.load(sys.stdin)["nftables"]
 print(" ".join(sorted("%s=%s" % (c["chain"]["name"], c["chain"].get("policy")) for c in d if "chain" in c)))')"
@@ -127,10 +127,10 @@ print(" ".join(sorted("%s=%s" % (c["chain"]["name"], c["chain"].get("policy")) f
 hdr "1  network_probe.py from each zone"
 for role in client:client monitoring:mon admin:admin unauthorized:unauth; do
   r="${role%%:*}"; h="${role##*:}"
-  out="$(x "$h" python3 "$BM/network_probe.py" "$T/site.json" --role "$r" --source-ip "${IP[$h]}" --timeout 1)"; rc=$?
+  out="$(x "$h" python3 -Es "$BM/network_probe.py" "$T/site.json" --role "$r" --source-ip "${IP[$h]}" --timeout 1)"; rc=$?
   [ "$rc" = 0 ] && P "$r: matrix matches the config" || F "$r (rc=$rc): $out"
 done
-out="$(x client python3 "$BM/network_probe.py" "$T/site.json" --role admin --source-ip "${IP[client]}" 2>&1)"; rc=$?
+out="$(x client python3 -Es "$BM/network_probe.py" "$T/site.json" --role admin --source-ip "${IP[client]}" 2>&1)"; rc=$?
 [ "$rc" = 2 ] && P "a probe claiming a zone it is not in is refused (exit 2)" || F "role/source mismatch rc=$rc"
 
 hdr "2  an undeclared port on the KMS host is reachable from nowhere"

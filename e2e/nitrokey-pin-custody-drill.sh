@@ -155,7 +155,7 @@ phase serve "$PRIMARY" "$STATE/v1.cred" || die "v1 did not serve"; counters
 say "R2 — rotate: new PIN on the card, sealed as v2 BEFORE anything restarts"
 # The same LENGTH as the card's PIN: a card provisioned at the production posture (10 digits, 10
 # tries) refuses a shorter new PIN with CKR_DATA_INVALID (measured on DENK0404144, 2026-09-29).
-NEWPIN="$(python3 -c 'import secrets,sys; print("".join(secrets.choice("0123456789") for _ in range(int(sys.argv[1]))))' "${#NK_PIN_PRIMARY}")"
+NEWPIN="$(python3 -I -c 'import secrets,sys; print("".join(secrets.choice("0123456789") for _ in range(int(sys.argv[1]))))' "${#NK_PIN_PRIMARY}")"
 printf '%s' "$NEWPIN" | age -r "$BG" -o "$STATE/rotated.age"   # so a failed run can still restore it
 change_pin "$PRIMARY" "$NK_PIN_PRIMARY" "$NEWPIN" || die "PIN change on $PRIMARY"
 ROTATED="$NEWPIN"   # only now does the card hold it: set earlier, a failed change would make restore spend a retry

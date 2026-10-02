@@ -32,7 +32,7 @@ W="$(mktemp -d)"
 pass=0; fail=0
 # Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
 # program would carry it in argv) and never interpreted as regex syntax.
-log(){ printf '%s\n' "$*" | python3 -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
+log(){ printf '%s\n' "$*" | python3 -I -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
@@ -47,7 +47,7 @@ cleanup_keys(){ local id; wait_back 2>/dev/null; for id in "${CREATED[@]}"; do
   p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
 trap 'restore; cleanup_keys; rm -rf "$W"' EXIT
 
-slot_of(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+slot_of(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
@@ -62,7 +62,7 @@ SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL"
 # The USB device to remove is the one BEHIND THIS TOKEN: the serial pcscd puts in the slot's reader
 # name (the last parenthesised group, from the device's iSerialNumber), matched to exactly one device
 # in sysfs. A default vendor:product once removed the Nitrokey while the Pico was under test.
-USB_SERIAL="$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+USB_SERIAL="$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 slot = sys.argv[1]
 for line in sys.stdin:
