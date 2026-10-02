@@ -114,40 +114,52 @@ def catch_up(store, envelopes):
     return summary(store)
 
 
-def recover(store, chains, minimum=2):
+AUTHORITY = "authority"   # the revocation authority as a source of chains; every other source is a node ID
+
+
+def recover(store, sources, minimum=2):
     """A node whose store refuses with ROLLBACK (its disk is older than its TPM anchor, or lost) installs a
     whole chain fetched from its peers, through Store.restore. Returns the summary.
 
-    `chains` holds one whole chain per source (peer_store.envelopes()), each from a DIFFERENT peer, or the
-    authority. The TPM anchors an epoch, not a digest: a node that has lost its chain cannot tell two validly
-    signed chains of the same length apart, so one source could hand it a branch it never accepted (the
-    signing key would have had to sign two manifests for one epoch). Therefore at least `minimum` sources
-    must each give a valid chain that reaches the anchored epoch, and they must agree at every epoch they
-    share; any difference is a CONFLICT and nothing is installed. The longest is restored. `minimum=1` is
-    an operator's decision, for when only one peer can be reached; it is never the default."""
+    `sources` maps WHO a chain came from to the whole chain it gave (peer_store.envelopes()): a peer's node
+    ID, or AUTHORITY. The TPM anchors an epoch, not a digest: a node that has lost its chain cannot tell two
+    validly signed chains of the same length apart, so one source could hand it a branch it never accepted
+    (the signing key would have had to sign two manifests for one epoch). Therefore at least `minimum`
+    DIFFERENT sources must each give a valid chain that reaches the anchored epoch, and they must agree at
+    every epoch they share; any difference is a CONFLICT and nothing is installed. The longest is restored,
+    and every node named as a source must be one that manifest lets authorize. `minimum=1` is an operator's
+    decision, for when only one peer can be reached; it is never the default.
+
+    Being a mapping, one source cannot be counted twice. That the chain really came from the peer it is
+    filed under is the transport's to establish (the peer's WireGuard and mTLS identities, pinned in the
+    manifest: #80); this function cannot."""
     require(isinstance(minimum, int) and not isinstance(minimum, bool) and minimum >= 1, "minimum must be an integer >= 1")
-    require(isinstance(chains, list) and all(isinstance(c, list) and c for c in chains), "chains must be a list of non-empty chains, one per source")
-    require(len(chains) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given): the TPM anchors "
-            "an epoch, not which chain" % (minimum, len(chains)))
+    require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
+            "sources must map each source (a node ID, or %r) to the non-empty chain it gave" % AUTHORITY)
+    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given): the TPM anchors "
+            "an epoch, not which chain" % (minimum, len(sources)))
     anchored = store.hw.value()
-    verified = []
-    for chain in chains:
+    verified, last = {}, {}
+    for source, chain in sources.items():
         require(len(chain) <= MAX_ENVELOPES * 100, "a chain is oversized")
-        manifests, current = [], None
+        digests, current = [], None
         for envelope in chain:
             nxt = membership.accept(current, envelope, store.root_key)
             require(nxt is not current, "a fetched chain repeats epoch %d" % nxt["epoch"])
-            manifests.append(membership.digest(nxt))
+            digests.append(membership.digest(nxt))
             current = nxt
-        require(len(manifests) >= anchored, "a fetched chain ends at epoch %d, below the TPM high-water %d: that source is behind "
-                "and cannot vouch for the anchored epochs" % (len(manifests), anchored))
-        verified.append(manifests)
-    longest = max(range(len(chains)), key=lambda i: len(verified[i]))
-    for digests in verified:
+        require(len(digests) >= anchored, "a fetched chain ends at epoch %d, below the TPM high-water %d: that source is behind "
+                "and cannot vouch for the anchored epochs" % (len(digests), anchored))
+        verified[source], last[source] = digests, current
+    longest = max(sources, key=lambda source: len(verified[source]))
+    for digests in verified.values():
         for epoch, (one, other) in enumerate(zip(digests, verified[longest]), 1):
             require(one == other, "CONFLICT: the sources' chains differ at epoch %d: two manifests were signed for one epoch; "
                     "nothing is restored; record an incident" % epoch)
-    store.restore(chains[longest])
+    for source in sources:
+        require(source == AUTHORITY or membership.may(last[longest], source, "authorize"),
+                "%r is not a source this chain trusts: neither the authority nor a node it lets authorize" % source)
+    store.restore(sources[longest])
     return summary(store)
 
 
