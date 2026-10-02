@@ -71,10 +71,11 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 
 | # | Step | Status |
 |---|---|---|
-| 1.1 | Build the new kernel as a Unified Kernel Image (UKI) | **NOT BUILT**: no UKI build exists for these hosts (#57) |
-| 1.2 | Predict its PCR 11 **in the two phases a host is judged in**: `systemd-measure calculate --phase=enter-initrd --phase=enter-initrd:leave-initrd:sysinit:ready`. The first is what the host measures when it asks for its disk, the second when it asks for a lease | **manual**; shown on a software TPM (`e2e/pcr-signed-policy-swtpm.sh`) |
-| 1.3 | Sign that prediction with the PCR-signing key (`systemd-measure sign`, or `ukify --pcr-private-key`), so the PIN and the local unlock share open under the new image with no reseal | **manual**; the key's custody is undecided (#57, ADR-0002 D19) |
-| 1.4 | For each host, write its new accepted set: its TPM firmware version, its PCR values, and the new PCR 11 **per phase** (`"phases": {"initrd": {"11": …}, "system": {"11": …}}`, the two values of step 1.2). The other PCRs come from that host's own survey (`pcr_survey.py snapshot`, `classify`) | the per-phase set **exists** (`attest.py`, `measurements.py`); survey **exists**; assembling the document is **NOT BUILT** (hand-written JSON today) |
+| 1.1 | Build the new kernel as a Unified Kernel Image (UKI): `python3 -m deploy.baremetal.uki build …` writes the unsigned image and its **build record** (the SHA-256 of every input, every measured section and the image, and the PCR 11 it will measure in each phase). The same inputs give the same bytes: build it twice, on two machines, and compare the records | the tool **exists** (`deploy/baremetal/uki.py`; in CI with Debian 13's own tools, `e2e/uki-build.sh`). **NOT BUILT**: the inputs. The initrd with the unlock client is #66 and must hold nothing per host; pinning the kernel, microcode and stub packages is not done |
+| 1.2 | Predict its PCR 11 **in the two phases a host is judged in**: the build record's `pcr11.initrd` (what the host measures when it asks for its disk) and `pcr11.system` (when it asks for a lease). The tool computes them from the built image and refuses to write a record if this machine's `systemd-measure` disagrees | **exists**; a software TPM that measures the image's sections reaches both values (`e2e/uki-build.sh`). Not shown by a boot |
+| 1.3 | Sign, on the offline signing machine: `python3 -m deploy.baremetal.uki sign …`. It builds the image again from the same inputs (a third build, which must give the record's hash), signs PCR 11 with **two keys, one per phase** (the initrd-phase key for the local unlock share, the system-phase key for the HSM PIN, so neither secret opens in the other's phase), and signs the file for Secure Boot with a third. The keys are in a PKCS#11 token (`--key-source engine:pkcs11`); no option takes a PIN | the command **exists**, shown with test keys in a software token. **NOT BUILT**: the three keys, their ceremony and their cards (design on #57: generated on the ceremony machine, backed up under the break-glass key, imported into two YubiKeys); nothing has run with a hardware token |
+| 1.3a | Before installing an image on a host: `python3 -m deploy.baremetal.uki verify --image … --record …` (the image is the record's, both PCR signatures verify, the Secure Boot signature verifies) | **exists** |
+| 1.4 | For each host, write its new accepted set: its TPM firmware version, its PCR values, and the new PCR 11 **per phase** (`"phases": {"initrd": {"11": …}, "system": {"11": …}}`, the two values of step 1.2). The other PCRs come from that host's own survey (`pcr_survey.py snapshot`, `classify`). `python3 -m deploy.baremetal.uki set --record … --label … --tpm-firmware-version … --pcrs HOST.json` prints the set | the set **exists** (`uki set`, `attest.py`, `measurements.py`); survey **exists**; assembling the whole document is **NOT BUILT** (hand-written JSON today) |
 | 1.5 | Write the CURRENT + NEXT measurement document: for every host, its current set, then the new one **listed last** | format and checks **exist** (`measurements.validate`); no authoring tool |
 
 ### 2. Approve: the root signs "both are accepted"
@@ -154,8 +155,11 @@ either the next update, or a document that re-approves the old image.
    Still missing around it: where a running host's leases, boot session and authenticated time come
    from for `may-reboot`, and collecting the three hosts' answers in one place.
 3. Installing a measurement document on a running host and reloading its attestation policy.
-4. A UKI build for these hosts, the PCR-signing key's custody, and signed images (#57); with it, a stated
-   way to list what an image's initrd uses to open the root disk (step 2.2a).
+4. For the image (#57): the build, its record, the signing command and the verification exist
+   (`deploy/baremetal/uki.py`). Still missing: the initrd without per-host files (#66); pinned kernel,
+   microcode and stub packages; the three signing keys, their ceremony and cards; Secure Boot enrolment
+   of our certificate on each host; a first boot of such an image; and a stated way to list what an
+   image's initrd uses to open the root disk (step 2.2a).
 5. The boot-time unlock client, so that a peer is actually needed to open the disk (#66, #67, #135).
 6. A rehearsal on the three DL360s (#65), including the boot loader's automatic fallback.
 7. The owner's decision on who approves an image (above).
