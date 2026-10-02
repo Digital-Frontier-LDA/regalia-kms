@@ -1,0 +1,12 @@
+#!/bin/sh
+# Inside the test guest, once the root filesystem is up: say so on the console, with what is left of
+# the boot mesh (nothing should be), and power off.
+mesh=absent; ip link show wg-boot >/dev/null 2>&1 && mesh=present
+table=absent; nft list table inet regalia_boot >/dev/null 2>&1 && table=present
+addresses="$(ip -4 -o addr show scope global | wc -l)"
+mapped=no; [ -e /dev/mapper/root ] && mapped=yes
+echo "REGALIA-E2E-ROOT-UP root=$mapped wg-boot=$mesh table=$table addresses=$addresses" > /dev/console
+# what actually opened the root volume: the unit the initrd generated, still loaded after switch-root
+echo "REGALIA-E2E-ATTACH $(systemctl show 'systemd-cryptsetup@root.service' -p ExecStart --value 2>&1 | tr -s ' \n' ' ' | cut -c1-400)" > /dev/console
+echo "REGALIA-E2E-CMDLINE $(cat /proc/cmdline)" > /dev/console
+systemctl --no-block poweroff
