@@ -111,6 +111,10 @@ for package in vim-tiny vim-common nano; do
     apt-get purge -y "$package"
   fi
 done
+# Retain built-in C.UTF-8; generated locales and installer-only partition/media
+# tools are unnecessary on the running appliance. APT must not expand this list.
+printf '%s\n' 'LANG=C.UTF-8' >/etc/default/locale
+python3 -I /tmp/regalia-source/lab/appliance/minimize.py --apply >/var/log/regalia-minimization.json
 apt-get autoremove --purge -y
 # A fresh baseline carries one current kernel. CURRENT/NEXT overlap belongs to
 # the controlled update procedure, rather than an unreviewed installer fallback.

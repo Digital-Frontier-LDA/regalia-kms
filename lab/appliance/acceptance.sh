@@ -41,11 +41,13 @@ check sh -c 'test "$(cat /sys/module/apparmor/parameters/enabled)" = Y'
 check sh -c 'test "$(cat /proc/sys/kernel/dmesg_restrict)" = 1'
 check sh -c 'test "$(cat /proc/sys/kernel/kptr_restrict)" = 2'
 check sh -c 'test -z "$(swapon --noheadings --show)"'
-for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vim-tiny vim-common nano; do
+for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vim-tiny vim-common nano locales libc-l10n util-linux-locales eject fdisk; do
   if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -q '^installed$'; then
     fail "unexpected-package-$package"
   fi
 done
+check grep -qx 'LANG=C.UTF-8' /etc/default/locale
+check test -r /var/log/regalia-minimization.json
 # Temporarily start the real daemon with a public fixture and no credentials.
 # It must run under the installed policy while remaining cryptographically unready.
 # These public fixtures are removed before exporting the reusable disk.
