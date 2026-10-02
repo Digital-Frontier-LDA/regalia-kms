@@ -33,8 +33,8 @@ A denial carries the rule that produced it, and the audit record stores it as
 `policy-DENIED:<rule>`. The API answer does not change with the rule: the caller is told `DENIED`
 (`API.md`), so the rule is evidence for the operator, never an oracle for the client.
 
-A Cosmos transaction is checked one dimension at a time, in this order, and the first refusal is the
-one reported:
+A Cosmos transaction is checked one dimension at a time, in this order, each across all of its
+messages before the next, and the first refusal is the one reported:
 
 | Rule | The transaction is refused because |
 |---|---|
@@ -52,5 +52,6 @@ After these, the durable state can still refuse: `sequence` (not the next accoun
 `quota` (the daily cap), `epoch` (a superseded fencing epoch) and `replay` (a nonce already used).
 
 `TestCosmosPolicyRejectsEveryControlledDimension` provokes every rule in the table and fails if one
-is never produced; `TestTheFirstRefusingCosmosDimensionIsTheOneReported` pins the order.
+is never produced; `TestTheFirstRefusingCosmosDimensionIsTheOneReported` pins the order, and
+`TestTheCosmosRuleOrderHoldsAcrossMessages` that it holds across messages.
 `e2e/cosmos-simapp-kms-tx.sh` asserts the same rules against a live node.

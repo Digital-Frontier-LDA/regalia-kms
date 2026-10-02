@@ -45,7 +45,13 @@ def compressed_pubkey(der_path):
     return key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.CompressedPoint)
 
 
-def http_json(url, body=None):
+def http_json(url, body=None, expect_ok=False):
+    """GET (or POST body) and return the JSON answer.
+
+    expect_ok is for a query whose answer the caller is about to read a value out of (a balance, an
+    account): an HTTP error is then a failure, retried and finally fatal, never a document to read a
+    default from. Without it an HTTP error's JSON body is returned, because for a broadcast and for
+    polling a transaction hash that body IS the answer (a rejection, or "not found yet")."""
     # urllib also opens file:// and ftp:// URLs. Every URL here is built from --rest, so refuse any
     # scheme but http(s) rather than let a mistyped or hostile value read a local file.
     if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
@@ -63,6 +69,11 @@ def http_json(url, body=None):
                 return json.load(resp)
         except urllib.error.HTTPError as e:
             payload = e.read()
+            if expect_ok:
+                if attempt == attempts - 1:
+                    raise SystemExit(f"{url}: HTTP {e.code}: {payload[:300]!r}")
+                time.sleep(2)
+                continue
             try:
                 return json.loads(payload)
             except ValueError:
@@ -84,7 +95,9 @@ def cmd_build(a):
         sys.exit("--to and --amount must be given in pairs")
     account_number, sequence = a.account_number, a.sequence
     if account_number is None or sequence is None:
-        acct = http_json(f"{a.rest}/cosmos/auth/v1beta1/accounts/{getattr(a, 'from')}")["account"]
+        acct = http_json(f"{a.rest}/cosmos/auth/v1beta1/accounts/{getattr(a, 'from')}", expect_ok=True).get("account")
+        if not isinstance(acct, dict) or "account_number" not in acct:
+            sys.exit("the node's answer names no account: nothing is built from a guess")
         if account_number is None:
             account_number = int(acct["account_number"])
         if sequence is None:
@@ -140,8 +153,13 @@ def cmd_broadcast(a):
 
 
 def cmd_balance(a):
-    resp = http_json(f"{a.rest}/cosmos/bank/v1beta1/balances/{a.address}/by_denom?denom={a.denom}")
-    print(int(resp.get("balance", {}).get("amount", "0")))
+    resp = http_json(f"{a.rest}/cosmos/bank/v1beta1/balances/{a.address}/by_denom?denom={a.denom}", expect_ok=True)
+    # NO DEFAULT. A missing amount used to print 0, and the shell then compared that 0 with the
+    # expected balance and reported a refused transaction as having moved it.
+    balance = resp.get("balance")
+    if not isinstance(balance, dict) or balance.get("denom") != a.denom or not str(balance.get("amount", "")).isdigit():
+        sys.exit(f"the node's answer carries no {a.denom} balance: {json.dumps(resp)[:200]}")
+    print(int(balance["amount"]))
 
 
 def main():

@@ -375,7 +375,8 @@ const (
 	RuleCosmosFee         = "cosmos-fee"         // a fee in an unknown denomination, of zero, or over the cap
 )
 
-// CosmosRules lists every rule validateCosmos can return, in the order it checks them.
+// CosmosRules lists every rule validateCosmos can return, in the order it checks them. Each rule is
+// checked across ALL of the transaction's messages before the next one is looked at.
 func CosmosRules() []string {
 	return []string{RuleCosmosTransaction, RuleCosmosChain, RuleCosmosAccount, RuleCosmosMessage, RuleCosmosDestination,
 		RuleCosmosSource, RuleCosmosAmount, RuleCosmosGas, RuleCosmosFee}
@@ -393,17 +394,26 @@ func (policy compiledPolicy) validateCosmos(transaction *CosmosTransaction) (map
 	if _, ok := policy.accounts[transaction.AccountNumber]; !ok {
 		return nil, RuleCosmosAccount
 	}
-	totals := make(map[string]uint64)
+	// ONE DIMENSION AT A TIME, ACROSS EVERY MESSAGE. A single loop that checked each message in full
+	// would report the first message's amount before the second message's destination, and the rule
+	// order CosmosRules promises would hold only for single-message transactions.
 	for _, message := range transaction.Messages {
 		if _, ok := policy.messages[message.Type]; !ok || len(message.Amounts) == 0 {
 			return nil, RuleCosmosMessage
 		}
+	}
+	for _, message := range transaction.Messages {
 		if _, ok := policy.destinations[message.Destination]; !ok {
 			return nil, RuleCosmosDestination
 		}
+	}
+	for _, message := range transaction.Messages {
 		if _, ok := policy.sources[message.Source]; !ok {
 			return nil, RuleCosmosSource
 		}
+	}
+	totals := make(map[string]uint64)
+	for _, message := range transaction.Messages {
 		for _, coin := range message.Amounts {
 			maximum, known := policy.policy.Cosmos.MaxPerTransaction[coin.Denom]
 			if !known || coin.Amount == 0 || coin.Amount > maximum || ^uint64(0)-totals[coin.Denom] < coin.Amount {
