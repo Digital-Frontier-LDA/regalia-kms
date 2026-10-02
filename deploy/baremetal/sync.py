@@ -299,15 +299,16 @@ class Server:
         except Refused:
             pass
 
-    def _is_a_node(self, source):
-        """Whether `source` is the address of a node this server may talk to, by the manifest it read LAST
-        (in memory: no disk, no TPM). Asked only when the address table is full, so that a table full of
-        busy strangers cannot turn a node away: the node then goes on to its own bucket, which the
-        manifest bounds, and to the real check against the manifest read now."""
+    def _node_at(self, source):
+        """The node `source` is the address of, by the manifest this server read LAST (in memory: no disk,
+        no TPM), if it may still be talked to; else None. A node in a terminal state there is None.
+        Asked only when the address table is full, so that a table full of busy strangers cannot turn a
+        node away: the node is then held to its own bucket, BEFORE anything is read, and goes on to the
+        real check against the manifest read now."""
         try:
-            return self._seen is not None and bool(peer_of(self._seen, self.identify(self._seen, source)))
+            return peer_of(self._seen, self.identify(self._seen, source)) if self._seen is not None else None
         except Exception:      # noqa: BLE001 - anything that is not "yes, a node" is "no"
-            return False
+            return None
 
     def _spend(self, late, who, kind):
         """One request of `kind` for `who`, or Refused; a count left over from a flood is put on `late`."""
@@ -342,8 +343,14 @@ class Server:
         # Before the disk and the TPM are touched for anybody. One exception: when the address table is full
         # of busy strangers, an address the last manifest gives to a node is not counted there at all (and
         # so is not refused there): it goes on to that node's own bucket.
-        if self.buckets.has_room(name, "address") or not self._is_a_node(source):
+        spent = None
+        member = None if self.buckets.has_room(name, "address") else self._node_at(source)
+        if member is None:
             self._spend(view.late, name, "address")
+        else:                     # the node's own bucket stands in front of the store instead
+            known["caller"], known["identified"] = member, member != self.node_id     # a node, by the last manifest read: told why
+            self._spend(view.late, member, "any")
+            spent = member
         manifest = known["manifest"] = self._seen = view.load()
         require(manifest is not None, "this node holds no manifest")
         key = self.identify(manifest, source)
@@ -352,7 +359,8 @@ class Server:
         # From here an admitted node is told why it is refused, its own rate limit included. A node in a
         # terminal state, and this node's own key, stay "refused" and nothing more.
         known["identified"] = node["state"] not in membership.TERMINAL and caller != self.node_id
-        self._spend(view.late, caller, "any")                            # before the refusals below: they are limited too
+        if caller != spent:                                                # not spent already, in front of the store
+            self._spend(view.late, caller, "any")                        # before the refusals below: they are limited too
         peer_of(manifest, key)
         require(caller != self.node_id, "a node does not ask itself")
         require(isinstance(raw, bytes) and len(raw) <= MAX_REQUEST, "a request is at most %d bytes" % MAX_REQUEST)

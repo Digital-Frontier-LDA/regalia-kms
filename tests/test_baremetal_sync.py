@@ -399,6 +399,16 @@ class Bounds(Case):
             before = len(self.events)
             self.assertEqual(self.pull("b")["refused"], "refused")                  # and now the door knows too: it is a stranger like any other,
             self.assertEqual([e["reason"] for e in self.events[before:] if "too many callers" not in e["reason"]], [])   # stopped there, the store not read
+        # on that path the node's own bucket stands in front of the store: twenty reads a minute, no more
+        self.tick += 600
+        with unittest.mock.patch.object(sync, "MAX_BUCKETS", 4):
+            self.tick += 61
+            for i in range(4):
+                self.pull("b", caller="2001:db8::%d" % i)
+            with unittest.mock.patch.object(self.stores["b"], "envelopes", wraps=self.stores["b"].envelopes) as reads:
+                answers = [self.pull("b", caller="c", summary=convergence.summary(self.stores["c"])) for _ in range(200)]
+            self.assertEqual((reads.call_count, sum(1 for a in answers if a["ok"])), (20, 20))
+            self.assertIn("RATE: more than 20 any requests in 60 s from c", [a.get("refused") for a in answers if not a["ok"]][0])
         fresh = self.server("c")                                                    # a server that has read nothing yet has no manifest to ask
         with unittest.mock.patch.object(sync, "MAX_BUCKETS", 1):
             fresh.buckets.take("2001:db8::1", "address")                            # the one place is taken before this server ever read its store
