@@ -42,6 +42,15 @@ and that the daemon's two token backends do not lock each other out (regalia#541
                               backend needs the card to itself and OpenSC connects to every card it is
                               not told to ignore. With one backend or none there is nothing to check
 
+and that the daemon, and only the daemon, may talk to pcscd (regalia#541):
+
+  kms_pcscd_access_rule       /etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules is the shipped rule
+                              (deploy/polkit/): pcscd's two polkit actions are granted to the KMS user
+                              and root and refused to everyone else. Debian's pcscd lets in only users
+                              with an active session, so without the grant the daemon reaches no token;
+                              without the refusal any user with a console session reaches them all. No
+                              other polkit rule may speak about pcscd or grant every action
+
 Standard library only.
 """
 import json
@@ -55,7 +64,7 @@ import sys
 SERVICE = "regalia-kms.service"
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
             "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
-            "kms_opensc_leaves_piv_cards")
+            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule")
 # property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
 # directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
 SANDBOX_PROPERTIES = {
@@ -486,6 +495,60 @@ def opensc_leaves_piv_cards(host):
     return True, f"{conf}: ignored_readers {matching[0]!r} keeps OpenSC off the YubiKey"
 
 
+PCSCD_RULE_PATH = "/etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules"
+POLKIT_RULE_DIRECTORIES = ("/etc/polkit-1/rules.d", "/run/polkit-1/rules.d", "/usr/local/share/polkit-1/rules.d", "/usr/share/polkit-1/rules.d")
+# The shipped rule (deploy/polkit/50-regalia-kms-pcscd.rules) with its comments and blank lines left
+# out; tests/test_baremetal_os_probe.py holds the two together.
+PCSCD_RULE = """var ONLY_THE_KMS = true;
+polkit.addRule(function(action, subject) {
+if (action.id != "org.debian.pcsc-lite.access_pcsc" && action.id != "org.debian.pcsc-lite.access_card") {
+return polkit.Result.NOT_HANDLED;
+}
+if (subject.user == "regalia-kms" || subject.user == "root") {
+return polkit.Result.YES;
+}
+return ONLY_THE_KMS ? polkit.Result.NO : polkit.Result.NOT_HANDLED;
+});"""
+
+
+def rule_statements(text):
+    """A polkit rules file without its // comments, blank lines and indentation."""
+    lines = (line.strip() for line in (text or "").splitlines())
+    return "\n".join(line for line in lines if line and not line.startswith("//"))
+
+
+def pcscd_access_rule(host):
+    """pcscd lets in the KMS user and root, and nobody else, by the shipped polkit rule; and no other rule
+    on the host undoes that. What a rule file DOES cannot be decided by reading it, so two things are
+    refused outright in any other file: naming pcscd's actions, and granting without looking at the
+    action at all (an allow-everything rule, which polkit would consult first if its name sorts first)."""
+    text = host.read(PCSCD_RULE_PATH)
+    if text is None:
+        return False, (f"{PCSCD_RULE_PATH} is missing or unreadable: pcscd admits only users with an active session, "
+                       "so the KMS service user reaches no token (install deploy/polkit/50-regalia-kms-pcscd.rules)")
+    if rule_statements(text) != PCSCD_RULE:
+        if rule_statements(text) == PCSCD_RULE.replace("ONLY_THE_KMS = true", "ONLY_THE_KMS = false"):
+            return False, f"{PCSCD_RULE_PATH} grants the KMS user and refuses nobody (ONLY_THE_KMS = false): a bench setting, not a KMS host's"
+        return False, f"{PCSCD_RULE_PATH} is not the shipped rule (deploy/polkit/50-regalia-kms-pcscd.rules)"
+    rc, out = host.run(["stat", "-c", "%u %a", PCSCD_RULE_PATH])
+    fields = out.split()
+    if rc != 0 or len(fields) != 2 or fields[0] != "0" or not re.fullmatch(r"[0-7]{3,4}", fields[1]) or int(fields[1], 8) & 0o022:
+        return False, f"{PCSCD_RULE_PATH} is not root's alone to change (owner and mode: {out.strip() or 'unreadable'})"
+    for directory in POLKIT_RULE_DIRECTORIES:
+        for name in sorted(host.listdir(directory)):
+            path = f"{directory}/{name}"
+            if path == PCSCD_RULE_PATH or not name.endswith(".rules"):
+                continue
+            other = rule_statements(host.read(path))
+            if not other and host.read(path) is None:
+                return False, f"{path} cannot be read: what it grants is unknown"
+            if "pcsc-lite" in other:
+                return False, f"{path} also speaks about pcscd's actions: only the shipped rule may"
+            if "Result.YES" in other and "action.id" not in other and "action.lookup" not in other:
+                return False, f"{path} grants without looking at the action: it would let its subjects into pcscd whatever the shipped rule says"
+    return True, f"{PCSCD_RULE_PATH}: pcscd admits regalia-kms and root, and refuses every other user"
+
+
 def pcscd_clients(host):
     """(True, "<n> pcscd client(s), all the KMS binary") when every process connected to pcscd runs the
     KMS binary; (False, why) otherwise. Shared with deploy/baremetal/host_probe.py."""
@@ -523,4 +586,4 @@ PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
           "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission,
-          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards}
+          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards, "kms_pcscd_access_rule": pcscd_access_rule}
