@@ -221,6 +221,21 @@ jobs:
       - name: Fuzz envelope parsing (refusal class and round-trip stability)
         run: go test ./internal/envelope -run='^$' -fuzz=FuzzParseAcceptsOnlyWhatItCanReproduce -fuzztime=20s
 
+  # #61, PoC 1.2: the KMS unit's sandbox by behaviour. A dummy service under the shipped unit and
+  # hardening drop-in is refused writes outside its state directory, home directories, the kernel,
+  # privilege and unused socket families; the same service with none of the settings is allowed each
+  # one (the control), and what the KMS needs still works. It starts root units on the runner's own
+  # system manager, which is why it has a job, and a runner, to itself.
+  kms-sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The shipped sandbox refuses what it should, with a control for every refusal
+        run: bash e2e/kms-sandbox-negative.sh
+
   # regalia#439, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts the transactions the KMS
   # signed, and every negative case fails for its own reason — replay, chain id, destination,
   # sequence, account number, fee and gas, several messages, malformed sign bytes, the daily quota
