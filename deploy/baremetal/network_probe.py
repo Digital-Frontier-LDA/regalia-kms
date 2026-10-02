@@ -2,7 +2,7 @@
 """Check the bare-metal KMS host's firewall from one network zone: the same positive/negative TCP matrix
 the site config promises (deploy/baremetal/sitecfg.py, rendered by firewall.py).
 
-    python3 deploy/baremetal/network_probe.py site.json --role client --source-ip 198.51.100.20
+    python3 -Es deploy/baremetal/network_probe.py site.json --role client --source-ip 198.51.100.20
 
 Run it once from a machine in each zone. Exit 0 when every port is exactly as open or closed as the
 config says, 1 when the firewall differs, 2 when the probe itself is refused (bad config or source).

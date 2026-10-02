@@ -65,7 +65,7 @@ out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-hos
 
 hdr "C: an altered blob is refused"
 # Flip one byte unconditionally (XOR with 0xFF), and prove the copy now differs.
-python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
+python3 -I -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
 cmp -s "$W/pin-A.blob" "$W/bad.blob" && F "the altered blob is identical to the original"
 out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && P "an altered blob is refused" || F "an altered blob was accepted: $out"

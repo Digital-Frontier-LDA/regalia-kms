@@ -210,8 +210,10 @@ class ServiceMesh(unittest.TestCase):
         self.assertEqual(incoming[6], "meta nfproto ipv6 drop")
         self.assertEqual(outgoing[1:6], ["oif \"lo\" accept"] + wanted_out)
         self.assertEqual(outgoing[6], "meta nfproto ipv6 drop")
-        # a connection is new only with a SYN and nothing else: exactly one rule per direction takes "new"
-        self.assertEqual(text.count("ct state new"), 2)
+        # a connection is new only with a SYN and nothing else: exactly one rule per direction takes "new" here,
+        # the boot mesh's unlock rule is the third, and every rule that takes "new" asks for the lone SYN
+        self.assertEqual(text.count("ct state new"), 3)
+        self.assertEqual([line for line in text.splitlines() if "ct state new" in line and syn not in line], [])
         # nothing else in the ruleset speaks IPv6, and nothing else names the interface
         self.assertEqual(text.count("ip6 "), 12)
         self.assertEqual(text.count('"wg-svc"'), 8)

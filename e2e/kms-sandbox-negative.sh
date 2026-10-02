@@ -39,7 +39,7 @@ sudo sh -c "echo marker > /root/$tag && echo marker > /home/$tag && echo marker 
 trap 'sudo rm -f "/root/$tag" "/home/$tag" "/tmp/$tag"; sudo rm -rf "/var/lib/regalia-sandbox-probe" "$W"' EXIT
 
 # The shipped [Service] settings, as -p arguments. The drop-in comes second, as systemd would read it.
-mapfile -t props < <(python3 - "$UNIT" "$DROPIN" <<'PY'
+mapfile -t props < <(python3 -I - "$UNIT" "$DROPIN" <<'PY'
 import sys
 SKIP = {"Type", "User", "Group", "ExecStart", "Restart", "RestartSec", "StateDirectory", "StateDirectoryMode", "AppArmorProfile"}
 for path in sys.argv[1:]:
@@ -61,21 +61,21 @@ run(){ local name="$1" out="$2"; shift 2
   # shellcheck disable=SC2024  # the report is written by this user, on purpose: only the unit is root
   sudo systemd-run --quiet --wait --pipe --collect --unit="$name-$$" -p StateDirectory=regalia-sandbox-probe \
     -E "MARKER_ROOT=/root/$tag" -E "MARKER_HOME=/home/$tag" -E "MARKER_TMP=/tmp/$tag" "$@" \
-    /usr/bin/python3 - < "$PROBE" > "$out" 2> "$out.err"; }
+    /usr/bin/python3 -I - < "$PROBE" > "$out" 2> "$out.err"; }
 run regalia-sandbox-control "$W/control.json";             rc_control=$?
 run regalia-sandbox-hardened "$W/hardened.json" "${hardening[@]}"; rc_hardened=$?
 
 hdr "0  both units ran the probe"
-[ "$rc_control" = 0 ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$W/control.json" 2>/dev/null \
+[ "$rc_control" = 0 ] && python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$W/control.json" 2>/dev/null \
   && P "the control unit (no hardening) ran it" || F "control unit: exit $rc_control: $(head -c 400 "$W/control.json.err")"
-[ "$rc_hardened" = 0 ] && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$W/hardened.json" 2>/dev/null \
+[ "$rc_hardened" = 0 ] && python3 -I -c 'import json,sys; json.load(open(sys.argv[1]))' "$W/hardened.json" 2>/dev/null \
   && P "the hardened unit (${#props[@]} shipped settings) ran it" || F "hardened unit: exit $rc_hardened: $(head -c 400 "$W/hardened.json.err")"
 if [ "$fail" != 0 ]; then echo; echo "kms-sandbox-negative: $pass passed, $fail failed"; exit 1; fi
 
 # The verdicts: one line per check, "PASS|FAIL<TAB>text", sections as "HDR<TAB>title", and a last line
 # "END<TAB><number of checks>". They are written to a file and counted, so an evaluator that dies part
 # way cannot leave a short list of passes behind.
-python3 - "$W/control.json" "$W/hardened.json" > "$W/verdicts" <<'PY'
+python3 -I - "$W/control.json" "$W/hardened.json" > "$W/verdicts" <<'PY'
 import json, sys
 control, hardened = (json.load(open(p)) for p in sys.argv[1:3])
 REFUSED = (

@@ -5,8 +5,8 @@ regalia#42 asks that "exact hardware and middleware combinations are qualified a
 drills recorded WHICH versions they ran on, in prose; nothing refused a combination that had never
 run. config/qualified-stack.json pins the combination; this checks against it.
 
-    python3 tools/qualified_stack.py --go-mod go.mod        # CI: the Go token libraries are the pinned ones
-    python3 tools/qualified_stack.py --host                 # commissioning: installed middleware + attached tokens
+    python3 -Es tools/qualified_stack.py --go-mod go.mod        # CI: the Go token libraries are the pinned ones
+    python3 -Es tools/qualified_stack.py --host                 # commissioning: installed middleware + attached tokens
 
 A component NOT in the list is UNQUALIFIED, and the exit status is 1. That does not mean it is broken.
 It means no drill has run on it, and a KMS should not be the first thing that finds out. To qualify a

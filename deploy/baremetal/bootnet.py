@@ -156,7 +156,7 @@ table inet %(table)s {
     ct state invalid drop
     ct state established,related accept
     ip daddr %(underlays)s udp dport %(listen)d accept comment "WireGuard, to the peers' declared addresses"
-    oifname "%(interface)s" ip saddr %(address)s ip daddr %(addresses)s tcp dport %(unlock)d accept comment "unlock requests, inside the tunnel"
+    oifname "%(interface)s" ip saddr %(address)s ip daddr %(addresses)s tcp dport %(unlock)d tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment "a new unlock request, inside the tunnel"
     icmp type { destination-unreachable, time-exceeded } accept comment "path MTU discovery"
   }
 }

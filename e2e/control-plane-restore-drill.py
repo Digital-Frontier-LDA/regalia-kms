@@ -4,7 +4,7 @@ the REAL daemon, serving from a REAL Nitrokey, loses its host state and gets it 
 control-plane export.
 
     REGALIA_CEREMONY_DIR=… HSM_STAGING_REGISTRY_FILE=… CARD_PIN=… \
-      python3 e2e/control-plane-restore-drill.py --serial DENK0404380 --object-id 10 --workdir /build/cpdrill
+      python3 -Es e2e/control-plane-restore-drill.py --serial DENK0404380 --object-id 10 --workdir /build/cpdrill
 
 Sequence:
   1 seal     an envelope to the card's KEK (TestEnvelopeSurvivesTokenWipeAndDKEKRestore, phase seal)
