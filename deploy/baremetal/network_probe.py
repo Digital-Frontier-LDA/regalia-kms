@@ -13,6 +13,7 @@ config says, 1 when the firewall differs, 2 when the probe itself is refused (ba
 """
 import argparse
 import datetime
+import errno
 import ipaddress
 import json
 import os
@@ -38,12 +39,27 @@ def role_matches_source(cfg, role, source):
     return not any(inside.values()) if role == "unauthorized" else inside[role]
 
 
+# What a firewall's drop or reject looks like from the probe: a timeout, a reset/refusal, or an ICMP
+# host-unreachable (admin-prohibited). Anything else (no route, no such local address, an invalid
+# argument) is a failure of the probe host, not evidence about the KMS firewall.
+CLOSED_ERRNOS = {errno.ECONNREFUSED, errno.ECONNRESET, errno.EHOSTUNREACH, errno.ETIMEDOUT}
+
+
+class ProbeFailure(Exception):
+    pass
+
+
 def connect(source, target, port, timeout):
     try:
         with socket.create_connection((target, port), timeout=timeout, source_address=(source, 0)):
             return True, "connected"
+    except socket.timeout:
+        return False, "timeout (dropped)"
     except OSError as error:
-        return False, "%s: %s" % (type(error).__name__, error)
+        if error.errno in CLOSED_ERRNOS:
+            return False, "%s: %s" % (type(error).__name__, error)
+        raise ProbeFailure("%s on port %d: %s (a local routing or socket failure, not a firewall answer)"
+                           % (errno.errorcode.get(error.errno, error.errno), port, error))
 
 
 def main(argv=None):
@@ -69,7 +85,11 @@ def main(argv=None):
         return 2
     results, passed = [], True
     for port, want in expected_ports(cfg, args.role).items():
-        got, detail = connect(str(source), cfg["host_ipv4"], port, args.timeout)
+        try:
+            got, detail = connect(str(source), cfg["host_ipv4"], port, args.timeout)
+        except ProbeFailure as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 2
         passed = passed and got is want
         results.append({"port": port, "expected": "open" if want else "closed",
                         "observed": "open" if got else "closed", "matched": got is want, "detail": detail})
