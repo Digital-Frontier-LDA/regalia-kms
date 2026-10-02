@@ -22,11 +22,16 @@ Transition rules (accept(current, candidate)):
   * the epoch rises by exactly one and prev_digest is the digest of the current manifest: a strict hash
     chain, so two different manifests at one epoch (a conflict) cannot both be accepted, and a node that
     missed manifests catches up by verifying the chain in order (accept_chain);
-  * the ROOT key (pinned, offline) may make any change: enroll, replace, change identities, change the
-    revocation keys, restore trust;
+  * the ROOT key (pinned, offline) may make any change but one (reviving a retired node, below): enroll,
+    replace, change identities, change the revocation keys, restore trust;
   * a REVOCATION key (named by the root in the current manifest) may only make RESTRICTIVE changes:
     the same nodes, identities, policy version and revocation keys, and each node's capabilities a
     subset of what they were;
+  * RETIREMENT IS TERMINAL, for every signer: a RETIRED or REVOKED_STOLEN node stays in every later
+    manifest as a tombstone (the same node_id, identities and HSM serials; RETIRED may only become
+    REVOKED_STOLEN). Its hardware can then never be enrolled again, under any name: the uniqueness rule
+    sees the tombstone. The manifest therefore grows by one entry per retired node, for ever, and that is
+    intended. Hardware that may return belongs in MAINTENANCE or QUARANTINED, which the root can reverse;
   * the TPM-backed high-water mark (HighWater) anchors the accepted epoch: Store keeps the signed chain
     on disk, refuses at load a chain older than the high-water (a restored disk; recovered by fetching
     the newer chain from a peer), and advances the high-water after each durable commit.
@@ -205,6 +210,27 @@ def _restrictive(current, candidate):
                 "%s: %s -> %s widens capabilities; only the root can do that" % (nid, old[nid]["state"], node["state"]))
 
 
+TERMINAL = ("RETIRED", "REVOKED_STOLEN")
+
+
+def _tombstones(current, candidate):
+    """Retirement is terminal for EVERY signer, the root included. A node that is RETIRED or REVOKED_STOLEN
+    stays in every later manifest as a tombstone: the same node_id, identities and HSM serials, and a
+    state that only moves from RETIRED to REVOKED_STOLEN. With the tombstone always present, validate()'s
+    uniqueness rule refuses any reuse of its EK, AK, WireGuard keys, HSM serials or node ID, for ever."""
+    old, new = validate(current), validate(candidate)
+    for nid, node in old.items():
+        if node["state"] not in TERMINAL:
+            continue
+        require(nid in new, "tombstone: %s is %s and must stay in every later manifest (its identities are never reused)"
+                % (nid, node["state"]))
+        for k in IDENTITY_KEYS + ("hsm_serials",):
+            require(new[nid][k] == node[k], "tombstone: %s is %s and its %s cannot change" % (nid, node["state"], k))
+        require(new[nid]["state"] == node["state"] or (node["state"], new[nid]["state"]) == ("RETIRED", "REVOKED_STOLEN"),
+                "tombstone: %s is %s, which is terminal for every signer (%s refused); hardware that may return "
+                "belongs in MAINTENANCE or QUARANTINED" % (nid, node["state"], new[nid]["state"]))
+
+
 def accept(current, envelope, root_key):
     """The next manifest, if `envelope` may follow `current` (None at enrollment, where only a
     root-signed epoch-1 manifest is accepted)."""
@@ -219,6 +245,7 @@ def accept(current, envelope, root_key):
     require(candidate["epoch"] == current["epoch"] + 1,
             "epoch %d does not follow %d (fetch the missing manifests and accept them in order)" % (candidate["epoch"], current["epoch"]))
     require(candidate["prev_digest"] == digest(current), "prev_digest does not chain to the current manifest")
+    _tombstones(current, candidate)        # both signers: the one rule the root cannot override
     if signer == "revocation":
         _restrictive(current, candidate)
     return candidate

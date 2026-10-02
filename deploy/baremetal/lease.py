@@ -191,7 +191,7 @@ class TpmSigner:
 EVIDENCE_KEYS = ("ephemeral_public", "nonce", "quote", "signature")
 
 
-def _reattest(attester, evidence, request, manifest, subject):
+def reattest(attester, evidence, request, manifest, subject):
     """The subject re-attests NOW, as the node the manifest names. The peer's attestation verifier
     (attest.Verifier) pins the manifest's EK for it and verified the quote under the manifest's AK; the quote in
     `evidence` answers a nonce that verifier issued within its last two minutes, good once, and is over
@@ -230,7 +230,7 @@ def issue(manifest, issuer_id, request, attester, evidence, freshness, signer):
     # absolute expiry bounds it: however long the attestation below takes, the lease cannot outlive the
     # heartbeat. A lease dated slightly early only ends slightly early.
     now, fresh_until = freshness.live_until(manifest)
-    _reattest(attester, evidence, request, manifest, nodes[subject_id])
+    reattest(attester, evidence, request, manifest, nodes[subject_id])
     lease = {"schema": SCHEMA, "node_id": subject_id, "ak_name": nodes[subject_id]["ak_name"], "issuer": issuer_id,
              "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "session_id": request["session_id"],
              "nonce": request["nonce"], "issued_at": _stamp(now), "expires_at": _stamp(min(now + MAX_LIFETIME, fresh_until))}

@@ -420,3 +420,21 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
       - name: Runtime leases against swtpm (issue, hold, revoke, reboot)
         run: bash e2e/runtime-lease-swtpm.sh
+
+  # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
+  # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
+  # holds a lease; the old hardware is refused by every decision; its identities cannot be enrolled
+  # again. The script fails if its test is skipped.
+  node-replacement-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Node replacement against swtpm (enroll the new node, refuse the old hardware)
+        run: bash e2e/node-replacement-swtpm.sh
