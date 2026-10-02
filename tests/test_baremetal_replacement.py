@@ -105,6 +105,32 @@ class Tombstones(Case):
         self.refused("tombstone: a is RETIRED", self.accept, self.m2, self.chain(self.m2, [self.entry("a", "QUARANTINED")] + rest),
                      hbt.REVOKE, "revocation")
 
+    def test_no_node_is_removed_it_can_only_be_retired(self):
+        """A node removed outright would leave no tombstone, and its identities could be enrolled again."""
+        for state in ("ACTIVE", "MAINTENANCE", "DRAINING", "QUARANTINED"):
+            with self.subTest(state=state):
+                current = self.accept(self.m1, self.chain(self.m1, [self.entry("a", state), self.entry("b"), self.entry("c")]))
+                removed = self.chain(current, [self.entry("b"), self.entry("c")])
+                self.refused("tombstone: a cannot be removed; retire it instead", self.accept, current, removed)
+                # nor removed and replaced by new hardware in the same manifest, under another name or its own
+                self.refused("tombstone: a cannot be removed; retire it instead", self.accept, current,
+                             self.chain(current, [self.entry("b"), self.entry("c"), self.entry("a2")]))
+                # a mistaken enrollment is corrected by retiring it: it stays, and its identities stay unusable
+                retired = self.accept(current, self.chain(current, [self.entry("a", "RETIRED"), self.entry("b"), self.entry("c")]))
+                self.refused("already used (ek_name of a)", self.accept, retired,
+                             self.chain(retired, [self.entry("a", "RETIRED"), self.entry("b"), self.entry("c"), self.entry("x", ek_name=self.entry("a")["ek_name"])]))
+        # a revocation key could never remove a node; it now gets the same answer as the root
+        self.refused("tombstone: a cannot be removed; retire it instead", self.accept, self.m1,
+                     self.chain(self.m1, [self.entry("b"), self.entry("c")]), hbt.REVOKE, "revocation")
+        # through the stored chain as well
+        tpm = hbt.FakeTpm()
+        anchor = m.HighWater("0x1500016", lock_path=os.path.join(self.d, "hw.lock"), run=tpm)
+        anchor.define()
+        store = m.Store(os.path.join(self.d, "membership.json"), hbt.pub(hbt.ROOT), anchor)
+        store.commit(sign(self.m1))
+        self.refused("tombstone: a cannot be removed; retire it instead", store.commit, sign(self.chain(self.m1, [self.entry("b"), self.entry("c")])))
+        self.assertEqual(store.load()["epoch"], 1)
+
     def test_no_identity_of_retired_hardware_is_ever_enrolled_again(self):
         """The root re-enrols the EK, the AK, a WireGuard key or the HSM serial of the retired node under a
         new node ID: the tombstone is still there, so the uniqueness rule sees it."""

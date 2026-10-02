@@ -22,11 +22,14 @@ Transition rules (accept(current, candidate)):
   * the epoch rises by exactly one and prev_digest is the digest of the current manifest: a strict hash
     chain, so two different manifests at one epoch (a conflict) cannot both be accepted, and a node that
     missed manifests catches up by verifying the chain in order (accept_chain);
-  * the ROOT key (pinned, offline) may make any change but one (reviving a retired node, below): enroll,
-    replace, change identities, change the revocation keys, restore trust;
+  * the ROOT key (pinned, offline) may enroll, replace, change identities, change the revocation keys
+    and restore trust. Two things it cannot do (below): remove a node, and revive a retired one;
   * a REVOCATION key (named by the root in the current manifest) may only make RESTRICTIVE changes:
     the same nodes, identities, policy version and revocation keys, and each node's capabilities a
     subset of what they were;
+  * NO NODE IS EVER REMOVED, by any signer: a node leaves service by being retired, and a mistaken
+    enrollment is corrected the same way. Once issued, an identity is never forgotten (as a revocation
+    list never forgets a certificate);
   * RETIREMENT IS TERMINAL, for every signer: a RETIRED or REVOKED_STOLEN node stays in every later
     manifest as a tombstone (the same node_id, identities and HSM serials; RETIRED may only become
     REVOKED_STOLEN). Its hardware can then never be enrolled again, under any name: the uniqueness rule
@@ -214,7 +217,8 @@ TERMINAL = ("RETIRED", "REVOKED_STOLEN")
 
 
 def _tombstones(current, candidate):
-    """Retirement is terminal for EVERY signer, the root included. A node that is RETIRED or REVOKED_STOLEN
+    """No node ever leaves the manifest, and retirement is terminal, for EVERY signer, the root included.
+    A node can only be retired, never removed. A node that is RETIRED or REVOKED_STOLEN
     stays in every later manifest as a tombstone: the same node_id, identities and HSM serials (as they
     were BEFORE it was retired: the retiring manifest cannot change them either), and a state that only
     moves from RETIRED to REVOKED_STOLEN. With the tombstone always present, validate()'s
@@ -222,9 +226,12 @@ def _tombstones(current, candidate):
     old, new = validate(current), validate(candidate)
     for nid, node in old.items():
         if node["state"] not in TERMINAL:
+            # No node leaves the list except as a tombstone: a node removed outright would leave nothing
+            # behind, and its identities could be enrolled again. A mistaken enrollment is retired.
+            require(nid in new, "tombstone: %s cannot be removed; retire it instead" % nid)
             # The manifest that retires a node must record the hardware as it was: identities rewritten in
             # the same step would leave the real ones free and protect the substitutes for ever.
-            if nid in new and new[nid]["state"] in TERMINAL:
+            if new[nid]["state"] in TERMINAL:
                 for k in IDENTITY_KEYS + ("hsm_serials",):
                     require(new[nid][k] == node[k], "tombstone: %s becomes %s and its %s cannot change in the same manifest"
                             % (nid, new[nid]["state"], k))
