@@ -221,6 +221,9 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
 
 ## 4a. Updating the kernel on three nodes without locking the cluster out (#75)
 
+**The whole procedure, step by step, with what can and cannot be run today: `KERNEL-UPDATE.md`** (gaps:
+#156). This section explains the mechanism.
+
 A peer unlocks a node only if its quote matches the reference values the peer holds. Those values are
 a **measurement document** (`deploy/baremetal/measurements.py`) that the signed membership manifest
 commits to: the manifest's `policy_version` is a digest of the document (174 bits of its SHA-256), so a
