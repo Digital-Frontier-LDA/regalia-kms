@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/keywrap"
@@ -44,7 +45,8 @@ type Provider struct {
 	// counter into the indistinguishable value zero.
 	pinReadings map[string]pinRetryReading
 	// turn holds the one slot PIV requests take in order. See takeTurn.
-	turn chan struct{}
+	turn    chan struct{}
+	waiting atomic.Int32
 }
 
 type pinRetryReading struct {
@@ -74,9 +76,19 @@ func New(driver Driver, pins PINSource) (*Provider, error) {
 // A request waits as long as its own context allows, and one that gives up never touches a card.
 // It returns the function that ends the turn, or false when the context ended first.
 func (provider *Provider) takeTurn(ctx context.Context) (func(), bool) {
+	done := func() { <-provider.turn }
 	select {
 	case provider.turn <- struct{}{}:
-		return func() { <-provider.turn }, true
+		return done, true
+	default:
+	}
+	// waiting counts the requests parked here, so that a test can know they have arrived instead
+	// of guessing with a sleep.
+	provider.waiting.Add(1)
+	defer provider.waiting.Add(-1)
+	select {
+	case provider.turn <- struct{}{}:
+		return done, true
 	case <-ctx.Done():
 		return nil, false
 	}

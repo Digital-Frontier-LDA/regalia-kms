@@ -51,6 +51,18 @@ func (session *exclusiveSession) Close() error {
 	return session.fakeSession.Close()
 }
 
+// waitForQueue returns once exactly n requests are parked waiting for the turn.
+func waitForQueue(t *testing.T, provider *Provider, n int32) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for provider.waiting.Load() != n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d requests are waiting for the turn, want %d", provider.waiting.Load(), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 // PIV REQUESTS WAIT FOR EACH OTHER (regalia#541).
 //
 // One YubiKey holds several keys, and the daemon takes requests for them at the same time. On the
@@ -147,7 +159,7 @@ func TestQueuedRequestsDoNotPresentAPINThatWasJustRefused(t *testing.T) {
 			_, _, _ = provider.Execute(context.Background(), route(), "sign", "", "application/octet-stream", []byte("payload"), nil)
 		}()
 	}
-	time.Sleep(20 * time.Millisecond)
+	waitForQueue(t, provider, 6)
 	done()
 	wg.Wait()
 	if presented := card.logins.Load(); presented != 1 {
@@ -170,7 +182,7 @@ func TestAProbeQueuedBehindARefusedPINReportsTheLatch(t *testing.T) {
 	healthy := make(chan bool, 1)
 	go func() { healthy <- provider.Healthy(context.Background(), route().Binding) }()
 	// The probe has passed the first look at the latch and is waiting for the turn.
-	time.Sleep(20 * time.Millisecond)
+	waitForQueue(t, provider, 1)
 	provider.blockPIN(route().Binding.DeviceID)
 	done()
 	if <-healthy {
