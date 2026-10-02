@@ -249,6 +249,22 @@ jobs:
           persist-credentials: false
       - name: Debian 13 software TPM and LUKS2 bootstrap experiments
         run: bash lab/bootstrap/run.sh
+      - name: Repeated unorderly TPM starts above the dictionary lockout threshold
+        run: |
+          lab_test_image=$(docker image inspect regalia-bootstrap-lab:dev --format '{{.Id}}')
+          docker run --init --rm --pull=never --network none --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777 --pids-limit 128 \
+            --mount "type=bind,src=$PWD/lab/bootstrap/.artifacts,dst=/evidence" \
+            --env REGALIA_LAB_SWTPM_SECCOMP=kill --entrypoint python3 "$lab_test_image" \
+            /opt/tpm_soak.py --cycles 100 --output /evidence/tpm-soak-report.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: tpm-restart-soak
+          path: lab/bootstrap/.artifacts/tpm-soak-report.json
+          if-no-files-found: warn
+          retention-days: 14
 
   build-test:
     runs-on: ubuntu-latest

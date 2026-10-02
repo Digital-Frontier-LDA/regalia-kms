@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 FROM tools AS ipc
-COPY lab.py peer.py peer_cases.py membership_cases.py /opt/
+COPY lab.py tpm_soak.py peer.py peer_cases.py membership_cases.py /opt/
 USER 65532:65532
 ENTRYPOINT ["python3", "/opt/lab.py"]
 

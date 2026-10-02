@@ -44,6 +44,8 @@ class TPM:
         self.process = None
         self.operation_lock = threading.RLock()
         self.failures = []
+        self.sealed_attributes = {}
+        self.ak_attributes = None
         self.socket = self.root / "tpm.sock"
         self.env = dict(os.environ, TPM2TOOLS_TCTI=f"swtpm:path={self.socket}")
 
@@ -71,10 +73,32 @@ class TPM:
         if not provision:
             return
         self.call("tpm2_createek", "-G", "rsa", "-c", "0x81010001", "-Q")
-        self.call("tpm2_createak", "-C", "0x81010001", "-G", "rsa", "-g", "sha256",
-                  "-s", "rsassa", "-c", self.root / "ak.ctx", "-u", self.root / "ak.pem", "-f", "pem", "-Q")
+        # A PIN-less AK authorizes no secret by itself. The stock createak
+        # template is DA-protected; unorderly startups eventually lock it out.
+        # Use the same restricted signing template plus noDA, via the EK's
+        # standard endorsement PolicySecret session. No global DA setting changes.
+        session = self.root / "ek-session.ctx"
+        self.call("tpm2_startauthsession", "--policy-session", "-S", session, "-Q")
+        try:
+            self.call("tpm2_policysecret", "-S", session, "-c", "e", "-Q")
+            self.call("tpm2_create", "-C", "0x81010001", "-P", "session:" + str(session),
+                      "-G", "rsa2048:rsassa:null",
+                      "-a", "fixedtpm|fixedparent|sensitivedataorigin|userwithauth|restricted|sign|noda",
+                      "-c", self.root / "ak.ctx", "-u", self.root / "ak.pub",
+                      "-r", self.root / "ak.priv", "-Q")
+        finally:
+            self.call("tpm2_flushcontext", session, required=False)
+            session.unlink(missing_ok=True)
+        self.call("tpm2_readpublic", "-c", self.root / "ak.ctx", "-f", "pem",
+                  "-o", self.root / "ak.pem", "-Q")
         self.call("tpm2_evictcontrol", "-C", "o", "-c", self.root / "ak.ctx", "0x81010002", "-Q")
         self.call("tpm2_flushcontext", "-t")
+        public = self.root / "ak.enrolled.pub"
+        self.call("tpm2_readpublic", "-c", "0x81010002", "-f", "tss", "-o", public, "-Q")
+        blob = public.read_bytes()
+        if len(blob) < 10 or int.from_bytes(blob[6:10], "big") != 0x50472:
+            raise RuntimeError("AK attributes do not enforce restricted fixed TPM signing with noDA")
+        self.ak_attributes = 0x50472
 
     def restart(self):
         with self.operation_lock:
@@ -109,11 +133,21 @@ class TPM:
         self.call("tpm2_createpolicy", "--policy-pcr", "-l", "sha256:7", "-L", self.root / "pcr.policy", "-Q")
 
     def seal(self, name, secret, handle):
+        # Policy-only objects have no password guessing surface. noDA prevents
+        # deliberate wrong-PCR probes from exhausting global dictionary counters.
+        # userwithauth remains absent, so an empty password cannot bypass policy.
         self.call("tpm2_create", "-C", "0x81010003", "-L", self.root / "pcr.policy", "-i", "-",
+                  "-a", "fixedtpm|fixedparent|noda",
                   "-u", self.root / f"{name}.pub", "-r", self.root / f"{name}.priv",
                   "-c", self.root / f"{name}.ctx", "-Q", data=secret)
         self.call("tpm2_evictcontrol", "-C", "o", "-c", self.root / f"{name}.ctx", handle, "-Q")
         self.call("tpm2_flushcontext", "-t")
+        public = self.root / f"{name}.enrolled.pub"
+        self.call("tpm2_readpublic", "-c", handle, "-f", "tss", "-o", public, "-Q")
+        blob = public.read_bytes()
+        if len(blob) < 10 or int.from_bytes(blob[6:10], "big") != 0x412:
+            raise RuntimeError("sealed object attributes do not enforce policy-only noDA")
+        self.sealed_attributes[name] = 0x412
 
     def unseal(self, handle):
         return self.call("tpm2_unseal", "-c", handle, "-p", "pcr:sha256:7", required=False)

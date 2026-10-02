@@ -147,6 +147,9 @@ class Cluster:
                 raise RuntimeError("cluster startup timed out")
             self.check(f"{node} drops all service capabilities", identities[node]["uid"] == 10000
                        and int(identities[node]["caps"], 16) == 0)
+            self.check(f"{node} seals policy-only noDA objects with fixed TPM and parent",
+                       identities[node].get("sealed_object_attributes") == {"wg": 0x412, "local": 0x412}
+                       and identities[node].get("ak_attributes") == 0x50472)
             self.check(f"{node} has distinct boot and runtime WireGuard identities",
                        identities[node]["wg_public"] != identities[node]["service_wg_public"])
         self.identities = identities

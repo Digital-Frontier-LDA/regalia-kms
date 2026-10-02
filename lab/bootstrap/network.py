@@ -147,7 +147,9 @@ class Node:
                 if line.startswith("CapEff:")][0]
         return {"node_id": self.node_id, "wg_public": self.public, "uid": os.getuid(), "caps": caps,
                 "ak_pem": (self.tpm.root / "ak.pem").read_text(),
-                "approved_pcr": (self.tpm.root / "approved.pcr").read_bytes().hex()}
+                "approved_pcr": (self.tpm.root / "approved.pcr").read_bytes().hex(),
+                "sealed_object_attributes": dict(self.tpm.sealed_attributes),
+                "ak_attributes": self.tpm.ak_attributes}
 
     def release(self, command, source):
         if command.get("op") not in ["challenge", "authorize"]:
