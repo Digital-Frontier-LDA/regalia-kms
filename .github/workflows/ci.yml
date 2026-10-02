@@ -95,6 +95,8 @@ jobs:
           # internal/pin's mlock refusal can only be exercised where mlock can be made to fail, and
           # on linux it can. With this set the test fails rather than skips if that stops being true.
           REGALIA_EXPECT_MLOCK_ENFORCED: "1"
+          # internal/pin's ACL guard needs a filesystem that takes POSIX ACLs; the runner's does.
+          REGALIA_EXPECT_ACL_GUARD_ENFORCED: "1"
         run: |
           umask 002
           go test -race ./...

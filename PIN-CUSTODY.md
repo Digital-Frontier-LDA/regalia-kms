@@ -43,7 +43,11 @@ them only while starting `regalia-kms` and exposes them to that service under it
 paths. It never accepts PIN values in JSON, environment variables, command arguments or logs.
 
 `internal/pin.LockedFileSource` opens credentials with `O_NOFOLLOW|O_CLOEXEC`, verifies the opened
-object is a root- or service-owned regular file with no group/world permission, bounds it to 64
+object is a root- or service-owned regular file with no group/world permission (the one POSIX ACL it
+accepts is systemd's own: read for the service's user and nothing for anyone else, which is how
+`LoadCredential`/`LoadCredentialEncrypted` deliver a credential to a unit with `User=`; that file
+reads as mode 0440, and was refused until `e2e/kms-hardened-serve.sh` ran the daemon under the
+shipped unit), bounds it to 64
 printable bytes, locks its pages with `mlock`, and returns a fresh buffer for one operation. Both
 providers zero and `munlock` that buffer through `Release` immediately after login and operation.
 Failure to lock or release memory fails the operation closed. *Verified by:* unit tests in
