@@ -64,7 +64,7 @@ ATTESTED, NOT MEASURED (what the OS cannot read; in the signed evidence, deploy/
   pin_import_key_sha256, hsm_usb_path, credential_tpm2_pcrs (never PCR 10, never PCR 11 directly),
   credential_tpm2_signed_pcrs and credential_tpm2_pcr_key_pkfp (the signed PCR 11 policy, #57).
 
-The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's SANDBOX_MEASURED.
+The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's too.
 
 NOT MEASURED YET: a signed PCR 11 policy on the ROOT DISK. root_disk_tpm_unlocked still requires a
 LUKS2 token bound to PCR 7 exactly; the signed policy covers the PIN credentials only.
@@ -111,7 +111,7 @@ PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank
             "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
             "token_clients_root_only", "firewall_default_deny")
-MEASURED = PLATFORM + os_probe.MEASURED + os_probe.SANDBOX_MEASURED
+MEASURED = PLATFORM + os_probe.MEASURED
 UNMEASURED = evidence_mod.ATTESTED + evidence_mod.RECORDS
 
 
@@ -505,7 +505,7 @@ def firewall(host):
     return True, "inet regalia_kms loaded; input, output and forward default to drop"
 
 
-PROBES = dict(os_probe.PROBES, **os_probe.SANDBOX_PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
+PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
               tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
