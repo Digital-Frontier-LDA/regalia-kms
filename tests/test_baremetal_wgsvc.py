@@ -131,6 +131,12 @@ class Rendering(Case):
         self.assertEqual(wgsvc.reconcile(self.m1, wgsvc.AUTHORITY, {}, PRIVATE, run=host, own_key=AUTHORITY), wgsvc.address(AUTHORITY))
         self.refused("the authority's is given", wgsvc.reconcile, self.m1, wgsvc.AUTHORITY, {}, PRIVATE, run=Reconciling.Host())
         self.refused("a node's key is the manifest's", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=Reconciling.Host(), own_key=AUTHORITY)
+        # the authority's own key is held to the same checks as the nodes'
+        self.refused("the authority's key is a node's key", wgsvc.reconcile, self.m1, wgsvc.AUTHORITY, {}, PRIVATE, run=Reconciling.Host(), own_key=KEY["b"])
+        from unittest import mock
+        real = wgsvc.address
+        with mock.patch.object(wgsvc, "address", lambda key: real(KEY["b"]) if key == AUTHORITY else real(key)):
+            self.refused("two keys derive the same tunnel address", wgsvc.reconcile, self.m1, wgsvc.AUTHORITY, {}, PRIVATE, run=Reconciling.Host(), own_key=AUTHORITY)
 
     def test_two_keys_that_derive_one_address_are_refused(self):
         from unittest import mock
@@ -176,10 +182,12 @@ class Applying(Case):
             with self.subTest(bad=bad):
                 self.refused("named wg-...", wgsvc.apply, "[Interface]\n", PRIVATE, interface=bad, run=Wg())
                 self.refused("named wg-...", wgsvc.verify, "[Interface]\n", interface=bad, run=Wg())
-                self.refused("named wg-...", wgsvc.up, KEY["a"], interface=bad, run=Wg())
+                self.refused("named wg-...", wgsvc.prepare, KEY["a"], interface=bad, run=Wg())
+                self.refused("named wg-...", wgsvc.up, interface=bad, run=Wg())
+                self.refused("named wg-...", wgsvc.down, interface=bad, run=Wg())
         wgsvc.apply("[Interface]\nListenPort = 1\n", PRIVATE, interface="wg-other", run=Wg())
 
-    def test_up_creates_the_interface_once_with_the_derived_address_and_the_route(self):
+    def test_prepare_creates_the_interface_once_and_leaves_it_down_up_brings_it_up_with_the_route(self):
         own = wgsvc.address(KEY["a"])
 
         class Ip(Wg):
@@ -189,19 +197,41 @@ class Applying(Case):
                 self.calls.append(argv)
                 return done(0 if self.present else 1) if argv[:3] == ["ip", "link", "show"] else done(self.code)
         fresh = Ip()
-        self.assertEqual(wgsvc.up(KEY["a"], run=fresh), own)
+        self.assertEqual(wgsvc.prepare(KEY["a"], run=fresh), own)
         self.assertEqual(fresh.calls, [["ip", "link", "show", "dev", "wg-svc"], ["ip", "link", "add", "dev", "wg-svc", "type", "wireguard"],
-                                       ["ip", "-6", "address", "replace", own + "/128", "dev", "wg-svc", "nodad"],
-                                       ["ip", "link", "set", "dev", "wg-svc", "up"],
-                                       ["ip", "-6", "route", "replace", "fd72:6567:6c61::/48", "dev", "wg-svc"]])
+                                       ["ip", "-6", "address", "replace", own + "/128", "dev", "wg-svc", "nodad"]])   # not up
+        wgsvc.up(run=fresh)
+        self.assertEqual(fresh.calls[-2:], [["ip", "link", "set", "dev", "wg-svc", "up"], ["ip", "-6", "route", "replace", "fd72:6567:6c61::/48", "dev", "wg-svc"]])
         again = Ip()
         again.present = True
-        wgsvc.up(KEY["a"], run=again)
+        wgsvc.prepare(KEY["a"], run=again)
         self.assertNotIn(["ip", "link", "add", "dev", "wg-svc", "type", "wireguard"], again.calls)   # it is there: not added twice
         failing = Ip(code=1)
-        self.refused("the tunnel interface could not be created", wgsvc.up, KEY["a"], run=failing)
+        self.refused("the tunnel interface could not be created", wgsvc.prepare, KEY["a"], run=failing)
         failing.present = True
-        self.refused("the tunnel address could not be set", wgsvc.up, KEY["a"], run=failing)
+        self.refused("the tunnel address could not be set", wgsvc.prepare, KEY["a"], run=failing)
+        self.refused("could not be brought up", wgsvc.up, run=failing)
+
+    def test_down_is_down_or_deleted_or_a_refusal_that_says_so(self):
+        class Ip(Wg):
+            def __init__(self, codes):
+                super().__init__()
+                self.codes = codes
+
+            def __call__(self, argv, **kw):
+                self.calls.append(argv)
+                code = self.codes.pop(0)
+                if isinstance(code, Exception):
+                    raise code
+                return done(code)
+        quiet = Ip([0])
+        wgsvc.down(run=quiet)
+        self.assertEqual(quiet.calls, [["ip", "link", "set", "dev", "wg-svc", "down"]])
+        stubborn = Ip([1, 0])
+        wgsvc.down(run=stubborn)
+        self.assertEqual(stubborn.calls[-1], ["ip", "link", "del", "dev", "wg-svc"])
+        for codes in ([1, 1], [OSError("ip"), subprocess.TimeoutExpired("ip", 10)]):
+            self.refused("could not be taken down or deleted: it may still carry its old peers", wgsvc.down, run=Ip(codes))
 
 
 class Verifying(Case):
@@ -277,11 +307,41 @@ class Reconciling(Case):
         return {n["wg_service_pub"]: [wgsvc.address(n["wg_service_pub"]) + "/128"] for n in manifest["nodes"]
                 if n["node_id"] != node and n["state"] not in m.TERMINAL}
 
-    def test_up_apply_and_read_back(self):
+    def test_apply_read_back_and_only_then_up(self):
         host = self.Host(self.table(self.m1))
         self.assertEqual(wgsvc.reconcile(self.m1, "a", {"b": "198.51.100.7"}, PRIVATE, run=host), wgsvc.address(KEY["a"]))
-        self.assertEqual([c[:2] for c in host.calls], [["ip", "link"], ["ip", "-6"], ["ip", "link"], ["ip", "-6"], ["wg", "syncconf"], ["wg", "show"]])
+        self.assertEqual([c[:4] for c in host.calls], [["ip", "link", "show", "dev"], ["ip", "-6", "address", "replace"], ["wg", "syncconf", "wg-svc", "/dev/stdin"],
+                                                       ["wg", "show", "wg-svc", "allowed-ips"], ["ip", "link", "set", "dev"], ["ip", "-6", "route", "replace"]])
+        self.assertEqual(host.calls[4], ["ip", "link", "set", "dev", "wg-svc", "up"])     # after the read-back, not before
         self.assertNotIn(["ip", "link", "set", "dev", "wg-svc", "down"], host.calls)
+
+    def test_a_failure_anywhere_takes_the_interface_down_and_a_failed_take_down_is_said(self):
+        """Found by an independent read: a failure inside the old up() was outside the try, and a take-down
+        that failed was ignored, so a refusal could leave the interface up with stale or widened peers."""
+        for label, step in (("the address", ["ip", "-6", "address"]), ("the link up", ["ip", "link", "set", "dev", "wg-svc", "up"]),
+                            ("the route", ["ip", "-6", "route"])):
+            with self.subTest(label):
+                class Failing(self.Host):
+                    def __call__(self, argv, **kw):
+                        if argv[:len(step)] == step:
+                            self.calls.append(argv)
+                            return done(1)
+                        return super().__call__(argv, **kw)
+                host = Failing(self.table(self.m1))
+                with self.assertRaises(m.Refused):
+                    wgsvc.reconcile(self.m1, "a", {}, PRIVATE, run=host)
+                self.assertEqual(host.calls[-1], ["ip", "link", "set", "dev", "wg-svc", "down"])
+
+        class Stuck(self.Host):
+            def __call__(self, argv, **kw):
+                if argv[:3] == ["ip", "link", "set"] or argv[:3] == ["ip", "link", "del"]:
+                    self.calls.append(argv)
+                    return done(1)
+                return super().__call__(argv, **kw)
+        wide = Stuck(dict(self.table(self.m1), **{KEY["c"]: ["fd72:6567:6c61::/48"]}))
+        self.refused("the tunnel's peers are not the manifest's", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=wide)
+        self.refused("could not be taken down or deleted", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=Stuck(dict(self.table(self.m1), **{KEY["c"]: ["fd72:6567:6c61::/48"]})))
+        self.assertEqual(wide.calls[-2:], [["ip", "link", "set", "dev", "wg-svc", "down"], ["ip", "link", "del", "dev", "wg-svc"]])
 
     def test_a_result_that_is_not_the_manifest_s_takes_the_interface_down(self):
         revoked = hbt.manifest(c="REVOKED_STOLEN")

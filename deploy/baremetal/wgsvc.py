@@ -34,8 +34,15 @@ so a node that is revoked there is refused although its peer entry has not been 
 THE REVOCATION AUTHORITY is one more peer, configured locally by its key and underlay (it is not a node of
 the manifest). Nodes ask it; it never asks them, and nothing it sends is trusted for coming from it.
 
-NOT HERE: the units, the trigger that re-runs reconcile() after an accepted manifest, the firewall rules
-for the interface and the site configuration that names it (step 3).
+ONE MORE CONDITION, ON THE HOST: a packet with a tunnel source address must not reach the sync port by any
+other way than the tunnel. Linux takes packets for a local address on any interface, and IPv6 has no
+reverse-path filter, so a host on the same link could send one in plaintext. The host firewall closes
+that (firewall.py, #189): IPv6 is accepted only on the service interface; on every other it is dropped.
+
+`wg` and `ip` are found through PATH; the units pin it.
+
+NOT HERE: the units, the trigger that re-runs reconcile() after an accepted manifest, and the site
+configuration that names the interface (step 3).
 """
 import base64
 import binascii
@@ -90,7 +97,7 @@ def _port(value, label):
     return value
 
 
-def conf(manifest, node_id, underlays, authority=None, listen_port=LISTEN_PORT):
+def conf(manifest, node_id, underlays, authority=None, listen_port=LISTEN_PORT, own_key=None):
     """The `wg setconf` text for `node_id`'s service interface under `manifest`, without the private key.
     `underlays` maps a node ID to its IPv4 underlay address (a peer with none is still a peer: it can call,
     and is answered where it called from). `authority` is None or {"key", "underlay", "port"}."""
@@ -125,7 +132,10 @@ def conf(manifest, node_id, underlays, authority=None, listen_port=LISTEN_PORT):
     # key the root signer pins is ever a peer, so it would take the signer's help; still, it is refused
     # here rather than assumed: every node of the manifest (this one and terminal ones included) and the
     # authority must derive addresses of their own.
-    keys = [n["wg_service_pub"] for n in manifest["nodes"]] + ([authority["key"]] if authority is not None else [])
+    if own_key is not None:      # the authority's own interface: its key is no node's, and derives an address of its own
+        membership.hex_field(own_key, 64, "the authority's key")
+        require(own_key not in {n["wg_service_pub"] for n in manifest["nodes"]}, "the authority's key is a node's key")
+    keys = [n["wg_service_pub"] for n in manifest["nodes"]] + [k for k in ((authority or {}).get("key"), own_key) if k is not None]
     derived = [address(k) for k in keys]
     require(len(set(derived)) == len(derived), "two keys derive the same tunnel address: they could not be told apart")
     return text
@@ -152,8 +162,9 @@ def apply(text, private_key, interface=INTERFACE, run=subprocess.run):
          input=bootnet.with_key(text, private_key).encode())
 
 
-def up(own_key, interface=INTERFACE, run=subprocess.run):
-    """Create the interface if it is not there, with this node's derived address and the route to the prefix.
+def prepare(own_key, interface=INTERFACE, run=subprocess.run):
+    """Create the interface if it is not there and give it this node's derived address, LEAVING IT DOWN:
+    it carries nothing until its peers have been applied and read back (reconcile). Returns the address.
     THE MTU IS LEFT AT WIREGUARD'S DEFAULT, THE SAME ON EVERY HOST, and must stay so: the host firewall drops
     every ICMPv6 inside the tunnel, the "packet too big" that path-MTU discovery needs included, so a site
     with a smaller MTU on its interface would silently lose the others' large segments."""
@@ -165,9 +176,27 @@ def up(own_key, interface=INTERFACE, run=subprocess.run):
     if not present:
         _run(run, ["ip", "link", "add", "dev", name, "type", "wireguard"], "the tunnel interface could not be created")
     _run(run, ["ip", "-6", "address", "replace", own + "/128", "dev", name, "nodad"], "the tunnel address could not be set")
+    return own
+
+
+def up(interface=INTERFACE, run=subprocess.run):
+    """Bring the interface up, with the route to the tunnel prefix: only once its peers are verified."""
+    name = _interface(interface)
     _run(run, ["ip", "link", "set", "dev", name, "up"], "the tunnel interface could not be brought up")
     _run(run, ["ip", "-6", "route", "replace", str(PREFIX), "dev", name], "the route to the tunnel prefix could not be set")
-    return own
+
+
+def down(interface=INTERFACE, run=subprocess.run):
+    """Take the interface out of service, and make sure it is: down, or if that fails deleted. Raises
+    Refused if neither could be done, naming it, so that nobody takes the interface for safe."""
+    name = _interface(interface)
+    for argv in (["ip", "link", "set", "dev", name, "down"], ["ip", "link", "del", "dev", name]):
+        try:
+            if run(argv, capture_output=True, timeout=10).returncode == 0:
+                return
+        except (OSError, subprocess.SubprocessError):
+            pass
+    raise Refused("the tunnel interface %s could not be taken down or deleted: it may still carry its old peers" % name)
 
 
 def owners(text):
@@ -218,21 +247,25 @@ def verify(text, interface=INTERFACE, run=subprocess.run):
 
 def reconcile(manifest, node_id, underlays, private_key, authority=None, listen_port=LISTEN_PORT, interface=INTERFACE, run=subprocess.run,
               own_key=None):
-    """The root side: make the interface what `manifest` says, and prove it. On any failure after the
-    interface exists it is taken DOWN before the refusal is raised. `own_key` is this host's public key
+    """The root side: make the interface what `manifest` says, and prove it. The interface is brought UP
+    only after its peers have been applied and read back. On ANY failure once it exists it is taken DOWN
+    (or deleted, if it will not go down) before the refusal is raised. `own_key` is this host's public key
     when it is the authority (node_id AUTHORITY); a node's is the manifest's."""
     membership.validate(manifest)
     entries = {node["node_id"]: node for node in manifest["nodes"]}
-    text = conf(manifest, node_id, underlays, authority, listen_port)
+    text = conf(manifest, node_id, underlays, authority, listen_port, own_key)
     require((own_key is None) == (node_id in entries), "a node's key is the manifest's; the authority's is given")
     name = _interface(interface)
-    own = up(own_key or entries[node_id]["wg_service_pub"], name, run)
     try:
+        own = prepare(own_key or entries[node_id]["wg_service_pub"], name, run)
         apply(text, private_key, name, run)
         verify(text, name, run)
-    except Refused:
-        with contextlib.suppress(OSError, subprocess.SubprocessError):
-            run(["ip", "link", "set", "dev", name, "down"], capture_output=True, timeout=10)
+        up(name, run)
+    except BaseException as failure:
+        try:
+            down(name, run)
+        except Refused as stuck:
+            raise Refused("%s; and %s" % (failure, stuck)) from None
         raise
     return own
 
