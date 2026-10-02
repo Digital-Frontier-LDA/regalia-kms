@@ -46,7 +46,12 @@ Commissioning has two halves:
     an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
     passes only when the unlock can retire an image: a peer's contribution (#67: `regalia-peer-unlock`
     tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
-    peer that holds a path; the enrolment exists in `deploy/baremetal/unlock.py`, its boot-time client
+    peer that holds a path, and a crypttab entry whose key file is the unlock client's socket,
+    `/run/regalia-unlock/key.sock`, with only options known to leave the unlock alone (`luks`, `x-initrd.attach`,
+    `discard`, `tries=`, `timeout=`, …: no `header=`, no `headless`, no other token device) and no `rd.luks.*` on the
+    kernel command line. The probe reads `/etc/crypttab`, which is what the initrd was built from, not necessarily
+    what the initrd holds: rebuild the initrd after every edit. The enrolment exists in
+    `deploy/baremetal/unlock.py`, its boot-time client
     does not yet), or an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
     `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
@@ -140,12 +145,17 @@ Commissioning has two halves:
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
   it asked for after the token was back (after the daemon's own start, for a restart): until then that
   binding is unavailable and the daemon is not ready. The lease service sees the daemon's start and asks
-  at once; a token's return it does not see, and that waits for the next scheduled renewal. Measured: `kms_runtime_admission_required` (the
+  at once; a token's return it does not see, and that waits for the next scheduled renewal. A token
+  pulled while an operation is in flight is seen too (it stops answering for its identity); a request the
+  token merely refuses, or one whose caller hung up, is not an absence. A token pulled during the PIN
+  login also leaves the PIN latch set: after its return it needs the fresh lease **and** an operator's
+  PIN-block reset, as any failed login does. This holds for every key the daemon serves: the HSM's, a
+  YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
 
 ### Host firewall (default deny, both directions)
 
-The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` for a single-site
+The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` and `"service_mesh": null` for a single-site
 host, section 7 otherwise) declares the host's address, the
 KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
 (the audit and NTP sinks at least). From it:
@@ -235,7 +245,22 @@ commits to: the manifest's `policy_version` is a digest of the document (174 bit
 peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
 restored disk cannot roll back: the epoch is anchored in the TPM).
 
-Each node has one accepted set, or two while an update is under way. An update is three documents:
+Each node has one accepted set, or two while an update is under way.
+
+**One image, two PCR 11 values.** On a host that boots a unified kernel image, systemd extends PCR 11
+as the boot passes its phases. So the same image measures one PCR 11 in the initrd, where the node asks
+a peer for its disk, and another once booted, where it asks for a runtime lease. A set therefore gives
+PCR 11 **per phase** (`"phases": {"initrd": {"11": …}, "system": {"11": …}}`, both values from the
+image's build record), and a peer accepts each request from its own phase only: **an unlock from the
+initrd, a lease from the booted system.** A booted system that asks for a disk key is refused, on an
+approved image too. A set with one value per PCR (a host that does not boot a UKI) is judged the same in
+both. The peer's record of a node says in which phase it last saw it, and **"back on the new image"
+means seen up**: a node verified only in its initrd has asked for its disk and may never have come up,
+so it does not let the next node reboot and does not count towards retiring the old image.
+Until this was added, a set held one PCR 11 value and a real UKI host would have been refused at
+one of the two requests; the software-TPM tests extended PCR 11 once and did not show it.
+
+An update is three documents:
 
 | Step | Document | The root signs | What works |
 |---|---|---|---|
@@ -344,7 +369,8 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 - **The peer** (`deploy/baremetal/unlock.py`, on a booted host): the host sends a fresh TPM quote for
   this boot; the peer decides with `replacement.may_unlock`, and answers with its half encrypted to
   this boot's one-time key and signed by its own TPM. A captured exchange is useless in another boot.
-- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary; `unlock.py` also holds a
+- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary that talks to the TPM through
+  `go-tpm`, the standard Go library for it; `unlock.py` also holds a
   reference client that the tests use and that is not shipped). It holds no manifest and makes no
   membership decision. It runs no other program and writes no file:
   - systemd unseals the local half with the TPM and passes it as the unit's credential
@@ -360,8 +386,41 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   the volume is mapped with the key from the socket; with no peer, systemd-cryptsetup gets no key and
   gives up within a second, maps nothing, and the socket goes on listening for the next attempt.
   **One boot carries one attested session**: after a peer has answered once in a boot, a second run in
-  that boot gets no second answer. NOT shown yet: the prompt for the recovery key at a console after
-  that (it needs a console: the boot test), and the units inside an initrd.
+  that boot gets no second answer.
+- **The initrd** is built with dracut and the module `deploy/baremetal/initrd/dracut/90regalia-unlock`
+  (`dracut --add regalia-unlock`): the client, the two units above, `regalia-wg-boot.service` with its
+  script (the initrd ruleset first, then the declared address, then WireGuard with the WG-BOOT key
+  systemd unsealed), `ip`, `wg`, `nft`, and the network drivers. The files that differ per host and
+  per manifest are under `/etc/regalia` (the boot configuration, the two sealed credentials, the
+  WireGuard configuration, the ruleset, `boot.env`), with the root volume's crypttab entry:
+  `root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach`.
+- **Shown on a real boot** (`e2e/unlock-boot-qemu.sh`: a Debian 13 guest in QEMU with a software TPM,
+  its whole disk one LUKS2 volume, the peers reached over WireGuard):
+  - enrolment: with nothing enrolled the console asks "Please enter recovery key for disk root", and
+    the key opens the volume; the running guest seals the two boot credentials to its own TPM;
+  - unattended: systemd unseals both credentials in the initrd, the boot mesh comes up, a peer
+    verifies the guest's quote and gives its half, and the root volume opens with nobody typing
+    anything (a few seconds after the kernel started, in the runs so far); after switch-root the boot
+    interface, its ruleset and its addresses are gone and the link is down;
+  - no peer: the client gives nothing after its five rounds (about two minutes in the runs so far),
+    and the console asks for the passphrase or recovery key, which opens the volume.
+  NOT shown: measured boot. The guest boots a plain kernel and initrd under SeaBIOS, so PCR 11 is zero
+  and PCR 7 holds no Secure Boot state: sealing to the TPM and the peers' check of the quote are shown
+  as mechanics, on this TPM and no other, and nothing there would refuse a changed initrd. That needs
+  a unified kernel image under UEFI. Also not shown: a network card that udev renames in the initrd
+  (the guest's is `eth0`), a host whose initrd is built with the files already under `/etc/regalia`
+  (the test appends them to the image), and any physical machine.
+- **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
+  keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen
+  in the boot test). `/etc/crypttab` on the root is only what the initrd was built from, if it was
+  rebuilt since the last edit. So it is checked on the image, before the image is approved:
+  ```sh
+  lsinitrd IMAGE | grep -E 'regalia|etc/crypttab|etc/cmdline\.d|usr/bin/(wg|nft)$'   # what it holds
+  lsinitrd -f etc/crypttab IMAGE          # one entry: root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach
+  lsinitrd -f etc/regalia/unlock.json IMAGE   # this node, its disk, the PCRs it quotes, its peers
+  ```
+  No file under `etc/cmdline.d` may configure LUKS (`rd.luks.*`), and no other crypttab entry may
+  name the root volume.
 - **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
   keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
   disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
@@ -392,6 +451,25 @@ a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network na
 - A WireGuard configuration is applied with its private key added in memory (`bootnet.with_key`),
   never without it: `wg syncconf` with a file that has no key unsets the interface's key.
 
-Not there yet, so **nothing here is to be run on a KMS host**: the systemd units and the initrd
-(dracut) that bring up the mesh and start the client, sealing the WG-BOOT key, the operator commands,
-and every run on a physical TPM, a DL360 (#65) or the real datacenter networks.
+**The service mesh (#80).** The running services of the three nodes talk over a second WireGuard
+interface, `wg-svc` (the site config's `service_mesh`; it needs a `boot_mesh`, whose node ID and
+underlay addresses it uses). Inside it every address is derived from a node's WireGuard key, in one
+fixed prefix (`sitecfg.SERVICE_PREFIX`), so the site config names none of them. The host firewall gains,
+and only with a `service_mesh`:
+
+- WireGuard (its UDP port) with the peers' declared addresses, and the revocation authority's if one is
+  configured;
+- the sync port inside the tunnel, only between addresses of that prefix, in both directions;
+- **nothing else on that interface**, IPv4 or IPv6, in or out: the rule that drops the rest of the
+  interface comes before every zone rule, so a zone's address inside the tunnel opens nothing.
+
+It is the only IPv6 the host carries. Proven by behaviour, with real WireGuard, in section 5 of
+`e2e/baremetal-firewall-netns.sh`: a source outside the prefix, another port, the sync port on the
+wire, a client-zone address inside the tunnel, and a valid key at an undeclared address each get
+nothing.
+
+Not there yet, so **nothing here is to be run on a KMS host**: measured boot with a unified kernel
+image (a changed or retired initrd refused on a real boot), the commands an operator types to enrol a
+host and to write `/etc/regalia` after each manifest, the long-running peer process, and every run on
+a physical TPM, a DL360 (#65) or the real datacenter networks. Sections 3 to 5 above still describe
+the single-site baseline (initramfs-tools, TPM-only crypttab); they change when this is commissioned.

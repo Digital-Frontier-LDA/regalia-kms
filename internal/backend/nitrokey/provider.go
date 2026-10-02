@@ -11,11 +11,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/keywrap"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
 
 var ErrUnavailable = errors.New("Nitrokey backend unavailable")
+
+// ErrPINNotPresented is what Session.Login returns when it refused BEFORE the PIN reached the token:
+// the request's context had ended, or the session was closed. No try was spent, so the provider sets
+// no PIN latch for it. A Login error that is not this one means the PIN may have been presented.
+var ErrPINNotPresented = errors.New("the PIN was not presented to the token")
 
 // kekReason names the latch truthfully.
 //
@@ -105,10 +111,9 @@ type Provider struct {
 }
 
 // Reauthorizer says whether the node holds a runtime lease it asked for after a moment, given in
-// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter).
-type Reauthorizer interface {
-	RequestedAfter(ctx context.Context, boottimeMs int64) bool
-}
+// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter). It is the gate
+// every provider takes (internal/backend/reauth), under the name this package has always used.
+type Reauthorizer = reauth.Gate
 
 type tokenAbsence struct {
 	returned     bool
@@ -147,9 +152,25 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 // at once (deploy/baremetal/admission.py), and the node's readiness says so meanwhile. sinceMs
 // must not be in the future: a start time ahead of the clock would be a lease nobody can ask for.
 //
-// WHAT IT CANNOT SEE: an absence nobody looked during. A token is known to be gone only when an
-// operation or a health check opens it and fails. Every routing decision and every readiness probe
-// does open it, so the window is the gap between two of those.
+// WHAT COUNTS AS SEEN GONE. A token that cannot be opened. And a token that stopped answering while
+// it was open: when a call on an open session fails, the token is asked for its identity again, and
+// if it does not answer (the driver looks for the token by serial among the slots and reads it
+// afresh: a pulled card is not found), or the session will not close, it is marked gone. A token
+// that still answers was not gone: the failure was about the request (a payload the key refuses, a
+// malformed blob) or about the caller (it hung up, or its deadline passed). That distinction
+// matters, because marking on any failure would let a caller who may sign take a token out of
+// service at will, for up to a third of a lease each time.
+//
+// The question is asked under a context of ITS OWN, not the request's. Every driver call refuses an
+// ended context, so under the request's context a caller that disconnects mid-signature, or a
+// request that reaches its deadline, would make the token look gone.
+//
+// Two limits of the question. The driver refuses to pick a slot while ANOTHER slot's token answers
+// with an error, so a refused request that coincides with a second token misbehaving costs this one
+// a renewal. And a token pulled and put back within the one failed call answers, and is not seen.
+//
+// WHAT IT CANNOT SEE: an absence nobody looked during. Every routing decision and every readiness
+// probe opens the token, so the window is the gap between two of those.
 func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime func() (int64, error), sinceMs int64) error {
 	if gate == nil || boottime == nil {
 		return errors.New("reauthorization needs the admission gate and the boot clock")
@@ -169,12 +190,52 @@ func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime fun
 	return nil
 }
 
-// tokenGone records that a token could not be opened. Whatever lease the node holds now was asked
-// for before the token comes back.
+// gates reports whether reauthorization is required at all.
+func (provider *Provider) gates() bool {
+	provider.mu.RLock()
+	defer provider.mu.RUnlock()
+	return provider.reauthorizer != nil
+}
+
+// stillAnswersWithin bounds the question stillAnswers asks: long enough for a token that is there,
+// short enough that a failed request does not hold its caller.
+const stillAnswersWithin = 5 * time.Second
+
+// stillAnswers asks the token for its identity again after a call on it failed. A token that was
+// pulled is not found. A driver that panics is not answering either. The context is the question's
+// own: the request's may already be cancelled or past its deadline, and that says nothing about the
+// token.
+func stillAnswers(ctx context.Context, session Session) (answers bool) {
+	defer func() {
+		if recover() != nil {
+			answers = false
+		}
+	}()
+	own, cancel := context.WithTimeout(context.WithoutCancel(ctx), stillAnswersWithin)
+	defer cancel()
+	_, _, err := session.Identity(own)
+	return err == nil
+}
+
+// goneUnlessTheRequestEnded is what a failed Open means. The driver refuses to open anything under a
+// context that has ended, so a request that arrives already cancelled, or past its deadline, fails
+// here with the token in place: that says nothing about the token, and marking it gone would let a
+// caller who hangs up take every key on it out of service until the next renewal. Under a live
+// context a failed Open is the token not being there. A token that IS gone while a request ends is
+// marked by the next look made under a live context: the health check of the next routing decision.
+func (provider *Provider) goneUnlessTheRequestEnded(ctx context.Context, deviceID string) {
+	if ctx.Err() == nil {
+		provider.tokenGone(deviceID)
+	}
+}
+
+// tokenGone records that a token could not be opened, or stopped answering while it was open.
+// Whatever lease the node holds now was asked for before the token comes back.
 func (provider *Provider) tokenGone(deviceID string) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if provider.reauthorizer != nil {
+	// "" is not a device: it is the key the baseline for never-seen devices is kept under.
+	if provider.reauthorizer != nil && deviceID != "" {
 		provider.absences[deviceID] = tokenAbsence{}
 	}
 }
@@ -188,6 +249,10 @@ func (provider *Provider) reauthorized(ctx context.Context, deviceID string) boo
 	if gate == nil {
 		provider.mu.Unlock()
 		return true
+	}
+	if deviceID == "" { // not a device: the baseline's own key, which serving must never overwrite
+		provider.mu.Unlock()
+		return false
 	}
 	absence, known := provider.absences[deviceID]
 	if !known {
@@ -252,15 +317,25 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
-		provider.tokenGone(binding.DeviceID)
+		provider.goneUnlessTheRequestEnded(ctx, binding.DeviceID)
 		return nil, "", ErrUnavailable
 	}
+	// gated is set once this token has passed the reauthorization check below: from then on, a
+	// failure is looked at to see whether the token itself went away (RequireReauthorization).
+	gated := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		panicked := recover() != nil
+		if panicked {
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
 		}
+		if gated && (panicked || (err != nil && !stillAnswers(ctx, session))) {
+			provider.tokenGone(binding.DeviceID)
+		}
 		if closeErr := session.Close(); closeErr != nil {
+			if gated {
+				provider.tokenGone(binding.DeviceID)
+			}
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
 		}
@@ -270,17 +345,17 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	// out of service until an operator clears it. An unreadable identity latches too: "cannot prove
 	// which device this is" is not a safer state than "provably the wrong one".
 	if reason := verifyIdentity(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return nil, "", ErrUnavailable
 	}
 	if err := session.EstablishSecureChannel(ctx); err != nil {
 		// A channel that will not establish is a downgrade: everything after this would travel
 		// unprotected, so the key is latched rather than used over it.
-		provider.quarantine(binding.DeviceID, "secure-channel-failed")
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, "secure-channel-failed")
 		return nil, "", ErrUnavailable
 	}
 	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return nil, "", ErrUnavailable
 	}
 	// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (#72 PoC 12.4). Checked after the identity and
@@ -289,6 +364,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	if !provider.reauthorized(ctx, binding.DeviceID) {
 		return nil, "", ErrUnavailable
 	}
+	gated = provider.gates()
 	if operation == "public-key" {
 		output, err = session.PublicKey(ctx, binding.ObjectID)
 		if err != nil || len(output) == 0 {
@@ -316,7 +392,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		// runtime check, which is all it has.
 		if _, pinned := pinnedPublicKey(binding); !pinned {
 			if err := session.AssertKEKGeneratedOnToken(ctx, binding.ObjectID); err != nil {
-				provider.quarantine(binding.DeviceID, kekReason(err, ErrKEKNotTokenGenerated, "kek-not-token-generated"))
+				provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, kekReason(err, ErrKEKNotTokenGenerated, "kek-not-token-generated"))
 				return nil, "", ErrUnavailable
 			}
 		}
@@ -367,7 +443,14 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		zero(pin)
 	}()
 	if err := session.Login(ctx, pin); err != nil {
-		provider.blockPIN(binding.DeviceID)
+		// THE PIN LATCH PROTECTS THE RETRY BUDGET, so it is skipped only when it is CERTAIN the PIN
+		// never reached the token: the driver says so itself (ErrPINNotPresented), before the call
+		// that would present it. "The context has ended by now" is not that certainty: it can end
+		// while the PIN is on the wire, the token refuses it, and without the latch the next
+		// request would present the same wrong PIN again (regalia-kms#178).
+		if !errors.Is(err, ErrPINNotPresented) {
+			provider.blockPIN(binding.DeviceID)
+		}
 		return nil, "", ErrUnavailable
 	}
 	switch operation {
@@ -419,7 +502,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		// Asked here and not at wrap because the private object is invisible to a logged-out
 		// session, and this path has already logged in.
 		if assertErr := session.AssertKEKNonExportable(ctx, binding.ObjectID); assertErr != nil {
-			provider.quarantine(binding.DeviceID, kekReason(assertErr, ErrKEKExportable, "kek-exportable"))
+			provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, kekReason(assertErr, ErrKEKExportable, "kek-exportable"))
 			return nil, "", ErrUnavailable
 		}
 		var frame []byte
@@ -455,7 +538,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
-		provider.tokenGone(binding.DeviceID)
+		provider.goneUnlessTheRequestEnded(ctx, binding.DeviceID)
 		return false
 	}
 	// A session that will not close means this device cannot serve, so Healthy must not
@@ -473,21 +556,25 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	// registry.safeHealthy is called from Route, RouteForUnwrap and Ready, with no cache and
 	// no latch -- so returning false skips the device exactly while it is failing and stops
 	// skipping it the moment it recovers, with no operator action. See #312.
+	gated := false
 	defer func() {
 		if session.Close() != nil {
+			if gated {
+				provider.tokenGone(binding.DeviceID)
+			}
 			healthy = false
 		}
 	}()
 	if reason := verifyIdentity(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return false
 	}
 	if session.EstablishSecureChannel(ctx) != nil {
-		provider.quarantine(binding.DeviceID, "secure-channel-failed")
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, "secure-channel-failed")
 		return false
 	}
 	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return false
 	}
 	// Present, the right token, and not yet vouched for again: not healthy, so routing and
@@ -495,9 +582,12 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	if !provider.reauthorized(ctx, binding.DeviceID) {
 		return false
 	}
+	gated = provider.gates()
 	retries, err := session.PINRetries(ctx)
 	if err == nil {
 		provider.notePINRetries(binding.DeviceID, retries)
+	} else if gated && !stillAnswers(ctx, session) {
+		provider.tokenGone(binding.DeviceID)
 	}
 	return err == nil && retries > 1
 }
@@ -538,6 +628,24 @@ func (provider *Provider) quarantine(deviceID, reason string) {
 		provider.blocked[deviceID] = reason
 	}
 	provider.mu.Unlock()
+}
+
+// quarantineUnlessTheRequestEnded is what a failed latching check means (regalia-kms#178).
+//
+// A CONTEXT THAT HAS ENDED IS NEVER EVIDENCE ABOUT THE TOKEN. Every driver call refuses an ended
+// context, so a request cancelled or past its deadline between Open and a check fails that check
+// with the token in place and in order. Latching on that would let any caller allowed one key on
+// the token take ALL of them out of service until an operator resets it, by hanging up at the right
+// moment (it can try until it lands); an executor timeout does it with nobody attacking. So the
+// latch is set only when the request's own context is still live when the check comes back failed:
+// only then was the check completed against the token. The request itself fails either way.
+//
+// A genuine mismatch that coincides with a request ending is not latched by that request. These
+// checks spend nothing, so the cost is that the next look, under a live context, sets the latch.
+func (provider *Provider) quarantineUnlessTheRequestEnded(ctx context.Context, deviceID, reason string) {
+	if ctx.Err() == nil {
+		provider.quarantine(deviceID, reason)
+	}
 }
 
 // QuarantineReason reports why a device is latched, so the condition is diagnosable rather than

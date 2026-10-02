@@ -29,6 +29,14 @@ export REGALIA_Q_PIN="$HSM_USER_PIN"; unset HSM_USER_PIN
 USBDEV=""   # resolved from the token itself below, once its slot is known
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"; EVID="${EVIDENCE_DIR:-.}/evidence-removal-$SERIAL-$UTC.log"
 W="$(mktemp -d)"
+# A BENCH-SAFE OpenSC. These suites never test the YubiKey, but OpenSC's enumeration leaves its PIV applet
+# selected, so a concurrent OpenPGP login by another process lands on PIV and spends PIV PIN tries (three
+# were spent that way on 2026-10-02). Unless the caller set OPENSC_CONF, the YubiKey's reader is ignored.
+if [ -z "${OPENSC_CONF:-}" ]; then
+  IGN="$(python3 -I -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()) or "\"__none__\"")' "${HSM_IGNORE_READERS:-Yubico}")"
+  printf 'app default {\n  ignored_readers = %s;\n}\n' "$IGN" > "$W/opensc.conf"
+  export OPENSC_CONF="$W/opensc.conf"; OWN_OPENSC_CONF=1
+fi
 pass=0; fail=0
 # Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
 # program would carry it in argv) and never interpreted as regex syntax.
@@ -43,11 +51,11 @@ remove(){ echo 0 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null
 restore(){ [ -n "$USBDEV" ] || return 0; echo 1 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null 2>&1; log "restored $USBDEV at $(date -u +%T.%N)"; }
 ID_EC=""; ID_RSA=""; CREATED=()
 # On any exit: the token back on the bus, then its test keys deleted (best effort), then the temp dir.
-cleanup_keys(){ local id; wait_back 2>/dev/null; for id in "${CREATED[@]}"; do
+cleanup_keys(){ local id; wait_back 2>/dev/null || return 0; for id in "${CREATED[@]}"; do
   p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
 trap 'restore; cleanup_keys; rm -rf "$W"' EXIT
 
-slot_of(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+slot_of(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
@@ -56,13 +64,39 @@ for line in sys.stdin:
     if "serial num" in line and line.split(":", 1)[1].strip() == serial: hits.append(slot)
 print(hits[0] if len(hits) == 1 else "")' "$SERIAL"; }
 wait_back(){ local i; for i in $(seq 1 30); do SLOT="$(slot_of)"; [ -n "$SLOT" ] && return 0; sleep 1; done; return 1; }
-p11(){ pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
-p11l(){ p11 --login --pin env:REGALIA_Q_PIN "$@"; }
+# EVERY LOGIN IS GATED ON WHAT IS IN THE SLOT NOW (review of #152): slot $SLOT must hold the token with
+# serial $SERIAL, no other slot may hold that serial, and under the suite's own isolated config it must
+# be the ONLY slot. During a removal the check fails and no PIN is sent; a reader that arrived later and
+# took this slot ID fails it too. Residual: the token removed AND another arriving in the milliseconds
+# between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s).
+target_ok(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+import re, sys
+slot, serial, isolated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+cur, slots, hits = None, 0, []
+for line in sys.stdin:
+    m = re.match(r"Slot \d+ \((0x[0-9a-f]+)\)", line)
+    if m:
+        cur = m.group(1); slots += 1
+    elif "serial num" in line and line.split(":", 1)[1].strip() == serial:
+        hits.append(cur)
+ok = hits == [slot] and (slots == 1 or not isolated)
+sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; }
+p11(){ timeout 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
+p11l(){ target_ok || { echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97; }
+  p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL"
+# ONE READER ONLY from here on (e2e/lib/opensc_isolate.py): another token can no longer take this
+# token's slot ID when its reader disappears, and OpenSC stops probing the other cards.
+if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
+  HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 -Es "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
+    || die "cannot isolate this token's reader in OpenSC"
+  SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
+  [ "$(timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
+fi
 # The USB device to remove is the one BEHIND THIS TOKEN: the serial pcscd puts in the slot's reader
 # name (the last parenthesised group, from the device's iSerialNumber), matched to exactly one device
 # in sysfs. A default vendor:product once removed the Nitrokey while the Pico was under test.
-USB_SERIAL="$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+USB_SERIAL="$(timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 slot = sys.argv[1]
 for line in sys.stdin:
@@ -97,7 +131,7 @@ EC_FP="$(sha256sum < "$W/ec.der")"; RSA_FP="$(sha256sum < "$W/rsa.der")"
 same_keys(){ p11 --read-object --type pubkey --id "$ID_EC" -o "$W/ec2.der" >/dev/null 2>&1 && p11 --read-object --type pubkey --id "$ID_RSA" -o "$W/rsa2.der" >/dev/null 2>&1 \
   && [ "$(sha256sum < "$W/ec2.der")" = "$EC_FP" ] && [ "$(sha256sum < "$W/rsa2.der")" = "$RSA_FP" ]; }
 sign_once(){ printf 'm %s' "$1" > "$W/m$1"; openssl dgst -sha256 -binary "$W/m$1" > "$W/h$1"
-  p11l --sign --mechanism ECDSA --id "$ID_EC" --signature-format openssl -i "$W/h$1" -o "$W/s$1" >/dev/null 2>&1; }
+  p11l --sign --mechanism ECDSA --id "$ID_EC" --signature-format openssl -i "$W/h$1" -o "$W/s$1" 2>>"$W/sign.err" >/dev/null; }
 log "device $SERIAL usb $USBDEV module $MODULE $(opensc-tool --info 2>&1 | head -1)"
 
 hdr "1  idle removal"
@@ -107,11 +141,19 @@ restore; wait_back && P "restored and found again by serial (slot $SLOT)" || F "
 same_keys && P "the same keys are there" || F "keys changed or missing after idle removal"
 
 hdr "2  removal during a stream of signatures"
-( for i in $(seq 1 40); do if sign_once "$i"; then echo "ok $i"; else echo "err $i"; fi; done ) > "$W/stream" 2>&1 &
+# TIME-BOUNDED STREAMS: operations are paced over 15 s so the stream straddles the 3 s removal whatever one
+# operation costs (~2.6 s with one reader visible, ~20 s when OpenSC probed every card; a failure can return
+# at once). The last error line of each failure is kept for the evidence.
+( end=$((SECONDS+15)); i=0; while [ "$SECONDS" -lt "$end" ]; do i=$((i+1))
+    sign_once "$i"; case $? in 0) echo "ok $i";; 97) echo "skip $i";; *) echo "err $i";; esac; sleep 0.5; done ) > "$W/stream" 2>&1 &
 sp=$!; sleep 3; remove; sleep 3; restore; wait "$sp"
-ok=$(grep -c '^ok' "$W/stream"); er=$(grep -c '^err' "$W/stream"); log "stream: $ok ok, $er err"
+ok=$(grep -c '^ok' "$W/stream"); er=$(grep -c '^err' "$W/stream"); sk=$(grep -c '^skip' "$W/stream"); log "stream: $ok ok, $er err, $sk skip ($(tr '\n' ' ' < "$W/stream"))"
+[ -s "$W/sign.err" ] && log "first signing error: $(head -1 "$W/sign.err")"
 bad=0; for i in $(sed -n 's/^ok //p' "$W/stream"); do openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/s$i" "$W/m$i" >/dev/null 2>&1 || bad=$((bad+1)); done
-[ "$ok" -gt 0 ] && [ "$er" -gt 0 ] && P "the removal interrupted the stream ($ok done, $er failed)" || F "the stream needs both outcomes: $ok done, $er failed"
+# What was SEEN: done, failed in flight (the token went away during the call), not attempted (the gate
+# found no token and sent nothing). A removal needs some done and some that did not complete.
+[ "$ok" -gt 0 ] && [ $((er + sk)) -gt 0 ] && P "the removal interrupted the stream ($ok done, $er failed in flight, $sk not attempted)" \
+  || F "the stream needs both outcomes: $ok done, $er failed in flight, $sk not attempted"
 [ "$bad" = 0 ] && P "every signature reported as done verifies ($ok of $ok)" || F "$bad signature(s) reported done do not verify"
 wait_back && sign_once after && openssl dgst -sha256 -verify "$W/ec.pem" -signature "$W/safter" "$W/mafter" >/dev/null 2>&1 \
   && P "signing resumes after restore" || F "signing does not resume"
@@ -133,13 +175,16 @@ MECH=(); for m in OAEP PKCS; do
 done
 [ "${#MECH[@]}" -gt 0 ] && P "before the removal, ${MECH[1]} decrypts exactly" || F "no RSA mechanism decrypts before the removal: section 3 cannot test anything"
 if [ "${#MECH[@]}" -gt 0 ]; then
-  ( for i in $(seq 1 30); do
-      if p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" >/dev/null 2>&1; then echo "ok $i"; else echo "err $i"; fi
-    done ) > "$W/dstream" 2>&1 &
+  ( end=$((SECONDS+15)); i=0; while [ "$SECONDS" -lt "$end" ]; do i=$((i+1))
+      p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" 2>>"$W/decrypt.err" >/dev/null
+      case $? in 0) echo "ok $i";; 97) echo "skip $i";; *) echo "err $i";; esac
+      sleep 0.5; done ) > "$W/dstream" 2>&1 &
   dp=$!; sleep 3; remove; sleep 3; restore; wait "$dp"
-  ok=$(grep -c '^ok' "$W/dstream"); er=$(grep -c '^err' "$W/dstream"); log "decrypt stream (${MECH[1]}): $ok ok, $er err"
+  ok=$(grep -c '^ok' "$W/dstream"); er=$(grep -c '^err' "$W/dstream"); sk=$(grep -c '^skip' "$W/dstream"); log "decrypt stream (${MECH[1]}): $ok ok, $er err, $sk skip ($(tr '\n' ' ' < "$W/dstream"))"
+  [ -s "$W/decrypt.err" ] && log "first decryption error: $(head -1 "$W/decrypt.err")"
   bad=0; for i in $(sed -n 's/^ok //p' "$W/dstream"); do cmp -s "$W/pt" "$W/d$i" || bad=$((bad+1)); done
-  [ "$ok" -gt 0 ] && [ "$er" -gt 0 ] && P "the removal interrupted the decryptions ($ok done, $er failed)" || F "the stream needs both outcomes: $ok done, $er failed"
+  [ "$ok" -gt 0 ] && [ $((er + sk)) -gt 0 ] && P "the removal interrupted the decryptions ($ok done, $er failed in flight, $sk not attempted)" \
+    || F "the stream needs both outcomes: $ok done, $er failed in flight, $sk not attempted"
   [ "$bad" = 0 ] && P "every decryption reported as done is exact ($ok of $ok)" || F "$bad decryption(s) reported done are wrong"
   wait_back && p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/dafter" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/dafter" \
     && P "after reinsertion, decryption is exact again" || F "no exact decryption after reinsertion"
@@ -149,9 +194,39 @@ else
 fi
 
 hdr "4  startup without the token"
+# THE PIN GOES TO THIS TOKEN OR TO NOTHING. This step once logged in by a hard-coded token LABEL;
+# with the token under test removed, that label matched ANOTHER token on the bench, which was handed
+# this token's PIN and spent a try (2026-10-02). It now does what the daemon does: the token is
+# looked for by serial (absent), and the operation is attempted on the removed token's own slot ID,
+# which must hold no token at all, so no card can receive the PIN. If any token sits in that slot,
+# the attempt is not made.
+STALE="$SLOT"
 remove; sleep 2
-out="$(pkcs11-tool --module "$MODULE" --login --pin env:REGALIA_Q_PIN --token-label regalia-staging --sign --mechanism ECDSA --id "$ID_EC" -i "$W/h1" -o "$W/sx" 2>&1)"; rc=$?; log "startup without token: rc=$rc $out"
-[ "$rc" != 0 ] && [ ! -s "$W/sx" ] && P "an operation with the token absent fails outright (no fallback, no output)" || F "an operation succeeded without the token"
+slot_has_token(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
+import re, sys
+want, cur, hit = sys.argv[1], None, False
+for line in sys.stdin:
+    m = re.match(r"Slot \d+ \((0x[0-9a-f]+)\)", line)
+    if m:
+        cur = m.group(1)
+    elif cur == want and "token label" in line:
+        hit = True
+sys.exit(0 if hit else 1)' "$1"; }
+if [ -n "$(slot_of)" ]; then
+  F "the token is still listed while removed: no startup test"
+elif slot_has_token "$STALE"; then
+  F "slot $STALE holds another token after the removal: not presenting this token's PIN to it"
+else
+  # The PKCS#11 layer itself, with NO login and therefore no PIN: reading the key's public object on the
+  # removed token's slot must fail and produce nothing (no fallback to another token).
+  out0="$(p11 --read-object --type pubkey --id "$ID_EC" -o "$W/px" 2>&1)"; rc0=$?; log "no-login read without token (slot $STALE): rc=$rc0 $out0"
+  [ "$rc0" != 0 ] && [ ! -s "$W/px" ] && P "the PKCS#11 layer finds nothing on the absent token's slot (no fallback; no PIN involved)" \
+    || F "a read on the absent token's slot returned data"
+  out="$(p11l --sign --mechanism ECDSA --id "$ID_EC" -i "$W/h1" -o "$W/sx" 2>&1)"; rc=$?; log "startup without token (slot $STALE, empty): rc=$rc $out"
+  [ "$rc" != 0 ] && [ ! -s "$W/sx" ] && ! grep -q 'CKR_PIN' <<< "$out" \
+    && P "an operation with the token absent fails outright (no fallback, no output, no PIN presented)" \
+    || F "an operation with the token absent did not fail cleanly: $(tail -1 <<< "$out")"
+fi
 restore; wait_back && sign_once start && P "it works once the token is back" || F "no recovery after restore"
 
 hdr "5  cleanup"

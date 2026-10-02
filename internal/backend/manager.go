@@ -31,6 +31,20 @@ func New(providers map[string]Provider) (*Manager, error) {
 	return &Manager{providers: copy}, nil
 }
 
+// Providers is every provider this manager holds, by backend name. The daemon walks it at startup
+// to put each one under the rules every provider must follow (token reauthorization, #72); the map
+// is a copy, the providers are the ones that serve.
+func (manager *Manager) Providers() map[string]Provider {
+	if manager == nil {
+		return nil
+	}
+	copy := make(map[string]Provider, len(manager.providers))
+	for name, provider := range manager.providers {
+		copy[name] = provider
+	}
+	return copy
+}
+
 // Serves reports whether this manager has a provider for a named backend. The daemon uses it to
 // refuse a key registry that routes somewhere it cannot reach.
 func (manager *Manager) Serves(backend string) bool {

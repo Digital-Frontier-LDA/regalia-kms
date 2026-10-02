@@ -67,8 +67,10 @@ LIMITS, stated:
     hosts.
 
 THE COMMAND (KERNEL-UPDATE.md is the procedure it serves). Every subcommand READS: files, and with
---tpm-index this host's TPM epoch counter. None signs, writes state, reboots or talks to a peer. One of
-them, `propose`, prints an UNSIGNED manifest for the root's operator to check and sign.
+--tpm-index this host's TPM anchor (the epoch counter and the record of the manifest it anchors). None
+signs, writes state, reboots or talks to a peer; the only file one may create is the anchor's empty lock
+file under /run/lock. One of them, `propose`, prints an UNSIGNED manifest for the root's operator to
+check and sign.
 
     python3 -m deploy.baremetal.rollout version   --measurements NEW.json
     python3 -m deploy.baremetal.rollout transition --old OLD.json --new NEW.json [--emergency] [--dropped NODE]...
@@ -86,8 +88,10 @@ them, `propose`, prints an UNSIGNED manifest for the root's operator to check an
 CHAIN.json is the node's membership file (the signed chain membership.Store keeps); it is verified from
 the root key given, every time. With --tpm-index its epoch must also EQUAL this host's TPM high-water
 (the counter is read, never advanced: an older file is a rollback, a newer one has not been accepted by
-the node's service yet). Without it the output says the chain was NOT checked against the TPM, and a
-restored older file would be believed.
+the node's service yet), and its manifest at that epoch must be the one the TPM recorded (another
+root-signed chain of the same length is refused with CONFLICT, as membership.Store.load refuses it; the
+record is read, never repaired). Without it the output says the chain was NOT checked against the TPM,
+and a restored older file, or a substituted one, would be believed.
 Exit status: 0 yes, 1 refused (the reason on standard error, or in the JSON), 2 a usage error.
 --json prints one JSON object instead of text.
 
@@ -98,6 +102,7 @@ from the system clock, and then says so: an unauthenticated clock is good enough
 import argparse
 import datetime
 import json
+import re
 import subprocess
 import sys
 import time
@@ -113,26 +118,50 @@ def attesting(manifest):
     return sorted(n for n, node in nodes.items() if membership.CAPABILITIES[node["state"]] & {"request", "serve"})
 
 
+def _readable(last):
+    """A verifier's record of a node's last accepted quote: {"label", "epoch"} and, since the sets can be
+    per boot phase, "phase" (None, or one of attest.PHASES). Types are exact."""
+    return (isinstance(last, dict) and type(last.get("epoch")) is int and isinstance(last.get("label"), str)
+            and (last.get("phase") is None or (isinstance(last["phase"], str) and last["phase"] in attest.PHASES)))
+
+
+def _last(state, manifest, node_id):
+    nodes = state.get("nodes") if isinstance(state, dict) else None
+    record = nodes.get(node_id) if isinstance(nodes, dict) else None
+    last = record.get("measurement") if isinstance(record, dict) else None
+    if not _readable(last) or last["epoch"] != manifest["epoch"]:
+        return None
+    return last["label"], last.get("phase")
+
+
 def last_seen(state, manifest, node_id):
     """What one verifier's state (attest.py's state file, parsed) records for `node_id` under THIS
     manifest epoch: the label of the set it was last verified on, or None (never seen, seen under
     another epoch, or not a record). Types are exact: an epoch of 2.0 or True is not epoch 2."""
-    nodes = state.get("nodes") if isinstance(state, dict) else None
-    record = nodes.get(node_id) if isinstance(nodes, dict) else None
-    last = record.get("measurement") if isinstance(record, dict) else None
-    if not isinstance(last, dict) or type(last.get("epoch")) is not int or not isinstance(last.get("label"), str):
-        return None
-    return last["label"] if last["epoch"] == manifest["epoch"] else None
+    last = _last(state, manifest, node_id)
+    return last[0] if last else None
+
+
+def _up(target, phase):
+    """Whether a sighting in `phase` shows the node UP on `target`. Where the set is per phase, only a
+    quote from the booted system does: a node verified in its initrd asked for its disk, and may never
+    have come up. (A record written before the phase was recorded has none, and does not count either.)
+    A set with one value per PCR cannot tell the two apart, and any sighting counts, as before."""
+    return phase == "system" if "phases" in target else True
 
 
 def seen_on_target(state, manifest, document, node_id):
-    """Whether that verifier last saw `node_id` on its target set under this epoch. (yes, what it says)."""
-    want, label = measurements.target(document, node_id)["label"], last_seen(state, manifest, node_id)
-    if label == want:
-        return True, "on %s at epoch %d" % (want, manifest["epoch"])
-    if label is None:
+    """Whether that verifier last saw `node_id` up on its target set under this epoch. (yes, what it says)."""
+    target, last = measurements.target(document, node_id), _last(state, manifest, node_id)
+    want = target["label"]
+    if last is None:
         return False, "not verified under epoch %d" % manifest["epoch"]
-    return False, "last verified on %r at epoch %d, not on %s" % (label, manifest["epoch"], want)
+    label, phase = last
+    if label != want:
+        return False, "last verified on %r at epoch %d, not on %s" % (label, manifest["epoch"], want)
+    if not _up(target, phase):
+        return False, "last verified in the initrd of %s at epoch %d: it asked for its disk and has not been seen up since" % (want, manifest["epoch"])
+    return True, "on %s at epoch %d" % (want, manifest["epoch"])
 
 
 def may_reboot(manifest, document, node_id, running, session_id, own_state, leases, now, run=subprocess.run):
@@ -224,16 +253,19 @@ def retire_ready(manifest, document, states):
             if "measurement" not in record:
                 continue
             last = record["measurement"]
-            require(isinstance(last, dict) and type(last.get("epoch")) is int and isinstance(last.get("label"), str),
+            require(_readable(last),
                     "%s's state has an unreadable measurement for %s: it cannot be counted, and it cannot be ignored" % (peer_id, node_id))
             require(last["epoch"] <= manifest["epoch"], "%s last verified %s under epoch %d, later than the manifest given "
                     "(epoch %d): use the current manifest and its document" % (peer_id, node_id, last["epoch"], manifest["epoch"]))
     seen, behind = {}, []
     for node_id in attesting(manifest):
-        want = measurements.target(document, node_id)["label"]
-        said = {peer: last_seen(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id}
-        said = {peer: label for peer, label in said.items() if label is not None}
-        wrong = ["%s last saw it on %r" % (peer, label) for peer, label in said.items() if label != want]
+        target = measurements.target(document, node_id)
+        want = target["label"]
+        said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id}
+        said = {peer: last for peer, last in said.items() if last is not None}
+        # on another image, or on the target but only in its initrd: it asked for its disk, and may never have come up
+        wrong = ["%s last saw it on %r" % (peer, label) if label != want else "%s last saw it in the initrd of %r, not up" % (peer, label)
+                 for peer, (label, phase) in said.items() if label != want or not _up(target, phase)]
         if not said:
             behind.append("%s (no other node has verified it under epoch %d)" % (node_id, manifest["epoch"]))
         elif wrong:
@@ -267,16 +299,39 @@ def _current(args):
     membership.hex_field(args.root_key, 64, "--root-key")
     chain = membership.load(_read(args.membership), limit=membership.MAX_CHAIN_BYTES)
     require(isinstance(chain, list) and chain, "%s must hold a non-empty list of signed manifests" % args.membership)
-    manifest = membership.accept_chain(None, chain, args.root_key)
+    manifest, manifests = None, []
+    for envelope in chain:
+        accepted = membership.accept(manifest, envelope, args.root_key)
+        require(accepted is not manifest, "%s repeats epoch %d" % (args.membership, accepted["epoch"]))
+        manifests.append(accepted)
+        manifest = accepted
     if not args.tpm_index:
         return manifest, False
-    # READ the counter; never advance it. membership.Store.load anchors a verified newer chain, and that
-    # is the node's own service's to do, not an operator's check.
-    high_water = membership.HighWater(args.tpm_index).value()
+    require(isinstance(args.tpm_index, str) and re.fullmatch(r"0x[0-9a-fA-F]{1,8}", args.tpm_index),
+            "--tpm-index must be an NV index as 0x followed by 1 to 8 hex digits, e.g. 0x1500016")
+    # READ the anchor; never advance or repair it. membership.Store.load anchors a verified newer chain
+    # and completes a record a crash left behind, and that is the node's own service's to do, not an
+    # operator's check.
+    anchor = membership.HighWater(args.tpm_index)
+    high_water = anchor.value()
     require(manifest["epoch"] >= high_water, "ROLLBACK: %s is at epoch %d but this host's TPM high-water is %d: the file is older "
             "than what this host has accepted; fetch the chain from a peer" % (args.membership, manifest["epoch"], high_water))
     require(manifest["epoch"] == high_water, "%s is at epoch %d, which this host has not anchored yet (TPM high-water %d): let the "
             "node's service accept it first" % (args.membership, manifest["epoch"], high_water))
+    # The counter tells a shorter chain from the anchored one; only the TPM's record of the manifest digest
+    # tells two root-signed chains of the SAME length apart (membership.Store.load refuses the other with
+    # CONFLICT, and so must this). Both calls take HighWater's lock, which creates its lock file if absent.
+    moved = "this host's TPM high-water moved during the check: run it again"
+
+    def digest_of(epoch):
+        # the node's service may commit between the two readings: the anchor then asks for an epoch this file lacks
+        require(epoch <= len(manifests), moved)
+        return membership.digest(manifests[epoch - 1]) if epoch else anchor.ZERO
+    require(anchor.verify(digest_of) == high_water, moved)
+    # No operator command completes the record: the node's service does, when it loads its membership at start.
+    require(anchor.pinned(), "this host's TPM records the manifest at epoch %d, not yet the one at its high-water %d (the node's "
+            "service was interrupted while accepting it): restart the node's service, which completes the record when it "
+            "loads its membership" % (high_water - 1, high_water))
     return manifest, True
 
 

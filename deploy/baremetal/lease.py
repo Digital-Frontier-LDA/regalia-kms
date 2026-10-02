@@ -191,14 +191,18 @@ class TpmSigner:
 EVIDENCE_KEYS = ("ephemeral_public", "nonce", "quote", "signature")
 
 
-def reattest(attester, evidence, node_id, session_id, manifest, subject):
+def reattest(attester, evidence, node_id, session_id, manifest, subject, phase):
     """`node_id` re-attests NOW, in boot session `session_id`, as the node the manifest names (`subject`, its
     entry). Freshness comes only from the nonce inside `evidence`, which the peer's attestation verifier
     issued and accepts once; nothing the requester chose is trusted for it. The peer's attestation verifier
     (attest.Verifier) pins the manifest's EK for it and verified the quote under the manifest's AK; the quote in
     `evidence` answers a nonce that verifier issued within its last two minutes, good once, and is over
     this node ID, this epoch and that boot session. An earlier verdict cannot be passed in: the
-    verification runs here. Used for a lease (issue) and for an unlock (replacement.may_unlock)."""
+    verification runs here. Used for a lease (issue) and for an unlock (replacement.may_unlock).
+    `phase` is the boot phase the caller accepts the request from (attest.PHASES): "system" for a lease,
+    "initrd" for an unlock. It has no default: where the node's measurements are per phase, the two
+    requests are told apart by it and by nothing else."""
+    require(isinstance(phase, str) and phase in attest.PHASES, "the phase must be one of %s" % ", ".join(attest.PHASES))
     require(isinstance(evidence, dict), "the subject has not re-attested: no lease")
     membership.exact(evidence, EVIDENCE_KEYS, "attestation evidence")
     for k, limit in (("ephemeral_public", 512), ("nonce", 32), ("quote", 1024), ("signature", 256)):
@@ -209,7 +213,7 @@ def reattest(attester, evidence, node_id, session_id, manifest, subject):
             "the attestation policy does not pin the manifest's EK for %s" % node_id)
     try:
         verdict = attester.verify(node_id, manifest["epoch"], bytes.fromhex(session_id),
-                                  *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS))
+                                  *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS), phase=phase)
     except attest.Refused as refusal:
         raise Refused("the subject's attestation is refused: %s" % refusal)
     # The AK the quote was actually verified under, reported from inside the verifier's own lock: an AK
@@ -231,7 +235,8 @@ def issue(manifest, issuer_id, request, attester, evidence, freshness, signer):
     # absolute expiry bounds it: however long the attestation below takes, the lease cannot outlive the
     # heartbeat. A lease dated slightly early only ends slightly early.
     now, fresh_until = freshness.live_until(manifest)
-    reattest(attester, evidence, subject_id, request["session_id"], manifest, nodes[subject_id])
+    # a lease is for a node that is up and serving: on per-phase measurements, an initrd does not get one
+    reattest(attester, evidence, subject_id, request["session_id"], manifest, nodes[subject_id], phase="system")
     lease = {"schema": SCHEMA, "node_id": subject_id, "ak_name": nodes[subject_id]["ak_name"], "issuer": issuer_id,
              "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "session_id": request["session_id"],
              "nonce": request["nonce"], "issued_at": _stamp(now), "expires_at": _stamp(min(now + MAX_LIFETIME, fresh_until))}
@@ -297,19 +302,28 @@ class Holder:
             self._write(state)
         return {"node_id": self.node_id, "session_id": self.session_id, "nonce": nonce}
 
-    def install(self, envelope, manifest):
-        """Take a lease a peer returned. Returns the seconds the held lease has left."""
+    def install(self, envelope, manifest, prefer=False):
+        """Take a lease a peer returned. Returns the seconds the held lease has left. Of the lease held and
+        the one returned, the longer-lived is kept, and on a tie the one returned. With `prefer`, the one
+        returned is held whatever its life: the caller needs a lease asked for NOW (the daemon started
+        after the held one was asked for, admission.py), and a shorter one that the daemon serves on is
+        worth more than a longer one it refuses."""
         with membership._exclusive(self.lock_path):
-            return self._install(envelope, manifest)
+            return self._install(envelope, manifest, prefer)
 
-    def _install(self, envelope, manifest):
+    def _install(self, envelope, manifest, prefer=False):
         state = self._read()
         now = self._now(state)
         left = verify(envelope, manifest, now, self.run)
         lease = envelope["lease"]
         self._mine(lease)
-        require(lease["nonce"] in state["nonces"], "the lease answers no request this node has outstanding (replayed, or asked for by another)")
-        state["nonces"].remove(lease["nonce"])
+        require(lease["nonce"] in state["nonces"], "the lease answers no request this node has outstanding (replayed, asked for by "
+                "another, or older than a request already answered)")
+        # REQUESTS ARE ANSWERED IN ORDER, OR NOT AT ALL. The nonces are kept in the order they were asked
+        # for; taking this one retires every request made before it. A late answer to an OLDER request
+        # would otherwise displace, on a longer life or a tie, the lease asked for after the daemon started
+        # (admission.py), and the daemon would stop serving until the next round asked again.
+        state["nonces"] = state["nonces"][state["nonces"].index(lease["nonce"]) + 1:]
         held, keep = state["envelope"], False
         if held is not None:
             # The other peer answered first and its lease runs longer: keep it. On a tie the one just
@@ -319,7 +333,7 @@ class Holder:
             try:
                 held_left = verify(held, manifest, now, self.run)
                 self._mine(held["lease"])
-                keep = held_left > left
+                keep = held_left > left and not prefer
             except Refused:
                 pass
         if keep:

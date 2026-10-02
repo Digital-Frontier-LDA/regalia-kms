@@ -1,0 +1,11 @@
+[Unit]
+Description=regalia e2e: seal the boot credentials on this machine (only when the enrolment disk is attached)
+ConditionPathExists=/dev/vdb
+Before=regalia-e2e-report.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/regalia/e2e-enrol
+
+[Install]
+WantedBy=multi-user.target

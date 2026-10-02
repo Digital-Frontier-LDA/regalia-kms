@@ -336,13 +336,14 @@ class Issue(Case):
         swapped = self.evidence(b["attester"], self.m1, signed_by="c")
         real = b["attester"].verify
 
-        def enroll_then_verify(*args):
+        def enroll_then_verify(*args, **kw):
             with open(b["attester"].state_path) as f:
                 state = json.load(f)
             state["nodes"]["a"]["ak_public"] = self.keys["c"].ak_public.hex()
             with open(b["attester"].state_path, "w") as f:
                 json.dump(state, f)
-            return real(*args)
+            self.assertEqual(kw, {"phase": "system"})   # a lease is asked for by a booted node
+            return real(*args, **kw)
         b["attester"].verify = enroll_then_verify
         self.refused("the attested AK is not the AK the manifest names for a", self.issue, evidence=swapped)
         b["attester"].verify = real
@@ -368,9 +369,9 @@ class Issue(Case):
         b = self.peers["b"]
         real = b["attester"].verify
 
-        def slow(*args):
+        def slow(*args, **kw):
             self.later(50)                               # the attestation takes 50 s
-            return real(*args)
+            return real(*args, **kw)
         b["attester"].verify = slow
         envelope = self.issue()
         self.assertEqual(envelope["lease"]["expires_at"], hbt.stamp(heartbeat_expiry))
@@ -443,7 +444,8 @@ class Hold(Case):
         self.later(10)
         from_c = self.issue("c", request=to_c)
         self.assertEqual(self.holder.install(from_c, self.m1), 300)
-        self.assertEqual(self.holder.install(from_b, self.m1), 300)      # the earlier one arrives late: the later expiry stays
+        # the answer to the EARLIER request arrives late: c's answer retired that request, so it is refused
+        self.refused("answers no request this node has outstanding", self.holder.install, from_b, self.m1)
         with open(self.holder.state_path) as f:
             state = json.load(f)
         self.assertEqual((state["envelope"]["lease"]["issuer"], state["nonces"]), ("c", []))
@@ -464,13 +466,47 @@ class Hold(Case):
         self.refused("answers no request this node has outstanding", self.holder.install, first, self.m1)    # the first one again: a replay
         self.refused("answers no request this node has outstanding", self.holder.install, second, self.m1)
         self.assertEqual(self.holder.held()["lease"]["nonce"], second["lease"]["nonce"])
-        # a strictly shorter one is still not taken over a longer one held
-        to_b = self.holder.request()
-        early = self.issue("b", request=to_b)
+        # a strictly shorter one is still not taken over a longer one held (the later request, answered by a
+        # peer whose own heartbeat runs out sooner)
         self.later(10)
         self.holder.install(self.issue("c"), self.m1)
-        self.assertEqual(self.holder.install(early, self.m1), 300)
+        body = dict(self.issue("b")["lease"], expires_at=hbt.stamp(self.now + 100))
+        short = {"lease": body, "signature": self.keys["b"].signer()(lease.signed_digest(body))}
+        self.assertEqual(self.holder.install(short, self.m1), 300)
         self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
+
+    def test_a_preferred_lease_is_held_whatever_its_life_and_is_verified_like_any_other(self):
+        self.holder.install(self.issue("c"), self.m1)
+        body = dict(self.issue("b")["lease"], expires_at=hbt.stamp(self.now + 100))
+        short = sign(body, self.keys["b"])
+        self.assertEqual(self.holder.install(short, self.m1, prefer=True), 100)
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "b")
+        self.refused("answers no request this node has outstanding", self.holder.install, short, self.m1, prefer=True)   # a replay, preferred or not
+        forged = sign(dict(self.issue("b")["lease"], node_id="c"), self.keys["b"])
+        with self.assertRaises(m.Refused):
+            self.holder.install(forged, self.m1, prefer=True)
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "b")
+
+    def test_a_late_answer_to_an_older_request_never_displaces_the_lease_held(self):
+        """Found by an independent read of #160. r1 is asked, then r2; r2's lease is installed; r1's answer
+        arrives afterwards with the same expiry (the common case when both are cut at the issuer's heartbeat
+        expiry) or a longer one. The held lease must stay r2's: the daemon serves on the request time."""
+        r1, r2 = self.holder.request(), self.holder.request()
+        for label, wait in (("the same expiry", 0), ("a longer life", 5)):
+            with self.subTest(label):
+                newer = self.issue("b", request=r2)
+                self.later(wait)
+                older = self.issue("c", request=r1)
+                self.assertEqual(self.holder.install(newer, self.m1), 300 - wait)
+                self.refused("answers no request this node has outstanding", self.holder.install, older, self.m1)
+                self.assertEqual(self.holder.held()["lease"]["nonce"], r2["nonce"])
+                r1, r2 = self.holder.request(), self.holder.request()
+        # in order, each is taken: the older first, then the newer over it
+        self.holder.install(self.issue("b", request=r1), self.m1)
+        self.holder.install(self.issue("c", request=r2), self.m1)
+        self.assertEqual(self.holder.held()["lease"]["nonce"], r2["nonce"])
+        with open(self.holder.state_path) as f:
+            self.assertEqual(json.load(f)["nonces"], [])
 
     def test_poc_14_3_a_revoked_running_node_is_refused_renewal_and_stops_within_the_lease_bound(self):
         self.holder.install(self.issue("b"), self.m1)
