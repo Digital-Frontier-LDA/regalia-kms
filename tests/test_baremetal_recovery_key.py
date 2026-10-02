@@ -86,7 +86,11 @@ class RecoveryKey(unittest.TestCase):
         tokens = list(meta["tokens"].values())
         self.assertEqual([t["type"] for t in tokens], ["systemd-recovery"])
         slot = tokens[0]["keyslots"][0]
-        self.assertNotEqual(slot, "0", "the recovery key shares the installer's keyslot")
+        # The script chose the keyslot itself (the lowest free one) and told cryptsetup, so that it
+        # knows which keyslot to take back if a later step fails.
+        self.assertEqual(slot, "1")
+        with open(self.argv_log, encoding="utf-8") as f:
+            self.assertIn("--new-key-slot 1", f.read())
         self.assertTrue(self.opens(KEY, slot))
         self.assertFalse(self.opens(KEY, 0), "the recovery key opens the installer's keyslot")
         self.assertFalse(self.opens(INSTALLER, slot), "the installer's passphrase opens the recovery keyslot")
@@ -184,6 +188,23 @@ class RecoveryKey(unittest.TestCase):
         self.assertIn("removed again", stderr)
         self.assertEqual(self.header(), before)
         self.assertFalse(self.opens(KEY))
+        # The header cannot be read: nothing is attempted. (Without errexit, a failed read inside a
+        # command substitution would otherwise go unnoticed and the key be added to a keyslot nobody
+        # can then identify.)
+        with open(self.argv_log, "w", encoding="utf-8"):
+            pass
+        done = self.run_script("enrol", INSTALLER, KEY, fail_subcommand="luksDump")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("cannot read the LUKS2 header", done.stderr)
+        with open(self.argv_log, encoding="utf-8") as f:
+            self.assertNotIn("luksAddKey", f.read())
+        self.assertEqual(self.header(), before)
+        # The new keyslot does not open with the key (cryptsetup's own test fails): it is taken back,
+        # keyslot and token.
+        done = self.run_script("enrol", INSTALLER, KEY, fail_subcommand="--test-passphrase")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("was removed again", done.stderr)
+        self.assertEqual(self.header(), before)
         # One host, one recovery key.
         self.enrolled()
         again = self.run_script("enrol", INSTALLER, NEW_KEY)

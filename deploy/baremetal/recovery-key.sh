@@ -107,24 +107,29 @@ opens(){ if [ -n "${2:-}" ]; then cryptsetup open --test-passphrase --key-slot "
 # closed for it: in batch mode cryptsetup still waits on an open pipe there (measured, 2.7.5), and
 # this script's own input may be one, with a secret still unread in it.
 kill_slot(){ cryptsetup luksKillSlot --batch-mode "$DEV" "$1" </dev/null >/dev/null 2>&1; }
+# undo <slot>: take back a keyslot this run added, and the token that names it.
+undo(){ local token; token="$(token_of "$1" 2>/dev/null)"; kill_slot "$1"
+        [ -z "$token" ] || cryptsetup token remove --token-id "$token" "$DEV" </dev/null >/dev/null 2>&1; }
 # add <secret that opens the volume> <new key>: a new keyslot for the key with its systemd-recovery
-# token; prints the keyslot. If the token cannot be written the keyslot is destroyed again, so a key
-# never stays behind as an unlabelled passphrase.
+# token; prints the keyslot. The keyslot NUMBER is chosen here, from a header that was read
+# successfully, and given to cryptsetup: so every later failure knows exactly which keyslot to take
+# back, and a key never stays behind as an unlabelled passphrase.
 add(){
-  local before after slot
-  before="$(slots)"; before="${before##*|}"
-  cryptsetup luksAddKey --batch-mode "${KDF[@]}" --key-file <(printf '%s' "$1") "$DEV" <(printf '%s' "$2") >/dev/null 2>&1 \
-    || fail "cryptsetup refused to add the keyslot (is the first value one that opens this volume? are all keyslots in use?). Nothing was changed"
-  after="$(slots)"; after="${after##*|}"
-  slot="$(comm -13 <(tr ' ' '\n' <<< "$before" | sort) <(tr ' ' '\n' <<< "$after" | sort))"
-  [[ "$slot" =~ ^[0-9]+$ ]] || fail "a keyslot was added but cannot be identified; look at cryptsetup luksDump $DEV"
+  local snapshot used slot="" n
+  snapshot="$(slots)" || exit 1
+  used=" ${snapshot##*|} "
+  for n in $(seq 0 31); do case "$used" in *" $n "*) ;; *) slot="$n"; break;; esac; done
+  [ -n "$slot" ] || fail "every keyslot of $DEV is in use. Nothing was changed"
+  cryptsetup luksAddKey --batch-mode "${KDF[@]}" --new-key-slot "$slot" --key-file <(printf '%s' "$1") "$DEV" <(printf '%s' "$2") >/dev/null 2>&1 \
+    || fail "cryptsetup refused to add the keyslot (is the first value one that opens this volume?). Nothing was changed"
   if ! printf '{"type":"systemd-recovery","keyslots":["%s"]}' "$slot" | cryptsetup token import --json-file - "$DEV" >/dev/null 2>&1; then
-    kill_slot "$slot"
+    undo "$slot"
     fail "the keyslot could not be marked as the recovery key, and was removed again. Nothing was changed"
   fi
   printf '%s' "$slot"; }
 
-IFS='|' read -r RECOVERY STRAY _ <<< "$(slots)"
+SNAPSHOT="$(slots)" || exit 1
+IFS='|' read -r RECOVERY STRAY _ <<< "$SNAPSHOT"
 case "$MODE" in
 status)
   echo "KEYSLOTS OF $DEV"; kinds
@@ -141,7 +146,7 @@ enrol)
   well_formed "$B" "that value"
   [ "$A" != "$B" ] || fail "the passphrase and the recovery key are the same value; nothing was changed"
   slot="$(add "$A" "$B")" || exit 1
-  opens "$B" "$slot" || fail "the new keyslot $slot does not open with the key just typed; look at cryptsetup luksDump $DEV"
+  opens "$B" "$slot" || { undo "$slot"; fail "the new keyslot did not open with the key just typed, and was removed again. Nothing was changed"; }
   say "ENROLLED: the recovery key is keyslot $slot of $DEV. Now run --check with the key read from the CARD."
   kinds >&2
   ;;
@@ -166,7 +171,7 @@ replace)
   slot="$(add "$A" "$B")" || exit 1
   # The new key is proven BEFORE the used one is destroyed: at no moment is the host without a
   # recovery key that is known to open it.
-  opens "$B" "$slot" || { new_token="$(token_of "$slot")"; kill_slot "$slot"; cryptsetup token remove --token-id "$new_token" "$DEV" >/dev/null 2>&1; fail "the new keyslot did not open with the new key and was removed; the used key is still enrolled"; }
+  opens "$B" "$slot" || { undo "$slot"; fail "the new keyslot did not open with the new key and was removed; the used key is still enrolled"; }
   cryptsetup luksKillSlot --key-file <(printf '%s' "$B") "$DEV" "$RECOVERY" >/dev/null 2>&1 \
     || fail "the new key is enrolled (keyslot $slot) but the USED keyslot $RECOVERY could not be destroyed: it still opens the disk. Destroy it: cryptsetup luksKillSlot $DEV $RECOVERY"
   cryptsetup token remove --token-id "$old_token" "$DEV" >/dev/null 2>&1 \
