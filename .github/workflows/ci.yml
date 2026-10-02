@@ -214,9 +214,10 @@ jobs:
       - name: Fuzz envelope parsing (refusal class and round-trip stability)
         run: go test ./internal/envelope -run='^$' -fuzz=FuzzParseAcceptsOnlyWhatItCanReproduce -fuzztime=20s
 
-  # regalia#439 ACCEPTANCE CRITERION 1, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts a
-  # transaction the KMS signed, and rejects a replay, a wrong-chain signature and a policy-refused
-  # destination (e2e/cosmos-simapp-kms-tx.sh). ADR-0002 D7: simd is built HERE from a pinned Cosmos
+  # regalia#439, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts the transactions the KMS
+  # signed, and every negative case fails for its own reason — replay, chain id, destination,
+  # sequence, account number, fee and gas, several messages, malformed sign bytes, the daily quota
+  # and a superseded epoch (e2e/cosmos-simapp-kms-tx.sh; the table is in e2e/README.md). ADR-0002 D7: simd is built HERE from a pinned Cosmos
   # SDK commit — no binary is downloaded, so the node under test is exactly what the tag's source
   # says. The build is cached by that commit; a cache miss costs one build, never a different binary.
   cosmos-node:
@@ -256,7 +257,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/cosmpy"
           "$RUNNER_TEMP/cosmpy/bin/pip" install --quiet cosmpy==0.12.2 cryptography==50.0.1
 
-      - name: A live node accepts a KMS-signed transaction, and 3 negative arms hold
+      - name: A live node accepts KMS-signed transactions, and every negative case fails for its own reason
         env:
           REGALIA_COSMOS_SIMD_BIN: ${{ runner.temp }}/simd
           REGALIA_COSMOS_PYTHON: ${{ runner.temp }}/cosmpy/bin/python
