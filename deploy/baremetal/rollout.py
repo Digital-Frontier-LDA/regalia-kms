@@ -20,19 +20,24 @@ may_reboot(...)    asked ON the node, before it reboots into NEXT. Refused unles
        verifier (the record attest.py keeps each time this node re-attests a peer for a lease or an
        unlock). With 2 and 3 together exactly one node can pass at a time: the first one, in order,
        that is not on its target, and only once everybody before it has been seen back;
-    4  every other node that may authorize has vouched for this node within the lease lifetime: a
-       runtime lease (lease.py) issued to this node, by that peer, under this same manifest epoch,
-       still valid at the node's authenticated time. A lease is signed by the peer's TPM and is only
-       issued by a peer that is ACTIVE with a live heartbeat, so it is evidence the peer was able to
-       authorize minutes ago, under the same manifest and therefore the same measurements.
+    4  every other node that may authorize has vouched for this node IN ITS CURRENT BOOT, within the
+       lease lifetime: a runtime lease (lease.py) issued to this node, for this boot session, by that
+       peer, under this same manifest epoch, still valid at the node's authenticated time. A lease is
+       signed by the peer's TPM and is only issued by a peer that is ACTIVE with a live heartbeat and
+       has just re-attested the node, so it is evidence that the peer could authorize minutes ago,
+       under the same manifest and the same measurements, AND that the peer's record of this node is
+       of this boot. That last part is what makes "one at a time" hold when a node has fallen back: a
+       lease from before the fallback is for another boot session and is refused, and a fresh one
+       means the peers have seen the fallback, so the node after it waits.
 
   There is no "skip". A node that is down, and must not hold the others up, is taken out by a signed
   manifest that leaves it nothing to do (QUARANTINED: a revocation key can sign that): it is then
   neither waited for nor counted on, and that decision is authenticated like every other.
 
 retire_ready(...)  asked by the root's operator, before signing the document that drops CURRENT.
-    Refused unless, for every node that may be unlocked or serve, EVERY peer whose state was given
-    and has seen that node under this epoch last saw it on its target, and at least one did. A node
+    The state of EVERY node that may authorize must be given: a file left out could be the one that
+    saw a node fall back. Refused unless, for every node that may be unlocked or serve, every peer
+    that has seen that node under this epoch last saw it on its target, and at least one did. A node
     that booted NEXT and fell back is behind for whoever saw it last. Only the state of nodes that
     may authorize is taken, and a node's own state says nothing about itself. The input is the
     peers' attestation state files as the operator collected them: unsigned, so this is a guard
@@ -85,11 +90,11 @@ def seen_on_target(state, manifest, document, node_id):
     return False, "last verified on %r at epoch %d, not on %s" % (label, manifest["epoch"], want)
 
 
-def may_reboot(manifest, document, node_id, running, own_state, leases, now, run=subprocess.run):
+def may_reboot(manifest, document, node_id, running, session_id, own_state, leases, now, run=subprocess.run):
     """Whether `node_id` may reboot into its target image now. `running` is the label of the set this
-    node is running; `own_state` is this node's attest.py state (parsed); `leases` are runtime-lease
-    envelopes this node holds, one per peer; `now` is its authenticated time
-    (heartbeat.authenticated_now). Returns {"target": label, "authorizers": [...], "seconds": the
+    node is running and `session_id` its current boot session (64 hex); `own_state` is this node's
+    attest.py state (parsed); `leases` are runtime-lease envelopes this node holds, one per peer; `now`
+    is its authenticated time (heartbeat.authenticated_now). Returns {"target": label, "authorizers": [...], "seconds": the
     shortest lease's time left}, or raises Refused with the reason."""
     sets = measurements.bind(manifest, document)
     nodes = membership.validate(manifest)
@@ -104,6 +109,7 @@ def may_reboot(manifest, document, node_id, running, own_state, leases, now, run
     require(isinstance(running, str) and running in [s["label"] for s in accepted],
             "%s says it runs %r, which is neither of its accepted sets (%s)" % (node_id, running, ", ".join(s["label"] for s in accepted)))
     require(running != target, "%s is already on its target (%s): nothing to reboot for" % (node_id, target))
+    membership.hex_field(session_id, 64, "session_id")
     # 3. the turn
     order = attesting(manifest)
     for earlier in order[:order.index(node_id)]:
@@ -126,6 +132,8 @@ def may_reboot(manifest, document, node_id, running, own_state, leases, now, run
             continue
         if body["node_id"] != node_id:
             reasons[issuer] = "its lease is for %s" % body["node_id"]
+        elif body["session_id"] != session_id:
+            reasons[issuer] = "its lease is for another boot session of %s: that peer has not seen this boot" % node_id
         elif body["epoch"] != manifest["epoch"]:
             reasons[issuer] = "its lease is from epoch %d: that peer has not accepted epoch %d" % (body["epoch"], manifest["epoch"])
         else:
@@ -148,6 +156,9 @@ def retire_ready(manifest, document, states):
     silent = sorted(p for p in states if not membership.may(manifest, p, "authorize"))
     require(not silent, "state from nodes that may not authorize under epoch %d: %s. Only a peer that judges unlocks is a witness"
             % (manifest["epoch"], ", ".join(silent)))
+    absent = sorted(n for n in nodes if membership.may(manifest, n, "authorize") and n not in states)
+    require(not absent, "the state of %s is missing. Every node that may authorize is a witness: the file left out could be "
+            "the one that saw a node fall back" % ", ".join(absent))
     seen, behind = {}, []
     for node_id in attesting(manifest):
         want = measurements.target(document, node_id)["label"]

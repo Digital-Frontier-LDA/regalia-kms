@@ -212,14 +212,15 @@ Each node has one accepted set, or two while an update is under way. An update i
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
-   unlock it holds the new manifest and has vouched for it in the last five minutes (a runtime lease).
-   Exactly one node can pass at a time: the first, in order, that is not on NEXT. A node that is down
+   unlock it holds the new manifest and has vouched for it, in its current boot, in the last five
+   minutes (a runtime lease for this boot session). Never more than one node can pass at a time: the
+   first, in order, that is not on NEXT, and only once its peers have seen its current boot. A node that is down
    and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
    unsigned way to skip it.
 4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
    accepted until the retirement. That is the fallback, at every step up to step 5.
-5. **Retire.** When `rollout.retire_ready(...)` passes (under manifest N+1, every peer that has seen a
-   node last saw it on NEXT, for every node), and `transition` says `retire` (not `abandon`, which is
+5. **Retire.** When `rollout.retire_ready(...)` passes (given the state of every node that may
+   authorize: under manifest N+1, every peer that has seen a node last saw it on NEXT, for every node), and `transition` says `retire` (not `abandon`, which is
    the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
    From then on a node booted
    into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
@@ -228,8 +229,12 @@ Each node has one accepted set, or two while an update is under way. An update i
 Both manifests can be signed in one root-key session and the second released later; if a revocation
 is published in between, the second no longer chains and is signed again.
 
+**Replacing a node during all this** (#76) changes the document too, since the new node needs an entry:
+`measurements.check_replacement(...)` requires the manifest to replace the node and the document to
+differ by that node's and the new node's entries, and nothing else.
+
 **An emergency** (the current image is compromised) skips the overlap: `transition(..., emergency=True)`
-accepts a document that drops CURRENT at once. Every node still on it is then locked out until it boots
+accepts a document that drops CURRENT at once, on every node. Every node still on it is then locked out until it boots
 the new image; that is the intent.
 
 Proven on three software TPMs, with real quotes, NV counters and TPM-signed leases

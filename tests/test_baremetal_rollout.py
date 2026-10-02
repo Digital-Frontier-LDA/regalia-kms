@@ -132,10 +132,44 @@ class Document(Case):
         policy = measurements.attest_policy(manifest, BOTH, peer_id="b")
         self.assertEqual(policy, replacement.attest_policy(manifest, measurements.bind(manifest, BOTH), peer_id="b"))
         self.refused("is not the one the root approved", measurements.attest_policy, manifest, NEXT, "b")
+        for stranger in ("zz", 7, None, ["b"]):
+            with self.subTest(peer=repr(stranger)):
+                self.refused("is not a node of the manifest", measurements.attest_policy, manifest, BOTH, stranger)
         self.assertEqual(sorted(policy["nodes"]), ["a", "c"])
         self.assertEqual(policy["nodes"]["a"], {"ek_name": self.keys["a"].ek_name, "accepted": BOTH["nodes"]["a"]["accepted"]})
         nodes = attest.validate_policy(policy)
         self.assertEqual([s["label"] for s in nodes["c"]["accepted"]], ["image-1", "image-2"])
+
+    def test_a_node_replacement_carries_the_document_with_it(self):
+        """#76 replaces a by a new node in one manifest. Under bound measurements the new node needs an
+        entry, so the document and policy_version change in that manifest, and nothing else may."""
+        keys = dict(self.keys, d=lt.Key(self.keydir, "d", 9))
+        m1 = self.under(CURRENT)
+
+        def entry(node_id, i, state="ACTIVE"):
+            return {"node_id": node_id, "state": state, "ek_name": keys[node_id].ek_name, "ak_name": keys[node_id].ak_name,
+                    "wg_boot_pub": ("%02x" % (0x70 + i)) * 32, "wg_service_pub": ("%02x" % (0xa0 + i)) * 32, "hsm_serials": ["DENK04041%02d" % i]}
+
+        def replaced(doc):
+            return dict(m1, epoch=2, prev_digest=m.digest(m1), policy_version=measurements.version(doc),
+                        nodes=[entry("a", 0, "RETIRED"), entry("b", 1), entry("c", 2), entry("d", 3)])
+        with_d = document("v1d", **dict({n: [one("image-1", IMAGE1)] for n in "bc"}, d=[one("image-1", IMAGE1)]))
+        keep_a = document("v1d", **{n: [one("image-1", IMAGE1)] for n in "abcd"})
+        for doc in (with_d, keep_a):
+            m2 = replaced(doc)
+            measurements.check_replacement(m1, m2, CURRENT, doc, "a", "d")
+            self.assertEqual(sorted(measurements.attest_policy(m2, doc, "b")["nodes"]), ["c", "d"])
+        m2 = replaced(with_d)
+        # the old rule still holds where it is asked without documents: policy_version must not change
+        self.refused("a replacement does not change policy_version", replacement.check_replacement, m1, m2, "a", "d")
+        # and with them, nothing else rides along
+        sneaks = dict({n: [one("image-1", IMAGE1)] for n in "bd"}, c=[one("image-1", IMAGE1), one("image-2", IMAGE2)])
+        self.refused("a replacement does not change the measurements of c", measurements.check_replacement, m1,
+                     replaced(document("s", **sneaks)), CURRENT, document("s", **sneaks), "a", "d")
+        no_d = document("v1x", **{n: [one("image-1", IMAGE1)] for n in "bc"})
+        self.refused("no entry for d, which the manifest lets attest", measurements.check_replacement, m1, replaced(no_d), CURRENT, no_d, "a", "d")
+        self.refused("is not the one the root approved", measurements.check_replacement, m1, m2, CURRENT, keep_a, "a", "d")
+        self.refused("is not the one the root approved", measurements.check_replacement, m1, m2, BOTH, with_d, "a", "d")
 
     def test_schema_refusals(self):
         ok = lambda: copy.deepcopy(BOTH)   # noqa: E731
@@ -198,6 +232,19 @@ class Transition(Case):
         self.refused("b: the set 'image-1' has other measurements than before", measurements.transition, CURRENT, relabel_b, emergency=True)
         and_approve = document("e", a=[one("image-2", IMAGE2)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)], c=[one("image-1", IMAGE1)])
         self.refused("an emergency replacement (a) must not also approve (b)", measurements.transition, CURRENT, and_approve, emergency=True)
+        # the replacing set is the target: listed last, in an emergency too
+        backwards = document("e", **{n: [one("image-3", IMAGE3), one("image-2", IMAGE2)] for n in "abc"})
+        self.refused("the replacing set must be listed last", measurements.transition, BOTH, backwards, emergency=True)
+
+    def test_an_emergency_drops_the_compromised_image_everywhere_at_once(self):
+        """After a per-node approve, a already has both sets and b and c only the old one. Dropping the old
+        image at once is a replacement on b and c and a retirement on a, in one document."""
+        only_a = document("a-first", a=[one("image-1", IMAGE1), one("image-2", IMAGE2)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1)])
+        self.assertEqual(measurements.transition(only_a, NEXT, emergency=True), "replace-without-overlap")
+        self.refused("would be locked out", measurements.transition, only_a, NEXT)
+        # but nothing else rides along: abandoning NEXT on a while replacing on b and c is two decisions
+        abandon_a = document("x", a=[one("image-1", IMAGE1)], b=[one("image-3", IMAGE3)], c=[one("image-3", IMAGE3)])
+        self.refused("an emergency replacement (b, c) must not also abandon (a)", measurements.transition, only_a, abandon_a, emergency=True)
         swapped_c = document("e", a=[one("image-1", IMAGE1), one("image-3", IMAGE3)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
                              c=[one("image-2", IMAGE2), one("image-1", IMAGE1)])
         self.refused("c: its two sets changed places", measurements.transition, BOTH, swapped_c, emergency=True)
@@ -223,8 +270,10 @@ class Transition(Case):
         self.refused("its two sets changed places, so its target would become image-1", measurements.transition, BOTH, swapped)
         self.assertEqual(measurements.target(swapped, "a")["label"], "image-1")
 
-    def test_a_node_cannot_be_dropped_and_come_back_with_only_the_new_image(self):
-        """Two "unchanged" steps would otherwise be a replacement with no overlap and no emergency flag."""
+    def test_a_node_leaves_the_document_only_when_named_and_only_when_the_manifest_gives_it_nothing_to_do(self):
+        """A node silently dropped and re-added with only the new image would be a replacement with no
+        overlap and no emergency flag. Dropping it needs `dropped`, and bind() needs the manifest to
+        have taken its capabilities away first; coming back is then an enrollment the root signs."""
         without_c = document("no-c", a=[one("image-1", IMAGE1)], b=[one("image-1", IMAGE1)])
         self.refused("c is no longer in the measurements", measurements.transition, CURRENT, without_c)
         self.assertEqual(measurements.transition(CURRENT, without_c, dropped=("c",)), "unchanged")
@@ -232,6 +281,12 @@ class Transition(Case):
                      measurements.transition, CURRENT, without_c, dropped=("a", "c", "z"))
         # and a manifest that still lets c attest does not accept the document without it
         self.refused("no entry for c, which the manifest lets attest", measurements.bind, self.under(without_c), without_c)
+        measurements.bind(self.under(without_c, c="QUARANTINED"), without_c)
+        # the come-back: c returns with only image-2. transition sees an enrollment ("unchanged" for a and b);
+        # what stood between was the manifest that had to quarantine c, and the root restoring it.
+        back = document("c-back", a=[one("image-1", IMAGE1)], b=[one("image-1", IMAGE1)], c=[one("image-2", IMAGE2)])
+        self.assertEqual(measurements.transition(without_c, back), "unchanged")
+        self.refused("c: image-1 is dropped in the same step that adds image-2", measurements.transition, CURRENT, back)
 
     def test_a_new_node_is_enrolled_without_blocking_a_step(self):
         with_d = document("v2d", a=[one("image-1", IMAGE1), one("image-2", IMAGE2)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
@@ -263,17 +318,21 @@ class Reboot(Case):
     def leases(self, node, manifest=None):
         return [self.lease_for(node, peer, manifest) for peer in lt.NAMES if peer != node]
 
-    def ask(self, node, state=None, leases=None, running="image-1"):
-        return rollout.may_reboot(self.manifest2, BOTH, node, running, state if state is not None else self.state(),
+    def ask(self, node, state=None, leases=None, running="image-1", session=lt.SESSION):
+        return rollout.may_reboot(self.manifest2, BOTH, node, running, session, state if state is not None else self.state(),
                                   self.leases(node) if leases is None else leases, self.now)
 
     def allowed(self, running, seen):
-        """Which nodes may reboot at one instant, each with every lease it could want.
-        `running` is what each node runs; `seen` is what each node's verifier last saw the others on."""
+        """Which nodes may reboot at one instant. `running` is what each node runs; `seen` is what the
+        OTHER nodes' verifiers last saw it on. A peer issues a lease only after re-attesting the node, so
+        a node holds leases for its current boot exactly when its peers' record of it is current
+        (seen == running); otherwise the leases it holds are from the boot the peers last saw."""
         out = []
         for node in lt.NAMES:
+            leases = self.leases(node) if seen[node] == running[node] else \
+                [self.lease_for(node, peer, session_id=lt.OTHER_SESSION) for peer in lt.NAMES if peer != node]
             try:
-                self.ask(node, self.state(**{p: seen[p] for p in lt.NAMES if p != node}), running=running[node])
+                self.ask(node, self.state(**{p: seen[p] for p in lt.NAMES if p != node}), leases, running=running[node])
                 out.append(node)
             except m.Refused:
                 pass
@@ -313,6 +372,32 @@ class Reboot(Case):
         # a is down (rebooting): b and c have not seen it back, whatever they run
         self.assertEqual(self.allowed(dict(a=two, b=one, c=one), seen=dict(a=one, b=one, c=one)), [])
 
+    def test_with_stale_records_too_never_more_than_one_node_may_reboot(self):
+        """Every combination of what the three nodes run and what their peers last saw them on (64). A
+        record goes stale when a node reboots or falls back and has not been re-attested yet; its leases
+        are then from the boot the peers last saw. Never two nodes at once."""
+        labels = ("image-1", "image-2")
+        combos = [dict(a=a, b=b, c=c) for a in labels for b in labels for c in labels]
+        more_than_one = [(running, seen, self.allowed(running, seen)) for running in combos for seen in combos]
+        self.assertEqual(len(more_than_one), 64)
+        self.assertEqual([(r, s, who) for r, s, who in more_than_one if len(who) > 1], [])
+        # and with every record current, it is exactly the first node not on its target (none when all are)
+        self.assertEqual([who for running, seen, who in more_than_one if running == seen],
+                         [[n for n in lt.NAMES if running[n] == "image-1"][:1] for running in combos])
+
+    def test_a_lease_from_before_a_fallback_is_for_another_boot_and_is_refused(self):
+        """a booted NEXT, both peers vouched, and within the five minutes a fell back to CURRENT. Its leases
+        are still valid signatures; b's record still says a is on NEXT, so b would pass. a must not."""
+        from_the_other_boot = [self.lease_for("a", peer, session_id=lt.OTHER_SESSION) for peer in ("b", "c")]
+        why = self.refused("WAIT: no valid lease from b (its lease is for another boot session of a: that peer has not seen this boot)",
+                           self.ask, "a", leases=from_the_other_boot)
+        self.assertIn("c (its lease is for another boot session of a", why)
+        self.ask("b", self.state(a="image-2"))                             # the node b believes is back
+        self.ask("a", leases=from_the_other_boot, session=lt.OTHER_SESSION)  # control: the same leases, in the boot they are for
+        for bad in ("", "5e" * 31, "5E" * 32, None, 5):
+            with self.subTest(session=repr(bad)):
+                self.refused("session_id must be 64 lowercase hex", self.ask, "a", session=bad)
+
     def test_a_node_already_on_its_target_has_nothing_to_reboot_for(self):
         self.refused("a is already on its target (image-2): nothing to reboot for", self.ask, "a", running="image-2")
         self.refused("a says it runs 'image-9', which is neither of its accepted sets", self.ask, "a", running="image-9")
@@ -324,9 +409,9 @@ class Reboot(Case):
         for node in lt.NAMES:
             with self.subTest(node):
                 self.refused("no update is approved for %s: the measurements list one set (image-1)" % node, rollout.may_reboot,
-                             manifest, CURRENT, node, "image-1", self.state(), self.leases(node, manifest), self.now)
+                             manifest, CURRENT, node, "image-1", lt.SESSION, self.state(), self.leases(node, manifest), self.now)
         after = self.under(NEXT, epoch=3, prev=m.digest(self.manifest2))
-        self.refused("no update is approved for a", rollout.may_reboot, after, NEXT, "a", "image-2", self.state(), self.leases("a", after), self.now)
+        self.refused("no update is approved for a", rollout.may_reboot, after, NEXT, "a", "image-2", lt.SESSION, self.state(), self.leases("a", after), self.now)
 
     def test_a_peer_that_cannot_vouch_stops_the_reboot(self):
         self.refused("WAIT: no valid lease from c (none presented)", self.ask, "a", leases=[self.lease_for("a", "b")])
@@ -357,25 +442,25 @@ class Reboot(Case):
         b then goes on c's word alone. There is no unsigned way to skip a node."""
         self.refused("a updates first", self.ask, "b", self.state(), leases=[self.lease_for("b", "c")])
         manifest = self.under(BOTH, epoch=2, prev=m.digest(self.under(CURRENT)), a="QUARANTINED")
-        verdict = rollout.may_reboot(manifest, BOTH, "b", "image-1", self.state(), [self.lease_for("b", "c", manifest)], self.now)
+        verdict = rollout.may_reboot(manifest, BOTH, "b", "image-1", lt.SESSION, self.state(), [self.lease_for("b", "c", manifest)], self.now)
         self.assertEqual(verdict["authorizers"], ["c"])
         self.assertNotIn("skip", rollout.may_reboot.__code__.co_varnames)
         # and with both others out, nobody would unlock b
         alone = self.under(BOTH, epoch=2, prev=m.digest(self.under(CURRENT)), a="QUARANTINED", c="DRAINING")
         self.refused("no other node may authorize under epoch 2: nobody would unlock b", rollout.may_reboot, alone, BOTH, "b",
-                     "image-1", self.state(), [], self.now)
+                     "image-1", lt.SESSION, self.state(), [], self.now)
 
     def test_only_an_active_node_is_rebooted_by_the_rollout(self):
         for state in ("MAINTENANCE", "DRAINING", "QUARANTINED", "RETIRED"):
             with self.subTest(state):
                 manifest = self.under(BOTH, epoch=2, prev=m.digest(self.under(CURRENT)), a=state)
                 self.refused("a is %s under epoch 2: only an ACTIVE node is rebooted by the rollout" % state, rollout.may_reboot,
-                             manifest, BOTH, "a", "image-1", self.state(), self.leases("a", manifest), self.now)
-        self.refused("z is not listed", rollout.may_reboot, self.manifest2, BOTH, "z", "image-1", self.state(), [], self.now)
+                             manifest, BOTH, "a", "image-1", lt.SESSION, self.state(), self.leases("a", manifest), self.now)
+        self.refused("z is not listed", rollout.may_reboot, self.manifest2, BOTH, "z", "image-1", lt.SESSION, self.state(), [], self.now)
 
     def test_the_document_must_be_the_one_the_manifest_commits_to(self):
-        self.refused("is not the one the root approved", rollout.may_reboot, self.manifest2, NEXT, "a", "image-1", self.state(), self.leases("a"), self.now)
-        self.refused("is not the one the root approved", rollout.may_reboot, self.under(CURRENT), BOTH, "a", "image-1", self.state(), [], self.now)
+        self.refused("is not the one the root approved", rollout.may_reboot, self.manifest2, NEXT, "a", "image-1", lt.SESSION, self.state(), self.leases("a"), self.now)
+        self.refused("is not the one the root approved", rollout.may_reboot, self.under(CURRENT), BOTH, "a", "image-1", lt.SESSION, self.state(), [], self.now)
 
     def test_a_record_counts_only_with_an_integer_epoch_and_a_text_label(self):
         for record in ({"label": "image-2", "epoch": 2.0}, {"label": "image-2", "epoch": True}, {"label": "image-2", "epoch": "2"},
@@ -401,9 +486,9 @@ class Retire(Case):
             for node, v in seen.items()}} for peer, seen in by_peer.items()}
 
     def test_current_is_retired_only_when_every_node_was_seen_on_next_by_a_peer(self):
-        done = self.states(a={"b": "image-2", "c": "image-2"}, b={"a": "image-2", "c": "image-2"})
-        self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, done), {"a": ["b"], "b": ["a"], "c": ["a", "b"]})
-        lagging = self.states(a={"b": "image-2", "c": "image-1"}, b={"a": "image-2", "c": "image-1"})
+        done = self.states(a={"b": "image-2", "c": "image-2"}, b={"a": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, done), {"a": ["b", "c"], "b": ["a", "c"], "c": ["a", "b"]})
+        lagging = self.states(a={"b": "image-2", "c": "image-1"}, b={"a": "image-2", "c": "image-1"}, c={"a": "image-2", "b": "image-2"})
         why = self.refused("NOT YET: retiring now would lock out c", rollout.retire_ready, self.manifest2, BOTH, lagging)
         self.assertIn("a last saw it on 'image-1'; b last saw it on 'image-1', not on image-2", why)
         self.assertNotIn("lock out a", why)
@@ -416,13 +501,19 @@ class Retire(Case):
                            rollout.retire_ready, self.manifest2, BOTH, fell_back)
         self.assertNotIn("a last saw it", why)
         # a peer that has not seen the node under this epoch says nothing either way
-        partly = self.states(a={"b": "image-2", "c": ("image-1", 1)}, b={"a": "image-2", "c": "image-2"})
+        partly = self.states(a={"b": "image-2", "c": ("image-1", 1)}, b={"a": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
         self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, partly)["c"], ["b"])
 
+    def test_leaving_a_peers_state_out_does_not_make_it_ready(self):
+        """The same case with the dissenting file not collected: forgetting one is the mistake to catch."""
+        without_b = self.states(a={"b": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        self.refused("the state of b is missing. Every node that may authorize is a witness", rollout.retire_ready, self.manifest2, BOTH, without_b)
+        self.refused("the state of b, c is missing", rollout.retire_ready, self.manifest2, BOTH, self.states(a={"b": "image-2", "c": "image-2"}))
+
     def test_a_node_does_not_vouch_for_itself_and_an_old_epoch_does_not_count(self):
-        self_only = self.states(a={"a": "image-2", "b": "image-2", "c": "image-2"})
+        self_only = self.states(a={"a": "image-2", "b": "image-2", "c": "image-2"}, b={}, c={})
         self.refused("lock out a (no other node has verified it under epoch 2)", rollout.retire_ready, self.manifest2, BOTH, self_only)
-        stale = self.states(a={"b": "image-2", "c": "image-2"}, b={"a": ("image-2", 1), "c": "image-2"})
+        stale = self.states(a={"b": "image-2", "c": "image-2"}, b={"a": ("image-2", 1), "c": "image-2"}, c={"a": ("image-2", 1), "b": "image-2"})
         self.refused("lock out a (no other node has verified it under epoch 2)", rollout.retire_ready, self.manifest2, BOTH, stale)
 
     def test_only_a_node_that_may_authorize_is_a_witness(self):
@@ -435,12 +526,12 @@ class Retire(Case):
     def test_refusals_about_the_inputs(self):
         self.refused("no verifier state was given", rollout.retire_ready, self.manifest2, BOTH, {})
         self.refused("state from nodes the manifest does not list: z", rollout.retire_ready, self.manifest2, BOTH, self.states(z={}))
-        self.refused("is not the one the root approved", rollout.retire_ready, self.manifest2, NEXT, self.states(a={}))
+        self.refused("is not the one the root approved", rollout.retire_ready, self.manifest2, NEXT, self.states(a={}, b={}, c={}))
         # a state file that is not a state file refuses; it does not crash
         for junk in ([], "x", {"nodes": []}, {"nodes": {"b": "x"}}, {"nodes": {"b": {"measurement": "image-2"}}},
                      {"nodes": {"b": {"measurement": {"label": "image-2", "epoch": 2.0}}}}):
             with self.subTest(junk=repr(junk)):
-                self.refused("NOT YET", rollout.retire_ready, self.manifest2, BOTH, {"a": junk})
+                self.refused("NOT YET", rollout.retire_ready, self.manifest2, BOTH, {"a": junk, "b": junk, "c": junk})
 
 
 def sign(manifest, key=hbt.ROOT, signer="root"):
@@ -476,7 +567,10 @@ class OnSwtpm(unittest.TestCase):
             self.on(name, attest.node_init, "%s/%s" % (self.d, name))
             self.names[name] = {k: attest.name_of(attest.public_area(lt.slurp("%s/%s/%s.pub" % (self.d, name, k)), k)).hex()
                                 for k in ("ek", "ak")}
-        self.now = lt.T0 + 60
+        # The wall clock must advance with the TPMs' own clocks: heartbeat.authenticated_now refuses a clock
+        # that reads earlier than its last reading plus the TPM time elapsed since. A frozen test clock passed
+        # on a quiet machine and failed ("the clock went backwards") whenever the run took longer.
+        self.started, self.offset = time.monotonic(), 0
         self.clock = lambda: (self.now, True)
         self.root = hbt.pub(hbt.ROOT)
         self.sequence = 0
@@ -489,6 +583,10 @@ class OnSwtpm(unittest.TestCase):
             counter.define()
             self.freshness[name] = hb.Freshness(counter, self.clock, hb.TpmClock(tcti=self.tcti[name]), "%s/%s-freshness.json" % (self.d, name))
             self.signer[name] = lease.TpmSigner(tcti=self.tcti[name])
+
+    @property
+    def now(self):
+        return lt.T0 + 60 + int(time.monotonic() - self.started) + self.offset
 
     # ---- the machines ----
 
@@ -509,9 +607,13 @@ class OnSwtpm(unittest.TestCase):
         subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=%s/tpm-%s" % (self.d, name), "--server", "type=unixio,path=" + sock,
                         "--ctrl", "type=unixio,path=" + sock + ".ctrl", "--flags", "not-need-init,startup-clear", "--daemon",
                         "--pid", "file=%s/%s.pid" % (self.d, name)], check=True, capture_output=True)
-        time.sleep(0.5)
         with open("%s/%s.pid" % (self.d, name)) as f:
             self.pid[name] = int(f.read())
+        # not a fixed sleep: on a busy machine the TPM may take longer to answer than it usually does
+        for _ in range(50):
+            if self.on(name, subprocess.run, ["tpm2_pcrread", "sha256:7"], capture_output=True).returncode == 0:
+                break
+            time.sleep(0.2)
         self.on(name, subprocess.run, ["tpm2_pcrextend", "7:sha256=" + self.PCR7, "11:sha256=" + self.IMAGES[image]], check=True, capture_output=True)
         self.boots += 1
         self.session[name] = hashlib.sha256(b"boot %d" % self.boots).hexdigest()
@@ -594,7 +696,7 @@ class OnSwtpm(unittest.TestCase):
     def may_reboot(self, node, leases=None):
         if leases is None:
             leases = [self.vouch(peer, node) for peer in self.NODES if peer != node]
-        return rollout.may_reboot(self.manifest_now, self.document_now, node, self.image[node], self.state(node), leases, self.now)
+        return rollout.may_reboot(self.manifest_now, self.document_now, node, self.image[node], self.session[node], self.state(node), leases, self.now)
 
     def others(self, node):
         return [n for n in self.NODES if n != node]
@@ -648,9 +750,9 @@ class OnSwtpm(unittest.TestCase):
             self.assertEqual(self.seen(peer, "a"), "image-2")
         self.refused("a is already on its target (image-2): nothing to reboot for", self.may_reboot, "a")
         held = [self.vouch(peer, "a") for peer in ("b", "c")]
-        self.assertEqual([lease.verify(e, m2, self.now) for e in held], [300, 300])
+        self.assertTrue(all(lease.verify(e, m2, self.now) > 280 for e in held))      # five minutes, less this run's seconds
         # a, on NEXT, still vouches for b and c on CURRENT: both sets work during the rollout
-        self.assertEqual([lease.verify(self.vouch("a", n), m2, self.now) for n in ("b", "c")], [300, 300])
+        self.assertTrue(all(lease.verify(self.vouch("a", n), m2, self.now) > 280 for n in ("b", "c")))
         why = self.refused("NOT YET: retiring now would lock out b", rollout.retire_ready, m2, v2, {n: self.state(n) for n in self.NODES})
         self.assertIn("c (a last saw it on 'image-1'; b last saw it on 'image-1', not on image-2)", why)
 
@@ -661,7 +763,10 @@ class OnSwtpm(unittest.TestCase):
         self.boot("b", "image-2")
         self.assertGreater(self.unlock("a", "b"), 0)
         # b's new image fails and it falls back to CURRENT: still unlocked, because both are approved
+        before_fallback = [self.vouch(peer, "b") for peer in ("a", "c")]     # leases b holds on image-2
         self.boot("b", "image-1")
+        # those leases are still valid signatures, and a's record still says b is on NEXT; they are for another boot
+        self.refused("its lease is for another boot session of b: that peer has not seen this boot", self.may_reboot, "b", before_fallback)
         self.assertGreater(self.unlock("c", "b"), 0)
         self.assertEqual(self.seen("c", "b"), "image-1")
         self.refused("WAIT: it is not c's turn. b updates first", self.may_reboot, "c")   # c saw b fall back
@@ -695,8 +800,8 @@ class OnSwtpm(unittest.TestCase):
             self.assertEqual(self.seen(peer, "c"), "image-2")             # a refusal does not rewrite the record
         # the lease c held from before the retirement was issued under epoch 2 and is still inside its five minutes:
         # the lease bound, as lease.py states it. It is not renewed.
-        self.assertEqual(lease.verify(old_lease_for_c, m3, self.now), 300)
-        self.now += lease.MAX_LIFETIME
+        self.assertGreater(lease.verify(old_lease_for_c, m3, self.now), 0)
+        self.offset += lease.MAX_LIFETIME
         self.refused("EXPIRED", lease.verify, old_lease_for_c, m3, self.now)
 
         # the older document, handed to a peer that holds the newer manifest

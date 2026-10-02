@@ -48,7 +48,8 @@ that is NEXT. transition(old, new) names what a new document does and refuses wh
 
 Refused: a set dropped in the step that adds another on the same node (no overlap: a node still running
 the old image is locked out with no step in which both were accepted), unless the caller says it is an
-EMERGENCY (a compromised image is dropped at once: "replace-without-overlap"); two sets swapped (the
+EMERGENCY (a compromised image is dropped at once, everywhere: "replace-without-overlap"; nodes that
+already had both sets lose the old one in the same document, and nothing else rides along); two sets swapped (the
 target would change with nothing approved or retired); a label given other measurements; approving
 and retiring, or retiring and abandoning, in one document; and a node that disappears from the document
 unless the caller names it in `dropped` (a retired or replaced node: bind() lets a node have no entry
@@ -130,11 +131,31 @@ def bind(manifest, document):
     return {node_id: {"accepted": accepted} for node_id, accepted in sets.items()}
 
 
-def attest_policy(manifest, document, peer_id=None):
+def attest_policy(manifest, document, peer_id):
     """The attestation policy `peer_id` holds under `manifest`, from the document that manifest commits
     to and from nothing else. This is the call a peer should make: replacement.attest_policy takes any
-    reference values it is handed, bound or not."""
-    return replacement.attest_policy(manifest, bind(manifest, document), peer_id=peer_id)
+    reference values it is handed, bound or not. `peer_id` must be a node of the manifest: a peer's
+    policy never lists the peer itself."""
+    bound = bind(manifest, document)
+    require(isinstance(peer_id, str) and peer_id in membership.validate(manifest), "%r is not a node of the manifest" % (peer_id,))
+    return replacement.attest_policy(manifest, bound, peer_id=peer_id)
+
+
+def check_replacement(current, candidate, old_document, new_document, old_id, new_id):
+    """A node replacement (#76) under bound measurements: `candidate` replaces `old_id` by `new_id`, and
+    the document it commits to is the old one with the new node's entry added, the replaced node's entry
+    kept or removed, and NOTHING else changed: no other node gains, loses or reorders a set in the same
+    step. Raises Refused with the reason."""
+    bind(current, old_document)
+    replacement.check_replacement(current, candidate, old_id, new_id, measurements_change=True)
+    bind(candidate, new_document)
+    before, after = validate(old_document), validate(new_document)
+    require(new_id in after and new_id not in before, "the new document must add an entry for %s" % new_id)
+    require(set(after) - set(before) == {new_id} and set(before) - set(after) <= {old_id},
+            "a replacement changes the entries of %s and %s only (added: %s; removed: %s)"
+            % (old_id, new_id, ", ".join(sorted(set(after) - set(before))) or "none", ", ".join(sorted(set(before) - set(after))) or "none"))
+    for node_id in sorted(set(before) & set(after)):
+        require(after[node_id] == before[node_id], "a replacement does not change the measurements of %s" % node_id)
 
 
 def target(document, node_id):
@@ -171,6 +192,7 @@ def transition(old, new, emergency=False, dropped=()):
             require(emergency, "%s: %s is dropped in the same step that adds %s. A node still running the old image would "
                     "be locked out: approve the new image first (both sets), retire the old one afterwards"
                     % (node_id, ", ".join(sorted(set(was) - set(now))), ", ".join(sorted(set(now) - set(was)))))
+            require(_key(a[-1]) in added, "%s: the replacing set must be listed last (it is the target)" % node_id)
             replaced.append(node_id)
         elif added:
             # target() reads the LAST set as the image to end up on, so the newcomer goes last.
@@ -183,8 +205,11 @@ def transition(old, new, emergency=False, dropped=()):
             require([_key(e) for e in a] == [_key(e) for e in b], "%s: its two sets changed places, so its target would become %s "
                     "with nothing approved or retired" % (node_id, a[-1]["label"]))
     if replaced:
-        require(not kinds, "an emergency replacement (%s) must not also %s (%s) in the same document"
-                % (", ".join(replaced), " or ".join(sorted(kinds)), ", ".join(sorted(n for v in kinds.values() for n in v))))
+        # Dropping the compromised image everywhere at once is the point of an emergency: a node that already had
+        # both sets simply loses the old one ("retire") in the same document. Nothing else rides along.
+        other = {k: v for k, v in kinds.items() if k != "retire"}
+        require(not other, "an emergency replacement (%s) must not also %s (%s) in the same document"
+                % (", ".join(replaced), " or ".join(sorted(other)), ", ".join(sorted(n for v in other.values() for n in v))))
         return "replace-without-overlap"
     require(len(kinds) <= 1, "one document does two things: %s. One step, one document"
             % "; ".join("%s on %s" % (k, ", ".join(v)) for k, v in sorted(kinds.items())))
