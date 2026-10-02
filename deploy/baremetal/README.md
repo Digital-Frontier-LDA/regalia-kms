@@ -41,6 +41,13 @@ Commissioning has two halves:
 - **Full-disk encryption** (LUKS2), enrolled to the TPM:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
   `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
+  - **A disk enrolled this way FAILS `root_disk_unlock_revocable`, and `host_probe.py` exits 1. That is
+    intended (#135): it is the known blocker for production.** PCR 7 does not change with the kernel, so
+    an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
+    passes only when the unlock can retire an image: a peer's contribution (#67, being built), or an
+    NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
+    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
+    A host that is otherwise commissioned shows this as its only failing control.
 - **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this
   host's disk by itself after a total outage (#77; PIN-CUSTODY.md, "The disk recovery key"). It is a
   ceremony secret, one per host, written on the KMS host recovery card and carried in every escrow;

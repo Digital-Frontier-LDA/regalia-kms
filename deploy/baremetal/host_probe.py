@@ -27,6 +27,17 @@ PLATFORM AND TPM, measured:
   root_disk_tpm_unlocked    a dm-crypt device is among the root filesystem's block-device ancestors
                             (lsblk -s: LUKS directly or under LVM), and its crypttab entry unlocks with
                             the TPM (a tpm2-device=<value> option, parsed exactly)
+  root_disk_unlock_revocable
+                            NO keyslot of the root volume is released by the local TPM on a policy that
+                            cannot retire a boot image (#135). A systemd-tpm2 token bound to PCR values,
+                            or to a signed PCR policy, is such a policy: PCR 7 does not change with the
+                            kernel, and a signed policy accepts every image its key ever signed. An old
+                            signed image then unlocks the disk, reads the host key and opens the HSM
+                            PIN. What passes: every TPM token of the root volume is NV-backed
+                            (tpm2_pcrlock: the policy lives in a TPM NV index and an update replaces
+                            it). The peer contribution of #67 will be a second passing shape when it
+                            exists. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY DESIGN: it is the
+                            known blocker for production, and there is no option to skip it.
   root_disk_recovery_keyslot
                             the same LUKS2 header carries the per-host RECOVERY keyslot (#77): exactly
                             one systemd-recovery token, naming one keyslot that no other token names,
@@ -125,7 +136,8 @@ HOST_KEY = "/var/lib/systemd/credential.secret"
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
-            "root_disk_tpm_unlocked", "root_disk_recovery_keyslot", "ima_policy_loaded", "pin_import_key_present",
+            "root_disk_tpm_unlocked", "root_disk_unlock_revocable", "root_disk_recovery_keyslot", "ima_policy_loaded",
+            "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
             "token_clients_root_only", "firewall_default_deny")
 MEASURED = PLATFORM + os_probe.MEASURED
@@ -247,13 +259,54 @@ def root_unlock(host):
             return False, "%s (%s) has no systemd-tpm2 token in its LUKS2 header: enrol it with " \
                 "systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7" % (name, dev)
         # The commissioning policy binds the disk to PCR 7 exactly (README, section 3): a token with no
-        # PCRs, or other ones, would release the disk key whatever the Secure Boot state.
-        wrong = [t.get("tpm2-pcrs") for t in tpm if sorted(t.get("tpm2-pcrs") or []) != [7]]
+        # PCRs, or other ones, would release the disk key whatever the Secure Boot state. The one other
+        # shape is an NV-backed token (tpm2_pcrlock): its PCRs are in the policy the NV index holds, not
+        # in the token, which lists none. Whether a token can RETIRE an image is root_disk_unlock_revocable's.
+        wrong = [t.get("tpm2-pcrs") for t in tpm if not nv_backed(t) and sorted(t.get("tpm2-pcrs") or []) != [7]]
         if wrong:
-            return False, "%s (%s) has a TPM2 token bound to PCRs %s, not exactly [7]: re-enrol with " \
+            return False, "%s (%s) has a TPM2 token bound to PCRs %s, not exactly [7] and not NV-backed: re-enrol with " \
                 "systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7" % (name, dev, wrong)
     return True, "%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (
         ", ".join(crypts), "; ".join(entries[n] for n in crypts))
+
+
+def nv_backed(token):
+    """A systemd-tpm2 token whose policy lives in a TPM NV index (systemd-cryptenroll --tpm2-pcrlock):
+    exactly `"tpm2_pcrlock": true`, and no PCR list of its own."""
+    return token.get("tpm2_pcrlock") is True and not token.get("tpm2-pcrs")
+
+
+NOT_REVOCABLE = (
+    "%s (%s) is unlocked by the local TPM alone, under a policy that cannot retire a boot image (%s). An old signed "
+    "kernel image unlocks this disk, reads the host key and opens the HSM PIN. BLOCKING FOR PRODUCTION (#135). "
+    "What clears it: a peer's contribution to the unlock (#67, not built yet), or an NV-backed policy "
+    "(systemd-cryptenroll --tpm2-pcrlock; measured on a software TPM only, e2e/pcrlock-luks-swtpm.sh). "
+    "There is no option to skip this check")
+
+
+def unlock_revocable(host):
+    crypts, why = root_crypt_devices(host)
+    if crypts is None:
+        return False, why
+    for name in crypts:
+        dev, meta = luks_header(host, name)
+        if dev is None:
+            return False, meta
+        tpm = [t for t in (meta.get("tokens") or {}).values() if isinstance(t, dict) and t.get("type") == "systemd-tpm2" and t.get("keyslots")]
+        if not tpm:
+            return False, "%s (%s) has no systemd-tpm2 token: nothing to judge (root_disk_tpm_unlocked says what is missing)" % (name, dev)
+        fixed = []
+        for t in tpm:
+            if nv_backed(t):
+                continue
+            how = "PCRs %s" % (t.get("tpm2-pcrs") or "none")
+            if t.get("tpm2_pubkey") or t.get("tpm2_pubkey_pcrs"):
+                how += ", and a signed policy on PCRs %s (every image its key ever signed)" % (t.get("tpm2_pubkey_pcrs") or "?")
+            fixed.append(how)
+        if fixed:
+            return False, NOT_REVOCABLE % (name, dev, "; ".join(fixed))
+    return True, "%s: every TPM token is NV-backed (tpm2_pcrlock): an update replaces the policy, and a retired image no longer unlocks" \
+        % ", ".join(crypts)
 
 
 def recovery_keyslots(meta):
@@ -619,7 +672,7 @@ def firewall(host):
 
 PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
               tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock,
-              root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
+              root_disk_unlock_revocable=unlock_revocable, root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
