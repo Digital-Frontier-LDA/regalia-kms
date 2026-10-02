@@ -51,13 +51,18 @@ LIMITS, stated:
     stopped by it, and a node that lies to itself is not either.
   * A lease proves the peer could authorize up to five minutes ago, not that it still can when this
     node comes back. One remaining authorizer is accepted when the manifest leaves only one.
+  * "Never more than one node" rests on one fact outside this function: a peer writes its record of a
+    node BEFORE it signs that node a lease (lease.issue re-attests first), and a node has one boot
+    session per boot. So a lease for this boot means the issuer's record of this node is of this boot.
+    `own_state` must be the state file of the verifier this node issues leases with; it is an argument,
+    and nothing here can check that it is.
   * Nothing here reboots, installs an image or signs a manifest, and nothing is wired into a
     service yet. Boot counting and the automatic fallback to CURRENT are systemd-boot's, on the real
     hosts.
 """
 import subprocess
 
-from deploy.baremetal import lease, measurements, membership
+from deploy.baremetal import attest, lease, measurements, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -98,6 +103,9 @@ def may_reboot(manifest, document, node_id, running, session_id, own_state, leas
     shortest lease's time left}, or raises Refused with the reason."""
     sets = measurements.bind(manifest, document)
     nodes = membership.validate(manifest)
+    require(isinstance(node_id, str), "node_id is text")
+    require(isinstance(leases, (list, tuple)), "leases is a list of lease envelopes")
+    require(isinstance(now, (int, float)) and not isinstance(now, bool), "now is the node's authenticated time, in seconds")
     require(node_id in nodes and nodes[node_id]["state"] == "ACTIVE",
             "%s is %s under epoch %d: only an ACTIVE node is rebooted by the rollout (it must be unlocked again, and it holds "
             "runtime leases now)" % (node_id, nodes[node_id]["state"] if node_id in nodes else "not listed", manifest["epoch"]))
@@ -150,7 +158,7 @@ def retire_ready(manifest, document, states):
     that is not there, and who says so."""
     measurements.bind(manifest, document)
     nodes = membership.validate(manifest)
-    require(isinstance(states, dict) and states, "no verifier state was given")
+    require(isinstance(states, dict) and states and all(isinstance(p, str) for p in states), "no verifier state was given")
     unknown = sorted(set(states) - set(nodes))
     require(not unknown, "state from nodes the manifest does not list: %s" % ", ".join(unknown))
     silent = sorted(p for p in states if not membership.may(manifest, p, "authorize"))
@@ -159,6 +167,11 @@ def retire_ready(manifest, document, states):
     absent = sorted(n for n in nodes if membership.may(manifest, n, "authorize") and n not in states)
     require(not absent, "the state of %s is missing. Every node that may authorize is a witness: the file left out could be "
             "the one that saw a node fall back" % ", ".join(absent))
+    # ... and a file that was collected empty, or is not a verifier's state at all, is as good as left out
+    hollow = sorted(p for p, state in states.items() if not (
+        isinstance(state, dict) and state.get("schema") == attest.STATE_SCHEMA and isinstance(state.get("nodes"), dict)))
+    require(not hollow, "the state given for %s is not an attestation verifier's state (%s, with its nodes): a failed "
+            "collection is not a witness" % (", ".join(hollow), attest.STATE_SCHEMA))
     seen, behind = {}, []
     for node_id in attesting(manifest):
         want = measurements.target(document, node_id)["label"]

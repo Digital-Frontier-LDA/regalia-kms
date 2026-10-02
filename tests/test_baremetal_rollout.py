@@ -169,6 +169,20 @@ class Document(Case):
         no_d = document("v1x", **{n: [one("image-1", IMAGE1)] for n in "bc"})
         self.refused("no entry for d, which the manifest lets attest", measurements.check_replacement, m1, replaced(no_d), CURRENT, no_d, "a", "d")
         self.refused("is not the one the root approved", measurements.check_replacement, m1, m2, CURRENT, keep_a, "a", "d")
+        # the new node gets the sets the others already have, by name: no approval rides in with it
+        for sets in ([one("image-1", IMAGE1), one("image-2", IMAGE2)], [one("image-9", IMAGE3)], [one("zzz", IMAGE1)]):
+            with self.subTest(labels=[e["label"] for e in sets]):
+                doc = document("v1n", **dict({n: [one("image-1", IMAGE1)] for n in "bc"}, d=sets))
+                self.refused("a replacement gives the new node the sets another node already has (['image-1'])",
+                             measurements.check_replacement, m1, replaced(doc), CURRENT, doc, "a", "d")
+        own_hardware = document("v1h", **dict({n: [one("image-1", IMAGE1)] for n in "bc"}, d=[one("image-1", {"7": "dd" * 32, "11": "a1" * 32})]))
+        measurements.check_replacement(m1, replaced(own_hardware), CURRENT, own_hardware, "a", "d")   # its own PCR values are fine
+        # the switch that lets policy_version change is not on the public function
+        self.assertNotIn("measurements_change", replacement.check_replacement.__code__.co_varnames)
+        self.assertNotIn("policy_version_may_change", replacement.check_replacement.__code__.co_varnames[:replacement.check_replacement.__code__.co_argcount])
+        for ids in ((["a"], "d"), ("a", {"d": 1}), (("a", "x"), "d")):
+            with self.subTest(ids=repr(ids)):
+                self.refused("node IDs are text", measurements.check_replacement, m1, m2, CURRENT, with_d, *ids)
         self.refused("is not the one the root approved", measurements.check_replacement, m1, m2, BOTH, with_d, "a", "d")
 
     def test_schema_refusals(self):
@@ -236,18 +250,47 @@ class Transition(Case):
         backwards = document("e", **{n: [one("image-3", IMAGE3), one("image-2", IMAGE2)] for n in "abc"})
         self.refused("the replacing set must be listed last", measurements.transition, BOTH, backwards, emergency=True)
 
+        swapped_c = document("e", a=[one("image-1", IMAGE1), one("image-3", IMAGE3)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
+                             c=[one("image-2", IMAGE2), one("image-1", IMAGE1)])
+        self.refused("c: its two sets changed places", measurements.transition, BOTH, swapped_c, emergency=True)
+
     def test_an_emergency_drops_the_compromised_image_everywhere_at_once(self):
         """After a per-node approve, a already has both sets and b and c only the old one. Dropping the old
         image at once is a replacement on b and c and a retirement on a, in one document."""
         only_a = document("a-first", a=[one("image-1", IMAGE1), one("image-2", IMAGE2)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1)])
         self.assertEqual(measurements.transition(only_a, NEXT, emergency=True), "replace-without-overlap")
         self.refused("would be locked out", measurements.transition, only_a, NEXT)
-        # but nothing else rides along: abandoning NEXT on a while replacing on b and c is two decisions
-        abandon_a = document("x", a=[one("image-1", IMAGE1)], b=[one("image-3", IMAGE3)], c=[one("image-3", IMAGE3)])
-        self.refused("an emergency replacement (b, c) must not also abandon (a)", measurements.transition, only_a, abandon_a, emergency=True)
-        swapped_c = document("e", a=[one("image-1", IMAGE1), one("image-3", IMAGE3)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
-                             c=[one("image-2", IMAGE2), one("image-1", IMAGE1)])
-        self.refused("c: its two sets changed places", measurements.transition, BOTH, swapped_c, emergency=True)
+        # a must lose the compromised image, not the other one: keeping only image-1 while b and c replace it
+        keeps = document("x", a=[one("image-1", IMAGE1)], b=[one("image-3", IMAGE3)], c=[one("image-3", IMAGE3)])
+        self.refused("an emergency replacement drops image-1; a loses another set (image-2)", measurements.transition, only_a, keeps, emergency=True)
+        # nor may it simply stay beside the new one
+        stays = document("x", a=[one("image-1", IMAGE1), one("image-2", IMAGE2)], b=[one("image-2", IMAGE2)], c=[one("image-2", IMAGE2)])
+        self.refused("an emergency replacement drops image-1, but a would still accept it", measurements.transition, only_a, stays, emergency=True)
+
+    def test_an_emergency_drops_the_compromised_image_whichever_set_it_is(self):
+        """A 0 -> 1 rollout already retired on b and c, still open on a; then image-1 is found compromised.
+        The right document drops image-1 on a (its LAST set) and replaces it on b and c."""
+        zero = {"7": "00" * 32, "11": "a0" * 32}
+        before = document("mid", a=[one("image-0", zero), one("image-1", IMAGE1)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1)])
+        right = document("drop-1", a=[one("image-0", zero)], b=[one("image-2", IMAGE2)], c=[one("image-2", IMAGE2)])
+        self.assertEqual(measurements.transition(before, right, emergency=True), "replace-without-overlap")
+        wrong = document("keep-1", a=[one("image-1", IMAGE1)], b=[one("image-2", IMAGE2)], c=[one("image-2", IMAGE2)])
+        self.refused("an emergency replacement drops image-1; a loses another set (image-0)", measurements.transition, before, wrong, emergency=True)
+        # the mirror: NEXT already the only set on a, then NEXT (image-2) is the compromised one
+        retired_on_a = document("r", a=[one("image-2", IMAGE2)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
+                                c=[one("image-1", IMAGE1), one("image-2", IMAGE2)])
+        back = document("drop-2", a=[one("image-3", IMAGE3)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1)])
+        self.assertEqual(measurements.transition(retired_on_a, back, emergency=True), "replace-without-overlap")
+        stays_on_c = document("drop-2", a=[one("image-3", IMAGE3)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1), one("image-2", IMAGE2)])
+        self.refused("drops image-2, but c would still accept it", measurements.transition, retired_on_a, stays_on_c, emergency=True)
+        # a newly enrolled node may not bring the compromised image back either
+        with_d = document("drop-2d", a=[one("image-3", IMAGE3)], b=[one("image-1", IMAGE1)], c=[one("image-1", IMAGE1)], d=[one("image-2", IMAGE2)])
+        self.refused("drops image-2, but d would still accept it", measurements.transition, retired_on_a, with_d, emergency=True)
+
+    def test_dropped_is_a_list_of_node_ids(self):
+        for bad in (None, 5, "ab", "c", {"c": 1}, [1], [["c"]]):
+            with self.subTest(dropped=repr(bad)):
+                self.refused("`dropped` is a list of node IDs", measurements.transition, CURRENT, CURRENT, dropped=bad)
 
     def test_one_node_at_a_time_may_be_approved_but_not_approved_and_retired_in_one_document(self):
         only_a = document("a-first", a=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
@@ -462,6 +505,15 @@ class Reboot(Case):
         self.refused("is not the one the root approved", rollout.may_reboot, self.manifest2, NEXT, "a", "image-1", lt.SESSION, self.state(), self.leases("a"), self.now)
         self.refused("is not the one the root approved", rollout.may_reboot, self.under(CURRENT), BOTH, "a", "image-1", lt.SESSION, self.state(), [], self.now)
 
+    def test_arguments_of_the_wrong_kind_are_refused_not_crashed_on(self):
+        self.refused("leases is a list of lease envelopes", self.ask, "a", leases=5)
+        self.refused("leases is a list", rollout.may_reboot, self.manifest2, BOTH, "a", "image-1", lt.SESSION, self.state(), None, self.now)
+        for now in (None, "x", True):
+            with self.subTest(now=repr(now)):
+                self.refused("now is the node's authenticated time", rollout.may_reboot, self.manifest2, BOTH, "a", "image-1",
+                             lt.SESSION, self.state(), self.leases("a"), now)
+        self.refused("node_id is text", rollout.may_reboot, self.manifest2, BOTH, ["a"], "image-1", lt.SESSION, self.state(), [], self.now)
+
     def test_a_record_counts_only_with_an_integer_epoch_and_a_text_label(self):
         for record in ({"label": "image-2", "epoch": 2.0}, {"label": "image-2", "epoch": True}, {"label": "image-2", "epoch": "2"},
                        {"label": ["image-2"], "epoch": 2}, {"label": "image-2"}, "image-2", None):
@@ -523,14 +575,29 @@ class Retire(Case):
         done = self.states(a={"b": "image-2"}, b={"a": "image-2"})
         self.assertEqual(rollout.retire_ready(manifest, BOTH, done), {"a": ["b"], "b": ["a"]})   # and c is not waited for
 
+    def test_a_collected_state_that_is_empty_or_not_a_state_is_not_a_witness(self):
+        """a and c report everyone on NEXT; the dissenting b's file was collected empty, or is something
+        else. That is the same mistake as leaving it out."""
+        good = self.states(a={"b": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        for junk in ({}, [], "x", None, {"nodes": {}}, {"schema": attest.STATE_SCHEMA, "nodes": []}, {"schema": "nope", "nodes": {}},
+                     {"schema": attest.STATE_SCHEMA}):
+            with self.subTest(junk=repr(junk)):
+                self.refused("the state given for b is not an attestation verifier's state", rollout.retire_ready,
+                             self.manifest2, BOTH, dict(good, b=junk))
+        # a real, empty-of-records state from b: it has seen nobody under this epoch, and says nothing
+        seen_nobody = dict(good, b={"schema": attest.STATE_SCHEMA, "nodes": {}, "nonces": {}})
+        self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, seen_nobody)["b"], ["a", "c"])
+
     def test_refusals_about_the_inputs(self):
         self.refused("no verifier state was given", rollout.retire_ready, self.manifest2, BOTH, {})
+        self.refused("no verifier state was given", rollout.retire_ready, self.manifest2, BOTH, {7: {}})
         self.refused("state from nodes the manifest does not list: z", rollout.retire_ready, self.manifest2, BOTH, self.states(z={}))
         self.refused("is not the one the root approved", rollout.retire_ready, self.manifest2, NEXT, self.states(a={}, b={}, c={}))
         # a state file that is not a state file refuses; it does not crash
-        for junk in ([], "x", {"nodes": []}, {"nodes": {"b": "x"}}, {"nodes": {"b": {"measurement": "image-2"}}},
-                     {"nodes": {"b": {"measurement": {"label": "image-2", "epoch": 2.0}}}}):
-            with self.subTest(junk=repr(junk)):
+        # a state with records that are not records refuses; it does not crash
+        for nodes in ({"b": "x"}, {"b": {"measurement": "image-2"}}, {"b": {"measurement": {"label": "image-2", "epoch": 2.0}}}):
+            with self.subTest(nodes=repr(nodes)):
+                junk = {"schema": attest.STATE_SCHEMA, "nodes": nodes}
                 self.refused("NOT YET", rollout.retire_ready, self.manifest2, BOTH, {"a": junk, "b": junk, "c": junk})
 
 

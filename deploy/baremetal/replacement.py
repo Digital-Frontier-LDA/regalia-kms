@@ -79,13 +79,19 @@ def identities(node):
     return {node[k] for k in membership.IDENTITY_KEYS} | {"hsm:" + s for s in node["hsm_serials"]}
 
 
-def check_replacement(current, candidate, old_id, new_id, measurements_change=False):
+def check_replacement(current, candidate, old_id, new_id):
     """`candidate` replaces `old_id` by `new_id` and does nothing else. Raises Refused with the reason.
 
-    `measurements_change`: where policy_version commits to a measurement document (measurements.py, #75),
-    the new node needs an entry in it, so the document changes and policy_version with it. That is allowed
-    only through measurements.check_replacement, which calls this with the flag and then requires the two
-    documents to differ by the replaced and the new node's entries and nothing else."""
+    Where policy_version commits to a measurement document (measurements.py, #75) the new node needs an
+    entry in it, so policy_version changes with the replacement and this check refuses it: use
+    measurements.check_replacement, which also compares the two documents."""
+    _check_replacement(current, candidate, old_id, new_id, policy_version_may_change=False)
+
+
+def _check_replacement(current, candidate, old_id, new_id, policy_version_may_change):
+    """check_replacement, for measurements.check_replacement only: with the flag, policy_version may
+    change, and the caller answers for WHAT changed by comparing the documents. Not a public switch."""
+    require(isinstance(old_id, str) and isinstance(new_id, str), "node IDs are text")
     old, new = membership.validate(current), membership.validate(candidate)
     require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
             "the replacement must be the next manifest: epoch %d, chained to the current one" % (current["epoch"] + 1))
@@ -105,5 +111,5 @@ def check_replacement(current, candidate, old_id, new_id, measurements_change=Fa
                     "the retired entry of %s must keep its identities" % old_id)
         else:
             require(new[node_id] == node, "a replacement does not change %s" % node_id)
-    for k in ("revocation_keys",) if measurements_change else ("policy_version", "revocation_keys"):
+    for k in ("revocation_keys",) if policy_version_may_change else ("policy_version", "revocation_keys"):
         require(candidate[k] == current[k], "a replacement does not change %s" % k)

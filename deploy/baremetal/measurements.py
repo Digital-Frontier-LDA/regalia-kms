@@ -48,8 +48,9 @@ that is NEXT. transition(old, new) names what a new document does and refuses wh
 
 Refused: a set dropped in the step that adds another on the same node (no overlap: a node still running
 the old image is locked out with no step in which both were accepted), unless the caller says it is an
-EMERGENCY (a compromised image is dropped at once, everywhere: "replace-without-overlap"; nodes that
-already had both sets lose the old one in the same document, and nothing else rides along); two sets swapped (the
+EMERGENCY (a compromised image is dropped at once, everywhere: "replace-without-overlap"; a node that
+had it beside another set loses it, whichever of its two it was; no node may keep it, lose any other
+set, or gain an approval in the same document); two sets swapped (the
 target would change with nothing approved or retired); a label given other measurements; approving
 and retiring, or retiring and abandoning, in one document; and a node that disappears from the document
 unless the caller names it in `dropped` (a retired or replaced node: bind() lets a node have no entry
@@ -147,10 +148,16 @@ def check_replacement(current, candidate, old_document, new_document, old_id, ne
     kept or removed, and NOTHING else changed: no other node gains, loses or reorders a set in the same
     step. Raises Refused with the reason."""
     bind(current, old_document)
-    replacement.check_replacement(current, candidate, old_id, new_id, measurements_change=True)
+    replacement._check_replacement(current, candidate, old_id, new_id, policy_version_may_change=True)
     bind(candidate, new_document)
     before, after = validate(old_document), validate(new_document)
     require(new_id in after and new_id not in before, "the new document must add an entry for %s" % new_id)
+    # The new node gets the images the cluster already accepts, under their names: its PCR values are its
+    # own hardware's, but a replacement is not the step that approves an image nobody else runs.
+    known = sorted({tuple(e["label"] for e in sets) for sets in before.values()})
+    labels = tuple(e["label"] for e in after[new_id])
+    require(labels in known, "%s is enrolled with the sets %s; a replacement gives the new node the sets another node already "
+            "has (%s), and approving a new image is a step of its own" % (new_id, list(labels), " or ".join(str(list(k)) for k in known)))
     require(set(after) - set(before) == {new_id} and set(before) - set(after) <= {old_id},
             "a replacement changes the entries of %s and %s only (added: %s; removed: %s)"
             % (old_id, new_id, ", ".join(sorted(set(after) - set(before))) or "none", ", ".join(sorted(set(before) - set(after))) or "none"))
@@ -172,15 +179,17 @@ def _key(entry):
 def transition(old, new, emergency=False, dropped=()):
     """What `new` does to `old`: "approve", "retire", "abandon", "unchanged", or, with `emergency`,
     "replace-without-overlap". Raises Refused for anything that is not one clean step (the module text
-    lists them). `dropped` names the nodes that are meant to leave the document; a node that is new in
-    `new` (an enrollment) is not compared."""
+    lists them). `dropped` names the nodes that are meant to leave the document (a list of node IDs); a
+    node that is new in `new` (an enrollment) is not compared."""
+    require(isinstance(dropped, (list, tuple, set, frozenset)) and all(isinstance(n, str) for n in dropped),
+            "`dropped` is a list of node IDs")
     before, after = validate(old), validate(new)
     gone, dropped = set(before) - set(after), set(dropped)
     require(gone <= dropped, "%s is no longer in the measurements. A node that still attests cannot lose its entry; if it was "
             "retired or replaced, name it in `dropped`" % ", ".join(sorted(gone - dropped)))
     require(dropped <= gone, "`dropped` names nodes that are still in the new document or never were in the old one: %s"
             % ", ".join(sorted(dropped - gone)))
-    kinds, replaced = {}, []
+    kinds, replaced, compromised, lost = {}, [], set(), {}
     for node_id in sorted(set(before) & set(after)):
         b, a = before[node_id], after[node_id]
         was, now = {e["label"]: _key(e) for e in b}, {e["label"]: _key(e) for e in a}
@@ -194,6 +203,7 @@ def transition(old, new, emergency=False, dropped=()):
                     % (node_id, ", ".join(sorted(set(was) - set(now))), ", ".join(sorted(set(now) - set(was)))))
             require(_key(a[-1]) in added, "%s: the replacing set must be listed last (it is the target)" % node_id)
             replaced.append(node_id)
+            compromised |= set(was) - set(now)       # the labels the emergency drops
         elif added:
             # target() reads the LAST set as the image to end up on, so the newcomer goes last.
             require(_key(a[-1]) in added, "%s: the newly approved set must be listed last (it is the target)" % node_id)
@@ -201,15 +211,23 @@ def transition(old, new, emergency=False, dropped=()):
         elif removed:
             # one set left, of two: the old target (CURRENT is retired) or the old first set (NEXT is abandoned)
             kinds.setdefault("retire" if _key(a[-1]) == _key(b[-1]) else "abandon", []).append(node_id)
+            lost[node_id] = set(was) - set(now)
         else:
             require([_key(e) for e in a] == [_key(e) for e in b], "%s: its two sets changed places, so its target would become %s "
                     "with nothing approved or retired" % (node_id, a[-1]["label"]))
     if replaced:
-        # Dropping the compromised image everywhere at once is the point of an emergency: a node that already had
-        # both sets simply loses the old one ("retire") in the same document. Nothing else rides along.
-        other = {k: v for k, v in kinds.items() if k != "retire"}
-        require(not other, "an emergency replacement (%s) must not also %s (%s) in the same document"
-                % (", ".join(replaced), " or ".join(sorted(other)), ", ".join(sorted(n for v in other.values() for n in v))))
+        # An emergency drops ONE thing, the compromised image, everywhere at once. A node that had it beside
+        # another set simply loses it, whichever of its two sets it was. Nothing else rides along: no approval,
+        # no other set lost, and the compromised image left on nobody.
+        approving = kinds.get("approve", [])
+        require(not approving, "an emergency replacement (%s) must not also approve (%s) in the same document"
+                % (", ".join(replaced), ", ".join(approving)))
+        other = sorted(n for n, labels in lost.items() if not labels <= compromised)
+        require(not other, "an emergency replacement drops %s; %s loses another set (%s) in the same document"
+                % (", ".join(sorted(compromised)), ", ".join(other), ", ".join(sorted(set().union(*(lost[n] for n in other)) - compromised))))
+        kept = sorted(n for n, sets in after.items() if {e["label"] for e in sets} & compromised)
+        require(not kept, "an emergency replacement drops %s, but %s would still accept it"
+                % (", ".join(sorted(compromised)), ", ".join(kept)))
         return "replace-without-overlap"
     require(len(kinds) <= 1, "one document does two things: %s. One step, one document"
             % "; ".join("%s on %s" % (k, ", ".join(v)) for k, v in sorted(kinds.items())))
