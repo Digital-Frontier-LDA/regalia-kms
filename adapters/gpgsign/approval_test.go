@@ -280,6 +280,13 @@ func TestApproveAndPrepareRefuseWhatCannotCount(t *testing.T) {
 	if _, err := Approve(pending, releaseApprover, approver, fixedNow.Add(5*time.Minute)); err == nil {
 		t.Error("an expired record was approved")
 	}
+	// Dated a year ahead, consistently: an approval of it now could be stockpiled.
+	future := pending
+	future.Created = fixedNow.AddDate(1, 0, 0).Format(time.RFC3339)
+	future.ExpiresAt = fixedNow.AddDate(1, 0, 0).Add(5 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := Approve(future, releaseApprover, approver, fixedNow); err == nil || !strings.Contains(err.Error(), "too far in the future") {
+		t.Errorf("a record expiring next year was approved today: %v", err)
+	}
 	if _, err := Approve(pending, "", approver, fixedNow); err == nil {
 		t.Error("an approval without an approver ID was made")
 	}

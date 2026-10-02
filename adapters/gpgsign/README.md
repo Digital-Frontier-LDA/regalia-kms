@@ -149,8 +149,14 @@ What each step checks:
   in the record. It also requires the record's file hash to be that of the approver's copy, byte for
   byte: a cleartext signature's payload ignores trailing whitespace and the form of line endings
   (RFC 4880, 7.1), so the payload alone would not tell two such files apart. A record for another
-  key or target, or an expired one, is refused. `--unseen` approves without the file; the output
-  then says `NOT CHECKED`, and the file hash shown is only what the preparer wrote.
+  key or target, an expired one, or one that expires more than an hour from now, is refused.
+  `--unseen` approves without the file; the output then says `NOT CHECKED`, and the file hash shown
+  is only what the preparer wrote.
+- **What a cleartext signature cannot pin.** The file hash is checked by the approver and by
+  `--complete`; it is not in the binding the KMS verifies, and it could not usefully be. Whoever
+  holds a finished cleartext signature can attach it to any text with the same canonical form, with
+  or without this tool: that is the format's definition, and every verifier accepts it. The checks
+  make an honest run exact. For bytes that must not vary at all, use `--detach`.
 - **The signature cannot be backdated.** Its creation time is part of what is signed, and it is the
   preparer's claim. A record whose creation time is not within one window (at most an hour) before
   its expiry is refused by `regalia-approve` and by `--complete`, and the approver is shown the date.

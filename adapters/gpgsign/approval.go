@@ -307,6 +307,13 @@ func Approve(pending Pending, approverID string, signer crypto.Signer, now time.
 	if !now.Before(expires) {
 		return Approval{}, errors.New("the pending signature has expired; prepare it again")
 	}
+	// AN APPROVAL IS FOR NOW. A record that expires next year is internally consistent (its creation
+	// time can sit an hour before that), and an approval of it today could be kept until the KMS's
+	// own freshness window opens. Nothing prepared by this tool expires more than one window from
+	// when it was made, so nothing further away than that is approved.
+	if expires.After(now.Add(maxWindow)) {
+		return Approval{}, errors.New("the pending signature expires too far in the future to be approved now")
+	}
 	public, ok := signer.Public().(ed25519.PublicKey)
 	if !ok || strings.TrimSpace(approverID) == "" {
 		return Approval{}, errors.New("an approval needs an approver ID and an Ed25519 key")
