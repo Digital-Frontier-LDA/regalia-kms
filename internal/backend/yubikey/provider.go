@@ -335,3 +335,24 @@ func zero(value []byte) {
 		value[index] = 0
 	}
 }
+
+// reacher is a driver that can say, without opening a session, which commissioned cards cannot be
+// opened and whether another connection holds a reader (the PIV driver's Reach).
+type reacher interface {
+	Reach(context.Context) (missing []string, held bool, err error)
+}
+
+// Reach asks the driver which commissioned cards cannot be opened and whether another connection
+// holds a reader. It takes the turn every request takes. A driver that cannot say reports nothing.
+func (provider *Provider) Reach(ctx context.Context) (missing []string, held bool, err error) {
+	driver, ok := provider.driver.(reacher)
+	if !ok {
+		return nil, false, nil
+	}
+	done, ok := provider.takeTurn(ctx)
+	if !ok {
+		return nil, false, ErrUnavailable
+	}
+	defer done()
+	return driver.Reach(ctx)
+}

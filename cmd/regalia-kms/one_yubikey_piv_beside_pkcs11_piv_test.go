@@ -41,6 +41,10 @@ import (
 //
 // PIV slot 9c must hold a P-256 key (PIN once, touch never). Nothing is written to either token,
 // and the HSM is never logged in to.
+//
+// REGALIA_ONE_YK_EXPECT_LOCKOUT=1 runs the other half instead: with OPENSC_CONF NOT naming the
+// ignore rule, the daemon's own module holds the YubiKey, and buildHardware must refuse to start
+// and name the setting (requirePIVCardsOpenBesidePKCS11).
 func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 	modulePath, serial := os.Getenv("REGALIA_ONE_YK_MODULE"), os.Getenv("REGALIA_ONE_YK_SERIAL")
 	pin, ed25519Slot, hsmSerial := os.Getenv("REGALIA_ONE_YK_PIV_PIN"), os.Getenv("REGALIA_ONE_YK_ED25519_SLOT"), os.Getenv("REGALIA_ONE_YK_HSM_SERIAL")
@@ -68,6 +72,20 @@ func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 		PINPaths: map[string]string{"yubikey-sitea": write("yubikey.pin", pin), "hsm-sitea": write("hsm.pin", "000000")},
 	}
 
+	if os.Getenv("REGALIA_ONE_YK_EXPECT_LOCKOUT") == "1" {
+		_, _, _, closer, err := buildHardware(settings, hsmRegistryFor(t, hsmSerial, "issuing-ca p384 - sign"))
+		if err == nil {
+			closer()
+			t.Fatal("the daemon started although its PKCS#11 module holds the YubiKey: every PIV request would fail (is OPENSC_CONF naming the ignore rule? this half runs without it)")
+		}
+		for _, want := range []string{"yubikey-sitea", "another connection holds a card reader", "OPENSC_CONF", "deploy/opensc/ignore-yubikey.conf"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("the refusal does not name %q: %v", want, err)
+			}
+		}
+		t.Logf("refused to start: %v", err)
+		return
+	}
 	// The PKCS#11 side is alive in this process: the HSM answers the startup question about what it
 	// offers, which is how an Ed25519 key bound to it is refused...
 	if _, _, _, closer, err := buildHardware(settings, hsmRegistryFor(t, hsmSerial, "release-ed25519 ed25519 - sign")); err == nil {

@@ -541,6 +541,8 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 	providers := make(map[string]backend.Provider)
 	var observer *nitrokey.Provider
 	var closers []func()
+	// enumerate makes the PKCS#11 module look at the readers; nil when there is no module.
+	var enumerate func(context.Context) bool
 	if settings.PKCS11ModulePath != "" {
 		channel, channelErr := nitrokey.LoadSecureChannelEvidence(settings.SecureChannelEvidence, time.Now)
 		if channelErr != nil {
@@ -557,6 +559,7 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 		}
 		providers["nitrokey-pkcs11"] = provider
 		observer = provider
+		enumerate = driver.Ready
 		closers = append(closers, func() { _ = driver.Close() })
 		// A YUBIKEY'S OPENPGP APPLET IS A SECOND KIND OF TOKEN BEHIND THE SAME MODULE. It is served
 		// only when the evidence carries a local-usb attestation: that is the operator saying such
@@ -594,6 +597,15 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 				close()
 			}
 			return nil, nil, nil, nil, providerErr
+		}
+		// Both a PKCS#11 module and PIV cards: the module must leave the cards alone.
+		if cards, ok := provider.(pivReach); ok {
+			if err := requirePIVCardsOpenBesidePKCS11(context.Background(), enumerate, cards); err != nil {
+				for _, close := range closers {
+					close()
+				}
+				return nil, nil, nil, nil, err
+			}
 		}
 		providers["yubikey-piv"] = provider
 	}

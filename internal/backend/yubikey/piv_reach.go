@@ -1,0 +1,60 @@
+//go:build piv
+
+package yubikey
+
+import (
+	"context"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// Reach looks at every reader once and says which commissioned cards could not be opened, and
+// whether any reader refused because another connection holds its card.
+//
+// THIS BACKEND OPENS A CARD FOR EXCLUSIVE USE. A PKCS#11 module that keeps a connection to every
+// card it finds (opensc-pkcs11.so does) therefore locks it out, and every request for a PIV key
+// fails as unavailable with nothing naming the cause (regalia#541). The daemon asks this once at
+// startup, after its own module has looked at the readers, so that the cause is named while
+// someone is watching. Nothing is written and no PIN is presented.
+//
+// A reader that refuses cannot be asked which card it holds, so `held` is about the readers, not
+// about a particular card: with a card missing and a reader held, the held reader is the likely
+// place it is.
+func (driver *PIVDriver) Reach(ctx context.Context) (missing []string, held bool, err error) {
+	if driver == nil || ctx.Err() != nil {
+		return nil, false, ErrUnavailable
+	}
+	cards, err := pivCards()
+	if err != nil {
+		return nil, false, ErrUnavailable
+	}
+	present := map[string]bool{}
+	for _, card := range cards {
+		candidate, openErr := pivOpen(card)
+		if openErr != nil {
+			held = held || heldByAnother(openErr)
+			continue
+		}
+		if serial, serialErr := candidate.Serial(); serialErr == nil {
+			present[strconv.FormatUint(uint64(serial), 10)] = true
+		}
+		_ = candidate.Close()
+	}
+	for deviceID, serial := range driver.devices {
+		if !present[serial] {
+			missing = append(missing, deviceID)
+		}
+	}
+	sort.Strings(missing)
+	return missing, held, nil
+}
+
+// heldByAnother recognises PC/SC's SCARD_E_SHARING_VIOLATION. The card library keeps the code in
+// a type it does not export, so the text it gives that code is what can be matched; the test
+// pins the text against the library, and a wording change fails there, not silently here.
+func heldByAnother(err error) bool {
+	return err != nil && strings.Contains(err.Error(), sharingViolationText)
+}
+
+const sharingViolationText = "the smart card cannot be accessed because of other connections outstanding"

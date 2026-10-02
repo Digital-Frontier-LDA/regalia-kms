@@ -34,18 +34,28 @@ and that the daemon needs a runtime lease to serve (#74):
                               admission file, this node's ID and the boot session file. "disabled-for-lab"
                               is a lab setting: a host carrying it is not commissioned
 
+and that the daemon's two token backends do not lock each other out (regalia#541):
+
+  kms_opensc_leaves_piv_cards  when that same configuration names both a PKCS#11 module and YubiKey PIV
+                              devices, the unit's Environment carries OPENSC_CONF and the file it names
+                              has an ignored_readers entry that matches a YubiKey's reader. The PIV
+                              backend needs the card to itself and OpenSC connects to every card it is
+                              not told to ignore. With one backend or none there is nothing to check
+
 Standard library only.
 """
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 
 SERVICE = "regalia-kms.service"
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
-            "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required")
+            "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
+            "kms_opensc_leaves_piv_cards")
 # property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
 # directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
 SANDBOX_PROPERTIES = {
@@ -265,27 +275,37 @@ def apparmor(host):
     return True, f"pid {pid} is confined by {profile!r} in enforce mode"
 
 
-def runtime_admission(host):
-    """The daemon is started with a configuration that REQUIRES a runtime lease. Read from the unit's own
-    ExecStart, not from a path assumed here: what matters is the file the running service was given."""
+def daemon_config(host):
+    """The configuration the unit starts the daemon with: (config, path, "") or (None, None, why). Read
+    from the unit's own ExecStart, not from a path assumed here: what matters is the file the running
+    service was given."""
     rc, props = unit_properties(host, "ExecStart", "LoadState")
     if props.get("LoadState") != "loaded":
-        return False, f"{SERVICE} is not loaded"
+        return None, None, f"{SERVICE} is not loaded"
     found = re.search(r"argv\[\]=(.*?) ;", props.get("ExecStart", ""))
     argv = found.group(1).split() if found else []
     paths = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a in ("-config", "--config")]
     paths += [a.split("=", 1)[1] for a in argv if a.startswith(("-config=", "--config="))]
     if len(paths) != 1 or not paths[0].startswith("/"):
-        return False, f"{SERVICE} is not started with exactly one absolute -config file (ExecStart: {' '.join(argv) or 'unreadable'})"
+        return None, None, f"{SERVICE} is not started with exactly one absolute -config file (ExecStart: {' '.join(argv) or 'unreadable'})"
     text = host.read(paths[0])
     if text is None:
-        return False, f"cannot read the daemon's configuration {paths[0]}"
+        return None, None, f"cannot read the daemon's configuration {paths[0]}"
     try:
         config = json.loads(text)
     except ValueError:
-        return False, f"{paths[0]} is not valid JSON"
+        return None, None, f"{paths[0]} is not valid JSON"
     if not isinstance(config, dict):
-        return False, f"{paths[0]} is not a JSON object"
+        return None, None, f"{paths[0]} is not a JSON object"
+    return config, paths[0], ""
+
+
+def runtime_admission(host):
+    """The daemon is started with a configuration that REQUIRES a runtime lease."""
+    config, path, why = daemon_config(host)
+    if config is None:
+        return False, why
+    paths = [path]
     stated = config.get("runtime_admission")
     if stated == "disabled-for-lab":
         return False, f"{paths[0]} says runtime_admission \"disabled-for-lab\": this daemon serves with no runtime lease"
@@ -297,6 +317,52 @@ def runtime_admission(host):
         return False, f"{paths[0]} requires runtime admission but lacks {', '.join(missing)}"
     return True, (f"{paths[0]}: runtime_admission required, node {config['node_id']}, "
                   f"admission file {config['runtime_admission_path']}")
+
+
+# What a YubiKey's CCID reader is called by pcscd ("Yubico YubiKey OTP+FIDO+CCID 00 00", "Yubico YubiKey
+# CCID 00 00", ...). OpenSC ignores a reader whose name CONTAINS an ignored_readers entry, so an entry
+# counts when it is a piece of this.
+YUBIKEY_READER = "Yubico YubiKey"
+
+
+def ignored_readers(text):
+    """The strings of every ignored_readers statement in an OpenSC configuration, comments left out."""
+    entries = []
+    for line in (text or "").splitlines():
+        line = line.split("#", 1)[0]
+        found = re.match(r"\s*ignored_readers\s*=\s*(.*?)\s*;", line)
+        if found:
+            entries += re.findall(r'"([^"]*)"', found.group(1))
+    return entries
+
+
+def opensc_leaves_piv_cards(host):
+    """A daemon that holds both a PKCS#11 module and YubiKey PIV devices is started with an OpenSC
+    configuration that ignores the YubiKey's reader. Without it the daemon's own PKCS#11 module holds the
+    card the PIV backend must open exclusively; the daemon refuses to start when it sees that, and this
+    says so before it is started."""
+    config, path, why = daemon_config(host)
+    if config is None:
+        return False, why
+    module, devices = config.get("pkcs11_module_path"), config.get("yubikey_devices")
+    if not (isinstance(module, str) and module) or not (isinstance(devices, dict) and devices):
+        return True, f"{path}: not both a PKCS#11 module and YubiKey PIV devices, nothing to keep apart"
+    rc, props = unit_properties(host, "Environment")
+    try:
+        environment = dict(item.split("=", 1) for item in shlex.split(props.get("Environment", "")) if "=" in item)
+    except ValueError:
+        return False, f"cannot read the Environment of {SERVICE}"
+    conf = environment.get("OPENSC_CONF", "")
+    if not conf.startswith("/"):
+        return False, (f"{path} names a PKCS#11 module and YubiKey PIV devices, and {SERVICE} does not set "
+                       "OPENSC_CONF in its Environment: OpenSC's defaults connect to the YubiKey and lock the PIV backend out")
+    text = host.read(conf)
+    if text is None:
+        return False, f"cannot read the OpenSC configuration {conf} named by OPENSC_CONF"
+    matching = [entry for entry in ignored_readers(text) if entry and entry in YUBIKEY_READER]
+    if not matching:
+        return False, f"{conf} has no ignored_readers entry that matches a YubiKey's reader ({YUBIKEY_READER!r})"
+    return True, f"{conf}: ignored_readers {matching[0]!r} keeps OpenSC off the YubiKey"
 
 
 def pcscd_clients(host):
@@ -335,4 +401,5 @@ def pcscd_clients(host):
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
-          "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission}
+          "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission,
+          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards}
