@@ -58,6 +58,7 @@ class FakeSession:
         self.live = set()                     # derived session objects not yet destroyed
         self.derive_fails = False
         self.unreadable_secret = False
+        self.unreadable_derive = False        # CKA_DERIVE cannot be read
 
     # -- handles are (generation, index), so a handle from another session is recognisable
     def findObjects(self, template):
@@ -82,6 +83,8 @@ class FakeSession:
             raise FakeError("CKR_OBJECT_HANDLE_INVALID")
         kid, ktype, label = self.keys[i][:3]
         extra = self.keys[i][3] if len(self.keys[i]) > 3 else {}
+        if CKA_DERIVE in attrs and self.unreadable_derive:
+            raise FakeError("CKR_DEVICE_ERROR")
         vals = {CKA_ID: list(kid), CKA_KEY_TYPE: ktype, CKA_LABEL: label,
                 CKA_EC_PARAMS: list(extra["params"]) if extra.get("params") else None,
                 CKA_MODULUS_BITS: 2048, CKA_DERIVE: extra.get("derive", False)}
@@ -355,18 +358,47 @@ class BenchTest(unittest.TestCase):
         for session in lib.sessions:
             self.assertEqual(session.live, set(), "a derived secret outlived a failed read")
 
+    def test_an_unreadable_derive_attribute_is_not_reported_as_no_key_allowing_derive(self):
+        # "Could not tell" is not "may not". A card that fails the attribute read must not print the
+        # definitive "no EC key allows derive".
+        def unreadable(session, _count):
+            session.unreadable_derive = True
+        lib, out = self.run_bench([self.DERIVE_KEY], prepare=unreadable)
+        rows = ecdh_rows(out)
+        self.assertEqual(len(rows), 1, out)
+        self.assertIn("CKA_DERIVE unreadable", rows[0])
+        self.assertEqual(lib.sessions[0].derives, [], "a derive was attempted on a key whose permission is unknown")
+        self.assertNotIn("no EC key on this token allows derive", out)
+        self.assertIn("could not establish whether 1 key(s) allow derive", out)
+
+    def test_an_ec_key_that_could_not_be_looked_up_is_not_counted_as_not_allowing_derive(self):
+        # Two EC keys share a CKA_ID, so neither is measured. Either may allow derive.
+        keys = [(b"\x01", CKK_EC, "a", {"derive": True, "params": P256}),
+                (b"\x01", CKK_EC, "b", {"derive": True, "params": P256})]
+        _lib, out = self.run_bench(keys)
+        self.assertIn("ambiguous", out)
+        self.assertNotIn("no EC key on this token allows derive", out)
+        self.assertIn("could not establish whether 2 key(s) allow derive", out)
+
     def test_the_real_peer_point_is_a_point_on_the_keys_curve(self):
-        # The one test that uses `cryptography`, when it is installed: the shape of what the real
-        # function hands CKM_ECDH1_DERIVE, per curve, and its refusal of a curve it does not know.
+        # The one test that uses `cryptography`: the shape of what the real function hands
+        # CKM_ECDH1_DERIVE, for every curve in ECDH_CURVE, and its refusal of a curve it does not
+        # know. Without the library there is nothing to check but the refusal — so CI installs it
+        # and sets REGALIA_EXPECT_CRYPTOGRAPHY, which turns "not installed" from a pass into a failure.
         install_fake([])
         m = load_bench({"HSM_PIN": "123456", "BENCH_N": "1", "PKCS11_MODULE": "/fake"})
         self.assertEqual(m.peer_point("0000"), (None, "curve not known to this benchmark"))
         try:
             import cryptography  # noqa: F401
         except ImportError:
+            if os.environ.get("REGALIA_EXPECT_CRYPTOGRAPHY", "") not in ("", "0"):
+                self.fail("REGALIA_EXPECT_CRYPTOGRAPHY is set, but `cryptography` is not installed: "
+                          "the per-curve checks did not run")
             self.assertEqual(m.peer_point(P256.hex()), (None, "install `cryptography` to measure ECDH"))
             return
-        for curve, size in (("06082a8648ce3d030107", 32), ("06052b81040022", 48), ("06052b8104000a", 32)):
+        sizes = {"06082a8648ce3d030107": 32, "06052b81040022": 48, "06052b81040023": 66, "06052b8104000a": 32}
+        self.assertEqual(set(sizes), set(m.ECDH_CURVE), "a curve in ECDH_CURVE has no check here")
+        for curve, size in sizes.items():
             point, why = m.peer_point(curve)
             self.assertIsNone(why)
             self.assertEqual((point[0], len(point)), (4, 1 + 2 * size))

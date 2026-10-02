@@ -142,12 +142,20 @@ def ecdh_once(sess, key, point):
 
 
 def allows_derive(sess, obj):
-    """CKA_DERIVE on the private key. A key that does not allow it is not asked: a refused derive is
-    a failed operation, and a failed operation costs a session reopen and a PIN verification."""
+    """CKA_DERIVE on the private key: (True, None), (False, None), or (None, why) when it cannot be
+    read.
+
+    A key that does not allow derive is not asked: a refused derive is a failed operation, and a
+    failed operation costs a session reopen and a PIN verification. "Cannot be read" is a third
+    answer and stays one: reporting it as "does not allow" would let a failing attribute read, or a
+    failing card, print "no key allows derive" as if that had been established."""
     try:
-        return bool(sess.getAttributeValue(obj, [PyKCS11.CKA_DERIVE])[0])
-    except PyKCS11.PyKCS11Error:
-        return False
+        value = sess.getAttributeValue(obj, [PyKCS11.CKA_DERIVE])[0]
+    except PyKCS11.PyKCS11Error as exc:
+        return None, f"CKA_DERIVE unreadable: {exc}"
+    if value is None:
+        return None, "CKA_DERIVE unreadable"
+    return bool(value), None
 
 
 def curve_hex(sess, obj):
@@ -223,6 +231,9 @@ def _run(holder, info, reopen):
     # a card that cannot sign. Identity is the CKA_ID; the handle is re-resolved from it whenever
     # the session changes.
     keys = []
+    # For the ECDH summary line: keys measured or attempted, and keys whose eligibility could not be
+    # established (an unreadable key, an EC key that could not be looked up, an unreadable CKA_DERIVE).
+    ecdh_keys = ecdh_unknown = 0
     for obj in holder[0].findObjects([(PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY)]):
         try:
             kid_raw = bytes(holder[0].getAttributeValue(obj, [PyKCS11.CKA_ID])[0])
@@ -230,6 +241,8 @@ def _run(holder, info, reopen):
             label = holder[0].getAttributeValue(obj, [PyKCS11.CKA_LABEL])[0] or "(no label)"
         except PyKCS11.PyKCS11Error as exc:
             print(f"  !! skipping a key, attributes unreadable: {exc}")
+            # Its type is unknown, so it may have been an EC key that allows derive.
+            ecdh_unknown += 1
             continue
         keys.append((kid_raw, kid_raw.hex(), ktype, label))
 
@@ -249,7 +262,6 @@ def _run(holder, info, reopen):
         return None, f"ambiguous CKA_ID {kid_raw.hex()}: {len(found)} private keys share it, not measured"
 
     rows = []
-    ecdh_keys = 0
     for kid_raw, kid, ktype, label in keys:
         # Resolved ONCE per key, outside the measured operations: a C_FindObjects inside the timed
         # loop would be measuring the search, not the signature.
@@ -257,6 +269,8 @@ def _run(holder, info, reopen):
         cell = [handle]
         if cell[0] is None:
             rows.append((label, kid, "?", "key lookup", None, why))
+            if ktype == PyKCS11.CKK_EC:
+                ecdh_unknown += 1
             continue
         obj = cell[0]
         desc = key_desc(holder[0], obj, ktype)
@@ -280,7 +294,11 @@ def _run(holder, info, reopen):
                 ops.append((nm, lambda c=cell, m=m: holder[0].sign(c[0], os.urandom(32), m)))
             # ECDH, only on a key the token says may derive. The peer point is made ONCE, before the
             # timed loop: generating a key pair on the host is not what is being measured.
-            if allows_derive(holder[0], obj):
+            may_derive, why = allows_derive(holder[0], obj)
+            if may_derive is None:
+                ecdh_unknown += 1
+                rows.append((label, kid, desc, ECDH_ROW, None, why))
+            elif may_derive:
                 ecdh_keys += 1
                 point, why = peer_point(curve_hex(holder[0], obj))
                 if point is None:
@@ -317,8 +335,11 @@ def _run(holder, info, reopen):
                   f"{mean:9.1f} {statistics.median(times):8.1f} {p90(times):8.1f} {1000 / mean:7.2f}")
     if not ecdh_keys:
         # Said, not left to be inferred from a missing row: "no ECDH figure" must not read as "ECDH
-        # was not worth reporting".
-        print("\nECDH    : not measured (no EC key on this token allows derive, CKA_DERIVE)")
+        # was not worth reporting". And "none allows it" is claimed only when every key answered.
+        if ecdh_unknown:
+            print(f"\nECDH    : not measured (could not establish whether {ecdh_unknown} key(s) allow derive; see the rows above)")
+        else:
+            print("\nECDH    : not measured (no EC key on this token allows derive, CKA_DERIVE)")
 
 
 if __name__ == "__main__":
