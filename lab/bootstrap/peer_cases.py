@@ -12,12 +12,15 @@ from peer import BootSession, Refusal, canonical, oaep, qualification, signed_re
 
 
 class Peer:
-    def __init__(self, root, peer_id, target):
+    def __init__(self, root, peer_id, target, authorities=None):
         self.state = root / f"peer-{peer_id}.json"
         self.peer_id = peer_id
-        result = self.invoke({"op": "init", "peer_id": peer_id,
-                              "targets": {"A": {"ak_pem": (target.root / "ak.pem").read_text(),
-                                                "approved_pcr": (target.root / "approved.pcr").read_bytes().hex()}}})
+        command = {"op": "init", "peer_id": peer_id,
+                   "targets": {"A": {"ak_pem": (target.root / "ak.pem").read_text(),
+                                     "approved_pcr": (target.root / "approved.pcr").read_bytes().hex()}}}
+        if authorities is not None:
+            command["authorities"] = authorities
+        result = self.invoke(command)
         self.pin = bytes.fromhex(result["result"]["peer_public_key"])
 
     def invoke(self, command=None, raw=None):

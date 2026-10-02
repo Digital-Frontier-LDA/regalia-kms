@@ -22,6 +22,7 @@ MAX_INPUT = 65536
 REQUEST_FIELDS = {"node_id", "peer_id", "manifest_epoch", "boot_session_id",
                   "ephemeral_public_key", "peer_nonce", "challenge_id"}
 RESPONSE_FIELDS = {"version", "peer_id", "request_digest", "ciphertext", "signature"}
+NODE_STATES = {"ACTIVE", "MAINTENANCE", "DRAINING", "QUARANTINED", "RETIRED", "REVOKED_STOLEN"}
 
 
 class Refusal(Exception):
@@ -138,6 +139,8 @@ def persist(path, state):
 
 def permitted(state, node_id):
     nodes = state["nodes"]
+    if "authorities" in state and state["manifest"] is None:
+        raise Refusal()
     if node_id not in state["targets"] or nodes.get(node_id) not in ["ACTIVE", "MAINTENANCE"]:
         raise Refusal()
     if nodes.get(state["peer_id"]) != "ACTIVE":
@@ -145,7 +148,10 @@ def permitted(state, node_id):
 
 
 def commission(command, path):
-    fields(command, {"op", "peer_id", "targets"})
+    expected = {"op", "peer_id", "targets"}
+    if "authorities" in command:
+        expected.add("authorities")
+    fields(command, expected)
     if path.exists() or command["peer_id"] not in ["A", "B", "C"]:
         raise Refusal()
     targets = command["targets"]
@@ -168,8 +174,89 @@ def commission(command, path):
     state = {"peer_id": command["peer_id"], "epoch": 1, "nodes": {"A": "ACTIVE", "B": "ACTIVE", "C": "ACTIVE"},
              "targets": targets, "pending": {}, "signing_key": signing.private_bytes_raw().hex(),
              "contributions": {node: os.urandom(32).hex() for node in targets}}
+    if "authorities" in command:
+        pins = command["authorities"]
+        fields(pins, {"cluster_id", "membership_root", "revocation"})
+        for value in pins.values():
+            hex_bytes(value, 32)
+        if pins["membership_root"] == pins["revocation"]:
+            raise Refusal("INVALID_REQUEST")
+        state.update(authorities=pins, epoch=0, manifest=None, manifest_digest="00" * 32)
     persist(path, state)
     return {"peer_public_key": signing.public_key().public_bytes_raw().hex()}
+
+
+def ak_digest(pem):
+    key = serialization.load_pem_public_key(pem.encode())
+    der = key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    return hashlib.sha256(der).hexdigest()
+
+
+def apply_manifest(command, state, path):
+    fields(command, {"op", "envelope"})
+    envelope = command["envelope"]
+    fields(envelope, {"authority", "manifest", "signature"})
+    authority = envelope["authority"]
+    if not isinstance(authority, str) or authority not in ["membership_root", "revocation"]:
+        raise Refusal("INVALID_REQUEST")
+    if "authorities" not in state:
+        raise Refusal()
+    manifest = envelope["manifest"]
+    fields(manifest, {"version", "cluster_id", "epoch", "previous_digest", "nodes"})
+    if type(manifest["version"]) is not int or manifest["version"] != 1:
+        raise Refusal("INVALID_REQUEST")
+    if type(manifest["epoch"]) is not int or not 0 < manifest["epoch"] < 2 ** 64:
+        raise Refusal("INVALID_REQUEST")
+    hex_bytes(manifest["cluster_id"], 32)
+    hex_bytes(manifest["previous_digest"], 32)
+    fields(manifest["nodes"], {"A", "B", "C"})
+    for node in manifest["nodes"].values():
+        fields(node, {"state", "ak_sha256", "approved_pcr"})
+        if not isinstance(node["state"], str) or node["state"] not in NODE_STATES:
+            raise Refusal("INVALID_REQUEST")
+        hex_bytes(node["ak_sha256"], 32)
+        hex_bytes(node["approved_pcr"], 32)
+    signature = hex_bytes(envelope["signature"], 64)
+    signed = {"authority": authority, "manifest": manifest}
+    try:
+        ed25519.Ed25519PublicKey.from_public_bytes(bytes.fromhex(state["authorities"][authority])).verify(
+            signature, b"regalia-bootstrap-lab/v1/membership\0" + canonical(signed))
+    except InvalidSignature:
+        raise Refusal() from None
+    if manifest["cluster_id"] != state["authorities"]["cluster_id"]:
+        raise Refusal()
+    digest = hashlib.sha256(canonical(manifest)).hexdigest()
+    result = {"epoch": manifest["epoch"], "manifest_digest": digest}
+    if manifest["epoch"] == state["epoch"] and digest == state["manifest_digest"]:
+        return result
+    if (manifest["epoch"] != state["epoch"] + 1
+            or manifest["previous_digest"] != state["manifest_digest"]):
+        raise Refusal()
+    for name, enrolled in state["targets"].items():
+        if manifest["nodes"][name]["ak_sha256"] != ak_digest(enrolled["ak_pem"]):
+            raise Refusal()
+    if authority == "revocation":
+        previous = state["manifest"]
+        if previous is None:
+            raise Refusal()
+        changed = False
+        for name, node in manifest["nodes"].items():
+            old = previous["nodes"][name]
+            if node["ak_sha256"] != old["ak_sha256"] or node["approved_pcr"] != old["approved_pcr"]:
+                raise Refusal()
+            if node["state"] != old["state"]:
+                if (old["state"] in {"RETIRED", "REVOKED_STOLEN"}
+                        or node["state"] not in {"QUARANTINED", "RETIRED", "REVOKED_STOLEN"}):
+                    raise Refusal()
+                changed = True
+        if not changed:
+            raise Refusal()
+    state.update(epoch=manifest["epoch"], manifest=manifest, manifest_digest=digest, pending={},
+                 nodes={name: node["state"] for name, node in manifest["nodes"].items()})
+    for name, enrolled in state["targets"].items():
+        enrolled["approved_pcr"] = manifest["nodes"][name]["approved_pcr"]
+    persist(path, state)
+    return result
 
 
 def checked_request(request):
@@ -224,9 +311,11 @@ def verify_attestation(state, request, command):
 def execute(command, path):
     if command["op"] == "init":
         return commission(command, path)
-    if command["op"] not in ["challenge", "authorize"]:
+    if command["op"] not in ["challenge", "authorize", "apply_manifest"]:
         raise Refusal("INVALID_REQUEST")
     state = json.loads(path.read_bytes())
+    if command["op"] == "apply_manifest":
+        return apply_manifest(command, state, path)
     now = time.monotonic()
     if command["op"] == "challenge":
         fields(command, {"op", "node_id"})

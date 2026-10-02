@@ -190,7 +190,7 @@ def main():
         "image_id": os.environ.get("REGALIA_LAB_IMAGE_ID", "unknown"),
         "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "sources_sha256": {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                           for name in ["lab.py", "peer.py", "peer_cases.py"]},
+                           for name in ["lab.py", "peer.py", "peer_cases.py", "membership_cases.py"]},
         "status": "failed",
         "debian_version": Path("/etc/debian_version").read_text().strip(),
         "packages": Path("/opt/packages.tsv").read_text().splitlines(),
@@ -254,6 +254,9 @@ def main():
             from peer_cases import peer_cases
             peer_checks, peer_b, peer_c = peer_cases(root, a, b, verify_quote)
             cases.extend(peer_checks)
+            from membership_cases import membership_cases
+            membership_checks, report["limitations_observed"] = membership_cases(root, a)
+            cases.extend(membership_checks)
             a.call("tpm2_pcrextend", "7:sha256=" + hashlib.sha256(b"unexpected boot change").hexdigest())
             changed_quote = a.quote(challenge, "changed")
             cases.extend([

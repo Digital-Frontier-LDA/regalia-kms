@@ -3,6 +3,7 @@
 !lab.py
 !peer.py
 !peer_cases.py
+!membership_cases.py
 !network.py
 !vm.py
 !guest.py

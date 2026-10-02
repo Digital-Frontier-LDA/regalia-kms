@@ -19,7 +19,7 @@ host disks, existing KMS credentials, or the Docker socket. Generated test state
 is discarded when the container exits.
 
 Evidence class: **emulated**. This lab prepares software experiments for
-regalia-kms #65–#67. Containers do not exercise UEFI, the real TPM measurement
+regalia-kms #65–#69. Containers do not exercise UEFI, the real TPM measurement
 chain, initramfs networking, dm-crypt mapping, or physical HSM authentication.
 
 ## Experiments
@@ -27,7 +27,7 @@ chain, initramfs networking, dm-crypt mapping, or physical HSM authentication.
 Two independent `swtpm` instances use Unix sockets inside the container. Separate
 B/C verifier subprocesses use pinned lab AK and measurement policy, issue fresh
 challenges, and release signed contributions encrypted to a boot-session key.
-The current runner executes 75 checks.
+The current runner executes 121 checks, including 46 signed-membership scenarios.
 
 | Area | What the lab exercises |
 |---|---|
@@ -43,6 +43,8 @@ The current runner executes 75 checks.
 | Response handling | Wrong recipient, forged/altered responses, cross-session replay, duplicates, and late second-peer responses are rejected |
 | State and concurrency | State capability checks, epoch advancement, expiry, bounded pending challenges, and exactly one grant from racing workers |
 | Input boundary | Strict types/fields/hex, duplicate JSON keys, malformed/oversized input, and client filesystem-path substitution are refused |
+| Signed membership | Pinned root/revocation roles; signature and cluster binding; chained epochs; conflicting updates; pending-request revocation; measurement-policy enforcement |
+| Software rollback limitation | Restoring an entire verifier state file permits a previously revoked bootstrap; recorded as a limitation, not theft-resistance acceptance |
 
 `cryptsetup open --test-passphrase` checks actual LUKS2 keyslot credentials
 without creating a device-mapper mapping or mounting a filesystem. It does not
@@ -50,9 +52,12 @@ prove that a machine can boot its encrypted root. Contributions are generated
 and retained in separate software verifier state in tmpfs, and the received
 session-encrypted values supply the actual LUKS credential derivation. Transport
 is local stdin/stdout IPC in one trusted container, not remote bootstrap over
-WireGuard. Policy is an unsigned fixture: the state/epoch checks do not prove
-signed membership, global policy freshness, rollback resistance, or production
-revocation. Runtime leases, HSMs, and physical-node recovery remain separate work.
+WireGuard. Original scenarios use unsigned fixture policy; the additional
+[signed membership scenarios](MEMBERSHIP.md) verify root/revocation signatures
+and apply those policies in the actual verifier. Neither mode proves global
+policy freshness, rollback-resistant storage, or production revocation. The
+state-file restore drill records `membership_state_rollback_is_possible` in
+`limitations_observed`. Runtime leases, HSMs, and physical-node recovery remain separate work.
 Read the [local peer contract](PROTOCOL.md) for the request/response and challenge
 lifecycle. Verifier signing keys are software test fixtures, not KMS service keys.
 
@@ -129,10 +134,24 @@ bash lab/bootstrap/run-vm.sh
 
 ## Next slices
 
+Additional experiments can run on the development machine:
+
+| Experiment | Software validation to add |
+|---|---|
+| Signed network policy | Commission authority pins on all three peers; deliver signed updates over a separate administrative contract; test interrupted/conflicting delivery and explicit freshness/partition policy |
+| Runtime leases | Expiry, renewal through either peer, running-node revocation, clock faults and external client rejection; preserve independent service-signing fencing |
+| Software service gate | Reuse the existing [SoftHSM battery](../../e2e/README.md) to connect bootstrap authorization to PKCS#11 service readiness, token removal and reauthentication; native vendor PKA remains a hardware gate |
+| Randomized faults | Seeded partition, response-loss, reboot, policy-conflict and parser-corruption schedules; retain the seed and assert recovery or an explicit closed state |
+
+These are follow-up experiments, not completed acceptance criteria.
+
+Production qualification still requires:
+
 1. Qualify complete Debian boot packaging and the DL360 measurement chain. The
    small emulated BusyBox root is software-path evidence, not an appliance build.
-2. Integrate signed membership and revocation freshness before claiming safe
-   unattended bootstrap. Keep service signing fencing independent.
+2. Extend signed membership into network/guest commissioning and design
+   revocation freshness before claiming safe unattended bootstrap. Qualify a
+   rollback-resistant high-water store; keep service signing fencing independent.
 3. Qualify native/cross-vendor PKA and wrapped-key recovery on designated physical
    lab HSMs. This container does not initialize or touch attached tokens.
 

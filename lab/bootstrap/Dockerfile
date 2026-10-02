@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 FROM tools AS ipc
-COPY lab.py peer.py peer_cases.py /opt/
+COPY lab.py peer.py peer_cases.py membership_cases.py /opt/
 USER 65532:65532
 ENTRYPOINT ["python3", "/opt/lab.py"]
 
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends iproute2 nftabl
     && dpkg-query -W -f='${Package}\t${Version}\n' > /opt/packages.tsv \
     && rm -rf /var/lib/apt/lists/*
 FROM network-tools AS network
-COPY lab.py peer.py peer_cases.py network.py /opt/
+COPY lab.py peer.py peer_cases.py membership_cases.py network.py /opt/
 ENTRYPOINT ["python3", "/opt/network.py"]
 
 FROM network-tools AS vm-tools
@@ -32,5 +32,5 @@ RUN apt-get update && case "$TARGETARCH" in \
     && dpkg-query -W -f='${Package}\t${Version}\n' > /opt/packages.tsv \
     && rm -rf /var/lib/apt/lists/*
 FROM vm-tools AS vm
-COPY lab.py peer.py peer_cases.py network.py vm.py guest.py guest-init.sh root-init.sh /opt/
+COPY lab.py peer.py peer_cases.py membership_cases.py network.py vm.py guest.py guest-init.sh root-init.sh /opt/
 ENTRYPOINT ["python3", "/opt/network.py"]

@@ -56,10 +56,16 @@ there is no production recovery credential or existing device credential involve
 | Boot-session private keys | cryptography library generates transient RSA-3072 keys for the peer response profile; generic transcript tests also use X25519 public-key fixtures | New per boot fixture; RSA private key decrypts only session-bound responses; first valid response consumes the software session; discard on exit |
 | Nonces/session IDs | OS randomness; transient request fixture and tool input | Fresh per attempt; old quote fails under new challenge |
 | Pending challenges | Random IDs/nonces and monotonic expiry in private verifier state; max 16 pending entries | Pruned after expiry; owned attempt consumed before verification/response work; atomically persisted for process-level replay protection |
+| Membership root / revocation private keys | Separate disposable Ed25519 keys generated in harness RAM; public pins commissioned into verifier state | New per run; root may restore trust/approve measurements; revocation signer only restricts states; no production key custody or signer rotation |
 
 Policy state and challenges are ordinary tmpfs files. They are not a durable TPM
 epoch/high-water store and provide no anti-rollback against the Docker host.
-Fixture policy changes are injected by the trusted harness. Consuming a challenge
+Original fixture policy changes are injected by the trusted harness. The signed
+extension authenticates a bounded manifest, checks its cluster/chain/authority,
+and replaces policy under the process lock. Its high-water mark survives process
+restarts but rolls back when the host restores the whole state file. The lab
+explicitly reproduces a revoked target receiving a valid TPM-attested grant after
+that restore. See [the contract and scope](MEMBERSHIP.md). Consuming a challenge
 before verification can deny that attempt after a forged/lost message; a new
 challenge is required. Production transport identity, replay journals, policy
 freshness, and availability under malicious traffic still require qualification.

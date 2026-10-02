@@ -16,7 +16,8 @@ Raw requests, private keys, secrets, and tool output are never logged.
 
 | Operation | Input fields | Result |
 |---|---|---|
-| `init` (trusted fixture commissioning) | `op`, `peer_id`, `targets` | Pinned Ed25519 public key; refuses an already commissioned state |
+| `init` (trusted fixture commissioning) | `op`, `peer_id`, `targets`; optionally `authorities` | Pinned Ed25519 public key; refuses an already commissioned state |
+| `apply_manifest` (when authorities are commissioned) | `op`, `envelope` | Accepted epoch and manifest digest |
 | `challenge` | `op`, `node_id` | Fresh nonce, challenge ID, peer ID, manifest epoch |
 | `authorize` | `op`, `request`, `quote`, `signature` | Signed, session-encrypted peer contribution |
 
@@ -57,8 +58,11 @@ consume the session. A response cannot be reused for a different ephemeral key,
 peer path, or request. Local contribution plus the received peer contribution
 then derives the credential for the actual disposable LUKS2 keyslot test.
 
-Policy and epoch are trusted unsigned fixture state, not signed membership or
-rollback-resistant freshness. State and signing keys are software files in
+The [signed membership experiment](MEMBERSHIP.md) commissions separate root and
+restrictive revocation pins and installs authenticated, chained policy updates.
+Without `authorities`, policy and epoch remain trusted unsigned fixture state;
+the network and guest suites currently use this original mode. Neither mode
+provides global freshness or rollback-resistant storage. State and signing keys are software files in
 tmpfs, writable by the trusted harness/host. This proves orchestration behavior
 under pinned policy; physical theft, root compromise, cross-host authorization,
 lease/fencing authority, and production anti-rollback remain separate gates.
