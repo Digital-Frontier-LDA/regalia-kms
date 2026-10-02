@@ -15,6 +15,7 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/certs"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/controlplane"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
@@ -28,6 +29,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -367,7 +370,7 @@ func run() error {
 		tokenObserver = observer
 		// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (regalia-kms#72 PoC 12.4). Only where runtime
 		// admission is required: without a lease service there is no lease to wait for.
-		if err := requireReauthorization(observer, admissionGate, admission.ProcessStart); err != nil {
+		if err := requireReauthorization(manager, admissionGate, admission.ProcessStart); err != nil {
 			return err
 		}
 
@@ -814,16 +817,30 @@ func admitRunner(settings config.Config, base operations.Runner, onTransition fu
 	return admission.NewRunner(gate, base), gate, nil
 }
 
-// requireReauthorization makes the token provider wait, after a token's absence and after a start
-// of this daemon, for a runtime lease asked for since. A nil gate (admission not required) or a nil
-// provider (no PKCS#11 token: a YubiKey-only host) changes nothing.
+// awaitingReauthorization names the backends whose provider does not yet make a returned token wait
+// for a fresh lease. It exists so that the gap is written down and shrinks: a provider that is not a
+// reauth.Provider and is not named here stops the daemon, and a test fails when a provider named here
+// has gained the hook, so the line is deleted with the change that makes it unnecessary.
+//
+// interim: until the PIV provider has the hook. On a host with runtime admission required, a YubiKey
+// PIV key that is pulled and put back serves again on the lease the node already holds; the HSM's
+// keys and the OpenPGP applet's wait (regalia-kms#72, PoC 12.4).
+var awaitingReauthorization = map[string]string{
+	"yubikey-piv": "the PIV provider has no token reauthorization yet (regalia-kms#72)",
+}
+
+// requireReauthorization makes EVERY key provider wait, after a token's absence and after a start of
+// this daemon, for a runtime lease asked for since (regalia-kms#72, PoC 12.4). The rule is for every
+// key the daemon serves, so the providers are walked, not named: one that can execute a key
+// operation and has no such hook stops the daemon, unless awaitingReauthorization names it. A nil
+// gate (admission not required) or no manager (no token) changes nothing.
 //
 // The lease must have been asked for after THIS PROCESS STARTED, as the kernel dates it: the lease
 // service reads that same time for the daemon's PID and asks at once, so a restart of the daemon
 // costs one renewal and not the wait for the next scheduled one. If the start time cannot be read,
 // "now" stands in: later, so never weaker, and the cost is that wait.
-func requireReauthorization(provider *nitrokey.Provider, gate *admission.Gate, processStart func() (int64, error)) error {
-	if provider == nil || gate == nil {
+func requireReauthorization(manager *backend.Manager, gate *admission.Gate, processStart func() (int64, error)) error {
+	if manager == nil || gate == nil {
 		return nil
 	}
 	now, err := admission.Boottime()
@@ -841,8 +858,37 @@ func requireReauthorization(provider *nitrokey.Provider, gate *admission.Gate, p
 	if since > now && since-now <= 10 {
 		since = now
 	}
-	if err := provider.RequireReauthorization(gate, admission.Boottime, since); err != nil {
-		return fmt.Errorf("token reauthorization: %w", err)
+	providers := manager.Providers()
+	names := make([]string, 0, len(providers))
+	for name := range providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	// One provider may answer for two backend names (the PKCS#11 provider serves the OpenPGP applet
+	// too): it is told once, because being told again would forget what it has seen. "The same
+	// provider" is asked of a map, so a provider must be something a map can hold as a key: a pointer,
+	// as both are today. A type that is not comparable would panic there; it is refused here instead.
+	told := make(map[reauth.Provider]bool)
+	for _, name := range names {
+		if !reflect.TypeOf(providers[name]).Comparable() {
+			return fmt.Errorf("token reauthorization: the %s backend's provider cannot be told apart from another (it must be a pointer)", name)
+		}
+		provider, gated := providers[name].(reauth.Provider)
+		if !gated {
+			reason, named := awaitingReauthorization[name]
+			if !named {
+				return fmt.Errorf("token reauthorization: the %s backend serves keys and cannot make a returned token wait for a fresh lease", name)
+			}
+			slog.Warn("KMS token reauthorization does NOT cover this backend: a token pulled and put back serves on the lease already held", "backend", name, "reason", reason)
+			continue
+		}
+		if told[provider] {
+			continue
+		}
+		told[provider] = true
+		if err := provider.RequireReauthorization(gate, admission.Boottime, since); err != nil {
+			return fmt.Errorf("token reauthorization (%s): %w", name, err)
+		}
 	}
 	slog.Info("KMS token reauthorization required: a token that was absent serves again only under a runtime lease asked for after its return")
 	return nil

@@ -12,14 +12,19 @@ import (
 // removableDriver is a token that can be pulled: while gone, Open fails, as a PKCS#11 driver's does.
 type removableDriver struct {
 	session *fakeSession
-	gone    bool
-	opens   int
+	// override, when set, is the session handed out instead (a wrapper around session).
+	override Session
+	gone     bool
+	opens    int
 }
 
 func (driver *removableDriver) Open(context.Context, registry.Binding) (Session, error) {
 	driver.opens++
 	if driver.gone {
 		return nil, errors.New("token not present")
+	}
+	if driver.override != nil {
+		return driver.override, nil
 	}
 	return driver.session, nil
 }
@@ -359,5 +364,215 @@ func TestWithoutReauthorizationAReturnedTokenResumesAsBefore(t *testing.T) {
 	driver.gone = false
 	if execute() != nil || !provider.Healthy(context.Background(), binding()) {
 		t.Fatal("a returned token did not resume on a provider that requires no reauthorization")
+	}
+}
+
+// AN ABSENCE THE DAEMON SAW AS A FAILURE IS AN ABSENCE (found by an independent read of #151). A
+// token pulled while its session is open does not show up as a failed Open: the operation fails.
+// Before this, that failure was discarded, and a token back before the next Open served at once on
+// the old lease.
+func TestATokenPulledWhileItsSessionIsOpenWaitsForAFreshLease(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	if !w.serves() {
+		t.Fatal("the fixture does not serve")
+	}
+	w.driver.session.pullOnSign = true // pulled during the signature: Open had succeeded
+	if err := w.execute("sign"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a signature on a pulled token: %v", err)
+	}
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
+		t.Fatalf("waiting = %v: the token stopped answering mid-operation and was not marked gone", w.waiting())
+	}
+	// back before anything tried to open it again
+	w.driver.session.pullOnSign, w.driver.session.pulled, w.now = false, false, 5_000
+	if w.serves() {
+		t.Fatal("a token pulled mid-operation and put back served on the lease from before")
+	}
+	w.gate.requestedMs = 5_001
+	if !w.serves() {
+		t.Fatal("a lease asked for after the return did not restore service")
+	}
+}
+
+// A REFUSED REQUEST IS NOT AN ABSENCE. The token still answers for its identity, so the failure was
+// about the request. Marking it gone would let any caller who may sign take the token out of
+// service, for up to a third of a lease, with one malformed payload.
+func TestAFailedOperationOnATokenThatStillAnswersChangesNothing(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	// The clock is past the lease's request time: an absence wrongly recorded now would be dated after
+	// the lease, and the token would wait. (With the clock still before it, a wrong mark would be
+	// invisible: the token would "serve" anyway.)
+	w.now = 5_000
+	w.driver.session.signErr = errors.New("CKR_DATA_LEN_RANGE")
+	for range 3 {
+		if err := w.execute("sign"); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("a refused payload: %v", err)
+		}
+	}
+	if len(w.waiting()) != 0 {
+		t.Fatalf("waiting = %v: a refused payload took the token out of service", w.waiting())
+	}
+	w.driver.session.signErr = nil
+	if !w.serves() || !w.healthy() {
+		t.Fatal("the token does not serve after a refused payload")
+	}
+}
+
+func TestASessionThatWillNotCloseOrThatPanicsMarksTheTokenGone(t *testing.T) {
+	for name, breakIt := range map[string]func(*fakeSession){
+		"close fails": func(session *fakeSession) { session.closeErr = errors.New("C_CloseSession failed") },
+		"panic":       func(session *fakeSession) { session.panicOnSign = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newReauthWorld(t)
+			w.gate.requestedMs = 1_001
+			breakIt(w.driver.session)
+			if err := w.execute("sign"); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("%v", err)
+			}
+			if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
+				t.Fatalf("waiting = %v", w.waiting())
+			}
+		})
+	}
+}
+
+func TestTheHealthCheckAlsoSeesATokenThatStoppedAnswering(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	w.driver.session.retries, w.driver.session.retriesSet = 3, true
+	w.driver.session.retriesErr = errors.New("C_GetTokenInfo failed")
+	if w.healthy() {
+		t.Fatal("healthy although the retry counter cannot be read")
+	}
+	if len(w.waiting()) != 0 {
+		t.Fatalf("waiting = %v: the token still answers for its identity", w.waiting())
+	}
+	w.driver.session.pulled = false
+	pulling := &pullingSession{fakeSession: w.driver.session}
+	w.driver.override = pulling
+	if w.healthy() {
+		t.Fatal("healthy on a token that stopped answering")
+	}
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
+		t.Fatalf("waiting = %v: the health check saw the token stop answering and did not mark it", w.waiting())
+	}
+	w.driver.override = nil
+	w.driver.session.retriesErr = nil
+	w.driver.session.closeErr = errors.New("C_CloseSession failed")
+	w.gate.requestedMs, w.now = 9_000, 5_000
+	w.healthy() // back and reauthorized, but the session will not close
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
+		t.Fatalf("waiting = %v after a close failure in the health check", w.waiting())
+	}
+}
+
+// pullingSession is a token pulled between the reauthorization check and the retry counter: the
+// first identity read (the binding check) answers, every later one does not.
+type pullingSession struct {
+	*fakeSession
+	identities int
+}
+
+func (session *pullingSession) Identity(ctx context.Context) (string, string, error) {
+	session.identities++
+	if session.identities > 1 {
+		return "", "", errors.New("token not present")
+	}
+	return session.fakeSession.Identity(ctx)
+}
+
+// Without RequireReauthorization nothing is asked twice: a host with no runtime admission has no
+// lease to wait for, and the token is not probed after a failure.
+func TestWithoutReauthorizationAFailureDoesNotProbeTheToken(t *testing.T) {
+	session := &fakeSession{serial: "serial-1", devaut: binding().DevAuthFingerprint, pullOnSign: true}
+	provider, _ := New(&removableDriver{session: session}, &fakePIN{value: []byte("123456")})
+	_, _, err := provider.Execute(context.Background(), registry.Route{Algorithm: "rsa2048", Binding: binding()}, "sign",
+		"", "application/vnd.regalia.digest", []byte("digest"), nil)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	asked := 0
+	for _, call := range session.order {
+		if call == "Identity" {
+			asked++
+		}
+	}
+	if asked != 1 || len(provider.AwaitingReauthorization()) != 0 {
+		t.Fatalf("identity asked %d times, waiting %v", asked, provider.AwaitingReauthorization())
+	}
+}
+
+// A YUBIKEY'S OPENPGP APPLET IS SERVED BY THIS SAME PROVIDER (#130), so it waits like any token here.
+// Proved, not assumed: the rule must hold for every key the daemon serves.
+func TestAnOpenPGPAppletTokenWaitsLikeAnyOther(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	applet := binding()
+	applet.Backend, applet.DeviceID = OpenPGPAppletBackend, "yubikey-openpgp"
+	sign := func() error {
+		_, _, err := w.provider.Execute(context.Background(), registry.Route{Algorithm: "ed25519", Binding: applet}, "sign",
+			"", "application/vnd.regalia.signature", []byte("message"), nil)
+		return err
+	}
+	if err := sign(); err != nil {
+		t.Fatalf("the applet fixture does not sign: %v", err)
+	}
+	w.driver.gone = true
+	if !errors.Is(sign(), ErrUnavailable) {
+		t.Fatal("signed with the applet's token gone")
+	}
+	w.driver.gone, w.now = false, 5_000
+	if !errors.Is(sign(), ErrUnavailable) || w.provider.Healthy(context.Background(), applet) {
+		t.Fatal("a returned OpenPGP applet token served on the lease from before")
+	}
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"yubikey-openpgp": 5_000}) {
+		t.Fatalf("waiting = %v", w.waiting())
+	}
+	w.gate.requestedMs = 5_001
+	if err := sign(); err != nil {
+		t.Fatalf("a lease asked for after the return did not restore the applet: %v", err)
+	}
+}
+
+// A CALLER THAT HANGS UP DOES NOT TAKE THE TOKEN OUT OF SERVICE (found by the read of this change).
+// Every driver call refuses an ended context. Asked under the request's context, a token whose
+// caller disconnected mid-signature, or whose request passed its deadline, would look gone, and every
+// key on it would wait for the next renewal: the stall the second identity read exists to exclude.
+func TestARequestThatIsCancelledOrTimesOutDoesNotMarkTheTokenGone(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	w.now = 5_000 // past the lease's request time: a wrong mark would make the token wait
+	sign := func(ctx context.Context) error {
+		_, _, err := w.provider.Execute(ctx, registry.Route{Algorithm: "rsa2048", Binding: binding()}, "sign",
+			"", "application/vnd.regalia.digest", []byte("digest"), nil)
+		return err
+	}
+	for range 3 {
+		ctx, cancel := context.WithCancel(context.Background())
+		w.driver.session.endOnSign = cancel // the caller hangs up during the signature
+		if err := sign(ctx); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("a cancelled signature: %v", err)
+		}
+		cancel()
+	}
+	w.driver.session.endOnSign = nil
+	if len(w.waiting()) != 0 {
+		t.Fatalf("waiting = %v: a caller that hung up took the token out of service", w.waiting())
+	}
+	if err := sign(context.Background()); err != nil {
+		t.Fatalf("the token does not serve the next caller: %v", err)
+	}
+	// the converse: the caller hung up AND the token really went
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.driver.session.endOnSign, w.driver.session.pullOnSign = cancel, true
+	if err := sign(ctx); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
+		t.Fatalf("waiting = %v: a token that left during a cancelled request was not marked gone", w.waiting())
 	}
 }
