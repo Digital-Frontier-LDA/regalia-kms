@@ -82,7 +82,7 @@ Commissioning has two halves:
   `root_disk_recovery_keyslot` (exactly one recovery keyslot, of its own, and no keyslot left that no
   token names, such as the installer's passphrase). The probe reads the LUKS2 header only and never
   asks for the key. After **any** use of the key, a rehearsal included: `recovery-key.sh --replace`
-  with a new key from a new escrow.
+  with a new key printed by the ceremony disc's `pin-escrow.sh --new-recovery-key` (never invented by hand); escrow it only after `--replace` and `--check` have succeeded.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
