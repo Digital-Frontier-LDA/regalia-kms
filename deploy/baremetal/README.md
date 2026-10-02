@@ -353,7 +353,15 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     turn (`unlock.boot_config`: node ID, disk, PCRs to quote, and each peer's address and TPM key
     names), for a bounded number of rounds;
   - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
-    file. If no peer helps, it gives nothing and the console asks for the recovery key (section 3).
+    file (`/run/regalia-unlock/key.sock`). If no peer helps, it gives nothing.
+- **The units** (`deploy/baremetal/initrd/regalia-unlock.socket` and `.service`): systemd-cryptsetup's
+  connection to the socket starts the client, sandboxed (no capability, no write anywhere, no device
+  but the TPM and the disks, read-only). Shown with a running systemd and the real systemd-cryptsetup:
+  the volume is mapped with the key from the socket; with no peer, systemd-cryptsetup gets no key and
+  gives up within a second, maps nothing, and the socket goes on listening for the next attempt.
+  **One boot carries one attested session**: after a peer has answered once in a boot, a second run in
+  that boot gets no second answer. NOT shown yet: the prompt for the recovery key at a console after
+  that (it needs a console: the boot test), and the units inside an initrd.
 - **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
   keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
   disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).

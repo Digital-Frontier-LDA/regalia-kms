@@ -26,8 +26,14 @@
 # a skip here is a failure. The decisions that need no TPM and no root (every binding of the exchange,
 # the store, enrolment, rotation, the header's judgement) run with the Python guards and are run here too.
 #
-# NOT covered: WG-BOOT under the TCP transport (#66), the systemd units and the initramfs, a real boot,
-# and any physical TPM or DL360.
+#   7  with a running systemd: the shipped units (deploy/baremetal/initrd/) are installed, the real
+#      systemd-cryptsetup is given the socket as its key file, and the volume is mapped; with no peer it
+#      gets no key, gives up, and the socket goes on listening; a retired image gets nothing
+#
+# NOT covered: the units inside an initrd, the TPM unsealing done by systemd itself (it can use only the
+# machine's own TPM: the test unseals and passes the credential plain), the prompt for the recovery key
+# at a console, WG-BOOT under the TCP transport (e2e/wg-boot-netns.sh has the network), a real boot, and
+# any physical TPM or DL360.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
@@ -53,11 +59,19 @@ fi
 [ -x "$REGALIA_UNLOCK_BIN" ] || { echo "peer-unlock-swtpm: $REGALIA_UNLOCK_BIN is not an executable"; exit 2; }
 export REGALIA_UNLOCK_BIN
 
-out="$(REGALIA_EXPECT_SWTPM=1 REGALIA_EXPECT_CRYPTSETUP=1 REGALIA_UNLOCK_DEVICE="$LOOP" python3 -m unittest -v tests.test_baremetal_unlock </dev/null 2>&1)"; rc=$?
+# With a running systemd and systemd-cryptsetup, the shipped units are started for real and
+# systemd-cryptsetup itself asks for the key (deploy/baremetal/initrd/). CI has both; a container may not.
+SYSTEMD=0
+if [ "$(systemctl is-system-running 2>/dev/null)" != offline ] && [ -d /run/systemd/system ] && { [ -x /usr/lib/systemd/systemd-cryptsetup ] || command -v systemd-cryptsetup >/dev/null; }; then SYSTEMD=1; fi
+[ "$SYSTEMD" = 1 ] || [ "${REGALIA_EXPECT_SYSTEMD:-0}" != 1 ] || { echo "peer-unlock-swtpm: a running systemd with systemd-cryptsetup is expected here"; exit 2; }
+
+out="$(REGALIA_EXPECT_SWTPM=1 REGALIA_EXPECT_CRYPTSETUP=1 REGALIA_UNLOCK_SYSTEMD="$SYSTEMD" REGALIA_UNLOCK_DEVICE="$LOOP" python3 -m unittest -v tests.test_baremetal_unlock </dev/null 2>&1)"; rc=$?
 printf '%s\n' "$out"
 [ "$rc" = 0 ] || { echo "peer-unlock-swtpm: FAILED"; exit 1; }
 ran="$(grep -oE '^Ran [0-9]+ tests?' <<< "$out" | grep -oE '[0-9]+')"
-if ! grep -q '^test_tpm_plus_one_peer_opens_the_disk.*ok$' <<< "$out" || grep -qi 'skipped' <<< "$out"; then
-  echo "peer-unlock-swtpm: the TPM test did not run, or a test was skipped"; exit 1
+skips="$(grep -c 'skipped' <<< "$out")"
+if ! grep -q '^test_tpm_plus_one_peer_opens_the_disk.*ok$' <<< "$out" || { [ "$SYSTEMD" = 1 ] && [ "$skips" != 0 ]; } || [ "$skips" -gt 1 ]; then
+  echo "peer-unlock-swtpm: the TPM test did not run, or a test was skipped that should have run"; exit 1
 fi
+[ "$SYSTEMD" = 1 ] || echo "peer-unlock-swtpm: NOTE: no running systemd here, the units were not started (one test skipped)"
 echo "peer-unlock-swtpm: $ran passed, 0 failed"
