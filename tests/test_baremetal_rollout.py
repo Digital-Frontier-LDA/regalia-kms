@@ -412,6 +412,10 @@ class Transition(Case):
                 if label != "one more PCR selected":
                     self.refused("drops uki-1, but d would still accept the same measurements under another label",
                                  measurements.transition, v1, new_node, emergency=True)
+        # the dropped image's own values with one more PCR selected, on a new node: still the dropped image
+        grown = dict(uki("fresh", "a1", "a2"), pcrs={"4": "44" * 32, "7": "00" * 32})
+        self.refused("drops uki-1, but d would still accept the same measurements under another label", measurements.transition, v1,
+                     document("e", **dict({n: [u3] for n in "abc"}, d=[grown])), emergency=True)
         # the same dropped image under another TPM firmware version is the same image
         self.refused("would still accept the same measurements under another label", measurements.transition, v1,
                      document("e", **dict({n: [u3] for n in "abc"}, d=[uki("fresh", "a1", "a2", fw="1" * 16)])), emergency=True)
