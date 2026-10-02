@@ -1276,7 +1276,8 @@ func (registry *Registry) DeclaredPolicies() []DeclaredPolicy {
 //
 // The registry accepts bindings to backends the daemon may not actually serve. It knows about
 // yubikey-piv and yubikey-openpgp — it has capability entries for them and routes to them — while
-// the daemon only ever constructs a nitrokey-pkcs11 provider. An operator could bind a key to a
+// a given daemon serves the first only in a piv-tagged build with devices configured, and the
+// second only where its evidence carries a local-usb attestation. An operator could bind a key to a
 // YubiKey, watch the manifest validate and the daemon start clean, and then have every operation on
 // that key fail at signing time with a generic "unavailable". The routing table said yes and the
 // backend table said nothing.

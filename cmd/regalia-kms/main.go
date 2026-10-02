@@ -742,11 +742,12 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 // bindBackendToRegistry refuses a key registry that routes to a backend the daemon cannot serve.
 //
 // The registry accepts bindings to yubikey-piv and yubikey-openpgp — it has capability entries for
-// both and will route to them — while buildHardware only ever constructs a nitrokey-pkcs11
-// provider. Nothing connected the two, so an operator could bind a key to a YubiKey, watch the
-// custody manifest validate and the daemon start clean, and then have every operation on that key
-// fail at signing time as DEPENDENCY_UNAVAILABLE. Fail-closed, but discovered one request at a
-// time, at the moment someone needed the key.
+// both and will route to them — while buildHardware serves each only when this host is configured
+// for it: yubikey-piv with devices in a piv-tagged build, yubikey-openpgp with a local-usb
+// attestation in the evidence. Nothing connected the two, so an operator could bind a key to a
+// YubiKey, watch the custody manifest validate and the daemon start clean, and then have every
+// operation on that key fail at signing time as DEPENDENCY_UNAVAILABLE. Fail-closed, but discovered
+// one request at a time, at the moment someone needed the key.
 //
 // A backend the routing table names and the daemon cannot reach is a configuration error, and a
 // configuration error belongs at startup where somebody is watching.
