@@ -271,7 +271,12 @@ func regaliaSign(t *testing.T, binary, config string, args ...string) string {
 func tokenPublicKeyPEM(t *testing.T, modulePath, id string) []byte {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "public.der")
-	if output, err := exec.Command("pkcs11-tool", "--module", modulePath, "--token-label", "regalia-kms-e2e",
+	// The SoftHSM battery's token is regalia-kms-e2e. A run on a real token names its own label.
+	label := os.Getenv("REGALIA_PKCS11_E2E_TOKEN_LABEL")
+	if label == "" {
+		label = "regalia-kms-e2e"
+	}
+	if output, err := exec.Command("pkcs11-tool", "--module", modulePath, "--token-label", label,
 		"--read-object", "--type", "pubkey", "--id", id, "--output-file", path).CombinedOutput(); err != nil {
 		t.Fatalf("read public key %s off the token: %v\n%s", id, err, output)
 	}

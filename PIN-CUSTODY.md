@@ -147,6 +147,37 @@ Typing the PIN from the PIN card stays as the fallback (re-sealing later, a host
 the ceremony). Proven on DENK0404144 with two software TPMs as the two hosts:
 `e2e/nitrokey-pin-import-drill.sh` (14/0, 2026-10-01).
 
+## Power cuts and the TPM's own lockout
+
+The TPM has a retry counter of its own, separate from the card's: its dictionary-attack counter. A
+power cut feeds it. When a key subject to that protection was used since the last start and the TPM
+then loses power with no `TPM2_Shutdown`, it adds one failed try at the next start; at its limit it
+refuses every protected key until tries heal. A KMS host uses such a key at every boot: systemd
+unseals the PIN credential through a primary key it creates each time (the sealed object itself is
+exempt; the primary is not, and `systemd-creds` has no option for it). So a run of power cuts ends
+with the PIN not released, and the KMS not back, with nobody having typed anything wrong.
+
+Decisions (#57, 2026-10-02):
+
+- **The settings are commissioned, not left to the vendor's defaults:** 32 failed tries before
+  lockout, one try forgiven every 600 s, 86400 s of lockout-hierarchy recovery
+  (`deploy/baremetal/tpm-lockout.sh --set`). 31 cuts in a row are survived; counted tries heal on
+  their own, one every 10 minutes.
+- **The lockout authorization is set, and is a ceremony secret.** It is what changes these settings
+  or clears the counter. Empty, anyone on the host can. It is generated and escrowed with the other
+  ceremony secrets and typed at the console; it is never stored on the host. A wrong one blocks the
+  lockout hierarchy for a day, which is the TPM protecting it.
+- **The PIN import key and its parent are created `noda`.** The key has no authorization value to
+  guess (anyone on the host may ask it to decrypt; its protection is that only this TPM can), so the
+  counter guards nothing there and would only add a way to lock the host out.
+
+*Verified by:* `e2e/tpm-lockout-swtpm.sh` in CI (software TPMs: the settings, drift, a wrong
+authorization, the `noda` key across four power cuts with a control, one try counted per cut after
+an unseal, healing, and the PIN refused at swtpm's default limit of 3); `host_probe.py`
+(`tpm_lockout_policy`, `pin_import_key_present`) on the host. **Not verified: any physical TPM.** The
+DL360's defaults, and whether its firmware counts a real power cut the same way, are a PoC still to
+run (#57).
+
 ## Retry circuit breaker
 
 Both providers refuse to present a PIN when the card reports one or zero remaining attempts, latch the

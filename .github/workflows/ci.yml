@@ -74,6 +74,12 @@ jobs:
         # refused for an unsigned kernel, another key, a changed PCR 7 or an uncovered boot phase.
         run: bash e2e/pcr-signed-policy-swtpm.sh
 
+      - name: TPM lockout settings and power cuts, against software TPMs (swtpm)
+        # deploy/baremetal/tpm-lockout.sh sets the dictionary-attack policy and a lockout authorization;
+        # host_probe's tpm_lockout_policy measures it and fails on drift; the PIN import key (noda)
+        # is unaffected by power cuts, a PIN credential counts one try per cut and the tries heal (#57).
+        run: bash e2e/tpm-lockout-swtpm.sh
+
       - name: Bare-metal host firewall, by behaviour, in network namespaces
         # The rendered default-deny ruleset is loaded only inside a throwaway namespace; the zones probe
         # it with network_probe.py, and outbound is checked against the declared sinks.
@@ -374,3 +380,20 @@ jobs:
         env:
           REGALIA_EXPECT_APPARMOR_PARSER: "1"
         run: python3 -m unittest -v tests.test_baremetal_apparmor
+
+  # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
+  # its own NV counter (replay and disk rollback refused), and the TPM clock behind the time floor.
+  # The script fails if any of its three tests is skipped.
+  heartbeat-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Heartbeat sequence counter and TPM clock against swtpm
+        run: bash e2e/heartbeat-swtpm.sh

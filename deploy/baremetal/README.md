@@ -132,11 +132,24 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
 
 ## 4. TPM provisioning
 
+0. **Lockout settings, first:** `sudo deploy/baremetal/tpm-lockout.sh --set`. It sets the TPM's
+   dictionary-attack policy (32 failed tries before lockout, one try forgiven every 600 s, 86400 s of
+   lockout-hierarchy recovery) and the **lockout authorization**, a ceremony secret typed from the
+   escrow (16-32 characters) and never stored on the host. Why it matters here: a power cut after
+   the PIN was unsealed counts as one failed try, and at the limit the TPM releases no PIN, so the
+   KMS would not come back unattended. With this policy a host survives 31 cuts in a row and forgets
+   one every 10 minutes. A **wrong** lockout authorization blocks the lockout hierarchy for a day:
+   read it from the escrow, never guess. Measured: `tpm_lockout_policy` (the three settings, an
+   authorization set, not in lockout; the tries counted are reported). Proven on software TPMs only
+   (`e2e/tpm-lockout-swtpm.sh`); the DL360's own behaviour under real power cuts is a PoC still to
+   run (#57).
 1. **PIN import key:** `sudo deploy/seal-hsm-pin.sh --init-import-key`. Copy the printed fingerprint
    **by hand** at the console (the ceremony checks it) and record it in the evidence as
    `host.pin_import_key_sha256`. Measured: `pin_import_key_present`, which compares the key at the
    handle with that recorded value and checks its template: RSA-3072 with exactly
-   fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt. Any other key at the handle fails.
+   fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda. Any other key at the handle fails.
+   `noda`: the key has no authorization value to guess, so the TPM's dictionary-attack counter
+   protects nothing there, and without it every power cut after the key was used would count a try.
 2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7 --from-blob
    pin-hsm_<x>.blob`, and `--yubikey <serial> … --from-blob pin-yubikey_<x>.blob` for the KMS YubiKey
    (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card. Record the binding in the
