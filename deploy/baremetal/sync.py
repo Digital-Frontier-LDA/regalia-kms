@@ -95,10 +95,11 @@ ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "lease": ("v", "ok", "lease")}
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "drop": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
 OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
 MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
 EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under
+LISTENER = "the listener"        # what an accept() that fails is recorded against: never a key of the capped table
 MAX_CONNECTIONS, MAX_PER_ADDRESS, DEADLINE = 8, 2, 10
 MAX_ROUNDS = 64                  # pulls in one catch-up: 64 * 64 epochs, then the next timer tick goes on
 
@@ -321,7 +322,7 @@ class Server:
         request in time). Recorded, at most once a minute per address."""
         name = convergence._printable(source)
         try:      # the first of a window passes; the others are counted, and none of them is an event of its own
-            suppressed = self.buckets.take(name, "drop")
+            suppressed = self.buckets.take(name, "listener" if source == LISTENER else "drop")
         except Quiet:
             return
         except Crowded as crowded:      # more addresses are being dropped than are remembered: one event a minute says so
@@ -624,7 +625,7 @@ def serve(server, listener, stop, deadline=DEADLINE, connections=MAX_CONNECTIONS
         except (TimeoutError, socket.timeout):
             continue
         except OSError as failure:      # a connection aborted before it was accepted, no descriptor left: the listener goes on
-            dropped("the listener", "a connection could not be accepted (%s)" % type(failure).__name__)
+            dropped(LISTENER, "a connection could not be accepted (%s)" % type(failure).__name__)
             time.sleep(0.1)
             continue
         address = peer[0]

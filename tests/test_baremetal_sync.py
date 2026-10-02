@@ -1045,14 +1045,18 @@ class Sockets(Case):
             self.assertEqual(len(self.drops()), 2)
             for i in range(5):
                 server.dropped("127.0.1.%d" % i, "over the connection limit")
-            server.dropped("the listener", "a connection could not be accepted (OSError)")
-            self.assertEqual(len(self.drops()), 3)                                  # one more event for all six
+            self.assertEqual(len(self.drops()), 3)                                  # one more event for all five
             subject, outcome, reason = self.drops()[-1]
             self.assertEqual((subject, outcome), ("*", "DENY"))
             self.assertIn("RATE: too many callers at once; connections are being dropped: over the connection limit", reason)
+            # the listener's own failure is never crowded out: it is not a key of the capped table
+            server.dropped("the listener", "a connection could not be accepted (OSError)")
+            self.assertEqual(self.drops()[-1], ("the listener", "DENY", "a connection could not be accepted (OSError)"))
+            server.dropped("the listener", "a connection could not be accepted (OSError)")
+            self.assertEqual(len(self.drops()), 4)                                  # and once a minute
             self.tick += 61
             server.dropped("the listener", "a connection could not be accepted (OSError)")
-            self.assertEqual(self.drops()[-1][0], "the listener")                   # the two idle keys were forgotten: there is room again
+            self.assertEqual(self.drops()[-1], ("the listener", "DENY", "a connection could not be accepted (OSError) (1 more dropped since the last report)"))
 
     def test_drops_are_reported_once_a_minute_with_the_count(self):
         server = self.servers["b"]
