@@ -36,9 +36,13 @@ go mod download
 go mod verify
 go build -trimpath -buildvcs=false -ldflags="-buildid= -X main.version=appliance-lab-$revision" \
   -o /usr/local/sbin/regalia-kms ./cmd/regalia-kms
+# The build umask must not prevent the service account executing its public
+# binary or systemd reading its public unit/drop-ins. All remain root-owned.
+chmod 0755 /usr/local/sbin/regalia-kms
 go version -m /usr/local/sbin/regalia-kms >/var/log/regalia-binary-build.txt
 install -m 0644 deploy/systemd/regalia-kms.service /etc/systemd/system/regalia-kms.service
 mkdir -p /etc/systemd/system/regalia-kms.service.d /etc/regalia-kms
+chmod 0755 /etc/systemd/system/regalia-kms.service.d
 install -m 0644 deploy/baremetal/regalia-kms-hardening.conf.example \
   /etc/systemd/system/regalia-kms.service.d/hardening.conf
 install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
@@ -53,6 +57,7 @@ ConditionPathExists=/etc/regalia-kms/config.json
 CapabilityBoundingSet=
 LockPersonality=yes
 EOF
+chmod 0644 /etc/systemd/system/regalia-kms.service.d/commissioning.conf
 useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin regalia-kms
 # The private build umask creates this directory as root-only. The daemon must
 # be able to traverse it to read commissioned configuration, without write access.
