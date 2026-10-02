@@ -194,7 +194,7 @@ the unit fails it too: what it sets is not seen.
 
 ### Host firewall (default deny, both directions)
 
-The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` for a single-site
+The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` and `"service_mesh": null` for a single-site
 host, section 7 otherwise) declares the host's address, the
 KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
 (the audit and NTP sinks at least). From it:
@@ -489,6 +489,23 @@ a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network na
   refused at attestation, by the peer, against current measurements.
 - A WireGuard configuration is applied with its private key added in memory (`bootnet.with_key`),
   never without it: `wg syncconf` with a file that has no key unsets the interface's key.
+
+**The service mesh (#80).** The running services of the three nodes talk over a second WireGuard
+interface, `wg-svc` (the site config's `service_mesh`; it needs a `boot_mesh`, whose node ID and
+underlay addresses it uses). Inside it every address is derived from a node's WireGuard key, in one
+fixed prefix (`sitecfg.SERVICE_PREFIX`), so the site config names none of them. The host firewall gains,
+and only with a `service_mesh`:
+
+- WireGuard (its UDP port) with the peers' declared addresses, and the revocation authority's if one is
+  configured;
+- the sync port inside the tunnel, only between addresses of that prefix, in both directions;
+- **nothing else on that interface**, IPv4 or IPv6, in or out: the rule that drops the rest of the
+  interface comes before every zone rule, so a zone's address inside the tunnel opens nothing.
+
+It is the only IPv6 the host carries. Proven by behaviour, with real WireGuard, in section 5 of
+`e2e/baremetal-firewall-netns.sh`: a source outside the prefix, another port, the sync port on the
+wire, a client-zone address inside the tunnel, and a valid key at an undeclared address each get
+nothing.
 
 Not there yet, so **nothing here is to be run on a KMS host**: measured boot with a unified kernel
 image (a changed or retired initrd refused on a real boot), the commands an operator types to enrol a

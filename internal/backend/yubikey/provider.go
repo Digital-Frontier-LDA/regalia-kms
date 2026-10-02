@@ -5,6 +5,7 @@ package yubikey
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -18,6 +19,12 @@ import (
 )
 
 var ErrUnavailable = errors.New("YubiKey backend unavailable")
+
+// ErrPINNotPresented is what Session.Login returns when it refused BEFORE the PIN reached the card:
+// the request's context had ended, the session was closed, or the PIN had a length no card takes.
+// No try was spent, so the provider sets no PIN latch for it. A Login error that is not this one
+// means the PIN may have been presented. It is still ErrUnavailable to whoever asks.
+var ErrPINNotPresented = fmt.Errorf("%w: the PIN was not presented to the card", ErrUnavailable)
 
 type PINSource interface {
 	PIN(context.Context, string) ([]byte, error)
@@ -339,9 +346,19 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		}
 		zero(pin)
 	}()
-	if session.Login(ctx, pin) != nil {
-		provider.forgetPINRetries(binding.DeviceID)
-		provider.blockPIN(binding.DeviceID)
+	if err := session.Login(ctx, pin); err != nil {
+		// THE PIN LATCH PROTECTS THE RETRY BUDGET, so it is skipped only when it is CERTAIN the
+		// PIN never reached the card: the session says so itself (ErrPINNotPresented), before the
+		// call that would present it. A request that ends between the retry-counter read and the
+		// login is refused that way, with the card in place and no try spent; latching on it let
+		// a caller who hung up at that moment take the card out of service until an operator reset
+		// it (regalia-kms#178). "The context has ended by now" is not that certainty: it can end
+		// while the PIN is on the wire, the card refuses it, and without the latch the next
+		// request would present the same wrong PIN again.
+		if !errors.Is(err, ErrPINNotPresented) {
+			provider.forgetPINRetries(binding.DeviceID)
+			provider.blockPIN(binding.DeviceID)
+		}
 		return nil, "", ErrUnavailable
 	}
 	switch operation {
