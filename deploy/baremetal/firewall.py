@@ -60,19 +60,23 @@ def render(cfg):
                cfg["host_ipv4"], mesh["listen_port"], _set([p["underlay"] + "/32" for p in mesh["peers"]])))
     service, service_in, service_out, service_udp_in, service_udp_out = cfg["service_mesh"], "", "", "", ""
     if service:
-        # Before the IPv6 drop: the service tunnel is the one place IPv6 is carried. Each pair ends in a
+        # Before the IPv6 drop: the service tunnel is the one place IPv6 is carried. Each group ends in a
         # drop for the whole interface, so no later rule (a zone, a sink) can match inside the tunnel.
+        # A connection starts with a SYN and nothing else: conntrack would otherwise take a stray
+        # mid-stream segment for a new connection and let it reach the stack.
         name, prefix, port = service["interface"], sitecfg.SERVICE_PREFIX, service["sync_port"]
         service_in = (
-            "    iifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d ct state new,established accept comment \"service mesh: sync requests, inside the tunnel\"\n"
+            "    iifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"service mesh: a new sync request, inside the tunnel\"\n"
+            "    iifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d ct state established accept comment \"service mesh: the rest of a sync request\"\n"
             "    iifname \"%s\" ip6 saddr %s ip6 daddr %s tcp sport %d ct state established accept comment \"service mesh: answers to this host's requests\"\n"
             "    iifname \"%s\" drop comment \"service mesh: nothing else inside the tunnel\"\n"
-            % (name, prefix, prefix, port, name, prefix, prefix, port, name))
+            % (name, prefix, prefix, port, name, prefix, prefix, port, name, prefix, prefix, port, name))
         service_out = (
-            "    oifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d ct state new,established accept comment \"service mesh: this host's sync requests\"\n"
-            "    oifname \"%s\" ip6 saddr %s ip6 daddr %s tcp sport %d ct state established accept comment \"service mesh: its answers\"\n"
+            "    oifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"service mesh: a new sync request of this host's\"\n"
+            "    oifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d ct state established accept comment \"service mesh: the rest of it\"\n"
+            "    oifname \"%s\" ip6 saddr %s ip6 daddr %s tcp sport %d ct state established accept comment \"service mesh: this host's answers\"\n"
             "    oifname \"%s\" drop comment \"service mesh: nothing else leaves by the tunnel\"\n"
-            % (name, prefix, prefix, port, name, prefix, prefix, port, name))
+            % (name, prefix, prefix, port, name, prefix, prefix, port, name, prefix, prefix, port, name))
         underlays = _set([p["underlay"] + "/32" for p in mesh["peers"]])
         service_udp_in = ("    ip daddr %s udp dport %d ip saddr %s accept comment \"service mesh: WireGuard, from the peers' declared addresses\"\n"
                           % (cfg["host_ipv4"], service["listen_port"], underlays))

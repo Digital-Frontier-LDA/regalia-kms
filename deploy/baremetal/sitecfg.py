@@ -33,7 +33,8 @@ network_probe.py checks the result from each zone, so the two can never describe
 
     "service_mesh": {                                # needs a boot_mesh: the node ID and the peers' underlays are its
       "interface": "wg-svc",                         # the WireGuard interface of the running services (regalia-sync)
-      "listen_port": 51821,                          # its UDP port, reachable from the peers' declared addresses only
+      "listen_port": 51821,                          # its UDP port, ONE for the whole mesh: every node listens on this
+                                                     #   number, and it is reachable from the peers' addresses only
       "sync_port": 7444,                             # TCP, inside the tunnel only: deploy/baremetal/sync.py
       "authority": null                              # or where the revocation authority is, and its WireGuard key:
     }                                                #   {"key": "<64 hex>", "underlay": "203.0.113.50", "port": 51821}
@@ -210,6 +211,11 @@ def _service_mesh(mesh, cfg):
         underlay = _address(authority["underlay"], "service_mesh.authority.underlay")
         taken = {cfg["host_ipv4"], boot["address"]} | {p["underlay"] for p in boot["peers"]} | {p["address"] for p in boot["peers"]}
         require(underlay not in taken, "service_mesh.authority.underlay is a node's address: the authority is another host")
+        # The zone rules match on addresses alone. An authority inside a zone would also be handed that
+        # zone's port on the wire (the KMS port, or SSH), which nothing about "authority" says.
+        for zone, network in [(k, n) for k in ("client_cidrs", "monitoring_cidrs", "admin_cidrs") for n in cfg[k]] + [("outbound", o["cidr"]) for o in cfg["outbound"]]:
+            require(ipaddress.ip_address(underlay) not in ipaddress.ip_network(network),
+                    "service_mesh.authority.underlay %s is inside %s (%s): the authority is not a client, a monitor, an admin or a sink" % (underlay, zone, network))
         out["authority"] = {"key": authority["key"], "underlay": underlay, "port": _port(authority["port"], "service_mesh.authority.port")}
     return out
 

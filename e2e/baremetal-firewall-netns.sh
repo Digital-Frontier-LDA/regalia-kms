@@ -218,7 +218,11 @@ cat > "$T/site-mesh.json" <<EOF
 EOF
 python3 "$BM/firewall.py" "$T/site-mesh.json" > "$T/mesh.nft" && x kms nft -c -f "$T/mesh.nft" && x kms nft -f "$T/mesh.nft" \
   && P "the ruleset with both meshes renders, passes nft -c and loads inside the KMS namespace" || F "the meshed ruleset did not load"
-x kms nft flush ruleset >/dev/null 2>&1; x kms nft -f "$T/mesh.nft"   # and from empty: no leftover state from the controls
+# Loaded again from an empty ruleset. That does NOT empty connection tracking: a flow opened during the
+# controls would still count as established. None is left that matters: each control's TCP connection
+# was closed, every check below opens a new one, the peer's WireGuard flow is one the ruleset allows,
+# and the stranger has sent nothing yet.
+x kms nft flush ruleset >/dev/null 2>&1; x kms nft -f "$T/mesh.nft"
 
 # 5.1 allowed: the sync port, inside the tunnel, between addresses of the prefix, both ways
 from peer "$A_PEER" "$A_KMS" 7444 && P "the peer reaches the sync port through the tunnel" || F "the sync port is not reachable through the tunnel"

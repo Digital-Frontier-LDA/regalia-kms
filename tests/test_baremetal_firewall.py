@@ -166,6 +166,10 @@ class ServiceMesh(unittest.TestCase):
             "an authority at this host": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="192.0.2.10")), "is a node's address"),
             "an authority at a peer": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="192.0.2.20")), "is a node's address"),
             "an authority at a tunnel address": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="10.89.0.2")), "is a node's address"),
+            "an authority among the clients": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="198.51.100.9")), "is inside client_cidrs"),
+            "an authority among the admins": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.4")), "is inside admin_cidrs"),
+            "an authority that is the monitor": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.128")), "is inside monitoring_cidrs"),
+            "an authority that is the audit sink": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.192")), "is inside outbound"),
             "an authority port 0": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, port=0)), "authority.port must be a port number"),
         }
         for label, (breakit, why) in cases.items():
@@ -184,20 +188,26 @@ class ServiceMesh(unittest.TestCase):
     def test_ipv6_is_carried_only_on_the_service_interface_only_within_its_prefix_only_for_the_sync_port(self):
         text, incoming, outgoing = self.rules()
         prefix = "fd72:6567:6c61::/48"
-        wanted_in = ['iifname "wg-svc" ip6 saddr %s ip6 daddr %s tcp dport 7444 ct state new,established accept comment "service mesh: sync requests, inside the tunnel"' % (prefix, prefix),
-                     'iifname "wg-svc" ip6 saddr %s ip6 daddr %s tcp sport 7444 ct state established accept comment "service mesh: answers to this host\'s requests"' % (prefix, prefix),
+        syn = "tcp flags & (fin | syn | rst | ack) == syn ct state new accept"
+        between = "ip6 saddr %s ip6 daddr %s" % (prefix, prefix)
+        wanted_in = ['iifname "wg-svc" %s tcp dport 7444 %s comment "service mesh: a new sync request, inside the tunnel"' % (between, syn),
+                     'iifname "wg-svc" %s tcp dport 7444 ct state established accept comment "service mesh: the rest of a sync request"' % between,
+                     'iifname "wg-svc" %s tcp sport 7444 ct state established accept comment "service mesh: answers to this host\'s requests"' % between,
                      'iifname "wg-svc" drop comment "service mesh: nothing else inside the tunnel"']
-        wanted_out = ['oifname "wg-svc" ip6 saddr %s ip6 daddr %s tcp dport 7444 ct state new,established accept comment "service mesh: this host\'s sync requests"' % (prefix, prefix),
-                      'oifname "wg-svc" ip6 saddr %s ip6 daddr %s tcp sport 7444 ct state established accept comment "service mesh: its answers"' % (prefix, prefix),
+        wanted_out = ['oifname "wg-svc" %s tcp dport 7444 %s comment "service mesh: a new sync request of this host\'s"' % (between, syn),
+                      'oifname "wg-svc" %s tcp dport 7444 ct state established accept comment "service mesh: the rest of it"' % between,
+                      'oifname "wg-svc" %s tcp sport 7444 ct state established accept comment "service mesh: this host\'s answers"' % between,
                       'oifname "wg-svc" drop comment "service mesh: nothing else leaves by the tunnel"']
         # straight after loopback, in this order, and BEFORE the drop of all other IPv6
-        self.assertEqual(incoming[1:5], ["iif \"lo\" accept"] + wanted_in)
-        self.assertEqual(incoming[5], "meta nfproto ipv6 drop")
-        self.assertEqual(outgoing[1:5], ["oif \"lo\" accept"] + wanted_out)
-        self.assertEqual(outgoing[5], "meta nfproto ipv6 drop")
+        self.assertEqual(incoming[1:6], ["iif \"lo\" accept"] + wanted_in)
+        self.assertEqual(incoming[6], "meta nfproto ipv6 drop")
+        self.assertEqual(outgoing[1:6], ["oif \"lo\" accept"] + wanted_out)
+        self.assertEqual(outgoing[6], "meta nfproto ipv6 drop")
+        # a connection is new only with a SYN and nothing else: exactly one rule per direction takes "new"
+        self.assertEqual(text.count("ct state new"), 2)
         # nothing else in the ruleset speaks IPv6, and nothing else names the interface
-        self.assertEqual(text.count("ip6 "), 8)
-        self.assertEqual(text.count('"wg-svc"'), 6)
+        self.assertEqual(text.count("ip6 "), 12)
+        self.assertEqual(text.count('"wg-svc"'), 8)
         self.assertEqual(text.count("meta nfproto ipv6 drop"), 2)
         # every chain still defaults to drop, and the zone rules are as they were
         for hook in ("input", "forward", "output"):
