@@ -42,7 +42,10 @@ check() {
 }
 
 depends() {
-    echo systemd systemd-cryptsetup tpm2-tss
+    # systemd-pcrphase: the unit that extends PCR 11 with "enter-initrd". It is not in dracut's default set
+    # (its check() returns 0, not 255), and without it no credential sealed to the image's initrd-phase
+    # signature opens: the units here are ordered After= it, which does nothing for a unit that is absent.
+    echo systemd systemd-cryptsetup systemd-pcrphase tpm2-tss
 }
 
 installkernel() {
