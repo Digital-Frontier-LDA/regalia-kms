@@ -438,3 +438,22 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
       - name: Node replacement against swtpm (enroll the new node, refuse the old hardware)
         run: bash e2e/node-replacement-swtpm.sh
+
+  # regalia-kms#75: a kernel update rolled through three nodes, on three software TPMs. The root approves
+  # CURRENT and NEXT in one manifest; the nodes reboot one at a time, in order, each unlocked by its
+  # peers on the new image; a failed image falls back to CURRENT; CURRENT is retired once every node was
+  # seen on NEXT; the old image, booted again, is then refused, and so is a peer's membership restored
+  # from before the retirement. The script fails if its test is skipped.
+  rolling-policy-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Rolling measured-boot update against swtpm (approve, one node at a time, retire, refuse the old image)
+        run: bash e2e/rolling-policy-swtpm.sh
