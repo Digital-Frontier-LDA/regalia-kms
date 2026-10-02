@@ -68,6 +68,17 @@ Commissioning has two halves:
   connected to pcscd must be the KMS binary. Measured: `token_clients_root_only`. A KMS user that
   brings its own client is caught by the pcscd check only while it is connected; restricting pcscd
   access with a polkit rule (root and the KMS user only) is recommended on top.
+- **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
+  `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
+  capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name
+  in `/etc/hosts`. The profile is parser-checked only, so load it in complain mode first, correct it
+  from the kernel log, and only then enforce (the full sequence is in the file's header):
+  ```sh
+  sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
+  sudo apparmor_parser -r -C /etc/apparmor.d/usr.local.sbin.regalia-kms   # complain: logs, refuses nothing
+  sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms      # enforce, once the log is clean
+  ```
+  Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
 
 ### Host firewall (default deny, both directions)
 
@@ -122,6 +133,11 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
+4. **Attestation key (three-site, #65):** `python3 deploy/baremetal/attest.py node-init --out DIR`
+   creates the EK and a restricted AK and exports their public areas; a peer enrolls the AK with
+   `challenge` / `node-activate` / `enroll` and then verifies quotes with `nonce` / `node-quote` /
+   `verify`. Proven on a software TPM (`e2e/tpm-attest-swtpm.sh`); the PCRs to expect and the EK
+   certificate check are set on the DL360s (#65 PoC 5.2/5.3).
 
 ## 5. Pass criteria
 
