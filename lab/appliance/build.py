@@ -24,6 +24,31 @@ def command(args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
 
+def install_guest(args: list[str], log: Path, timeout: float):
+    """Stop an unattended installer promptly after the fixed failure marker."""
+    with log.with_suffix(".stderr").open("wb") as errors:
+        process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=errors)
+        try:
+            deadline = time.monotonic() + timeout
+            while process.poll() is None:
+                if log.exists() and "REGALIA_BUILD_FAILED" in log.read_text(errors="replace"):
+                    raise VerificationError("guest setup failed; see installer diagnostic log")
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(args, timeout)
+                time.sleep(0.2)
+            require(process.returncode == 0, "installer process failed")
+            require(not log.exists() or "REGALIA_BUILD_FAILED" not in log.read_text(errors="replace"),
+                    "guest setup failed; see installer diagnostic log")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+
+
 def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: int, acceleration: str = "tcg") -> dict:
     policy = json.loads((ROOT / "deploy/images/debian-policy.json").read_text())
     media_report = verify_gpg(media / policy["image"], media / policy["checksum"],
@@ -77,7 +102,7 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
                             "-nic", "user,model=virtio-net-pci", "-serial", f"file:{staging / 'install.log'}"]
         print("Installing verified Debian media in a disposable UEFI QEMU guest...", flush=True)
         started = time.monotonic()
-        command(install, timeout=timeout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        install_guest(install, staging / "install.log", timeout)
         require("REGALIA_BUILD_COMPLETE" in (staging / "install.log").read_text(errors="replace"),
                 "installer did not complete the appliance build")
         export = staging / "export"

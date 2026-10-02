@@ -2,7 +2,16 @@
 set -eu
 umask 077
 exec >>/var/log/regalia-image-build.log 2>&1
+trap 'status=$?; if [ "$status" -ne 0 ]; then
+  echo REGALIA_BUILD_FAILED >/dev/ttyS0
+  tail -n 60 /var/log/regalia-image-build.log >/dev/ttyS0
+fi' EXIT
 echo REGALIA_BUILD_BEGIN >/dev/ttyS0
+# d-i leaves its cdrom entry active until later installer cleanup. The chroot
+# cannot refresh it. Disable that entry; keep network Release signatures intact.
+if [ -f /etc/apt/sources.list ]; then
+  sed -i '/^[[:space:]]*deb.*cdrom:/s/^/# installer-only: /' /etc/apt/sources.list
+fi
 # Installer media can contain older packages than the authenticated security
 # repository. Upgrade the complete installed set before compiling or cleanup.
 # APT retains its Release signature/package hash and expiry verification.
