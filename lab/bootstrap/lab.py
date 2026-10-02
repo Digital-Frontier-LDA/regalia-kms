@@ -28,10 +28,10 @@ def run(*args, env=None, data=None, required=True):
     return result
 
 
-def tpm_refused(result, expected_code):
+def tpm_refused(result, expected_code, expected_exit=1):
     """Do not count a transport/tool failure as a successful security refusal."""
     codes = [int(value, 16) for value in re.findall(rb"0x[0-9a-fA-F]+", result.stderr)]
-    if result.returncode != 1 or expected_code not in codes:
+    if result.returncode != expected_exit or expected_code not in codes:
         raise RuntimeError(f"expected TPM refusal {expected_code:#x} was not observed")
     return True
 

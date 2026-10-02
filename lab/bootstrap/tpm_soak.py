@@ -27,6 +27,19 @@ def exercise(cycles):
             wireguard,local=os.urandom(45),os.urandom(32)
             tpm.seal('wg',wireguard,'0x81010004');tpm.seal('local',local,'0x81010005')
             report['initial_counters']=counters()
+            # Deliberately fault this disposable DA-protected storage parent.
+            # This proves bootstrap still works while GLOBAL DA enforcement is
+            # active; no reset, enlarged budget, or timer change can hide it.
+            maximum = report['initial_counters']['TPM2_PT_MAX_AUTH_FAIL']
+            if not 1 <= maximum <= 16: raise RuntimeError('unexpected fixture DA budget')
+            for _ in range(maximum):
+                refusal = tpm.call('tpm2_load','-C','0x81010003','-P','hex:01020304',
+                    '-u',tpm.root/'wg.pub','-r',tpm.root/'wg.priv','-c',tpm.root/'denied.ctx',
+                    required=False)
+                tpm_refused(refusal,0x98E,expected_exit=3)
+            report['locked_counters'] = counters()
+            if report['locked_counters']['TPM2_PT_LOCKOUT_COUNTER'] < maximum:
+                raise RuntimeError('fixture did not enter DA lockout')
             for index in range(cycles):
                 challenges=[os.urandom(32),os.urandom(32)]
                 with ThreadPoolExecutor(max_workers=2) as pool:
@@ -46,6 +59,11 @@ def exercise(cycles):
                     raise RuntimeError('bootstrap contributions changed after a cold restart')
                 tpm_refused(tpm.call('tpm2_unseal','-c','0x81010005',required=False),0x12F)
                 report['cycles_completed']=index+1
+            # A DA-protected object must still refuse, while noDA quotes and
+            # PCR-only unsealing have succeeded for every preceding cycle.
+            refusal = tpm.call('tpm2_load','-C','0x81010003','-u',tpm.root/'wg.pub',
+                '-r',tpm.root/'wg.priv','-c',tpm.root/'denied.ctx',required=False)
+            tpm_refused(refusal,0x921)
             final=counters();report['final_counters']=final
             initial=report['initial_counters']
             if (final['TPM2_PT_LOCKOUT_COUNTER'] < final['TPM2_PT_MAX_AUTH_FAIL']
