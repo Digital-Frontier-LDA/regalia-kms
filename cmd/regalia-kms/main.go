@@ -351,7 +351,7 @@ func run() error {
 	} else if settings.RuntimeAdmission == config.RuntimeAdmissionDisabledForLab {
 		slog.Warn("KMS runtime admission is DISABLED FOR LAB: this daemon serves with no runtime lease; never on a production host")
 	}
-	if settings.PKCS11ModulePath != "" || len(settings.YubiKeyDevices) > 0 {
+	if tokenConfigured(settings) {
 		hardware, manager, observer, closer, buildErr := buildHardware(settings, keyRegistry)
 		if buildErr != nil {
 			return buildErr
@@ -773,6 +773,19 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 		return nil, nil, err
 	}
 	return fencing.NewRunner(standby, base), standby, nil
+}
+
+// tokenConfigured reports whether the daemon gets a cryptographic backend, and with it a
+// coordinator. Without one there is nothing to route a key operation to and every one of them is
+// refused (api.Handler answers DEPENDENCY_UNAVAILABLE).
+//
+// It is a function so that one thing can be tested: config.Validate lets a configuration leave
+// runtime_admission out only when no token is configured. That exemption is safe exactly as long as
+// "no token" there and "no coordinator" here are the same condition; if a backend were ever built
+// from a setting config does not count as a token, a daemon could serve keys with no runtime lease
+// and no statement about it. TestNoTokenMeansNoKeyOperation holds the two together.
+func tokenConfigured(settings config.Config) bool {
+	return settings.PKCS11ModulePath != "" || len(settings.YubiKeyDevices) > 0
 }
 
 // admitRunner puts the runtime-admission gate in front of a runner, when the configuration requires

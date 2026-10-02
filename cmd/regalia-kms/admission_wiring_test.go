@@ -2,16 +2,24 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
+	api "github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/auth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/config"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/server"
 )
@@ -135,6 +143,94 @@ func TestReadinessIsFalseWhileTheNodeIsNotAdmitted(t *testing.T) {
 	dependencies.Admission = ready
 	if !readinessOf(server.NewRequired(dependencies)) {
 		t.Fatal("an admitted node reported not ready")
+	}
+}
+
+// THE EXEMPTION MUST NOT BE A HOLE. config.Validate lets a configuration leave runtime_admission out
+// when it has no token, so that a host which serves nothing need not state how it serves. That is
+// only safe if "no token" means "no key operation at all". Three things hold it:
+//
+//   - every configuration that gives the daemon a backend is refused without the setting;
+//   - every configuration accepted without the setting gives the daemon no backend;
+//   - a daemon with no backend answers every key operation with its ordinary refusal.
+func TestNoTokenMeansNoKeyOperation(t *testing.T) {
+	routing := func(cfg *config.Config) {
+		cfg.RegistryPath, cfg.Site = "/etc/regalia/registry.json", "sitea"
+		cfg.PolicyPath, cfg.PolicyStatePath = "/etc/regalia/policy.json", "/var/lib/regalia/policy-state.jsonl"
+		cfg.RBACPolicyPath = "/etc/regalia/rbac.json"
+	}
+	withBackend := map[string]func(*config.Config){
+		"a PKCS#11 token": func(cfg *config.Config) {
+			routing(cfg)
+			cfg.PKCS11ModulePath = "/usr/lib/opensc-pkcs11.so"
+			cfg.PINPaths = map[string]string{"hsm-sitea": "/run/credentials/regalia-kms.service/hsm-sitea.pin"}
+			cfg.SecureChannelEvidence, cfg.AuditJournalPath = "/etc/regalia/secure-channel.json", "/var/lib/regalia/audit.jsonl"
+		},
+		"a YubiKey": func(cfg *config.Config) {
+			routing(cfg)
+			cfg.YubiKeyDevices = map[string]string{"yubi-a": "25923905"}
+			cfg.PINPaths = map[string]string{"yubi-a": "/run/credentials/regalia-kms.service/yubi-a.pin"}
+			cfg.AuditJournalPath = "/var/lib/regalia/audit.jsonl"
+		},
+	}
+	for name, build := range withBackend {
+		cfg := config.Default()
+		build(&cfg)
+		if !tokenConfigured(cfg) {
+			t.Fatalf("%s: the fixture gives the daemon no backend", name)
+		}
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must state runtime_admission") {
+			t.Fatalf("%s with runtime_admission left out: Validate = %v, want the refusal", name, err)
+		}
+		cfg.RuntimeAdmission = config.RuntimeAdmissionDisabledForLab
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("%s: the fixture is not otherwise valid: %v", name, err)
+		}
+	}
+	// Accepted without the setting: no backend, whatever else is configured.
+	withoutBackend := map[string]func(*config.Config){
+		"nothing at all": func(*config.Config) {},
+		"routing, policy and authorization, no token": routing,
+		"fencing and a registry": func(cfg *config.Config) {
+			cfg.RegistryPath, cfg.Site = "/etc/regalia/registry.json", "sitea"
+			cfg.FencingLeasePath, cfg.FencingStatePath, cfg.FencingPublicKeyPath = "/run/regalia/lease.json", "/var/lib/regalia/epochs.jsonl", "/etc/regalia/fencing.pub"
+		},
+	}
+	for name, build := range withoutBackend {
+		cfg := config.Default()
+		build(&cfg)
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("%s: Validate = %v", name, err)
+		}
+		if tokenConfigured(cfg) {
+			t.Fatalf("%s: accepted with runtime_admission left out, and the daemon would still build a backend", name)
+		}
+	}
+	// And such a daemon serves no key operation: there is no coordinator to hand one to.
+	handler := api.NewHandler(nil)
+	identity, _ := url.Parse("spiffe://regalia/workload/e2e")
+	expires := time.Now().Add(time.Minute).UTC().Format("2006-01-02T15:04:05Z")
+	accepted := `{"object_id":"production-signing","context":{"environment":"production","purpose":"release-signing","expires_at":"` + expires +
+		`","nonce":"018f0000000070008000000000000001"},"content_type":"application/vnd.regalia.digest","payload_base64":"` +
+		base64.StdEncoding.EncodeToString(make([]byte, 32)) + `"}`
+	for _, operation := range []string{"sign", "wrap", "unwrap", "certificate-sign", "key-agreement", "release-secret", "seal-envelope"} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/operations/"+operation, strings.NewReader(accepted))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("X-Request-ID", "018f0000-0000-7000-8000-000000000001")
+		request.Header.Set("Idempotency-Key", "018f0000000070008000000000000001")
+		request.TLS = &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{{
+			SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, URIs: []*url.URL{identity},
+		}}}}
+		recorder := httptest.NewRecorder()
+		// behind the authenticator, as in the daemon: the request arrives as an identified workload
+		auth.NewAuthenticator("spiffe://regalia/", nil, time.Now, time.Minute).Middleware(handler).ServeHTTP(recorder, request)
+		if recorder.Code < 400 || strings.Contains(recorder.Body.String(), "result_base64") {
+			t.Fatalf("%s on a daemon with no backend: HTTP %d %s", operation, recorder.Code, recorder.Body.String())
+		}
+		if operation == "sign" && (recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), "DEPENDENCY_UNAVAILABLE")) {
+			t.Fatalf("an otherwise accepted sign request on a daemon with no backend: HTTP %d %s, want 503 DEPENDENCY_UNAVAILABLE", recorder.Code, recorder.Body.String())
+		}
 	}
 }
 
