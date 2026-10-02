@@ -121,7 +121,7 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 		return nil, errors.New("PKCS#11 device is not configured")
 	}
 	deviceID, expectedSerial := binding.DeviceID, binding.DeviceSerial
-	selected, err := resolveSlot(driver.module, expectedSerial, binding.TokenLabel)
+	selected, err := resolveSlot(driver.module, expectedSerial, string(binding.TokenLabel))
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 	if err != nil {
 		return nil, errors.New("PKCS#11 session unavailable")
 	}
-	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: binding.TokenLabel, devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
+	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: string(binding.TokenLabel), devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
 }
 
 // resolveSlot finds the one slot holding the commissioned token, on every call: a slot id is never
@@ -140,6 +140,12 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 // OpenPGP applet (regalia#541). It is matched exactly and only when configured. Whatever the
 // binding names, anything other than exactly one matching slot is refused: no match is an absent
 // device, and several are not told apart by position.
+//
+// A SLOT THAT CANNOT BE READ IS NOT A SLOT THAT DOES NOT MATCH. Skipping it would let one readable
+// match count as the only match while its twin sat unread beside it, so a failed C_GetTokenInfo
+// refuses the whole resolution. The two exceptions are the module's own statements that the slot
+// holds nothing it can drive: a card it does not recognise (a memory card in a reader on the same
+// host), or a token that left between the two calls. Neither can be the commissioned token.
 func resolveSlot(module cryptoki, serial, tokenLabel string) (uint, error) {
 	slots, err := module.GetSlotList(true)
 	if err != nil {
@@ -149,7 +155,13 @@ func resolveSlot(module cryptoki, serial, tokenLabel string) (uint, error) {
 	matches := 0
 	for _, slot := range slots {
 		info, infoErr := module.GetTokenInfo(slot)
-		if infoErr != nil || strings.TrimSpace(info.SerialNumber) != serial {
+		if infoErr != nil {
+			if notAToken(infoErr) {
+				continue
+			}
+			return 0, errors.New("PKCS#11 token info unavailable")
+		}
+		if strings.TrimSpace(info.SerialNumber) != serial {
 			continue
 		}
 		if tokenLabel != "" && strings.TrimSpace(info.Label) != tokenLabel {
@@ -161,6 +173,12 @@ func resolveSlot(module cryptoki, serial, tokenLabel string) (uint, error) {
 		return 0, errors.New("commissioned PKCS#11 device is unavailable")
 	}
 	return selected, nil
+}
+
+// notAToken reports the two C_GetTokenInfo results that mean "nothing here this module can drive".
+func notAToken(err error) bool {
+	var code pkcs11.Error
+	return errors.As(err, &code) && (code == pkcs11.CKR_TOKEN_NOT_RECOGNIZED || code == pkcs11.CKR_TOKEN_NOT_PRESENT)
 }
 
 func (driver *PKCS11Driver) Ready(ctx context.Context) bool {

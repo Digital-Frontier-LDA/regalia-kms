@@ -135,6 +135,20 @@
         },
         {
           "if": {
+            "required": [
+              "token_label"
+            ]
+          },
+          "then": {
+            "properties": {
+              "backend": {
+                "const": "nitrokey-pkcs11"
+              }
+            }
+          }
+        },
+        {
+          "if": {
             "properties": {
               "backend": {
                 "enum": [

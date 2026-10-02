@@ -106,6 +106,12 @@ class CustodyManifestTests(unittest.TestCase):
             self.assert_invalid(labelled(label), "token_label")
         self.assert_invalid(labelled(7), "token_label")
         self.assert_invalid(labelled("PIV_II", backend="yubikey-piv"), "token_label")
+        # The published schema says the same: a consumer validating against it alone must not accept
+        # a label on a backend that ignores it.
+        schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        rules = [rule for rule in schema["$defs"]["binding"]["allOf"] if rule.get("if") == {"required": ["token_label"]}]
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0]["then"], {"properties": {"backend": {"const": "nitrokey-pkcs11"}}})
 
     def test_published_schema_matches_validator_enums(self):
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))

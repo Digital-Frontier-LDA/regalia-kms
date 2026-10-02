@@ -87,12 +87,12 @@ type Binding struct {
 	DeviceID     string `json:"device_id"`
 	DeviceSerial string `json:"device_serial,omitempty"`
 	// TokenLabel tells apart two PKCS#11 tokens that report one serial. See validateBinding.
-	TokenLabel         string `json:"token_label,omitempty"`
-	DevAuthFingerprint string `json:"devaut_fingerprint,omitempty"`
-	ObjectID           string `json:"object_id"`
-	PublicFingerprint  string `json:"public_fingerprint,omitempty"`
-	PublicKeySHA256    string `json:"public_key_sha256,omitempty"` // enforced; see nitrokeyIdentityPinned
-	KeyCheck           string `json:"key_check,omitempty"`
+	TokenLabel         TokenLabel `json:"token_label,omitempty"`
+	DevAuthFingerprint string     `json:"devaut_fingerprint,omitempty"`
+	ObjectID           string     `json:"object_id"`
+	PublicFingerprint  string     `json:"public_fingerprint,omitempty"`
+	PublicKeySHA256    string     `json:"public_key_sha256,omitempty"` // enforced; see nitrokeyIdentityPinned
+	KeyCheck           string     `json:"key_check,omitempty"`
 	// KEKAlgorithm names the wrapping key in this slot for objects whose own algorithm is not a
 	// key algorithm. See validateBinding.
 	KEKAlgorithm string `json:"kek_algorithm,omitempty"`
@@ -718,6 +718,21 @@ func validateObject(object *custodyObject, site string, occupied map[string]stri
 	return err
 }
 
+// TokenLabel is a binding's token_label. It is a type of its own so that a label which is PRESENT
+// and empty is refused when the manifest is decoded: as a plain string, "token_label": "" would be
+// indistinguishable from no label at all, and the loader would accept a manifest that the schema
+// and tools/custody_manifest.py both refuse.
+type TokenLabel string
+
+func (label *TokenLabel) UnmarshalJSON(data []byte) error {
+	var value *string
+	if err := json.Unmarshal(data, &value); err != nil || value == nil || *value == "" {
+		return errors.New("token_label, when present, must be a non-empty string")
+	}
+	*label = TokenLabel(*value)
+	return nil
+}
+
 // tokenLabelPattern is what CK_TOKEN_INFO.label can hold once its padding is trimmed: at most 32
 // characters. Printable ASCII only, and no space at either end, because the driver compares against
 // the trimmed label and a value that could never equal one is a binding that never resolves.
@@ -758,7 +773,7 @@ func validateBinding(binding Binding, algorithm string, operations []string) err
 		if binding.Backend != "nitrokey-pkcs11" {
 			return errors.New("token_label is only valid for the PKCS#11 backend")
 		}
-		if !tokenLabelPattern.MatchString(binding.TokenLabel) {
+		if !tokenLabelPattern.MatchString(string(binding.TokenLabel)) {
 			return errors.New("token_label must be 1 to 32 printable ASCII characters with no space at either end")
 		}
 	}

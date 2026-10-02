@@ -21,11 +21,15 @@ type slotModule struct {
 	fakeCryptoki
 	slots  []uint
 	infos  map[uint]pkcs11.TokenInfo
+	errs   map[uint]error
 	opened []uint
 }
 
 func (module *slotModule) GetSlotList(bool) ([]uint, error) { return module.slots, nil }
 func (module *slotModule) GetTokenInfo(slot uint) (pkcs11.TokenInfo, error) {
+	if err := module.errs[slot]; err != nil {
+		return pkcs11.TokenInfo{}, err
+	}
 	return module.infos[slot], nil
 }
 func (module *slotModule) OpenSession(slot uint, _ uint) (pkcs11.SessionHandle, error) {
@@ -64,7 +68,7 @@ func selectionDriver(t *testing.T, module cryptoki) *PKCS11Driver {
 }
 
 func labelled(serial, label string) registry.Binding {
-	return registry.Binding{Backend: "nitrokey-pkcs11", DeviceID: "token", DeviceSerial: serial, TokenLabel: label}
+	return registry.Binding{Backend: "nitrokey-pkcs11", DeviceID: "token", DeviceSerial: serial, TokenLabel: registry.TokenLabel(label)}
 }
 
 func TestTwoTokensUnderOneSerialAreRefusedWithoutALabel(t *testing.T) {
@@ -122,6 +126,42 @@ func TestALabelThatDoesNotNameExactlyOneTokenIsRefused(t *testing.T) {
 		}
 		if len(test.module.opened) != 0 {
 			t.Fatalf("%s: OpenSession was called for slot %v", name, test.module.opened)
+		}
+	}
+}
+
+// A slot that cannot be read might be the twin of the one that can. Counting only the readable
+// match would call it unique on no evidence.
+func TestAnUnreadableSlotRefusesTheResolution(t *testing.T) {
+	module := yubiKeyAsOpenSCPresentsIt()
+	module.errs = map[uint]error{openPGPUserSlot: pkcs11.Error(pkcs11.CKR_DEVICE_ERROR)}
+	driver := selectionDriver(t, module)
+	if session, err := driver.Open(context.Background(), labelled(openPGPSerial, openPGPSigPIN)); err == nil || session != nil {
+		t.Fatal("a token was selected while another slot could not be read")
+	}
+	// Nor is it only the commissioned serial's neighbours that count: the unreadable slot's
+	// serial is exactly what is unknown.
+	if session, err := driver.Open(context.Background(), labelled("DENK0404144", "")); err == nil || session != nil {
+		t.Fatal("a token was selected while another slot could not be read")
+	}
+	if len(module.opened) != 0 {
+		t.Fatalf("a session was opened on slot %v", module.opened)
+	}
+}
+
+// A card the module does not recognise, or one that left between the two calls, is not a token it
+// can drive and cannot be the commissioned one. A memory card in a second reader must not take the
+// KMS down: the bench host has exactly that (an SLE-4442 in an ACR40U).
+func TestASlotHoldingNothingTheModuleCanDriveIsNotAMatch(t *testing.T) {
+	for name, code := range map[string]uint{"not recognised": pkcs11.CKR_TOKEN_NOT_RECOGNIZED, "not present": pkcs11.CKR_TOKEN_NOT_PRESENT} {
+		module := yubiKeyAsOpenSCPresentsIt()
+		module.slots = append([]uint{0}, module.slots...)
+		module.errs = map[uint]error{0: pkcs11.Error(code)}
+		if _, err := selectionDriver(t, module).Open(context.Background(), labelled(openPGPSerial, openPGPSigPIN)); err != nil {
+			t.Fatalf("a slot whose token is %s refused the resolution: %v", name, err)
+		}
+		if len(module.opened) != 1 || module.opened[0] != openPGPSigSlot {
+			t.Fatalf("a slot whose token is %s: opened %v, want %d", name, module.opened, openPGPSigSlot)
 		}
 	}
 }
