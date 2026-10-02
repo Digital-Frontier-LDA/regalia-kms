@@ -119,8 +119,9 @@ func TestRegaliaSignEd25519OnAYubiKeyOpenPGPApplet(t *testing.T) {
 	fingerprint := strings.TrimSpace(regaliaSign(t, binary, config, "--fingerprint"))
 	exported := regaliaSign(t, binary, config, "--export-key")
 	home := importIntoThrowawayGnuPG(t, gpg, exported, fingerprint)
+	// requireGPG found gpg on PATH, and that is the one this runs.
 	verify := func(args ...string) (string, error) {
-		output, err := exec.Command(gpg, append([]string{"--homedir", home, "--batch", "--no-tty", "--status-fd", "1"}, args...)...).CombinedOutput()
+		output, err := exec.Command("gpg", append([]string{"--homedir", home, "--batch", "--no-tty", "--status-fd", "1"}, args...)...).CombinedOutput()
 		return string(output), err
 	}
 
@@ -169,16 +170,10 @@ func TestRegaliaSignEd25519OnAYubiKeyOpenPGPApplet(t *testing.T) {
 	// the operator's claim aged out. Last, because a channel that will not establish latches the
 	// device until an operator clears it.
 	now = now.Add(2 * time.Hour)
-	stale := filepath.Join(deployment, "stale.txt")
-	if err := os.WriteFile(stale, []byte("signed after the attestation expired\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	command := exec.Command(binary, "--config", config, "--detach", stale)
-	if output, err := command.CombinedOutput(); err == nil {
-		t.Fatalf("regalia-sign produced a signature after the local-usb attestation expired:\n%s", output)
-	}
-	if _, err := os.Stat(stale + ".asc"); err == nil {
-		t.Fatal("a signature file was written after the attestation expired")
+	digest := sha256.Sum256([]byte("signed after the attestation expired"))
+	binding.PublicKeySHA256 = keyPin
+	if signature, _, err := hardware.Execute(context.Background(), registry.Route{Algorithm: "ed25519", Binding: binding}, "sign", "", "application/vnd.regalia.digest", digest[:], nil); err == nil {
+		t.Fatalf("the card signed after the local-usb attestation expired (%d bytes)", len(signature))
 	}
 	if reason, quarantined := provider.QuarantineReason("yubikey-e2e"); !quarantined {
 		t.Fatal("an expired attestation did not latch the device")

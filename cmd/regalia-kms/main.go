@@ -532,7 +532,7 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 		// provider answers for both backend names, so quarantine and PIN-budget state stay in the
 		// one place the metrics surface reads.
 		if local := channel.LocalTokens(); local != nil {
-			if err := requireOpenPGPAppletBindingsAreServable(keyRegistry); err != nil {
+			if err := requireOpenPGPAppletBindingsAreServable(keyRegistry, local); err != nil {
 				_ = driver.Close()
 				return nil, nil, nil, nil, err
 			}

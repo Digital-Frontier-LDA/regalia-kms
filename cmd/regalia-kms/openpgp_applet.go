@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -25,10 +26,13 @@ var openPGPAppletKeyPin = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 //   - OpenSC presents the applet as two tokens under one serial, so a binding with no token_label
 //     names no token;
 //   - the applet has no device certificate, so the commissioned public key is the only thing that
-//     identifies the card, and a binding without that pin is never opened.
+//     identifies the card, and a binding without that pin is never opened;
+//   - the local-usb attestation is per serial. Evidence for one YubiKey makes the backend served,
+//     and says nothing for another: a binding whose own serial has no current entry would be
+//     refused, and its device latched, at the first signature.
 //
 // A configuration the daemon cannot serve is refused at startup, where somebody is watching.
-func requireOpenPGPAppletBindingsAreServable(keyRegistry *registry.Registry) error {
+func requireOpenPGPAppletBindingsAreServable(keyRegistry *registry.Registry, local nitrokey.SecureChannel) error {
 	var problems []string
 	for _, object := range keyRegistry.RoutedTo(nitrokey.OpenPGPAppletBackend) {
 		if object.Algorithm != "ed25519" {
@@ -46,6 +50,11 @@ func requireOpenPGPAppletBindingsAreServable(keyRegistry *registry.Registry) err
 		// commissioned binding is routed. The public key is the half it does not ask for.
 		if !openPGPAppletKeyPin.MatchString(object.Binding.PublicKeySHA256) {
 			problems = append(problems, fmt.Sprintf("%s does not pin public_key_sha256 (nothing else identifies the card)", object.ObjectID))
+		}
+	}
+	for _, object := range keyRegistry.RoutedTo(nitrokey.OpenPGPAppletBackend) {
+		if local == nil || local.Establish(context.Background(), object.Binding.DeviceID, object.Binding.DeviceSerial) != nil {
+			problems = append(problems, fmt.Sprintf("%s is bound to serial %q, which has no current local-usb attestation", object.ObjectID, object.Binding.DeviceSerial))
 		}
 	}
 	if len(problems) > 0 {

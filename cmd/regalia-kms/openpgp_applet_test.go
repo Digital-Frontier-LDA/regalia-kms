@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -49,8 +51,16 @@ func appletRegistry(t *testing.T, algorithm, operations, serial, label, pin stri
 // request at a time as a retryable error.
 func TestAppletBindingsTheDaemonCannotServeAreRefusedAtStartup(t *testing.T) {
 	const serial, label, pin = "000635718625", "OpenPGP card (User PIN (sig))", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	if err := requireOpenPGPAppletBindingsAreServable(appletRegistry(t, "ed25519", `"sign"`, serial, label, pin)); err != nil {
+	attested := attestedSerials{serial: true}
+	if err := requireOpenPGPAppletBindingsAreServable(appletRegistry(t, "ed25519", `"sign"`, serial, label, pin), attested); err != nil {
 		t.Fatalf("a servable applet binding was refused: %v", err)
+	}
+	// The attestation is per serial: evidence for another YubiKey, or none, does not cover this one.
+	for name, local := range map[string]attestedSerials{"evidence for another serial": {"000600000009": true}, "no evidence": nil} {
+		err := requireOpenPGPAppletBindingsAreServable(appletRegistry(t, "ed25519", `"sign"`, serial, label, pin), local)
+		if err == nil || !strings.Contains(err.Error(), "release-ed25519") || !strings.Contains(err.Error(), "local-usb attestation") {
+			t.Fatalf("%s: err = %v, want a refusal naming the object and its missing attestation", name, err)
+		}
 	}
 	for name, test := range map[string]struct {
 		registry *registry.Registry
@@ -62,13 +72,23 @@ func TestAppletBindingsTheDaemonCannotServeAreRefusedAtStartup(t *testing.T) {
 		"no token label":               {appletRegistry(t, "ed25519", `"sign"`, serial, "", pin), "token_label"},
 		"no pinned public key":         {appletRegistry(t, "ed25519", `"sign"`, serial, label, ""), "public_key_sha256"},
 	} {
-		err := requireOpenPGPAppletBindingsAreServable(test.registry)
+		err := requireOpenPGPAppletBindingsAreServable(test.registry, attested)
 		if err == nil || !strings.Contains(err.Error(), "release-ed25519") || !strings.Contains(err.Error(), test.reason) {
 			t.Fatalf("%s: err = %v, want a refusal naming the object and %q", name, err, test.reason)
 		}
 	}
 	// A registry with no applet object has nothing to refuse.
-	if err := requireOpenPGPAppletBindingsAreServable(nil); err != nil {
+	if err := requireOpenPGPAppletBindingsAreServable(nil, attested); err != nil {
 		t.Fatalf("an empty registry was refused: %v", err)
 	}
+}
+
+// attestedSerials stands in for the evidence's local view: Establish succeeds for the serials in it.
+type attestedSerials map[string]bool
+
+func (attested attestedSerials) Establish(_ context.Context, _, serial string) error {
+	if attested[serial] {
+		return nil
+	}
+	return errors.New("no local-usb attestation")
 }
