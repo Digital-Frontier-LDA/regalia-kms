@@ -39,7 +39,8 @@ that has been independently validated counts as more secure than code written he
   YubiKey's OpenPGP applet as a PKCS#11 token, and that token lists `EDDSA` (255 bits, in hardware).
   The driver the KMS already uses for the HSM could serve it, with no card protocol written here.
   The hand-written driver in `internal/backend/openpgp` is the part this rule argues against, not the
-  applet. **Proposed, not decided**: no Ed25519 signature has been made this way yet.
+  applet. Proven on a card: an Ed25519 key generated on the applet signs through `CKM_EDDSA` and the
+  signature verifies. **Proposed, not decided**: the KMS does not serve it yet (gap 3).
 - **Signature formats come from maintained open-source libraries**, not from encoders written here.
 
 ### Relation to the three-site device profiles
@@ -63,7 +64,7 @@ promises more than either token delivers:
 | Pico HSM | `nitrokey-pkcs11` | The same list as the Nitrokey, mechanism for mechanism. **No EdDSA and no AES**: Ed25519 key generation is refused (`mechanism 1055 not supported`). Whether the firmware does Ed25519 by another path is unmeasured. | `C_GetMechanismList` and a key-generation attempt without login, Pico Key 8625B32841D722E2, firmware 6.6, OpenSC 0.26.1, 2026-10-02 |
 | YubiKey, PIV applet | `yubikey-piv` | P-256 and P-384 sign and certificate-sign; RSA-2048 sign, wrap, unwrap, certificate-sign. Firmware 5.7 and the pinned `piv-go` v2.6.0 also know Ed25519; the backend does not offer it and it is unmeasured. | qualified on YubiKey 5 NFC, firmware 5.7.4 (`config/qualified-stack.json`); built only with `-tags piv` |
 | YubiKey, OpenPGP applet | `yubikey-openpgp` | Ed25519 sign; X25519 unwrap; RSA 2048 to 4096 sign and unwrap | partly qualified on one YubiKey 5C NFC, firmware 5.4.3 ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)); **the daemon constructs no provider for it** |
-| YubiKey, OpenPGP applet through OpenSC | none yet | `EDDSA` sign (255 bits), ECDH derive from 255 bits, ECDSA 256 to 521, RSA 2048 to 4096 | `C_GetMechanismList` with OpenSC's `openpgp` driver, YubiKey 5 NFC 35718625, firmware 5.7.4, applet 3.4, OpenSC 0.26.1, 2026-10-02. The applet held no key: no signature was made. |
+| YubiKey, OpenPGP applet through OpenSC | none yet | `EDDSA` sign (255 bits), ECDH derive from 255 bits, ECDSA 256 to 521, RSA 2048 to 4096 | `C_GetMechanismList` with OpenSC's `openpgp` driver, YubiKey 5 NFC 35718625, firmware 5.7.4, applet 3.4, OpenSC 0.26.1, 2026-10-02. With an Ed25519 key generated on the applet, `CKM_EDDSA` over 32, 48 and 64 bytes returns a 64-byte signature that verifies as pure Ed25519; `CKA_EC_PARAMS` is OID 1.3.101.112. |
 
 ## What each configuration can serve
 
@@ -114,9 +115,10 @@ rule and works in every configuration once a `signtool` adapter exists.
    wired, the PIV backend does not offer it, and `regalia-sign` refuses Ed25519 keys.
 3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4),
    and the only driver for it is hand-written. Serving it through OpenSC and PKCS#11 instead needs:
-   an Ed25519 signature measured on a card; token selection that copes with OpenSC presenting the
+   token selection that copes with OpenSC presenting the
    applet as two tokens with one serial (`User PIN` and `User PIN (sig)`), where the driver today
-   requires a serial to match exactly one; and a recorded change to the legacy-only rule. The driver
+   requires a serial to match exactly one; a recorded change to the legacy-only rule; and an explanation for two logins that failed straight
+   after another tool had used the card. The driver
    choice itself is settled: a `card_atr` block in `opensc.conf` naming `driver = "openpgp"` for the
    YubiKey's ATR leaves the Nitrokey on its own driver in the same module (measured 2026-10-02).
 4. **The Pico is not a recognised token.** `config/qualified-stack.json`, `tools/qualified_stack.py`
