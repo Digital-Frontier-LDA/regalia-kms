@@ -3,6 +3,7 @@ its current manifest, judged against authenticated time, with the sequence in a 
 
 The first classes run with the TPM faked at the tpm2-tools boundary (so Counter's own code runs); the last
 runs the same rollback and replay cases on swtpm."""
+import contextlib
 import copy
 import json
 import os
@@ -97,7 +98,7 @@ class Case(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tpm = FakeTpm()
-        self.counter = hb.Counter("0x1500018", run=self.tpm)
+        self.counter = hb.Counter("0x1500018", lock_path=self.d + "/lock", run=self.tpm)
         self.counter.define()
         self.now, self.authenticated, self.ticks = T0 + 60, True, 5000
         self.state = os.path.join(self.d, "freshness.json")
@@ -310,6 +311,24 @@ class Sequence(Case):
         self.assertEqual(self.counter.value(), 2)          # finished
         self.refused("REPLAY", self.f.accept, beat(self.m1, 2), self.m1)
 
+    def test_the_replay_check_runs_under_the_counter_s_lock(self):
+        """Two processes handed the same sequence must not both pass: the comparison and the increments
+        are one step under HighWater's lock."""
+        events = []
+        real_lock, real_value = m._exclusive, self.counter.value
+
+        @contextlib.contextmanager
+        def lock(path):
+            events.append("lock " + path)
+            with real_lock(path):
+                yield
+            events.append("unlock")
+        self.counter.value = lambda: (events.append("compare"), real_value())[1]
+        with unittest.mock.patch.object(m, "_exclusive", lock):
+            self.counter.advance(1)
+        self.assertEqual(events, ["lock " + self.d + "/lock", "compare", "unlock"])
+        self.assertTrue(os.path.exists(self.d + "/lock"))
+
     def test_an_anomalous_jump_is_refused_and_nothing_is_written(self):
         self.f.accept(beat(self.m1, 1), self.m1)
         with open(self.state, "rb") as f:
@@ -328,12 +347,12 @@ class Sequence(Case):
         self.refused("fail closed", self.f.check, self.m1)
         self.refused("fail closed", self.f.accept, beat(self.m1, 4), self.m1)
         self.tpm.broken = False
-        self.refused("fail closed", hb.Counter("0x1500099", run=self.tpm).value)   # an index nobody defined
+        self.refused("fail closed", hb.Counter("0x1500099", lock_path=self.d + "/lock", run=self.tpm).value)   # an index nobody defined
         self.assertEqual(self.f.check(self.m1), hb.MAX_LIFETIME - 60)
 
     def test_a_tpm_that_held_counters_before_still_starts_at_zero(self):
         used = FakeTpm(highest=40)
-        counter = hb.Counter("0x1500018", run=used)
+        counter = hb.Counter("0x1500018", lock_path=self.d + "/lock", run=used)
         self.assertEqual(counter.define(), 41)             # where the counter landed: its base
         self.assertEqual(counter.value(), 0)
         f = hb.Freshness(counter, lambda: (self.now, True), lambda: self.ticks, os.path.join(self.d, "used.json"))
@@ -353,14 +372,14 @@ class Sequence(Case):
         self.refused("REPLAY", self.f.accept, beat(self.m1, 7), self.m1)
 
     def test_the_sequence_counter_does_not_share_membership_s_indices(self):
-        epochs = m.HighWater("0x1500016", run=self.tpm)
+        epochs = m.HighWater("0x1500016", lock_path=self.d + "/lock", run=self.tpm)
         epochs.define()
         epochs.advance(3)
         self.assertEqual(self.counter.value(), 0)
         self.f.accept(beat(self.m1, 2), self.m1)
         self.assertEqual((epochs.value(), self.counter.value()), (3, 2))
         self.assertEqual(len({epochs.index, epochs.base_index, self.counter.index, self.counter.base_index}), 4)
-        self.refused("already exists", hb.Counter("0x1500017", run=self.tpm).define)   # membership's base index
+        self.refused("already exists", hb.Counter("0x1500017", lock_path=self.d + "/lock", run=self.tpm).define)   # membership's base index
 
     def test_a_counter_that_does_not_move_or_cannot_be_incremented_is_refused(self):
         def stuck(argv, **kw):
@@ -368,8 +387,8 @@ class Sequence(Case):
 
         def failing(argv, **kw):
             return subprocess.CompletedProcess(argv, 1, b"", b"no") if argv[0] == "tpm2_nvincrement" else self.tpm(argv, **kw)
-        self.refused("did not advance by one", hb.Counter("0x1500018", run=stuck).advance, 1)
-        self.refused("cannot increment the NV counter", hb.Counter("0x1500018", run=failing).advance, 1)
+        self.refused("did not advance by one", hb.Counter("0x1500018", lock_path=self.d + "/lock", run=stuck).advance, 1)
+        self.refused("cannot increment the NV counter", hb.Counter("0x1500018", lock_path=self.d + "/lock", run=failing).advance, 1)
         self.assertEqual(self.counter.value(), 0)
 
     def test_a_planted_heartbeat_cannot_push_the_counter_forward(self):
@@ -481,9 +500,9 @@ class OnSwtpm(unittest.TestCase):
         with open(self.d + "/pid") as f:
             self.addCleanup(os.kill, int(f.read()), 15)
         self.tcti = "swtpm:path=" + sock
-        self.epochs = m.HighWater("0x1500016", tcti=self.tcti)    # with its base at 0x1500017
+        self.epochs = m.HighWater("0x1500016", lock_path=self.d + "/lock", tcti=self.tcti)    # with its base at 0x1500017
         self.epochs.define()
-        self.counter = hb.Counter("0x1500018", tcti=self.tcti)    # with its base at 0x1500019
+        self.counter = hb.Counter("0x1500018", lock_path=self.d + "/lock", tcti=self.tcti)    # with its base at 0x1500019
         self.counter.define()
         self.now = T0 + 60
         self.state = self.d + "/freshness.json"
@@ -538,7 +557,7 @@ class OnSwtpm(unittest.TestCase):
         self.now -= 3600
         self.refused("the clock went backwards", self.f.check, self.m1)
         self.refused("the TPM clock cannot be read", hb.TpmClock(tcti="swtpm:path=" + self.d + "/absent"))
-        self.refused("fail closed", hb.Counter("0x1500018", tcti="swtpm:path=" + self.d + "/absent").value)
+        self.refused("fail closed", hb.Counter("0x1500018", lock_path=self.d + "/lock", tcti="swtpm:path=" + self.d + "/absent").value)
 
 
 if __name__ == "__main__":
