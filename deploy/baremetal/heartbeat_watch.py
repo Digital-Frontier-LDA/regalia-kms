@@ -20,13 +20,16 @@ authority that stopped signing. So, at every step():
     heartbeat arrives. A heartbeat that is expired, missing or unusable (time not authenticated, a
     rollback) is an ERROR, at once and then at most every hour, each kind on its own clock.
   * After something was said: a NEWER heartbeat (a higher sequence) says RENEWED; the SAME heartbeat usable
-    again (time re-authenticated, a read that failed once) says RECOVERED. The words differ because an
-    audit trail must not say a heartbeat arrived when none did.
+    again (time re-authenticated, a read that failed once) says RECOVERED, once it has been usable for
+    TWO steps in a row. The words differ because an audit trail must not say a heartbeat arrived when
+    none did; the second step is there because it must not say "recovered" of a reading that is down
+    again at the next look.
 
-A READING THAT FLAPS DOES NOT FLOOD THE TRAIL. What has been said about a heartbeat is remembered by its
-sequence and survives the steps in which it could not be read; an ERROR of a kind is repeated only after
-the hour; RECOVERED is said only for an outage that was announced. A reading that alternates between live
-and unusable at every step therefore costs one ERROR and one RECOVERED an hour, not one event a step.
+A READING THAT FLAPS DOES NOT FLOOD THE TRAIL, AND THE TRAIL'S LAST WORD IS NOT WRONG. What has been said
+about a heartbeat is remembered by its sequence and survives the steps in which it could not be read; an
+ERROR of a kind is repeated only after the hour; RECOVERED is said only for an outage that was announced,
+and only after two live steps. A reading that alternates between live and unusable at every step
+therefore costs one ERROR an hour and no RECOVERED: the trail goes on saying it is down, which it is.
 
 THE FRACTION IS OF THE HEARTBEAT'S OWN LIFETIME, not of the manifest's bound: an authority that signs
 12-hour heartbeats under a 24-hour bound would otherwise be at "50 % left" the moment each one arrives.
@@ -96,7 +99,7 @@ def reading(freshness, manifest):
     return dict(result, live=True, seconds_left=expires - now, lifetime=expires - issued, sequence=sequence)
 
 
-STATE_KEYS = ("sequence", "level", "last", "down", "announced", "errors")
+STATE_KEYS = ("sequence", "level", "last", "down", "announced", "recovering", "errors")
 KINDS = ("EXPIRED", "UNUSABLE")
 
 
@@ -107,11 +110,13 @@ def decide(current, previous, now, thresholds=THRESHOLDS, repeat=REPEAT):
         level      the lowest threshold warned about for it, or None
         last       when that warning last went, or None
         down       whether the last reading was not live
-        announced  whether an ERROR was sent for the outage that reading belongs to
+        announced  whether an ERROR was sent for the outage that reading belongs to (or the one just ended)
+        recovering whether the last reading was the first live one after an announced outage
         errors     {kind: when an ERROR of that kind last went}
     Returns (event or None, remembered). `now` only spaces the repeats: a clock set back repeats at once."""
     sequence, level, last = previous.get("sequence", 0), previous.get("level"), previous.get("last")
     down, announced, errors = previous.get("down", False), previous.get("announced", False), dict(previous.get("errors", {}))
+    recovering = previous.get("recovering", False)
 
     def waited(at):
         return at is None or now < at or now - at >= repeat
@@ -123,21 +128,24 @@ def decide(current, previous, now, thresholds=THRESHOLDS, repeat=REPEAT):
                 "max_lifetime_s": current["max_lifetime"], "threshold_percent": threshold, "reason": current["reason"]}
 
     def remembered():
-        return {"sequence": sequence, "level": level, "last": last, "down": down, "announced": announced, "errors": errors}
+        return {"sequence": sequence, "level": level, "last": last, "down": down, "announced": announced, "recovering": recovering,
+                "errors": errors}
 
     if not current["live"]:
-        kind, down, due = ("EXPIRED" if current["reason"].startswith("EXPIRED") else "UNUSABLE"), True, None
+        kind, down, recovering, due = ("EXPIRED" if current["reason"].startswith("EXPIRED") else "UNUSABLE"), True, False, None
         if waited(errors.get(kind)):
             errors[kind], announced, due = int(now), True, event("ERROR", kind, 0)
         return due, remembered()
     due = None
-    if current["sequence"] > sequence:              # a newer heartbeat: what was said about the old one is over
-        if level is not None or announced:
-            due = event("INFO", "RENEWED", 0)
-        sequence, level, last = current["sequence"], None, None
-    elif down and announced:                        # the same heartbeat, usable again
-        due = event("INFO", "RECOVERED", 0)
-    down, announced = False, False
+    if current["sequence"] != sequence:             # another heartbeat: what was said about the old one is over
+        if current["sequence"] > sequence and (level is not None or announced):
+            due = event("INFO", "RENEWED", 0)       # a newer one; a LOWER sequence (a state file from elsewhere) is not news
+        sequence, level, last, announced, recovering = current["sequence"], None, None, False, False
+    elif announced and recovering:                  # the same heartbeat, usable for the second step running
+        due, announced, recovering = event("INFO", "RECOVERED", 0), False, False
+    elif announced:                                 # usable again, for one step so far: said at the next, if it holds
+        recovering = True
+    down = False
     crossed = [t for t in thresholds if current["seconds_left"] * 100 <= t * current["lifetime"]]
     if crossed:
         lowest = min(crossed)
@@ -201,7 +209,7 @@ class Watch:
             require(isinstance(state["sequence"], int) and not isinstance(state["sequence"], bool) and state["sequence"] >= 0, "sequence")
             require(state["level"] is None or state["level"] in self.thresholds, "level")
             require(moment(state["last"]), "last")
-            require(isinstance(state["down"], bool) and isinstance(state["announced"], bool), "down, announced")
+            require(all(isinstance(state[k], bool) for k in ("down", "announced", "recovering")), "down, announced, recovering")
             errors = state["errors"]
             require(isinstance(errors, dict) and set(errors) <= set(KINDS) and all(moment(v) and v is not None for v in errors.values()), "errors")
             return state

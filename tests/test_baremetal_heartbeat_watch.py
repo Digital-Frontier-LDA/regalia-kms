@@ -276,7 +276,9 @@ class Watching(hbt.Case):
         self.assertEqual(self.kinds(), [])                                       # not at every step
         self.authenticated = True
         self.w.step()
-        self.assertEqual(self.kinds(), [("INFO", "RECOVERED", 0)])                # the same heartbeat again: nothing was renewed
+        self.assertEqual(self.kinds(), [])                                       # usable again for one step: not said yet
+        self.w.step()
+        self.assertEqual(self.kinds(), [("INFO", "RECOVERED", 0)])                # for two: said. The same heartbeat: nothing was renewed
         # the manifest moved on and no heartbeat for it has arrived
         self.held = manifest2(DAY, 2, m.digest(self.man), a="REVOKED_STOLEN")
         self.later(HOUR)
@@ -309,7 +311,7 @@ class Watching(hbt.Case):
         self.left(12 * HOUR)
         self.w.step()
         self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 50)])
-        good = {"sequence": 1, "level": 50, "last": self.now, "down": False, "announced": False, "errors": {}}
+        good = {"sequence": 1, "level": 50, "last": self.now, "down": False, "announced": False, "recovering": False, "errors": {}}
         with open(self.wstate) as f:
             self.assertEqual(json.load(f), good)
         self.watch().step()                                                      # a new process
@@ -320,7 +322,7 @@ class Watching(hbt.Case):
         for damage in (b"", b"{", b" " * (watch.MAX_BYTES + 1), b'{"key": 1, "level": 50, "last": 1}',      # the previous format
                        json.dumps({k: v for k, v in good.items() if k != "errors"}).encode(), state(more=1),
                        state(sequence=-1), state(sequence=True), state(sequence="1"), state(level=49), state(level=True), state(last=1.5),
-                       state(last=True), state(down=1), state(announced="no"), state(errors=[]), state(errors={"OTHER": 1}),
+                       state(last=True), state(down=1), state(announced="no"), state(recovering=0), state(recovering=None), state(errors=[]), state(errors={"OTHER": 1}),
                        state(errors={"EXPIRED": None}), state(errors={"EXPIRED": True}), state(errors={"UNUSABLE": "soon"})):
             with self.subTest(damage=damage[:40]):
                 with open(self.wstate, "wb") as f:
@@ -351,22 +353,27 @@ class Watching(hbt.Case):
         state = watch.decide(down, {"sequence": 1, "errors": {"EXPIRED": ahead}}, self.now)
         self.assertEqual((state[0]["kind"], state[1]["errors"]), ("EXPIRED", {"EXPIRED": self.now}))
 
-    def test_a_reading_that_flaps_costs_one_error_and_one_recovered_an_hour(self):
+    def test_a_reading_that_flaps_costs_one_error_an_hour_and_is_never_called_recovered(self):
         """Found by an independent read of #153: live, down, live, down at every step sent one event a step
-        to the log and the audit trail."""
+        to the log and the audit trail. And by the read of the fix: a RECOVERED said at the first live
+        step would be the trail's last word while the reading was down again."""
         self.w.step()
         for minute in range(59):                                                 # an hour of flapping, one step a minute
             self.authenticated = minute % 2 == 1
             self.later(60)
             self.w.step()
-        self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0), ("INFO", "RECOVERED", 0)])
+        self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0)])               # one, and the trail still says down: it is
         self.authenticated = False
         self.later(120)
         self.w.step()
         self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0)])               # the hour passed: said again
         self.authenticated = True
         self.w.step()
-        self.assertEqual(self.kinds(), [("INFO", "RECOVERED", 0)])               # and that outage's end
+        self.assertEqual(self.kinds(), [])
+        self.w.step()
+        self.assertEqual(self.kinds(), [("INFO", "RECOVERED", 0)])               # two live steps in a row: that outage's end
+        self.w.step()
+        self.assertEqual(self.kinds(), [])                                       # said once
 
     def test_what_was_said_about_a_heartbeat_is_not_said_again_after_a_blip(self):
         self.left(12 * HOUR)
@@ -376,10 +383,28 @@ class Watching(hbt.Case):
         self.w.step()
         self.authenticated = True
         self.w.step()
+        self.w.step()
         self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0), ("INFO", "RECOVERED", 0)])   # not a second "50 % left"
         self.left(6 * HOUR)
         self.w.step()
         self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 25)])            # the next threshold, once
+
+    def test_a_remembered_sequence_that_is_not_the_heartbeat_s_does_not_silence_its_warnings(self):
+        """A state file from elsewhere, naming a higher sequence at the lowest threshold: the real heartbeat's
+        50 % and 25 % must still be said. And a lower sequence arriving is not a renewal."""
+        with open(self.wstate, "w") as f:
+            json.dump({"sequence": 9, "level": 10, "last": self.now, "down": False, "announced": False, "recovering": False, "errors": {}}, f)
+        self.left(12 * HOUR)
+        self.w.step()
+        self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 50)])
+        self.left(6 * HOUR)
+        self.w.step()
+        self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 25)])
+        with open(self.wstate, "w") as f:
+            json.dump({"sequence": 9, "level": 10, "last": self.now, "down": False, "announced": False, "recovering": False, "errors": {}}, f)
+        self.f.accept(beat(self.man, 2, issued=self.now, lifetime=DAY), self.man)
+        self.w.step()
+        self.assertEqual(self.kinds(), [])                                       # sequence 2 after a remembered 9: no "RENEWED"
 
     def test_renewed_means_a_newer_heartbeat_and_recovered_means_the_same_one(self):
         self.authenticated = False
