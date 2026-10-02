@@ -79,6 +79,15 @@ KMS.
 
 ## Signing commits and tags
 
+**Not with the company's release key.** That key's policy requires an approval, and git cannot carry
+one: it runs one command and expects the signature back. The release key signs the release FILES
+(checksums, an apt `InRelease`, the public key export) through
+[prepare, approve, complete](#signing-under-a-policy-that-requires-approval). Commits and tags are
+signed by each developer, with their own key, on their own workstation (owner decision, 2026-10-02):
+a commit says who wrote it, a release signature says the company published it, and the two are not
+the same key. What follows is for a KMS-held key whose policy requires no approval, such as a
+developer's or a CI identity's own.
+
 ```sh
 git config gpg.program regalia-sign
 git config user.signingkey "$(regalia-sign --config /etc/regalia-sign/config.json --fingerprint)"
