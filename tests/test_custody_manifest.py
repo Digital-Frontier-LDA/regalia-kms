@@ -1,6 +1,7 @@
 import copy
 import datetime
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -112,6 +113,13 @@ class CustodyManifestTests(unittest.TestCase):
         rules = [rule for rule in schema["$defs"]["binding"]["allOf"] if rule.get("if") == {"required": ["token_label"]}]
         self.assertEqual(len(rules), 1)
         self.assertEqual(rules[0]["then"], {"properties": {"backend": {"const": "nitrokey-pkcs11"}}})
+        # A schema pattern is SEARCHED, and in some engines "$" also matches before a final newline.
+        # The pattern must refuse what the validators refuse under those semantics too.
+        pattern = re.compile(schema["$defs"]["binding"]["properties"]["token_label"]["pattern"])
+        for label in ("OpenPGP card (User PIN)", "OpenPGP card (User PIN (sig))", "x", "a" * 32):
+            self.assertIsNotNone(pattern.search(label), label)
+        for label in ("a" * 33, " leading", "trailing ", " ", "tab\tinside", "c\u00e4rd", "", "label\n", "\nlabel"):
+            self.assertIsNone(pattern.search(label), repr(label))
 
     def test_published_schema_matches_validator_enums(self):
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))

@@ -135,7 +135,7 @@ var sweepSurvivors = []ledgerRow{
 	// envelopeMaxAge: json.Unmarshal(policy.EnvelopeMaxAgeDays, &days).
 	// Masked by L296 (len == 0 returns 0): any test that exercises the
 	// unmarshal path passes L296 only when EnvelopeMaxAgeDays is set,
-	// and 297 more importantly L308 (days < 1 check) catches integer
+	// and more importantly L308 (days < 1 check) catches integer
 	// negatives immediately.
 	{
 		ID: "registry.go:303[0]", LineNo: 303,

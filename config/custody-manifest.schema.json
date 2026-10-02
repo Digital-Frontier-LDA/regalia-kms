@@ -65,7 +65,7 @@
         },
         "token_label": {
           "type": "string",
-          "pattern": "^[!-~]([ -~]{0,30}[!-~])?$"
+          "pattern": "^(?![\\s\\S]*[^ -~])[!-~]([ -~]{0,30}[!-~])?$"
         },
         "devaut_fingerprint": {
           "type": "string",
