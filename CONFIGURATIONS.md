@@ -32,14 +32,13 @@ Nitrokeys).
 Owner, 2026-10-02: the most standard interface and the most secure method, where open-source code
 that has been independently validated counts as more secure than code written here. In practice:
 
-- **Tokens are reached through standard interfaces and reviewed open-source middleware**: PKCS#11
-  through OpenSC for the HSM, and PIV (NIST SP 800-73) for the YubiKey. OpenPGP *signatures* do not
-  need the YubiKey's OpenPGP *applet*: `regalia-sign` frames them around a key on the HSM. If the
-  applet is served at all, the principle points at OpenSC's OpenPGP card driver over PKCS#11 rather
-  than the hand-written driver in `internal/backend/openpgp`. **Open, for the owner.**
-- **Signing keys use the algorithms every verifier and every token here already implements**: ECDSA
-  P-384 or RSA 3072 and larger. None of the three platforms below needs Ed25519, so Ed25519 is not
-  pursued: no new driver is written to reach it.
+- **Tokens are reached through standard interfaces and reviewed open-source middleware.** That is
+  PKCS#11 through OpenSC for the HSM, and PIV (NIST SP 800-73) for the YubiKey.
+- **The same rule gives Ed25519 a standard home.** OpenSC's own OpenPGP card driver presents the
+  YubiKey's OpenPGP applet as a PKCS#11 token, and that token lists `EDDSA` (255 bits, in hardware).
+  The driver the KMS already uses for the HSM could serve it, with no card protocol written here.
+  The hand-written driver in `internal/backend/openpgp` is the part this rule argues against, not the
+  applet. **Proposed, not decided**: no Ed25519 signature has been made this way yet.
 - **Signature formats come from maintained open-source libraries**, not from encoders written here.
 
 ### Relation to the three-site device profiles
@@ -63,6 +62,7 @@ promises more than either token delivers:
 | Pico HSM | `nitrokey-pkcs11` | The same list as the Nitrokey, mechanism for mechanism. **No EdDSA and no AES**: Ed25519 key generation is refused (`mechanism 1055 not supported`). Whether the firmware does Ed25519 by another path is unmeasured. | `C_GetMechanismList` and a key-generation attempt without login, Pico Key 8625B32841D722E2, firmware 6.6, OpenSC 0.26.1, 2026-10-02 |
 | YubiKey, PIV applet | `yubikey-piv` | P-256 and P-384 sign and certificate-sign; RSA-2048 sign, wrap, unwrap, certificate-sign. Firmware 5.7 and the pinned `piv-go` v2.6.0 also know Ed25519; the backend does not offer it and it is unmeasured. | qualified on YubiKey 5 NFC, firmware 5.7.4 (`config/qualified-stack.json`); built only with `-tags piv` |
 | YubiKey, OpenPGP applet | `yubikey-openpgp` | Ed25519 sign; X25519 unwrap; RSA 2048 to 4096 sign and unwrap | partly qualified on one YubiKey 5C NFC, firmware 5.4.3 ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)); **the daemon constructs no provider for it** |
+| YubiKey, OpenPGP applet through OpenSC | none yet | `EDDSA` sign (255 bits), ECDH derive from 255 bits, ECDSA 256 to 521, RSA 2048 to 4096 | `C_GetMechanismList` with OpenSC's `openpgp` driver, YubiKey 5 NFC 35718625, firmware 5.7.4, applet 3.4, OpenSC 0.26.1, 2026-10-02. The applet held no key: no signature was made. |
 
 ## What each configuration can serve
 
@@ -74,12 +74,12 @@ promises more than either token delivers:
 | RSA 2048 to 4096: sign, wrap, unwrap, CA | HSM | HSM | HSM |
 | secp256k1 sign (Cosmos) | HSM | HSM | HSM |
 | Opaque secrets under an RSA KEK | HSM | HSM | HSM |
-| Ed25519 sign | **none** | OpenPGP applet only, not wired | OpenPGP applet only, not wired |
+| Ed25519 sign | **none** | YubiKey OpenPGP applet, not wired | YubiKey OpenPGP applet, not wired |
 | X25519 unwrap (legacy `sops-pgp`) | none | OpenPGP applet, not wired | OpenPGP applet, not wired |
 
-Neither HSM can hold an Ed25519 key through this backend. No signing target needs one, so the
-configurations are equal for the purposes below, and the row is a limit to know about rather than
-work to do.
+Neither HSM can hold an Ed25519 key through this backend, so in configurations 2 and 3 it lives on
+the YubiKey's OpenPGP applet, and configuration 1 has none. Ubuntu, Apple and Microsoft do not
+require Ed25519; OpenPGP, SSH and git users commonly expect it.
 
 ## Signing software for a platform
 
@@ -109,12 +109,12 @@ rule and works in every configuration once a `signtool` adapter exists.
    are advertised for `nitrokey-pkcs11`, and neither token lists an EdDSA or AES mechanism. A
    manifest that binds such a key validates, the daemon starts, and every operation fails as
    unavailable. The token's own mechanism list should be checked against its bindings at startup.
-2. **Ed25519 has no served home, and none is planned.** It is not reachable on either HSM, the
-   OpenPGP applet is not wired, the PIV backend does not offer it, and `regalia-sign` refuses
-   Ed25519 keys. P-384 and RSA cover every target.
-3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4).
-   No signing target needs it; its candidate use is the PIN bootstrap adapter (#73). Whether and how
-   to serve it is open (see the principle above).
+2. **Ed25519 has no served home yet.** It is not reachable on either HSM, the OpenPGP applet is not
+   wired, the PIV backend does not offer it, and `regalia-sign` refuses Ed25519 keys.
+3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4),
+   and the only driver for it is hand-written. Serving it through OpenSC and PKCS#11 instead needs:
+   an Ed25519 signature measured on a card, a per-card OpenSC driver choice (OpenSC presents a
+   YubiKey as PIV by default), and a recorded change to the legacy-only rule.
 4. **The Pico is not a recognised token.** `config/qualified-stack.json`, `tools/qualified_stack.py`
    and `deploy/seal-hsm-pin.sh` treat it as staging hardware. The attached Pico also reports the
    token serial `ESPICOHSMTR`, not a per-device one, and the driver selects a token by serial.
