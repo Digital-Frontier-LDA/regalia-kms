@@ -1,9 +1,22 @@
 # AppArmor profile for the regalia-kms daemon on a bare-metal KMS host (regalia-kms#61).
 #
+# FIRST IN COMPLAIN MODE (-C: violations are logged, nothing is refused), because this profile has
+# never confined a running daemon:
+#
 #   sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
-#   sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms
+#   sudo apparmor_parser -r -C /etc/apparmor.d/usr.local.sbin.regalia-kms
 #   sudo systemctl restart regalia-kms      # the unit asks for it: AppArmorProfile=regalia-kms
+#   # exercise a sign, a wrap, a token removal and a service restart, then:
+#   sudo journalctl -k -g 'apparmor=.*profile="regalia-kms"'
+#
+# Correct the profile for every legitimate ALLOWED line and repeat until there is none. ONLY THEN
+# enforce (the same file, without -C), and measure:
+#
+#   sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms
+#   sudo systemctl restart regalia-kms
 #   sudo python3 deploy/baremetal/host_probe.py   # kms_apparmor_enforced
+#
+# In complain mode kms_apparmor_enforced fails, as it should: the host is not commissioned yet.
 #
 # WHAT IS CONFINED. The profile has a name and NO attachment path: it confines the service, which
 # asks for it by name (regalia-kms-hardening.conf.example), and nothing else. The same binary run by
@@ -25,10 +38,8 @@
 # audit_sink_url must be an IP address or a name in /etc/hosts.
 #
 # NOT YET PROVEN ON A KERNEL. This file is checked by `apparmor_parser --skip-kernel-load -Q` (it
-# parses and compiles). It has not confined a running daemon: load it in complain mode on the DL360
-# first (`aa-complain regalia-kms`), exercise a sign, a wrap, a token removal and a restart, read
-# `journalctl -k -g apparmor`, and only then enforce (#61 PoC 1.2). The [library] rules are the ones
-# to expect corrections to.
+# parses and compiles). It has not confined a running daemon, which is why the steps above start in
+# complain mode (#61 PoC 1.2). The [library] rules are the ones to expect corrections to.
 
 abi <abi/4.0>,
 

@@ -68,12 +68,17 @@ Commissioning has two halves:
   connected to pcscd must be the KMS binary. Measured: `token_clients_root_only`. A KMS user that
   brings its own client is caught by the pcscd check only while it is connected; restricting pcscd
   access with a polkit rule (root and the KMS user only) is recommended on top.
-- **AppArmor.** Install `deploy/baremetal/apparmor/usr.local.sbin.regalia-kms` in `/etc/apparmor.d/`
-  and load it (`apparmor_parser -r`); the unit asks for it by name (`AppArmorProfile=regalia-kms`
-  in `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
+- **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
+  `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
   capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name
-  in `/etc/hosts`. The profile is parser-checked only: run it in complain mode on the host first
-  (the steps are in the file's header). Measured: `kms_apparmor_enforced`.
+  in `/etc/hosts`. The profile is parser-checked only, so load it in complain mode first, correct it
+  from the kernel log, and only then enforce (the full sequence is in the file's header):
+  ```sh
+  sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
+  sudo apparmor_parser -r -C /etc/apparmor.d/usr.local.sbin.regalia-kms   # complain: logs, refuses nothing
+  sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms      # enforce, once the log is clean
+  ```
+  Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
 
 ### Host firewall (default deny, both directions)
 
