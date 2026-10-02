@@ -86,6 +86,20 @@ func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 		t.Logf("refused to start: %v", err)
 		return
 	}
+	// REGALIA_ONE_YK_EXPECT_ABSENT=1: the YubiKey is off the bus and the HSM is attached. The module
+	// holds the HSM's reader, which must not be taken for a locked-out YubiKey: the daemon starts.
+	if os.Getenv("REGALIA_ONE_YK_EXPECT_ABSENT") == "1" {
+		_, manager, _, closer, err := buildHardware(settings, hsmRegistryFor(t, hsmSerial, "issuing-ca p384 - sign"))
+		if err != nil {
+			t.Fatalf("the daemon refused to start with the YubiKey merely absent: %v", err)
+		}
+		defer closer()
+		if !manager.Serves("nitrokey-pkcs11") || !manager.Serves("yubikey-piv") {
+			t.Fatal("the manager does not serve both backends")
+		}
+		t.Log("started with the YubiKey absent and the HSM attached")
+		return
+	}
 	// The PKCS#11 side is alive in this process: the HSM answers the startup question about what it
 	// offers, which is how an Ed25519 key bound to it is refused...
 	if _, _, _, closer, err := buildHardware(settings, hsmRegistryFor(t, hsmSerial, "release-ed25519 ed25519 - sign")); err == nil {

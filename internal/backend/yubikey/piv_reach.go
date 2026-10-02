@@ -19,8 +19,13 @@ import (
 // someone is watching. Nothing is written and no PIN is presented.
 //
 // A reader that refuses cannot be asked which card it holds, so `held` is about the readers, not
-// about a particular card: with a card missing and a reader held, the held reader is the likely
-// place it is.
+// about a particular card: with a card missing and a YubiKey's reader held, that reader is the
+// likely place it is.
+//
+// ONLY A YUBIKEY'S READER COUNTS AS HELD. Every reader is listed, the HSM's among them, and the
+// PKCS#11 module holds the HSM's reader by design: counting that one would turn a YubiKey that is
+// merely unplugged into "locked out" on every host that has an HSM. A reader is a YubiKey's by its
+// name, as pcscd reports it.
 func (driver *PIVDriver) Reach(ctx context.Context) (missing []string, held bool, err error) {
 	if driver == nil || ctx.Err() != nil {
 		return nil, false, ErrUnavailable
@@ -33,7 +38,7 @@ func (driver *PIVDriver) Reach(ctx context.Context) (missing []string, held bool
 	for _, card := range cards {
 		candidate, openErr := pivOpen(card)
 		if openErr != nil {
-			held = held || heldByAnother(openErr)
+			held = held || (heldByAnother(openErr) && yubiKeyReader(card))
 			continue
 		}
 		if serial, serialErr := candidate.Serial(); serialErr == nil {
@@ -55,6 +60,12 @@ func (driver *PIVDriver) Reach(ctx context.Context) (missing []string, held bool
 // pins the text against the library, and a wording change fails there, not silently here.
 func heldByAnother(err error) bool {
 	return err != nil && strings.Contains(err.Error(), sharingViolationText)
+}
+
+// yubiKeyReader reports whether a PC/SC reader name is a YubiKey's ("Yubico YubiKey OTP+FIDO+CCID
+// 00 00" and its variants).
+func yubiKeyReader(name string) bool {
+	return strings.Contains(strings.ToLower(name), "yubikey")
 }
 
 const sharingViolationText = "the smart card cannot be accessed because of other connections outstanding"

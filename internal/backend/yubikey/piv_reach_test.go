@@ -35,6 +35,12 @@ func TestReachSaysWhichCardsAreMissingAndWhetherAReaderIsHeld(t *testing.T) {
 	if err != nil || !held || !reflect.DeepEqual(missing, both) {
 		t.Fatalf("held reader: missing=%v held=%v err=%v", missing, held, err)
 	}
+	// the HSM's reader is held by the PKCS#11 module by design: that says nothing about a YubiKey,
+	// and a YubiKey that is merely unplugged must not look locked out on a host with an HSM
+	missing, held, err = reachWith(t, []string{"Nitrokey Nitrokey HSM (DENK04041440000         ) 00 00"}, nil, errors.New("connecting to smart card: "+sharingViolationText))
+	if err != nil || held || !reflect.DeepEqual(missing, both) {
+		t.Fatalf("held HSM reader, no YubiKey: missing=%v held=%v err=%v", missing, held, err)
+	}
 	// a reader that refuses for another reason (no card in it) is not a held one
 	missing, held, err = reachWith(t, []string{"ACR40U 00 00"}, nil, errors.New("connecting to smart card: no smart card inserted"))
 	if err != nil || held || !reflect.DeepEqual(missing, both) {
