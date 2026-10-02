@@ -13,7 +13,7 @@ and what a node does with what it receives. Three rules.
      (missing). The same epoch with another digest, or a digest that is not the one the receiver's chain
      has at that epoch, is a CONFLICT: two manifests were signed for one epoch. Nothing is applied and an
      incident is raised. Peers already talk at every lease renewal, so two connected peers converge
-     within one renewal.
+     within one renewal, or one renewal per 1000 epochs the receiver is behind (MAX_ENVELOPES a message).
   2  THE HEARTBEAT FORCES IT. A heartbeat is for one manifest. After a revoking manifest the authority
      issues heartbeats for the new one only, so a peer that is behind cannot take them, and the one it
      holds runs out. The authority ships a BUNDLE, the envelopes and the heartbeat together; apply_bundle
@@ -24,10 +24,11 @@ and what a node does with what it receives. Three rules.
 THE BOUNDS, for a node revoked as stolen:
   * a peer that holds the revoking manifest refuses it at once (unlock, lease issue, lease verify, and
     whatever it signs as an issuer);
-  * peers that reach each other converge within one exchange between them;
-  * a peer cut off from everyone goes on helping until its heartbeat expires: at most 24 hours after the
-    last heartbeat it accepted, or less if the authority issues shorter-lived heartbeats. exposure() is
-    that number for a peer, now;
+  * peers that reach each other converge within one exchange between them (one per 1000 epochs behind);
+  * a peer cut off from everyone goes on helping until its heartbeat expires: at most 24 hours and 5
+    minutes after it accepted its last heartbeat (a heartbeat lives 24 hours from its issue time, and one
+    issued up to 5 minutes ahead of the peer's clock is accepted: heartbeat.FUTURE_SKEW), or less if the
+    authority issues shorter-lived heartbeats. exposure() is that number for a peer, now;
   * a stolen node that was running stops 300 s after its issuing peers hold the manifest (lease.py).
 
 Nothing here weakens a check: every envelope goes through Store.commit (signature, chain, tombstones, the
@@ -103,11 +104,20 @@ def catch_up(store, envelopes):
         if isinstance(epoch, int) and not isinstance(epoch, bool) and 1 <= epoch <= held:
             around = store.envelopes(max(epoch - 2, 0))          # the manifest before it (if any), and the one held at that epoch
             before, mine = (None, around[0]) if epoch == 1 else (around[0]["manifest"], around[1])
-            received = membership.verify_envelope(envelope, store.root_key, before)[0]   # authentic, whoever resent it
+            # authentic AND authorized, whoever resent it: the same transition rules as when it was first
+            # accepted (a revocation key cannot have signed what only the root may)
+            received = membership.accept(before, envelope, store.root_key)
             require(membership.digest(received) == membership.digest(mine["manifest"]),
                     "CONFLICT: a different manifest at epoch %d: two manifests were signed for one epoch; record an incident" % epoch)
             continue
         current = store.commit(envelope)
+    return summary(store)
+
+
+def recover(store, envelopes):
+    """A node whose store refuses with ROLLBACK (its disk is older than its TPM anchor) fetches a peer's
+    whole chain, peer_store.envelopes(), and installs it through Store.restore. Returns the summary."""
+    store.restore(envelopes)
     return summary(store)
 
 

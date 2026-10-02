@@ -395,6 +395,9 @@ class Store:
                       enrollment).
     envelopes(n)      the signed envelopes above epoch n, verified and anchored as load() does: what a
                       peer at epoch n lacks (convergence.py).
+    restore(chain)    replaces the stored chain by one fetched whole from a peer, when load() refuses with
+                      ROLLBACK: verified from the root, at least as new as the TPM high-water, and a
+                      continuation of what is on disk.
     commit(envelope)  accepts the next manifest onto the loaded chain, writes the file durably
                       (temp file, fsync, rename, fsync of the directory), THEN advances the TPM; a crash
                       in between is completed by the next load(), never strands the node.
@@ -442,6 +445,40 @@ class Store:
         with _exclusive(self.lock_path):
             self._load()
             return copy.deepcopy(self.chain[after_epoch:])
+
+    def restore(self, envelopes):
+        """Replace the stored chain by one fetched whole from a peer: the recovery when load() refuses
+        with ROLLBACK (the disk was restored to an older chain, or the file was lost). The fetched chain is
+        verified from the pinned root at epoch 1, must reach at least the TPM high-water, and must continue
+        whatever valid chain is still on disk (a different manifest at an epoch held there is a CONFLICT).
+        Written durably, then anchored; returns the current manifest."""
+        with _exclusive(self.lock_path):
+            require(isinstance(envelopes, list) and envelopes, "a chain to restore is a non-empty list of envelopes")
+            require(len(canonical(envelopes)) <= MAX_CHAIN_BYTES, "the chain to restore is oversized")
+            current = None
+            for envelope in envelopes:
+                nxt = accept(current, envelope, self.root_key)
+                require(nxt is not current, "the fetched chain repeats epoch %d" % nxt["epoch"])
+                current = nxt
+            hw = self.hw.value()
+            require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
+                    "fetch from a peer that is not behind" % (current["epoch"], hw))
+            try:
+                on_disk = self._read_chain()
+            except Refused:
+                on_disk = []                    # unreadable: nothing on disk to agree with
+            for mine, theirs in zip(on_disk, envelopes):
+                if not isinstance(mine, dict) or not isinstance(mine.get("manifest"), dict):
+                    break
+                require(digest(mine["manifest"]) == digest(theirs["manifest"]), "CONFLICT: the fetched chain differs from the "
+                        "stored one at epoch %s: record an incident" % theirs["manifest"]["epoch"])
+            require(len(on_disk) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
+            self._write(copy.deepcopy(envelopes))
+            if current["epoch"] > hw:
+                self.hw.advance(current["epoch"])
+            self.hw.check(current["epoch"])
+            self.chain = copy.deepcopy(envelopes)
+            return current
 
     def commit(self, envelope):
         with _exclusive(self.lock_path):        # load, write and advance as one step

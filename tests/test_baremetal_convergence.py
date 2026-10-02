@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 from deploy.baremetal import convergence, lease, replacement
 from deploy.baremetal import heartbeat as hb
@@ -173,6 +174,8 @@ class Exchange(Case):
                 change(resent)
                 self.refused(reason, convergence.catch_up, c, [resent])
         self.refused("signature does not verify", convergence.catch_up, c, [dict(self.e1, signature=dict(self.e1["signature"], sig="11" * 64))])
+        # ... and authorized: the root-signed epoch 1 re-signed, validly, by the revocation key is not the root's
+        self.refused("the signing revocation key is not named by the current manifest", convergence.catch_up, c, [rt.sign(self.m1, hbt.REVOKE, "revocation")])
         self.assertEqual(convergence.summary(c)["epoch"], 3)
         for label, reason, bad in (("not a list", "at most 1000 envelopes at a time", e2), ("too many", "at most 1000 envelopes at a time", [e2] * 1001),
                                    ("not an envelope", "an envelope must hold a manifest", ["x"]), ("no manifest", "an envelope must hold a manifest", [{"signature": {}}])):
@@ -214,6 +217,69 @@ class Exchange(Case):
         for bad in (0, 1001, True, "3"):
             with self.subTest(limit=bad):
                 self.refused("limit must be 1 to 1000", convergence.missing, authority, convergence.summary(c), bad)
+
+    def test_a_held_epoch_resent_under_a_signer_that_could_not_have_made_it_is_refused(self):
+        """Epoch 2 is a root-only change (a node enrolled). The same manifest re-signed by the revocation key
+        has a valid signature and the right digest, and is still not what was accepted."""
+        b = self.stores["b"]
+        enrolled = self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c"), self.entry("a2")])
+        b.commit(rt.sign(enrolled))
+        resigned = rt.sign(enrolled, hbt.REVOKE, "revocation")
+        self.refused("a revocation key cannot add or remove nodes", convergence.catch_up, b, [resigned])
+        self.assertEqual(convergence.catch_up(b, [rt.sign(enrolled)])["epoch"], 2)
+
+    def test_recovery_from_a_rolled_back_or_lost_chain_goes_through_the_store(self):
+        b, c = self.stores["b"], self.stores["c"]
+        with open(c.path, "rb") as f:
+            epoch_1 = f.read()
+        e2 = self.revoke(self.m1, "QUARANTINED")
+        e3 = self.revoke(e2["manifest"])
+        for store in (b, c):
+            convergence.catch_up(store, [e2, e3])
+        with open(c.path, "wb") as f:
+            f.write(epoch_1)
+        self.refused("ROLLBACK", convergence.catch_up, c, [e2, e3])                          # the normal path is closed
+        self.refused("the fetched chain ends at epoch 2, below the TPM high-water 3", convergence.recover, c, b.envelopes()[:2])
+        self.refused("does not follow", convergence.recover, c, [self.e1, e3])               # not a chain
+        self.refused("signature does not verify", convergence.recover, c, [self.e1, e2, dict(e3, signature=dict(e3["signature"], sig="00" * 64))])
+        self.refused("a chain to restore is a non-empty list", convergence.recover, c, [])
+        rival2 = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "DRAINING")]), hbt.REVOKE, "revocation")
+        rival3 = rt.sign(self.chain(rival2["manifest"], [self.entry("a"), self.entry("b"), self.entry("c", "RETIRED")]), hbt.REVOKE, "revocation")
+        with open(c.path, "wb") as f:
+            f.write(m.canonical([self.e1, e2]))                                              # the disk holds epochs 1-2 of the real chain
+        self.refused("CONFLICT: the fetched chain differs from the stored one at epoch 2", convergence.recover, c, [self.e1, rival2, rival3])
+        with open(c.path, "rb") as f:
+            self.assertEqual(f.read(), m.canonical([self.e1, e2]))                           # refused: nothing written
+        self.assertEqual(convergence.recover(c, b.envelopes()), {"epoch": 3, "manifest_digest": m.digest(e3["manifest"])})
+        self.assertEqual(c.load()["epoch"], 3)
+        # a disk AHEAD of the fetched chain (a crash after the write, before the TPM moved) is not shortened
+        d = self.store("d")
+        convergence.catch_up(d, [self.e1, e2])
+        with open(d.path, "wb") as f:
+            f.write(m.canonical([self.e1, e2, e3]))
+        self.refused("the fetched chain is shorter than the stored one: nothing to restore", d.restore, [self.e1, e2])
+        self.assertEqual(d.load()["epoch"], 3)                                               # load() completes that crash by itself
+        os.unlink(c.path)                                                                    # lost altogether
+        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        with open(c.path, "w") as f:
+            f.write("{")                                                                     # or unreadable
+        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        # a node that is merely behind may be restored forward too: its TPM anchor moves with the chain
+        behind = self.store("behind")
+        behind.commit(self.e1)
+        self.assertEqual((convergence.recover(behind, b.envelopes())["epoch"], behind.hw.value()), (3, 3))
+        self.refused("the fetched chain repeats epoch 1", convergence.recover, c, [self.e1, self.e1, e2, e3])
+        whole = b.envelopes()
+        with unittest.mock.patch.object(m, "MAX_CHAIN_BYTES", 100):
+            self.refused("the chain to restore is oversized", convergence.recover, c, whole)
+
+    def test_the_partition_bound_is_24_hours_and_the_accepted_skew(self):
+        c, fresh = self.stores["c"], self.peer("c", "-skew")["freshness"]
+        ahead = hbt.beat(self.m1, 1, issued=self.now + hb.FUTURE_SKEW)       # issued as far ahead of this peer's clock as is accepted
+        fresh.accept(ahead, c.load())
+        self.assertEqual(convergence.exposure(c, fresh), hb.MAX_LIFETIME + hb.FUTURE_SKEW)
+        self.later(hb.MAX_LIFETIME + hb.FUTURE_SKEW)
+        self.assertEqual(convergence.exposure(c, fresh), 0)
 
     def test_exposure_is_the_life_left_in_the_heartbeat(self):
         c, fresh = self.stores["c"], self.peers["c"]["freshness"]
@@ -423,12 +489,14 @@ class OnSwtpm(unittest.TestCase):
         self.refused("ROLLBACK: the membership on disk is epoch 1 but the TPM high-water is 3", c.load)
         self.refused("ROLLBACK", convergence.summary, c)
         self.refused("ROLLBACK", convergence.missing, c, convergence.NOT_ENROLLED)
-        # recovery: fetch the chain from b again
-        os.unlink(c.path)
+        self.refused("ROLLBACK", convergence.catch_up, c, b.envelopes(1))
+        # recovery: fetch b's whole chain and install it through the store
+        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        self.assertEqual((c.load()["epoch"], c.hw.value()), (3, 3))
+        self.refused("a may not be unlocked under epoch 3", hb.authorize, c.load(), "c", "a", self.fresh["c"])
+        os.unlink(c.path)                                                    # the file lost altogether: the same recovery
         self.refused("ROLLBACK", c.load)
-        with open(c.path, "wb") as f:
-            f.write(m.canonical(b.envelopes()))
-        self.assertEqual(c.load()["epoch"], 3)
+        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
 
 
 if __name__ == "__main__":
