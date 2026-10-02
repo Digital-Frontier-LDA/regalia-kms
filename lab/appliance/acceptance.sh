@@ -46,7 +46,8 @@ for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vi
     fail "unexpected-package-$package"
   fi
 done
-check grep -qx 'LANG=C.UTF-8' /etc/default/locale
+check grep -qx 'LANG=C.UTF-8' /etc/locale.conf
+check sh -c 'systemctl show-environment | grep -qx "LANG=C.UTF-8"'
 check test -r /var/log/regalia-minimization.json
 # Temporarily start the real daemon with a public fixture and no credentials.
 # It must run under the installed policy while remaining cryptographically unready.

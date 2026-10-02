@@ -124,7 +124,7 @@ for package in $(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'linux-imag
 done
 # locales post-removal deletes its old config; write the builtin locale after
 # all package cleanup has finished. C.UTF-8 is supplied by libc, without locales.
-printf '%s\n' 'LANG=C.UTF-8' >/etc/default/locale
+printf '%s\n' 'LANG=C.UTF-8' >/etc/locale.conf
 apt-get clean
 rm -rf /root/go /root/.cache /tmp/regalia-build /tmp/regalia-source /tmp/regalia-source.tar
 rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed
