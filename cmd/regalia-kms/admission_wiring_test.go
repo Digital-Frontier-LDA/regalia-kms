@@ -390,12 +390,12 @@ func TestTheNamedExemptionsAreExactlyTheProvidersThatLackTheHook(t *testing.T) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	if !reflect.DeepEqual(names, []string{"yubikey-piv"}) {
+	if !reflect.DeepEqual(names, []string{}) {
 		t.Fatalf("exemptions = %v: a new one needs a decision recorded on regalia-kms#72, not only a line here", names)
 	}
-	// an exempted backend with no hook starts
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "yubikey-piv", ungatedProvider{}), gate, admission.ProcessStart); err != nil {
-		t.Fatalf("the exempted backend stopped the daemon: %v", err)
+	// with nothing exempted, the name that used to be is refused like any other backend with no hook
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "yubikey-piv", ungatedProvider{}), gate, admission.ProcessStart); err == nil {
+		t.Fatal("a yubikey-piv provider with no hook started the daemon: it is no longer exempt")
 	}
 	// the providers this build really assembles: each is gated, or exempt and NOT gated
 	for name, provider := range assembledProviders(t) {
