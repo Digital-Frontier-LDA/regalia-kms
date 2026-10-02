@@ -120,7 +120,15 @@ jobs:
         with:
           python-version: "3.12"
       - name: unit tests for the PKCS#11 benchmark harness
-        run: python3 tools/bench/test_hsm_bench.py
+        env:
+          # The per-curve peer-point checks need `cryptography`. It is installed here, hash-pinned,
+          # with the harness's own requirements; with this set, the test fails rather than passes
+          # if it is somehow absent. PyKCS11 is installed too and never used: the tests put a fake
+          # module in its place.
+          REGALIA_EXPECT_CRYPTOGRAPHY: "1"
+        run: |
+          python3 -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
+          python3 tools/bench/test_hsm_bench.py
 
   govulncheck:
     runs-on: ubuntu-latest

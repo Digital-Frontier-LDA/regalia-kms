@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """hsm-bench.py — throughput per KEY TYPE on a PKCS#11 token, one persistent session.
 
+RSA sign and decrypt, ECDSA sign, and ECDH key agreement on every EC key the token allows it for.
+
 Why persistent: spawning `pkcs11-tool` per operation costs ~298 ms of process start, PKCS#11
 init and C_Login, which swamps the card. Measuring that and calling it card throughput is how a
 5x-wrong number ends up in a design document. Open one session, log in once, then loop.
@@ -8,7 +10,7 @@ init and C_Login, which swamps the card. Measuring that and calling it card thro
 Reports median and p90 as well as mean: a smartcard's variance matters when the number is used
 as a capacity ceiling.
 
-    HSM_PIN=… ./hsm-bench.py                      # needs PyKCS11; `cryptography` enables decrypt
+    HSM_PIN=… ./hsm-bench.py                      # needs PyKCS11; `cryptography` enables decrypt and ECDH
     HSM_PIN=… BENCH_N=50 PKCS11_MODULE=… ./hsm-bench.py
 
 Labels are derived from the KEY, never assumed: an RSA key is reported at its real modulus size
@@ -95,6 +97,78 @@ def rsa_ciphertext(sess, obj):
     return rsa.RSAPublicNumbers(e, n).public_key().encrypt(b"A" * 32, padding.PKCS1v15()), None
 
 
+# The curves ECDH is measured on, by the DER of their OID (CKA_EC_PARAMS), as `cryptography` names them.
+ECDH_CURVE = {
+    "06082a8648ce3d030107": "SECP256R1",
+    "06052b81040022": "SECP384R1",
+    "06052b81040023": "SECP521R1",
+    "06052b8104000a": "SECP256K1",
+}
+
+
+def peer_point(curve_hex):
+    """A fresh peer public key on the key's curve, as the uncompressed point CKM_ECDH1_DERIVE takes.
+
+    Returns (point, None) or (None, why). The peer is generated on the host, as a real peer's key
+    would be: the token only ever sees its public point."""
+    name = ECDH_CURVE.get(curve_hex)
+    if name is None:
+        return None, "curve not known to this benchmark"
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+    except ImportError:
+        return None, "install `cryptography` to measure ECDH"
+    peer = ec.generate_private_key(getattr(ec, name)())
+    return peer.public_key().public_bytes(serialization.Encoding.X962,
+                                          serialization.PublicFormat.UncompressedPoint), None
+
+
+def ecdh_once(sess, key, point):
+    """One key agreement as the daemon performs it (internal/backend/nitrokey, Derive): derive a
+    session object with CKD_NULL, read its value, destroy it. All three are timed, because that is
+    what one agreement costs; the derive is the only step that reaches the card.
+
+    The derived object is destroyed whether or not the read succeeds: N samples must not leave N
+    shared secrets in the session."""
+    template = [(PyKCS11.CKA_CLASS, PyKCS11.CKO_SECRET_KEY), (PyKCS11.CKA_KEY_TYPE, PyKCS11.CKK_GENERIC_SECRET),
+                (PyKCS11.CKA_TOKEN, False), (PyKCS11.CKA_SENSITIVE, False), (PyKCS11.CKA_EXTRACTABLE, True)]
+    derived = sess.deriveKey(key, template, PyKCS11.ECDH1_DERIVE_Mechanism(point, PyKCS11.CKD_NULL, None))
+    try:
+        if not sess.getAttributeValue(derived, [PyKCS11.CKA_VALUE])[0]:
+            raise PyKCS11.PyKCS11Error("the derived secret could not be read")
+    finally:
+        sess.destroyObject(derived)
+
+
+def allows_derive(sess, obj):
+    """CKA_DERIVE on the private key: (True, None), (False, None), or (None, why) when it cannot be
+    read.
+
+    A key that does not allow derive is not asked: a refused derive is a failed operation, and a
+    failed operation costs a session reopen and a PIN verification. "Cannot be read" is a third
+    answer and stays one: reporting it as "does not allow" would let a failing attribute read, or a
+    failing card, print "no key allows derive" as if that had been established."""
+    try:
+        value = sess.getAttributeValue(obj, [PyKCS11.CKA_DERIVE])[0]
+    except PyKCS11.PyKCS11Error as exc:
+        return None, f"CKA_DERIVE unreadable: {exc}"
+    if value is None:
+        return None, "CKA_DERIVE unreadable"
+    return bool(value), None
+
+
+def curve_hex(sess, obj):
+    try:
+        raw = sess.getAttributeValue(obj, [PyKCS11.CKA_EC_PARAMS])[0]
+    except PyKCS11.PyKCS11Error:
+        return None
+    return bytes(raw).hex() if raw is not None else None
+
+
+ECDH_ROW = "ECDH derive (+read, destroy)"
+
+
 def measure(fn):
     times = []
     for _ in range(N):
@@ -157,6 +231,9 @@ def _run(holder, info, reopen):
     # a card that cannot sign. Identity is the CKA_ID; the handle is re-resolved from it whenever
     # the session changes.
     keys = []
+    # For the ECDH summary line: keys measured or attempted, and keys whose eligibility could not be
+    # established (an unreadable key, an EC key that could not be looked up, an unreadable CKA_DERIVE).
+    ecdh_keys = ecdh_unknown = 0
     for obj in holder[0].findObjects([(PyKCS11.CKA_CLASS, PyKCS11.CKO_PRIVATE_KEY)]):
         try:
             kid_raw = bytes(holder[0].getAttributeValue(obj, [PyKCS11.CKA_ID])[0])
@@ -164,6 +241,8 @@ def _run(holder, info, reopen):
             label = holder[0].getAttributeValue(obj, [PyKCS11.CKA_LABEL])[0] or "(no label)"
         except PyKCS11.PyKCS11Error as exc:
             print(f"  !! skipping a key, attributes unreadable: {exc}")
+            # Its type is unknown, so it may have been an EC key that allows derive.
+            ecdh_unknown += 1
             continue
         keys.append((kid_raw, kid_raw.hex(), ktype, label))
 
@@ -190,6 +269,8 @@ def _run(holder, info, reopen):
         cell = [handle]
         if cell[0] is None:
             rows.append((label, kid, "?", "key lookup", None, why))
+            if ktype == PyKCS11.CKK_EC:
+                ecdh_unknown += 1
             continue
         obj = cell[0]
         desc = key_desc(holder[0], obj, ktype)
@@ -211,6 +292,19 @@ def _run(holder, info, reopen):
                              ("ECDSA sign (SHA-256 on card)", PyKCS11.CKM_ECDSA_SHA256)):
                 m = PyKCS11.Mechanism(mech, None)
                 ops.append((nm, lambda c=cell, m=m: holder[0].sign(c[0], os.urandom(32), m)))
+            # ECDH, only on a key the token says may derive. The peer point is made ONCE, before the
+            # timed loop: generating a key pair on the host is not what is being measured.
+            may_derive, why = allows_derive(holder[0], obj)
+            if may_derive is None:
+                ecdh_unknown += 1
+                rows.append((label, kid, desc, ECDH_ROW, None, why))
+            elif may_derive:
+                ecdh_keys += 1
+                point, why = peer_point(curve_hex(holder[0], obj))
+                if point is None:
+                    rows.append((label, kid, desc, ECDH_ROW, None, why))
+                else:
+                    ops.append((ECDH_ROW, lambda c=cell, pt=point: ecdh_once(holder[0], c[0], pt)))
 
         lost = None
         for name, fn in ops:
@@ -239,6 +333,13 @@ def _run(holder, info, reopen):
             mean = statistics.mean(times)
             print(f"{label[:14]:14} {kid:4} {desc[:20]:20} {name[:30]:30} "
                   f"{mean:9.1f} {statistics.median(times):8.1f} {p90(times):8.1f} {1000 / mean:7.2f}")
+    if not ecdh_keys:
+        # Said, not left to be inferred from a missing row: "no ECDH figure" must not read as "ECDH
+        # was not worth reporting". And "none allows it" is claimed only when every key answered.
+        if ecdh_unknown:
+            print(f"\nECDH    : not measured (could not establish whether {ecdh_unknown} key(s) allow derive; see the rows above)")
+        else:
+            print("\nECDH    : not measured (no EC key on this token allows derive, CKA_DERIVE)")
 
 
 if __name__ == "__main__":
