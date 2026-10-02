@@ -38,6 +38,17 @@ Commissioning has two halves:
 
 ## 3. Operating system (Debian 13)
 
+Authenticate installation media **before** writing it to USB or booting it. On the
+trusted workstation, from the repository root run
+`python3 -m deploy.images.fetch_debian OUTPUT_DIR`. It pins
+Debian 13.7.0/amd64 and the full Debian CD signing-key fingerprint, verifies the
+detached GPG signature and SHA-512, and publishes the directory only after success.
+Re-run `deploy/images/verify.py gpg` against the image immediately before use;
+retain the original signed manifest, signature and verification evidence.
+For custom appliance/recovery images, require the same checks under the approved
+release signing key. See the [image verification contract](../images/README.md).
+An unsigned image or an image with only a checksum is not approved installation media.
+
 - **Full-disk encryption** (LUKS2), enrolled to the TPM:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
   `tpm2-device=auto` in `/etc/crypttab`. Keep a recovery passphrase in the escrow. Measured:

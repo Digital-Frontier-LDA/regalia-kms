@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 mkdir -p .artifacts
+python3 ../../deploy/images/inventory.py > .artifacts/image-inputs.json
 if [[ "${REGALIA_LAB_GUEST:-0}" == 1 ]]; then
   export REGALIA_MESH_TARGET=vm REGALIA_MESH_IMAGE=regalia-bootstrap-vm:dev REGALIA_LAB_TMPFS_SIZE=1g
 fi

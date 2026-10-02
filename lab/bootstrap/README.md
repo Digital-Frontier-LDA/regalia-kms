@@ -12,6 +12,13 @@ Override `REGALIA_LAB_PLATFORM=linux/amd64` to test the other architecture.
 The Debian 13 base image is pinned by multi-architecture digest. Package versions
 are recorded in the report; apt repositories are not snapshot-pinned.
 
+Runners first check the [image input inventory](../../deploy/images/README.md) and
+write `.artifacts/image-inputs.json`. The current base has **digest integrity only**;
+publisher-signature authentication is unverified. These explicitly recorded
+development fixtures cannot be promoted to appliance images. New Dockerfile or
+Compose image references fail the inventory gate until their policy is reviewed.
+The host inventory requires PyYAML 6.0.3 (pinned in `harness-requirements.txt`).
+
 The lab is a non-root, network-disabled container with all capabilities dropped,
 a read-only root filesystem, and temporary memory-backed scratch storage.
 Only the evidence directory is mounted. It has no access to hardware devices,

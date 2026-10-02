@@ -10,6 +10,24 @@ permissions:
   contents: read
 
 jobs:
+  image-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install image verification dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends gnupg
+          python3 -m venv "$RUNNER_TEMP/image-verification"
+          "$RUNNER_TEMP/image-verification/bin/pip" install --quiet PyYAML==6.0.3
+      - name: Real GPG tampering tests and image input inventory
+        run: |
+          "$RUNNER_TEMP/image-verification/bin/python" -m unittest discover -s tests -p 'test_image_*.py' -v
+          "$RUNNER_TEMP/image-verification/bin/python" deploy/images/inventory.py
+
   bootstrap-harness-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 5

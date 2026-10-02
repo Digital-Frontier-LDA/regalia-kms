@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 mkdir -p .artifacts
+python3 ../../deploy/images/inventory.py > .artifacts/image-inputs.json
 export REGALIA_LAB_UID="$(id -u)" REGALIA_LAB_GID="$(id -g)"
 export REGALIA_LAB_COMMIT="$(git rev-parse HEAD)"
 export REGALIA_LAB_DAEMON_PLATFORM="$(docker version --format '{{.Server.Os}}/{{.Server.Arch}}')"

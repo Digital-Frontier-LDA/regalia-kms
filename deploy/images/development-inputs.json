@@ -1,0 +1,13 @@
+{
+  "schema": "regalia.development-image-inputs/v1",
+  "external": {
+    "lab/bootstrap/Dockerfile": [
+      "debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a"
+    ]
+  },
+  "local": {
+    "lab/bootstrap/compose.yaml": ["regalia-bootstrap-lab:dev"],
+    "lab/bootstrap/compose.network.yaml": ["${REGALIA_MESH_IMAGE:-regalia-bootstrap-mesh:dev}"]
+  },
+  "reason": "Existing development experiments only; digest integrity is pinned, publisher signatures are unverified. Production promotion is blocked."
+}
