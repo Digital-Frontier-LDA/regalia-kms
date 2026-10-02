@@ -88,6 +88,7 @@ func TestEvaluateRejectsCosmosFeeAndGasOutsidePolicy(t *testing.T) {
 		"no gas limit":     {func(tx *CosmosTransaction) { tx.GasLimit = 0 }, RuleCosmosGas},
 		"fee cap":          {func(tx *CosmosTransaction) { tx.Fee[0].Amount = 10_001 }, RuleCosmosFee},
 		"fee denomination": {func(tx *CosmosTransaction) { tx.Fee[0].Denom = "uunknown" }, RuleCosmosFee},
+		"zero fee":         {func(tx *CosmosTransaction) { tx.Fee[0].Amount = 0 }, RuleCosmosFee},
 	} {
 		mutate := test.mutate
 		t.Run(name, func(t *testing.T) {

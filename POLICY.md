@@ -27,14 +27,15 @@ control-plane export and off-host audit heads because a fully compromised root c
 Policy decisions expose stable codes and rule identifiers suitable for the redacted audit event.
 They never include destination, amount, certificate, payload or internal state error details.
 
-## Denial rules
+## Refusal rules
 
-A denial carries the rule that produced it, and the audit record stores it as
-`policy-DENIED:<rule>`. The API answer does not change with the rule: the caller is told `DENIED`
-(`API.md`), so the rule is evidence for the operator, never an oracle for the client.
+A refusal carries the rule that produced it, and the audit record stores the decision code and the
+rule together, as `policy-<CODE>:<rule>`. The API answer is decided by the code alone, never by the
+rule, so the rule is evidence for the operator and not an oracle for the client.
 
 A Cosmos transaction is checked one dimension at a time, in this order, each across all of its
-messages before the next, and the first refusal is the one reported:
+messages before the next, and the first refusal is the one reported. Every rule in this table is a
+plain denial: audited as `policy-DENIED:<rule>`, answered `DENIED` (`API.md`).
 
 | Rule | The transaction is refused because |
 |---|---|
@@ -48,8 +49,15 @@ messages before the next, and the first refusal is the one reported:
 | `cosmos-gas` | the gas limit is zero or over the cap |
 | `cosmos-fee` | a fee coin is in an unknown denomination, is zero, or the fee is over the cap |
 
-After these, the durable state can still refuse: `sequence` (not the next account sequence),
-`quota` (the daily cap), `epoch` (a superseded fencing epoch) and `replay` (a nonce already used).
+After these, the durable state can still refuse, and not always as a denial:
+
+| Rule | Refused because | Audited as | API answer |
+|---|---|---|---|
+| `sequence` | it is not the next account sequence | `policy-DENIED:sequence` | `DENIED` |
+| `epoch` | the fencing epoch is superseded | `policy-DENIED:epoch` | `DENIED` |
+| `quota` | it would cross the daily cap | `policy-LIMIT_EXCEEDED:quota` | `RESOURCE_EXHAUSTED` |
+| `replay` | its nonce was already used | `policy-REPLAY:replay` | `CONFLICT` |
+| `durable-state` | the state could not be written | `policy-STATE_UNAVAILABLE:durable-state` | `DEPENDENCY_UNAVAILABLE` |
 
 `TestCosmosPolicyRejectsEveryControlledDimension` provokes every rule in the table and fails if one
 is never produced; `TestTheFirstRefusingCosmosDimensionIsTheOneReported` pins the order, and
