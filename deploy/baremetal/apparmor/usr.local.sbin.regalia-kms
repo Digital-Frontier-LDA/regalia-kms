@@ -1,0 +1,131 @@
+# AppArmor profile for the regalia-kms daemon on a bare-metal KMS host (regalia-kms#61).
+#
+#   sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
+#   sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms
+#   sudo systemctl restart regalia-kms      # the unit asks for it: AppArmorProfile=regalia-kms
+#   sudo python3 deploy/baremetal/host_probe.py   # kms_apparmor_enforced
+#
+# WHAT IS CONFINED. The profile has a name and NO attachment path: it confines the service, which
+# asks for it by name (regalia-kms-hardening.conf.example), and nothing else. The same binary run by
+# an operator (-export-control-plane, -restore-export, -scan-tree, -verify-audit) reads and writes
+# paths the operator names and stays unconfined; an attachment path would confine those runs too and
+# a restore under -restore-root could not write.
+#
+# DENY BY DEFAULT. What is not listed is refused and logged: every capability, every program (the
+# daemon executes nothing: no rule here carries an x), every datagram, raw or netlink socket, every
+# mount, ptrace and profile change. Each rule names the code that needs it. A rule marked [library]
+# is needed by a library the daemon loads and is taken from that library's documented behaviour,
+# not from this repository's code.
+#
+# THE LAYOUT IS FIXED HERE. Configuration under /etc/regalia-kms, state under /var/lib/regalia-kms,
+# the fencing lease under /run/regalia-kms, PINs under /run/credentials/regalia-kms.service. A
+# config.json that points anywhere else fails at startup, closed.
+#
+# NO DNS. Only stream sockets are allowed, so a name is resolved from /etc/hosts or not at all:
+# audit_sink_url must be an IP address or a name in /etc/hosts.
+#
+# NOT YET PROVEN ON A KERNEL. This file is checked by `apparmor_parser --skip-kernel-load -Q` (it
+# parses and compiles). It has not confined a running daemon: load it in complain mode on the DL360
+# first (`aa-complain regalia-kms`), exercise a sign, a wrap, a token removal and a restart, read
+# `journalctl -k -g apparmor`, and only then enforce (#61 PoC 1.2). The [library] rules are the ones
+# to expect corrections to.
+
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile regalia-kms {
+  # libc, ld.so and the shared libraries, /dev/null, the journal socket, time zones, signals from
+  # systemd (unconfined). The binary is dynamically linked: miekg/pkcs11 is cgo.
+  include <abstractions/base>
+
+  # ---- the binary ----
+  # deploy/systemd/regalia-kms.service ExecStart; os_probe.ALLOWED_TOKEN_CLIENT_EXES; the file IMA
+  # measures (host_probe.KMS_BINARY). Mapped and read, never executed again.
+  /usr/local/sbin/regalia-kms mr,
+
+  # ---- configuration: read-only ----
+  # -config                         internal/config/config.go Load
+  # registry_path                   internal/registry/registry.go
+  # rbac_policy_path                internal/auth/rbac.go
+  # policy_path                     internal/policy/load.go
+  # approver_keys_path              internal/approval/approval.go LoadKeySet
+  # tls_certificate_path, tls_private_key_path, tls_client_ca_path
+  #                                 cmd/regalia-kms/main.go (the listener, and the audit sink's client)
+  # issuer_certificate_path         cmd/regalia-kms/main.go
+  # secure_channel_evidence_path    internal/backend/nitrokey/securechannel.go readEvidenceFile
+  # fencing_public_key_path         internal/fencing/gate.go
+  # commissioning_record_path       cmd/regalia-kms/provenance.go
+  # revoked_serials_path            internal/auth/revocation.go (re-read while running)
+  /etc/regalia-kms/ r,
+  /etc/regalia-kms/** r,
+
+  # ---- PINs ----
+  # pin_paths: the credentials systemd decrypted for this unit (LoadCredentialEncrypted=), opened
+  # O_NOFOLLOW and locked in memory within LimitMEMLOCK, which needs no capability.
+  #                                 internal/pin/source.go LockedFileSource.PIN
+  /run/credentials/regalia-kms.service/ r,
+  /run/credentials/regalia-kms.service/* r,
+
+  # ---- state: the three journals and their high-water sidecars ----
+  # audit_journal_path              internal/audit/audit.go Open, VerifyIntegrity, writeMark
+  # policy_state_path               internal/policy/state.go (append, verify, exclusive flock: k)
+  # fencing_state_path              internal/fencing/gate.go appendEpoch, verifyEpochJournal
+  # Each sidecar is written as <journal>.high-water.tmp and renamed over <journal>.high-water.
+  # rw and not append-only (a): the journals are created on first start, and whether `a` permits
+  # that cannot be checked without an AppArmor kernel. The hash chains are what detect a rewrite.
+  owner /var/lib/regalia-kms/ r,
+  owner /var/lib/regalia-kms/*.jsonl rwk,
+  owner /var/lib/regalia-kms/*.jsonl.high-water rw,
+  owner /var/lib/regalia-kms/*.jsonl.high-water.tmp rw,
+
+  # ---- the fencing lease ----
+  # fencing_lease_path: written by regalia-fence, read here.   internal/fencing/gate.go readLease
+  /run/regalia-kms/ r,
+  /run/regalia-kms/*.json r,
+
+  # ---- the token: PKCS#11 over PC/SC ----
+  # pkcs11_module_path, dlopen()ed.  internal/backend/nitrokey/pkcs11_driver.go, probes.go
+  /usr/lib/opensc-pkcs11.so mr,
+  /usr/lib/@{multiarch}/opensc-pkcs11.so mr,
+  /usr/lib/@{multiarch}/pkcs11/opensc-pkcs11.so mr,
+  # [library] OpenSC reads its configuration and card profiles.
+  /etc/opensc/opensc.conf r,
+  /etc/opensc.conf r,
+  /usr/share/opensc/** r,
+  # [library] libpcsclite connects to the pcscd socket; the -tags piv build (YubiKey PIV, OpenPGP)
+  # reaches it the same way.        internal/backend/openpgp/pcsc/pcsc.go, internal/backend/yubikey
+  /run/pcscd/pcscd.comm rw,
+  # Unix stream sockets with a filesystem path or no name only (addr=none): the path is decided by
+  # the file rule above. No abstract socket.
+  unix (connect, send, receive) type=stream peer=(addr=none),
+
+  # ---- network ----
+  # listen_address (net.Listen "tcp")              cmd/regalia-kms/main.go
+  # audit_sink_url (HTTPS, mutual TLS)             internal/audit/httpsink.go, transport.go
+  # Stream sockets only. The port is not narrowed here: the host firewall does that.
+  network inet stream,
+  network inet6 stream,
+  # Go's listener reads the accept backlog; its resolver reads these three and uses no DNS (above).
+  @{PROC}/sys/net/core/somaxconn r,
+  /etc/hosts r,
+  /etc/nsswitch.conf r,
+  /etc/resolv.conf r,
+
+  # ---- the Go runtime ----
+  # GOMAXPROCS from the unit's CPU limit. Refusing these is harmless; allowing them keeps the log
+  # for real denials.
+  owner @{PROC}/@{pid}/cgroup r,
+  owner @{PROC}/@{pid}/mountinfo r,
+  @{sys}/fs/cgroup/**/cpu.max r,
+
+  # ---- stated refusals: denied by default already, written down so that no later rule or
+  # abstraction can grant them, and audited so that an attempt is seen ----
+  # The daemon never talks to the TPM: systemd unseals the PIN before it starts.
+  audit deny /dev/tpm* rwklx,
+  audit deny /dev/tpmrm* rwklx,
+  # Nor reads a sealed blob, nor changes its own configuration or binary.
+  audit deny /etc/credstore.encrypted/** rwklx,
+  audit deny /etc/regalia-kms/** wkl,
+  audit deny /usr/local/sbin/** wkl,
+}
