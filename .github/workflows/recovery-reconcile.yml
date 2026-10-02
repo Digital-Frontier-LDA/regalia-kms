@@ -12,7 +12,7 @@ permissions:
 jobs:
   reconcile:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -29,6 +29,12 @@ jobs:
           python3 -I lab/recovery/reconcile_matrix.py \
             --script deploy/baremetal/recovery-reconcile.py \
             --output "$RUNNER_TEMP/recovery-reconcile/matrix.json"
+      - name: Prove explicit card repair across all legacy enrollment interruptions
+        run: |
+          python3 -I lab/recovery/operator_matrix.py \
+            --script deploy/baremetal/recovery-key.sh \
+            --reconciler deploy/baremetal/recovery-reconcile.py \
+            --output "$RUNNER_TEMP/recovery-reconcile/legacy.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
