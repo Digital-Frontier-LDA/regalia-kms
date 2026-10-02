@@ -206,7 +206,15 @@ PY
 mtls=(--cert "$W/client.pem" --key "$W/client.key")
 nonce="e2e-nonce-$(openssl rand -hex 12)"
 status="$(sign "$nonce" "${mtls[@]}")"
-[ "$status" = 200 ] && P "POST /v1/operations/sign: 200" || { F "sign: HTTP $status: $(head -c 400 "$W/response")"; journal; }
+if [ "$status" = 200 ]; then P "POST /v1/operations/sign: 200"; else
+  F "sign: HTTP $status: $(head -c 400 "$W/response")"
+  # The daemon says only BACKEND_UNAVAILABLE to a caller; what it could and could not use is here.
+  echo "  the PIN credential, as the service sees it:"; sudo stat -c '    %n %U:%G mode %a (%F)' "/run/credentials/$SVC"/* 2>&1
+  command -v getfacl >/dev/null && sudo getfacl -p "/run/credentials/$SVC"/* 2>&1 | sed 's/^/    /'
+  echo "  ready after the failure: HTTP $(curl -s -o /dev/null -w '%{http_code}' --cacert "$W/ca.pem" "https://127.0.0.1:$PORT/v1/health/ready")"
+  echo "  the last audit records:"; sudo tail -n 3 "$STATE/audit.jsonl" 2>&1 | cut -c1-600 | sed 's/^/    /'
+  journal
+fi
 # The KMS returns raw r||s; openssl wants DER SEQUENCE{INTEGER r, INTEGER s}.
 python3 - "$W/response" "$W/sig.der" <<'PY' && P "the result is a 64-byte P-256 signature (r||s)" || F "the response carries no 64-byte signature: $(head -c 300 "$W/response")"
 import base64, json, sys
