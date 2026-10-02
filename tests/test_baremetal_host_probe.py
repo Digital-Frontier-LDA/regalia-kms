@@ -403,6 +403,9 @@ class HostProbe(unittest.TestCase):
             "PCR 11 accepted as all zeros": (zeros(11), "binds PCRs [7] (with measured values)", True),
             "PCR 11 with a zero value beside a real one": (zeros(11, beside=True), "binds PCRs [7] (with measured values)", True),
             "PCR 7 accepted as all zeros": (zeros(7), "binds PCRs [11]", False),
+            "PCR 11 listed twice, once with zeros": (lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, json.dumps(dict(
+                PCRLOCK, pcrValues=[{"pcr": 7, "values": ["07" * 32]}, {"pcr": 11, "values": ["0b" * 32]}, {"pcr": 11, "values": ["00" * 32]}]))),
+                "lists PCR 11 twice", False),
             "a value that is not 64 hex": (lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, json.dumps(dict(
                 PCRLOCK, pcrValues=[{"pcr": 7, "values": ["07" * 32]}, {"pcr": 11, "values": ["xyz"]}]))), "has a PCR entry that is not", False),
             "a value in upper case": (lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, json.dumps(dict(

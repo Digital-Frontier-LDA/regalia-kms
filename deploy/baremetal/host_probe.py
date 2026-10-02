@@ -337,7 +337,7 @@ def pcrlock_pcrs(host):
     values = doc.get("pcrValues") if isinstance(doc, dict) else None
     if not isinstance(values, list) or not values or doc.get("pcrBank") != "sha256":
         return None, "%s is not a SHA-256 pcrlock policy with PCR values" % PCRLOCK_POLICY
-    pcrs = set()
+    pcrs, listed = set(), set()
     for entry in values:
         good = isinstance(entry, dict) and type(entry.get("pcr")) is int and 0 <= entry["pcr"] <= 23 \
             and isinstance(entry.get("values"), list) and entry["values"] \
@@ -347,6 +347,10 @@ def pcrlock_pcrs(host):
         # A PCR nothing was measured into is all zeros, on every boot of every image: accepting that value
         # binds nothing. PCR 11 is extended only by systemd-stub (a UKI boot); on a GRUB + initramfs host it
         # stays zero, and a policy "covering" it is satisfied by every old kernel.
+        # one entry per PCR: with two, a second one accepting zeros would hide behind a first that does not
+        if entry["pcr"] in listed:
+            return None, "%s lists PCR %d twice" % (PCRLOCK_POLICY, entry["pcr"])
+        listed.add(entry["pcr"])
         if "0" * 64 not in entry["values"]:
             pcrs.add(entry["pcr"])
     return pcrs, ""
