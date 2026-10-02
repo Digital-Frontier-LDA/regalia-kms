@@ -44,7 +44,8 @@ W="$(mktemp -d)"; ID_EC=""; ID_RSA=""; CREATED=()
 # selected, so a concurrent OpenPGP login by another process lands on PIV and spends PIV PIN tries (three
 # were spent that way on 2026-10-02). Unless the caller set OPENSC_CONF, the YubiKey's reader is ignored.
 if [ -z "${OPENSC_CONF:-}" ]; then
-  printf 'app default {\n  ignored_readers = "%s";\n}\n' "${HSM_IGNORE_READERS:-Yubico}" > "$W/opensc.conf"
+  IGN="$(python3 -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()))' "${HSM_IGNORE_READERS:-Yubico}")"
+  printf 'app default {\n  ignored_readers = %s;\n}\n' "$IGN" > "$W/opensc.conf"
   export OPENSC_CONF="$W/opensc.conf"; OWN_OPENSC_CONF=1
 fi
 # On any exit, interrupted or not: delete the test keys from the token (best effort), then the temp dir.
@@ -72,13 +73,31 @@ SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL (p
 # ONE READER ONLY from here on (e2e/lib/opensc_isolate.py): another token can no longer take this
 # token's slot ID when its reader disappears, and OpenSC stops probing the other cards.
 if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
-  python3 "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
+  HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
     || die "cannot isolate this token's reader in OpenSC"
   SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
   [ "$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
 fi
-p11(){ pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
-p11l(){ p11 --login --pin env:REGALIA_Q_PIN "$@"; }
+# EVERY LOGIN IS GATED ON WHAT IS IN THE SLOT NOW (review of #152): slot $SLOT must hold the token with
+# serial $SERIAL, no other slot may hold that serial, and under the suite's own isolated config it must
+# be the ONLY slot. During a removal the check fails and no PIN is sent; a reader that arrived later and
+# took this slot ID fails it too. Residual: the token removed AND another arriving in the milliseconds
+# between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s).
+target_ok(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+import re, sys
+slot, serial, isolated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+cur, slots, hits, here = None, 0, [], False
+for line in sys.stdin:
+    m = re.match(r"Slot \d+ \((0x[0-9a-f]+)\)", line)
+    if m:
+        cur = m.group(1); slots += 1
+    elif "serial num" in line and line.split(":", 1)[1].strip() == serial:
+        hits.append(cur)
+ok = hits == [slot] and (slots == 1 or not isolated)
+sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; }
+p11(){ timeout 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
+p11l(){ target_ok || { echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97; }
+  p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 # Fresh ids: refuse any id already on the token (PKCS#11 does not make CKA_ID unique), and remember
 # only the objects THIS run created, so cleanup can never delete a key that was there before.
 # An id counts as free only against a listing that SUCCEEDED (an absent token lists nothing).

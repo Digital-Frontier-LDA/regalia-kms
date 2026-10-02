@@ -39,7 +39,10 @@ def main(argv):
     # Every reader PC/SC knows, straight from pcscd (pyscard lists names without connecting to a card).
     # Not opensc-tool: under the caller's OPENSC_CONF it would not show the readers that config already
     # ignores, and they would then be missing from the new ignore list.
-    from smartcard.System import readers as pcsc_readers
+    try:
+        from smartcard.System import readers as pcsc_readers
+    except ImportError:
+        sys.exit("opensc_isolate: needs pyscard (python3-pyscard) in the python3 on PATH")
     names = [base(str(r)) for r in pcsc_readers()]
     if names.count(target) != 1:
         sys.exit("opensc_isolate: the reader %r is not exactly one of %r" % (target, names))
@@ -47,7 +50,14 @@ def main(argv):
     for n in others:
         if n in target or target in n:
             sys.exit("opensc_isolate: reader names overlap (%r / %r): cannot isolate by name" % (n, target))
-    quoted = ", ".join('"%s"' % n.replace('"', '') for n in others)
+    # The snapshot misses a reader that is off the bus right now (e.g. a YubiKey replugged later), so
+    # the caller's own list (HSM_IGNORE_READERS, comma-separated) is always kept as well.
+    import os
+    extra = [n.strip().replace('"', "") for n in os.environ.get("HSM_IGNORE_READERS", "").split(",") if n.strip()]
+    for n in extra:
+        if n in target:
+            sys.exit("opensc_isolate: HSM_IGNORE_READERS entry %r would hide the token's own reader" % n)
+    quoted = ", ".join('"%s"' % n.replace('"', '') for n in sorted(set(others) | set(extra)))
     with open(conf, "w") as f:
         f.write("app default {\n  ignored_readers = %s;\n}\n" % (quoted if quoted else '"__none__"'))
     print(target)
