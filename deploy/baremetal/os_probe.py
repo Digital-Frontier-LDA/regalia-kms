@@ -15,6 +15,20 @@ the deprecated deploy/proxmox/guest_probe.py. Each probe reads the host and retu
 and pcscd_clients(): every process connected to pcscd runs the KMS binary (matched by socket inode,
 identified by /proc/<pid>/exe, never by the name a process gives itself).
 
+The KMS unit's sandbox (#61), SANDBOX_MEASURED. Not yet in MEASURED: the signed evidence requires every
+MEASURED name, and its schema gains these three in the change that follows #82.
+
+  kms_service_sandboxed       the unit's effective ProtectSystem=strict, ProtectHome, PrivateTmp,
+                              ProtectKernelTunables/Modules/Logs, ProtectControlGroups,
+                              RestrictSUIDSGID and LockPersonality, as `systemctl show` reports them
+  kms_capabilities_minimal    the unit's CapabilityBoundingSet and AmbientCapabilities hold nothing
+                              beyond ALLOWED_CAPABILITIES (nothing: an unprivileged KMS on a high
+                              port needs none), and so do the bounding, permitted, effective and
+                              ambient sets the kernel reports for the running process
+  kms_apparmor_enforced       AppArmor is enabled and the running KMS process is confined by a
+                              profile in enforce mode (read from /proc/<MainPID>/attr, not from the
+                              unit: AppArmorProfile=-name starts unconfined when the profile is missing)
+
 Standard library only.
 """
 import os
@@ -25,6 +39,18 @@ import sys
 
 SERVICE = "regalia-kms.service"
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged")
+SANDBOX_MEASURED = ("kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced")
+# property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
+# directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
+SANDBOX_PROPERTIES = {
+    "ProtectSystem": ("strict",), "ProtectHome": ("yes", "tmpfs"), "PrivateTmp": ("yes", "disconnected"),
+    "ProtectKernelTunables": ("yes",), "ProtectKernelModules": ("yes",), "ProtectKernelLogs": ("yes",),
+    "ProtectControlGroups": ("yes", "strict"), "RestrictSUIDSGID": ("yes",), "LockPersonality": ("yes",),
+}
+# What the KMS may hold, as `systemctl show` spells it (cap_net_bind_service), with the kernel's bit
+# number for each. Empty: it runs unprivileged, listens on a high port, and locks its PIN pages within
+# LimitMEMLOCK. A capability added here is a recorded decision, not a default.
+ALLOWED_CAPABILITIES = {}
 HIBERNATING_TARGETS = ("hibernate.target", "hybrid-sleep.target", "suspend-then-hibernate.target")
 TOKEN_CLIENTS = ("ykman", "yubico-piv-tool", "pkcs11-tool", "pkcs15-tool", "opensc-tool", "sc-hsm-tool",
                  "pcsc_scan", "scdaemon", "gpg-card", "yubikey-agent", "age-plugin-yubikey")
@@ -166,6 +192,73 @@ def unprivileged(host):
     return True, f"User={user}, NoNewPrivileges=yes"
 
 
+def sandboxed(host):
+    rc, props = unit_properties(host, *SANDBOX_PROPERTIES, "LoadState")
+    if props.get("LoadState") != "loaded":
+        return False, f"{SERVICE} is not loaded"
+    weak = [f"{name}={props.get(name, '')!r} (want {' or '.join(want)})"
+            for name, want in SANDBOX_PROPERTIES.items() if props.get(name) not in want]
+    if weak:
+        return False, f"{SERVICE}: " + ", ".join(weak)
+    return True, ", ".join(f"{name}={props[name]}" for name in SANDBOX_PROPERTIES)
+
+
+def main_pid(host):
+    """The pid systemd tracks as the unit's main process, or None when it is not running."""
+    _, props = unit_properties(host, "MainPID")
+    pid = props.get("MainPID", "")
+    return pid if pid.isdigit() and pid != "0" else None
+
+
+def capabilities(host):
+    rc, props = unit_properties(host, "CapabilityBoundingSet", "AmbientCapabilities", "LoadState")
+    if props.get("LoadState") != "loaded":
+        return False, f"{SERVICE} is not loaded"
+    for name in ("CapabilityBoundingSet", "AmbientCapabilities"):
+        if name not in props:
+            return False, f"{SERVICE}: {name} cannot be read"
+        extra = sorted(set(props[name].split()) - set(ALLOWED_CAPABILITIES))
+        if extra:
+            # An unset bounding set is every capability the kernel knows: the list is long by design.
+            return False, f"{SERVICE} {name} holds {len(extra)} capabilit{'y' if len(extra) == 1 else 'ies'} " \
+                          f"beyond the allowed set: {' '.join(extra)}"
+    # What the unit asks for is not what the process holds if the unit changed since it started.
+    pid = main_pid(host)
+    if pid is None:
+        return False, f"{SERVICE} is not running, so the capabilities the kernel gave it cannot be read (start it first)"
+    status = host.read(f"/proc/{pid}/status") or ""
+    allowed_mask = sum(1 << bit for bit in ALLOWED_CAPABILITIES.values())
+    for field in ("CapBnd", "CapPrm", "CapEff", "CapAmb"):
+        found = re.search(rf"^{field}:\s*([0-9a-fA-F]+)\s*$", status, re.M)
+        if not found:
+            return False, f"/proc/{pid}/status has no {field}"
+        if int(found.group(1), 16) & ~allowed_mask:
+            return False, f"the running KMS (pid {pid}) has {field}={found.group(1)}, beyond the allowed set"
+    allowed = " ".join(sorted(ALLOWED_CAPABILITIES)) or "none"
+    return True, f"bounding set: {props['CapabilityBoundingSet'] or 'empty'}; ambient: " \
+                 f"{props['AmbientCapabilities'] or 'empty'}; allowed: {allowed}; pid {pid} holds nothing beyond it"
+
+
+def apparmor(host):
+    if (host.read("/sys/module/apparmor/parameters/enabled") or "").strip() != "Y":
+        return False, "AppArmor is not enabled in this kernel (/sys/module/apparmor/parameters/enabled)"
+    pid = main_pid(host)
+    if pid is None:
+        return False, f"{SERVICE} is not running, so its confinement cannot be read (start it first)"
+    # The process's own label: attr/apparmor/current where the kernel has it (5.8+), attr/current otherwise.
+    label = host.read(f"/proc/{pid}/attr/apparmor/current")
+    if label is None:
+        label = host.read(f"/proc/{pid}/attr/current")
+    label = (label or "").strip().rstrip("\x00")
+    found = re.fullmatch(r"(\S.*) \((enforce|complain|kill|unconfined|mixed)\)", label)
+    if not found:
+        return False, f"the running KMS (pid {pid}) is {label or 'not labelled'}: no AppArmor profile confines it"
+    profile, mode = found.groups()
+    if mode != "enforce" or profile == "unconfined":
+        return False, f"the running KMS (pid {pid}) is under {profile!r} in {mode} mode, not enforce"
+    return True, f"pid {pid} is confined by {profile!r} in enforce mode"
+
+
 def pcscd_clients(host):
     """(True, "<n> pcscd client(s), all the KMS binary") when every process connected to pcscd runs the
     KMS binary; (False, why) otherwise. Shared with deploy/baremetal/host_probe.py."""
@@ -201,3 +294,5 @@ def pcscd_clients(host):
 
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged}
+SANDBOX_PROBES = {"kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
+                  "kms_apparmor_enforced": apparmor}
