@@ -149,7 +149,9 @@ class HighWaterOnSwtpm(unittest.TestCase):
                         "--pid", "file=%s/pid" % self.d], check=True, capture_output=True)
         self.addCleanup(lambda: os.kill(int(open(self.d + "/pid").read()), 15))
         time.sleep(0.5)
-        self.hw = m.HighWater("0x1500016", tcti="swtpm:port=%d" % port)
+        self.tcti = "swtpm:port=%d" % port
+        self.env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
+        self.hw = m.HighWater("0x1500016", tcti=self.tcti)
         self.hw.define()
 
     def test_rollback_of_the_disk_is_refused(self):
@@ -166,6 +168,32 @@ class HighWaterOnSwtpm(unittest.TestCase):
         self.hw.advance(7)                            # the counter moved; the disk still holds epoch 6
         with self.assertRaisesRegex(m.Refused, "ROLLBACK"):
             self.hw.check(6)
+
+    def test_a_tpm_that_already_had_counters_starts_at_epoch_0(self):
+        # 48's finding: a new counter's first increment lands above any deleted counter's value.
+        other = m.HighWater("0x1500030", tcti=self.tcti)
+        other.define()
+        other.advance(5)
+        for idx in ("0x1500030", "0x1500031", "0x1500016", "0x1500017"):
+            subprocess.run(["tpm2_nvundefine", idx, "-C", "o"], env=self.env, check=True, capture_output=True)
+        fresh = m.HighWater("0x1500016", tcti=self.tcti)
+        self.assertGreater(fresh.define(), 5)
+        self.assertEqual((fresh.value(), fresh.advance(1), fresh.advance(2)), (0, 1, 2))
+
+    def test_a_missing_counter_or_tpm_fails_closed(self):
+        # 48's finding: value() used to read 0 on any failure, so check() passed every epoch.
+        self.hw.advance(3)
+        subprocess.run(["tpm2_nvundefine", "0x1500016", "-C", "o"], env=self.env, check=True, capture_output=True)
+        with self.assertRaisesRegex(m.Refused, "fail closed"):
+            self.hw.check(1)
+        with self.assertRaisesRegex(m.Refused, "fail closed"):
+            m.HighWater("0x1500016", tcti="device:/nonexistent/tpmrm0").check(1)       # no TPM there
+
+    def test_the_base_is_write_once(self):
+        r = subprocess.run(["tpm2_nvwrite", "0x1500017", "-C", "o", "-i", "-"], input=b"\0" * 8, env=self.env, capture_output=True)
+        self.assertNotEqual(r.returncode, 0)
+        with self.assertRaisesRegex(m.Refused, "already exists"):
+            self.hw.define()
 
     def test_an_anomalous_jump_is_refused(self):
         with self.assertRaisesRegex(m.Refused, "anomaly"):

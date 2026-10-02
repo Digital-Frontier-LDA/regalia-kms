@@ -93,26 +93,26 @@ def digest(manifest):
     return hashlib.sha256(canonical(manifest)).hexdigest()
 
 
-def _exact(value, keys, label):
+def exact(value, keys, label):
     require(isinstance(value, dict), "%s must be an object" % label)
     missing, unknown = set(keys) - set(value), set(value) - set(keys)
     require(not missing and not unknown, "%s fields mismatch: missing=%s unknown=%s" % (label, sorted(missing), sorted(unknown)))
 
 
-def _hex(value, n, label):
+def hex_field(value, n, label):
     require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % n, value) is not None, "%s must be %d lowercase hex" % (label, n))
 
 
 def validate(manifest):
     """Schema and uniqueness. Returns the manifest's nodes by ID."""
-    _exact(manifest, MANIFEST_KEYS, "manifest")
+    exact(manifest, MANIFEST_KEYS, "manifest")
     require(manifest["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
     e = manifest["epoch"]
     require(isinstance(e, int) and not isinstance(e, bool) and e >= 1, "epoch must be an integer >= 1")
     if e == 1:
         require(manifest["prev_digest"] == "", "epoch 1 has no previous manifest (prev_digest \"\")")
     else:
-        _hex(manifest["prev_digest"], 64, "prev_digest")
+        hex_field(manifest["prev_digest"], 64, "prev_digest")
     require(isinstance(manifest["policy_version"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,32}", manifest["policy_version"]),
             "policy_version must be a short name")
     try:
@@ -122,20 +122,20 @@ def validate(manifest):
     keys = manifest["revocation_keys"]
     require(isinstance(keys, list) and len(set(keys)) == len(keys), "revocation_keys must be a list of distinct keys")
     for k in keys:
-        _hex(k, 64, "a revocation key")
+        hex_field(k, 64, "a revocation key")
     nodes = manifest["nodes"]
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
     for i, node in enumerate(nodes):
-        _exact(node, NODE_KEYS, "nodes[%d]" % i)
+        exact(node, NODE_KEYS, "nodes[%d]" % i)
         require(isinstance(node["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node["node_id"]),
                 "nodes[%d].node_id must be a short lowercase name" % i)
         require(node["node_id"] not in by_id, "duplicate node_id %r" % node["node_id"])
         require(node["state"] in CAPABILITIES, "nodes[%d].state %r is not a known state" % (i, node["state"]))
-        _hex(node["ek_name"], 68, "nodes[%d].ek_name" % i)
-        _hex(node["ak_name"], 68, "nodes[%d].ak_name" % i)
-        _hex(node["wg_boot_pub"], 64, "nodes[%d].wg_boot_pub" % i)
-        _hex(node["wg_service_pub"], 64, "nodes[%d].wg_service_pub" % i)
+        hex_field(node["ek_name"], 68, "nodes[%d].ek_name" % i)
+        hex_field(node["ak_name"], 68, "nodes[%d].ak_name" % i)
+        hex_field(node["wg_boot_pub"], 64, "nodes[%d].wg_boot_pub" % i)
+        hex_field(node["wg_service_pub"], 64, "nodes[%d].wg_service_pub" % i)
         require(isinstance(node["hsm_serials"], list) and all(isinstance(s, str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", s)
                                                              for s in node["hsm_serials"]), "nodes[%d].hsm_serials" % i)
         # No identity may belong to two nodes: a substituted TPM, key or token would otherwise pass as another.
@@ -152,12 +152,12 @@ def validate(manifest):
 def verify_envelope(envelope, root_key, current=None):
     """The manifest inside an envelope, if its signature is by the pinned root key or by a revocation key
     named in the CURRENT manifest (never one named by the candidate itself). Returns (manifest, signer)."""
-    _exact(envelope, ("manifest", "signature"), "envelope")
+    exact(envelope, ("manifest", "signature"), "envelope")
     sig = envelope["signature"]
-    _exact(sig, ("signer", "key", "sig"), "signature")
+    exact(sig, ("signer", "key", "sig"), "signature")
     require(sig["signer"] in ("root", "revocation"), "signer must be root or revocation")
-    _hex(sig["key"], 64, "signature.key")
-    _hex(sig["sig"], 128, "signature.sig")
+    hex_field(sig["key"], 64, "signature.key")
+    hex_field(sig["sig"], 128, "signature.sig")
     if sig["signer"] == "root":
         require(sig["key"] == root_key, "the signature names a root key that is not the pinned root")
     else:
@@ -217,31 +217,67 @@ def may(manifest, node_id, action):
 
 
 class HighWater:
-    """The highest accepted epoch in a TPM NV counter (TPM_NT_COUNTER), outside restorable disk state.
-    `advance(epoch)` increments until the counter reads `epoch` (bounded); `check(disk_epoch)` refuses a
-    disk manifest older than the counter, after a restore or a crash between advance and the disk write.
-    Recovery is to fetch the chain from a peer up to at least the counter's value."""
+    """The highest accepted epoch, held in the TPM outside restorable disk state. `check(disk_epoch)`
+    refuses a disk manifest older than the high-water (a restored disk, or a crash between `advance`
+    and the disk write); recovery is to fetch the chain from a peer up to at least that value.
+
+    A TPM_NT_COUNTER's first increment lands at the highest value any counter on that TPM ever held,
+    so the epoch is `counter - base`: `define()` defines the counter, increments it once, and stores
+    where it landed in a second, write-once index (writedefine, then write-locked). After that every
+    increment is exactly +1. Deleting the counter fails closed (`value` refuses) and a redefined one
+    starts above the old value. Deleting and redefining the base index needs owner authorization on
+    the running host, which this anchor does not defend against (it defends against a restored disk).
+    """
 
     MAX_JUMP = 1000
+    NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
+    WRITTEN, WRITELOCKED = 0x20000000, 0x800
 
-    def __init__(self, index, tcti=None, run=subprocess.run):
+    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None):
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
+        self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
 
-    def _tpm(self, *args):
+    def _tpm(self, *args, **kw):
         import os
         env = dict(os.environ, **self.env) if self.env else None
-        return self.run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=env)
+        return self.run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=env, **kw)
+
+    def _attributes(self, index):
+        """The index's TPMA_NV mask; Refused if the index cannot be read (missing, or no TPM)."""
+        r = self._tpm("nvreadpublic", index)
+        require(r.returncode == 0, "cannot read NV index %s: the high-water anchor is unavailable (fail closed)" % index)
+        found = re.search(rb"attributes:\s*\n\s*friendly:[^\n]*\n\s*value:\s*0x([0-9A-Fa-f]+)", r.stdout)
+        require(found is not None, "unparseable nvreadpublic output for %s" % index)
+        return int(found.group(1), 16)
+
+    def _read8(self, index):
+        r = self._tpm("nvread", index, "-C", "o", "-s", "8")
+        require(r.returncode == 0 and len(r.stdout) == 8, "cannot read 8 bytes from NV index %s" % index)
+        return int.from_bytes(r.stdout, "big")
 
     def define(self):
+        for index in (self.index, self.base_index):
+            require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
         r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
+        require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+        base = self._read8(self.index)
+        r = self._tpm("nvdefine", self.base_index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite|writedefine")
+        require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
+        r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
+        require(r.returncode == 0, "cannot write the base index")
+        require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
+        return base
 
     def value(self):
-        r = self._tpm("nvread", self.index, "-C", "o")
-        if r.returncode != 0:
-            return 0                       # a counter that was never incremented reads as unwritten
-        require(len(r.stdout) == 8, "unexpected NV counter size")
-        return int.from_bytes(r.stdout, "big")
+        a = self._attributes(self.index)
+        require(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
+        b = self._attributes(self.base_index)
+        require(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
+                "base index %s is not written and write-locked" % self.base_index)
+        counter, base = self._read8(self.index), self._read8(self.base_index)
+        require(counter >= base, "the NV counter %d is below its base %d" % (counter, base))
+        return counter - base
 
     def advance(self, epoch):
         now = self.value()
