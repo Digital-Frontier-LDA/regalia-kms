@@ -360,6 +360,16 @@ An update is three documents:
 Both manifests can be signed in one root-key session and the second released later; if a revocation
 is published in between, the second no longer chains and is signed again.
 
+**The image itself** (#57) is built and signed by `deploy/baremetal/uki.py`: `build` gives the same bytes
+on any machine and a record of what the image will measure in each phase; `sign` rebuilds it on the
+signing machine, signs PCR 11 with one key per phase and the file for Secure Boot with a third, keys in
+a PKCS#11 token; `verify` is the check before an image is installed; `set` prints the image's
+measurement set for one host. `e2e/uki-build.sh` runs it with Debian 13's ukify, systemd-measure and
+sbsign and test keys, and replays the image on a software TPM: PCR 11 reaches the record's two values,
+and a secret sealed to each phase's key opens with the image's own signature in that phase only.
+**Not done:** no image has booted; the real initrd, the pinned inputs, the keys and their ceremony do
+not exist yet.
+
 **Replacing a node during all this** (#76) changes the document too, since the new node needs an entry:
 `measurements.check_replacement(...)` requires the manifest to replace the node and the document to
 differ by that node's and the new node's entries, and nothing else.
