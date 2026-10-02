@@ -75,6 +75,23 @@ REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-
   --login --pin env:REGALIA_E2E_PIN --keygen --key-type AES:32 \
   --label regalia-kms-aes-readable-e2e --id 0a >/dev/null
 
+# Release-signing keys (regalia#530): what regalia-sign frames as OpenPGP signatures. P-384 and
+# RSA-3072 are the two key types the Nitrokey HSM 2 offers for it. The second P-384 key (0d) is the
+# "wrong key" for the arm that proves a signature the pinned public key does not verify is never
+# written; the third (0e) backs an object the test identity is not granted.
+REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
+  --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:secp384r1 \
+  --usage-sign --label regalia-kms-release-p384-e2e --id 0b >/dev/null
+REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
+  --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type rsa:3072 \
+  --usage-sign --label regalia-kms-release-rsa-e2e --id 0c >/dev/null
+REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
+  --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:secp384r1 \
+  --usage-sign --label regalia-kms-release-p384b-e2e --id 0d >/dev/null
+REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
+  --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:secp384r1 \
+  --usage-sign --label regalia-kms-release-ungranted-e2e --id 0e >/dev/null
+
 slots="$(pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e --list-slots 2>/dev/null)"
 serial="$(printf '%s\n' "$slots" | awk -F: '/serial num/{gsub(/[[:space:]]/, "", $2); print $2; exit}')"
 [ -n "$serial" ] || { echo "SoftHSM2 serial unavailable" >&2; exit 1; }
@@ -123,6 +140,9 @@ REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_
   go -C "$ROOT" test -count=1 -run '^TestDeployedSOPSSidecarExecutableThroughMTLS$' ./internal/integration
 REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_PKCS11_E2E_PIN="$E2E_PIN" \
   go -C "$ROOT" test -count=1 -run '^TestSealOnConcretePKCS11ThenReleaseFromIt$' ./internal/integration
+# regalia#530: the regalia-sign executable, over mTLS, signs on the token; GnuPG verifies.
+REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_PKCS11_E2E_PIN="$E2E_PIN" \
+  go -C "$ROOT" test -count=1 -run '^TestDeployedRegaliaSignExecutableThroughMTLS$' ./internal/integration
 # ADR-0002 D1 through the PRODUCTION driver constructor and the real probes: SoftHSM exposes no
 # device certificate, exactly like a genuine SmartCard-HSM, so it is identified by serial plus the
 # commissioned public key. "public-key" only — it never logs in.
