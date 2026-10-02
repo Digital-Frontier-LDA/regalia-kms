@@ -267,6 +267,14 @@ class StoreOnSwtpm(_Swtpm):
         with self.assertRaisesRegex(m.Refused, "ROLLBACK"):
             m.Store(self.path, ROOT_PUB, self.hw).load()
 
+    def test_a_second_writer_at_the_same_epoch_gets_a_conflict(self):
+        self.store.commit(self.envs[0])
+        self.store.commit(self.envs[1])
+        rival = sign(manifest(2, m.digest(self.envs[0]["manifest"]), three(c="RETIRED")), ROOT)
+        with self.assertRaisesRegex(m.Refused, "CONFLICT"):
+            m.Store(self.path, ROOT_PUB, self.hw).commit(rival)       # another process, after the lock
+        self.assertEqual((m.Store(self.path, ROOT_PUB, self.hw).load(), self.hw.value()), (self.envs[1]["manifest"], 2))
+
     def test_a_crash_after_the_disk_write_is_completed_by_load(self):
         for env in self.envs[:2]:
             self.store.commit(env)
