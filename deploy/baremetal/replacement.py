@@ -72,8 +72,9 @@ def may_unlock(manifest, peer_id, requester_id, session_id, evidence, attester, 
 
 
 def identities(node):
-    """Every value that identifies a node's hardware: its TPM names, its WireGuard keys, its HSM serials."""
-    return {node[k] for k in membership.IDENTITY_KEYS} | {"hsm:" + s for s in node["hsm_serials"]}
+    """Every value that identifies a node's hardware: its TPM names, its WireGuard keys, its SSH host key
+    (schema v2), its HSM serials."""
+    return {node[k] for k in membership.identity_keys(node)} | {"hsm:" + s for s in node["hsm_serials"]}
 
 
 def check_replacement(current, candidate, old_id, new_id):

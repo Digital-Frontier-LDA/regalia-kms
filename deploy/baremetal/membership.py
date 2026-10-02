@@ -8,15 +8,32 @@ node claims (THREE-SITE-THREAT-MODEL.md S2, ADR-0002 D23).
     envelope = {"manifest": {...}, "signature": {"signer": "root" | "revocation", "key": "<hex Ed25519 public key>",
                                                  "sig": "<hex Ed25519 signature>"}}
 
-    manifest = {"schema": "regalia.membership/v1", "epoch": <int >= 1>, "prev_digest": "<64 hex, or "" at epoch 1>",
+    manifest = {"schema": "regalia.membership/v1" | "regalia.membership/v2", "epoch": <int >= 1>,
+                "prev_digest": "<64 hex, or "" at epoch 1>",
                 "policy_version": "<text>", "issued_at": "YYYY-MM-DDTHH:MM:SSZ",
+                "heartbeat_max_lifetime_s": <int> (v2 only),
                 "revocation_keys": ["<hex Ed25519 public key>", ...],
                 "nodes": [{"node_id": ..., "state": ..., "ek_name": ..., "ak_name": ..., "wg_boot_pub": ...,
-                           "wg_service_pub": ..., "hsm_serials": [...]}]}
+                           "wg_service_pub": ..., "hsm_serials": [...], "ssh_host_pub": ... (v2 only)}]}
 
 Signed message: b"regalia-membership/v1\\0" + canonical JSON of the manifest (sorted keys, no spaces,
 ASCII). Parsing refuses duplicate keys, unknown or missing fields, floats and non-ASCII names, so one
-document has exactly one meaning.
+document has exactly one meaning. The prefix names the envelope format and is the same for both schemas;
+the schema is a field of the signed manifest.
+
+Schemas (#143). v2 is v1 plus two required fields.
+  * A node field, `ssh_host_pub`: the node's SSH host key, a raw Ed25519 public key as 64 lowercase hex.
+    It is an identity like the others: unique by value across every node and every role, unchangeable
+    by a revocation key, and kept by a tombstone.
+  * A manifest field, `heartbeat_max_lifetime_s` (#69): the longest life a heartbeat may have under this
+    manifest, in seconds, from one hour to HEARTBEAT_HARD_MAX_S (seven days, a constant here that no
+    manifest can exceed). It is the window in which a partitioned peer still helps a node revoked
+    elsewhere, so it is the root's to set, like the policy version: a revocation key cannot change it.
+    There is no default: it is in the signed manifest, or the manifest is invalid.
+Each manifest is
+validated under the schema it names, so a chain that starts at v1 and moves to v2 verifies from epoch 1.
+The schema only moves forward, and only in a ROOT-signed manifest: v1 may be followed by v1 or v2, v2
+only by v2, and a revocation key cannot change it. A first manifest may be either.
 
 Transition rules (accept(current, candidate)):
   * the epoch rises by exactly one and prev_digest is the digest of the current manifest: a strict hash
@@ -59,6 +76,9 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 SCHEMA = "regalia.membership/v1"
+SCHEMA_V2 = "regalia.membership/v2"
+SCHEMAS = (SCHEMA, SCHEMA_V2)          # in order: a chain never goes back
+HEARTBEAT_MIN_S, HEARTBEAT_HARD_MAX_S = 3600, 7 * 24 * 3600      # what a v2 manifest may set as heartbeat_max_lifetime_s
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
 MAX_CHAIN_BYTES = 64 * 1024 * 1024
@@ -71,6 +91,9 @@ CAPABILITIES = {
 MANIFEST_KEYS = ("schema", "epoch", "prev_digest", "policy_version", "issued_at", "revocation_keys", "nodes")
 NODE_KEYS = ("node_id", "state", "ek_name", "ak_name", "wg_boot_pub", "wg_service_pub", "hsm_serials")
 IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
+V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
+V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
+V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
 
 
 class Refused(Exception):
@@ -133,10 +156,22 @@ def hex_field(value, n, label):
     require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % n, value) is not None, "%s must be %d lowercase hex" % (label, n))
 
 
+def identity_keys(node):
+    """The identity fields a validated node entry carries: v1's four, and ssh_host_pub in a v2 manifest."""
+    return V2_IDENTITY_KEYS if "ssh_host_pub" in node else IDENTITY_KEYS
+
+
 def validate(manifest):
     """Schema and uniqueness. Returns the manifest's nodes by ID."""
-    exact(manifest, MANIFEST_KEYS, "manifest")
-    require(manifest["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
+    require(isinstance(manifest, dict), "manifest must be an object")
+    require(manifest.get("schema") in SCHEMAS, "schema must be %s" % " or ".join(SCHEMAS))
+    second = manifest["schema"] == SCHEMA_V2
+    exact(manifest, V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
+    node_keys, identities = (V2_NODE_KEYS, V2_IDENTITY_KEYS) if second else (NODE_KEYS, IDENTITY_KEYS)
+    if second:
+        life = manifest["heartbeat_max_lifetime_s"]
+        require(isinstance(life, int) and HEARTBEAT_MIN_S <= life <= HEARTBEAT_HARD_MAX_S,
+                "heartbeat_max_lifetime_s must be an integer from %d to %d" % (HEARTBEAT_MIN_S, HEARTBEAT_HARD_MAX_S))
     e = manifest["epoch"]
     require(isinstance(e, int) and not isinstance(e, bool) and e >= 1, "epoch must be an integer >= 1")
     if e == 1:
@@ -158,7 +193,7 @@ def validate(manifest):
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
     for i, node in enumerate(nodes):
-        exact(node, NODE_KEYS, "nodes[%d]" % i)
+        exact(node, node_keys, "nodes[%d]" % i)
         require(isinstance(node["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node["node_id"]),
                 "nodes[%d].node_id must be a short lowercase name" % i)
         require(node["node_id"] not in by_id, "duplicate node_id %r" % node["node_id"])
@@ -167,12 +202,14 @@ def validate(manifest):
         hex_field(node["ak_name"], 68, "nodes[%d].ak_name" % i)
         hex_field(node["wg_boot_pub"], 64, "nodes[%d].wg_boot_pub" % i)
         hex_field(node["wg_service_pub"], 64, "nodes[%d].wg_service_pub" % i)
+        if "ssh_host_pub" in node_keys:
+            hex_field(node["ssh_host_pub"], 64, "nodes[%d].ssh_host_pub" % i)
         require(isinstance(node["hsm_serials"], list) and all(isinstance(s, str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", s)
                                                              for s in node["hsm_serials"]), "nodes[%d].hsm_serials" % i)
         # No identity may belong to two nodes: a substituted TPM, key or token would otherwise pass as another.
         # Compared by value across roles: one WireGuard key cannot be a boot key and a service key, on
-        # one node or two, and one TPM name cannot be an EK and an AK.
-        for k in IDENTITY_KEYS:
+        # one node or two, one TPM name cannot be an EK and an AK, and an SSH host key is no other key.
+        for k in identities:
             require(node[k] not in seen, "%s of %s is already used (%s)" % (k, node["node_id"], seen.get(node[k])))
             seen[node[k]] = "%s of %s" % (k, node["node_id"])
         for s in node["hsm_serials"]:
@@ -206,13 +243,16 @@ def verify_envelope(envelope, root_key, current=None):
 
 
 def _restrictive(current, candidate):
-    """A revocation-signed change: identities, policy and keys unchanged; capabilities only shrink."""
+    """A revocation-signed change: identities, policy and keys unchanged; capabilities only shrink.
+    (The schema too: accept() has already refused a schema change that the root did not sign.)"""
     require(candidate["policy_version"] == current["policy_version"], "a revocation key cannot change the policy version")
     require(candidate["revocation_keys"] == current["revocation_keys"], "a revocation key cannot change the revocation keys")
+    require(candidate.get("heartbeat_max_lifetime_s") == current.get("heartbeat_max_lifetime_s"),
+            "a revocation key cannot change heartbeat_max_lifetime_s")
     old, new = validate(current), validate(candidate)
     require(set(old) == set(new), "a revocation key cannot add or remove nodes")
     for nid, node in new.items():
-        for k in IDENTITY_KEYS + ("hsm_serials",):
+        for k in identity_keys(node) + ("hsm_serials",):
             require(node[k] == old[nid][k], "a revocation key cannot change %s of %s" % (k, nid))
         require(CAPABILITIES[node["state"]] <= CAPABILITIES[old[nid]["state"]],
                 "%s: %s -> %s widens capabilities; only the root can do that" % (nid, old[nid]["state"], node["state"]))
@@ -227,7 +267,9 @@ def _tombstones(current, candidate):
     stays in every later manifest as a tombstone: the same node_id, identities and HSM serials (as they
     were BEFORE it was retired: the retiring manifest cannot change them either), and a state that only
     moves from RETIRED to REVOKED_STOLEN. With the tombstone always present, validate()'s
-    uniqueness rule refuses any reuse of its EK, AK, WireGuard keys, HSM serials or node ID, for ever."""
+    uniqueness rule refuses any reuse of its EK, AK, WireGuard keys, SSH host key, HSM serials or node ID,
+    for ever. The fields compared are those the CURRENT entry has: in the manifest that moves a chain to
+    v2 every node, a tombstone included, is given its ssh_host_pub, and from then on it is kept too."""
     old, new = validate(current), validate(candidate)
     for nid, node in old.items():
         if node["state"] not in TERMINAL:
@@ -237,13 +279,13 @@ def _tombstones(current, candidate):
             # The manifest that retires a node must record the hardware as it was: identities rewritten in
             # the same step would leave the real ones free and protect the substitutes for ever.
             if new[nid]["state"] in TERMINAL:
-                for k in IDENTITY_KEYS + ("hsm_serials",):
+                for k in identity_keys(node) + ("hsm_serials",):
                     require(new[nid][k] == node[k], "tombstone: %s becomes %s and its %s cannot change in the same manifest"
                             % (nid, new[nid]["state"], k))
             continue
         require(nid in new, "tombstone: %s is %s and must stay in every later manifest (its identities are never reused)"
                 % (nid, node["state"]))
-        for k in IDENTITY_KEYS + ("hsm_serials",):
+        for k in identity_keys(node) + ("hsm_serials",):
             require(new[nid][k] == node[k], "tombstone: %s is %s and its %s cannot change" % (nid, node["state"], k))
         require(new[nid]["state"] == node["state"] or (node["state"], new[nid]["state"]) == ("RETIRED", "REVOKED_STOLEN"),
                 "tombstone: %s is %s, which is terminal for every signer (%s refused); hardware that may return "
@@ -264,6 +306,10 @@ def accept(current, envelope, root_key):
     require(candidate["epoch"] == current["epoch"] + 1,
             "epoch %d does not follow %d (fetch the missing manifests and accept them in order)" % (candidate["epoch"], current["epoch"]))
     require(candidate["prev_digest"] == digest(current), "prev_digest does not chain to the current manifest")
+    if candidate["schema"] != current["schema"]:
+        require(SCHEMAS.index(candidate["schema"]) > SCHEMAS.index(current["schema"]), "schema %s cannot follow %s: the schema "
+                "only moves forward" % (candidate["schema"], current["schema"]))
+        require(signer == "root", "only the root can change the schema (%s to %s)" % (current["schema"], candidate["schema"]))
     _tombstones(current, candidate)        # both signers: the one rule the root cannot override
     if signer == "revocation":
         _restrictive(current, candidate)
