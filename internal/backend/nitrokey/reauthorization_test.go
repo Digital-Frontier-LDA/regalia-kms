@@ -57,7 +57,7 @@ func newReauthWorld(t *testing.T) *reauthWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := provider.RequireReauthorization(w.gate, func() (int64, error) { return w.now, w.clockErr }); err != nil {
+	if err := provider.RequireReauthorization(w.gate, func() (int64, error) { return w.now, w.clockErr }, w.now); err != nil {
 		t.Fatal(err)
 	}
 	w.provider = provider
@@ -191,6 +191,35 @@ func TestATokenFirstSeenLaterIsDatedFromTheDaemonsStart(t *testing.T) {
 	}
 }
 
+// THE BASELINE IS THE PROCESS'S START, NOT THE CALL. The daemon reaches RequireReauthorization some
+// time after it started (the PKCS#11 module is loaded first). A lease the lease service asked for in
+// between was asked for after this daemon started, and counts.
+func TestALeaseAskedForAfterTheProcessStartedButBeforeTheCallCounts(t *testing.T) {
+	driver := &removableDriver{session: &fakeSession{serial: "serial-1", devaut: binding().DevAuthFingerprint}}
+	provider, _ := New(driver, &fakePIN{value: []byte("123456")})
+	gate := &leaseGate{admitted: true, requestedMs: 1_500}
+	if err := provider.RequireReauthorization(gate, func() (int64, error) { return 4_000, nil }, 1_000); err != nil {
+		t.Fatal(err)
+	}
+	execute := func() error {
+		_, _, err := provider.Execute(context.Background(), registry.Route{Algorithm: "rsa2048", Binding: binding()}, "unwrap",
+			"regalia-envelope-v2", "application/vnd.regalia.data-key", []byte("wrapped"), []byte("context"))
+		return err
+	}
+	if err := execute(); err != nil {
+		t.Fatalf("a lease asked for at 1500, by a process started at 1000 and called at 4000, was refused: %v", err)
+	}
+	gate.requestedMs = 1_000
+	other, _ := New(driver, &fakePIN{value: []byte("123456")})
+	if err := other.RequireReauthorization(gate, func() (int64, error) { return 4_000, nil }, 1_000); err != nil {
+		t.Fatal(err)
+	}
+	provider = other
+	if execute() == nil {
+		t.Fatal("a lease asked for at the process's start, not after it, was accepted")
+	}
+}
+
 func TestANodeThatIsNotAdmittedDoesNotResume(t *testing.T) {
 	w := newReauthWorld(t)
 	w.gate.requestedMs, w.gate.admitted = 1_001, false
@@ -291,14 +320,19 @@ func TestAnUnreadableBootClockKeepsTheTokenOut(t *testing.T) {
 func TestRequireReauthorizationNeedsItsParts(t *testing.T) {
 	provider, _ := New(&removableDriver{session: &fakeSession{}}, &fakePIN{value: []byte("123456")})
 	clock := func() (int64, error) { return 1, nil }
-	if err := provider.RequireReauthorization(nil, clock); err == nil {
+	if err := provider.RequireReauthorization(nil, clock, 1); err == nil {
 		t.Fatal("accepted no gate")
 	}
-	if err := provider.RequireReauthorization(&leaseGate{}, nil); err == nil {
+	if err := provider.RequireReauthorization(&leaseGate{}, nil, 1); err == nil {
 		t.Fatal("accepted no clock")
 	}
-	if err := provider.RequireReauthorization(&leaseGate{}, func() (int64, error) { return 0, errors.New("no clock") }); err == nil {
+	if err := provider.RequireReauthorization(&leaseGate{}, func() (int64, error) { return 0, errors.New("no clock") }, 1); err == nil {
 		t.Fatal("accepted a clock that cannot be read")
+	}
+	for _, since := range []int64{0, -1, 2} { // the clock reads 1: 2 is in the future
+		if err := provider.RequireReauthorization(&leaseGate{}, clock, since); err == nil {
+			t.Fatalf("accepted a start time of %d", since)
+		}
 	}
 	if len(provider.AwaitingReauthorization()) != 0 {
 		t.Fatal("a provider with no reauthorization lists waiting devices")

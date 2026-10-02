@@ -141,21 +141,27 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 //
 // EVERY TOKEN STARTS AS JUST ARRIVED. The provider cannot know what happened to a token before this
 // process started (a token pulled, the daemon restarted, the token put back would otherwise resume
-// on the old lease), so the first time each token is seen it is treated as having returned at this
-// call. The cost is that after a daemon restart key operations wait for the lease service's next
-// renewal; the node's readiness says so meanwhile.
+// on the old lease), so the first time each token is seen it is treated as having returned at
+// sinceMs: when this process started, on the boot clock. After a daemon restart key operations
+// therefore wait for a lease asked for since; the lease service sees the same start time and asks
+// at once (deploy/baremetal/admission.py), and the node's readiness says so meanwhile. sinceMs
+// must not be in the future: a start time ahead of the clock would be a lease nobody can ask for.
 //
 // WHAT IT CANNOT SEE: an absence nobody looked during. A token is known to be gone only when an
 // operation or a health check opens it and fails. Every routing decision and every readiness probe
 // does open it, so the window is the gap between two of those.
-func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime func() (int64, error)) error {
+func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime func() (int64, error), sinceMs int64) error {
 	if gate == nil || boottime == nil {
 		return errors.New("reauthorization needs the admission gate and the boot clock")
 	}
-	started, err := boottime()
+	now, err := boottime()
 	if err != nil {
 		return errors.New("reauthorization cannot read the boot clock")
 	}
+	if sinceMs <= 0 || sinceMs > now {
+		return errors.New("reauthorization needs the time this process started, on the boot clock and not in the future")
+	}
+	started := sinceMs
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
 	provider.reauthorizer, provider.boottime = gate, boottime

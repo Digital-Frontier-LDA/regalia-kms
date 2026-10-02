@@ -312,10 +312,14 @@ class Holder:
         state["nonces"].remove(lease["nonce"])
         held, keep = state["envelope"], False
         if held is not None:
-            try:    # the other peer answered first and its lease runs at least as long: keep it
+            # The other peer answered first and its lease runs longer: keep it. On a tie the one just
+            # asked for is taken: the daemon serves a token only under a lease asked for after its own
+            # start (admission.py), and a renewal asked for that reason must not be dropped for an older
+            # lease of the same length (the same second, or both cut at the issuer's heartbeat expiry).
+            try:
                 held_left = verify(held, manifest, now, self.run)
                 self._mine(held["lease"])
-                keep = held_left >= left
+                keep = held_left > left
             except Refused:
                 pass
         if keep:

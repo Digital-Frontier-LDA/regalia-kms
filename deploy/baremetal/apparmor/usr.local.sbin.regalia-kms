@@ -138,6 +138,10 @@ profile regalia-kms {
   # for real denials.
   owner @{PROC}/@{pid}/cgroup r,
   owner @{PROC}/@{pid}/mountinfo r,
+  # When this process started (admission.ProcessStart): the moment a runtime lease must have been
+  # asked for since, which the lease service reads for the same PID. Refused, the daemon dates it
+  # from "now" and waits for the next scheduled renewal.
+  owner @{PROC}/@{pid}/stat r,
   @{sys}/fs/cgroup/**/cpu.max r,
 
   # ---- stated refusals: denied by default already, written down so that no later rule or

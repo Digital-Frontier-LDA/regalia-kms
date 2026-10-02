@@ -250,7 +250,7 @@ func TestRequiredAdmissionMakesTheTokenProviderWaitForAFreshLease(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := requireReauthorization(provider, gate); err != nil {
+	if err := requireReauthorization(provider, gate, admission.ProcessStart); err != nil {
 		t.Fatal(err)
 	}
 	// A token the provider fails to open is now remembered as gone: the mark only exists once
@@ -263,17 +263,73 @@ func TestRequiredAdmissionMakesTheTokenProviderWaitForAFreshLease(t *testing.T) 
 	}
 	// Not required, or no PKCS#11 provider: nothing changes and nothing fails.
 	untouched, _ := nitrokey.New(unopenableDriver{}, noPIN{})
-	if err := requireReauthorization(untouched, nil); err != nil {
+	if err := requireReauthorization(untouched, nil, admission.ProcessStart); err != nil {
 		t.Fatal(err)
 	}
 	untouched.Healthy(context.Background(), binding)
 	if len(untouched.AwaitingReauthorization()) != 0 {
 		t.Fatal("a provider on a host with no required admission tracks absences")
 	}
-	if err := requireReauthorization(nil, gate); err != nil {
+	if err := requireReauthorization(nil, gate, admission.ProcessStart); err != nil {
 		t.Fatal(err)
 	}
 }
+
+// THE DAEMON AND THE LEASE SERVICE MUST MEAN THE SAME MOMENT. The baseline handed to the provider is
+// this process's start as the kernel dates it, which is what the lease service reads for the daemon's
+// PID; a process that cannot read it falls back to "now" (later: never weaker) and still starts.
+func TestTheReauthorizationBaselineIsTheProcessStart(t *testing.T) {
+	directory := t.TempDir()
+	gate, err := admission.Open(admission.Options{Path: filepath.Join(directory, "admission.json"), NodeID: "site-a",
+		SessionPath: filepath.Join(directory, "boot-session")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := registry.Binding{Backend: "nitrokey-pkcs11", DeviceID: "hsm-sitea", DeviceSerial: "serial-1",
+		DevAuthFingerprint: "sha256:" + strings.Repeat("a", 64), ObjectID: "01"}
+	baseline := func(processStart func() (int64, error)) int64 {
+		t.Helper()
+		provider, _ := nitrokey.New(presentDriver{}, noPIN{})
+		if err := requireReauthorization(provider, gate, processStart); err != nil {
+			t.Fatal(err)
+		}
+		provider.Healthy(context.Background(), binding) // the first look records what the token waits for
+		waiting := provider.AwaitingReauthorization()
+		if len(waiting) != 1 {
+			t.Fatalf("waiting = %v", waiting)
+		}
+		return waiting["hsm-sitea"]
+	}
+	started, err := admission.ProcessStart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := baseline(admission.ProcessStart); got != started {
+		t.Fatalf("the baseline is %d, the process started at %d", got, started)
+	}
+	if got := baseline(func() (int64, error) { return 1234, nil }); got != 1234 {
+		t.Fatalf("the baseline is %d, not what the process-start reading returned", got)
+	}
+	before, _ := admission.Boottime()
+	got := baseline(func() (int64, error) { return 0, errors.New("stat refused") })
+	after, _ := admission.Boottime()
+	if got < before || got > after {
+		t.Fatalf("with no process start, the baseline is %d, not now (%d..%d)", got, before, after)
+	}
+	// a start time in the future is refused rather than waited for
+	provider, _ := nitrokey.New(presentDriver{}, noPIN{})
+	if err := requireReauthorization(provider, gate, func() (int64, error) { return after + 3_600_000, nil }); err == nil {
+		t.Fatal("a process start in the future was accepted")
+	}
+}
+
+// presentDriver opens a token that proves to be the bound one.
+type presentDriver struct{}
+
+func (presentDriver) Open(context.Context, registry.Binding) (nitrokey.Session, error) {
+	return presentSession{}, nil
+}
+func (presentDriver) Ready(context.Context) bool { return true }
 
 type unopenableDriver struct{}
 
@@ -296,3 +352,13 @@ func readinessOf(handler http.Handler) bool {
 type readyProbe bool
 
 func (probe readyProbe) Ready(context.Context) bool { return bool(probe) }
+
+// presentSession answers only what the provider asks before it reaches the reauthorization check;
+// anything further would be a call on the nil embedded Session, and a panic.
+type presentSession struct{ nitrokey.Session }
+
+func (presentSession) Identity(context.Context) (string, string, error) {
+	return "serial-1", "sha256:" + strings.Repeat("a", 64), nil
+}
+func (presentSession) EstablishSecureChannel(context.Context) error { return nil }
+func (presentSession) Close() error                                 { return nil }

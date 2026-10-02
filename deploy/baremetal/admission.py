@@ -34,6 +34,14 @@ requested_boottime_ms is when the node made the request that the held lease answ
 after it was asked for, so "asked for after the HSM returned" shows a peer vouched after the HSM
 returned, with no comparison between two machines' clocks (#72, PoC 12.4).
 
+WHEN THE DAEMON STARTS, THE SERVICE ASKS AT ONCE. The daemon serves a token only under a lease asked for
+after the daemon's own process started (#72: a token pulled, the daemon restarted and the token put back
+must not resume on the old lease). Left to the schedule, that is a wait of up to a third of a lease. So
+each step() compares the held lease's request time with the daemon's start, which the kernel dates in
+/proc/<pid>/stat on the boot clock and the daemon reads for itself (internal/admission.ProcessStart): a
+lease asked for at or before it is renewed now. `daemon_started` is injected; unit_started() is the one
+for a systemd unit. Not knowing the start (the unit is down) changes nothing.
+
 COOPERATIVE, as lease.Holder is: root on the node can write this file. What bounds a compromised node is
 outside it: peers refuse its unlocks, verifiers refuse its lease, the fencing authority decides who signs.
 
@@ -44,6 +52,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -72,6 +81,34 @@ def boot_id(path=BOOT_ID_PATH):
     return value
 
 
+def process_started_ms(pid, proc="/proc"):
+    """When process `pid` started, in CLOCK_BOOTTIME milliseconds: field 22 of /proc/<pid>/stat, which the
+    kernel counts in clock ticks. The command name (field 2) is in parentheses and may contain spaces and
+    parentheses, so the fields are counted from the LAST ")". Go's reader assumes 100 ticks a second
+    (internal/admission.parseProcessStart); another rate here is refused rather than disagreed with."""
+    require(os.sysconf("SC_CLK_TCK") == 100, "the kernel clock tick is not 100 Hz: the daemon would read another start time")
+    with open(os.path.join(proc, str(int(pid)), "stat")) as f:
+        stat = f.read(4096)
+    fields = stat[stat.rfind(")") + 1:].split() if ")" in stat else []
+    require(len(fields) > 19 and re.fullmatch(r"[1-9][0-9]{0,15}", fields[19]) is not None, "the process start time cannot be read")
+    return int(fields[19]) * 10
+
+
+def unit_started(unit="regalia-kms.service", run=subprocess.run, proc="/proc"):
+    """A `daemon_started` for Service: when the main process of a systemd unit started, or None when the
+    unit has no main process or it cannot be read (then nothing is renewed early)."""
+    def started():
+        try:
+            done = run(["systemctl", "show", "--property=MainPID", "--value", unit], capture_output=True, timeout=10)
+            pid = done.stdout.decode(errors="replace").strip() if done.returncode == 0 else ""
+            if re.fullmatch(r"[1-9][0-9]{0,9}", pid) is None:
+                return None
+            return process_started_ms(pid, proc)
+        except (OSError, subprocess.SubprocessError, Refused):
+            return None
+    return started
+
+
 def _printable(text):
     return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:240]
 
@@ -98,8 +135,9 @@ class Service:
     """One node's holder loop. `holder` is its lease.Holder; `manifest()` returns its current manifest (its
     membership.Store.load); `renew(request)` asks a peer and returns the lease envelope, or raises."""
 
-    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id):
+    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id, daemon_started=None):
         self.holder, self.manifest, self.renew, self.path, self.boottime = holder, manifest, renew, path, boottime
+        self.daemon_started = daemon_started      # () -> the daemon's start on the boot clock (ms), or None
         self.boot = boot()
         self.requests_path = path + ".requests"   # nonce -> when it was asked for; survives a restart of this service
 
@@ -131,13 +169,22 @@ class Service:
                 "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
                 "serve_until_boottime_ms": serve_until, "reason": _printable(reason)}
 
+    def _daemon_waits(self):
+        """Whether the daemon started after the held lease was asked for: it will not serve on that lease,
+        so a new one is asked for now. False when there is no daemon to wait, or no lease (then due() asks)."""
+        started = self.daemon_started() if self.daemon_started is not None else None
+        held = self.holder.held()
+        if started is None or held is None:
+            return False
+        return self._requests().get(held["lease"]["nonce"], 0) <= started
+
     def step(self):
         """One round: renew if due, check, write. Returns the document written."""
         manifest, envelope, serve_until, reason = None, None, 0, ""
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
-            if self.holder.due(manifest):
+            if self.holder.due(manifest) or self._daemon_waits():
                 request = self.holder.request()
                 self._remember(request["nonce"], self.boottime())
                 try:

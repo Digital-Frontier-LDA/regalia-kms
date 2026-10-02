@@ -31,9 +31,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +50,7 @@ const (
 	MaxAheadMilliseconds = 300_000
 	maxFileBytes         = 4096
 	bootIDPath           = "/proc/sys/kernel/random/boot_id"
+	processStatPath      = "/proc/self/stat"
 )
 
 // ErrNotAdmitted is what an operation gets while the node holds no runtime lease.
@@ -145,6 +148,44 @@ func Boottime() (int64, error) {
 		return 0, err
 	}
 	return ts.Sec*1000 + ts.Nsec/1_000_000, nil
+}
+
+// ProcessStart is when this process started, in CLOCK_BOOTTIME milliseconds, as the kernel records it
+// in /proc/self/stat. The lease service reads the same number for the daemon's PID
+// (deploy/baremetal/admission.py, daemon_started), so "a lease asked for after the daemon started"
+// means the same moment on both sides, and the service can ask for one at once instead of at its
+// next renewal. The kernel counts it in clock ticks, so it is up to 10 ms before the true start.
+func ProcessStart() (int64, error) {
+	contents, err := os.ReadFile(processStatPath)
+	if err != nil {
+		return 0, err
+	}
+	return parseProcessStart(string(contents))
+}
+
+// userHZ is the unit of the times in /proc/<pid>/stat. It is 100 on every Linux architecture Go
+// supports (the kernel's USER_HZ, not its internal tick rate); deploy/baremetal/admission.py asks
+// sysconf and refuses any other value.
+const userHZ = 100
+
+// parseProcessStart takes field 22 (starttime) of a /proc/<pid>/stat line. The command name, field
+// 2, is in parentheses and may itself contain spaces and parentheses, so the fields are counted
+// from the LAST ")".
+func parseProcessStart(stat string) (int64, error) {
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return 0, errors.New("the process stat line has no command name")
+	}
+	fields := strings.Fields(stat[end+1:])
+	const startTime = 22 - 3 // fields[0] is field 3, the state
+	if len(fields) <= startTime {
+		return 0, errors.New("the process stat line is too short")
+	}
+	ticks, err := strconv.ParseInt(fields[startTime], 10, 64)
+	if err != nil || ticks <= 0 || ticks > math.MaxInt64/1000 {
+		return 0, errors.New("the process start time is not a positive number of ticks")
+	}
+	return ticks * 1000 / userHZ, nil
 }
 
 // KernelBootID reads /proc/sys/kernel/random/boot_id.
