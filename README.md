@@ -52,7 +52,7 @@ YubiKey. What each can serve, and which are qualified, is in [`CONFIGURATIONS.md
 | Backend | Transport | Status | Notes |
 |---|---|---|---|
 | **Nitrokey HSM 2** (SmartCard-HSM) | PKCS#11 | ✅ software · 🚧 production qualification | The designated production HSM (audited NXP firmware). Device-cert identity and on-token key-provenance probes await final hardware sign-off. |
-| **Pico HSM** — RP2350 running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) | PKCS#11 | ✅ staging | A fully-capable open-hardware SmartCard-HSM (~$5 board). It *could* hold production keys; Regalia **chooses** not to (policy D1) and reserves production for the Nitrokey — a trust decision, not a capability gap. Firmware/drills: [regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony). |
+| **Pico HSM** — RP2350 running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) | PKCS#11 | ✅ software · 🚧 not qualified | An open-hardware SmartCard-HSM (~$5 board), supported as a key-holding HSM but with no qualified stack yet ([`CONFIGURATIONS.md`](CONFIGURATIONS.md)). Digital Frontier's own fleet reserves production for the Nitrokey (policy D1) — a trust decision. Firmware/drills: [regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony). |
 | **YubiKey PIV** | PIV (`-tags piv`) | ✅ implemented · ⚠️ not wired into the default daemon | Built only under `-tags piv`; the default build links a stub. |
 | **OpenPGP card** | PC/SC (`-tags piv`) | 🚧 admission + protocol done; transport/wiring pending | ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)) |
 | Software / file-based KEK | — | ❌ refused in production **by design** | Production KEKs must be non-exportable hardware keys; there is no software fallback. |
