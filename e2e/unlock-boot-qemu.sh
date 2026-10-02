@@ -43,7 +43,8 @@ cleanup(){
 trap cleanup EXIT
 RECOVERY="cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"
 
-echo "### the guest's root tree (Debian $(: "${REGALIA_BOOT_SUITE:=trixie}"; echo "$REGALIA_BOOT_SUITE"))"
+SUITE="${REGALIA_BOOT_SUITE:-trixie}"
+echo "### the guest's root tree (Debian $SUITE)"
 ROOT="$W/root"
 if [ -n "${REGALIA_BOOT_ROOTFS:-}" ]; then
   cp -a "$REGALIA_BOOT_ROOTFS" "$ROOT"
@@ -51,7 +52,7 @@ else
   command -v mmdebstrap >/dev/null || { echo "unlock-boot-qemu: mmdebstrap is required (or REGALIA_BOOT_ROOTFS)"; exit 2; }
   mmdebstrap --variant=minbase \
     --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates \
-    "$REGALIA_BOOT_SUITE" "$ROOT" "${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}" >"$W/mmdebstrap.log" 2>&1 \
+    "$SUITE" "$ROOT" "${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
 fi
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
