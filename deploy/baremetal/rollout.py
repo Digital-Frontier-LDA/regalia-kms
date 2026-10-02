@@ -65,8 +65,42 @@ LIMITS, stated:
   * Nothing here reboots, installs an image or signs a manifest, and nothing is wired into a
     service yet. Boot counting and the automatic fallback to CURRENT are systemd-boot's, on the real
     hosts.
+
+THE COMMAND (KERNEL-UPDATE.md is the procedure it serves). Every subcommand READS: files, and with
+--tpm-index this host's TPM epoch counter. None signs, writes state, reboots or talks to a peer. One of
+them, `propose`, prints an UNSIGNED manifest for the root's operator to check and sign.
+
+    python3 -m deploy.baremetal.rollout version   --measurements NEW.json
+    python3 -m deploy.baremetal.rollout transition --old OLD.json --new NEW.json [--emergency] [--dropped NODE]...
+    python3 -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016]
+    python3 -m deploy.baremetal.rollout propose   --membership CHAIN.json --root-key HEX --old OLD.json --new NEW.json
+                                                  [--emergency] [--dropped NODE]... [--issued-at YYYY-MM-DDTHH:MM:SSZ]
+    python3 -m deploy.baremetal.rollout may-reboot --membership CHAIN.json --root-key HEX --measurements DOC.json
+                                                  --node-id ID --running LABEL --session-id HEX
+                                                  --attest-state STATE.json --lease LEASE.json... [--now SECONDS]
+    python3 -m deploy.baremetal.rollout retire-ready --membership CHAIN.json --root-key HEX --measurements DOC.json
+                                                  --state NODE=STATE.json...
+    python3 -m deploy.baremetal.rollout check-replacement --membership CHAIN.json --root-key HEX --candidate MANIFEST.json
+                                                  --old OLD.json --new NEW.json --old-id ID --new-id ID
+
+CHAIN.json is the node's membership file (the signed chain membership.Store keeps); it is verified from
+the root key given, every time. With --tpm-index its epoch must also EQUAL this host's TPM high-water
+(the counter is read, never advanced: an older file is a rollback, a newer one has not been accepted by
+the node's service yet). Without it the output says the chain was NOT checked against the TPM, and a
+restored older file would be believed.
+Exit status: 0 yes, 1 refused (the reason on standard error, or in the JSON), 2 a usage error.
+--json prints one JSON object instead of text.
+
+`may-reboot` takes the time from --now (seconds, from the node's authenticated clock) or, without it,
+from the system clock, and then says so: an unauthenticated clock is good enough to tell an operator
+"not yet", not to decide that a lease is still valid.
 """
+import argparse
+import datetime
+import json
 import subprocess
+import sys
+import time
 
 from deploy.baremetal import attest, lease, measurements, membership
 
@@ -209,3 +243,192 @@ def retire_ready(manifest, document, states):
     require(not behind, "NOT YET: retiring now would lock out %s. Every node must be on its target for every peer that has "
             "seen it" % "; ".join(behind))
     return seen
+
+
+# ---- the command ----
+
+def _read(path, limit=membership.MAX_CHAIN_BYTES):
+    with open(path, "rb") as f:
+        return f.read(limit + 1)
+
+
+def _document(path):
+    return measurements.load(_read(path, measurements.MAX_BYTES))
+
+
+def _json(path, label):
+    value = membership.load(_read(path, 4 * 1024 * 1024), limit=4 * 1024 * 1024)
+    require(isinstance(value, dict), "%s (%s) must hold one JSON object" % (label, path))
+    return value
+
+
+def _current(args):
+    """(the current manifest, whether it was checked against this host's TPM high-water)."""
+    membership.hex_field(args.root_key, 64, "--root-key")
+    chain = membership.load(_read(args.membership), limit=membership.MAX_CHAIN_BYTES)
+    require(isinstance(chain, list) and chain, "%s must hold a non-empty list of signed manifests" % args.membership)
+    manifest = membership.accept_chain(None, chain, args.root_key)
+    if not args.tpm_index:
+        return manifest, False
+    # READ the counter; never advance it. membership.Store.load anchors a verified newer chain, and that
+    # is the node's own service's to do, not an operator's check.
+    high_water = membership.HighWater(args.tpm_index).value()
+    require(manifest["epoch"] >= high_water, "ROLLBACK: %s is at epoch %d but this host's TPM high-water is %d: the file is older "
+            "than what this host has accepted; fetch the chain from a peer" % (args.membership, manifest["epoch"], high_water))
+    require(manifest["epoch"] == high_water, "%s is at epoch %d, which this host has not anchored yet (TPM high-water %d): let the "
+            "node's service accept it first" % (args.membership, manifest["epoch"], high_water))
+    return manifest, True
+
+
+def _summary(manifest, anchored):
+    return {"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "policy_version": manifest["policy_version"],
+            "issued_at": manifest["issued_at"], "nodes": {n["node_id"]: n["state"] for n in manifest["nodes"]},
+            "checked_against_tpm": anchored}
+
+
+def _cmd_version(args):
+    document = _document(args.measurements)
+    return {"name": document["name"], "policy_version": measurements.version(document),
+            "nodes": {n: [e["label"] for e in sets] for n, sets in sorted(measurements.validate(document).items())}}, \
+        "%(policy_version)s  (%(name)s)"
+
+
+def _cmd_transition(args):
+    kind = measurements.transition(_document(args.old), _document(args.new), emergency=args.emergency, dropped=args.dropped)
+    return {"transition": kind}, "%(transition)s"
+
+
+def _cmd_epoch(args):
+    manifest, anchored = _current(args)
+    return _summary(manifest, anchored), "epoch %(epoch)d, measurements %(policy_version)s, manifest %(manifest_digest)s" + (
+        "" if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
+
+
+def _cmd_propose(args):
+    current, anchored = _current(args)
+    old, new = _document(args.old), _document(args.new)
+    measurements.bind(current, old)
+    kind = measurements.transition(old, new, emergency=args.emergency, dropped=args.dropped)
+    require(kind != "unchanged", "the new document changes nothing: there is no manifest to propose")
+    issued = args.issued_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    proposal = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current),
+                    policy_version=measurements.version(new), issued_at=issued)
+    membership.validate(proposal)
+    measurements.bind(proposal, new)
+    return {"transition": kind, "unsigned_manifest": proposal, "signs_over": "regalia-membership/v1\\0 + canonical JSON of unsigned_manifest",
+            "follows": _summary(current, anchored)}, \
+        "%(transition)s: UNSIGNED manifest for the root to sign (nothing here signs)\n" + json.dumps(proposal, indent=2, sort_keys=True)
+
+
+def _cmd_may_reboot(args):
+    manifest, anchored = _current(args)
+    leases = [_json(path, "--lease") for path in args.lease]
+    authenticated = args.now is not None
+    verdict = may_reboot(manifest, _document(args.measurements), args.node_id, args.running, args.session_id,
+                         _json(args.attest_state, "--attest-state"), leases, args.now if authenticated else int(time.time()))
+    verdict.update(node_id=args.node_id, epoch=manifest["epoch"], checked_against_tpm=anchored, time_authenticated=authenticated)
+    return verdict, "YES: %(node_id)s may reboot into %(target)s (vouched for by %(authorizers)s; the shortest lease has %(seconds)d s left)" + (
+        "" if authenticated else "\nTIME IS THE SYSTEM CLOCK, not authenticated (no --now): do not act on a lease that is about to expire") + (
+        "" if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)") + (
+        "\nWait until this host is back and serving before starting the next one (KERNEL-UPDATE.md, step 3.5)")
+
+
+def _cmd_retire_ready(args):
+    manifest, anchored = _current(args)
+    states = {}
+    for item in args.state:
+        node_id, sep, path = item.partition("=")
+        require(sep and node_id and path, "--state takes NODE=FILE, not %r" % item)
+        require(node_id not in states, "--state names %s twice" % node_id)
+        states[node_id] = _json(path, "--state %s" % node_id)
+    seen = retire_ready(manifest, _document(args.measurements), states)
+    return {"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"], "checked_against_tpm": anchored}, \
+        "YES: every node was last seen on its target by every peer that has seen it (epoch %(epoch)d). The state files are " \
+        "unsigned: this guards against retiring too early, it is not proof"
+
+
+def _cmd_check_replacement(args):
+    current, anchored = _current(args)
+    candidate = _json(args.candidate, "--candidate")
+    candidate = candidate.get("manifest", candidate) if set(candidate) == {"manifest", "signature"} else candidate
+    measurements.check_replacement(current, candidate, _document(args.old), _document(args.new), args.old_id, args.new_id)
+    return {"replacement": "%s by %s" % (args.old_id, args.new_id), "epoch": candidate["epoch"], "policy_version": candidate["policy_version"],
+            "checked_against_tpm": anchored}, "the candidate replaces %(replacement)s and changes nothing else (epoch %(epoch)d, measurements %(policy_version)s)"
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.rollout",
+                                     description="The checks of a rolling boot-image update (KERNEL-UPDATE.md). Reads; never signs.")
+    parser.add_argument("--json", action="store_true", help="print one JSON object instead of text")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def chain(c):
+        c.add_argument("--membership", required=True, metavar="CHAIN.json", help="this node's membership file (the signed chain)")
+        c.add_argument("--root-key", required=True, metavar="HEX", help="the pinned membership root public key (64 hex)")
+        c.add_argument("--tpm-index", metavar="0x…", help="also check the chain against this host's TPM epoch counter at this NV index")
+
+    def step(c):
+        c.add_argument("--emergency", action="store_true", help="allow a compromised image to be dropped with no overlap")
+        c.add_argument("--dropped", action="append", default=[], metavar="NODE", help="a node that leaves the document; repeat")
+
+    c = sub.add_parser("version", help="the policy_version a manifest must carry to approve a measurement document")
+    c.add_argument("--measurements", required=True)
+    c.set_defaults(run=_cmd_version)
+    c = sub.add_parser("transition", help="what a new measurement document does to the old one: approve, retire, abandon, …")
+    c.add_argument("--old", required=True)
+    c.add_argument("--new", required=True)
+    step(c)
+    c.set_defaults(run=_cmd_transition)
+    c = sub.add_parser("epoch", help="the manifest this node holds: its epoch, digest and measurements version")
+    chain(c)
+    c.set_defaults(run=_cmd_epoch)
+    c = sub.add_parser("propose", help="the UNSIGNED next manifest for a new measurement document, for the root to sign")
+    chain(c)
+    c.add_argument("--old", required=True, help="the document the current manifest commits to")
+    c.add_argument("--new", required=True)
+    c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
+    step(c)
+    c.set_defaults(run=_cmd_propose)
+    c = sub.add_parser("may-reboot", help="may this node reboot into its target image now?")
+    chain(c)
+    c.add_argument("--measurements", required=True)
+    c.add_argument("--node-id", required=True)
+    c.add_argument("--running", required=True, metavar="LABEL", help="the set this node is running")
+    c.add_argument("--session-id", required=True, metavar="HEX", help="this boot's attested session (64 hex)")
+    c.add_argument("--attest-state", required=True, help="this node's attestation verifier state")
+    c.add_argument("--lease", action="append", default=[], metavar="LEASE.json", help="a runtime lease this node holds; repeat")
+    c.add_argument("--now", type=int, metavar="SECONDS", help="the node's authenticated time; without it the system clock, and the output says so")
+    c.set_defaults(run=_cmd_may_reboot)
+    c = sub.add_parser("retire-ready", help="may CURRENT be retired? (every node seen on its target by its peers)")
+    chain(c)
+    c.add_argument("--measurements", required=True)
+    c.add_argument("--state", action="append", default=[], metavar="NODE=STATE.json", help="a node's attestation verifier state; one per authorizing node")
+    c.set_defaults(run=_cmd_retire_ready)
+    c = sub.add_parser("check-replacement", help="does a candidate manifest replace one node and change nothing else?")
+    chain(c)
+    c.add_argument("--candidate", required=True, metavar="MANIFEST.json", help="the proposed manifest, bare or in its signed envelope")
+    c.add_argument("--old", required=True)
+    c.add_argument("--new", required=True)
+    c.add_argument("--old-id", required=True)
+    c.add_argument("--new-id", required=True)
+    c.set_defaults(run=_cmd_check_replacement)
+
+    args = parser.parse_args(argv)
+    try:
+        result, text = args.run(args)
+    except (Refused, attest.Refused, OSError) as refusal:
+        reason = "cannot read %s: %s" % (refusal.filename, refusal.strerror) if isinstance(refusal, OSError) else str(refusal)
+        if args.json:
+            print(json.dumps({"ok": False, "command": args.command, "refused": reason}, sort_keys=True))
+        else:
+            print("%s: NO: %s" % (args.command, reason), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(dict(result, ok=True, command=args.command), sort_keys=True))
+    else:
+        print(text % result)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
