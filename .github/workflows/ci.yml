@@ -438,3 +438,21 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
       - name: Node replacement against swtpm (enroll the new node, refuse the old hardware)
         run: bash e2e/node-replacement-swtpm.sh
+
+  # regalia-kms#69: convergence, on two software TPMs. A revoked node's manifests reach one peer in a
+  # bundle; the partitioned peer helps only until its heartbeat expires, catches up through the chain
+  # in one exchange (its TPM epoch counter follows), and its disk rolled back is refused. The script
+  # fails if its test is skipped.
+  convergence-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Manifest convergence against swtpm (bundle, partition, catch-up, rollback)
+        run: bash e2e/convergence-swtpm.sh

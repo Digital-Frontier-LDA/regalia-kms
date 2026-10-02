@@ -44,6 +44,7 @@ Capabilities by state (the #59 matrix): ACTIVE serves, requests bootstrap and au
 MAINTENANCE only requests; DRAINING only serves; QUARANTINED, RETIRED and REVOKED_STOLEN nothing.
 """
 import contextlib
+import copy
 import datetime
 import fcntl
 import hashlib
@@ -392,6 +393,8 @@ class Store:
                       high-water (a restored or deleted file: ROLLBACK), anchors a verified newer chain
                       (a crash after the disk write), and returns the current manifest (None before
                       enrollment).
+    envelopes(n)      the signed envelopes above epoch n, verified and anchored as load() does: what a
+                      peer at epoch n lacks (convergence.py).
     commit(envelope)  accepts the next manifest onto the loaded chain, writes the file durably
                       (temp file, fsync, rename, fsync of the directory), THEN advances the TPM; a crash
                       in between is completed by the next load(), never strands the node.
@@ -431,6 +434,14 @@ class Store:
         self.hw.check(epoch)
         self.chain = chain
         return current
+
+    def envelopes(self, after_epoch=0):
+        """The signed envelopes above `after_epoch`, in order: what a peer at that epoch lacks. Verified and
+        anchored exactly as load() does (a rolled-back file is refused here too), and returned as copies."""
+        require(isinstance(after_epoch, int) and not isinstance(after_epoch, bool) and after_epoch >= 0, "after_epoch must be an integer >= 0")
+        with _exclusive(self.lock_path):
+            self._load()
+            return copy.deepcopy(self.chain[after_epoch:])
 
     def commit(self, envelope):
         with _exclusive(self.lock_path):        # load, write and advance as one step
