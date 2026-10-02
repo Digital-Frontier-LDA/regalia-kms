@@ -457,6 +457,28 @@ jobs:
       - name: Node replacement against swtpm (enroll the new node, refuse the old hardware)
         run: bash e2e/node-replacement-swtpm.sh
 
+  # regalia-kms#135 (found under #75): a MEASUREMENT, not a control. Can an NV-backed TPM policy
+  # (systemd-pcrlock) retire a boot image for a LUKS2 volume, with no peer? A software TPM, a LUKS2 volume
+  # in a file, systemd's own tools: approve a second image, boot it, retire the first, and try each,
+  # including the retired image with the old policy file restored. Debian 13, because that is what the
+  # KMS hosts run (systemd 257). Privileged, with the runner's /dev: the unlock needs device-mapper.
+  pcrlock-luks-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: debian:13
+      options: --privileged -v /dev:/dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install systemd's TPM and LUKS tools, the software TPM and tpm2-tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends systemd systemd-cryptsetup cryptsetup-bin swtpm swtpm-tools tpm2-tools python3 util-linux
+      - name: NV-backed (pcrlock) policy on a LUKS2 volume against swtpm (approve, update, retire, refuse the old image)
+        run: bash e2e/pcrlock-luks-swtpm.sh
+
   # regalia-kms#69: convergence, on two software TPMs. A revoked node's manifests reach one peer in a
   # bundle; the partitioned peer helps only until its heartbeat expires, catches up through the chain
   # in one exchange (its TPM epoch counter follows), and its disk rolled back is refused. The script
