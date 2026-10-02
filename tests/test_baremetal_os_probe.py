@@ -2,7 +2,9 @@
 unprivileged service) and the pcscd client check, against a fake host. Moved here with the probes from
 the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
+import hashlib
 import json
+import os
 import pathlib
 import unittest
 from pathlib import Path
@@ -30,6 +32,16 @@ EXEC_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "ExecStart,LoadState")
 CONFIG = "/etc/regalia-kms/config.json"
 ADMISSION = {"listen_address": "0.0.0.0:8443", "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission.json",
              "node_id": "site-a", "boot_session_path": "/run/regalia/boot-session"}
+
+
+RULE_STAT = ("stat", "-c", "%u %a", os_probe.PCSCD_RULE_PATH)
+MAINPID_VALUE = ("systemctl", "show", os_probe.SERVICE, "-p", "MainPID", "--value")
+SHIPPED_PCSCD_RULE = (Path(__file__).resolve().parent.parent / "deploy/polkit/50-regalia-kms-pcscd.rules").read_text()
+# Debian's own rule file (polkitd 126): who is an administrator. It grants nothing by itself. The
+# probe knows the distribution's files by digest; this stand-in's digest is put in its place below.
+DEBIAN_DEFAULT_RULE = 'polkit.addAdminRule(function(action, subject) {\n    return ["unix-group:sudo"];\n});\n'
+REAL_KNOWN_RULES_FILES = dict(os_probe.KNOWN_RULES_FILES)
+os_probe.KNOWN_RULES_FILES["/usr/share/polkit-1/rules.d/50-default.rules"] = hashlib.sha256(DEBIAN_DEFAULT_RULE.encode()).hexdigest()
 
 
 def exec_start(arguments="-config " + CONFIG, load="loaded"):
@@ -79,7 +91,12 @@ class FakeHost:
             "/proc/20/status": proc_status(),
             "/proc/20/attr/apparmor/current": "regalia-kms (enforce)\n",
             CONFIG: json.dumps(ADMISSION),
+            os_probe.PCSCD_RULE_PATH: SHIPPED_PCSCD_RULE,
+            "/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE,
         }
+        self.dirs = {"/etc/polkit-1/rules.d": ["50-regalia-kms-pcscd.rules"], "/usr/share/polkit-1/rules.d": ["50-default.rules"],
+                     "/run/polkit-1/rules.d": [], "/usr/local/share/polkit-1/rules.d": []}
+        self.unlistable = set()
         self.commands = {
             ("systemctl", "show", os_probe.SERVICE, "-p", "LimitCORE,LoadState"): "LimitCORE=0\nLoadState=loaded\n",
             ("systemctl", "show", os_probe.SERVICE, "-p", "User,NoNewPrivileges,LoadState"):
@@ -87,6 +104,10 @@ class FakeHost:
             SANDBOX_SHOW: hardened_sandbox(),
             CAPS_SHOW: show(CapabilityBoundingSet="", AmbientCapabilities="", LoadState="loaded"),
             PID_SHOW: "MainPID=20\n",
+            RULE_STAT: "0 644\n",
+            MAINPID_VALUE: "20\n",
+            ("pkcheck", "--action-id", "org.debian.pcsc-lite.access_pcsc", "--process", "20"): "",
+            ("pkcheck", "--action-id", "org.debian.pcsc-lite.access_card", "--process", "20"): "",
             EXEC_SHOW: exec_start(),
             ("systemd-analyze", "cat-config", "systemd/coredump.conf"): "[Coredump]\n#Storage=external\nStorage=none\n",
             ("systemd-analyze", "cat-config", "systemd/sleep.conf"): "[Sleep]\n",
@@ -95,6 +116,11 @@ class FakeHost:
             ("ss", "-xpn"): 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 111 * 222 users:(("pcscd",pid=10,fd=5))\n'
                             'u_str ESTAB 0 0 * 222 * 111 users:(("regalia-kms",pid=20,fd=9))\n',
         }
+        for directory in os_probe.POLKIT_RULE_DIRECTORIES:
+            self.commands[("test", "-d", directory)] = ""
+            self.commands[("test", "-e", directory)] = ""
+            self.commands[("stat", "-L", "-c", "%u %a", directory)] = "0 755\n"
+            self.commands[("stat", "-L", "-c", "%u %a", os.path.dirname(directory))] = "0 755\n"
         self.links = {"/proc/20/exe": "/usr/local/sbin/regalia-kms", "/proc/10/exe": "/usr/sbin/pcscd"}
         for target in os_probe.HIBERNATING_TARGETS:
             self.commands[("systemctl", "is-enabled", target)] = "masked\n"
@@ -104,9 +130,15 @@ class FakeHost:
         return self.files.get(path)
 
     def listdir(self, path):
-        return []
+        return list(self.dirs.get(path, []))
+
+    def read_bytes(self, path):
+        text = self.files.get(path)
+        return None if text is None else text.encode()
 
     def run(self, argv):
+        if argv[:2] == ["find", "-H"] and argv[2] in self.dirs and argv[2] not in self.unlistable:
+            return 0, "".join(name + "\n" for name in self.dirs[argv[2]] if name.endswith(".rules"))
         out = self.commands.get(tuple(argv))
         return (0, out) if out is not None else (1, "")
 
@@ -526,6 +558,119 @@ class OpenSCLeavesThePIVCards(unittest.TestCase):
         value, why = self.verdict(host)
         self.assertFalse(value)
         self.assertIn("not valid JSON", why)
+
+
+
+class OnlyTheKMSReachesPcscd(unittest.TestCase):
+    """kms_pcscd_access_rule: the shipped polkit rule is installed byte for byte and readable by polkitd,
+    nothing else on the host is seen to speak about pcscd or grant first, and polkit admits the running
+    daemon (regalia#541)."""
+
+    control = "kms_pcscd_access_rule"
+
+    def verdict(self, host):
+        result = measure(host)[self.control]
+        return result["value"], result["why"]
+
+    def test_the_probe_s_digests_are_the_shipped_rule_s(self):
+        self.assertEqual(hashlib.sha256(SHIPPED_PCSCD_RULE.encode()).hexdigest(), os_probe.PCSCD_RULE_SHA256,
+                         "deploy/polkit/50-regalia-kms-pcscd.rules changed: update os_probe.PCSCD_RULE_SHA256")
+        bench = SHIPPED_PCSCD_RULE.replace("var ONLY_THE_KMS = true;", "var ONLY_THE_KMS = false;")
+        self.assertNotEqual(bench, SHIPPED_PCSCD_RULE, "the shipped rule must have the setting to switch")
+        self.assertEqual(hashlib.sha256(bench.encode()).hexdigest(), os_probe.PCSCD_RULE_BENCH_SHA256)
+        # The setting is inside a function: another rules file, sharing the context, cannot reach it.
+        self.assertTrue(SHIPPED_PCSCD_RULE.split("(function () {", 1)[0].count("ONLY_THE_KMS =") == 1
+                        and "(function () {\n    var ONLY_THE_KMS = true;" in SHIPPED_PCSCD_RULE)
+
+    def test_the_shipped_rule_installed_as_shipped_passes(self):
+        value, why = self.verdict(FakeHost())
+        self.assertTrue(value, why)
+        self.assertIn("polkit authorizes the running KMS (pid 20) for pcscd", why)
+
+    def test_what_fails_it(self):
+        def other(name, text, directory="/etc/polkit-1/rules.d"):
+            def breaker(host):
+                host.dirs.setdefault(directory, []).append(name)
+                if text is not None:
+                    host.files[directory + "/" + name] = text
+            return breaker
+        def installed(text):
+            return lambda h: h.files.update({os_probe.PCSCD_RULE_PATH: text})
+        qubes = 'polkit.addRule(function(action,subject) { if (subject.isInGroup("qubes")) return polkit.Result.YES; });\n'
+        harmless = 'polkit.addRule(function(action, s) { if (action.id == "org.freedesktop.udisks2.filesystem-mount" && s.user == "backup") return polkit.Result.YES; });\n'
+        cases = {
+            "the rule is not installed": (lambda h: h.files.pop(os_probe.PCSCD_RULE_PATH), "missing or unreadable"),
+            "the bench variant, which refuses nobody": (installed(SHIPPED_PCSCD_RULE.replace("ONLY_THE_KMS = true", "ONLY_THE_KMS = false")), "refuses nobody"),
+            "another user is granted": (installed(SHIPPED_PCSCD_RULE.replace('subject.user == "root"', 'subject.user == "operator"')), "byte for byte"),
+            "code after the rule": (installed(SHIPPED_PCSCD_RULE + 'polkit.addRule(function(a, s) { return "yes"; });\n'), "byte for byte"),
+            "code before the rule": (installed("polkit.Result.NO=null;\n" + SHIPPED_PCSCD_RULE), "byte for byte"),
+            "a form feed that turns the refusal into a comment": (installed(SHIPPED_PCSCD_RULE.replace('        return ONLY_THE_KMS', '        //\x0c return ONLY_THE_KMS')), "byte for byte"),
+            "comments changed": (installed(SHIPPED_PCSCD_RULE.replace("// pcscd access", "// PCSCD access")), "byte for byte"),
+            "an empty file": (installed(""), "byte for byte"),
+            "the file is another user's": (lambda h: h.commands.update({RULE_STAT: "1000 644\n"}), "not root's alone to change"),
+            "the file is group-writable": (lambda h: h.commands.update({RULE_STAT: "0 664\n"}), "not root's alone to change"),
+            "the file is world-writable": (lambda h: h.commands.update({RULE_STAT: "0 646\n"}), "not root's alone to change"),
+            "the file cannot be stat'ed": (lambda h: h.commands.pop(RULE_STAT), "not root's alone to change"),
+            "stat prints something else": (lambda h: h.commands.update({RULE_STAT: "0 644 extra\n"}), "not root's alone to change"),
+            "root-only (polkitd would not load it)": (lambda h: h.commands.update({RULE_STAT: "0 600\n"}), "not readable by others"),
+            "root and group only": (lambda h: h.commands.update({RULE_STAT: "0 640\n"}), "not readable by others"),
+            # Any other rules file is refused by name, whatever it says: the bypasses an independent
+            # read found in a word list, and a file that is harmless, alike.
+            "a group allowed everything, as Qubes ships": (other("00-qubes-allow-all.rules", qubes), "not known to need"),
+            "results rewritten without spaces": (other("60-x.rules", "polkit.Result.NO=null;\n"), "not known to need"),
+            "results rewritten by index": (other("60-x.rules", 'polkit.Result["NO"] = null;\n'), "not known to need"),
+            "results rewritten by defineProperty": (other("60-x.rules", "Object.defineProperty(polkit.Result, 'NO', {value: null});\n"), "not known to need"),
+            "the rule runner replaced": (other("60-x.rules", 'polkit._runRules = function(a,s){ return "y"+"es"; };\n'), "not known to need"),
+            "a grant exempted by an unrelated action.id": (other("10-x.rules", 'if (action.id == "org.foo.bar") {} if (subject.isInGroup("sudo")) return polkit.Result.YES;\n'), "not known to need"),
+            "a grant spelled in pieces": (other("10-x.rules", 'polkit.addRule(function(a, s) { return "y" + "es"; });\n'), "not known to need"),
+            "spawn spelled differently": (other("10-x.rules", 'polkit.addRule(function(a, s) { return polkit["spawn"](["/bin/x"]); });\n'), "not known to need"),
+            "a harmless rule for another action": (other("10-backup.rules", harmless), "not known to need"),
+            "the same in the distribution's directory": (other("00-allow.rules", qubes, "/usr/share/polkit-1/rules.d"), "not known to need"),
+            "the same in /usr/local": (other("00-allow.rules", qubes, "/usr/local/share/polkit-1/rules.d"), "not known to need"),
+            "the same in /run": (other("00-allow.rules", qubes, "/run/polkit-1/rules.d"), "not known to need"),
+            "a file of the same name in another directory": (other("50-regalia-kms-pcscd.rules", SHIPPED_PCSCD_RULE, "/usr/share/polkit-1/rules.d"), "not known to need"),
+            "the distribution's file, changed": (lambda h: h.files.update({"/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE + qubes}), "digest differs"),
+            "the distribution's file, unreadable": (lambda h: h.files.pop("/usr/share/polkit-1/rules.d/50-default.rules"), "cannot be read"),
+            "a rules directory that cannot be listed": (lambda h: h.unlistable.add("/usr/share/polkit-1/rules.d"), "cannot be listed"),
+            "a rules directory another user can change": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/usr/share/polkit-1/rules.d"): "0 777\n"}), "not root's alone to change"),
+            "an EMPTY rules directory anyone can write": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/usr/local/share/polkit-1/rules.d"): "1000 777\n"}), "not root's alone to change"),
+            "the parent of a rules directory anyone can write": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/run/polkit-1"): "0 777\n"}), "not root's alone to change"),
+            "a rules directory that is not root's": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/etc/polkit-1/rules.d"): "1000 755\n"}), "not root's alone to change"),
+            "the daemon is not running": (lambda h: h.commands.update({MAINPID_VALUE: "0\n"}), "is not running"),
+            "polkit refuses the daemon access_pcsc": (lambda h: h.commands.pop(("pkcheck", "--action-id", "org.debian.pcsc-lite.access_pcsc", "--process", "20")), "does not authorize the running KMS"),
+            "polkit refuses the daemon access_card": (lambda h: h.commands.pop(("pkcheck", "--action-id", "org.debian.pcsc-lite.access_card", "--process", "20")), "does not authorize the running KMS"),
+        }
+        for name, (breaker, reason) in cases.items():
+            with self.subTest(name):
+                host = FakeHost()
+                breaker(host)
+                value, why = self.verdict(host)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
+                self.assertTrue(all(v["value"] for k, v in measure(host).items() if k != self.control))
+
+    def test_a_rules_directory_that_does_not_exist_needs_no_stat(self):
+        host = FakeHost()
+        for key in (("test", "-d", "/run/polkit-1/rules.d"), ("test", "-e", "/run/polkit-1/rules.d"),
+                    ("stat", "-L", "-c", "%u %a", "/run/polkit-1/rules.d"), ("stat", "-L", "-c", "%u %a", "/run/polkit-1")):
+            host.commands.pop(key)
+        host.dirs.pop("/run/polkit-1/rules.d")
+        value, why = self.verdict(host)
+        self.assertTrue(value, why)
+        self.assertIn("the only other rules files are the distribution's", why)
+
+    def test_the_known_digests_are_this_machine_s_files_where_it_has_them(self):
+        """The digests were measured on Debian 13; where this machine has the files, they must agree."""
+        checked = 0
+        for path, digest in REAL_KNOWN_RULES_FILES.items():
+            try:
+                data = Path(path).read_bytes()
+            except OSError:
+                continue
+            checked += 1
+            self.assertEqual(hashlib.sha256(data).hexdigest(), digest, f"{path} on this machine is not the file the probe knows")
+        if not checked:
+            self.skipTest("no distribution polkit rules file is readable here")
 
 
 if __name__ == "__main__":

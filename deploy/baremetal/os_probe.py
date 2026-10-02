@@ -42,8 +42,21 @@ and that the daemon's two token backends do not lock each other out (regalia#541
                               backend needs the card to itself and OpenSC connects to every card it is
                               not told to ignore. With one backend or none there is nothing to check
 
+and that the daemon, and only the daemon, may talk to pcscd (regalia#541):
+
+  kms_pcscd_access_rule       /etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules is the shipped rule
+                              (deploy/polkit/): pcscd's two polkit actions are granted to the KMS user
+                              and root and refused to everyone else. Debian's pcscd lets in only users
+                              with an active session, so without the grant the daemon reaches no token;
+                              without the refusal any user with a console session reaches them all. The
+                              file is compared byte for byte and must be readable by polkitd; the only
+                              other rules files allowed are the distribution's, known by path and digest;
+                              and pkcheck must say polkit admits the running daemon. That a user WITH a
+                              console session is refused is not measured: it follows from the rule
+
 Standard library only.
 """
+import hashlib
 import json
 import os
 import re
@@ -55,7 +68,7 @@ import sys
 SERVICE = "regalia-kms.service"
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
             "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
-            "kms_opensc_leaves_piv_cards")
+            "kms_opensc_leaves_piv_cards", "kms_pcscd_access_rule")
 # property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
 # directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
 SANDBOX_PROPERTIES = {
@@ -91,6 +104,13 @@ class Host:
             return os.listdir(path)
         except OSError:
             return []
+
+    def read_bytes(self, path):
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
 
     def run(self, argv):
         try:
@@ -486,6 +506,99 @@ def opensc_leaves_piv_cards(host):
     return True, f"{conf}: ignored_readers {matching[0]!r} keeps OpenSC off the YubiKey"
 
 
+PCSCD_RULE_PATH = "/etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules"
+POLKIT_RULE_DIRECTORIES = ("/etc/polkit-1/rules.d", "/run/polkit-1/rules.d", "/usr/local/share/polkit-1/rules.d", "/usr/share/polkit-1/rules.d")
+# sha256 of deploy/polkit/50-regalia-kms-pcscd.rules, and of the same file with ONLY_THE_KMS = false.
+# tests/test_baremetal_os_probe.py holds these to the file. The file is compared byte for byte: what a
+# JavaScript file does cannot be decided by reading it line by line.
+PCSCD_RULE_SHA256 = "75d942b8a3d3c62be4082787eb1373504b09bee0fe0197541c910402a66eb55b"
+PCSCD_RULE_BENCH_SHA256 = "4a052de6c145ea44ebce731bb968099b445e6eb89e80385747025bdbe9a3abbf"
+PCSCD_ACTIONS = ("org.debian.pcsc-lite.access_pcsc", "org.debian.pcsc-lite.access_card")
+# THE ONLY OTHER RULES FILES A KMS HOST MAY CARRY: the distribution's own, known by path and sha256
+# (measured on Debian 13: polkitd 126-2, systemd 257.13, network-manager 1.52.1). Every rules file runs
+# in one JavaScript context with the KMS rule and can grant before it or rewrite polkit's objects under
+# it, and what a program does cannot be decided by reading it: a list of suspicious words was tried and
+# an independent read found a dozen ways round it. So any other file fails the control, by name. A
+# distribution update that changes one of these files fails it too, until the digest here is renewed.
+KNOWN_RULES_FILES = {
+    "/usr/share/polkit-1/rules.d/50-default.rules": "29f073ed9a8a6996b62f718e2bec962d5c84d311d23bb874830b4f9887eeabbf",
+    "/usr/share/polkit-1/rules.d/org.freedesktop.NetworkManager.rules": "c9c419a58f716c4de1f469a362dbb00745c0d35ae3077857b03168bdd9b06ee0",
+    "/usr/share/polkit-1/rules.d/systemd-networkd.rules": "f199e386a9297858331b00df07ed0b0ee5fcf4bea67f6c0bccc8a92b7e310bbd",
+}
+
+
+def rules_files(host, directory):
+    """The *.rules file names in a polkit rules directory, or None when it exists and cannot be listed."""
+    rc, _ = host.run(["test", "-d", directory])
+    if rc != 0:
+        return []
+    # -H: a directory that is a symlink is followed, as polkitd's opendir follows it
+    rc, out = host.run(["find", "-H", directory, "-mindepth", "1", "-maxdepth", "1", "-name", "*.rules", "-printf", "%f\\n"])
+    if rc != 0:
+        return None
+    return sorted(line for line in out.splitlines() if line)
+
+
+def pcscd_access_rule(host):
+    """pcscd lets in the KMS user and root, and nobody else, by the shipped polkit rule; nothing on the host
+    is seen to undo that; and polkit, asked about the running daemon, says yes.
+
+    What it cannot measure: that a user with an active console session is refused. That follows from the
+    rule and from no other file deciding first, which is checked here by reading the other files; a check
+    by reading cannot be complete for a program, so the list of what it refuses is deliberately wide."""
+    raw = host.read_bytes(PCSCD_RULE_PATH)
+    if raw is None:
+        return False, (f"{PCSCD_RULE_PATH} is missing or unreadable: pcscd admits only users with an active session, "
+                       "so the KMS service user reaches no token (install deploy/polkit/50-regalia-kms-pcscd.rules)")
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest == PCSCD_RULE_BENCH_SHA256:
+        return False, f"{PCSCD_RULE_PATH} grants the KMS user and refuses nobody (ONLY_THE_KMS = false): a bench setting, not a KMS host's"
+    if digest != PCSCD_RULE_SHA256:
+        return False, f"{PCSCD_RULE_PATH} is not, byte for byte, the shipped rule (deploy/polkit/50-regalia-kms-pcscd.rules)"
+    rc, out = host.run(["stat", "-c", "%u %a", PCSCD_RULE_PATH])
+    fields = out.split()
+    mode = int(fields[1], 8) if rc == 0 and len(fields) == 2 and re.fullmatch(r"[0-7]{3,4}", fields[1]) else None
+    if mode is None or fields[0] != "0" or mode & 0o022:
+        return False, f"{PCSCD_RULE_PATH} is not root's alone to change (owner and mode: {out.strip() or 'unreadable'})"
+    if not mode & 0o004:
+        return False, f"{PCSCD_RULE_PATH} is not readable by others (mode {fields[1]}): polkitd reads it as its own user and would not load it"
+    for directory in POLKIT_RULE_DIRECTORIES:
+        names = rules_files(host, directory)
+        if names is None:
+            return False, f"{directory} cannot be listed: what it grants is unknown"
+        # Every directory polkitd reads, empty or not, and its parent: whoever can write either can add
+        # a rules file, or rename one in, and polkitd loads it at once.
+        rc, _ = host.run(["test", "-e", directory])
+        for place in ((directory, os.path.dirname(directory)) if rc == 0 else ()):
+            rc, out = host.run(["stat", "-L", "-c", "%u %a", place])
+            fields = out.split()
+            if rc != 0 or len(fields) != 2 or fields[0] != "0" or not re.fullmatch(r"[0-7]{3,4}", fields[1]) or int(fields[1], 8) & 0o022:
+                return False, f"{place} is not root's alone to change (owner and mode: {out.strip() or 'unreadable'})"
+        for name in names:
+            path = f"{directory}/{name}"
+            if path == PCSCD_RULE_PATH:
+                continue
+            if path not in KNOWN_RULES_FILES:
+                return False, (f"{path} is a polkit rules file this host is not known to need: it runs beside the KMS rule and could "
+                               "grant pcscd before it or rewrite polkit under it. A KMS host carries only the distribution's rules files and the KMS rule")
+            other = host.read_bytes(path)
+            if other is None:
+                return False, f"{path} cannot be read: what it grants is unknown"
+            if hashlib.sha256(other).hexdigest() != KNOWN_RULES_FILES[path]:
+                return False, f"{path} is not the distribution's file as known (its digest differs): what it grants is unknown"
+    # The effect, asked of polkit itself: the running daemon is admitted to both actions.
+    rc, out = host.run(["systemctl", "show", SERVICE, "-p", "MainPID", "--value"])
+    pid = out.strip()
+    if rc != 0 or not pid.isdigit() or pid == "0":
+        return False, f"{SERVICE} is not running: polkit cannot be asked whether it admits the daemon"
+    for action in PCSCD_ACTIONS:
+        rc, _ = host.run(["pkcheck", "--action-id", action, "--process", pid])
+        if rc != 0:
+            return False, f"polkit does not authorize the running KMS (pid {pid}) for {action}"
+    return True, (f"{PCSCD_RULE_PATH}: the shipped rule; the only other rules files are the distribution's, known by digest; "
+                  f"polkit authorizes the running KMS (pid {pid}) for pcscd")
+
+
 def pcscd_clients(host):
     """(True, "<n> pcscd client(s), all the KMS binary") when every process connected to pcscd runs the
     KMS binary; (False, why) otherwise. Shared with deploy/baremetal/host_probe.py."""
@@ -523,4 +636,4 @@ PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
           "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission,
-          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards}
+          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards, "kms_pcscd_access_rule": pcscd_access_rule}

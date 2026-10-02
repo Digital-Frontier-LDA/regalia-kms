@@ -600,6 +600,60 @@ jobs:
       - name: NV-backed (pcrlock) policy on a LUKS2 volume against swtpm (approve, update, retire, refuse the old image)
         run: bash e2e/pcrlock-luks-swtpm.sh
 
+  # regalia-kms#57: the boot image of a KMS host. Debian 13's own ukify, systemd-measure and sbsign build
+  # a unified kernel image twice (the same bytes), sign its PCR 11 once per boot phase with two TEST keys
+  # and the file for Secure Boot with a third, from key files and from a PKCS#11 token (SoftHSM). A
+  # software TPM then measures the image's sections as systemd-stub would: its PCR 11 is the build
+  # record's value in the initrd and again once booted, and a secret sealed to each phase's key opens
+  # with the image's own signature in that phase only. Nothing is booted; no real key is used.
+  uki-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container:
+      image: debian:13
+      options: --privileged
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the image tools, the software token and the software TPM
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends systemd systemd-ukify systemd-boot-efi sbsigntool openssl softhsm2 \
+            libengine-pkcs11-openssl swtpm swtpm-tools tpm2-tools python3 python3-cryptography cpio dracut-core kmod
+      - name: Fetch Debian's kernel package, unpacked and not installed (the image's .linux)
+        run: |
+          mkdir -p /tmp/kernel && cd /tmp/kernel
+          pkg="$(apt-cache depends linux-image-amd64 | awk '/Depends: linux-image-/{print $2; exit}')"
+          apt-get download "$pkg"
+          sha256sum ./*.deb
+          dpkg -x ./*.deb root
+          ls root/boot/
+      - name: Build, sign and replay the image on a software TPM
+        shell: bash
+        run: |
+          set -o pipefail
+          set -- /tmp/kernel/root/boot/vmlinuz-*
+          LINUX="$1" bash e2e/uki-build.sh | tee "$RUNNER_TEMP/uki.log"
+          grep -q '^uki-build: 33 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
+          grep '^uki-build: image ' "$RUNNER_TEMP/uki.log" >> "$GITHUB_STEP_SUMMARY"
+      - name: Is a dracut initrd reproducible? (a measurement for the build design, regalia-kms#57)
+        shell: bash
+        run: |
+          set -- /tmp/kernel/root/boot/vmlinuz-*
+          kver="${1##*/vmlinuz-}"
+          kmod="/tmp/kernel/root/usr/lib/modules/$kver"
+          [ -d "$kmod" ] || kmod="/tmp/kernel/root/lib/modules/$kver"
+          [ -d "$kmod" ] || { echo "no modules directory for $kver in the kernel package"; exit 1; }
+          depmod -b "${kmod%/lib/modules/*}" "$kver"
+          for n in 1 2; do
+            dracut --force --no-hostonly --no-hostonly-cmdline --reproducible --kver "$kver" --kmoddir "$kmod" "/tmp/initrd-$n.img" > "/tmp/dracut-$n.log" 2>&1 \
+              || { tail -30 "/tmp/dracut-$n.log"; exit 1; }
+            sleep 2
+          done
+          sha256sum /tmp/initrd-1.img /tmp/initrd-2.img | tee -a "$GITHUB_STEP_SUMMARY"
+          cmp /tmp/initrd-1.img /tmp/initrd-2.img
+
   # regalia-kms#69: convergence, on two software TPMs. A revoked node's manifests reach one peer in a
   # bundle; the partitioned peer helps only until its heartbeat expires, catches up through the chain
   # in one exchange (its TPM epoch counter follows), and its disk rolled back is refused. The script
