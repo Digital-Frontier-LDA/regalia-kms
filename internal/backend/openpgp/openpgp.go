@@ -5,10 +5,14 @@
 // ADR-0001 §4 allocates this backend to "unavoidable legacy card integration" and to nothing else.
 // That sentence was the entire design, and it was only a sentence. The registry advertises
 // yubikey-openpgp in the capability matrix and will route to it; the daemon constructs no provider
-// for it, so bindBackendToRegistry refuses such a manifest at startup. That is fail-closed, but it
-// is an availability answer to a policy question — "this daemon cannot serve that backend" is not
-// "that backend may not be used for this". The rules below are the policy answer, and they are
-// enforced rather than described.
+// FROM THIS PACKAGE. "This daemon cannot serve that backend" is an availability answer to a policy
+// question, not "that backend may not be used for this". The rules below are the policy answer for
+// this adapter, and they are enforced rather than described.
+//
+// Since ADR-0002 D26 the daemon does serve the backend name, for Ed25519 signing only, through a
+// different path: OpenSC's PKCS#11 module and internal/backend/nitrokey, on a host whose evidence
+// carries a local-usb attestation. That path does not pass through this package, and on any other
+// host bindBackendToRegistry still refuses the manifest at startup.
 //
 // # LIMITED IS A SET OF REFUSALS, NOT A SET OF FEATURES
 //
