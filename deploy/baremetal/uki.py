@@ -2,12 +2,12 @@
 """The boot image of a KMS host: one unified kernel image (UKI), built the same on any machine, with a
 record of what it will measure, and signed in a separate step by keys that are on no host (#57).
 
-    python3 -m deploy.baremetal.uki build   INPUTS --name NAME --out DIR
-    python3 -m deploy.baremetal.uki sign    INPUTS --record DIR/NAME.record.json --out DIR
+    python3 -Es -m deploy.baremetal.uki build   INPUTS --name NAME --out DIR
+    python3 -Es -m deploy.baremetal.uki sign    INPUTS --record DIR/NAME.record.json --out DIR
                                             --initrd-key K --initrd-cert C --system-key K --system-cert C
                                             --secure-boot-key K --secure-boot-cert C [--key-source file|engine:pkcs11]
-    python3 -m deploy.baremetal.uki verify  --image IMAGE --record RECORD [--secure-boot-cert C]
-    python3 -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
+    python3 -Es -m deploy.baremetal.uki verify  --image IMAGE --record RECORD [--secure-boot-cert C]
+    python3 -Es -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
 
     INPUTS: --linux VMLINUZ --initrd INITRD [--microcode FILE] --cmdline FILE --os-release FILE
             --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub

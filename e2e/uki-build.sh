@@ -32,7 +32,7 @@ MEASURE="$(command -v systemd-measure || echo /usr/lib/systemd/systemd-measure)"
 STUB="${STUB:-/usr/lib/systemd/boot/efi/linuxx64.efi.stub}"
 ENGINE="${ENGINE:-$(ls /usr/lib/x86_64-linux-gnu/engines-3/pkcs11.so 2>/dev/null)}"
 SOFTHSM="${SOFTHSM:-$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so 2>/dev/null | head -1)}"
-for t in ukify sbsign sbverify openssl softhsm2-util swtpm tpm2_pcrextend tpm2_pcrread systemd-creds python3 "$MEASURE"; do
+for t in ukify sbsign sbverify openssl softhsm2-util swtpm tpm2_pcrextend tpm2_pcrread systemd-creds "$MEASURE" python3; do
   command -v "$t" >/dev/null || { echo "uki-build: $t is required (systemd-ukify, sbsigntool, softhsm2, swtpm, tpm2-tools, systemd)"; exit 2; }
 done
 [ -f "$STUB" ] && [ -f "$ENGINE" ] && [ -f "$SOFTHSM" ] || { echo "uki-build: needs systemd-boot-efi (the stub), libengine-pkcs11-openssl and softhsm2"; exit 2; }
@@ -44,8 +44,8 @@ W="$(mktemp -d)"; cd "$HERE" || exit 2
 stop(){ [ -f "$W/tpm.pid" ] || return 0; TPM2TOOLS_TCTI="$D" tpm2_shutdown -c >/dev/null 2>&1; kill "$(cat "$W/tpm.pid")" 2>/dev/null; rm -f "$W/tpm.pid"; }
 trap 'stop; $SUDO rm -rf "$W"' EXIT
 D="swtpm:path=$W/tpm.sock"
-uki(){ python3 -m deploy.baremetal.uki "$@"; }
-field(){ python3 -c 'import json,sys; v=json.load(open(sys.argv[1]))
+uki(){ python3 -Es -m deploy.baremetal.uki "$@"; }
+field(){ python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): v=v[k]
 print(v)' "$1" "$2"; }
 
@@ -148,13 +148,13 @@ no "other keys than the record's are refused" "is not the one the record names" 
 hdr "4  a software TPM measures the image; its own signatures open a secret in the right phase only"
 export TPM2TOOLS_TCTI="$D"
 # The sections as systemd-stub measures them, from the SIGNED image: "name-digest content-digest" per section.
-python3 - "$W/a/test-image.efi" > "$W/extends" <<'EOF'
+PYTHONPATH="$HERE" python3 -Ps - "$W/a/test-image.efi" > "$W/extends" <<'EOF'
 import hashlib, sys
 from deploy.baremetal import uki
 for name, content in uki.measured(uki.read(sys.argv[1])).items():
     print(hashlib.sha256(b"." + name.encode() + b"\0").hexdigest(), hashlib.sha256(content).hexdigest())
 EOF
-python3 - "$W/a/test-image.efi" > "$W/pcrsig.json" <<'EOF'
+PYTHONPATH="$HERE" python3 -Ps - "$W/a/test-image.efi" > "$W/pcrsig.json" <<'EOF'
 import sys
 from deploy.baremetal import uki
 sys.stdout.write(dict(uki.sections(uki.read(sys.argv[1])))[".pcrsig"].rstrip(b"\0").decode())
@@ -197,7 +197,7 @@ opens system && F "another image opened the system-phase secret" || P "another i
 hdr "5  the measurement set of this image for a host"
 printf '{"0": "%s", "7": "%s"}' "$(printf '00%.0s' $(seq 32))" "$(printf '77%.0s' $(seq 32))" > "$W/pcrs.json"
 uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" > "$W/set.json" 2>"$W/set.err"
-python3 - "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
+PYTHONPATH="$HERE" python3 -Ps - "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
 import json, sys
 from deploy.baremetal import measurements
 entry = json.load(open(sys.argv[1]))
