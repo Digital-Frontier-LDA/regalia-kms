@@ -27,13 +27,16 @@ Transition rules (accept(current, candidate)):
   * a REVOCATION key (named by the root in the current manifest) may only make RESTRICTIVE changes:
     the same nodes, identities, policy version and revocation keys, and each node's capabilities a
     subset of what they were;
-  * the TPM-backed high-water mark (HighWater) must never exceed the accepted epoch on disk: a disk
-    restored to an older manifest is refused at load, and recovered by fetching the newer chain.
+  * the TPM-backed high-water mark (HighWater) anchors the accepted epoch: Store keeps the signed chain
+    on disk, refuses at load a chain older than the high-water (a restored disk; recovered by fetching
+    the newer chain from a peer), and advances the high-water after each durable commit.
 
 Capabilities by state (the #59 matrix): ACTIVE serves, requests bootstrap and authorizes peers;
 MAINTENANCE only requests; DRAINING only serves; QUARANTINED, RETIRED and REVOKED_STOLEN nothing.
 """
+import contextlib
 import datetime
+import fcntl
 import hashlib
 import json
 import re
@@ -45,6 +48,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 SCHEMA = "regalia.membership/v1"
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
+MAX_CHAIN_BYTES = 64 * 1024 * 1024
 CAPABILITIES = {
     "ACTIVE": frozenset({"serve", "request", "authorize"}),
     "MAINTENANCE": frozenset({"request"}),
@@ -58,6 +62,19 @@ IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
 
 class Refused(Exception):
     pass
+
+
+@contextlib.contextmanager
+def _exclusive(lock_path):
+    """An exclusive flock held for the block: every read-modify-write of the anchor or the stored
+    chain is serialized across processes on the host."""
+    import os
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def require(cond, message):
@@ -77,8 +94,8 @@ def _no_float(text):
     raise Refused("floats are not allowed (%s)" % text)
 
 
-def load(raw):
-    require(isinstance(raw, (bytes, str)) and len(raw) <= MAX_BYTES, "a manifest envelope is at most 256 KiB")
+def load(raw, limit=MAX_BYTES):
+    require(isinstance(raw, (bytes, str)) and len(raw) <= limit, "a document is at most %d bytes here" % limit)
     try:
         return json.loads(raw, object_pairs_hook=_pairs, parse_float=_no_float, parse_constant=_no_float)
     except ValueError as error:
@@ -120,9 +137,10 @@ def validate(manifest):
     except (TypeError, ValueError):
         raise Refused("issued_at must be UTC, YYYY-MM-DDTHH:MM:SSZ")
     keys = manifest["revocation_keys"]
-    require(isinstance(keys, list) and len(set(keys)) == len(keys), "revocation_keys must be a list of distinct keys")
+    require(isinstance(keys, list), "revocation_keys must be a list")
     for k in keys:
         hex_field(k, 64, "a revocation key")
+    require(len(set(keys)) == len(keys), "revocation_keys must be distinct")
     nodes = manifest["nodes"]
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
@@ -139,11 +157,13 @@ def validate(manifest):
         require(isinstance(node["hsm_serials"], list) and all(isinstance(s, str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", s)
                                                              for s in node["hsm_serials"]), "nodes[%d].hsm_serials" % i)
         # No identity may belong to two nodes: a substituted TPM, key or token would otherwise pass as another.
+        # Compared by value across roles: one WireGuard key cannot be a boot key and a service key, on
+        # one node or two, and one TPM name cannot be an EK and an AK.
         for k in IDENTITY_KEYS:
-            require((k, node[k]) not in seen, "%s of %s is also %s's" % (k, node["node_id"], seen.get((k, node[k]))))
-            seen[(k, node[k])] = node["node_id"]
+            require(node[k] not in seen, "%s of %s is already used (%s)" % (k, node["node_id"], seen.get(node[k])))
+            seen[node[k]] = "%s of %s" % (k, node["node_id"])
         for s in node["hsm_serials"]:
-            require(("hsm", s) not in seen, "HSM %s is listed for two nodes" % s)
+            require(("hsm", s) not in seen, "HSM %s is listed twice" % s)
             seen[("hsm", s)] = node["node_id"]
         by_id[node["node_id"]] = node
     return by_id
@@ -233,9 +253,11 @@ class HighWater:
     NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
     WRITTEN, WRITELOCKED = 0x20000000, 0x800
 
-    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None):
+    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None):
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
+        # Two processes advancing at once could both increment and push the counter past any manifest.
+        self.lock_path = lock_path or "/run/lock/regalia-highwater-%s.lock" % self.index
 
     def _tpm(self, *args, **kw):
         import os
@@ -256,6 +278,10 @@ class HighWater:
         return int.from_bytes(r.stdout, "big")
 
     def define(self):
+        with _exclusive(self.lock_path):
+            return self._define()
+
+    def _define(self):
         for index in (self.index, self.base_index):
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
         r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
@@ -287,6 +313,10 @@ class HighWater:
         return self._epoch(self._base())
 
     def advance(self, epoch):
+        with _exclusive(self.lock_path):
+            return self._advance(epoch)
+
+    def _advance(self, epoch):
         base = self._base()
         now = self._epoch(base)
         require(epoch >= now, "refusing to accept epoch %d below the TPM high-water %d" % (epoch, now))
@@ -300,7 +330,97 @@ class HighWater:
         return now
 
     def check(self, disk_epoch):
+        """The disk epoch must EQUAL the high-water: older is a rollback, newer was never anchored
+        (Store.load anchors a verified newer chain with advance() first)."""
         hw = self.value()
         require(disk_epoch >= hw, "ROLLBACK: the manifest on disk is epoch %d but the TPM high-water is %d; "
                 "fetch the chain from a peer" % (disk_epoch, hw))
+        require(disk_epoch == hw, "epoch %d on disk is not anchored (TPM high-water %d)" % (disk_epoch, hw))
         return hw
+
+
+class Store:
+    """The node's accepted membership: the whole signed chain from epoch 1 in one file, anchored to a
+    HighWater. This is the only API a node should use to read or change its membership.
+
+    Both hold an exclusive lock (path + ".lock"), and HighWater serializes its own read/increment
+    sequences, so concurrent callers cannot interleave.
+
+    load()            verifies the chain from the pinned root, refuses it if it is older than the TPM
+                      high-water (a restored or deleted file: ROLLBACK), anchors a verified newer chain
+                      (a crash after the disk write), and returns the current manifest (None before
+                      enrollment).
+    commit(envelope)  accepts the next manifest onto the loaded chain, writes the file durably
+                      (temp file, fsync, rename, fsync of the directory), THEN advances the TPM; a crash
+                      in between is completed by the next load(), never strands the node.
+    """
+
+    def __init__(self, path, root_key, highwater):
+        self.path, self.root_key, self.hw = path, root_key, highwater
+        self.lock_path = path + ".lock"
+
+    def _read_chain(self):
+        try:
+            with open(self.path, "rb") as f:
+                raw = f.read(MAX_CHAIN_BYTES + 1)
+        except FileNotFoundError:
+            return []
+        chain = load(raw, limit=MAX_CHAIN_BYTES)
+        require(isinstance(chain, list) and chain, "the membership file must hold a non-empty list of envelopes")
+        return chain
+
+    def load(self):
+        with _exclusive(self.lock_path):
+            return self._load()
+
+    def _load(self):
+        chain = self._read_chain()
+        current = None
+        for envelope in chain:
+            nxt = accept(current, envelope, self.root_key)
+            require(nxt is not current, "the stored chain repeats epoch %d" % nxt["epoch"])
+            current = nxt
+        epoch = current["epoch"] if current else 0
+        hw = self.hw.value()
+        require(epoch >= hw, "ROLLBACK: the membership on disk is epoch %d but the TPM high-water is %d; "
+                "fetch the chain from a peer" % (epoch, hw))
+        if epoch > hw:
+            self.hw.advance(epoch)
+        self.hw.check(epoch)
+        self.chain = chain
+        return current
+
+    def commit(self, envelope):
+        with _exclusive(self.lock_path):        # load, write and advance as one step
+            return self._commit(envelope)
+
+    def _commit(self, envelope):
+        current = self._load()
+        nxt = accept(current, envelope, self.root_key)
+        if nxt is current:
+            return current
+        self._write(self.chain + [envelope])
+        self.hw.advance(nxt["epoch"])
+        self.chain = self.chain + [envelope]
+        return nxt
+
+    def _write(self, chain):
+        import os
+        import tempfile
+        directory = os.path.dirname(os.path.abspath(self.path))
+        fd, tmp = tempfile.mkstemp(prefix=".membership-", dir=directory)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(canonical(chain))
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
