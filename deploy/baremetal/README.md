@@ -152,6 +152,18 @@ Commissioning has two halves:
   PIN-block reset, as any failed login does. This holds for every key the daemon serves: the HSM's, a
   YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
+- **Authenticated time (`authtime.py`; the unit is NOT BUILT yet, #80).** Every expiry here (a
+  heartbeat's, a lease's) is judged against the clock, so the clock itself must be vouched for. It counts
+  as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
+  (declare servers of independent operators, so that no single operator can move the clock), with no
+  source configured without NTS, an update within the last hour, and no correction pending. A small root
+  service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
+  services believe it for 60 s.
+  **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
+  node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
+  intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
+  for the time itself; an outage of the NTS servers, or of that path, longer than those bounds stops the
+  nodes. Proven against live chrony daemons in `e2e/authtime-chrony-nts.py`.
 
 ### Host firewall (default deny, both directions)
 
