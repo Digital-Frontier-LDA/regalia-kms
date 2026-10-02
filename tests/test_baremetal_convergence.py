@@ -269,6 +269,16 @@ class Exchange(Case):
         behind.commit(self.e1)
         self.assertEqual((convergence.recover(behind, b.envelopes())["epoch"], behind.hw.value()), (3, 3))
         self.refused("the fetched chain repeats epoch 1", convergence.recover, c, [self.e1, self.e1, e2, e3])
+        # a chain further above the anchor than the anchor will move in one go: refused before anything is written
+        far = self.store("far")
+        far.commit(self.e1)
+        with open(far.path, "rb") as f:
+            before = f.read()
+        with unittest.mock.patch.object(m.HighWater, "MAX_JUMP", 1):
+            self.refused("2 above the TPM high-water: the jump exceeds the bound 1: anomaly", convergence.recover, far, b.envelopes())
+        with open(far.path, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual((far.hw.value(), far.load()["epoch"]), (1, 1))
         whole = b.envelopes()
         with unittest.mock.patch.object(m, "MAX_CHAIN_BYTES", 100):
             self.refused("the chain to restore is oversized", convergence.recover, c, whole)

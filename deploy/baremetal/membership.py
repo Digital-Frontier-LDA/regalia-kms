@@ -463,6 +463,10 @@ class Store:
             hw = self.hw.value()
             require(current["epoch"] >= hw, "the fetched chain ends at epoch %d, below the TPM high-water %d: "
                     "fetch from a peer that is not behind" % (current["epoch"], hw))
+            # before anything is written: advance() would refuse this jump AFTER the file was replaced,
+            # leaving a disk ahead of the TPM that load() could never anchor
+            require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
+                    "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
             try:
                 on_disk = self._read_chain()
             except Refused:
