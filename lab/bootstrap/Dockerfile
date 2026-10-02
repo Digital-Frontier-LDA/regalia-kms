@@ -22,6 +22,14 @@ FROM network-tools AS network
 COPY lab.py peer.py peer_cases.py membership_cases.py network.py /opt/
 ENTRYPOINT ["python3", "/opt/network.py"]
 
+FROM network-tools AS cluster-tools
+RUN apt-get update && apt-get install -y --no-install-recommends softhsm2 python3-pykcs11 \
+    && dpkg-query -W -f='${Package}\t${Version}\n' > /opt/packages.tsv \
+    && rm -rf /var/lib/apt/lists/*
+FROM cluster-tools AS cluster
+COPY lab.py peer.py network.py cluster.py tokens.py /opt/
+ENTRYPOINT ["python3", "/opt/cluster.py"]
+
 FROM network-tools AS vm-tools
 ARG TARGETARCH
 RUN apt-get update && case "$TARGETARCH" in \

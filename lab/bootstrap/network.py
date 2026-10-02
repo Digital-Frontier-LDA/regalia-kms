@@ -21,10 +21,10 @@ def address(node, plane="wg"):
     return f"10.77.91.{NODES[node]}" if plane == "wg" else f"10.89.91.{NODES[node]}"
 
 
-def exchange(host, port, command, timeout=4):
+def exchange(host, port, command, timeout=4, route="/bootstrap"):
     connection = http.client.HTTPConnection(host, port, timeout=timeout)
     try:
-        connection.request("POST", "/bootstrap", body=canonical(command),
+        connection.request("POST", route, body=canonical(command),
                            headers={"Content-Type": "application/json"})
         response = connection.getresponse()
         raw = response.read(MAX_INPUT + 1)
@@ -51,7 +51,7 @@ def parse_command_response(raw):
     return result
 
 
-def configure(node):
+def configure(node, service=False):
     """Only the startup process configures its own container namespace."""
     key = run("wg", "genkey").stdout
     public = run("wg", "pubkey", data=key).stdout.decode().strip()
@@ -64,6 +64,18 @@ def configure(node):
         run("ip", "link", "set", "wg-bootstrap", "up")
     finally:
         key_file.unlink(missing_ok=True)
+    service_public = None
+    if service:
+        service_key = run("wg", "genkey").stdout
+        service_public = run("wg", "pubkey", data=service_key).stdout.decode().strip()
+        key_file.write_bytes(service_key)
+        try:
+            run("ip", "link", "add", "wg-service", "type", "wireguard")
+            run("ip", "address", "add", f"10.78.91.{NODES[node]}/24", "dev", "wg-service")
+            run("wg", "set", "wg-service", "listen-port", "51821", "private-key", key_file)
+            run("ip", "link", "set", "wg-service", "up")
+        finally:
+            key_file.unlink(missing_ok=True)
     rules = b'''table inet lab {
       chain input { type filter hook input priority 0; policy drop;
         iifname "lo" accept
@@ -79,11 +91,17 @@ def configure(node):
       }
       chain forward { type filter hook forward priority 0; policy drop; }
     }'''
+    if service:
+        rules = rules.replace(b"udp dport 51820", b"udp dport {51820,51821}")
+        for direction, subnet in [(b"iifname", b"saddr"), (b"oifname", b"daddr")]:
+            original = direction + b' "wg-bootstrap" ip ' + subnet + b" 10.77.91.0/24 tcp dport 8443 accept"
+            extra = direction + b' "wg-service" ip ' + subnet + b" 10.78.91.0/24 tcp dport {8444,8445,8446} accept"
+            rules = rules.replace(original, original + b"\n        " + extra)
     run("nft", "-f", "-", data=rules)
     os.setgroups([])
     os.setgid(10000)
     os.setuid(10000)
-    return key, public
+    return (key, public, service_public) if service else (key, public)
 
 
 class Node:
@@ -309,8 +327,9 @@ class BoundedServer(ThreadingHTTPServer):
     daemon_threads = True
     request_queue_size = 16
 
-    def __init__(self, endpoint, node, local=False):
+    def __init__(self, endpoint, node, local=False, route="/bootstrap", drop_ops=("authorize",)):
         self.node, self.local = node, local
+        self.route, self.drop_ops = route, drop_ops
         self.slots = threading.BoundedSemaphore(8)
         super().__init__(endpoint, Handler)
 
@@ -346,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             lengths = self.headers.get_all("Content-Length", [])
-            if self.path != "/bootstrap" or len(lengths) != 1 or self.headers.get("Transfer-Encoding"):
+            if self.path != self.server.route or len(lengths) != 1 or self.headers.get("Transfer-Encoding"):
                 raise Refusal("INVALID_REQUEST")
             size = int(lengths[0])
             if not 0 < size <= MAX_INPUT:
@@ -359,7 +378,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = {"result": self.server.node.control(command)}
             else:
                 result = self.server.node.release(command, self.client_address[0])
-                if command["op"] == "authorize" and "result" in result and self.server.node.drop_next:
+                if command["op"] in self.server.drop_ops and "result" in result and self.server.node.drop_next:
                     self.server.node.drop_next = False
                     self.close_connection = True
                     return

@@ -5,6 +5,8 @@
 !peer_cases.py
 !membership_cases.py
 !network.py
+!cluster.py
+!tokens.py
 !vm.py
 !guest.py
 !guest-init.sh
