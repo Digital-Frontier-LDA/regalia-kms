@@ -170,6 +170,63 @@ func TestAnEd25519KeyIsNotEncodedAsAnECKey(t *testing.T) {
 	}
 }
 
+// THE OTHER SPELLING OF THE SAME CURVE. PKCS#11 v3.0 lets an Edwards key name its curve by a
+// PrintableString ("edwards25519") instead of an OID, and lets the point be the bare 32 bytes or an
+// OCTET STRING around them. SoftHSM and pkcs11-tool use the string. The test above feeds the OID
+// form only, which is how the driver came to refuse the first real Ed25519 key it met.
+func TestAnEd25519KeyNamedByItsCurveNameIsRead(t *testing.T) {
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := asn1.MarshalWithParams("edwards25519", "printable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapped, err := asn1.Marshal([]byte(public))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const ckkECEdwards = 0x40
+	for form, point := range map[string][]byte{"an OCTET STRING around the key": wrapped, "the bare 32 bytes": public} {
+		encoded, err := marshalPublicKey([]*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, uint(ckkECEdwards)),
+			pkcs11.NewAttribute(pkcs11.CKA_EC_PARAMS, name), pkcs11.NewAttribute(pkcs11.CKA_EC_POINT, point),
+		})
+		if err != nil {
+			t.Fatalf("%s: marshalPublicKey() error = %v", form, err)
+		}
+		parsed, err := x509.ParsePKIXPublicKey(encoded)
+		recovered, ok := parsed.(ed25519.PublicKey)
+		if err != nil || !ok || !recovered.Equal(public) {
+			t.Fatalf("%s: the encoding does not round-trip as this Ed25519 key (%T, %v)", form, parsed, err)
+		}
+	}
+
+	// Refusals: another curve name, the name with trailing bytes, and a point that is not 32 bytes
+	// in either form. Each would otherwise be published under the Ed25519 OID as a key it is not.
+	other, _ := asn1.MarshalWithParams("edwards448", "printable")
+	short, _ := asn1.Marshal([]byte(public[:31]))
+	for what, attributes := range map[string][2][]byte{
+		"another curve name":            {other, wrapped},
+		"the name with trailing bytes":  {append(append([]byte{}, name...), 0x00), wrapped},
+		"a 31-byte key in OCTET STRING": {name, short},
+		"a bare 31-byte key":            {name, public[:31]},
+		"a 33-byte point":               {name, append([]byte{0x04}, public...)},
+		"an empty point":                {name, nil},
+	} {
+		encoded, err := marshalPublicKey([]*pkcs11.Attribute{
+			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, uint(ckkECEdwards)),
+			pkcs11.NewAttribute(pkcs11.CKA_EC_PARAMS, attributes[0]), pkcs11.NewAttribute(pkcs11.CKA_EC_POINT, attributes[1]),
+		})
+		// REFUSED, not merely unparseable: bytes that came back at all would be hashed into an
+		// identity pin and handed to a verifier, whatever a later parser made of them.
+		if err == nil {
+			t.Errorf("%s was accepted and encoded as %x", what, encoded)
+		}
+	}
+}
+
 func TestAMalformedECKeyIsRefusedByPart(t *testing.T) {
 	valid := ecAttributes(t, asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}, []byte{4, 1, 2, 3})
 	emptyPoint, err := asn1.Marshal([]byte{})

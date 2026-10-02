@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
@@ -891,6 +892,40 @@ func signingMechanism(algorithm string) (*pkcs11.Mechanism, error) {
 	}
 }
 
+// namesEd25519 reports whether CKA_EC_PARAMS names the curve the other way PKCS#11 v3.0 allows for
+// an Edwards key: not an OID but the PrintableString "edwards25519" (section 2.3.5, curveName).
+//
+// The OID form (id-Ed25519) was the only one this driver read, and the only one its unit test fed
+// it — the fixture and the code shared the assumption. SoftHSM and pkcs11-tool use the string, so
+// the first Ed25519 key the driver ever met on a real module (2026-10-02) could not be read at all:
+// "invalid PKCS#11 EC parameters", and with it no identity pin and no public key for a verifier.
+func namesEd25519(params []byte) bool {
+	var name asn1.RawValue
+	rest, err := asn1.Unmarshal(params, &name)
+	return err == nil && len(rest) == 0 && name.Class == asn1.ClassUniversal && name.Tag == asn1.TagPrintableString &&
+		string(name.Bytes) == "edwards25519"
+}
+
+// marshalEd25519PublicKey encodes an Ed25519 public key as SubjectPublicKeyInfo (RFC 8410). The
+// point is the 32-byte key, either bare or wrapped in a DER OCTET STRING; modules do both. Anything
+// that is not exactly 32 bytes after unwrapping is refused: a key of another length published under
+// the Ed25519 OID would be pinned and handed to verifiers as something it is not.
+func marshalEd25519PublicKey(point []byte) ([]byte, error) {
+	raw := point
+	if len(raw) != ed25519.PublicKeySize {
+		var unwrapped []byte
+		if rest, err := asn1.Unmarshal(point, &unwrapped); err != nil || len(rest) != 0 {
+			return nil, errors.New("invalid PKCS#11 EC point")
+		}
+		raw = unwrapped
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, errors.New("invalid PKCS#11 EC point")
+	}
+	return asn1.Marshal(subjectPublicKeyInfo{Algorithm: publicKeyAlgorithm{Algorithm: oidEd25519},
+		PublicKey: asn1.BitString{Bytes: raw, BitLength: len(raw) * 8}})
+}
+
 func marshalPublicKey(attributes []*pkcs11.Attribute) ([]byte, error) {
 	values := make(map[uint][]byte, len(attributes))
 	for _, attribute := range attributes {
@@ -908,6 +943,9 @@ func marshalPublicKey(attributes []*pkcs11.Attribute) ([]byte, error) {
 		return x509.MarshalPKIXPublicKey(&rsa.PublicKey{N: modulus, E: exponent})
 	}
 	params, point := values[pkcs11.CKA_EC_PARAMS], values[pkcs11.CKA_EC_POINT]
+	if namesEd25519(params) {
+		return marshalEd25519PublicKey(point)
+	}
 	var curveOID asn1.ObjectIdentifier
 	if _, err := asn1.Unmarshal(params, &curveOID); err != nil {
 		return nil, errors.New("invalid PKCS#11 EC parameters")
