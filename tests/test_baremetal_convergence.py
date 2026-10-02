@@ -5,6 +5,7 @@ The transport is a function in this file (two nodes exchange summaries and envel
 Fixtures are those of the replacement and lease tests; the last class runs catch-up on two software TPMs."""
 import copy
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -250,7 +251,7 @@ class Exchange(Case):
         self.refused("CONFLICT: the fetched chain differs from the stored one at epoch 2", c.restore, [self.e1, rival2, rival3])
         with open(c.path, "rb") as f:
             self.assertEqual(f.read(), m.canonical([self.e1, e2]))                           # refused: nothing written
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": self.stores["authority"].envelopes()}), {"epoch": 3, "manifest_digest": m.digest(e3["manifest"])})
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()}), {"epoch": 3, "manifest_digest": m.digest(e3["manifest"])})
         self.assertEqual(c.load()["epoch"], 3)
         # a disk AHEAD of the fetched chain (a crash after the write, before the TPM moved) is not shortened
         d = self.store("d")
@@ -260,10 +261,10 @@ class Exchange(Case):
         self.refused("the fetched chain is shorter than the stored one: nothing to restore", d.restore, [self.e1, e2])
         self.assertEqual(d.load()["epoch"], 3)                                               # load() completes that crash by itself
         os.unlink(c.path)                                                                    # lost altogether
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": self.stores["authority"].envelopes()})["epoch"], 3)
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], 3)
         with open(c.path, "w") as f:
             f.write("{")                                                                     # or unreadable
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": self.stores["authority"].envelopes()})["epoch"], 3)
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], 3)
         # or well-formed JSON with a corrupt tail: only the valid prefix counts, and a tail of junk as long as
         # the real chain, or longer, does not make the fetched chain "shorter"
         for label, tail in (("an empty object", [{}]), ("junk entries", [{}, {"manifest": {}}, "x", 7]),
@@ -273,12 +274,12 @@ class Exchange(Case):
                     f.write(m.canonical([self.e1] + tail))
                 with self.assertRaises(m.Refused):
                     c.load()
-                self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": self.stores["authority"].envelopes()})["epoch"], 3)
+                self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], 3)
                 self.assertEqual(c.load()["epoch"], 3)
         # a node that is merely behind may be restored forward too: its TPM anchor moves with the chain
         behind = self.store("behind")
         behind.commit(self.e1)
-        self.assertEqual((convergence.recover(behind, {"b": b.envelopes(), "authority": self.stores["authority"].envelopes()})["epoch"], behind.hw.value()), (3, 3))
+        self.assertEqual((convergence.recover(behind, {"b": b.envelopes(), convergence.AUTHORITY: self.stores["authority"].envelopes()})["epoch"], behind.hw.value()), (3, 3))
         self.refused("the fetched chain repeats epoch 1", c.restore, [self.e1, self.e1, e2, e3])
         # a chain further above the anchor than the anchor will move in one go: refused before anything is written
         far = self.store("far")
@@ -306,33 +307,36 @@ class Exchange(Case):
         os.unlink(c.path)                                                    # c loses its chain
         self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", convergence.recover, c, {"b": fork})
         self.refused("CONFLICT: the sources' chains differ at epoch 2", convergence.recover, c, {"a": fork, "b": b.envelopes()})
-        self.refused("CONFLICT: the sources' chains differ at epoch 2", convergence.recover, c, {"b": b.envelopes(), "authority": authority.envelopes(), "a": fork})
+        self.refused("CONFLICT: the sources' chains differ at epoch 2", convergence.recover, c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes(), "a": fork})
         # one source cannot be counted twice, and a source must be the authority or a node the chain lets authorize
         self.assertEqual(len({"b": fork, **{"b": fork}}), 1)
         self.refused("'a' is not a source this chain trusts", convergence.recover, c, {"a": b.envelopes(), "b": b.envelopes()})     # a is revoked on it
         self.refused("'z' is not a source this chain trusts", convergence.recover, c, {"z": b.envelopes(), "b": b.envelopes()})
+        # the authority's tag is not a node ID, so no node can be filed as the authority by being named "authority"
+        self.assertIsNone(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", convergence.AUTHORITY))
+        self.refused("'authority' is not a source this chain trusts", convergence.recover, c, {"authority": b.envelopes(), "b": b.envelopes()})
         self.refused("is not a source this chain trusts", convergence.recover, c, {"x": fork, "a": fork})                             # the fork, from two names it does not list as peers
         self.assertFalse(os.path.exists(c.path))                             # nothing was installed
         for label, reason, chains in (
-                ("a source that is behind", "ends at epoch 1, below the TPM high-water 2: that source is behind", {"b": b.envelopes(), "authority": [self.e1]}),
-                ("a source with a forged link", "signature does not verify", {"b": b.envelopes(), "authority": [self.e1, dict(e2, signature=dict(e2["signature"], sig="00" * 64))]}),
-                ("a source that repeats an epoch", "a fetched chain repeats epoch 1", {"b": b.envelopes(), "authority": [self.e1, self.e1, e2]}),
-                ("an empty source", "sources must map each source", {"b": b.envelopes(), "authority": []}),
+                ("a source that is behind", "ends at epoch 1, below the TPM high-water 2: that source is behind", {"b": b.envelopes(), convergence.AUTHORITY: [self.e1]}),
+                ("a source with a forged link", "signature does not verify", {"b": b.envelopes(), convergence.AUTHORITY: [self.e1, dict(e2, signature=dict(e2["signature"], sig="00" * 64))]}),
+                ("a source that repeats an epoch", "a fetched chain repeats epoch 1", {"b": b.envelopes(), convergence.AUTHORITY: [self.e1, self.e1, e2]}),
+                ("an empty source", "sources must map each source", {"b": b.envelopes(), convergence.AUTHORITY: []}),
                 ("a list, not a mapping", "sources must map each source", [b.envelopes(), b.envelopes()])):
             with self.subTest(label):
                 self.refused(reason, convergence.recover, c, chains)
         for bad in (0, True, "2"):
             self.refused("minimum must be an integer >= 1", convergence.recover, c, {"b": b.envelopes()}, bad)
         with unittest.mock.patch.object(convergence, "MAX_ENVELOPES", 0):
-            self.refused("a chain is oversized", convergence.recover, c, {"b": b.envelopes(), "authority": authority.envelopes()})
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": authority.envelopes()})["epoch"], 2)
+            self.refused("a chain is oversized", convergence.recover, c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes()})
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes()})["epoch"], 2)
         self.assertEqual(c.load()["nodes"][0]["state"], "REVOKED_STOLEN")
         # one source, as an operator's explicit decision; and then a longer source brings the newer epochs
         os.unlink(c.path)
         e3 = self.revoke(e2["manifest"], "DRAINING", "c")
         self.assertEqual(convergence.recover(c, {"b": b.envelopes()}, minimum=1)["epoch"], 2)
         os.unlink(c.path)
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": authority.envelopes()})["epoch"], 3)   # the longest of the agreeing chains
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: authority.envelopes()})["epoch"], 3)   # the longest of the agreeing chains
 
     def test_the_partition_bound_is_24_hours_and_the_accepted_skew(self):
         c, fresh = self.stores["c"], self.peer("c", "-skew")["freshness"]
@@ -553,12 +557,12 @@ class OnSwtpm(unittest.TestCase):
         self.refused("ROLLBACK", convergence.catch_up, c, b.envelopes(1))
         # recovery: fetch b's whole chain and install it through the store
         self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", convergence.recover, c, {"b": b.envelopes()})
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": [e1, e2, e3]})["epoch"], 3)   # b's chain and the authority's agree
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: [e1, e2, e3]})["epoch"], 3)   # b's chain and the authority's agree
         self.assertEqual((c.load()["epoch"], c.hw.value()), (3, 3))
         self.refused("a may not be unlocked under epoch 3", hb.authorize, c.load(), "c", "a", self.fresh["c"])
         os.unlink(c.path)                                                    # the file lost altogether: the same recovery
         self.refused("ROLLBACK", c.load)
-        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), "authority": [e1, e2, e3]})["epoch"], 3)
+        self.assertEqual(convergence.recover(c, {"b": b.envelopes(), convergence.AUTHORITY: [e1, e2, e3]})["epoch"], 3)
 
 
 if __name__ == "__main__":

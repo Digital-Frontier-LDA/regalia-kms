@@ -114,7 +114,9 @@ def catch_up(store, envelopes):
     return summary(store)
 
 
-AUTHORITY = "authority"   # the revocation authority as a source of chains; every other source is a node ID
+# The revocation authority as a source of chains. Every other source is a node ID, and this is not one:
+# "@" is outside the node-ID grammar, so no node, revoked or not, can be filed as the authority by its name.
+AUTHORITY = "@authority"
 
 
 def recover(store, sources, minimum=2):
