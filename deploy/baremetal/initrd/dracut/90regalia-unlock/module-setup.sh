@@ -8,9 +8,9 @@
 #
 # Not included by default: add it with `dracut --add regalia-unlock` (or add_dracutmodules+=).
 #
-# dracut sources this file and provides $moddir, $initdir, $systemdsystemunitdir, $SYSTEMCTL and the
-# inst_* functions.
-# shellcheck disable=SC2154
+# dracut sources this file and provides $initdir, $systemdsystemunitdir, $SYSTEMCTL and the inst_*
+# functions. They are used as ${name:?}: sourced by anything that does not provide them, the module
+# stops instead of installing into nowhere.
 
 check() {
     require_binaries regalia-unlock wg nft ip || return 1
@@ -43,7 +43,7 @@ install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
     for unit in regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service; do
-        inst_simple "$systemdsystemunitdir/$unit"
+        inst_simple "${systemdsystemunitdir:?}/$unit"
     done
     # Taken when present, and said when not: an image without them builds, and every boot of it ends at
     # the recovery-key prompt.
@@ -55,5 +55,5 @@ install() {
             dwarn "regalia-unlock: $file is not there: this image cannot unlock the root volume unattended"
         fi
     done
-    $SYSTEMCTL -q --root "$initdir" enable regalia-unlock.socket
+    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket
 }
