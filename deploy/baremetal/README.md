@@ -106,6 +106,15 @@ Commissioning has two halves:
   sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms      # enforce, once the log is clean
   ```
   Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
+- **Runtime admission.** A production configuration states `"runtime_admission": "required"` with
+  `runtime_admission_path`, `node_id` and `boot_session_path` (`config/daemon.example.json`); with a
+  token configured the daemon refuses to start if the setting is left out, and `"disabled-for-lab"` is
+  for lab and CI hosts only. The daemon then serves key operations only while the root lease service
+  (`deploy/baremetal/admission.py`) reports that this node holds a runtime lease: without one,
+  `/v1/health/ready` is 503 and every key operation is a 503 `DEPENDENCY_UNAVAILABLE`, audited as
+  `not-admitted`. `/run/regalia` must be root's, mode 0755, and the two files in it root's, mode 0644.
+  `python3 -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
+  lease service to a peer is not shipped yet (#80).
 
 ### Host firewall (default deny, both directions)
 

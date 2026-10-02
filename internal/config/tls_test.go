@@ -11,6 +11,9 @@ func baseConfig() Config {
 	cfg.OperationTimeout = 15 * time.Second
 	cfg.ShutdownTimeout = 10 * time.Second
 	cfg.MaxConcurrentOperations = 4
+	// Stated, so that a row which configures a token is refused for the rule under test and not for
+	// leaving runtime admission out. The setting's own rules are in runtime_admission_test.go.
+	cfg.RuntimeAdmission = RuntimeAdmissionDisabledForLab
 	return cfg
 }
 

@@ -339,6 +339,12 @@ class Holder:
         self._mine(state["envelope"]["lease"])
         return left, state["envelope"]["lease"]
 
+    def held(self):
+        """The lease envelope this node holds (a copy), or None. Not a check: use check() to decide."""
+        with membership._exclusive(self.lock_path):
+            envelope = self._read()["envelope"]
+        return json.loads(json.dumps(envelope)) if envelope is not None else None
+
     def due(self, manifest):
         """Whether to ask for a renewal now: no usable lease, or a third of its lifetime used."""
         try:

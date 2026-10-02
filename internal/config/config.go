@@ -9,11 +9,21 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const maxConfigBytes = 32 << 10
+
+// The two values runtime_admission takes. There is no third and, with a token configured, no default.
+const (
+	RuntimeAdmissionRequired       = "required"
+	RuntimeAdmissionDisabledForLab = "disabled-for-lab"
+)
+
+var nodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 // Config contains operational limits only. Credentials, PINs and key material
 // are deliberately not representable in this format.
@@ -67,6 +77,17 @@ type Config struct {
 	CommissioningRecordPath string
 	FencingPublicKeyPath    string
 
+	// Runtime admission (regalia-kms#74). A node serves key operations only while it holds a runtime
+	// trust lease, which a root service on the host keeps and reports in the admission file.
+	// RuntimeAdmission has NO DEFAULT where a token is configured: "required" (with the three settings
+	// below) or "disabled-for-lab" must be written, so a production host cannot end up serving with no
+	// lease because a block was left out. NodeID is this node as the membership manifest spells it;
+	// BootSessionPath is the root-owned file holding this boot's attested session.
+	RuntimeAdmission     string
+	RuntimeAdmissionPath string
+	NodeID               string
+	BootSessionPath      string
+
 	// Revocation list. One serial per line; the file is cached behind a
 	// stat+ModTime guard, so an entry added at runtime is observed on the next
 	// Check call without a restart. Empty / unset returns a no-op list whose
@@ -109,6 +130,10 @@ type document struct {
 	CommissioningRecordPath *string            `json:"commissioning_record_path"`
 	FencingPublicKeyPath    *string            `json:"fencing_public_key_path"`
 	RevokedSerialsPath      *string            `json:"revoked_serials_path"`
+	RuntimeAdmission        *string            `json:"runtime_admission"`
+	RuntimeAdmissionPath    *string            `json:"runtime_admission_path"`
+	NodeID                  *string            `json:"node_id"`
+	BootSessionPath         *string            `json:"boot_session_path"`
 	MetricsReaderPrincipals *[]string          `json:"metrics_reader_principals"`
 }
 
@@ -239,6 +264,18 @@ func Decode(reader io.Reader) (Config, error) {
 	}
 	if input.RevokedSerialsPath != nil {
 		result.RevokedSerialsPath = *input.RevokedSerialsPath
+	}
+	if input.RuntimeAdmission != nil {
+		result.RuntimeAdmission = *input.RuntimeAdmission
+	}
+	if input.RuntimeAdmissionPath != nil {
+		result.RuntimeAdmissionPath = *input.RuntimeAdmissionPath
+	}
+	if input.NodeID != nil {
+		result.NodeID = *input.NodeID
+	}
+	if input.BootSessionPath != nil {
+		result.BootSessionPath = *input.BootSessionPath
 	}
 	if input.MetricsReaderPrincipals != nil {
 		result.MetricsReaderPrincipals = append([]string(nil), (*input.MetricsReaderPrincipals)...)
@@ -390,6 +427,41 @@ func (cfg Config) Validate() error {
 	}
 	if (cfg.PolicyPath == "") != (cfg.PolicyStatePath == "") {
 		return errors.New("policy_path and policy_state_path must be configured together")
+	}
+	// RUNTIME ADMISSION IS STATED, NEVER ASSUMED. With a token configured, leaving the setting out is
+	// refused: the default would be a daemon that serves with no lease, and on a production host
+	// nothing would say so. "required" needs all three of its settings; "disabled-for-lab" needs none
+	// of them, so a half-written block cannot pass as either.
+	admissionFields := 0
+	for _, value := range []string{cfg.RuntimeAdmissionPath, cfg.NodeID, cfg.BootSessionPath} {
+		if value != "" {
+			admissionFields++
+		}
+	}
+	switch cfg.RuntimeAdmission {
+	case RuntimeAdmissionRequired:
+		if admissionFields != 3 {
+			return errors.New("runtime_admission \"required\" needs runtime_admission_path, node_id and boot_session_path")
+		}
+		if !filepath.IsAbs(cfg.RuntimeAdmissionPath) || !filepath.IsAbs(cfg.BootSessionPath) {
+			return errors.New("runtime_admission_path and boot_session_path must be absolute")
+		}
+		if !nodeIDPattern.MatchString(cfg.NodeID) {
+			return errors.New("node_id must be this node's ID as the membership manifest spells it")
+		}
+	case RuntimeAdmissionDisabledForLab:
+		if admissionFields != 0 {
+			return errors.New("runtime_admission \"disabled-for-lab\" takes no runtime_admission_path, node_id or boot_session_path")
+		}
+	case "":
+		if admissionFields != 0 {
+			return errors.New("runtime_admission_path, node_id and boot_session_path need runtime_admission \"required\"")
+		}
+		if hardwareFields > 0 {
+			return errors.New("a configuration with a token must state runtime_admission: \"required\", or \"disabled-for-lab\" on a lab or CI host; there is no default")
+		}
+	default:
+		return fmt.Errorf("runtime_admission must be \"required\" or \"disabled-for-lab\", not %q", cfg.RuntimeAdmission)
 	}
 	// FENCING IS ALL OR NOTHING, and the missing piece is always the one that makes it safe. A lease
 	// without its public key would be trusted unsigned; a lease without its epoch journal would let
