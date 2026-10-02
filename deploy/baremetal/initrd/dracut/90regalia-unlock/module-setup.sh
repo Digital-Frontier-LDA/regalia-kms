@@ -14,7 +14,9 @@ check() {
 }
 
 depends() {
-    echo systemd systemd-cryptsetup tpm2-tss
+    # kernel-network-modules: the network card's driver. Nothing else here asks for the network, and
+    # without it the initrd has no interface to put the boot mesh on.
+    echo systemd systemd-cryptsetup tpm2-tss kernel-network-modules
 }
 
 installkernel() {

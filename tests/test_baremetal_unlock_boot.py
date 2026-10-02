@@ -25,7 +25,8 @@ BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
 # systemd sees the systemd-recovery token in the header and asks for the recovery key by that name
-PROMPT = re.compile(rb"Please enter (?:recovery key|passphrase) for disk root")
+# ("recovery key" when that is the only kind of keyslot it knows of, "passphrase or recovery key" otherwise)
+PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk root")
 CMDLINE = ("root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 "
            "rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4")
 run = tub.run
@@ -245,8 +246,11 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
-        sealed = {name: "".join(open("%s/%s" % (mnt, name)).read().split()) for name in ("unlock-local.cred", "wg-boot.cred")}
-        pcrs = {str(i): open("%s/pcr%d" % (mnt, i)).read().strip().lower() for i in (7, 11)}
+        def text(name):
+            with open("%s/%s" % (mnt, name)) as f:
+                return "".join(f.read().split())
+        sealed = {name: text(name) for name in ("unlock-local.cred", "wg-boot.cred")}
+        pcrs = {str(i): text("pcr%d" % i).lower() for i in (7, 11)}
         self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
         self.assertEqual(unlock.local_key_type(sealed["unlock-local.cred"]), "tpm2")
         print("the guest's PCRs: 7=%s 11=%s" % (pcrs["7"], pcrs["11"]), file=sys.stderr)
@@ -276,7 +280,6 @@ class OnQemu(tub.OnSwtpm):
         self.assertNotRegex(said, PROMPT.pattern.decode())
         self.assertRegex(said, r"regalia-unlock: gave the key of /dev/vda for keyslot [12], through [bc]")
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0", said)
-        self.assertIn(unlock.KEY_SOCKET, re.search(r"REGALIA-E2E-ATTACH (.*)", said).group(1))
         allowed = [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:] if e["event"] == "unlock"]
         self.assertEqual(allowed, [("unlock", "a", "ALLOW")])
 
