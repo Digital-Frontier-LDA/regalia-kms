@@ -249,7 +249,10 @@ class Watching(hbt.Case):
         self.watch().step()
         self.assertEqual(self.kinds(), [("ERROR", "EXPIRED", 0)])
         with open(self.wstate) as f:
-            self.assertEqual(json.load(f), {"key": "down", "level": 0, "last": self.now})
+            state = json.load(f)
+        self.assertEqual({k: state[k] for k in ("sequence", "level", "down", "announced", "errors")},
+                         {"sequence": 1, "level": 10, "down": True, "announced": True, "errors": {"EXPIRED": self.now}})
+        self.assertEqual(sorted(state), sorted(watch.STATE_KEYS))
 
     def test_the_fraction_is_of_the_heartbeat_s_own_lifetime(self):
         """12-hour heartbeats under a 24-hour bound are not at "50 % left" on arrival."""
@@ -273,9 +276,10 @@ class Watching(hbt.Case):
         self.assertEqual(self.kinds(), [])                                       # not at every step
         self.authenticated = True
         self.w.step()
-        self.assertEqual(self.kinds(), [("INFO", "RENEWED", 0)])
+        self.assertEqual(self.kinds(), [("INFO", "RECOVERED", 0)])                # the same heartbeat again: nothing was renewed
         # the manifest moved on and no heartbeat for it has arrived
         self.held = manifest2(DAY, 2, m.digest(self.man), a="REVOKED_STOLEN")
+        self.later(HOUR)
         self.w.step()
         self.assertIn("the heartbeat is for epoch 1", self.events[0]["reason"])
         self.assertEqual((self.events[0]["epoch"], self.events[0]["manifest_digest"]), (2, m.digest(self.held)))
@@ -305,13 +309,19 @@ class Watching(hbt.Case):
         self.left(12 * HOUR)
         self.w.step()
         self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 50)])
+        good = {"sequence": 1, "level": 50, "last": self.now, "down": False, "announced": False, "errors": {}}
         with open(self.wstate) as f:
-            self.assertEqual(json.load(f), {"key": 1, "level": 50, "last": self.now})
+            self.assertEqual(json.load(f), good)
         self.watch().step()                                                      # a new process
         self.assertEqual(self.kinds(), [])
-        for damage in (b"", b"{", b'{"key": 1, "level": 50}', b'{"key": 1, "level": 50, "last": 1.5}', b'{"key": "x", "level": 50, "last": 1}',
-                       b'{"key": 1, "level": 49, "last": 1}', b'{"key": true, "level": 50, "last": 1}', b'{"key": 1, "level": 50, "last": true}',
-                       b'{"key": 1, "level": 50, "last": 1, "more": 1}', b" " * (watch.MAX_BYTES + 1)):
+
+        def state(**change):
+            return json.dumps(dict(good, **change)).encode()
+        for damage in (b"", b"{", b" " * (watch.MAX_BYTES + 1), b'{"key": 1, "level": 50, "last": 1}',      # the previous format
+                       json.dumps({k: v for k, v in good.items() if k != "errors"}).encode(), state(more=1),
+                       state(sequence=-1), state(sequence=True), state(sequence="1"), state(level=49), state(level=True), state(last=1.5),
+                       state(last=True), state(down=1), state(announced="no"), state(errors=[]), state(errors={"OTHER": 1}),
+                       state(errors={"EXPIRED": None}), state(errors={"EXPIRED": True}), state(errors={"UNUSABLE": "soon"})):
             with self.subTest(damage=damage[:40]):
                 with open(self.wstate, "wb") as f:
                     f.write(damage)
@@ -332,12 +342,76 @@ class Watching(hbt.Case):
         self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 50)])
 
     def test_a_clock_set_back_repeats_rather_than_going_quiet(self):
-        self.left(8640)
+        live = {"live": True, "sequence": 1, "seconds_left": 8000, "lifetime": DAY, "max_lifetime": DAY, "epoch": 1,
+                "manifest_digest": "", "reason": ""}
+        ahead = self.now + 10 ** 6
+        state = watch.decide(live, {"sequence": 1, "level": 10, "last": ahead}, self.now)
+        self.assertEqual((state[0]["kind"], state[1]["last"]), ("RUNNING_OUT", self.now))
+        down = dict(live, live=False, seconds_left=0, reason="EXPIRED: long ago")
+        state = watch.decide(down, {"sequence": 1, "errors": {"EXPIRED": ahead}}, self.now)
+        self.assertEqual((state[0]["kind"], state[1]["errors"]), ("EXPIRED", {"EXPIRED": self.now}))
+
+    def test_a_reading_that_flaps_costs_one_error_and_one_recovered_an_hour(self):
+        """Found by an independent read of #153: live, down, live, down at every step sent one event a step
+        to the log and the audit trail."""
+        self.w.step()
+        for minute in range(59):                                                 # an hour of flapping, one step a minute
+            self.authenticated = minute % 2 == 1
+            self.later(60)
+            self.w.step()
+        self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0), ("INFO", "RECOVERED", 0)])
+        self.authenticated = False
+        self.later(120)
+        self.w.step()
+        self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0)])               # the hour passed: said again
+        self.authenticated = True
+        self.w.step()
+        self.assertEqual(self.kinds(), [("INFO", "RECOVERED", 0)])               # and that outage's end
+
+    def test_what_was_said_about_a_heartbeat_is_not_said_again_after_a_blip(self):
+        self.left(12 * HOUR)
+        self.w.step()
+        self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 50)])
+        self.authenticated = False
+        self.w.step()
+        self.authenticated = True
+        self.w.step()
+        self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0), ("INFO", "RECOVERED", 0)])   # not a second "50 % left"
+        self.left(6 * HOUR)
+        self.w.step()
+        self.assertEqual(self.kinds(), [("WARN", "RUNNING_OUT", 25)])            # the next threshold, once
+
+    def test_renewed_means_a_newer_heartbeat_and_recovered_means_the_same_one(self):
+        self.authenticated = False
         self.w.step()
         self.kinds()
-        state = watch.decide({"live": True, "sequence": 1, "seconds_left": 8000, "lifetime": DAY, "max_lifetime": DAY, "epoch": 1,
-                              "manifest_digest": "", "reason": ""}, {"key": 1, "level": 10, "last": self.now + 10 ** 6}, self.now)
-        self.assertEqual((state[0]["kind"], state[1]["last"]), ("RUNNING_OUT", self.now))
+        self.authenticated = True
+        self.f.accept(beat(self.man, 2, issued=self.now, lifetime=DAY), self.man)
+        self.w.step()
+        self.assertEqual((self.events[0]["kind"], self.events[0]["sequence"]), ("RENEWED", 2))
+        self.kinds()
+        self.w.step()
+        self.assertEqual(self.kinds(), [])                                       # said once
+        # an outage that was never announced (its ERROR fell inside the hour) ends without a word
+        self.authenticated = False
+        self.w.step()
+        self.authenticated = True
+        self.w.step()
+        self.assertEqual(self.kinds(), [])
+
+    def test_each_kind_of_outage_has_its_own_hour(self):
+        self.left(300)
+        self.authenticated = False
+        self.w.step()
+        self.assertEqual(self.kinds(), [("ERROR", "UNUSABLE", 0)])
+        self.authenticated = True
+        self.later(300)                                                          # five minutes of unusable, and now it has expired
+        self.w.step()
+        self.assertEqual(self.kinds(), [("ERROR", "EXPIRED", 0)])                # a different fact: said at once
+        self.later(600)
+        self.authenticated = False
+        self.w.step()
+        self.assertEqual(self.kinds(), [])                                       # unusable again, inside its hour: held
 
     def test_the_thresholds_and_the_repeat_are_a_local_setting_and_are_checked(self):
         self.left(20 * HOUR)
