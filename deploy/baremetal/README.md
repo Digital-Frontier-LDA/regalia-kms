@@ -177,8 +177,8 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
 
 A peer unlocks a node only if its quote matches the reference values the peer holds. Those values are
 a **measurement document** (`deploy/baremetal/measurements.py`) that the signed membership manifest
-commits to: the manifest's `policy_version` is a digest of the document, so a peer accepts exactly the
-document the root approved, and an older one is refused by the manifest the peer holds now (which a
+commits to: the manifest's `policy_version` is a digest of the document (174 bits of its SHA-256), so a
+peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
 restored disk cannot roll back: the epoch is anchored in the TPM).
 
 Each node has one accepted set, or two while an update is under way. An update is three documents:
@@ -192,17 +192,22 @@ Each node has one accepted set, or two while an update is under way. An update i
 1. **Build and predict.** Build the new UKI, predict its PCR 11 (`systemd-measure calculate`), sign it
    with the PCR-signing key (so the PIN and the disk unseal under it with no reseal), and write the
    CURRENT + NEXT document. `measurements.transition(old, new)` must say `approve`.
-2. **Approve.** The root signs manifest N+1 with `policy_version = measurements.version(document)`.
-   Distribute the manifest and the document to all three nodes.
+2. **Approve.** The root's operator computes `measurements.version(document)` from the file in hand, at
+   signing time, and the root signs manifest N+1 with that as `policy_version`. Distribute the manifest
+   and the document to all three nodes.
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
-   pass before the reboot: every node before this one has been seen back on NEXT by this node's own
-   verifier, and every peer that will have to unlock it holds the new manifest and has vouched for it
-   in the last five minutes (a runtime lease). A node asked out of turn is told to wait, so two nodes
-   are never down for the update at once.
+   pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
+   before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
+   unlock it holds the new manifest and has vouched for it in the last five minutes (a runtime lease).
+   Exactly one node can pass at a time: the first, in order, that is not on NEXT. A node that is down
+   and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
+   unsigned way to skip it.
 4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
    accepted until the retirement. That is the fallback, at every step up to step 5.
-5. **Retire.** When `rollout.retire_ready(...)` passes (every node was seen on NEXT, under manifest
-   N+1, by a peer), the root signs manifest N+2 for the NEXT-only document. From then on a node booted
+5. **Retire.** When `rollout.retire_ready(...)` passes (under manifest N+1, every peer that has seen a
+   node last saw it on NEXT, for every node), and `transition` says `retire` (not `abandon`, which is
+   the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
+   From then on a node booted
    into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
    within five minutes.
 

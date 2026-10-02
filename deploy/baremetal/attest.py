@@ -223,7 +223,8 @@ def validate_set(entry, label):
     pcrs = entry["pcrs"]
     require(isinstance(pcrs, dict) and pcrs, "%s.pcrs must expect at least one PCR" % label)
     for index, value in pcrs.items():
-        require(isinstance(index, str) and re.fullmatch(r"0|[1-9]\d?", index) and int(index) <= 23, "%s.pcrs: %r is not a PCR 0-23" % (label, index))
+        # [0-9], not \d: \d also matches the digits of other scripts, and int() reads them ("1" + ARABIC-INDIC ONE is 11)
+        require(isinstance(index, str) and re.fullmatch(r"0|[1-9][0-9]?", index) and int(index) <= 23, "%s.pcrs: %r is not a PCR 0-23" % (label, index))
         require(is_hex(value, 64), "%s.pcrs.%s must be 64 lowercase hex" % (label, index))
 
 
