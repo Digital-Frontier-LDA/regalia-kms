@@ -301,6 +301,8 @@ class RecordWrites(unittest.TestCase):
     def run_tpm(self, argv, **kw):
         self.calls.append(argv[0])
         verdict = self.fault(argv)
+        if isinstance(verdict, bytes):                       # the tool succeeds and prints this
+            return subprocess.CompletedProcess(argv, 0, verdict, b"")
         if verdict is not None:
             return subprocess.CompletedProcess(argv, verdict, b"", b"")
         return self.tpm(argv, **kw)
@@ -329,6 +331,19 @@ class RecordWrites(unittest.TestCase):
         self.fault = lambda argv: 0 if argv[:2] == ["tpm2_nvwrite", "0x150001a"] else None      # says yes, stores nothing
         with self.assertRaisesRegex(m.Refused, "the record index 0x150001a did not take the write"):
             hw.anchor(1, lambda epoch: "ab" * 32 if epoch else "00" * 32)
+
+    def test_a_record_read_of_another_length_is_refused(self):
+        # tpm2_nvread -s 40 gives 40 bytes or fails; a tool that gave fewer or more must not be parsed as a record
+        self.fault = lambda argv: None
+        hw = self.anchor()
+        hw.define()
+        for out in (b"", b"\0" * 39, b"\0" * 41):
+            self.fault = lambda argv: out if argv[:2] == ["tpm2_nvread", "0x150001a"] else None
+            for call in (hw.record, hw.pinned, lambda: hw.verify(lambda epoch: "00" * 32), lambda: hw.anchor(1, lambda epoch: "00" * 32)):
+                with self.subTest(length=len(out)), self.assertRaisesRegex(m.Refused, "cannot read 40 bytes from the record index 0x150001a"):
+                    call()
+        self.fault = lambda argv: None
+        self.assertEqual((hw.value(), hw.record()), (0, (0, "00" * 32)))
 
     def test_a_digest_that_is_not_one_is_never_written(self):
         self.fault = lambda argv: None
@@ -514,6 +529,24 @@ class StoreOnSwtpm(_Swtpm):
         self.assertEqual((self.hw.record(), fresh.pinned()), ((2, self.digest(2)), False))      # a refusal repairs nothing
         self.assertEqual(fresh.restore(self.envs[:3])["epoch"], 3)
         self.assertEqual((self.hw.value(), self.hw.record(), fresh.pinned()), (3, (3, self.digest(3)), True))
+
+    def test_a_restore_refused_after_the_record_check_repairs_nothing(self):
+        """The crash window, with the disk intact through epoch 3. A fetched chain that matches the record
+        at epoch 2 and forks at epoch 3 passes the record check and is refused by the disk. The check must
+        not have written the fork's epoch 3 into the record on the way."""
+        for env in self.envs[:2]:
+            self.store.commit(env)
+        self.store._write(self.envs[:3])
+        self.hw.advance(3)
+        fork3 = sign(manifest(3, self.digest(2), three(c="QUARANTINED")), ROOT)
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the fetched chain differs from the stored one at epoch 3"):
+            m.Store(self.path, ROOT_PUB, self.hw).restore(self.envs[:2] + [fork3])
+        self.assertEqual(self.hw.record(), (2, self.digest(2)))
+        with open(self.path, "rb") as f:
+            self.assertEqual(f.read(), m.canonical(self.envs[:3]))
+        self.assertEqual((self.hw.verify(self.digest), self.hw.record()), (3, (2, self.digest(2))))     # verify() changes nothing
+        self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).load()["epoch"], 3)
+        self.assertEqual(self.hw.record(), (3, self.digest(3)))                  # the disk's epoch 3, by load()
 
     def interrupted_restore(self, counter_too):
         """restore() wrote epochs 1-4 over a node at epoch 1 and stopped part-way through anchoring them:
