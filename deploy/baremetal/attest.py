@@ -447,11 +447,15 @@ def node_activate(credential_path, secret_path, run=subprocess.run):
             tpm2("policysecret", "-S", session, "-c", "e", run=run)
             fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             os.close(fd)
-            done = run(["tpm2_activatecredential", "-c", AK_HANDLE, "-C", EK_HANDLE, "-i", credential_path,
-                        "-o", secret_path, "-P", "session:" + session], capture_output=True, text=True)
-            if done.returncode != 0:
-                os.unlink(secret_path)   # the file this attempt made, so the same path can be retried
-            require(done.returncode == 0, "tpm2_activatecredential failed: this TPM does not hold the EK and AK "
+            activated = False
+            try:
+                done = run(["tpm2_activatecredential", "-c", AK_HANDLE, "-C", EK_HANDLE, "-i", credential_path,
+                            "-o", secret_path, "-P", "session:" + session], capture_output=True, text=True)
+                activated = done.returncode == 0
+            finally:
+                if not activated:
+                    os.unlink(secret_path)   # the file this attempt made, so the same path can be retried
+            require(activated, "tpm2_activatecredential failed: this TPM does not hold the EK and AK "
                     "the credential was made for")
         finally:
             run(["tpm2_flushcontext", session], capture_output=True)

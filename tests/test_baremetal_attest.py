@@ -483,6 +483,16 @@ class Node(unittest.TestCase):
         secret = os.path.join(self.d, "secret")
         self.refused("does not hold the EK and AK", attest.node_activate, "cred", secret)
         self.assertFalse(os.path.exists(secret))   # so the same path can be retried
+
+        def absent(argv, **kw):   # the tool cannot even be started
+            if argv[0] == "tpm2_activatecredential":
+                raise FileNotFoundError(argv[0])
+            return self.run_tool(argv, **kw)
+        with self.assertRaises(FileNotFoundError):
+            attest.node_activate("cred", secret, run=absent)
+        self.assertFalse(os.path.exists(secret))
+        self.assertEqual(self.calls[-1][0], "tpm2_flushcontext")
+        self.calls = self.calls[:4]
         self.failing = ()
         attest.node_activate("cred", secret, run=self.run_tool)
         self.assertEqual(os.stat(secret).st_mode & 0o777, 0o600)
