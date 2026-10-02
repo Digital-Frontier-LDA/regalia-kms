@@ -261,7 +261,7 @@ jobs:
       - name: Install the PKCS#11 emulator and the AppArmor parser
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc apparmor
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc apparmor acl
       - name: The real daemon serves a verifiable signature inside the shipped sandbox
         run: bash e2e/kms-hardened-serve.sh
 

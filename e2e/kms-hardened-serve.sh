@@ -209,10 +209,11 @@ status="$(sign "$nonce" "${mtls[@]}")"
 if [ "$status" = 200 ]; then P "POST /v1/operations/sign: 200"; else
   F "sign: HTTP $status: $(head -c 400 "$W/response")"
   # The daemon says only BACKEND_UNAVAILABLE to a caller; what it could and could not use is here.
-  echo "  the PIN credential, as the service sees it:"; sudo stat -c '    %n %U:%G mode %a (%F)' "/run/credentials/$SVC"/* 2>&1
-  command -v getfacl >/dev/null && sudo getfacl -p "/run/credentials/$SVC"/* 2>&1 | sed 's/^/    /'
+  # Looked at from INSIDE the service's mount namespace: the credential directory is not on the host's /run.
+  echo "  the PIN credential, as the service sees it:"
+  sudo nsenter -t "$pid" -m -- sh -c "stat -c '%n %U:%G mode %a (%F)' /run/credentials/$SVC/* 2>&1; command -v getfacl >/dev/null && getfacl -p /run/credentials/$SVC/* 2>&1; grep -E 'Max locked memory' /proc/$pid/limits" 2>&1 | sed 's/^/    /'
   echo "  ready after the failure: HTTP $(curl -s -o /dev/null -w '%{http_code}' --cacert "$W/ca.pem" "https://127.0.0.1:$PORT/v1/health/ready")"
-  echo "  the last audit records:"; sudo tail -n 3 "$STATE/audit.jsonl" 2>&1 | cut -c1-600 | sed 's/^/    /'
+  echo "  the last audit records:"; sudo tail -n 3 "$STATE/audit.jsonl" 2>&1 | cut -c1-1500 | sed 's/^/    /'
   journal
 fi
 # The KMS returns raw r||s; openssl wants DER SEQUENCE{INTEGER r, INTEGER s}.
