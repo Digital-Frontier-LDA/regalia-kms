@@ -402,6 +402,55 @@ func TestGitSignsAndVerifiesACommitAndATagThroughTheBinary(t *testing.T) {
 	}
 }
 
+// The output appears under its final name whole or not at all, and never over an existing file.
+func TestInstallNewIsAtomicAndNeverReplaces(t *testing.T) {
+	directory := t.TempDir()
+	destination := filepath.Join(directory, "InRelease")
+	leftovers := func() []string {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, entry := range entries {
+			if entry.Name() != "InRelease" {
+				names = append(names, entry.Name())
+			}
+		}
+		return names
+	}
+	if err := installNew(destination, "first\n"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(destination)
+	if err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("the installed file is %v (%v), want mode 0644", info, err)
+	}
+	if err := installNew(destination, "second\n"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("an existing file was not refused: %v", err)
+	}
+	if contents, _ := os.ReadFile(destination); string(contents) != "first\n" {
+		t.Fatalf("the existing file was changed to %q", contents)
+	}
+	// A dangling symbolic link at the name is an existing name too: nothing is written through it.
+	link := filepath.Join(directory, "dangling")
+	if err := os.Symlink(filepath.Join(directory, "elsewhere"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := installNew(link, "through the link\n"); err == nil {
+		t.Fatal("a symbolic link at the destination was written through")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "elsewhere")); err == nil {
+		t.Fatal("the link's target was created")
+	}
+	if err := installNew(filepath.Join(directory, "no-such-directory", "InRelease"), "x"); err == nil {
+		t.Fatal("a destination in a missing directory was accepted")
+	}
+	if names := leftovers(); len(names) != 1 || names[0] != "dangling" {
+		t.Fatalf("temporary files were left behind: %v", names)
+	}
+}
+
 func TestAKMSRefusalWritesNoSignatureAndNamesTheCode(t *testing.T) {
 	d := newDeployment(t)
 	d.refuse = "DENIED"

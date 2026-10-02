@@ -242,9 +242,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 }
 
 // signToFile signs request.detach or request.clearsign and writes the result beside the file (or to
-// --output). The output is complete before the file exists, and an existing file is never replaced:
-// a release directory with two different signatures for one artifact, at different times, is a
-// question nobody should have to answer.
+// --output). The output is complete before its name exists (installNew), and an existing file is
+// never replaced: a release directory with two different signatures for one artifact, at different
+// times, is a question nobody should have to answer.
 func signToFile(ctx context.Context, key *gpgsign.Key, request invocation, stdin io.Reader, stdout io.Writer, at time.Time) error {
 	source, suffix := request.detach, ".asc"
 	if request.clearsign != "" {
@@ -279,19 +279,44 @@ func signToFile(ctx context.Context, key *gpgsign.Key, request invocation, stdin
 		_, err := io.WriteString(stdout, signed.String())
 		return err
 	}
-	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	return installNew(destination, signed.String())
+}
+
+// installNew puts contents at destination, whole or not at all, and never over an existing file.
+//
+// The contents are written to a temporary file in the same directory and then LINKED to the final
+// name. A reader of that name — an apt client, a web server in front of the repository — therefore
+// sees either no file or the complete one, never the first half of an InRelease. And link(2) fails
+// when the name exists, so "never replace" is decided by the filesystem in one step, not by a check
+// followed by a create.
+func installNew(destination, contents string) error {
+	temporary, err := os.CreateTemp(filepath.Dir(destination), ".regalia-sign-*")
 	if err != nil {
+		return errors.New("create the output file")
+	}
+	defer os.Remove(temporary.Name())
+	if _, err := io.WriteString(temporary, contents); err != nil {
+		_ = temporary.Close()
+		return errors.New("write the output file")
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return errors.New("write the output file")
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return errors.New("write the output file")
+	}
+	if err := temporary.Close(); err != nil {
+		return errors.New("write the output file")
+	}
+	if err := os.Link(temporary.Name(), destination); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("%s already exists; remove it first", filepath.Base(destination))
 		}
 		return errors.New("create the output file")
 	}
-	if _, err := io.WriteString(output, signed.String()); err != nil {
-		_ = output.Close()
-		_ = os.Remove(destination)
-		return errors.New("write the output file")
-	}
-	return output.Close()
+	return nil
 }
 
 // verifyWithGPG replaces this process with the real gpg, arguments unchanged. Verifying needs the
