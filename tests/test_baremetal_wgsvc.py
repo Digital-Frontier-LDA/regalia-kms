@@ -1,0 +1,335 @@
+"""deploy/baremetal/wgsvc.py (#80, step 2): the service tunnel's peers and addresses come from the manifest
+alone; the root side applies them and reads them back; the caller of a connection is the node whose key
+derives its address. `wg` and `ip` are a fake here;
+e2e/regalia-sync-netns.py runs the same code on real WireGuard."""
+import base64
+import ipaddress
+import subprocess
+import unittest
+
+from deploy.baremetal import membership as m
+from deploy.baremetal import wgsvc
+import tests.test_baremetal_heartbeat as hbt
+
+KEY = {name: ("%02x" % (0xa0 + i)) * 32 for i, name in enumerate(("a", "b", "c"))}      # hbt.manifest's wg_service_pub
+AUTHORITY = "5e" * 32
+PRIVATE = base64.b64encode(bytes(range(32))).decode()
+
+
+def done(code=0, out=b""):
+    return subprocess.CompletedProcess([], code, out, b"")
+
+
+class Wg:
+    """`wg show <interface> allowed-ips` over a table {key (hex): [allowed networks]}; everything else succeeds."""
+
+    def __init__(self, table=None, code=0):
+        self.table, self.code, self.calls, self.inputs = table or {}, code, [], []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(argv)
+        self.inputs.append(kw.get("input"))
+        if argv[:2] == ["wg", "show"]:
+            lines = ["%s\t%s" % (wgsvc.wg_key(key), " ".join(nets) or "(none)") for key, nets in self.table.items()]
+            return done(self.code, ("\n".join(lines) + "\n").encode())
+        return done(self.code)
+
+
+class Case(unittest.TestCase):
+    def setUp(self):
+        self.m1 = hbt.manifest()
+
+    def refused(self, reason, fn, *args, **kw):
+        with self.assertRaises(m.Refused) as caught:
+            fn(*args, **kw)
+        self.assertIn(reason, str(caught.exception))
+
+
+class Addresses(Case):
+    def test_an_address_is_the_prefix_and_80_bits_of_the_key_s_hash(self):
+        import hashlib
+        for key in KEY.values():
+            address = ipaddress.IPv6Address(wgsvc.address(key))
+            self.assertIn(address, wgsvc.PREFIX)
+            self.assertEqual(address.packed, bytes.fromhex("fd7265676c61") + hashlib.sha256(bytes.fromhex(key)).digest()[:10])
+        self.assertEqual(len({wgsvc.address(key) for key in KEY.values()}), 3)
+        self.assertEqual(wgsvc.address(KEY["a"]), wgsvc.address(KEY["a"]))
+        self.assertEqual(str(wgsvc.PREFIX), "fd72:6567:6c61::/48")
+        for bad in ("", "a0" * 31, "A0" * 32, "zz" * 32, None, 5, wgsvc.wg_key(KEY["a"])):
+            with self.subTest(bad=bad):
+                self.refused("a WireGuard public key", wgsvc.address, bad)
+
+    def test_keys_go_between_the_manifest_s_hex_and_wireguard_s_base64(self):
+        self.assertEqual(wgsvc.wg_key("00" * 32), "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+        for key in list(KEY.values()) + [AUTHORITY]:
+            self.assertEqual(wgsvc.hex_key(wgsvc.wg_key(key)), key)
+        for bad in ("", "AAAA", "not base64!", wgsvc.wg_key("00" * 32)[:-1], base64.b64encode(bytes(33)).decode(), None, b"AAAA", KEY["a"]):
+            with self.subTest(bad=bad):
+                self.refused("not a WireGuard public key", wgsvc.hex_key, bad)
+
+
+class Rendering(Case):
+    def peers(self, text):
+        """[(comment, key hex, allowed, endpoint or None)] of a rendered configuration."""
+        out = []
+        for block in text.split("\n[Peer]\n")[1:]:
+            fields = dict(line.split(" = ", 1) for line in block.splitlines() if " = " in line)
+            self.assertEqual(set(fields) - {"PublicKey", "AllowedIPs", "Endpoint"}, set())
+            out.append((block.splitlines()[0], wgsvc.hex_key(fields["PublicKey"]), fields["AllowedIPs"], fields.get("Endpoint")))
+        return out
+
+    def test_every_other_node_is_a_peer_by_its_service_key_at_its_derived_address(self):
+        text = wgsvc.conf(self.m1, "a", {"b": "198.51.100.7", "c": "198.51.100.9"})
+        self.assertTrue(text.startswith("[Interface]\nListenPort = 51821\n"))
+        self.assertNotIn("PrivateKey", text)
+        self.assertEqual(self.peers(text), [("# b", KEY["b"], wgsvc.address(KEY["b"]) + "/128", "198.51.100.7:51821"),
+                                            ("# c", KEY["c"], wgsvc.address(KEY["c"]) + "/128", "198.51.100.9:51821")])
+        boot = {n["wg_boot_pub"] for n in self.m1["nodes"]}
+        self.assertEqual(boot & {p[1] for p in self.peers(text)}, set())          # never the boot keys
+
+    def test_a_peer_with_no_known_underlay_is_still_a_peer(self):
+        self.assertEqual(self.peers(wgsvc.conf(self.m1, "a", {"b": "198.51.100.7"}))[1],
+                         ("# c", KEY["c"], wgsvc.address(KEY["c"]) + "/128", None))
+
+    def test_a_node_in_a_terminal_state_is_nobody_s_peer_and_knows_nobody(self):
+        for state in m.TERMINAL:
+            with self.subTest(state=state):
+                gone = hbt.manifest(c=state)
+                self.assertEqual([p[0] for p in self.peers(wgsvc.conf(gone, "a", {}))], ["# b"])
+                self.assertEqual(wgsvc.conf(gone, "c", {}), "[Interface]\nListenPort = 51821\n")
+        for state in ("QUARANTINED", "DRAINING"):
+            with self.subTest(state=state):
+                still = hbt.manifest(c=state)                                       # it must go on learning what was decided
+                self.assertEqual([p[0] for p in self.peers(wgsvc.conf(still, "a", {}))], ["# b", "# c"])
+                self.assertEqual(len(self.peers(wgsvc.conf(still, "c", {}))), 2)
+
+    def test_the_authority_is_one_more_peer_from_local_configuration(self):
+        authority = {"key": AUTHORITY, "underlay": "203.0.113.50", "port": 51900}
+        peers = self.peers(wgsvc.conf(self.m1, "a", {}, authority))
+        self.assertEqual(peers[-1], ("# authority", AUTHORITY, wgsvc.address(AUTHORITY) + "/128", "203.0.113.50:51900"))
+        self.assertEqual(len(peers), 3)
+        for label, reason, bad in (("a node's key", "the authority's key is a node's key", dict(authority, key=KEY["b"])),
+                                   ("this node's key", "the authority's key is a node's key", dict(authority, key=KEY["a"])),
+                                   ("a retired node's key", "the authority's key is a node's key", dict(authority, key=KEY["c"])),
+                                   ("no port", "authority fields mismatch", {"key": AUTHORITY, "underlay": "203.0.113.50"}),
+                                   ("more", "authority fields mismatch", dict(authority, more=1)),
+                                   ("a bad key", "authority.key", dict(authority, key="5e" * 31)),
+                                   ("a host name", "authority.underlay is not an IPv4 address", dict(authority, underlay="authority.example")),
+                                   ("an IPv6 underlay", "authority.underlay is not an IPv4 address", dict(authority, underlay="2001:db8::1")),
+                                   ("port 0", "authority.port must be a port number", dict(authority, port=0)),
+                                   ("a port as text", "authority.port must be a port number", dict(authority, port="51900"))):
+            with self.subTest(label):
+                self.refused(reason, wgsvc.conf, hbt.manifest(c="RETIRED"), "a", {}, bad)
+
+    def test_the_authority_s_own_interface_knows_every_node_that_may_still_be_talked_to(self):
+        text = wgsvc.conf(hbt.manifest(c="REVOKED_STOLEN"), wgsvc.AUTHORITY, {"a": "198.51.100.5"})
+        self.assertEqual(self.peers(text), [("# a", KEY["a"], wgsvc.address(KEY["a"]) + "/128", "198.51.100.5:51821"),
+                                            ("# b", KEY["b"], wgsvc.address(KEY["b"]) + "/128", None)])
+        self.refused("the authority is not its own peer", wgsvc.conf, self.m1, wgsvc.AUTHORITY, {},
+                     {"key": AUTHORITY, "underlay": "203.0.113.50", "port": 51900})
+        host = Reconciling.Host({k: [wgsvc.address(k) + "/128"] for k in KEY.values()})
+        self.assertEqual(wgsvc.reconcile(self.m1, wgsvc.AUTHORITY, {}, PRIVATE, run=host, own_key=AUTHORITY), wgsvc.address(AUTHORITY))
+        self.refused("the authority's is given", wgsvc.reconcile, self.m1, wgsvc.AUTHORITY, {}, PRIVATE, run=Reconciling.Host())
+        self.refused("a node's key is the manifest's", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=Reconciling.Host(), own_key=AUTHORITY)
+
+    def test_what_cannot_be_rendered_is_refused(self):
+        self.refused("x is not in the manifest", wgsvc.conf, self.m1, "x", {})
+        self.refused("underlays maps node IDs to addresses", wgsvc.conf, self.m1, "a", None)
+        self.refused("the underlay of b is not an IPv4 address", wgsvc.conf, self.m1, "a", {"b": "198.51.100.7:51821"})
+        self.refused("the underlay of b is not an IPv4 address", wgsvc.conf, self.m1, "a", {"b": "1.2.3.4\nEndpoint = 6.6.6.6:1"})
+        self.refused("listen_port must be a port number", wgsvc.conf, self.m1, "a", {}, None, 70000)
+        self.assertIn("ListenPort = 51999\n", wgsvc.conf(self.m1, "a", {"b": "198.51.100.7"}, None, 51999))
+        self.assertIn("Endpoint = 198.51.100.7:51999\n", wgsvc.conf(self.m1, "a", {"b": "198.51.100.7"}, None, 51999))
+
+
+class Applying(Case):
+    def test_the_configuration_goes_to_syncconf_on_standard_input_with_the_key(self):
+        wg, text = Wg(), wgsvc.conf(self.m1, "a", {"b": "198.51.100.7"})
+        wgsvc.apply(text, PRIVATE, run=wg)
+        self.assertEqual(wg.calls, [["wg", "syncconf", "wg-svc", "/dev/stdin"]])
+        self.assertEqual(wg.inputs[0].decode(), "[Interface]\nPrivateKey = %s\n%s" % (PRIVATE, text[len("[Interface]\n"):]))
+        self.refused("the private key is not a WireGuard key", wgsvc.apply, text, "")               # never applied without it
+        self.refused("this is not a configuration rendered here", wgsvc.apply, "[Peer]\n", PRIVATE)
+        self.refused("the tunnel's configuration could not be applied", wgsvc.apply, text, PRIVATE, run=Wg(code=1))
+
+        def missing(argv, **kw):
+            raise FileNotFoundError("wg")
+
+        def slow(argv, **kw):
+            raise subprocess.TimeoutExpired(argv, 10)
+        self.refused("could not be applied (FileNotFoundError)", wgsvc.apply, text, PRIVATE, run=missing)
+        self.refused("could not be applied (TimeoutExpired)", wgsvc.apply, text, PRIVATE, run=slow)
+
+    def test_the_interface_is_one_of_its_own(self):
+        for bad in ("wg-boot", "eth0", "wg0", "wg-", "wg-svc; reboot", "wg-" + "x" * 13, None, "WG-SVC"):
+            with self.subTest(bad=bad):
+                self.refused("named wg-...", wgsvc.apply, "[Interface]\n", PRIVATE, interface=bad, run=Wg())
+                self.refused("named wg-...", wgsvc.verify, "[Interface]\n", interface=bad, run=Wg())
+                self.refused("named wg-...", wgsvc.up, KEY["a"], interface=bad, run=Wg())
+        wgsvc.apply("[Interface]\nListenPort = 1\n", PRIVATE, interface="wg-other", run=Wg())
+
+    def test_up_creates_the_interface_once_with_the_derived_address_and_the_route(self):
+        own = wgsvc.address(KEY["a"])
+
+        class Ip(Wg):
+            present = False
+
+            def __call__(self, argv, **kw):
+                self.calls.append(argv)
+                return done(0 if self.present else 1) if argv[:3] == ["ip", "link", "show"] else done(self.code)
+        fresh = Ip()
+        self.assertEqual(wgsvc.up(KEY["a"], run=fresh), own)
+        self.assertEqual(fresh.calls, [["ip", "link", "show", "dev", "wg-svc"], ["ip", "link", "add", "dev", "wg-svc", "type", "wireguard"],
+                                       ["ip", "-6", "address", "replace", own + "/128", "dev", "wg-svc", "nodad"],
+                                       ["ip", "link", "set", "dev", "wg-svc", "up"],
+                                       ["ip", "-6", "route", "replace", "fd72:6567:6c61::/48", "dev", "wg-svc"]])
+        again = Ip()
+        again.present = True
+        wgsvc.up(KEY["a"], run=again)
+        self.assertNotIn(["ip", "link", "add", "dev", "wg-svc", "type", "wireguard"], again.calls)   # it is there: not added twice
+        failing = Ip(code=1)
+        self.refused("the tunnel interface could not be created", wgsvc.up, KEY["a"], run=failing)
+        failing.present = True
+        self.refused("the tunnel address could not be set", wgsvc.up, KEY["a"], run=failing)
+
+
+class Verifying(Case):
+    """The root side reads back what it applied: the kernel's peers must be exactly the manifest's."""
+
+    def setUp(self):
+        super().setUp()
+        self.text = wgsvc.conf(self.m1, "a", {"b": "198.51.100.7"}, {"key": AUTHORITY, "underlay": "203.0.113.50", "port": 51900})
+
+    def table(self, **override):
+        table = {key: [wgsvc.address(key) + "/128"] for key in (KEY["b"], KEY["c"], AUTHORITY)}
+        table.update(override)
+        return {k: v for k, v in table.items() if v is not None}
+
+    def test_exactly_the_rendered_peers_each_at_its_one_address_passes(self):
+        wg = Wg(self.table())
+        wgsvc.verify(self.text, run=wg)
+        self.assertEqual(wg.calls, [["wg", "show", "wg-svc", "allowed-ips"]])
+        self.assertEqual(wgsvc.expected(self.text), {ipaddress.ip_network(wgsvc.address(k) + "/128"): [k] for k in (KEY["b"], KEY["c"], AUTHORITY)})
+        wgsvc.verify("[Interface]\nListenPort = 51821\n", run=Wg({}))             # a node that knows nobody: no peers
+
+    def test_anything_else_is_refused_and_named(self):
+        b, c = wgsvc.address(KEY["b"]), wgsvc.address(KEY["c"])
+        stranger = "77" * 32
+        for label, named, table in (
+                ("a wider range for a peer", "fd72:6567:6c61::/48", self.table(**{KEY["c"]: ["fd72:6567:6c61::/48"]})),
+                ("a second range for a peer", "10.0.0.0/8", self.table(**{KEY["c"]: [c + "/128", "10.0.0.0/8"]})),
+                ("everything", "::/0", self.table(**{KEY["c"]: [c + "/128", "::/0"]})),
+                ("another peer's address", c + "/128", self.table(**{KEY["b"]: [c + "/128"], KEY["c"]: [b + "/128"]})),
+                ("an address owned twice", b + "/128", self.table(**{KEY["c"]: [c + "/128", b + "/128"]})),
+                ("a peer the manifest does not have", wgsvc.wg_key(stranger), self.table(**{stranger: [wgsvc.address(stranger) + "/128"]})),
+                ("a stranger with no address", wgsvc.wg_key(stranger), self.table(**{stranger: []})),
+                ("a peer that is missing", wgsvc.wg_key(KEY["c"]), self.table(**{KEY["c"]: None})),
+                ("a peer with no address", c + "/128", self.table(**{KEY["c"]: []})),
+                ("a revoked node still configured", wgsvc.wg_key(KEY["c"]), None)):
+            with self.subTest(label):
+                text = self.text if table is not None else wgsvc.conf(hbt.manifest(c="REVOKED_STOLEN"), "a", {},
+                                                                      {"key": AUTHORITY, "underlay": "203.0.113.50", "port": 51900})
+                with self.assertRaises(m.Refused) as caught:
+                    wgsvc.verify(text, run=Wg(table if table is not None else self.table()))
+                self.assertIn("the tunnel's peers are not the manifest's", str(caught.exception))
+                self.assertIn(named, str(caught.exception))
+
+    def test_a_peer_list_that_is_not_understood_or_cannot_be_read_is_a_refusal(self):
+        self.refused("the tunnel's peers cannot be read back", wgsvc.verify, self.text, run=Wg(self.table(), code=1))
+
+        def missing(argv, **kw):
+            raise FileNotFoundError("wg")
+        self.refused("cannot be read back (FileNotFoundError)", wgsvc.verify, self.text, run=missing)
+        for label, text in (("no tab", "garbage"), ("a bad key", "notakey\tfd72:6567:6c61::1/128"), ("three fields", "a\tb\tc"),
+                            ("a bad network", "%s\tfd72::zz/128" % wgsvc.wg_key(KEY["b"])),
+                            ("host bits set", "%s\tfd72:6567:6c61::1/64" % wgsvc.wg_key(KEY["b"]))):
+            with self.subTest(label):
+                self.refused("not", wgsvc.verify, self.text, run=lambda argv, **kw: done(0, text.encode()))
+        b = wgsvc.wg_key(KEY["b"])
+        for label, text in (("a key and nothing else", b), ("a third field", "%s\t%s/128\tmore" % (b, wgsvc.address(KEY["b"])))):
+            with self.subTest(label):
+                self.refused("the tunnel's peer list is not understood", wgsvc.owners, text)
+        self.assertEqual(wgsvc.owners("\n%s\t(none)\n\n" % wgsvc.wg_key(KEY["b"])), {})
+
+
+class Reconciling(Case):
+    class Host(Wg):
+        """ip and wg: the interface exists; `wg show` answers from the table."""
+
+        def __call__(self, argv, **kw):
+            if argv[:3] == ["ip", "link", "show"]:
+                self.calls.append(argv)
+                return done(0)
+            return super().__call__(argv, **kw)
+
+    def table(self, manifest, node="a"):
+        return {n["wg_service_pub"]: [wgsvc.address(n["wg_service_pub"]) + "/128"] for n in manifest["nodes"]
+                if n["node_id"] != node and n["state"] not in m.TERMINAL}
+
+    def test_up_apply_and_read_back(self):
+        host = self.Host(self.table(self.m1))
+        self.assertEqual(wgsvc.reconcile(self.m1, "a", {"b": "198.51.100.7"}, PRIVATE, run=host), wgsvc.address(KEY["a"]))
+        self.assertEqual([c[:2] for c in host.calls], [["ip", "link"], ["ip", "-6"], ["ip", "link"], ["ip", "-6"], ["wg", "syncconf"], ["wg", "show"]])
+        self.assertNotIn(["ip", "link", "set", "dev", "wg-svc", "down"], host.calls)
+
+    def test_a_result_that_is_not_the_manifest_s_takes_the_interface_down(self):
+        revoked = hbt.manifest(c="REVOKED_STOLEN")
+        host = self.Host(self.table(self.m1))                                      # the kernel still has c, whatever was applied
+        self.refused("the tunnel's peers are not the manifest's", wgsvc.reconcile, revoked, "a", {}, PRIVATE, run=host)
+        self.assertEqual(host.calls[-1], ["ip", "link", "set", "dev", "wg-svc", "down"])
+        wide = self.Host(dict(self.table(self.m1), **{KEY["c"]: ["fd72:6567:6c61::/48"]}))
+        self.refused("fd72:6567:6c61::/48", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=wide)
+        self.assertEqual(wide.calls[-1], ["ip", "link", "set", "dev", "wg-svc", "down"])
+
+    def test_a_failed_apply_takes_the_interface_down_and_a_bad_request_touches_nothing(self):
+        class Failing(self.Host):
+            def __call__(self, argv, **kw):
+                if argv[:2] == ["wg", "syncconf"]:
+                    self.calls.append(argv)
+                    return done(1)
+                return super().__call__(argv, **kw)
+        host = Failing(self.table(self.m1))
+        self.refused("the tunnel's configuration could not be applied", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=host)
+        self.assertEqual(host.calls[-1], ["ip", "link", "set", "dev", "wg-svc", "down"])
+        for label, reason, args in (("a node the manifest does not have", "x is not in the manifest", (self.m1, "x", {}, PRIVATE)),
+                                    ("a manifest that does not validate", "schema", (dict(self.m1, schema="other"), "a", {}, PRIVATE)),
+                                    ("a bad underlay", "is not an IPv4 address", (self.m1, "a", {"b": "nowhere"}, PRIVATE))):
+            with self.subTest(label):
+                untouched = self.Host()
+                self.refused(reason, wgsvc.reconcile, *args, run=untouched)
+                self.assertEqual(untouched.calls, [])
+        keyless = self.Host(self.table(self.m1))
+        self.refused("the private key is not a WireGuard key", wgsvc.reconcile, self.m1, "a", {}, "", run=keyless)
+        self.assertEqual(keyless.calls[-1], ["ip", "link", "set", "dev", "wg-svc", "down"])
+
+
+class Caller(Case):
+    """regalia-sync's side: the caller is the node of the current manifest whose key derives the address."""
+
+    def test_the_address_names_the_key_of_one_node_of_the_manifest(self):
+        for name, key in KEY.items():
+            self.assertEqual(wgsvc.key_at(self.m1, wgsvc.address(key)), key)
+        revoked = hbt.manifest(c="REVOKED_STOLEN")
+        self.assertEqual(wgsvc.key_at(revoked, wgsvc.address(KEY["c"])), KEY["c"])   # found, to be refused by name (sync.peer_of)
+
+    def test_an_address_no_node_s_key_derives_is_refused(self):
+        self.refused("no node of the current manifest (epoch 1) has the address", wgsvc.key_at, self.m1, wgsvc.address(AUTHORITY))
+        self.refused("no node of the current manifest", wgsvc.key_at, self.m1, "fd72:6567:6c61::1")
+        replaced = dict(self.m1, nodes=[n for n in self.m1["nodes"] if n["node_id"] != "c"])
+        self.refused("no node of the current manifest", wgsvc.key_at, replaced, wgsvc.address(KEY["c"]))   # the manifest held NOW
+        boot = self.m1["nodes"][1]["wg_boot_pub"]
+        self.refused("no node of the current manifest", wgsvc.key_at, self.m1, wgsvc.address(boot))          # the boot key is another identity
+
+    def test_what_is_not_an_address_of_the_tunnel_is_refused(self):
+        for outside in ("2001:db8::1", "fd72:6567:6c62::1", "::1", "10.89.0.2", "::ffff:10.89.0.2", "", None, 5, b"fd72:6567:6c61::1",
+                        wgsvc.address(KEY["b"]) + "%eth0", "\x1b[2J", wgsvc.address(KEY["b"]) + "/128"):
+            with self.subTest(outside=outside):
+                self.refused("is not an address of the service tunnel", wgsvc.key_at, self.m1, outside)
+
+    def test_two_nodes_at_one_address_are_refused_not_chosen_between(self):
+        twice = dict(self.m1, nodes=self.m1["nodes"] + [dict(self.m1["nodes"][0], node_id="z")])
+        self.refused("no node of the current manifest", wgsvc.key_at, twice, wgsvc.address(KEY["a"]))
+
+
+if __name__ == "__main__":
+    unittest.main()

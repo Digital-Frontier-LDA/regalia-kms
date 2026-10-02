@@ -505,6 +505,31 @@ jobs:
           grep -q '^authtime-chrony-nts: 18 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
             echo "::error::the authenticated-time test did not run all 18 checks" >&2; exit 1; }
 
+  # regalia-kms#80: regalia-sync over real WireGuard, in network namespaces. Three nodes and the
+  # revocation authority, each with a wg-svc interface configured from the manifest and read back from
+  # the kernel. A node pulls the chain and the heartbeat through the tunnel; a lease is issued across
+  # it; a revoked node is refused by name while its tunnel is up and gets no answer once the peer is
+  # reconciled; an address that is not its key's does not get through; a peer list widened by hand is
+  # detected and repaired; a partitioned node catches up in rounds and authorizes nothing until a
+  # heartbeat for the tip arrives. Every interface lives in a throwaway namespace.
+  regalia-sync-netns:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install WireGuard tools and the Python the libraries need
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wireguard-tools iproute2 python3-cryptography
+      - name: regalia-sync between three namespaces and the authority (real WireGuard)
+        run: |
+          set -o pipefail
+          sudo python3 e2e/regalia-sync-netns.py | tee "$RUNNER_TEMP/sync.log"
+          grep -q '^regalia-sync-netns: 32 passed, 0 failed$' "$RUNNER_TEMP/sync.log" || {
+            echo "::error::the sync test did not run all 32 checks" >&2; exit 1; }
+
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
   # restores the node, no peer leaves it locked, and a retired boot image, another machine and a
