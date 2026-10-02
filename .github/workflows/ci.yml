@@ -42,7 +42,7 @@ jobs:
         if: steps.recipe.outputs.changed == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso cpio gnupg acl
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso cpio gnupg
           mkdir -p deploy/images/.artifacts
       - name: Preflight hardware virtualization on the ephemeral runner
         if: steps.recipe.outputs.changed == 'true'
@@ -52,7 +52,7 @@ jobs:
         run: python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
       - name: Install and exercise the actual daemon inside the appliance
         if: steps.recipe.outputs.changed == 'true'
-        run: python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
+        run: sudo -u "$(id -un)" -g kvm -- python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
       - name: Retain public build and boot diagnostics
         if: always() && steps.recipe.outputs.changed == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

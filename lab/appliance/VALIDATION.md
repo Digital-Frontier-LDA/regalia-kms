@@ -161,10 +161,25 @@ no image acceptance or release approval is inferred. Its source is GitHub's
 synthetic PR merge `8190a14f3273d35f001bb4d161d5143e91c920c0`, not the branch head.
 Retained installer/acceptance logs and report are under `.artifacts/ci-7ae5f60/`.
 
-Hosted CI now requires KVM: a named-user ACL gives only the ephemeral runner
-access to `/dev/kvm`, and a paused diskless/networkless QEMU machine must initialize
-and quit before the full build. CI passes `--acceleration kvm` explicitly; missing
-or unsupported KVM fails preflight rather than silently selecting TCG. The local
-macOS builder continues to support TCG. Failed reports record acceleration and
-retain QEMU stderr. This avoids the observed TCG execution path, without asserting
-an exact upstream root cause or weakening guest acceptance.
+The first KVM attempt, [CI run 37045119166](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37045119166),
+also failed: the original preflight exited successfully but the installer could
+not open `/dev/kvm`. Its report and stderr are retained under
+`.artifacts/ci-0142be6/`. The network jobs separately failed while assigning static
+addresses on an automatically configured Docker bridge.
+
+Hosted CI now runs both preflight and the builder as the ephemeral runner user
+with the KVM group. Preflight uses QMP to verify an initialized CPU, active KVM,
+and a paused diskless/networkless machine before quitting. It rejects an early
+zero exit; six simulated QMP cases in four tests verify success, failure and
+child cleanup, without claiming actual hardware qualification. CI passes
+`--acceleration kvm` explicitly; missing or unsupported KVM fails preflight
+rather than silently selecting TCG. Local macOS builds retain TCG support.
+Failed reports record acceleration and retain QEMU stderr. A fresh complete
+Linux installation and acceptance run is still required.
+
+The network fixture now reads Docker-assigned bridge addresses instead of
+requesting static addresses. The local three-node run passes all 276 checks,
+including encrypted UDP controls, confirmed underlay packet arrival and refusal
+on both WireGuard planes, followed by 36 seeded chaos steps and cleanup. This
+uses the recorded development source override on the cached native image; it
+is not publisher authentication or a full TCP CVE exploit.
