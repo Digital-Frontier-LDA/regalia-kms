@@ -2,8 +2,8 @@
 
 The whole procedure for a Debian kernel (or boot image) update on the three-site KMS, start to finish,
 with what each step needs and **whether it can be run today**. It cannot, end to end: the decisions and
-the checks exist and are tested on software TPMs; the tooling around them, and several pieces of the
-boot path, do not. Each step says which. The gaps are tracked in #156.
+the checks exist, are tested on software TPMs and have an operator command; signing with the root key,
+and several pieces of the boot path, do not. Each step says which. The gaps are tracked in #156.
 
 Read this before the first update is attempted on real hosts, and update it when a gap closes.
 
@@ -81,14 +81,14 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 
 | # | Step | Status |
 |---|---|---|
-| 2.1 | Check the step: `measurements.transition(old, new)` must answer `approve`. It refuses a renamed set, a changed label, a dropped host, two steps in one document | **exists**, as a function; a command is **NOT BUILT** |
+| 2.1 | Check the step: `python3 -m deploy.baremetal.rollout transition --old CURRENT.json --new BOTH.json` must answer `approve`. It refuses a renamed set, a changed label, a dropped host, two steps in one document | **exists** |
 | 2.2 | **Compare the document with each host's PCR survey by eye.** No check can tell an unapproved image entered under an approved name | **manual**, and it is the control |
-| 2.3 | Compute the document's version (`measurements.version`) from the file in hand, at signing time | **exists**, as a function |
-| 2.4 | Write manifest N+1: the current manifest with `epoch + 1`, `prev_digest`, and `policy_version` set to that version | format **exists** (`membership.py`); a tool to write and sign it is **NOT BUILT** |
+| 2.3 | Compute the document's version from the file in hand, at signing time: `python3 -m deploy.baremetal.rollout version --measurements BOTH.json` | **exists** |
+| 2.4 | Write manifest N+1, unsigned: `python3 -m deploy.baremetal.rollout propose --membership CHAIN.json --root-key HEX --old CURRENT.json --new BOTH.json`. It prints the current manifest with `epoch + 1`, `prev_digest`, and `policy_version` set to that version, and signs nothing | writing the proposal **exists**; signing it is step 2.6 |
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
 | 2.6 | Sign with the offline root key | **NOT BUILT**: the root key is "proposed" (THREE-SITE-SECRETS.md); no ceremony generates it and no tool signs with it |
 | 2.7 | Bring manifest N+1 and the document to all three hosts; each commits the manifest (its TPM epoch counter rises) and rebuilds its attestation policy from the document | commit **exists** (`membership.Store`), exchange between nodes **exists** (`convergence.py`); installing the document and reloading the policy on a running host is **NOT BUILT** |
-| 2.8 | Check that all three hold epoch N+1 | **NOT BUILT** as a command |
+| 2.8 | Check that all three hold epoch N+1: on each host, `python3 -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced), and compare the three answers | **exists**, one host at a time; nothing collects the three |
 
 ### 3. Update the hosts, one at a time, in the order of their node IDs
 
@@ -97,7 +97,7 @@ For each host, in order:
 | # | Step | Status |
 |---|---|---|
 | 3.1 | Install the new UKI beside the current one; the current one stays the fallback entry | **manual** (`kernel-install`, `bootctl`); not rehearsed on these hosts |
-| 3.2 | Ask whether this host may reboot now: `rollout.may_reboot`. It refuses unless an update is approved for this host, the hosts before it are back on the new image, and both peers have vouched for this boot in the last five minutes | **exists**, as a function; a command is **NOT BUILT** |
+| 3.2 | Ask whether this host may reboot now: `python3 -m deploy.baremetal.rollout may-reboot …` (the manifest, the document, this node, the image it runs, its boot session, its verifier state, its leases). It refuses unless an update is approved for this host, the hosts before it are back on the new image, and both peers have vouched for this boot in the last five minutes | **exists** as a command; where the leases, the boot session and authenticated time come from on a running host is **NOT BUILT** (the lease service of #74 holds them) |
 | 3.3 | Reboot into the new image | **manual** |
 | 3.4 | The host is unlocked by a peer and the KMS serves again, with nobody present | the peer's decision **exists** (`replacement.may_unlock`, `unlock.py`); the boot-time client that asks for it is **NOT BUILT** (#66, #67 in progress). Today the disk unlocks from the local TPM alone (#135) |
 | 3.5 | **Wait until the host is back and serving before touching the next one.** `may_reboot` alone is not the interlock: for up to five minutes after a host falls back or goes down, the next one may still be told it can go | the limit is stated and tested (`rollout.py`, LIMITS) |
@@ -108,14 +108,14 @@ For each host, in order:
 
 | # | Step | Status |
 |---|---|---|
-| 4.1 | Collect each host's attestation state file and ask `rollout.retire_ready`. It needs every host's file and refuses unless every host was last seen on the new image by every peer that has seen it | **exists**, as a function; collecting the files and a command are **NOT BUILT** |
+| 4.1 | Collect each host's attestation state file and ask `python3 -m deploy.baremetal.rollout retire-ready … --state a=A.json --state b=B.json --state c=C.json`. It needs every host's file and refuses unless every host was last seen on the new image by every peer that has seen it | **exists**; collecting the files is **manual** |
 | 4.2 | Let the cluster run on the new image for the agreed time before retiring the old one. Until step 5 the old image is the fallback | **manual**; the time is not decided |
 
 ### 5. Retire: the root signs "only the new one"
 
 | # | Step | Status |
 |---|---|---|
-| 5.1 | Check the step: `measurements.transition(both, next_only)` must answer `retire`. `abandon` means the document drops the NEW image instead: the wrong half | **exists**, as a function |
+| 5.1 | Check the step: `python3 -m deploy.baremetal.rollout transition --old BOTH.json --new NEXT.json` must answer `retire`. `abandon` means the document drops the NEW image instead: the wrong half. `python3 -m deploy.baremetal.rollout propose …` then prints manifest N+2, unsigned | **exists** |
 | 5.2 | Release manifest N+2 (signed in step 2.5, or sign it now); every host commits it | as 2.4 to 2.7 |
 | 5.3 | From now on a host booted into the old image gets no unlock and no lease. A lease issued just before runs out within five minutes | **exists**; shown on three software TPMs (`e2e/rolling-policy-swtpm.sh`) |
 | 5.4 | Remove the old UKI from each host | **manual** |
@@ -130,7 +130,7 @@ either the next update, or a document that re-approves the old image.
 | A host does not come back, before step 5 | boot the current image from the boot menu; it is still accepted | **manual** |
 | A host does not come back and no peer will unlock it | open its disk with its recovery key at the console (PIN-CUSTODY.md, "The disk recovery key") | **exists** (`recovery-key.sh`) |
 | A host is down and must not hold the others up | a manifest that sets it QUARANTINED; the revocation key may sign it. The others then update without it | rule **exists**; signing tool **NOT BUILT** |
-| The CURRENT image is found compromised | the emergency path: one manifest whose document drops it on every host at once (`transition(..., emergency=True)`). Every host still running it is locked out until it boots the new image. Root key | **exists**, as a function |
+| The CURRENT image is found compromised | the emergency path: one manifest whose document drops it on every host at once (`python3 -m deploy.baremetal.rollout propose … --emergency`). Every host still running it is locked out until it boots the new image. Root key | writing the proposal **exists**; signing it does not |
 | All three hosts are down | total-outage recovery: PIN-CUSTODY.md and the recovery keys | **manual** |
 
 ## What has been shown, and where
@@ -148,8 +148,10 @@ either the next update, or a document that re-approves the old image.
 ## What is missing before this can be run (#156)
 
 1. The root key: its generation ceremony, its custody, and a tool that writes and signs a manifest.
-2. One operator command for the checks that exist as functions: document version, `transition`,
-   `may_reboot`, `retire_ready`, and "which epoch does each host hold".
+2. ~~One operator command for the checks~~: built, `python3 -m deploy.baremetal.rollout` (`version`, `transition`, `epoch`,
+   `propose`, `may-reboot`, `retire-ready`, `check-replacement`). It reads and proposes; it signs nothing.
+   Still missing around it: where a running host's leases, boot session and authenticated time come
+   from for `may-reboot`, and collecting the three hosts' answers in one place.
 3. Installing a measurement document on a running host and reloading its attestation policy.
 4. A UKI build for these hosts, the PCR-signing key's custody, and signed images (#57).
 5. The boot-time unlock client, so that a peer is actually needed to open the disk (#66, #67, #135).
