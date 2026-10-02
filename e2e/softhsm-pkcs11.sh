@@ -92,12 +92,19 @@ REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-
   --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:secp384r1 \
   --usage-sign --label regalia-kms-release-ungranted-e2e --id 0e >/dev/null
 
+# An Ed25519 key. The driver has a CKM_EDDSA signing path and an Ed25519 branch in its public-key
+# encoding, and neither HSM on the bench offers EdDSA through OpenSC (regalia#541), so until this key
+# existed that code had never run against any PKCS#11 module at all.
+REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
+  --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:edwards25519 \
+  --usage-sign --label regalia-kms-ed25519-e2e --id 0f >/dev/null
+
 slots="$(pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e --list-slots 2>/dev/null)"
 serial="$(printf '%s\n' "$slots" | awk -F: '/serial num/{gsub(/[[:space:]]/, "", $2); print $2; exit}')"
 [ -n "$serial" ] || { echo "SoftHSM2 serial unavailable" >&2; exit 1; }
 
 REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_PKCS11_E2E_PIN="$E2E_PIN" \
-  go -C "$ROOT" test -count=1 -run '^TestConcretePKCS11DriverAgainstSoftHSM$|^TestAES256UnwrapRoundTripsAgainstSoftHSM$' ./internal/backend/nitrokey
+  go -C "$ROOT" test -count=1 -run '^TestConcretePKCS11DriverAgainstSoftHSM$|^TestAES256UnwrapRoundTripsAgainstSoftHSM$|^TestEd25519SignsTheBytesItIsGivenAgainstSoftHSM$' ./internal/backend/nitrokey
 
 # The Nitrokey HSM 2 qualification instrument, run here in CONTROL mode against this SoftHSM token so
 # it is exercised in CI, not only when a real token is attached: a generated key (id 01) must read
