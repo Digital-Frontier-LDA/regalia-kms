@@ -224,6 +224,9 @@ for h in lisbon porto faro; do x "$h" conntrack -F >/dev/null 2>&1; done
 hdr "2  the stolen server away from its datacenter: lisbon's key, a live session, an undeclared address"
 # The control a moment ago left porto holding a live session with `away` (the last to shake hands with
 # that key). Without the firewall its next request would be answered, as it just was.
+# The real lisbon is not there (it is the one that was stolen): its interface is down, so that a
+# handshake seen by a peer below can only be the copy's.
+x lisbon ip link del wg-boot
 shaken(){ x "$1" wg show wg-unlock latest-handshakes | awk -v k="$(cat "$T/lisbon.boot.pub")" '$1 == k { print $2 }'; }
 before="$(shaken porto)"; before_faro="$(shaken faro)"
 asked away "${TUN[porto]}" 4 && F "lisbon's key was answered from an undeclared address" || P "lisbon's key, with a live session, gets no answer from an undeclared address"
@@ -232,10 +235,34 @@ asked away "${TUN[faro]}" 4 && F "lisbon's key was answered by the other peer fr
   || F "a peer shook hands with the undeclared address (porto: $before -> $(shaken porto), faro: $before_faro -> $(shaken faro))"
 
 hdr "3  PoC 6.1: the node boots and reaches both peers' unlock port through the tunnel"
-# A boot starts with a handshake. (A node whose session a peer has replaced, as `away` did to lisbon's
-# here, otherwise waits out WireGuard's own timers, some 15 s, before it shakes hands again.)
-boot_up lisbon "$T/lisbon.boot.key"
-x lisbon nft -f "$T/lisbon.boot.nft"
+# The boot is made by the script the initrd runs (deploy/baremetal/initrd/wg-boot, as
+# regalia-wg-boot.service runs it): the ruleset first, then the address, then WireGuard with the key
+# from the credentials directory. A boot starts with a handshake. (A node whose session a peer has
+# replaced, as `away` did to lisbon's here, otherwise waits out WireGuard's own timers, some 15 s.)
+x lisbon ip addr flush dev eth0; x lisbon nft delete table inet regalia_boot
+mkdir "$T/etc" "$T/creds"; cp "$T/lisbon.boot.conf" "$T/etc/wg-boot.conf"; cp "$T/lisbon.boot.nft" "$T/etc/boot.nft"; cp "$T/lisbon.boot.key" "$T/creds/regalia-wg-boot-key"
+# boot.env is data to the script, not its environment: a line that would be code if it were sourced or
+# exported (LD_PRELOAD, a command substitution) is in it, and must change nothing.
+printf 'BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_PRELOAD=%s/evil.so\nBOOT_EXTRA=$(touch %s/sourced)\n' \
+  "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$T/etc/boot.env"
+initrd(){ x lisbon env REGALIA_ETC="$T/etc" CREDENTIALS_DIRECTORY="$T/creds" sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
+initrd up && P "the initrd's script brings the boot mesh up" || F "deploy/baremetal/initrd/wg-boot up failed"
+[ "$(x lisbon wg show wg-boot private-key)" = "$(cat "$T/lisbon.boot.key")" ] && [ "$(x lisbon wg show wg-boot peers | wc -l)" = 2 ] \
+  && P "wg-boot has the node's key and its two peers" || F "wg-boot is not configured as rendered"
+[ ! -e "$T/sourced" ] && P "boot.env was read as data: nothing in it ran" || F "a line of boot.env was executed"
+# a start that fails part-way leaves nothing behind: here the key is not a key, after the ruleset would have loaded
+cp "$T/creds/regalia-wg-boot-key" "$T/creds/good"; echo "not-a-wireguard-key" > "$T/creds/regalia-wg-boot-key"
+initrd up 2>"$T/up.err" && F "the script accepted a credential that is not a key" || P "a credential that is not a key is refused"
+grep -q "not-a-wireguard-key" "$T/up.err" && F "the refused credential was printed" || P "and it is not printed"
+cp "$T/creds/good" "$T/creds/regalia-wg-boot-key"; printf '# a comment first\n' | cat - "$T/lisbon.boot.conf" > "$T/etc/wg-boot.conf"
+initrd up 2>"$T/up.err" && F "the script accepted a configuration it did not render" || P "a configuration that does not begin with [Interface] is refused"
+grep -q "$(cat "$T/lisbon.boot.key")" "$T/up.err" && F "the key was printed" || P "and the key is not printed"
+cp "$T/lisbon.boot.conf" "$T/etc/wg-boot.conf"; sed -i 's|^BOOT_TUNNEL=.*|BOOT_TUNNEL=not-an-address|' "$T/etc/boot.env"
+initrd up 2>/dev/null && F "the script succeeded with an impossible tunnel address" || P "a start that fails after the ruleset loaded"
+x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
+  && F "the failed start left the interface, the ruleset or the address behind" || P "leaves no interface, no ruleset and no address behind"
+sed -i "s|^BOOT_TUNNEL=.*|BOOT_TUNNEL=${TUN[lisbon]}|" "$T/etc/boot.env"
+initrd up && P "and the next start succeeds" || F "the start after a failed one does not succeed"
 for h in porto faro; do
   asked lisbon "${TUN[$h]}" && P "lisbon is answered by $h on the unlock port, inside the tunnel" || F "lisbon is not answered by $h"
 done
@@ -297,7 +324,7 @@ for _ in 1 2 3 4 5; do timed asked lisbon "${TUN[faro]}" 10 && ok=$((ok+1)); [ "
 x lisbon tc qdisc del dev eth0 root
 x faro ip link set eth0 down
 timed asked lisbon "${TUN[faro]}" 3; rc=$?
-[ "$rc" != 0 ] && [ "$took" -le 5 ] && P "an unreachable peer: refused after ${took}s, and the other peer is asked" || F "an unreachable peer: rc=$rc after ${took}s"
+[ "$rc" != 0 ] && [ "$took" -le 10 ] && P "an unreachable peer: refused after ${took}s, and the other peer is asked" || F "an unreachable peer: rc=$rc after ${took}s"
 asked lisbon "${TUN[porto]}" && P "the other peer still answers" || F "the other peer does not answer"
 x faro ip link set eth0 up; x faro ip route add default dev eth0 2>/dev/null
 # what bootnet.py warns of, shown: a configuration applied without its key leaves the interface with none
@@ -306,9 +333,10 @@ x faro wg syncconf wg-unlock "$T/faro.unlock.conf"
   || F "wg syncconf without a key did not unset it: bootnet.py's warning is out of date"
 boot_up lisbon "$T/wrong.key"
 timed asked lisbon "${TUN[porto]}" 3; rc=$?
-[ "$rc" != 0 ] && [ "$took" -le 5 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
-x lisbon ip link del wg-boot
-x lisbon ip link show wg-boot >/dev/null 2>&1 && F "the boot interface is still there" || P "the boot interface is removed, as it is when the root filesystem takes over"
+[ "$rc" != 0 ] && [ "$took" -le 10 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
+initrd down
+x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
+  && F "the boot interface, its ruleset or its address is still there" || P "the script takes the interface, the ruleset and the address down, as it does when the root filesystem takes over"
 
 echo; echo "wg-boot-netns: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

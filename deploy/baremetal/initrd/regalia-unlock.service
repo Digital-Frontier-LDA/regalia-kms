@@ -13,6 +13,10 @@ Description=Give the root volume's key: TPM plus one peer
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 DefaultDependencies=no
 Requires=regalia-unlock.socket
+# the local half is unsealed with the TPM: not before its device is there
+Wants=tpm2.target
+# and, in a measured boot, not before the initrd's phase is in PCR 11: the quote must show that phase
+After=tpm2.target systemd-pcrphase-initrd.service
 # the boot mesh, when the initrd has it (#66); without that unit this line does nothing
 Wants=regalia-wg-boot.service
 After=regalia-wg-boot.service
