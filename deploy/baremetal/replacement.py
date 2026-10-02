@@ -62,12 +62,13 @@ def may_unlock(manifest, peer_id, requester_id, session_id, evidence, attester, 
     """Whether `peer_id` gives `requester_id` its bootstrap contribution: the requester may be unlocked and
     the peer may authorize under a live heartbeat, and the requester has just proved, with a fresh quote,
     that it is the hardware the manifest names. Returns the seconds of freshness left."""
-    left = heartbeat.authorize(manifest, peer_id, requester_id, freshness)
+    heartbeat.authorize(manifest, peer_id, requester_id, freshness)   # before any evidence is consumed
     membership.hex_field(session_id, 64, "session_id")
     # The freshness of the unlock is the attester-issued nonce inside `evidence` (good once, two minutes);
     # no nonce chosen by the requester takes part.
     lease.reattest(attester, evidence, requester_id, session_id, manifest, membership.validate(manifest)[requester_id])
-    return left
+    # and again, after it: the verification takes time, and the answer must hold when it is given
+    return heartbeat.authorize(manifest, peer_id, requester_id, freshness)
 
 
 def identities(node):
@@ -78,6 +79,8 @@ def identities(node):
 def check_replacement(current, candidate, old_id, new_id):
     """`candidate` replaces `old_id` by `new_id` and does nothing else. Raises Refused with the reason."""
     old, new = membership.validate(current), membership.validate(candidate)
+    require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
+            "the replacement must be the next manifest: epoch %d, chained to the current one" % (current["epoch"] + 1))
     require(old_id in old, "%s is not in the current manifest" % old_id)
     require(new_id not in old, "%s is already a node: a replacement gets a new node ID" % new_id)
     require(old_id in new and new[old_id]["state"] in TERMINAL, "%s must stay listed, as RETIRED or REVOKED_STOLEN" % old_id)

@@ -152,6 +152,8 @@ class Tombstones(Case):
                 candidate = self.chain(self.m1, [freed, b, c, self.entry("a2", **{field: old[field]})])
                 m.validate(candidate)
                 self.refused("a2 reuses an identity the manifest already lists", replacement.check_replacement, self.m1, candidate, "a", "a2")
+        self.refused("the replacement must be the next manifest: epoch 2", replacement.check_replacement, self.m1, dict(self.m2, epoch=3), "a", "a2")
+        self.refused("the replacement must be the next manifest: epoch 2", replacement.check_replacement, self.m1, dict(self.m2, prev_digest="00" * 32), "a", "a2")
         self.refused("a replacement does not change policy_version", replacement.check_replacement, self.m1, dict(self.m2, policy_version="p2"), "a", "a2")
         self.refused("a replacement does not change revocation_keys", replacement.check_replacement, self.m1, dict(self.m2, revocation_keys=[]), "a", "a2")
         replacement.check_replacement(self.m1, self.accept(self.m1, self.replaced("REVOKED_STOLEN")), "a", "a2")
@@ -272,6 +274,22 @@ class Decisions(Case):
         self.assertNotIn("nonce", inspect.signature(replacement.may_unlock).parameters)   # nothing requester-chosen stands for freshness
         self.authenticated = False
         self.refused("time is not authenticated", replacement.may_unlock, self.m2, "b", "a2", SESSION, self.quote(b["attester"], "a2", "a2"), *args)
+        self.authenticated = True
+
+    def test_a_heartbeat_that_expires_during_the_attestation_gives_no_unlock(self):
+        b = self.peers["b"]
+        self.later(hb.MAX_LIFETIME - 120)                # the heartbeat for m2 has a minute left
+        left = b["freshness"].check(self.m2)
+        self.assertEqual(left, 60)
+        evidence = self.quote(b["attester"], "a2", "a2")
+        real = b["attester"].verify
+
+        def slow(*args):
+            verdict = real(*args)
+            self.later(left + 1)                         # ... and the verification outlasts it
+            return verdict
+        b["attester"].verify = slow
+        self.refused("EXPIRED: the heartbeat expired", replacement.may_unlock, self.m2, "b", "a2", SESSION, evidence, b["attester"], b["freshness"])
 
 
 class OnSwtpm(unittest.TestCase):
