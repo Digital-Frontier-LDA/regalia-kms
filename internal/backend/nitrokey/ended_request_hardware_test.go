@@ -16,11 +16,20 @@ import (
 type endingDriver struct {
 	Driver
 	end func()
+	// opened counts the Opens that returned a session while a request was being ended, and failed
+	// keeps the last one that did not: an ended look that never got a session tests nothing.
+	opened int
+	failed error
 }
 
 func (driver *endingDriver) Open(ctx context.Context, binding registry.Binding) (Session, error) {
 	session, err := driver.Driver.Open(ctx, binding)
 	if driver.end != nil {
+		if err == nil && session != nil {
+			driver.opened++
+		} else {
+			driver.failed = fmt.Errorf("open under the request that was to be ended: %v", err)
+		}
 		driver.end()
 	}
 	return session, err
@@ -115,6 +124,13 @@ func TestARequestThatEndsAfterARealTokenWasOpenedLatchesNothing(t *testing.T) {
 		}
 		driver.end = nil
 		end()
+		// The request really got the token open and reached the checks under an ended context.
+		// Without this, an Open that failed for any reason would set no latch and the fixed
+		// expectation would pass without having tested anything.
+		if driver.opened != 1 || driver.failed != nil {
+			t.Fatalf("%s: the ended request did not open the token exactly once (%d sessions, %v): the case tests nothing", look, driver.opened, driver.failed)
+		}
+		driver.opened = 0
 		reason, latched := provider.QuarantineReason(bound.DeviceID)
 		t.Logf("after a %s whose request ended right after Open: quarantined=%v reason=%q", look, latched, reason)
 		if beforeFix {
