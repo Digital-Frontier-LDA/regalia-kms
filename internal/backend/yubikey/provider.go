@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -57,6 +60,8 @@ type Provider struct {
 	waiting atomic.Int32
 	// returned makes a card that was gone wait for a fresh runtime lease. See RequireReauthorization.
 	returned reauth.Tracker
+	// lockoutLooked is when nameLockout last looked at the readers.
+	lockoutLooked time.Time
 }
 
 type pinRetryReading struct {
@@ -102,6 +107,7 @@ func (provider *Provider) AwaitingReauthorization() map[string]int64 {
 func (provider *Provider) notOpened(ctx context.Context, deviceID string) {
 	if ctx.Err() == nil {
 		provider.returned.Gone(deviceID)
+		provider.nameLockout(ctx, deviceID)
 	}
 }
 
@@ -479,4 +485,66 @@ func zero(value []byte) {
 	for index := range value {
 		value[index] = 0
 	}
+}
+
+// lockoutLookEvery spaces the looks nameLockout takes: a card that cannot be opened is asked for
+// on every request and every health probe, and each look opens every reader.
+const lockoutLookEvery = time.Minute
+
+// nameLockout says why, when a card cannot be opened although it is attached: a YubiKey's reader is
+// held by another connection. The daemon refuses to start in that state when the card is attached
+// then (cmd/regalia-kms, requirePIVCardsOpenBesidePKCS11); a card attached LATER to a daemon whose
+// PKCS#11 module does not ignore it meets the same lockout with the daemon running, and without
+// this it would fail as "unavailable" with nothing naming the cause. Called with the turn held.
+// It returns whether it named the device.
+func (provider *Provider) nameLockout(ctx context.Context, deviceID string) bool {
+	driver, ok := provider.driver.(reacher)
+	if !ok || ctx.Err() != nil {
+		return false
+	}
+	provider.mu.Lock()
+	due := provider.lockoutLooked.IsZero() || time.Since(provider.lockoutLooked) >= lockoutLookEvery
+	if due {
+		provider.lockoutLooked = time.Now()
+	}
+	provider.mu.Unlock()
+	if !due {
+		return false
+	}
+	missing, held, err := driver.Reach(ctx)
+	if err != nil || !held {
+		return false
+	}
+	// A held reader cannot be asked which card is in it, so every card that is missing may be the
+	// one behind it. All of them are named, as the startup refusal does: with one look a minute for
+	// the whole provider, naming only the card this request was for would leave another card's
+	// lockout unsaid for as long as this one's requests keep taking the look.
+	if !slices.Contains(missing, deviceID) {
+		return false
+	}
+	slog.Error("KMS YubiKey PIV card(s) cannot be opened and another connection holds a YubiKey's reader: one of them is behind it. "+
+		"If this daemon also loads a PKCS#11 module, OpenSC must be told to ignore the YubiKey (OPENSC_CONF naming deploy/opensc/ignore-yubikey.conf); otherwise another process is using the card",
+		"devices", strings.Join(missing, ", "))
+	return true
+}
+
+// reacher is a driver that can say, without opening a session, which commissioned cards cannot be
+// opened and whether another connection holds a reader (the PIV driver's Reach).
+type reacher interface {
+	Reach(context.Context) (missing []string, held bool, err error)
+}
+
+// Reach asks the driver which commissioned cards cannot be opened and whether another connection
+// holds a reader. It takes the turn every request takes. A driver that cannot say reports nothing.
+func (provider *Provider) Reach(ctx context.Context) (missing []string, held bool, err error) {
+	driver, ok := provider.driver.(reacher)
+	if !ok {
+		return nil, false, nil
+	}
+	done, ok := provider.takeTurn(ctx)
+	if !ok {
+		return nil, false, ErrUnavailable
+	}
+	defer done()
+	return driver.Reach(ctx)
 }

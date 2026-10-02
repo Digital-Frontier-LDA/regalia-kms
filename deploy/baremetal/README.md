@@ -158,6 +158,45 @@ Commissioning has two halves:
   YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
 
+### OpenSC leaves the YubiKey to the PIV backend
+
+A host whose daemon serves both an HSM (PKCS#11, through OpenSC) and YubiKey PIV keys needs OpenSC
+told to ignore the YubiKey's reader. The PIV backend opens the card for itself alone, and OpenSC
+keeps a connection to every card it is not told to ignore: with OpenSC's defaults the daemon's own
+PKCS#11 module locks its PIV backend out (measured, regalia#541).
+
+- Install `deploy/opensc/ignore-yubikey.conf` as `/etc/regalia-kms/opensc.conf` (`root:root`, `0644`).
+  The shipped unit starts the daemon with `OPENSC_CONF` naming that path, and the AppArmor profile
+  already allows reading it.
+- **The daemon then reads that file and not `/etc/opensc/opensc.conf`.** Anything a host had put in
+  the system file for the daemon (a `card_atr` block for the OpenPGP applet, a slot limit) must move
+  to `/etc/regalia-kms/opensc.conf`, or it stops applying when the new unit is installed.
+- On an HSM-only host install the same file: ignoring a reader that is not there changes nothing.
+  If the file is missing, OpenSC uses its defaults (measured): the HSM is served as before, and a
+  host that also has PIV cards is refused at startup as described next.
+- **The daemon checks the effect at startup.** After its module has looked at the readers, every
+  configured PIV card must still open. A card that cannot be opened **while another connection
+  holds a YubiKey's reader** stops the daemon, with a message naming this setting: that is this
+  misconfiguration, or another process using the card, and neither heals by waiting. (The HSM's
+  reader does not count: the module holds it by design.) A card that is simply **not attached**
+  is a warning and the daemon starts, as it does with an HSM unplugged: the HSM's keys must not
+  go down for a missing YubiKey.
+- **What the startup check cannot see** is a YubiKey attached later to a daemon that started
+  without the setting. Its requests then fail, and the daemon logs the cause (an error, once a
+  minute at most, naming every configured card that is missing: a held reader cannot be asked
+  which card is in it) instead of leaving a bare "unavailable"; it does not stop. The host probe
+  below is what catches that host before the card is ever attached.
+- One host's YubiKeys then serve PIV only, not the OpenPGP applet through OpenSC
+  (`deploy/opensc/yubikey-openpgp.conf` asks OpenSC to drive the card; this asks it not to).
+
+Measured: `kms_opensc_leaves_piv_cards` (when the configuration the unit starts the daemon with names
+both a PKCS#11 module and YubiKey PIV devices, the unit's `Environment=` carries `OPENSC_CONF`, and
+in that file the block `opensc-pkcs11.so` reads, `app opensc-pkcs11` if there is one and else
+`app default`, has an `ignored_readers` entry naming a YubiKey's reader). The block and the statement
+are chosen as OpenSC chooses them, and a file that is not well formed (braces that do not balance,
+a list not ended by `;`) fails the control rather than being guessed at. An `EnvironmentFile=` on
+the unit fails it too: what it sets is not seen.
+
 ### Host firewall (default deny, both directions)
 
 The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` and `"service_mesh": null` for a single-site
