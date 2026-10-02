@@ -34,7 +34,9 @@ Transition rules (accept(current, candidate)):
 Capabilities by state (the #59 matrix): ACTIVE serves, requests bootstrap and authorizes peers;
 MAINTENANCE only requests; DRAINING only serves; QUARANTINED, RETIRED and REVOKED_STOLEN nothing.
 """
+import contextlib
 import datetime
+import fcntl
 import hashlib
 import json
 import re
@@ -60,6 +62,19 @@ IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
 
 class Refused(Exception):
     pass
+
+
+@contextlib.contextmanager
+def _exclusive(lock_path):
+    """An exclusive flock held for the block: every read-modify-write of the anchor or the stored
+    chain is serialized across processes on the host."""
+    import os
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def require(cond, message):
@@ -238,9 +253,11 @@ class HighWater:
     NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
     WRITTEN, WRITELOCKED = 0x20000000, 0x800
 
-    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None):
+    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None):
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
+        # Two processes advancing at once could both increment and push the counter past any manifest.
+        self.lock_path = lock_path or "/run/lock/regalia-highwater-%s.lock" % self.index
 
     def _tpm(self, *args, **kw):
         import os
@@ -261,6 +278,10 @@ class HighWater:
         return int.from_bytes(r.stdout, "big")
 
     def define(self):
+        with _exclusive(self.lock_path):
+            return self._define()
+
+    def _define(self):
         for index in (self.index, self.base_index):
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
         r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
@@ -292,6 +313,10 @@ class HighWater:
         return self._epoch(self._base())
 
     def advance(self, epoch):
+        with _exclusive(self.lock_path):
+            return self._advance(epoch)
+
+    def _advance(self, epoch):
         base = self._base()
         now = self._epoch(base)
         require(epoch >= now, "refusing to accept epoch %d below the TPM high-water %d" % (epoch, now))
@@ -318,6 +343,9 @@ class Store:
     """The node's accepted membership: the whole signed chain from epoch 1 in one file, anchored to a
     HighWater. This is the only API a node should use to read or change its membership.
 
+    Both hold an exclusive lock (path + ".lock"), and HighWater serializes its own read/increment
+    sequences, so concurrent callers cannot interleave.
+
     load()            verifies the chain from the pinned root, refuses it if it is older than the TPM
                       high-water (a restored or deleted file: ROLLBACK), anchors a verified newer chain
                       (a crash after the disk write), and returns the current manifest (None before
@@ -329,6 +357,7 @@ class Store:
 
     def __init__(self, path, root_key, highwater):
         self.path, self.root_key, self.hw = path, root_key, highwater
+        self.lock_path = path + ".lock"
 
     def _read_chain(self):
         try:
@@ -341,6 +370,10 @@ class Store:
         return chain
 
     def load(self):
+        with _exclusive(self.lock_path):
+            return self._load()
+
+    def _load(self):
         chain = self._read_chain()
         current = None
         for envelope in chain:
@@ -358,7 +391,11 @@ class Store:
         return current
 
     def commit(self, envelope):
-        current = self.load()
+        with _exclusive(self.lock_path):        # load, write and advance as one step
+            return self._commit(envelope)
+
+    def _commit(self, envelope):
+        current = self._load()
         nxt = accept(current, envelope, self.root_key)
         if nxt is current:
             return current

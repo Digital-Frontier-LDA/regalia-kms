@@ -1,6 +1,7 @@
 """deploy/baremetal/membership.py (#68, Phase 8): signed manifests, the capability matrix, root versus
 revocation authority, the epoch chain, and the TPM-backed high-water mark (PoC 8.3 runs on swtpm)."""
 import copy
+import fcntl
 import json
 import os
 import shutil
@@ -162,7 +163,7 @@ class _Swtpm(unittest.TestCase):
         time.sleep(0.5)
         self.tcti = "swtpm:port=%d" % port
         self.env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
-        self.hw = m.HighWater("0x1500016", tcti=self.tcti)
+        self.hw = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock")
         self.hw.define()
 
 
@@ -186,12 +187,12 @@ class HighWaterOnSwtpm(_Swtpm):
 
     def test_a_tpm_that_already_had_counters_starts_at_epoch_0(self):
         # 48's finding: a new counter's first increment lands above any deleted counter's value.
-        other = m.HighWater("0x1500030", tcti=self.tcti)
+        other = m.HighWater("0x1500030", tcti=self.tcti, lock_path=self.d + "/other.lock")
         other.define()
         other.advance(5)
         for idx in ("0x1500030", "0x1500031", "0x1500016", "0x1500017"):
             subprocess.run(["tpm2_nvundefine", idx, "-C", "o"], env=self.env, check=True, capture_output=True)
-        fresh = m.HighWater("0x1500016", tcti=self.tcti)
+        fresh = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock")
         self.assertGreater(fresh.define(), 5)
         self.assertEqual((fresh.value(), fresh.advance(1), fresh.advance(2)), (0, 1, 2))
 
@@ -202,7 +203,7 @@ class HighWaterOnSwtpm(_Swtpm):
         with self.assertRaisesRegex(m.Refused, "fail closed"):
             self.hw.check(1)
         with self.assertRaisesRegex(m.Refused, "fail closed"):
-            m.HighWater("0x1500016", tcti="device:/nonexistent/tpmrm0").check(1)       # no TPM there
+            m.HighWater("0x1500016", tcti="device:/nonexistent/tpmrm0", lock_path=self.d + "/x.lock").check(1)       # no TPM there
 
     def test_the_base_is_write_once(self):
         r = subprocess.run(["tpm2_nvwrite", "0x1500017", "-C", "o", "-i", "-"], input=b"\0" * 8, env=self.env, capture_output=True)
@@ -214,6 +215,23 @@ class HighWaterOnSwtpm(_Swtpm):
         self.hw.advance(50)
         with self.assertRaisesRegex(m.Refused, "not anchored"):
             self.hw.check(51)
+
+    def test_advance_waits_for_the_lock(self):
+        # Copilot's finding on #93: two unserialized advances could both increment and overshoot. Hold
+        # the lock as another process would; the advance must not touch the TPM until it is released.
+        import threading
+        lock = os.open(self.d + "/hw.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, lock)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        result = []
+        worker = threading.Thread(target=lambda: result.append(self.hw.advance(2)))
+        worker.start()
+        worker.join(3)
+        self.assertTrue(worker.is_alive(), "advance did not wait for the lock")
+        self.assertEqual(self.hw.value(), 0)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        worker.join(60)
+        self.assertEqual((result, self.hw.value()), ([2], 2))
 
     def test_an_anomalous_jump_is_refused(self):
         with self.assertRaisesRegex(m.Refused, "anomaly"):
