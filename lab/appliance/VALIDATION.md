@@ -309,3 +309,44 @@ Both builders use the same CI provider/toolchain trust; this proves binary
 repeatability across runners, not independent trust authorities or disk-image
 reproducibility. This binary comparison has its own fixed flags and is not the
 appliance executable listed above.
+
+
+## Reviewed package removal — 2026-10-02
+
+[CI run 37070724533](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37070724533)
+passed all 33 functional jobs. Its fresh appliance installation, real daemon
+confinement checks, normal UEFI boot and acknowledged shutdown passed. Startup:
+11.82 seconds. Actual source: `fabdb86c3af413a2eff47dc62eaaea338bfd1c6e`.
+Installed inventory decreased **274 → 259 packages**, all 259 still bound to the
+GPG-authenticated Debian snapshot indexes. Exact-image scanning decreased
+**296 → 280 High/Critical matches**: 38 Critical and 242 High. The release gate
+remains blocked; no exception, signature or publication is issued.
+
+The reviewed removal set is locales/libc-l10n, util-linux-locales, eject, fdisk
+and installer language/task packages. APT simulation must not expand that set,
+select an Essential package, or remove the required appliance roles. Normal
+cleanup removes orphaned dependencies; fresh acceptance verifies the requested
+packages are absent and the actual daemon/boot restrictions still hold. Final
+systemd startup uses built-in `C.UTF-8`, verified through `/etc/locale.conf` and
+the boot manager's environment. Initial refused builds are retained: one caught
+an unreviewed dependent language task, and two caught the obsolete locale path.
+Those did not grant build or release admission.
+
+Exact removed package names from the retained SBOM comparison:
+`dictionaries-common, eject, emacsen-common, fdisk, iamerican, ibritish, ienglish-common, ispell, libc-l10n, locales, task-english, tasksel, tasksel-data, util-linux-locales, wamerican`.
+
+| Artifact | SHA-256 |
+|---|---|
+| Disk (runner claim) | `2c669dbad6869a527ca48bad471ef6f0d2de88967db3c98b8613cca10139434a` |
+| Root filesystem export (runner claim) | `ccc8f216eb5d1ce4b0ae2bf7e98d5486c02720a91871e93db2482c88e0dcb971` |
+| Executable (runner claim) | `01f284512bc67ed9389680a2c47dc2356708c02232817c5267b046a7dd95cbbd` |
+| Package inventory | `122c2e595550b64a8f388895435bb0e82b5bbd031cff933d1f964b8d469d30b8` |
+| Build report | `e073d27b68b65796cee4253896b7d8e2ac0cbc03410f706b35fbec2689b26bf7` |
+| Scan report | `e9d71ca28ce03566ecf15a0a3b3ac80ed4de5476a3157015553a720cd1ace472` |
+| Normal boot log | `e72146edcdb879ceb74411263b77343aa9f41bf5a4d863318a525bf5832f4fa4` |
+
+Downloaded public evidence is under `lab/appliance/.artifacts/ci-760b15e/`.
+The image/rootfs/executable remain runner claims because those bytes are not
+published. The 280 remaining matches include required kernel/runtime components;
+package removal is not a proof of advisory reachability or patch applicability.
+The snapshot expiry and production commissioning gates remain in effect.

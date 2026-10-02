@@ -197,3 +197,10 @@ Its `build-binding.json` records the scan report and build report hashes. High
 or Critical findings fail this CI gate and keep `release_admissible: false`;
 public SBOMs, findings, binding, and Debian-tracker triage are retained even when
 blocked. These diagnostics do not waive the scan or commission the image.
+
+
+The reviewed cleanup now removes installer tasks, generated locale data, eject
+and fdisk. `minimize.py` rejects Essential candidates, unreviewed APT removals and
+loss of required appliance roles. The fresh image uses built-in C.UTF-8 and
+retains 259 authenticated package versions. See [validation](VALIDATION.md) for
+the exact build and remaining blocked scan; this is an uncommissioned template.
