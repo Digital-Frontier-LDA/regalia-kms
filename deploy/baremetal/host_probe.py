@@ -38,15 +38,21 @@ PLATFORM AND TPM, measured:
                             is RSA-3072 with EXACTLY the attributes --init-import-key sets:
                             fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda
   pin_credentials_sealed_as_recorded
-                            every /etc/credstore.encrypted/regalia-kms-*.pin is sealed to the TPM alone
-                            (not the host key, not a null key), and its header carries exactly the
+                            every /etc/credstore.encrypted/regalia-kms-*.pin is sealed to the TPM AND the
+                            host key together (not the TPM alone, not the host key alone, not a null key:
+                            #75, below), and its header carries exactly the
                             recorded binding: the PCRs bound directly, the PCRs bound through a signed
                             policy, and that policy's signing key (--credential-pcrs,
                             --credential-signed-pcrs, --credential-pcr-key-pkfp, or the evidence's
                             host.credential_tpm2_*), in the SHA-256 PCR bank. The header is authenticated
                             with the secret and names the PCRs systemd asks the TPM for, so it is the
                             binding the blob has. Each blob must also OPEN on this boot, under the name
-                            the unit loads it by (systemd-creds decrypt, the secret to /dev/null)
+                            the unit loads it by (systemd-creds decrypt, the secret to /dev/null). And the
+                            host key (/var/lib/systemd/credential.secret) is root's, mode 0400, on a
+                            filesystem with a dm-crypt device beneath it.
+                            WHY NOT THE TPM ALONE: a signed PCR 11 policy has no counter, so every image
+                            the PCR-signing key ever signed opens a TPM-only credential for ever. With
+                            the host key in the seal, an image must also unlock the root disk
   hsm_token_attached        a Nitrokey HSM 2 (USB 20a0:4230) is on the bus (sysfs; no token client
                             needed); its USB path is reported so the evidence can pin the INTERNAL port
   firewall_default_deny     the table `inet regalia_kms` (deploy/baremetal/firewall.py) is loaded, with its
@@ -99,12 +105,15 @@ LOCKOUT_POLICY = {"TPM2_PT_MAX_AUTH_FAIL": 32, "TPM2_PT_LOCKOUT_INTERVAL": 600, 
 CREDSTORE = "/etc/credstore.encrypted"
 PIN_CREDENTIAL = re.compile(r"regalia-kms-[a-z0-9]+(-[a-z0-9]+)*\.pin")   # what seal-hsm-pin.sh installs
 # The 16-byte key-type id that opens a systemd encrypted credential (measured, systemd 257, one blob of
-# each type made against swtpm). Only the two TPM-alone types are a commissioned PIN.
-CRED_TPM2, CRED_TPM2_PK = "0c7cc07b117645919c4b0bea08bc20fe", "faf7eb9341e3412ca1a436f95a29362f"
-CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key (bench only)",
-                "93a894094874449090caf2fc93cab553": "the host key and the TPM",
-                "af4950a849134eb1a73846304ff30c05": "the host key and the TPM, with a signed policy",
+# each type made against swtpm). Only the two host-key-AND-TPM types are a commissioned PIN (#75).
+CRED_HOST_TPM2, CRED_HOST_TPM2_PK = "93a894094874449090caf2fc93cab553", "af4950a849134eb1a73846304ff30c05"
+TPM_ALONE = "the TPM alone, with no host key: every image the PCR-signing key ever signed opens it without the " \
+    "root disk (#75). Reseal it from the PIN card with seal-hsm-pin.sh --replace"
+CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key alone (bench only)",
+                "0c7cc07b117645919c4b0bea08bc20fe": TPM_ALONE,
+                "faf7eb9341e3412ca1a436f95a29362f": TPM_ALONE,
                 "058469daf6f54324800549da0f8ea2fb": "a null key (no protection at all)"}
+HOST_KEY = "/var/lib/systemd/credential.secret"
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
@@ -368,7 +377,7 @@ def pcr_list(mask):
 def credential_header(text):
     """What a systemd encrypted credential is sealed to, read from its header:
     (PCRs bound directly, PCRs bound through a signed policy, the signing key's pkfp or "").
-    ValueError, with the reason, for anything that is not a TPM-alone credential.
+    ValueError, with the reason, for anything that is not sealed to the host key and the TPM together.
 
     Layout (little-endian; measured on systemd 257): id[16], key size, block size, IV size, tag size
     (u32 each), the IV; then, aligned to 8: PCR mask u64, PCR bank u16, primary algorithm u16, blob
@@ -382,8 +391,8 @@ def credential_header(text):
         raise ValueError("too short to be an encrypted credential")
     kind = raw[:16].hex()
     if kind in CRED_REFUSED:
-        raise ValueError("sealed with %s, not the TPM alone" % CRED_REFUSED[kind])
-    if kind not in (CRED_TPM2, CRED_TPM2_PK):
+        raise ValueError("sealed with %s" % CRED_REFUSED[kind])
+    if kind not in (CRED_HOST_TPM2, CRED_HOST_TPM2_PK):
         raise ValueError("an unknown credential type (id %s)" % kind)
     try:
         tag_size = struct.unpack_from("<I", raw, 28)[0]
@@ -391,7 +400,7 @@ def credential_header(text):
         mask, bank, _alg, blob, policy = struct.unpack_from("<QHHII", raw, at)
         at = (at + 20 + blob + policy + 7) & ~7
         signed_mask, key = 0, b""
-        if kind == CRED_TPM2_PK:
+        if kind == CRED_HOST_TPM2_PK:
             signed_mask, size = struct.unpack_from("<QI", raw, at)
             key = raw[at + 12:at + 12 + size]
             if len(key) != size:
@@ -408,7 +417,7 @@ def credential_header(text):
     # binding, whatever its mask says: tpm_sha256_bank measures the bank the record means.
     if bank != TPM2_ALG_SHA256:
         raise ValueError("bound to PCR bank 0x%04x, not SHA-256 (0x000b)" % bank)
-    if kind == CRED_TPM2:
+    if kind == CRED_HOST_TPM2:
         return pcr_list(mask), [], ""
     try:
         return pcr_list(mask), pcr_list(signed_mask), rsa_pkfp(key)
@@ -419,6 +428,27 @@ def credential_header(text):
 def binding_text(direct, signed, pkfp):
     out = "PCRs %s" % ("+".join(map(str, direct)) or "none")
     return out + (", signed PCRs %s by key pkfp %s" % ("+".join(map(str, signed)), pkfp) if signed or pkfp else ", no signed policy")
+
+
+def host_key_protected(host):
+    """The other half of every PIN credential: systemd's host key. It must be root's alone and on a
+    filesystem with a dm-crypt device beneath it. On a clear disk it is one more file an old image can
+    read, and the credential is then worth no more than the TPM half alone."""
+    rc, out = host.run(["stat", "-c", "%F|%u|%a", HOST_KEY])
+    if rc != 0:
+        return False, "the host key %s cannot be read (stat): seal-hsm-pin.sh creates it" % HOST_KEY
+    if out.strip() != "regular file|0|400":
+        return False, "the host key %s must be a regular file, root's, mode 0400 (it is %s)" % (HOST_KEY, out.strip())
+    rc, out = host.run(["findmnt", "-n", "-o", "SOURCE", "-T", HOST_KEY])
+    src = re.sub(r"\[.*\]$", "", out.strip())
+    if rc != 0 or not src:
+        return False, "cannot find the filesystem holding the host key %s" % HOST_KEY
+    rc, out = host.run(["lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", src])
+    crypts = [f[0] for f in (line.split() for line in out.splitlines()) if len(f) == 2 and f[1] == "crypt"]
+    if rc != 0 or not crypts:
+        return False, "the host key %s is on %s, which is not on dm-crypt: an image that boots without unlocking " \
+            "the root disk can read it, and the PIN is then guarded by the TPM alone" % (HOST_KEY, src)
+    return True, "the host key is root's, 0400, on %s" % ", ".join(crypts)
 
 
 def pin_credentials(host, expected=None):
@@ -451,8 +481,11 @@ def pin_credentials(host, expected=None):
             return False, "%s/%s is sealed as recorded but does NOT open on this boot (systemd-creds decrypt): it is cut or " \
                 "altered, sealed by another TPM or under another name, or this boot's PCRs or PCR signature do " \
                 "not satisfy its policy. regalia-kms cannot load it" % (CREDSTORE, name)
-    return True, "%d PIN credential(s) open on this boot, sealed to the TPM alone under %s, as recorded (%s)" % (
-        len(names), binding_text(*expected), ", ".join(names))
+    ok, detail = host_key_protected(host)
+    if not ok:
+        return False, detail
+    return True, "%d PIN credential(s) open on this boot, sealed to the host key and the TPM under %s, as recorded (%s); %s" % (
+        len(names), binding_text(*expected), ", ".join(names), detail)
 
 
 def hsm_ports(host):

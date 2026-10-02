@@ -50,6 +50,10 @@ Commissioning has two halves:
 - **The PIN and the disk are sealed to PCR 7** (Secure Boot state and the keys it trusts), as
   `systemd-cryptenroll` does by default. A kernel or KMS update does not change PCR 7, so nothing is
   stranded; turning Secure Boot off, or enrolling other keys, does change it.
+  - **The PIN is sealed to the host key as well** (`/var/lib/systemd/credential.secret`, on the
+    encrypted root disk): key type `host+tpm2`. A TPM policy alone cannot retire an image, so the PIN
+    must also need the unlocked root disk (PIN-CUSTODY.md, "Why the host key is in the seal"). Losing
+    the root disk therefore means resealing the PIN from the PIN card.
   - **Not PCR 10 (IMA).** systemd decrypts `LoadCredentialEncrypted` before it executes regalia-kms, so
     a policy expecting that binary's measurement could never unseal at an unattended start; PCR 10
     also depends on the order everything else ran in.
@@ -155,9 +159,11 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card. Record the binding in the
    evidence (`host.credential_tpm2_pcrs`, and the signed policy's two fields). Measured:
    `pin_credentials_sealed_as_recorded` reads the header of every
-   `/etc/credstore.encrypted/regalia-kms-*.pin` and fails unless each is sealed to the TPM alone (not
-   the host key) with exactly the recorded PCRs (of the SHA-256 bank) and signing key, and opens on
-   this boot under the name the unit loads it by. Without evidence, give the record on
+   `/etc/credstore.encrypted/regalia-kms-*.pin` and fails unless each is sealed to the host key and
+   the TPM together (not the TPM alone, which is what `seal-hsm-pin.sh` made before #75: reseal those
+   with `--replace`; not the host key alone) with exactly the recorded PCRs (of the SHA-256 bank) and
+   signing key, and opens on this boot under the name the unit loads it by; and unless the host key
+   is root's, mode 0400, on a filesystem with dm-crypt beneath it. Without evidence, give the record on
    the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
@@ -181,7 +187,8 @@ It must exit 0: every measured control true; the evidence at most 24 hours old (
 are not re-measured, so sign fresh evidence for each run), complete, signed by the recorded key,
 attesting every firmware setting, and agreeing with every measurement (including the import key's
 fingerprint). Then an unattended
-**reboot** brings the KMS back with no one present (the disk and the PIN both unseal from the TPM).
+**reboot** brings the KMS back with no one present (the disk unseals from the TPM; the PIN from the
+TPM and the host key on that disk).
 
 ## 6. Backups: the control-plane export, never an image
 

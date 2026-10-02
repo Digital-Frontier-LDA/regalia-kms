@@ -23,6 +23,9 @@
 #   6  host_probe.py reads that binding back from the installed blob's header, and a blob whose
 #      header was edited to claim another binding does not open
 #   7  why the script checks the binding: systemd-creds --with-key=tpm2 ignores the public key
+#   8  the host-key half (#75): the same blob does not open without the host key, or with another
+#      disk's, on the image it was sealed on, on an updated one, or on a retired one; the TPM half
+#      alone never retires an image, which is why a TPM-only credential is refused
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
 pass=0; fail=0
@@ -55,10 +58,15 @@ cat > "$W/stub/pkcs11-tool" <<STUB
 case " \$* " in *" -L "*) echo "Slot 0 (0x0): Stub reader ($SERIAL) 00 00";; *) [ "\$PKCS11_PIN" = "$PIN" ];; esac
 STUB
 chmod 755 "$W/stub/opensc-tool" "$W/stub/pkcs11-tool"
+# The host key is this run's own file, never the machine's (/var/lib/systemd/credential.secret):
+# systemd reads SYSTEMD_CREDENTIAL_SECRET. other.secret stands for another host's disk.
+HK="$W/host.secret"
+for k in host other; do sudo env SYSTEMD_CREDENTIAL_SECRET="$W/$k.secret" systemd-creds setup >/dev/null 2>&1 \
+  || { echo "pcr-signed-policy-swtpm: systemd-creds setup failed for $k.secret"; exit 2; }; done
 seal(){ printf '%s\n' "$PIN" | sudo env PATH="$W/stub:$PATH" REGALIA_TPM2_DEVICE="$D" REGALIA_CREDSTORE="$W/cred" \
-  "$SEAL" --id t --serial "$SERIAL" "$@" 2>&1; }
+  SYSTEMD_CREDENTIAL_SECRET="$HK" "$SEAL" --id t --serial "$SERIAL" "$@" 2>&1; }
 BLOB="$W/cred/regalia-kms-t.pin"
-open(){ sudo systemd-creds decrypt --tpm2-device="$D" --name=t.pin "$@" "$BLOB" - 2>/dev/null; }
+open(){ sudo env SYSTEMD_CREDENTIAL_SECRET="$HK" systemd-creds decrypt --tpm2-device="$D" --name=t.pin "$@" "$BLOB" - 2>/dev/null; }
 
 # ---- keys, kernels, signatures -----------------------------------------------------------------------
 key(){ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$1.key" 2>/dev/null && openssl pkey -in "$1.key" -pubout -out "$1.pub"; }
@@ -122,7 +130,12 @@ no "on a kernel the key never signed, nothing is sealed" 'for the PCR 11 of the 
 boot 1
 out="$(seal --pcrs 7 --tpm2-public-key pcr.pub --tpm2-public-key-pcrs 11 --tpm2-signature sig1.json)"; rc=$?
 [ "$rc" = 0 ] && grep -q '^SEALED' <<< "$out" && sudo test -s "$BLOB" && P "sealed and installed" || F "seal failed (exit $rc): $out"
-grep -q 'tpm2, PCRs 7 (TEST TPM' <<< "$out" && grep -q 'signed PCRs   : 11' <<< "$out" && P "the record: PCR 7 direct, PCR 11 signed, and a TEST TPM" || F "record: $out"
+grep -q 'host key + tpm2, PCRs 7 (TEST TPM' <<< "$out" && grep -q 'signed PCRs   : 11' <<< "$out" && P "the record: the host key and the TPM, PCR 7 direct, PCR 11 signed, and a TEST TPM" || F "record: $out"
+grep -q "(TEST host key $HK, not production)" <<< "$out" && P "the record says the host key is a test one" || F "record does not name the test host key: $out"
+# This run's directory is not on dm-crypt, and systemd says so; the record must repeat it.
+grep -q 'WARNING       : the host key is NOT on encrypted media' <<< "$out" && P "the record warns that the host key is not on encrypted media (so: not production)" || F "no encrypted-media warning: $out"
+[ "$(sudo cat "$BLOB" | base64 -d | head -c 16 | od -An -tx1 | tr -d ' \n')" = af4950a849134eb1a73846304ff30c05 ] \
+  && P "the blob's key type is host+tpm2-with-public-key (af4950a8…)" || F "the installed blob has another key type"
 fp="$(pkfp pcr.pub)"; grep -q "pkfp          : $fp" <<< "$out" && grep -q "\"pkfp\":\"$fp\"" sig1.json \
   && P "the record's key fingerprint is the pkfp in the signature file" || F "fingerprint $fp not in both the record and sig1.json"
 # Tried, not guessed from the path: the blob is opened once more the way the service will, with no
@@ -184,7 +197,7 @@ a = bytearray(raw); struct.pack_into("<Q", a, at, 0); open("no-pcr7.cred", "w").
 b = bytearray(raw); struct.pack_into("<Q", b, pk, 0); open("no-pcr11.cred", "w").write(base64.b64encode(b).decode())' \
   || F "could not edit the blob's header"
 for edited in no-pcr7 no-pcr11; do
-  o="$(sudo systemd-creds decrypt --tpm2-device="$D" --name=t.pin --tpm2-signature=sig1.json "$W/$edited.cred" - 2>/dev/null)"
+  o="$(sudo env SYSTEMD_CREDENTIAL_SECRET="$HK" systemd-creds decrypt --tpm2-device="$D" --name=t.pin --tpm2-signature=sig1.json "$W/$edited.cred" - 2>/dev/null)"
   [ $? != 0 ] && [ -z "$o" ] && P "a blob whose header was edited ($edited) does not open" || F "$edited.cred opened: the header is not what binds the blob"
 done
 yes "control: the unedited blob still opens" --tpm2-signature=sig1.json
@@ -199,6 +212,46 @@ elif [ "$(sudo systemd-creds decrypt --tpm2-device="$D" --tpm2-signature=nosig.j
 else
   echo "  NOTE this systemd's --with-key=tpm2 honours --tpm2-public-key; the script's check stays as a guard"
 fi
+
+# The same question for the key type the script uses when there is NO signed policy.
+printf '%s' "$PIN" | sudo env SYSTEMD_CREDENTIAL_SECRET="$HK" systemd-creds encrypt --with-key=host+tpm2 --tpm2-device="$D" --tpm2-pcrs=7 \
+  --tpm2-public-key=pcr.pub --tpm2-public-key-pcrs=11 --name=t.pin - "$W/plain-host.cred" 2>/dev/null
+if [ "$(sudo env SYSTEMD_CREDENTIAL_SECRET="$HK" systemd-creds decrypt --tpm2-device="$D" --tpm2-signature=nosig.json --name=t.pin "$W/plain-host.cred" - 2>/dev/null)" = "$PIN" ]; then
+  P "--with-key=host+tpm2 ignores --tpm2-public-key too: only the …-with-public-key types bind a signed policy"
+else
+  echo "  NOTE this systemd's --with-key=host+tpm2 honours --tpm2-public-key; the script's check stays as a guard"
+fi
+
+hdr "8  the host-key half: the PIN needs the root disk as well as the TPM (#75)"
+# with <host key file> <signature>: open the installed blob with THAT host key in front of the same TPM.
+with(){ sudo env SYSTEMD_CREDENTIAL_SECRET="$W/$1" systemd-creds decrypt --tpm2-device="$D" --name=t.pin "--tpm2-signature=$2" "$BLOB" - 2>/dev/null; }
+closed(){ local o; o="$(with "$2" "$3")"; [ $? != 0 ] && [ -z "$o" ] && P "$1" || F "$1: it opened"; }
+opened(){ [ "$(with "$2" "$3")" = "$PIN" ] && P "$1" || F "$1: did not open"; }
+boot 1
+opened "image 1, this disk's host key: opens" host.secret sig1.json
+closed "image 1, the credential file copied to ANOTHER disk (another host key), same TPM: does not open" other.secret sig1.json
+closed "image 1, no host key at all (the root disk is not unlocked): does not open" absent.secret sig1.json
+sudo test -e "$W/absent.secret" && F "systemd created a host key while DECRYPTING: 'no host key' was not tested" || P "…and decrypting created no host key"
+boot 2
+opened "image 2 (an update, no reseal), this disk's host key: opens" host.secret sig2.json
+closed "image 2, another disk's host key: does not open" other.secret sig2.json
+# A signed policy has no counter: image 1 is "retired" only in the manifest, and the TPM half still
+# accepts it. What stops it is that a retired image cannot unlock the root disk to reach the host key.
+boot 1
+opened "back on image 1 after the update: the TPM half still accepts it (a signed policy never retires an image)" host.secret sig1.json
+closed "…but without the host key it does not open: retirement is the root disk's to enforce" absent.secret sig1.json
+# Why host_probe refuses a TPM-only credential: what the script sealed before #75.
+printf '%s' "$PIN" | sudo systemd-creds encrypt --with-key=tpm2-with-public-key --tpm2-device="$D" --tpm2-pcrs=7 \
+  --tpm2-public-key=pcr.pub --tpm2-public-key-pcrs=11 --name=t.pin - "$W/tpm-only.cred" 2>/dev/null
+[ "$(sudo env SYSTEMD_CREDENTIAL_SECRET="$W/absent.secret" systemd-creds decrypt --tpm2-device="$D" --name=t.pin --tpm2-signature=sig1.json "$W/tpm-only.cred" - 2>/dev/null)" = "$PIN" ] \
+  && P "a TPM-only credential (the old form) opens on a signed image with NO host key: the gap" || F "the TPM-only control blob did not open"
+refusal="$(sudo cat "$W/tpm-only.cred" | PYTHONPATH="$HERE" python3 -c 'import sys
+from deploy.baremetal import host_probe
+try: host_probe.credential_header(sys.stdin.read()); print("accepted")
+except ValueError as e: print(e)')"
+grep -q "the TPM alone, with no host key" <<< "$refusal" && P "host_probe refuses that credential and says to reseal it" || F "host_probe on a TPM-only blob: $refusal"
+tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+  && P "the TPM's lockout counter is still 0: no refusal in this section was a lockout" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 echo; echo "pcr-signed-policy-swtpm: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
