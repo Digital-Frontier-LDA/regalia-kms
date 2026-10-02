@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -365,6 +366,7 @@ func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
 
 func TestAReplyIsParsedStrictly(t *testing.T) {
 	for _, raw := range []string{``, `[]`, `{"v":1,"peer_id":"porto","epoch":7,"nonce":"aa","extra":1}`, `{"v":1} {"v":1}`, `{"epoch":-1}`, `{"epoch":1.5}`,
+		`{"v":1,"error":"DENIED"}}`, `{"v":1,"error":"DENIED"}]anything {{{`, `{"v":1}x`,
 		`{"v":1,"peer_id":"porto","epoch":7,"nonce":"` + strings.Repeat("a", maxMessage) + `"}`} {
 		var hello helloReply
 		if decodeReply([]byte(raw), &hello) == nil {
@@ -460,6 +462,37 @@ func validConfig(peers ...*fakePeer) *bootConfig {
 	return config
 }
 
+// On a pollable character device (the kernel's TPM device is one) os.OpenFile sets O_NONBLOCK, and the
+// TPM device then answers a read made before the response is ready with 0 bytes. openTPM must not.
+func TestTheTPMDeviceIsOpenedBlocking(t *testing.T) {
+	const path = "/dev/random" // a pollable character device every Linux has, readable and writable by anyone
+	nonblocking := func(file *os.File) bool {
+		raw, err := file.SyscallConn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var flags uintptr
+		_ = raw.Control(func(fd uintptr) { flags, _, _ = syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0) })
+		return flags&syscall.O_NONBLOCK != 0
+	}
+	usual, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Skip("cannot open " + path)
+	}
+	defer usual.Close()
+	if !nonblocking(usual) {
+		t.Skip("os.OpenFile leaves " + path + " blocking here: this platform does not show the difference")
+	}
+	device, err := openTPM(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer device.Close()
+	if nonblocking(device.(*os.File)) {
+		t.Fatal("openTPM opened the device non-blocking: on a real TPM every quote would read 0 bytes")
+	}
+}
+
 func TestTheBootConfigurationIsRefusedUnlessExact(t *testing.T) {
 	porto := newFakePeer(t, "porto")
 	if err := validConfig(porto).validate(); err != nil {
@@ -476,11 +509,21 @@ func TestTheBootConfigurationIsRefusedUnlessExact(t *testing.T) {
 		"peer porto is listed twice":             func(c *bootConfig) { c.Peers = append(c.Peers, c.Peers[0]) },
 		"is listed twice, or is the node itself": func(c *bootConfig) { c.NodeID = "porto" },
 		"a peer's endpoint must be host:port":    func(c *bootConfig) { c.Peers[0].Endpoint = "porto.boot" },
+		"a peer's endpoint must be host:port,":   func(c *bootConfig) { c.Peers[0].Endpoint = "fd00::2:7000" }, // IPv6 without brackets: nothing can dial it
+		"an IPv6 address in brackets":            func(c *bootConfig) { c.Peers[0].Endpoint = "192.0.2.1:70000" },
+		"the port 1-65535":                       func(c *bootConfig) { c.Peers[0].Endpoint = "192.0.2.1:0" },
 		"must be SHA-256 TPM Names":              func(c *bootConfig) { c.Peers[0].AKName = "000b" + strings.Repeat("ZZ", 32) },
 	} {
 		config := validConfig(porto)
 		change(config)
 		wantError(t, config.validate(), strings.TrimSpace(reason))
+	}
+	for _, endpoint := range []string{"[2001:db8::3]:7443", "porto.boot:7443", "192.0.2.1:65535"} {
+		config := validConfig(porto)
+		config.Peers[0].Endpoint = endpoint
+		if err := config.validate(); err != nil {
+			t.Fatalf("%s: %v", endpoint, err)
+		}
 	}
 	path := filepath.Join(t.TempDir(), "unlock.json")
 	raw, _ := json.Marshal(validConfig(porto))
@@ -488,8 +531,11 @@ func TestTheBootConfigurationIsRefusedUnlessExact(t *testing.T) {
 	if loaded, err := loadBootConfig(path); err != nil || loaded.Peers[0].NodeID != "porto" {
 		t.Fatal(err)
 	}
-	_ = os.WriteFile(path, []byte(strings.Replace(string(raw), `"device"`, `"extra":1,"device"`, 1)), 0o600)
+	_ = os.WriteFile(path, append(append([]byte{}, raw...), '}'), 0o600)
 	_, err := loadBootConfig(path)
+	wantError(t, err, "the boot configuration has trailing data")
+	_ = os.WriteFile(path, []byte(strings.Replace(string(raw), `"device"`, `"extra":1,"device"`, 1)), 0o600)
+	_, err = loadBootConfig(path)
 	wantError(t, err, "not the expected JSON object")
 	_, err = loadBootConfig(filepath.Join(t.TempDir(), "absent"))
 	wantError(t, err, "cannot read the boot configuration")
@@ -652,6 +698,7 @@ func TestTheNewestPathIsAskedFirstAndUnusableTokensAreReported(t *testing.T) {
 	tokens["9"] = token("lisbon", "9", 4)
 	tokens["10"] = token("porto", "1", 4)
 	tokens["10"].(map[string]any)["keyslots"] = []string{"1", "2"}
+	tokens["11\x1b[2J\nregalia-unlock: all is well"] = token("faro", "3", 4) // an ID that is not a number is never printed
 	paths, skipped := pathsOf(t, tokens)
 	local := bytes.Repeat([]byte{0x11}, 32)
 	var log bytes.Buffer
@@ -661,6 +708,9 @@ func TestTheNewestPathIsAskedFirstAndUnusableTokensAreReported(t *testing.T) {
 		t.Fatalf("%s %s %v", peer, slot, err)
 	}
 	reported := strings.Join(skipped, "\n")
+	if strings.Contains(reported, "all is well") || strings.ContainsAny(reported, "\x1b") || len(skipped) != 5 {
+		t.Fatalf("a token ID from the disk reached the diagnostics unchecked:\n%q", reported)
+	}
 	for _, reason := range []string{"token 6: it is for node faro", "token 7: its local contribution is not a systemd credential sealed to the TPM alone",
 		"token 8: it has unknown or malformed fields", "token 9: its target or peer is not a node ID", "token 10: it does not name exactly one keyslot"} {
 		if !strings.Contains(reported, reason) {
@@ -697,7 +747,7 @@ func TestTheKeyHandoffAndTheLocalHalf(t *testing.T) {
 	if got, _ := io.ReadAll(asker); string(got) != "the derived credential" {
 		t.Fatalf("the asker read %q", got)
 	}
-	wantError(t, giveKey(listener, []byte("k"), 50*time.Millisecond), "nobody asked for the key on the socket")
+	wantError(t, giveKey(listener, []byte("k"), 50*time.Millisecond), "nobody entitled asked for the key on the socket")
 	// a run that fails answers the waiting connection with nothing, so it is not left waiting
 	waiting, err := net.DialUnix("unix", nil, address)
 	if err != nil {
@@ -769,7 +819,10 @@ func TestTheTransportIsOneBoundedRequestPerConnection(t *testing.T) {
 
 func TestTheCommandLine(t *testing.T) {
 	var out, diagnostics bytes.Buffer
-	wantError(t, run([]string{"-config", filepath.Join(t.TempDir(), "absent")}, &out, &diagnostics), "cannot read the boot configuration")
+	t.Setenv("LISTEN_FDS", "")
+	wantError(t, run([]string{"-config", filepath.Join(t.TempDir(), "absent")}, &out, &diagnostics), "no socket was passed")
+	_, err := loadBootConfig(filepath.Join(t.TempDir(), "absent"))
+	wantError(t, err, "cannot read the boot configuration")
 	wantError(t, run([]string{"-rounds", "0"}, &out, &diagnostics), "usage:")
 	wantError(t, run([]string{"extra"}, &out, &diagnostics), "usage:")
 	if err := run([]string{"-h"}, &out, &diagnostics); !errors.Is(err, errHelp()) || !strings.Contains(out.String(), "-config") {

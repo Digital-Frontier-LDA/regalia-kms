@@ -332,6 +332,9 @@ class Exchange(Case):
         self.assertEqual(json.loads(self.wire[0][1]), {"v": 1, "op": "hello", "node_id": "a"})
         self.assertEqual(sorted(json.loads(self.wire[0][2])), ["epoch", "nonce", "peer_id", "v"])
         self.assertEqual(json.loads(self.wire[1][2])["response"]["epoch"], 2)
+        other = self.boot()
+        self.refused("the hello reply is not version 1", unlock.ask, other, self.pins["b"], epoch,
+                     lambda raw: json.dumps(dict(json.loads(self.transport("b")(raw)), v=2)).encode(), self.quote(), run)
         # a hello reply changed on the way to state another epoch: the quote is over it, and the peer refuses
         fresh, genuine = self.boot(), self.transport("b")
 
@@ -368,6 +371,10 @@ class Exchange(Case):
                                (dict(peers=[]), "peers must list 1 to 8 peers"), (dict(peers=config["peers"][:1] * 2), "peer b is listed twice"),
                                (dict(node_id="b"), "is listed twice, or is the node itself"),
                                (dict(peers=[dict(config["peers"][0], endpoint="porto.boot")]), "peer.endpoint must be host:port"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="fd00::2:7000")]), "an IPv6 address in brackets"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="192.0.2.2:70000")]), "the port 1-65535"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="192.0.2.2:0")]), "the port 1-65535"),
+                               (dict(peers=[dict(config["peers"][0], endpoint=7)]), "peer.endpoint must be host:port"),
                                (dict(peers=[dict(config["peers"][0], ak_name="000b" + "zz" * 32)]), "peer.ak_name must be a SHA-256 TPM Name"),
                                (dict(peers=[dict(config["peers"][0], extra=1)]), "peer fields mismatch")):
             with self.subTest(reason):
@@ -379,10 +386,25 @@ class Exchange(Case):
         self.addCleanup(listener.close)
         endpoint = "127.0.0.1:%d" % listener.getsockname()[1]
         with unittest.mock.patch.object(unlock, "IO_TIMEOUT", 2):
-            server = threading.Thread(target=unlock.serve, args=(self.served["b"], listener, 6), daemon=True)
+            server = threading.Thread(target=unlock.serve, args=(self.served["b"], listener, 9), daemon=True)
             server.start()
             send = unlock.tcp_transport(endpoint)
             self.assertEqual(json.loads(send(b"{")), {"v": 1, "error": "INVALID_REQUEST"})
+            self.assertEqual(json.loads(send(b"[" * 60000)), {"v": 1, "error": "INVALID_REQUEST"})
+            # a sender of one byte now and then: the whole connection has the time limit, not each byte
+            with socket.create_connection(listener.getsockname()) as dripping:
+                started = time.monotonic()
+                with self.assertRaises(OSError):
+                    while time.monotonic() - started < 8:
+                        dripping.sendall(b" ")
+                        time.sleep(0.4)
+                self.assertLess(time.monotonic() - started, 4)
+            # a failure of the handler that nobody foresaw: audited by its kind, and the next request is served
+            handle = self.served["b"].handle
+            with unittest.mock.patch.object(self.served["b"], "handle", side_effect=ZeroDivisionError("a bug")):
+                self.assertEqual(send(b"{}"), b"")
+            self.assertEqual((self.events[-1]["event"], self.events[-1]["outcome"], self.events[-1]["reason"]), ("unlock-server-error", "ERROR", "ZeroDivisionError"))
+            self.assertIs(self.served["b"].handle.__func__, handle.__func__)
             self.assertEqual(json.loads(send(b" " * (unlock.MAX_BYTES + 1))), {"v": 1, "error": "INVALID_REQUEST"})
             with socket.create_connection(listener.getsockname()) as stalled:      # says half a request and stalls: it costs itself only
                 stalled.sendall(b'{"v":1,')
@@ -429,7 +451,8 @@ class Exchange(Case):
         self.assertIn("nonce", peer.handle(json.dumps(hello).encode()))
         invalid = {"v": 1, "error": "INVALID_REQUEST"}
         for raw in (b"", b"[]", b"{", b'{"v":1}', b'{"v":2,"op":"hello"}', b'{"v":true,"op":"hello"}', b'{"v":1,"op":"init"}', b'{"v":1,"op":7}',
-                    b'{"v":1,"v":1,"op":"hello"}', b'{"v":1.0,"op":"hello"}', b'{"v":1,"op":"manifests","envelopes":[]}', b" " * (unlock.MAX_BYTES + 1)):
+                    b'{"v":1,"v":1,"op":"hello"}', b'{"v":1.0,"op":"hello"}', b'{"v":1,"op":"manifests","envelopes":[]}', b" " * (unlock.MAX_BYTES + 1),
+                    b"[" * 60000):                                    # deeper than the JSON parser recurses: refused, not a crash
             with self.subTest(raw[:30]):
                 self.assertEqual(peer.handle(raw), invalid)
         denied = {"v": 1, "error": "DENIED"}
@@ -912,7 +935,7 @@ class OnSwtpm(unittest.TestCase):
         closed.close()
         return endpoints
 
-    def native(self, endpoints, *flags, tpm="a", mapped=False):
+    def native(self, endpoints, *flags, tpm="a", mapped=False, config_text=None):
         """One boot's run of the pre-root client on TPM `tpm`, with this test in systemd's two roles.
         As the unit's manager: unseal the local half with the TPM (LoadCredentialEncrypted=; a refusal
         means the unit never starts) and pass it in a credentials directory, with the listening socket.
@@ -920,7 +943,7 @@ class OnSwtpm(unittest.TestCase):
         test. Returns (exit code, stdout, stderr, the keyslot the key opened or None)."""
         config, creds, path = self.d + "/unlock.json", tempfile.mkdtemp(dir=self.d), self.d + "/key.sock"
         with open(config, "w") as f:
-            json.dump(unlock.boot_config(self.m1, "a", self.device, [7, 11], endpoints), f)
+            f.write(config_text or json.dumps(unlock.boot_config(self.m1, "a", self.device, [7, 11], endpoints)))
         tokens = [t for _, t in unlock.path_tokens(unlock.luks_meta(self.device, run))]
         local = unlock.unseal_local(tokens[0]["local"], tpm2_device=self.tcti[tpm], run=run)     # Refused on another TPM
         with open(os.open(creds + "/" + unlock.LOCAL_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400), "wb") as f:
@@ -943,7 +966,8 @@ class OnSwtpm(unittest.TestCase):
                                       capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, preexec_fn=activated, close_fds=False)
             listener.close()
             asker.settimeout(5)
-            key, slot = (asker.recv(4096) if done.returncode == 0 else b""), None
+            key, slot = asker.recv(4096), None                         # a run that gives no key answers with nothing, at once
+            self.assertEqual(bool(key), done.returncode == 0, done.stderr)
             if key:
                 args = [self.device, self.name] if mapped else ["--test-passphrase", self.device]
                 opened = run(["cryptsetup", "open", "--key-file", "-", "-v", *args], input=key, capture_output=True)
@@ -1020,6 +1044,11 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual(err.count("the transport failed (no connection)"), 4)
         self.refused("the disk stays locked: no peer to ask", self.unlock, peers=())
         self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
+        # a boot configuration that cannot be read: refused before any peer is asked, and the socket is still answered
+        since = len(self.events)
+        code, out, err, slot = self.native(endpoints, config_text='{"schema": "regalia.unlock-boot/v1"}}')
+        self.assertEqual((code, out, slot, self.events[since:]), (1, "", None, []), err)
+        self.assertEqual(err, "regalia-unlock: the boot configuration has trailing data\n")
 
         # #135: a boots an image the root has retired. Its TPM releases the local half all the same; both
         # peers refuse the quote, and the disk stays locked. With each client.

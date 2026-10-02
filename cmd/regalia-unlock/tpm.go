@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 )
 
 // One TPM command, written out by hand: TPM2_Quote by the persistent attestation key. The pre-root
@@ -28,7 +29,15 @@ func openTPM(path string) (io.ReadWriteCloser, error) {
 	if socket, ok := strings.CutPrefix(path, "unix:"); ok {
 		return net.Dial("unix", socket)
 	}
-	return os.OpenFile(path, os.O_RDWR, 0)
+	// A BLOCKING descriptor, opened by hand. os.OpenFile puts a pollable character device in
+	// non-blocking mode, and the kernel's TPM device then only queues the command on write and returns
+	// 0 bytes to a read made before the response is ready: every quote would look truncated. In blocking
+	// mode the write runs the command and the read that follows returns the whole response.
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), path), nil
 }
 
 // quoteCommand is the TPM2_Quote command: the AK's empty password authorization, the qualifying data,

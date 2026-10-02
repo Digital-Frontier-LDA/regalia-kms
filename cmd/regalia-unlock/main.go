@@ -60,6 +60,19 @@ type options struct {
 }
 
 func run(arguments []string, out, diagnostics io.Writer) error {
+	// The socket first, before anything that can fail. A run that gives no key still answers whoever
+	// waits on it, with nothing: systemd-cryptsetup then asks at the console, and systemd does not start
+	// this program again for a connection left waiting. That holds for a bad flag or a bad configuration too.
+	listener, listenerError := activatedListener()
+	given := false
+	if listener != nil {
+		defer listener.Close()
+		defer func() {
+			if !given {
+				giveNothing(listener)
+			}
+		}()
+	}
 	flags := flag.NewFlagSet("regalia-unlock", flag.ContinueOnError)
 	flags.SetOutput(out)
 	configPath := flags.String("config", "/etc/regalia/unlock.json", "the boot configuration (deploy/baremetal/unlock.py, boot_config)")
@@ -73,25 +86,15 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 {
 		return errors.New("usage: regalia-unlock [-config FILE] [-tpm DEVICE] [-rounds N] [-wait DURATION]")
 	}
+	if listenerError != nil {
+		return listenerError
+	}
+	// Everything that can be refused without a peer is refused first: nothing is asked of a peer, and no
+	// boot session is spent, by a run that could not have used the answer.
 	config, err := loadBootConfig(*configPath)
 	if err != nil {
 		return err
 	}
-	// Everything that can be refused without a peer is refused first: nothing is asked of a peer, and no
-	// boot session is spent, by a run that could not have used the answer.
-	listener, err := activatedListener()
-	if err != nil {
-		return err
-	}
-	defer listener.Close()
-	given := false
-	// A run that gives no key still answers whoever waits on the socket, with nothing: systemd-cryptsetup
-	// then asks at the console, and systemd does not start this program again for a connection left waiting.
-	defer func() {
-		if !given {
-			giveNothing(listener)
-		}
-	}()
 	local, err := localContribution(os.Getenv("CREDENTIALS_DIRECTORY"))
 	if err != nil {
 		return err
@@ -156,31 +159,44 @@ func activatedListener() (*net.UnixListener, error) {
 	return unix, nil
 }
 
-// giveKey writes the key to the one connection waiting on the socket, if it comes from this user (root,
-// before root exists), and to nobody else.
+// giveKey writes the key to the first connection on the socket that comes from this user (root, before
+// root exists), once, and to nobody else. A connection from another user is closed with nothing and
+// does not take the place of the one behind it.
 func giveKey(listener *net.UnixListener, key []byte, wait time.Duration) error {
 	_ = listener.SetDeadline(time.Now().Add(wait))
-	connection, err := listener.AcceptUnix()
-	if err != nil {
-		return errors.New("nobody asked for the key on the socket")
+	for {
+		connection, err := listener.AcceptUnix()
+		if err != nil {
+			return errors.New("nobody entitled asked for the key on the socket")
+		}
+		if !sameUser(connection) {
+			connection.Close()
+			continue
+		}
+		_ = connection.SetDeadline(time.Now().Add(ioTimeout))
+		_, err = connection.Write(key)
+		connection.Close()
+		if err != nil {
+			return errors.New("the key could not be written to the socket")
+		}
+		return nil
 	}
-	defer connection.Close()
+}
+
+// sameUser reports whether the other end of the connection is a process of this user (SO_PEERCRED).
+func sameUser(connection *net.UnixConn) bool {
 	raw, err := connection.SyscallConn()
 	if err != nil {
-		return errors.New("cannot identify who asked for the key")
+		return false
 	}
 	var credentials *syscall.Ucred
 	var credentialsError error
 	if err := raw.Control(func(fd uintptr) {
 		credentials, credentialsError = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-	}); err != nil || credentialsError != nil || credentials.Uid != uint32(os.Geteuid()) {
-		return errors.New("the key was asked for by another user: nothing was given")
+	}); err != nil || credentialsError != nil {
+		return false
 	}
-	_ = connection.SetDeadline(time.Now().Add(ioTimeout))
-	if _, err := connection.Write(key); err != nil {
-		return errors.New("the key could not be written to the socket")
-	}
-	return nil
+	return credentials.Uid == uint32(os.Geteuid())
 }
 
 // giveNothing closes the connection waiting on the socket, if there is one, without writing to it.

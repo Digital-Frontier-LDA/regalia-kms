@@ -104,6 +104,7 @@ import re
 import socket
 import subprocess
 import tempfile
+import time
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -132,7 +133,9 @@ BOOT_SCHEMA = "regalia.unlock-boot/v1"
 BOOT_KEYS = ("schema", "node_id", "device", "pcrs", "peers")
 PIN_KEYS = ("node_id", "endpoint", "ek_name", "ak_name")
 MAX_BYTES = 64 * 1024          # one message, either way
-IO_TIMEOUT = 10                # seconds for one connection
+IO_TIMEOUT = 10                # seconds for one connection, from accept to the last byte
+# a host name or IPv4 address, or an IPv6 address in brackets; then a port
+ENDPOINT = r"(\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9.-]{1,253}):([0-9]{1,5})"
 MAX_PATHS = 4                  # contributions a peer keeps per target (the current one, and one in rotation)
 # What systemd-cryptenroll gives a TPM2 or FIDO2 keyslot: the credential is 256 random bits, so a memory-hard
 # PBKDF buys nothing and would only slow the boot.
@@ -354,7 +357,7 @@ class Peer:
                         and isinstance(message.get("op"), str), "not a version 1 request")
                 handler = {"hello": self.hello, "unlock": self.unlock}.get(message["op"])
                 require(handler is not None, "unknown operation")
-            except Refused:
+            except (Refused, RecursionError):      # tens of thousands of nested brackets fit in one message
                 return {"v": VERSION, "error": "INVALID_REQUEST"}
             return handler(message)
         except (Refused, attest.Refused):
@@ -486,6 +489,7 @@ def ask(session, pin, epoch, transport, quote, run=subprocess.run):
     peer_id = validate_pin(pin)["node_id"]
     reply = _reply(transport, {"v": VERSION, "op": "hello", "node_id": session.node_id}, "hello")
     membership.exact(reply, ("v", "peer_id", "epoch", "nonce"), "hello reply")
+    require(type(reply["v"]) is int and reply["v"] == VERSION, "the hello reply is not version %d" % VERSION)
     require(reply["peer_id"] == peer_id, "the peer that answered is %r, not %s" % (reply["peer_id"], peer_id))
     stated = reply["epoch"]
     require(isinstance(stated, int) and not isinstance(stated, bool) and 1 <= stated < 2 ** 63, "the peer's epoch must be an integer >= 1")
@@ -504,8 +508,9 @@ def ask(session, pin, epoch, transport, quote, run=subprocess.run):
 def validate_pin(pin):
     membership.exact(pin, PIN_KEYS, "peer")
     node_id(pin["node_id"], "peer.node_id")
-    require(isinstance(pin["endpoint"], str) and re.fullmatch(r"[A-Za-z0-9.:\[\]-]{1,255}:[0-9]{1,5}", pin["endpoint"]) is not None,
-            "peer.endpoint must be host:port")
+    endpoint = re.fullmatch(ENDPOINT, pin["endpoint"]) if isinstance(pin["endpoint"], str) else None
+    require(endpoint is not None and 1 <= int(endpoint.group(2)) <= 65535,
+            "peer.endpoint must be host:port, an IPv6 address in brackets, the port 1-65535")
     for k in ("ek_name", "ak_name"):
         require(isinstance(pin[k], str) and re.fullmatch(r"000b[0-9a-f]{64}", pin[k]) is not None, "peer.%s must be a SHA-256 TPM Name" % k)
     return pin
@@ -542,9 +547,15 @@ def boot_config(manifest, target, device, pcrs, endpoints):
     return config
 
 
-def _read_all(conn):
+def _read_all(conn, deadline):
+    """Everything the other side sends before it closes, by `deadline` (time.monotonic) for the whole of it:
+    a sender of one byte every few seconds does not hold the connection."""
     data = b""
     while len(data) <= MAX_BYTES:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the connection took longer than %d seconds" % IO_TIMEOUT)
+        conn.settimeout(left)
         chunk = conn.recv(65536)
         if not chunk:
             return data
@@ -554,18 +565,30 @@ def _read_all(conn):
 
 def serve(peer, listener, count=None):
     """Answer unlock requests on `listener`, a bound and listening socket: one request per connection (the
-    sender closes its side to end it), one at a time, each bounded in size and time. A connection that
-    breaks, stalls or sends too much costs only itself. `count` ends the loop after that many connections."""
+    sender closes its side to end it), one at a time, each bounded in size and in time from accept to the
+    last byte. A connection that breaks, stalls, sends too much, or makes the handler fail in a way nobody
+    foresaw costs only itself: the failure goes to the peer's audit sink by its kind, and the next
+    connection is served. The loop ends when the listener is closed, or after `count` connections."""
     served = 0
     while count is None or served < count:
-        conn, _ = listener.accept()
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            if listener.fileno() == -1:
+                return
+            continue
         served += 1
         with conn:
             try:
-                conn.settimeout(IO_TIMEOUT)
-                conn.sendall(membership.canonical(peer.handle(_read_all(conn))))
+                deadline = time.monotonic() + IO_TIMEOUT
+                reply = membership.canonical(peer.handle(_read_all(conn, deadline)))
+                conn.settimeout(max(deadline - time.monotonic(), 0.001))
+                conn.sendall(reply)
             except OSError:
                 continue
+            except Exception as error:      # never a reason to stop answering the nodes that reboot next
+                peer.audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
+                            "outcome": "ERROR", "reason": type(error).__name__})
 
 
 def tcp_transport(endpoint):
@@ -573,10 +596,11 @@ def tcp_transport(endpoint):
     host, _, port = endpoint.rpartition(":")
 
     def send(raw):
+        deadline = time.monotonic() + IO_TIMEOUT
         with socket.create_connection((host.strip("[]"), int(port)), timeout=IO_TIMEOUT) as conn:
             conn.sendall(raw)
             conn.shutdown(socket.SHUT_WR)
-            return _read_all(conn)
+            return _read_all(conn, deadline)
     return send
 
 

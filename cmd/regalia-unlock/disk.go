@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	tokenType = "regalia-peer-unlock"
-	localName = "regalia-unlock-local"
+	tokenType   = "regalia-peer-unlock"
+	localName   = "regalia-unlock-local"
+	maxReported = 16 // unusable tokens named in the diagnostics
 )
 
 // The key-type id at the head of a systemd encrypted credential: the TPM alone, or the TPM under a
@@ -153,6 +154,12 @@ func pathTokens(device io.ReaderAt, nodeID string) (map[string][]pathToken, []st
 	sort.Strings(ids)
 	paths, skipped := map[string][]pathToken{}, []string{}
 	for _, id := range ids {
+		if _, err := strconv.ParseUint(id, 10, 16); err != nil {
+			continue // a token ID is a small number; anything else is not printed, and not used
+		}
+		if len(skipped) >= maxReported {
+			break
+		}
 		var kind struct {
 			Type string `json:"type"`
 		}

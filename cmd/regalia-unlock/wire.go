@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 )
@@ -132,7 +133,7 @@ func decodeReply(raw []byte, into any) error {
 	if err := decoder.Decode(into); err != nil {
 		return errors.New("the reply is not the expected JSON object")
 	}
-	if decoder.More() {
+	if _, err := decoder.Token(); err != io.EOF {
 		return errors.New("the reply has trailing data")
 	}
 	return nil
