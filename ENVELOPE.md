@@ -136,6 +136,67 @@ hardware. Recovery verification must prove a replacement token with the restored
 envelope before retiring the old token. Production enablement remains blocked until that physical
 ceremony passes; the unit test uses two simulated devices solely to prove format portability.
 
+## Assembling an envelope outside the daemon
+
+`seal-envelope` takes a ciphertext the caller produced, so a client in another module or another
+language has to build exactly the bytes the daemon will authenticate. This section is that
+construction. `TestTheEnvelopeConstructionIsTheBytesEnvelopeMdPublishes` rebuilds the vector below
+with the standard library alone, feeds it to the sealing path, and reads this file, so neither the
+code nor this text can move without the other.
+
+A client needs three values it already has: the `object_id`, and the `purpose` and `environment` it
+sends in the request context. Nothing here depends on the KEK, its version, or the server's clock.
+
+1. **Binding context.** Four fields joined by a single NUL byte (`0x00`), no terminator:
+
+   ```
+   regalia-release-v1 NUL <object_id> NUL <purpose> NUL <environment>
+   ```
+
+2. **Context digest.** The text `sha256:` followed by the lower-case hex SHA-256 of the binding
+   context (71 characters).
+
+3. **Content AAD.** Four fields joined by a single NUL byte, no terminator:
+
+   ```
+   regalia-envelope-v2 NUL <object_id> NUL AES-256-GCM NUL <context digest>
+   ```
+
+4. **Encrypt.** AES-256-GCM with a fresh random 32-byte data key and a fresh random 12-byte nonce,
+   the content AAD as additional data, and the standard 16-byte tag appended to the ciphertext.
+   The plaintext is 1 byte to 1 MiB.
+
+5. **Send** `ciphertext_base64`, `nonce_base64` and `data_key_base64` (standard base64, padded) to
+   `seal-envelope`, with the same `object_id`, `purpose` and `environment` used in step 1. The
+   daemon derives the context from the authorized route, checks the tag, wraps the data key and
+   returns the envelope. Discard the data key.
+
+If the purpose or environment in step 1 is not the one the object is registered for, the tag does
+not verify and the request is refused as `INVALID_ARGUMENT`. That is the design: the caller cannot
+choose the context, only match it.
+
+### Test vector
+
+A documentation vector and nothing else. Never use this key or nonce.
+
+| | |
+|---|---|
+| `object_id` | `example-seal-object` |
+| `purpose` | `example-purpose` |
+| `environment` | `staging` |
+| data key | the 32 bytes `00 01 02 … 1f` (`AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=`) |
+| nonce | the 12 bytes `a0 a1 … ab` (`oKGio6Slpqeoqaqr`) |
+| plaintext | the 23 bytes of `the secret being sealed` |
+| binding context | 62 bytes |
+| context digest | `sha256:ec7edc0f534a0ce8cfb1a34a534de69e517fa146ed0146dc9a3a8c3c6101663e` |
+| content AAD | 123 bytes |
+| ciphertext with tag | 39 bytes, `knAZDTauYc0HEaexYhOuuVDfPHH+0iYtSQbBtxneCzv/SC8qVDRB` |
+
+The envelope the daemon returns for this request differs from run to run in `created_at` and in the
+wrapped data key, and names the KEK generation that was active. Those are the server's fields; a
+client stores the envelope as returned and reads nothing from it but, if it wants one, the KEK
+reference.
+
 ## A KEK is only hardware-rooted if the token says so
 
 #6 requires that production KEKs be non-exportable hardware keys with no software fallback. Until

@@ -542,6 +542,18 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 			}
 			providers[nitrokey.OpenPGPAppletBackend] = provider
 		}
+		// With every token this host serves now openable: does each one offer what its objects
+		// declare? Asked of the token itself, without a login. No deadline: one that expired would
+		// leave the remaining tokens unchecked, and it could not interrupt a PKCS#11 call anyway.
+		unchecked, mechanismErr := requireTokensOfferBoundMechanisms(context.Background(), driver, keyRegistry)
+		if mechanismErr != nil {
+			_ = driver.Close()
+			return nil, nil, nil, nil, mechanismErr
+		}
+		if len(unchecked) > 0 {
+			slog.Warn("KMS could not ask these tokens which mechanisms they offer: an object they cannot serve will fail per operation, unnamed",
+				"tokens", strings.Join(unchecked, ", "))
+		}
 	}
 	if len(settings.YubiKeyDevices) > 0 {
 		provider, providerErr := newYubiKeyBackend(settings.YubiKeyDevices, pins)

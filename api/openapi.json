@@ -176,14 +176,29 @@
           "403": {
             "$ref": "#/components/responses/Denied"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "422": {
             "$ref": "#/components/responses/InvalidOperation"
           },
+          "429": {
+            "$ref": "#/components/responses/ResourceExhausted"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           }
         },
         "summary": "Sign a certificate request",
@@ -256,14 +271,29 @@
           "403": {
             "$ref": "#/components/responses/Denied"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "422": {
             "$ref": "#/components/responses/InvalidOperation"
           },
+          "429": {
+            "$ref": "#/components/responses/ResourceExhausted"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           }
         },
         "summary": "Derive a shared key",
@@ -336,14 +366,29 @@
           "403": {
             "$ref": "#/components/responses/Denied"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "422": {
             "$ref": "#/components/responses/InvalidOperation"
           },
+          "429": {
+            "$ref": "#/components/responses/ResourceExhausted"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           }
         },
         "summary": "Release an enveloped secret",
@@ -418,11 +463,26 @@
           "403": {
             "$ref": "#/components/responses/Denied"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "429": {
+            "$ref": "#/components/responses/ResourceExhausted"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
           "503": {
             "$ref": "#/components/responses/DependencyUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           }
         }
       }
@@ -485,14 +545,29 @@
           "403": {
             "$ref": "#/components/responses/Denied"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "422": {
             "$ref": "#/components/responses/InvalidOperation"
           },
+          "429": {
+            "$ref": "#/components/responses/ResourceExhausted"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           }
         }
       }
@@ -563,14 +638,29 @@
           "403": {
             "$ref": "#/components/responses/Denied"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "422": {
             "$ref": "#/components/responses/InvalidOperation"
           },
+          "429": {
+            "$ref": "#/components/responses/ResourceExhausted"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           }
         }
       }
@@ -633,14 +723,29 @@
           "403": {
             "$ref": "#/components/responses/Denied"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "405": {
+            "$ref": "#/components/responses/MethodNotAllowed"
+          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
           "422": {
             "$ref": "#/components/responses/InvalidOperation"
           },
+          "429": {
+            "$ref": "#/components/responses/ResourceExhausted"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
           }
         }
       }
@@ -937,12 +1042,14 @@
           },
           "content_type": {
             "enum": [
+              "application/vnd.regalia.digest",
               "application/vnd.cosmos.tx+protobuf",
               "application/vnd.regalia.release-manifest+json",
               "application/ssh-signature-input",
               "application/pkix-certification-request",
               "application/octet-stream"
-            ]
+            ],
+            "description": "What the payload is. It must be one of the content types the object's purpose policy lists; application/vnd.regalia.digest is a digest (for RSA, the DigestInfo that carries one)."
           },
           "payload_base64": {
             "type": "string",
@@ -1071,7 +1178,7 @@
         }
       },
       "InvalidOperation": {
-        "description": "Operation is incompatible with object purpose or policy.",
+        "description": "Reserved. The daemon does not return this status or the INVALID_OPERATION code today.",
         "content": {
           "application/json": {
             "schema": {
@@ -1092,6 +1199,46 @@
       },
       "DependencyUnavailable": {
         "description": "Policy state, audit or another required dependency is unavailable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "A method other than POST. Answered with code INVALID_ARGUMENT.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ResourceExhausted": {
+        "description": "A quota or the concurrency limit was reached. Retryable.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Internal": {
+        "description": "A fault the caller cannot act on.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Timeout": {
+        "description": "The operation did not finish: DEADLINE_EXCEEDED (retryable) or CANCELED (not retryable).",
         "content": {
           "application/json": {
             "schema": {
