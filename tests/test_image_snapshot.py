@@ -88,3 +88,30 @@ class SnapshotSignatures(unittest.TestCase):
         with self.assertRaises(VerificationError): self.verify()
         self.sign();self.signed.write_bytes(self.signed.read_bytes().replace(b'Origin: Debian',b'Origin: Evil!!'))
         with self.assertRaises(VerificationError): self.verify()
+
+class FrozenPackageIndexes(unittest.TestCase):
+    def test_index_tampering_is_refused_and_parsing_uses_verified_bytes(self):
+        import lzma
+        from unittest.mock import patch
+        payload=('Package: fixture\nVersion: 1\nArchitecture: amd64\nFilename: pool/f/fixture/fixture_1_amd64.deb\n'
+                 'SHA256: '+'0'*64+'\nSize: 1\n').encode()
+        compressed=lzma.compress(payload)
+        expected=(hashlib.sha256(compressed).hexdigest(),len(compressed))
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            for archive in snapshot.ARCHIVES:
+                folder=root/archive;folder.mkdir();(folder/'Packages.xz').write_bytes(compressed)
+            with patch.object(snapshot,'verify_release',return_value=({'status':'verified'},{'main/binary-amd64/Packages.xz':expected})):
+                _, inventory=snapshot.validate(root)
+                self.assertEqual(len(inventory),2)
+                first=root/'debian/Packages.xz';first.write_bytes(compressed+b'corrupted')
+                with self.assertRaises(VerificationError): snapshot.validate(root)
+                first.write_bytes(compressed)
+                original=snapshot.read_regular
+                def replaced_after_read(path,*args):
+                    data=original(path,*args)
+                    if path==first: path.write_bytes(b'not an authenticated index')
+                    return data
+                with patch.object(snapshot,'read_regular',side_effect=replaced_after_read):
+                    _, inventory=snapshot.validate(root)
+                    self.assertEqual([x['Package'] for x in inventory],['fixture','fixture'])

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
 import json
+import io
 import lzma
 from pathlib import Path
 import re
@@ -114,10 +115,11 @@ def packages(data):
 
 
 def validate(directory, policy_path=POLICY):
-    config=policy(json.loads(read_regular(policy_path)))
+    policy_data=read_regular(policy_path)
+    config=policy(json.loads(policy_data))
     report={'schema':'regalia.authenticated-package-snapshot/v1','status':'verified',
             'production_approved':False,'timestamp':config['timestamp'],
-            'policy_sha256':hashlib.sha256(read_regular(policy_path)).hexdigest(),'archives':{}}
+            'policy_sha256':hashlib.sha256(policy_data).hexdigest(),'archives':{}}
     inventory=[]
     for archive, entry in config['archives'].items():
         root=directory/archive
@@ -126,7 +128,7 @@ def validate(directory, policy_path=POLICY):
         require(name in sums, 'approved package index absent')
         compressed=read_regular(root/'Packages.xz',32*1024*1024)
         require((hashlib.sha256(compressed).hexdigest(),len(compressed)) == sums[name], 'package index hash or length mismatch')
-        with lzma.LZMAFile(root/'Packages.xz') as handle: data=handle.read(128*1024*1024+1)
+        with lzma.LZMAFile(io.BytesIO(compressed)) as handle: data=handle.read(128*1024*1024+1)
         require(len(data)<=128*1024*1024, 'package index expansion exceeds bounds')
         items=packages(data)
         verified.update(index_sha256=sums[name][0],packages=len(items),
@@ -137,11 +139,13 @@ def validate(directory, policy_path=POLICY):
 
 
 def fetch(destination, policy_path=POLICY):
-    config=policy(json.loads(read_regular(policy_path)))
+    policy_data=read_regular(policy_path)
+    config=policy(json.loads(policy_data))
     require(not destination.exists(), 'snapshot output already exists')
     destination.parent.mkdir(parents=True,exist_ok=True)
     staging=Path(tempfile.mkdtemp(prefix='.snapshot-',dir=destination.parent))
     try:
+        (staging/'policy.json').write_bytes(policy_data)
         for archive, entry in config['archives'].items():
             root=staging/archive;root.mkdir()
             base=f'https://snapshot.debian.org/archive/{archive}/{config["timestamp"]}/dists/{entry["suite"]}/'
@@ -150,10 +154,9 @@ def fetch(destination, policy_path=POLICY):
             _,sums=verify_release(root/'InRelease',root/entry['key_file'],entry['primary_fingerprint'],entry['suite'])
             require('main/binary-amd64/Packages.xz' in sums, 'package index absent')
             download(base+'main/binary-amd64/Packages.xz',root/'Packages.xz',32*1024*1024)
-        report,inventory=validate(staging,policy_path)
+        report,inventory=validate(staging,staging/'policy.json')
         (staging/'verification.json').write_text(json.dumps(report,indent=2)+'\n')
         (staging/'package-index.json').write_text(json.dumps(inventory,indent=2)+'\n')
-        shutil.copyfile(policy_path,staging/'policy.json')
         require(not destination.exists(), 'snapshot output appeared during capture')
         staging.rename(destination)
         return report

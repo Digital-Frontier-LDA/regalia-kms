@@ -53,7 +53,10 @@ def install_guest(args: list[str], log: Path, timeout: float):
 def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: int, acceleration: str = "tcg", packages: Path | None = None) -> dict:
     packages = packages or ROOT / "deploy/images/.artifacts/package-snapshot"
     package_report, package_inventory = validate_snapshot(packages)
-    snapshot_policy = json.loads(SNAPSHOT_POLICY.read_text())
+    snapshot_policy_data = SNAPSHOT_POLICY.read_bytes()
+    require(hashlib.sha256(snapshot_policy_data).hexdigest() == package_report["policy_sha256"],
+            "package snapshot policy changed during verification")
+    snapshot_policy = json.loads(snapshot_policy_data)
     policy = json.loads((ROOT / "deploy/images/debian-policy.json").read_text())
     media_report = verify_gpg(media / policy["image"], media / policy["checksum"],
                               media / policy["signature"], media / "debian-cd.pub",

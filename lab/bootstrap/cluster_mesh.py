@@ -10,6 +10,7 @@ import signal
 import time
 import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 

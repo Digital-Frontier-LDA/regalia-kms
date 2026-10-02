@@ -97,10 +97,12 @@ func TestExternalMTLSGatewayRefusesExpiredAndRevokedNodesOnLiveConnections(t *te
 		t.Cleanup(transport.CloseIdleConnections)
 		return &http.Client{Transport: transport, Timeout: 3 * time.Second}
 	}
+	var lastHandshakeResumed atomic.Bool
 	call := func(c *http.Client) (int, bool, error) {
 		request, _ := http.NewRequest(http.MethodGet, gateway.URL+"/v1/operations/sign", nil)
 		reused := false
-		request = request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused }}))
+		lastHandshakeResumed.Store(false)
+		request = request.WithContext(httptrace.WithClientTrace(request.Context(), &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused }, TLSHandshakeDone: func(state tls.ConnectionState, err error) { lastHandshakeResumed.Store(err == nil && state.DidResume) }}))
 		response, err := c.Do(request)
 		if err != nil {
 			return 0, reused, err
@@ -114,6 +116,10 @@ func TestExternalMTLSGatewayRefusesExpiredAndRevokedNodesOnLiveConnections(t *te
 	if status, _, err := call(node); err != nil || status != http.StatusNoContent {
 		t.Fatalf("valid node: status %d error %v", status, err)
 	}
+	node.Transport.(*http.Transport).CloseIdleConnections()
+	if status, reused, err := call(node); err != nil || status != http.StatusNoContent || reused || !lastHandshakeResumed.Load() {
+		t.Fatalf("valid resumed TLS session: status %d reused %v resumed %v error %v", status, reused, lastHandshakeResumed.Load(), err)
+	}
 	time.Sleep(time.Until(short.Leaf.NotAfter) + 100*time.Millisecond)
 	if status, reused, err := call(node); err != nil || status != http.StatusUnauthorized || !reused {
 		t.Fatalf("expired retained connection: status %d reused %v error %v", status, reused, err)
@@ -121,7 +127,11 @@ func TestExternalMTLSGatewayRefusesExpiredAndRevokedNodesOnLiveConnections(t *te
 	if _, _, err := call(client(short)); err == nil {
 		t.Fatal("expired node established a fresh authenticated TLS connection")
 	}
-	if served.Load() != 1 {
+	node.Transport.(*http.Transport).CloseIdleConnections()
+	if _, _, err := call(node); err == nil {
+		t.Fatal("expired node reused its cached TLS identity to reach the gateway")
+	}
+	if served.Load() != 2 {
 		t.Fatal("expired requests reached protected backend")
 	}
 	renewed := issue(false, time.Now().Add(time.Hour))
@@ -135,7 +145,11 @@ func TestExternalMTLSGatewayRefusesExpiredAndRevokedNodesOnLiveConnections(t *te
 	if status, reused, err := call(renewedNode); err != nil || status != http.StatusUnauthorized || !reused {
 		t.Fatalf("revoked retained connection: status %d reused %v error %v", status, reused, err)
 	}
-	if served.Load() != 2 {
+	renewedNode.Transport.(*http.Transport).CloseIdleConnections()
+	if status, reused, err := call(renewedNode); err != nil || status != http.StatusUnauthorized || reused || !lastHandshakeResumed.Load() {
+		t.Fatalf("revoked resumed session: status %d reused %v resumed %v error %v", status, reused, lastHandshakeResumed.Load(), err)
+	}
+	if served.Load() != 3 {
 		t.Fatal("revoked node reached protected backend")
 	}
 	// Losing the revocation source cannot turn an existing connection into trust.

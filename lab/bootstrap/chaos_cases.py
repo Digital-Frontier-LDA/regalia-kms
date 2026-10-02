@@ -135,7 +135,9 @@ def chaos_cases(c):
             raise RuntimeError("unknown chaos operation")
         c.fresh()
         c.rpc(node, "renew", peers=peers)
-        c.check(label + " finishes with verified service and healthy peers", c.verify(node, *c.sign(node))
-                and all(c.rpc(target, "status")["active"] and not c.rpc(target, "status")["agent_error"] for target in "ABC"))
+        service_valid = c.verify(node, *c.sign(node))
+        states = [c.rpc(target, "status") for target in "ABC"]
+        c.check(label + " finishes with verified service and healthy peers", service_valid
+                and all(state["active"] and not state["agent_error"] for state in states))
         record["status"] = "passed"
         record["elapsed_seconds"] = round(time.monotonic() - started, 3)
