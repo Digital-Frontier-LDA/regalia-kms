@@ -150,3 +150,21 @@ filesystem archive, inventories and scan hashes are retained under
 `.artifacts/docker-scan-enforced/evidence/`. The export contains no temporary
 acceptance configuration, custody manifest or commissioning marker. No image was
 signed or published.
+
+### Linux CI infrastructure failure and KVM preflight
+
+[CI run 37038540866](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37038540866)
+passed all 29 regular jobs, CodeQL and secret scanning. The authenticated appliance
+installation completed, but QEMU 8.2.2 under TCG terminated with SIGSEGV during
+kernel/PCI startup, before the acceptance script began. This run is **failed**;
+no image acceptance or release approval is inferred. Its source is GitHub's
+synthetic PR merge `8190a14f3273d35f001bb4d161d5143e91c920c0`, not the branch head.
+Retained installer/acceptance logs and report are under `.artifacts/ci-7ae5f60/`.
+
+Hosted CI now requires KVM: a named-user ACL gives only the ephemeral runner
+access to `/dev/kvm`, and a paused diskless/networkless QEMU machine must initialize
+and quit before the full build. CI passes `--acceleration kvm` explicitly; missing
+or unsupported KVM fails preflight rather than silently selecting TCG. The local
+macOS builder continues to support TCG. Failed reports record acceleration and
+retain QEMU stderr. This avoids the observed TCG execution path, without asserting
+an exact upstream root cause or weakening guest acceptance.

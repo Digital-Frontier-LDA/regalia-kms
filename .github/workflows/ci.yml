@@ -42,14 +42,17 @@ jobs:
         if: steps.recipe.outputs.changed == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso cpio gnupg
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso cpio gnupg acl
           mkdir -p deploy/images/.artifacts
+      - name: Preflight hardware virtualization on the ephemeral runner
+        if: steps.recipe.outputs.changed == 'true'
+        run: sh lab/appliance/ci-kvm.sh
       - name: Authenticate the pinned Debian installer
         if: steps.recipe.outputs.changed == 'true'
         run: python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
       - name: Install and exercise the actual daemon inside the appliance
         if: steps.recipe.outputs.changed == 'true'
-        run: python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000
+        run: python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
       - name: Retain public build and boot diagnostics
         if: always() && steps.recipe.outputs.changed == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -58,7 +61,9 @@ jobs:
           path: |
             lab/appliance/.artifacts/**/build-report.json
             lab/appliance/.artifacts/**/install.log
+            lab/appliance/.artifacts/**/install.stderr
             lab/appliance/.artifacts/**/acceptance.log
+            lab/appliance/.artifacts/**/acceptance.stderr
             lab/appliance/.artifacts/**/normal-boot.log
           include-hidden-files: true
           if-no-files-found: warn

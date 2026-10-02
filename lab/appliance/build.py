@@ -58,7 +58,7 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".appliance-build-", dir=output.parent))
     report = {"schema": "regalia.appliance-build/v1", "status": "building",
-              "evidence_class": "emulated", "production_approved": False,
+              "evidence_class": "emulated", "production_approved": False, "acceleration": acceleration,
               "installer": media_report, "sources": {}}
     try:
         frozen = staging / "inputs"
@@ -112,7 +112,8 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
                                "-device", "virtio-9p-pci,fsdev=export,mount_tag=regalia_export",
                                "-serial", f"file:{staging / 'acceptance.log'}"]
         print("Booting the installed disk and checking appliance restrictions...", flush=True)
-        command(acceptance, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        with (staging / "acceptance.stderr").open("wb") as errors:
+            command(acceptance, timeout=600, stdout=subprocess.DEVNULL, stderr=errors)
         log = (staging / "acceptance.log").read_text(errors="replace")
         require("REGALIA_ENFORCED_DAEMON_PASS" in log and
                 "REGALIA_ACCEPTANCE_PASS" in log and "REGALIA_FAIL:" not in log,

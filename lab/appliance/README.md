@@ -75,7 +75,10 @@ tests; production trusts an explicitly approved workflow or offline release sign
 The default firmware paths select Debian/Ubuntu OVMF on Linux or Homebrew EDK2
 on macOS. Explicit `--firmware` and `--variables` overrides must refer to a
 compatible reviewed pair. `--acceleration kvm` is selected only when `/dev/kvm`
-is accessible; otherwise the builder uses TCG. The x86 guest is slower on Apple
+is accessible; otherwise the local builder uses TCG. Hosted CI requires KVM and
+preflights a paused diskless/networkless machine after granting its runner user
+a named ACL on `/dev/kvm`; no world permissions are added. This avoids an observed
+QEMU 8.2 TCG crash during early guest boot. The x86 TCG guest is slower on Apple
 Silicon. Linux CI allows 150 minutes for installation/build; acceptance has its
 own ten-minute timeout. A failed guest leaves diagnostic files and a failed
 report under `.artifacts/.appliance-build-*`, never a passing output directory.
