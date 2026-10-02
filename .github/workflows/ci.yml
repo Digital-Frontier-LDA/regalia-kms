@@ -65,6 +65,7 @@ jobs:
             lab/appliance/.artifacts/**/acceptance.log
             lab/appliance/.artifacts/**/acceptance.stderr
             lab/appliance/.artifacts/**/normal-boot.log
+            lab/appliance/.artifacts/**/normal-boot.stderr
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14

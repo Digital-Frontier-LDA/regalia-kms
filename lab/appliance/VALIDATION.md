@@ -183,3 +183,40 @@ including encrypted UDP controls, confirmed underlay packet arrival and refusal
 on both WireGuard planes, followed by 36 seeded chaos steps and cleanup. This
 uses the recorded development source override on the cached native image; it
 is not publisher authentication or a full TCP CVE exploit.
+
+
+### Fresh KVM installation and acknowledged shutdown
+
+[CI run 37047653264](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37047653264)
+passed all 29 regular jobs, CodeQL and secret scanning. The fresh KVM image
+installation completed in about 219 seconds; enforcing-daemon acceptance and
+export completed in about 41 seconds. The serial log confirms the actual daemon
+in AppArmor enforce, zero effective capabilities, NoNewPrivs 1 and Seccomp 2.
+Normal UEFI boot reached multi-user.target in about 12 seconds, but the monitor's
+shutdown request did not result in a clean exit within 120 seconds. The complete
+image job remains **failed**. Public evidence is under `.artifacts/ci-6740613/`;
+source is synthetic PR merge `7d2ec66bfeb81d7f13ebb6c2d55088606b04f1da`.
+
+The normal-boot probe now negotiates QMP capabilities, requires command
+acknowledgement and keeps its socket open while waiting for guest shutdown.
+Unsolicited events and QMP errors cannot count as acknowledgements. It clears
+retained serial output before startup, and preserves normal-boot stderr on
+failure. This removes the fire-and-close HMP request; the exact cause of the
+previous lost shutdown is not established. Another fresh complete run must pass.
+
+Release collection now includes both public boot logs. The signed artifact set
+requires ordered, unique acceptance/enforcing-daemon markers without failure,
+and normal UEFI evidence bound to the report's hash without a verification flag
+or rerun. Legacy generic passing reports and incomplete collections are rejected.
+The original vulnerability verdict remains blocked; boot evidence does not waive it.
+
+
+The revised QMP probe also passed against the retained local enforcing-daemon
+image: normal UEFI multi-user startup in 30.60 seconds followed by clean ACPI
+shutdown. The base disk hash remained
+`b2e2d35999a63ed7e83bcda8bfc30028c6bb71f1045b3cd0f247b59b23d357d0`.
+Separate `normal-boot-qmp.log` and `.stderr` retain this check without replacing
+the earlier normal-boot evidence; log SHA-256 is
+`5c9a209bb51309767e43a498c2c8c91de30a6cc4735c68b2e7cfe9902a13d0f3`.
+All 64 image verification tests pass locally. This local check is not a fresh
+latest-source installation or physical hardware qualification.

@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import re
 import shutil
@@ -11,6 +12,25 @@ import tempfile
 import time
 
 from deploy.images.verify import require
+
+
+def qmp_powerdown(connection: socket.socket) -> None:
+    """Require QMP acknowledgement instead of closing an unread HMP socket."""
+    with connection.makefile("rwb") as stream:
+        require("QMP" in json.loads(stream.readline(65536)), "missing QMP greeting")
+        for identifier, command in enumerate(["qmp_capabilities", "system_powerdown"], 1):
+            stream.write(json.dumps({"execute": command, "id": identifier}).encode() + b"\n")
+            stream.flush()
+            for _ in range(128):
+                message = json.loads(stream.readline(65536))
+                require(isinstance(message, dict), "invalid QMP response")
+                if "event" in message:
+                    continue
+                require(message.get("id") == identifier and "return" in message and "error" not in message,
+                        "QMP powerdown command was not acknowledged")
+                break
+            else:
+                raise ValueError("QMP response limit exceeded")
 
 
 def normal_boot(disk: Path, firmware: Path, variables: Path, log: Path, acceleration: str = "tcg") -> dict:
@@ -30,9 +50,17 @@ def normal_boot(disk: Path, firmware: Path, variables: Path, log: Path, accelera
                    "-drive", f"if=pflash,format=raw,file={staging / 'vars.fd'}",
                    "-drive", f"if=virtio,format=qcow2,file={overlay}",
                    "-nic", "user,restrict=on,model=virtio-net-pci", "-serial", "file:" + str(log),
-                   "-monitor", f"unix:{monitor},server=on,wait=off"]
+                   "-monitor", "none", "-qmp", f"unix:{monitor},server=on,wait=off"]
         started = time.monotonic()
-        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # Never let a retained successful log satisfy the next run before QEMU
+        # opens its serial output. Keep bounded failure diagnostics as a file.
+        log.write_bytes(b"")
+        errors = log.with_suffix(".stderr").open("wb")
+        try:
+            process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=errors)
+        except BaseException:
+            errors.close()
+            raise
         try:
             deadline = started + 180
             while time.monotonic() < deadline and process.poll() is None:
@@ -51,8 +79,8 @@ def normal_boot(disk: Path, firmware: Path, variables: Path, log: Path, accelera
             with socket.socket(socket.AF_UNIX) as connection:
                 connection.settimeout(10)
                 connection.connect(str(monitor))
-                connection.sendall(b"system_powerdown\n")
-            require(process.wait(timeout=120) == 0, "normal guest did not shut down cleanly")
+                qmp_powerdown(connection)
+                require(process.wait(timeout=120) == 0, "normal guest did not shut down cleanly")
             return {"status": "passed", "mode": "UEFI disk boot in disposable overlay",
                     "multi_user_seconds": boot_seconds, "verification_reran": False,
                     "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()}
@@ -64,7 +92,7 @@ def normal_boot(disk: Path, firmware: Path, variables: Path, log: Path, accelera
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
-            process.stderr.close()
+            errors.close()
 
 
 if __name__ == "__main__":
