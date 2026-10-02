@@ -29,6 +29,8 @@ def b64(hex_key):
     return base64.b64encode(bytes.fromhex(hex_key)).decode()
 
 
+SYN = "tcp flags & (fin | syn | rst | ack) == syn ct state new accept"   # the beginning of a connection, and nothing else
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.cfg = sitecfg.validate(site())
@@ -112,7 +114,7 @@ class Mesh(Case):
         for hook in ("input", "forward", "output"):
             self.assertIn("type filter hook %s priority filter; policy drop;" % hook, text)
         self.assertIn('ip daddr { 198.51.100.7, 198.51.100.9 } udp dport 51820 accept', text)
-        self.assertIn('oifname "wg-boot" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7443 accept', text)
+        self.assertIn('oifname "wg-boot" ip saddr 10.89.0.1 ip daddr { 10.89.0.2, 10.89.0.3 } tcp dport 7443 %s comment' % SYN, text)
         self.assertEqual(text.count(" dport "), 2)                    # WireGuard and the unlock port: nothing else opens
         self.assertEqual(text.count("meta nfproto ipv6 drop"), 2)
         self.assertNotIn(" 22 ", text)
@@ -121,7 +123,7 @@ class Mesh(Case):
     def test_the_running_hosts_firewall_opens_the_mesh_to_declared_addresses_only(self):
         text = firewall.render(sitecfg.validate(site("b")))
         self.assertIn("ip daddr 198.51.100.7 udp dport 51820 ip saddr { 192.0.2.10/32, 198.51.100.9/32 } accept", text)
-        unlock_rule = 'iifname "wg-unlock" ip daddr 10.89.0.2 tcp dport 7443 ip saddr { 10.89.0.1/32, 10.89.0.3/32 } accept'
+        unlock_rule = 'iifname "wg-unlock" ip daddr 10.89.0.2 tcp dport 7443 ip saddr { 10.89.0.1/32, 10.89.0.3/32 } %s comment' % SYN
         self.assertIn(unlock_rule, text)
         # everything else that arrives inside the tunnel is dropped BEFORE the zone rules: a packet from a
         # tunnel address to the host's own address never reaches the KMS or SSH rule, whatever the zones say

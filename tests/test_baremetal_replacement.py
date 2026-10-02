@@ -323,8 +323,9 @@ class Decisions(Case):
         evidence = self.quote(b["attester"], "a2", "a2")
         real = b["attester"].verify
 
-        def slow(*args):
-            verdict = real(*args)
+        def slow(*args, **kw):
+            self.assertEqual(kw, {"phase": "initrd"})    # a disk key is asked for from the initrd
+            verdict = real(*args, **kw)
             self.later(left + 1)                         # ... and the verification outlasts it
             return verdict
         b["attester"].verify = slow

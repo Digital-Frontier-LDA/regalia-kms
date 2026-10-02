@@ -147,7 +147,7 @@ func (session *pivSession) PINRetries(ctx context.Context) (int, error) {
 
 func (session *pivSession) Login(ctx context.Context, pin []byte) error {
 	if err := session.usable(ctx); err != nil || len(pin) < 6 || len(pin) > 64 {
-		return ErrUnavailable
+		return ErrPINNotPresented
 	}
 	// piv-go requires a string. Retain it only for this exclusive session,
 	// clear the reference on Close, and never expose it through an error.

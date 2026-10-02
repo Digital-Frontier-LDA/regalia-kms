@@ -20,9 +20,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"github.com/google/go-tpm/tpm2"
+)
+
+// The TPM structures the fake peer sends are built here byte by byte, from the TPM 2.0 Library's
+// layout (Part 2), as deploy/baremetal/attest.py reads them: an independent check of what go-tpm parses.
+const (
+	tpmGenerated  = 0xFF544347
+	stAttestQuote = 0x8018
+	algSHA256     = 0x000B
+	algNull       = 0x0010
+	algECDSA      = 0x0018
+	algECC        = 0x0023
+	curveP256     = 0x0003
+	rawAttributes = 0x00050072 // fixedTPM | fixedParent | sensitiveDataOrigin | userWithAuth | restricted | sign
 )
 
 func sized(data []byte) []byte {
@@ -56,7 +70,7 @@ func newFakePeer(t *testing.T, id string) *fakePeer {
 	point, _ := ak.PublicKey.Bytes()
 	area := binary.BigEndian.AppendUint16(nil, algECC)
 	area = binary.BigEndian.AppendUint16(area, algSHA256)
-	area = binary.BigEndian.AppendUint32(area, akAttributes)
+	area = binary.BigEndian.AppendUint32(area, rawAttributes)
 	area = append(area, sized(nil)...)
 	for _, v := range []uint16{algNull, algECDSA, algSHA256, curveP256, algNull} {
 		area = binary.BigEndian.AppendUint16(area, v)
@@ -288,9 +302,9 @@ func TestTheQuoteIsOverTheTranscriptOfThisBootAndTheEpochThePeerStates(t *testin
 	}
 	failing := testSession(t)
 	_, err = failing.ask(peer.pin(), 3, peer.send, func([]byte) ([]byte, []byte, error) {
-		return nil, nil, errors.New("the TPM refused the quote (response code 0x921)")
+		return nil, nil, errors.New("the TPM refused the quote (TPM_RC_LOCKOUT)")
 	})
-	wantError(t, err, "quote: the TPM refused the quote (response code 0x921)")
+	wantError(t, err, "quote: the TPM refused the quote (TPM_RC_LOCKOUT)")
 }
 
 func TestAnInvalidResponseIsRefusedAndSpendsNothing(t *testing.T) {
@@ -380,78 +394,201 @@ func TestAReplyIsParsedStrictly(t *testing.T) {
 	wantError(t, err, "hello: the reply is not the expected JSON object")
 }
 
-// fakeTPM answers one command with a prepared response and records what it was sent.
-type fakeTPM struct {
-	command  []byte
-	response []byte
-	chunk    int
+// deadTPM is a TPM that answers nothing.
+type deadTPM struct{}
+
+func (deadTPM) Send([]byte) ([]byte, error) { return nil, errors.New("no TPM") }
+
+// wireTPM answers TPM2_ReadPublic and TPM2_Quote with prepared response BYTES, as a TPM does, and
+// records the command bytes it was sent: what go-tpm puts on the wire and what it makes of what comes
+// back are both checked against bytes written here from the TPM 2.0 Library (Part 3).
+type wireTPM struct {
+	commands [][]byte
+	public   []byte // TPM2B_PUBLIC of the key at the handle
+	quote    []byte // the whole TPM2_Quote response
 }
 
-func (f *fakeTPM) Write(p []byte) (int, error) {
-	f.command = append([]byte(nil), p...)
-	return len(p), nil
-}
-func (f *fakeTPM) Read(p []byte) (int, error) {
-	n := len(f.response)
-	if f.chunk > 0 && n > f.chunk {
-		n = f.chunk
-	}
-	if n == 0 {
-		return 0, io.EOF
-	}
-	n = copy(p, f.response[:n])
-	f.response = f.response[n:]
-	return n, nil
-}
-
-func quoteResponse(code uint32, attest, r, s []byte) []byte {
-	parameters := append(sized(attest), 0x00, 0x18, 0x00, 0x0b)
-	parameters = append(append(parameters, sized(r)...), sized(s)...)
-	body := binary.BigEndian.AppendUint32(nil, code)
-	tag := uint16(stSessions)
-	if code != 0 {
-		tag, parameters = 0x8001, nil
-	} else {
-		body = binary.BigEndian.AppendUint32(body, uint32(len(parameters)))
-		parameters = append(parameters, 0, 0, 0, 0, 0) // the response's authorization area
-	}
-	body = append(body, parameters...)
+func tpmResponse(tag uint16, code uint32, body []byte) []byte {
 	out := binary.BigEndian.AppendUint16(nil, tag)
-	out = binary.BigEndian.AppendUint32(out, uint32(6+len(body)))
+	out = binary.BigEndian.AppendUint32(out, uint32(10+len(body)))
+	out = binary.BigEndian.AppendUint32(out, code)
 	return append(out, body...)
 }
 
-func TestTheQuoteCommandIsTheOneTheTPMSpecifies(t *testing.T) {
+// quoteResponse is a TPM2_Quote response: the parameter size, TPM2B_ATTEST, TPMT_SIGNATURE, then the
+// response's authorization area for the password session (empty nonce, continueSession, empty HMAC).
+func quoteResponse(attest []byte, sigAlg, hashAlg uint16, r, s []byte) []byte {
+	parameters := sized(attest)
+	parameters = binary.BigEndian.AppendUint16(parameters, sigAlg)
+	parameters = binary.BigEndian.AppendUint16(parameters, hashAlg)
+	parameters = append(append(parameters, sized(r)...), sized(s)...)
+	body := binary.BigEndian.AppendUint32(nil, uint32(len(parameters)))
+	return tpmResponse(0x8002, 0, append(append(body, parameters...), 0, 0, 0x01, 0, 0))
+}
+
+func (w *wireTPM) Send(command []byte) ([]byte, error) {
+	w.commands = append(w.commands, append([]byte(nil), command...))
+	switch binary.BigEndian.Uint32(command[6:10]) {
+	case 0x00000173: // TPM2_ReadPublic: outPublic, name, qualifiedName
+		name := append([]byte{0x00, 0x0b}, make([]byte, 32)...)
+		return tpmResponse(0x8001, 0, append(append(append([]byte(nil), w.public...), sized(name)...), sized(name)...)), nil
+	case 0x00000158: // TPM2_Quote
+		return w.quote, nil
+	}
+	return tpmResponse(0x8001, 0x143, nil), nil // TPM_RC_COMMAND_CODE
+}
+
+func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 	qualifying := bytes.Repeat([]byte{0x5c}, 32)
-	// TPM2_Quote(0x81010002, password session, 32 bytes, TPM_ALG_NULL, sha256:7,11), field by field from
-	// Part 3 of the TPM 2.0 Library. That a TPM accepts it is shown on swtpm by e2e/peer-unlock-swtpm.sh.
-	want := "8002" + "00000049" + "00000158" + "81010002" + "00000009" + "40000009" + "0000" + "00" + "0000" +
-		"0020" + strings.Repeat("5c", 32) + "0010" + "00000001" + "000b" + "03" + "800800"
-	device := &fakeTPM{response: quoteResponse(0, []byte("the attest structure"), []byte{0x01, 0x02}, []byte{0x80, 0x03}), chunk: 7}
-	attest, signature, err := tpmQuote(device, qualifying, []int{7, 11})
-	if err != nil || hex.EncodeToString(device.command) != want {
-		t.Fatalf("command %x, error %v", device.command, err)
+	name := tpm2.TPM2BName{Buffer: append([]byte{0x00, 0x0b}, make([]byte, 32)...)}
+	command, err := quoteCommand(name, qualifying, []int{7, 11})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if string(attest) != "the attest structure" || hex.EncodeToString(signature) != "3009"+"02020102"+"0203008003" {
-		t.Fatalf("attest %q, signature %x", attest, signature)
+	// the persistent attestation key with its empty password, the key's own scheme, and one SHA-256 selection
+	handle, ok := command.SignHandle.(tpm2.AuthHandle)
+	if !ok || handle.Handle != 0x81010002 || !bytes.Equal(handle.Name.Buffer, name.Buffer) {
+		t.Fatalf("the quote is not by the attestation key at 0x81010002: %+v", command.SignHandle)
 	}
-	for _, c := range []struct {
-		reason   string
-		response []byte
-	}{
-		{"the TPM refused the quote (response code 0x921)", quoteResponse(0x921, nil, nil, nil)},
-		{"the TPM's response is truncated", []byte{0x80, 0x02, 0, 0}},
-		{"the TPM's response is truncated", quoteResponse(0, []byte("a"), []byte{1}, []byte{2})[:20]},
-		{"the TPM's response is too long", append([]byte{0x80, 0x02, 0, 0, 0xff, 0xff}, make([]byte, 8)...)},
-		{"the TPM's quote is malformed", quoteResponse(0, nil, []byte{1}, []byte{2})},
-	} {
-		_, _, err := tpmQuote(&fakeTPM{response: c.response}, qualifying, []int{7})
-		wantError(t, err, c.reason)
+	if !bytes.Equal(command.QualifyingData.Buffer, qualifying) || command.InScheme.Scheme != tpm2.TPMAlgNull {
+		t.Fatal("the qualifying data or the scheme is not as asked")
 	}
-	_, _, err = tpmQuote(&fakeTPM{}, qualifying[:31], []int{7})
+	selections := command.PCRSelect.PCRSelections
+	if len(selections) != 1 || selections[0].Hash != tpm2.TPMAlgSHA256 || hex.EncodeToString(selections[0].PCRSelect) != "800800" {
+		t.Fatalf("the PCR selection is not sha256:7,11: %+v", selections)
+	}
+	_, err = quoteCommand(name, qualifying[:31], []int{7})
 	wantError(t, err, "a quote needs 32 bytes")
-	_, _, err = tpmQuote(&fakeTPM{}, qualifying, []int{24})
+	_, err = quoteCommand(name, qualifying, nil)
+	wantError(t, err, "a quote needs 32 bytes")
+	_, err = quoteCommand(name, qualifying, []int{24})
 	wantError(t, err, "PCRs must be 0-23")
+
+	// what comes back: the TPMS_ATTEST exactly as the TPM made it, and the signature in DER
+	attestation := append(binary.BigEndian.AppendUint32(nil, tpmGenerated), 0x80, 0x18)
+	attestation = append(attestation, sized(make([]byte, 34))...)
+	attestation = append(attestation, sized(qualifying)...)
+	attestation = append(attestation, make([]byte, 8+4+4+1+8)...)
+	attestation = binary.BigEndian.AppendUint32(attestation, 1)
+	attestation = append(attestation, 0x00, 0x0b, 3, 0x80, 0x08, 0)
+	attestation = append(attestation, sized(make([]byte, 32))...)
+	signed := func(alg tpm2.TPMAlgID, hash tpm2.TPMAlgID, r, s []byte) *tpm2.QuoteResponse {
+		return &tpm2.QuoteResponse{Quoted: tpm2.BytesAs2B[tpm2.TPMSAttest](attestation),
+			Signature: tpm2.TPMTSignature{SigAlg: alg, Signature: tpm2.NewTPMUSignature(alg, &tpm2.TPMSSignatureECC{
+				Hash: hash, SignatureR: tpm2.TPM2BECCParameter{Buffer: r}, SignatureS: tpm2.TPM2BECCParameter{Buffer: s}})}}
+	}
+	attest, signature, err := quoted(signed(tpm2.TPMAlgECDSA, tpm2.TPMAlgSHA256, []byte{0x01, 0x02}, []byte{0x80, 0x03}))
+	if err != nil || !bytes.Equal(attest, attestation) || hex.EncodeToString(signature) != "3009"+"02020102"+"0203008003" {
+		t.Fatalf("attest %x, signature %x, %v", attest, signature, err)
+	}
+	if qualifiedSigner, extraData, err := parseAttest(attest); err != nil || len(qualifiedSigner) != 34 || !bytes.Equal(extraData, qualifying) {
+		t.Fatalf("go-tpm does not read the quote as the peer's verifier does: %v", err)
+	}
+	_, _, err = quoted(signed(tpm2.TPMAlgECDSA, tpm2.TPMAlgSHA1, []byte{1}, []byte{2}))
+	wantError(t, err, "the quote is not signed with ECDSA and SHA-256")
+	_, _, err = quoted(signed(tpm2.TPMAlgECDSA, tpm2.TPMAlgSHA256, nil, []byte{2}))
+	wantError(t, err, "the TPM's quote is malformed")
+	_, _, err = quoted(&tpm2.QuoteResponse{Signature: tpm2.TPMTSignature{SigAlg: tpm2.TPMAlgRSASSA}})
+	wantError(t, err, "the quote is not signed with ECDSA")
+
+	_, _, err = tpmQuote(deadTPM{}, qualifying, []int{7})
+	wantError(t, err, "the TPM has no usable attestation key")
+
+	// On the wire. The Quote command is, byte for byte, the one the TPM specifies: sessions tag, size,
+	// TPM_CC_Quote, the handle, a 9-byte password authorization, 32 bytes of qualifying data,
+	// TPM_ALG_NULL, one selection of sha256 with PCRs 7 and 11. A go-tpm that sent anything else fails here.
+	wantCommand := "8002" + "00000049" + "00000158" + "81010002" + "00000009" + "40000009" + "0000" + "00" + "0000" +
+		"0020" + strings.Repeat("5c", 32) + "0010" + "00000001" + "000b" + "03" + "800800"
+	peer := newFakePeer(t, "porto") // its public area stands for this TPM's attestation key
+	device := &wireTPM{public: peer.akPublic, quote: quoteResponse(attestation, algECDSA, algSHA256, []byte{0x01, 0x02}, []byte{0x80, 0x03})}
+	attest, signature, err = tpmQuote(device, qualifying, []int{7, 11})
+	if err != nil || len(device.commands) != 2 || hex.EncodeToString(device.commands[1]) != wantCommand {
+		t.Fatalf("%v; the commands sent: %x", err, device.commands)
+	}
+	if hex.EncodeToString(device.commands[0]) != "8001"+"0000000e"+"00000173"+"81010002" {
+		t.Fatalf("the first command is not TPM2_ReadPublic of the attestation key: %x", device.commands[0])
+	}
+	// and the attestation comes back as the bytes the TPM sent, not a re-encoding of them
+	if !bytes.Equal(attest, attestation) || hex.EncodeToString(signature) != "3009"+"02020102"+"0203008003" {
+		t.Fatalf("attest %x, signature %x", attest, signature)
+	}
+	for reason, raw := range map[string][]byte{
+		"the TPM refused the quote":                      tpmResponse(0x8001, 0x921, nil), // TPM_RC_LOCKOUT
+		"the TPM refused the quote ":                     quoteResponse(attestation, algECDSA, algSHA256, []byte{1}, []byte{2})[:30],
+		"the quote is not signed with ECDSA":             quoteResponse(attestation, 0x0014, algSHA256, []byte{1}, nil), // RSASSA
+		"the quote is not signed with ECDSA and SHA-256": quoteResponse(attestation, algECDSA, 0x0004, []byte{1}, []byte{2}),
+	} {
+		_, _, err := tpmQuote(&wireTPM{public: peer.akPublic, quote: raw}, qualifying, []int{7})
+		wantError(t, err, strings.TrimSpace(reason))
+	}
+	if _, err := openTPM(filepath.Join(t.TempDir(), "absent")); err == nil {
+		t.Fatal("a TPM device that does not exist was opened")
+	}
+	if _, err := openTPM("unix:" + filepath.Join(t.TempDir(), "absent.sock")); err == nil {
+		t.Fatal("a TPM socket that does not exist was opened")
+	}
+}
+
+// A peer's structures that are not exactly what attest.py accepts are refused, whatever go-tpm can parse.
+func TestOnlyARestrictedP256AttestationKeyIsAccepted(t *testing.T) {
+	peer := newFakePeer(t, "porto")
+	if name, key, err := akIdentity(peer.akPublic); err != nil || len(name) != 34 || key == nil {
+		t.Fatal(err)
+	}
+	area := peer.akPublic[2:]
+	patched := func(offset int, value ...byte) []byte {
+		out := append([]byte(nil), area...)
+		copy(out[offset:], value)
+		return sized(out)
+	}
+	for reason, public := range map[string][]byte{
+		"a decrypting key (attributes)":      patched(4, 0x00, 0x06, 0x00, 0x72),
+		"not restricted":                     patched(4, 0x00, 0x04, 0x00, 0x72),
+		"not fixedTPM":                       patched(4, 0x00, 0x05, 0x00, 0x70),
+		"another name algorithm":             patched(2, 0x00, 0x04),
+		"another curve":                      patched(16, 0x00, 0x04),
+		"trailing bytes after the structure": append(append([]byte(nil), peer.akPublic...), 0x00),
+		"a truncated structure":              peer.akPublic[:len(peer.akPublic)-3],
+		"nothing":                            nil,
+	} {
+		if _, _, err := akIdentity(public); err == nil {
+			t.Fatalf("accepted an attestation key that is %s", reason)
+		}
+	}
+	offCurve := patched(len(area)-32, bytes.Repeat([]byte{0xff}, 32)...)
+	_, _, err := akIdentity(offCurve)
+	wantError(t, err, "not on P-256")
+	// The signed structure: a quote, generated by a TPM, whole, with one SHA-256 selection. A restricted
+	// key signs caller-supplied data that does NOT begin with TPM_GENERATED, so a structure with another
+	// magic is exactly what a holder of the key could have built by hand.
+	quote, _ := hex.DecodeString(peer.sign(make([]byte, 32)).Quote)
+	if _, _, err := parseAttest(quote); err != nil {
+		t.Fatal(err)
+	}
+	mutated := func(change func([]byte) []byte) []byte { return change(append([]byte(nil), quote...)) }
+	twoBanks := mutated(func(q []byte) []byte {
+		tail := len(q) - (4 + 2 + 1 + 3 + 2 + 32) // count, hash, sizeofSelect, select, digest
+		out := append([]byte(nil), q[:tail]...)
+		out = append(out, 0, 0, 0, 2, 0x00, 0x0b, 3, 0x80, 0, 0, 0x00, 0x04, 3, 0x80, 0, 0)
+		return append(out, q[len(q)-34:]...)
+	})
+	for reason, attest := range map[string][]byte{
+		"another magic (zero)":      mutated(func(q []byte) []byte { copy(q, []byte{0, 0, 0, 0}); return q }),
+		"another magic":             mutated(func(q []byte) []byte { copy(q, []byte{0xde, 0xad, 0xbe, 0xef}); return q }),
+		"not a quote (certify)":     mutated(func(q []byte) []byte { q[5] = 0x17; return q }),
+		"bytes after the structure": append(append([]byte(nil), quote...), 0x00),
+		"cut inside the PCR digest": quote[:len(quote)-33],
+		"cut before the PCR digest": quote[:len(quote)-34],
+		"cut inside the selection":  quote[:len(quote)-38],
+		"the SHA-1 bank":            mutated(func(q []byte) []byte { q[len(q)-39] = 0x04; return q }),
+		"two PCR selections":        twoBanks,
+		"not a structure at all":    []byte("not an attestation"),
+		"nothing":                   nil,
+	} {
+		if _, _, err := parseAttest(attest); err == nil {
+			t.Fatalf("accepted a signed structure with %s", reason)
+		}
+	}
 }
 
 func validConfig(peers ...*fakePeer) *bootConfig {
@@ -460,37 +597,6 @@ func validConfig(peers ...*fakePeer) *bootConfig {
 		config.Peers = append(config.Peers, peer.pin())
 	}
 	return config
-}
-
-// On a pollable character device (the kernel's TPM device is one) os.OpenFile sets O_NONBLOCK, and the
-// TPM device then answers a read made before the response is ready with 0 bytes. openTPM must not.
-func TestTheTPMDeviceIsOpenedBlocking(t *testing.T) {
-	const path = "/dev/random" // a pollable character device every Linux has, readable and writable by anyone
-	nonblocking := func(file *os.File) bool {
-		raw, err := file.SyscallConn()
-		if err != nil {
-			t.Fatal(err)
-		}
-		var flags uintptr
-		_ = raw.Control(func(fd uintptr) { flags, _, _ = syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0) })
-		return flags&syscall.O_NONBLOCK != 0
-	}
-	usual, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		t.Skip("cannot open " + path)
-	}
-	defer usual.Close()
-	if !nonblocking(usual) {
-		t.Skip("os.OpenFile leaves " + path + " blocking here: this platform does not show the difference")
-	}
-	device, err := openTPM(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer device.Close()
-	if nonblocking(device.(*os.File)) {
-		t.Fatal("openTPM opened the device non-blocking: on a real TPM every quote would read 0 bytes")
-	}
 }
 
 func TestTheBootConfigurationIsRefusedUnlessExact(t *testing.T) {
