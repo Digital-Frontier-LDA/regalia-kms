@@ -33,3 +33,15 @@ and production reconciliation redesign remains open.
 Full reports are retained locally in `/tmp/regalia-recovery-evidence/main-final.json`
 and `pr170-final.json`, with hashes recorded in the summary. CI uploads its own
 full report even when findings fail the job. Findings must remain visible.
+
+## Merged-script checkpoint
+
+After #170 merged, main `55b8600` was observed with real cryptsetup 2.7.5:
+**622/622 scenarios reached**, 172 finding cases, all ordinary unlock paths and
+explicit laboratory repairs preserved. This supersedes earlier results as the
+current-main observation; historical reports remain tied to their original
+script versions. Exact report SHA-256: `d9a9e37f8ca54dfaa82e8512aabccdb5328e8a290e55f7cd52eaa50ad5dd3148`.
+Script SHA-256: `47e08272c808863fff8b524faa5146620e3375db7af5810ffa20aacb6e77afab`.
+
+The larger merged script has additional command paths. CI now allows 30 minutes
+for complete coverage; incomplete runs and findings still fail.
