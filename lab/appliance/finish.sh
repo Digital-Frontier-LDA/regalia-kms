@@ -54,6 +54,9 @@ CapabilityBoundingSet=
 LockPersonality=yes
 EOF
 useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin regalia-kms
+# The private build umask creates this directory as root-only. The daemon must
+# be able to traverse it to read commissioned configuration, without write access.
+install -d -m 0750 -o root -g regalia-kms /etc/regalia-kms
 passwd -l root
 systemctl enable regalia-kms.service nftables.service apparmor.service
 systemctl mask systemd-random-seed.service

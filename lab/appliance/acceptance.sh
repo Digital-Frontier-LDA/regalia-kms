@@ -1,7 +1,16 @@
 #!/bin/sh
 set -eu
 trap 'echo REGALIA_FAIL:acceptance-command' EXIT
-fail() { echo "REGALIA_FAIL:$1"; /sbin/poweroff -f; exit 1; }
+fail() {
+  echo "REGALIA_FAIL:$1"
+  # This guest has no commissioned credentials. Retain bounded startup/audit
+  # diagnostics so a specific refusal can be distinguished from a broken daemon.
+  systemctl --no-pager --full status regalia-kms.service || true
+  journalctl --no-pager -b -u regalia-kms.service -n 30 || true
+  journalctl --no-pager -b -k -g 'apparmor=.*DENIED' -n 20 || true
+  /sbin/poweroff -f
+  exit 1
+}
 check() { "$@" || fail "$1"; }
 echo REGALIA_ACCEPTANCE_BEGIN
 check test "$(cat /etc/debian_version | cut -d. -f1)" = 13
@@ -41,7 +50,8 @@ done
 # It must run under the installed policy while remaining cryptographically unready.
 # These public fixtures are removed before exporting the reusable disk.
 printf '{}\n' >/etc/regalia-kms/config.json
-chmod 0644 /etc/regalia-kms/config.json
+chown root:regalia-kms /etc/regalia-kms/config.json
+chmod 0640 /etc/regalia-kms/config.json
 touch /etc/regalia-kms/commissioned
 check systemctl start regalia-kms.service
 check systemctl is-active regalia-kms.service
