@@ -103,13 +103,24 @@ falling back. See [swtpm's documented seccomp option](https://github.com/stefanb
 
 ## Next slices
 
-1. Replace local IPC with authenticated cross-node transport and exercise
-   reachability/failover, keeping cryptographic recipient and authorizer binding.
-2. Prepare a Debian VM/physical-node initramfs lab for actual early networking
+The [three-container WireGuard experiment](NETWORK.md) now extends these IPC
+checks with 66 assertions covering actual encrypted cross-container transport, all six recovery paths,
+simultaneous recovery, total-outage/manual recovery, and network-failure tests.
+
+```sh
+bash lab/bootstrap/run-network.sh
+```
+
+This separate runner uses NET_ADMIN only inside its own container namespaces,
+drops service privileges, and removes its project resources after the run. It
+writes sanitized `network-report.json` evidence. Its stale-policy scenario
+explicitly reproduces an unresolved revocation-freshness risk.
+
+1. Prepare a Debian VM/physical-node initramfs lab for actual early networking
    and encrypted-root boot, then run the DL360 PCR survey.
-3. Integrate signed membership and revocation freshness before claiming safe
+2. Integrate signed membership and revocation freshness before claiming safe
    unattended bootstrap. Keep service signing fencing independent.
-4. Qualify native/cross-vendor PKA and wrapped-key recovery on designated physical
+3. Qualify native/cross-vendor PKA and wrapped-key recovery on designated physical
    lab HSMs. This container does not initialize or touch attached tokens.
 
 Tool references: [tpm2_quote](https://tpm2-tools.readthedocs.io/en/latest/man/tpm2_quote.1/),

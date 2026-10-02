@@ -37,3 +37,47 @@ no mapped dm-crypt filesystem, no physical reboot, no HSM or runtime leases.
 It does not establish global revocation, rollback resistance, or measured boot.
 The network experiment does prove encrypted cross-container transport and the
 logical recovery protocol under selected network and availability failures.
+
+The target enforces its own known requester/authorizer capabilities and requires
+the challenged peer epoch to equal its local fixture epoch. A local policy update
+cancels an in-flight bootstrap before activation. This deliberately fails closed
+on a known mismatch; it does not fetch or authenticate updated policy.
+
+## Observed membership freshness gap
+
+The runner reproduces a revoked node bootstrapping through a peer when both retain
+the old ACTIVE policy while the third peer knows the revocation. This assertion
+confirms a limitation, not a theft-resistance acceptance criterion. It is recorded
+separately as `limitations_observed.stale_target_and_authorizer_can_bootstrap`.
+Current peers reject the revoked target, and a target with a current view rejects
+a stale/locally revoked authorizer. No unsigned or asynchronous manifest scheme
+can infer information that neither participating node has received. Production
+still needs an explicit freshness/partition policy and independent external
+enforcement before claiming prompt theft revocation.
+
+## Security Findings
+
+Membership freshness remains a production blocker: two stale participants can
+authorize bootstrap after a third receives revocation. The lab reproduces this
+behavior instead of counting it as successful theft protection.
+
+## Checks Performed
+
+The network runner exercises 66 assertions, including actual handshakes, all six
+recovery directions, simultaneous two-node recovery, manual seeding of each
+possible survivor, request/source binding, bounded parsing, partitions, routing
+failure, lost grants, known policy/epoch mismatches, and genuine TPM policy refusal.
+The existing IPC and repository tests remain separate regression checks.
+
+## Residual Risk
+
+The Docker host and fixture controller remain trusted. Recovery material is in
+host Python memory for the drill. Logical locks do not erase daemon memory or
+simulate an operating-system reboot. Container and Python memory cleanup does
+not establish secure zeroization, hardware custody, or resistance to root access.
+
+## Recommendation
+
+Use this runner for disposable software validation. Keep production bootstrap
+blocked on signed policy freshness, physical measured boot, actual encrypted-root
+boot, hardware device qualification, and the other gates in the architecture.

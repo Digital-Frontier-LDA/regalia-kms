@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from lab import TPM, derive_credential, run
+from lab import TPM, derive_credential, run, tpm_refused
 from peer import BootSession, MAX_INPUT, Refusal, canonical, hex_bytes, parse_command, qualification
 
 NODES = {node: index for index, node in enumerate("ABC", 1)}
@@ -118,9 +118,12 @@ class Node:
         if command.get("op") not in ["challenge", "authorize"]:
             raise Refusal()
         request = command.get("request", {}) if command["op"] == "authorize" else command
-        if not isinstance(request, dict) or request.get("node_id") not in NODES:
-            raise Refusal()
-        if source != address(request["node_id"]):
+        if not isinstance(request, dict):
+            raise Refusal("INVALID_REQUEST")
+        node_id = request.get("node_id")
+        if not isinstance(node_id, str) or node_id not in NODES:
+            raise Refusal("INVALID_REQUEST")
+        if source != address(node_id):
             raise Refusal()
         with self.lock:
             if not self.active:
@@ -191,6 +194,9 @@ class Node:
             local = self.tpm.unseal("0x81010005")
             wg = self.tpm.unseal("0x81010004")
             if local.returncode or wg.returncode:
+                for result in [local, wg]:
+                    if result.returncode:
+                        tpm_refused(result, 0x99D)
                 return {"active": False, "reason": "local_policy"}
             if run("wg", "pubkey", data=wg.stdout).stdout.decode().strip() != self.public:
                 raise RuntimeError("sealed network identity mismatch")

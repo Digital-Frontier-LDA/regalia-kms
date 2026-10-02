@@ -10,6 +10,16 @@ permissions:
   contents: read
 
 jobs:
+  bootstrap-network:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Three isolated nodes recover over kernel WireGuard
+        run: bash lab/bootstrap/run-network.sh
+
   bootstrap-lab:
     runs-on: ubuntu-latest
     timeout-minutes: 10
