@@ -849,11 +849,18 @@ class Units(unittest.TestCase):
     def test_every_credential_of_the_initrd_is_unsealed_after_pcr_11_holds_the_initrd_phase(self):
         """A credential sealed to the image's initrd-phase PCR 11 signature opens only once systemd-pcrphase-initrd
         has extended "enter-initrd"; a unit that unseals one without that ordering fails when it wins the race."""
-        for name in ("regalia-unlock.service", "regalia-wg-boot.service"):
-            unit = self.unit(name)
-            self.assertTrue([v for k, v in unit["Service"] if k.startswith("LoadCredential")], name)
-            after = " ".join(v for k, v in unit["Unit"] if k == "After").split()
+        here = os.path.join(REPO, "deploy/baremetal/initrd")
+        loading = [n for n in sorted(os.listdir(here)) if n.endswith(".service")
+                   and [k for k, _ in self.unit(n).get("Service", []) if k.startswith("LoadCredential")]]
+        self.assertEqual(loading, ["regalia-unlock.service", "regalia-wg-boot.service"])   # a new one is checked too
+        for name in loading:
+            after = " ".join(v for k, v in self.unit(name)["Unit"] if k == "After").split()
             self.assertIn("systemd-pcrphase-initrd.service", after, name)
+        # ... and that unit is IN the initrd: dracut adds the module only when one depends on it
+        with open(os.path.join(here, "dracut/90regalia-unlock/module-setup.sh")) as f:
+            module = f.read()
+        depends = module[module.index("depends() {"):module.index("installkernel() {")]
+        self.assertIn("systemd-pcrphase", re.search(r"^\s*echo (.*)$", depends, re.M).group(1).split())
 
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]
