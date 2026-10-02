@@ -1,0 +1,43 @@
+x-node: &node
+  image: regalia-bootstrap-mesh:dev
+  platform: "${REGALIA_LAB_PLATFORM:-linux/amd64}"
+  build:
+    context: .
+    target: network
+  user: "0:0"
+  read_only: true
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN, SETUID, SETGID]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:rw,nosuid,nodev,noexec,size=256m,mode=1777
+  environment:
+    REGALIA_LAB_SWTPM_SECCOMP: "${REGALIA_LAB_SWTPM_SECCOMP:-kill}"
+
+services:
+  a:
+    <<: *node
+    command: [A]
+    networks:
+      underlay:
+        ipv4_address: 10.89.91.1
+  b:
+    <<: *node
+    command: [B]
+    networks:
+      underlay:
+        ipv4_address: 10.89.91.2
+  c:
+    <<: *node
+    command: [C]
+    networks:
+      underlay:
+        ipv4_address: 10.89.91.3
+
+networks:
+  underlay:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.89.91.0/24
+          gateway: 10.89.91.254

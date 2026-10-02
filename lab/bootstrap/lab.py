@@ -114,13 +114,16 @@ def verify_quote(public, paths, challenge, approved_pcr=None, selection="sha256:
                env=dict(os.environ, TPM2TOOLS_TCTI="none"), required=False).returncode == 0
 
 
+def derive_credential(local, peer, source, node_id="A"):
+    if len(local) != 32 or len(peer) != 32 or node_id not in ["A", "B", "C"] or source not in ["A", "B", "C"]:
+        raise ValueError("invalid lab contributions or path")
+    return HKDF(algorithm=hashes.SHA256(), length=64, salt=None,
+                info=f"regalia-bootstrap-lab/v1/luks/{node_id}/via/{source}".encode()).derive(local + peer)
+
+
 def luks_cases(root, local_secret, peer_b, peer_c):
     """Real LUKS2 header/keyslot checks; no device-mapper privileges required."""
-    def derive(local, peer, source):
-        if len(local) != 32 or len(peer) != 32:
-            raise ValueError("lab contributions must be 32 bytes")
-        return HKDF(algorithm=hashes.SHA256(), length=64, salt=None,
-                    info=b"regalia-bootstrap-lab/v1/luks/A/via/" + source.encode()).derive(local + peer)
+    derive = derive_credential
 
     key_b = derive(local_secret, peer_b, "B")
     key_c = derive(local_secret, peer_c, "C")

@@ -2,7 +2,9 @@ services:
   lab:
     image: regalia-bootstrap-lab:dev
     platform: "${REGALIA_LAB_PLATFORM:-linux/amd64}"
-    build: .
+    build:
+      context: .
+      target: ipc
     user: "${REGALIA_LAB_UID:-65532}:${REGALIA_LAB_GID:-65532}"
     network_mode: none
     read_only: true
