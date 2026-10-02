@@ -17,8 +17,9 @@
 //   - the boot configuration (-config).
 //
 // It reads the LUKS2 header for the peer paths, asks the peers in turn, derives the credential, and
-// writes it to the one connection waiting on the socket. The standard library and one TPM command
-// written out (tpm.go) are all the code there is: everything handled before root is in this directory.
+// writes it to the one connection waiting on the socket. Its code is this directory, the standard
+// library, and go-tpm (github.com/google/go-tpm), the standard Go library for talking to a TPM: the
+// transport, TPM2_Quote, and the parsing of TPM structures are go-tpm's, not written here.
 //
 // Exit status 0: the key was given. 1: the disk stays locked; each peer's reason is on standard error,
 // systemd-cryptsetup gets no key, and the console falls back to the recovery key (#77).
