@@ -462,7 +462,9 @@ jobs:
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
   # restores the node, no peer leaves it locked, and a retired boot image, another machine and a
   # revoked node get nothing. Each step is made with the native pre-root client (cmd/regalia-unlock)
-  # against the Python peer over TCP. The script fails if any of its tests is skipped.
+  # against the Python peer over TCP. Then the shipped systemd units (deploy/baremetal/initrd/) are
+  # started by the runner's systemd and the real systemd-cryptsetup takes the key from their socket.
+  # The script fails if any of its tests is skipped.
   peer-unlock-swtpm:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -477,10 +479,14 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools cryptsetup-bin
+          # systemd-cryptsetup is its own package from systemd 256 on; before that it is part of systemd
+          sudo apt-get install -y -qq --no-install-recommends systemd-cryptsetup 2>/dev/null || true
       - name: Build the pre-root client (static, no cgo)
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: TPM plus one peer opens the volume (swtpm, loop device, LUKS2; the native client and the reference one)
-        run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/peer-unlock-swtpm.sh
+        # REGALIA_EXPECT_SYSTEMD: the runner has a running systemd, so the shipped units are started for real
+        # and systemd-cryptsetup itself asks for the key; without them the script fails instead of skipping.
+        run: sudo REGALIA_EXPECT_SYSTEMD=1 REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/peer-unlock-swtpm.sh
 
   # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
   # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and

@@ -17,6 +17,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -824,6 +825,41 @@ class Disk(Case):
         self.assertEqual(unlock.judge_tokens(self.meta(), "a")[2] | {"0"}, set(self.meta()["keyslots"]))
 
 
+class Units(unittest.TestCase):
+    """deploy/baremetal/initrd/: what the two units must say, whatever else changes in them. That they WORK
+    is shown with a running systemd (OnSwtpm, e2e/peer-unlock-swtpm.sh)."""
+
+    def unit(self, name):
+        sections, current = {}, None
+        with open(os.path.join(REPO, "deploy", "baremetal", "initrd", name)) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("[") and line.endswith("]"):
+                    current = sections.setdefault(line[1:-1], [])
+                elif line and not line.startswith("#"):
+                    current.append(tuple(line.split("=", 1)))
+        return sections
+
+    def test_the_socket_is_the_one_crypttab_and_the_probe_know(self):
+        socket_unit = dict(self.unit("regalia-unlock.socket")["Socket"])
+        self.assertEqual(socket_unit["ListenStream"], unlock.KEY_SOCKET)
+        self.assertEqual((socket_unit["SocketMode"], socket_unit["DirectoryMode"]), ("0600", "0700"))
+        self.assertNotIn("Accept", socket_unit)                       # one service takes the listening socket itself
+
+    def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
+        service = self.unit("regalia-unlock.service")["Service"]
+        values = dict(service)
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config /etc/regalia/unlock.json")
+        self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
+        self.assertEqual(values["LoadCredentialEncrypted"], unlock.LOCAL_NAME + ":/etc/regalia/unlock-local.cred")
+        self.assertNotIn("LoadCredential", values)                    # never a credential that is not sealed
+        self.assertEqual((values["CapabilityBoundingSet"], values["NoNewPrivileges"], values["ProtectSystem"]), ("", "yes", "strict"))
+        self.assertEqual(values["RestrictAddressFamilies"], "AF_UNIX AF_INET AF_INET6")
+        self.assertEqual((values["DevicePolicy"], sorted(v for k, v in service if k == "DeviceAllow")), ("closed", ["/dev/tpmrm0 rw", "block-* r"]))
+        for forbidden in ("User", "Restart", "EnvironmentFile", "Environment"):
+            self.assertNotIn(forbidden, values)
+
+
 class OnSwtpm(unittest.TestCase):
     """Three software TPMs (target a, peers b and c): real EKs and AKs, real quotes, the peers' responses
     signed by their TPMs, the local contribution sealed by systemd-creds to a's TPM, and a real LUKS2
@@ -841,7 +877,8 @@ class OnSwtpm(unittest.TestCase):
                 self.fail("root, swtpm, tpm2-tools, openssl, systemd-creds and cryptsetup are expected here (missing: %s; uid %d)"
                           % (", ".join(missing) or "none", os.geteuid()))
             self.skipTest("needs root (systemd-creds seals to a TPM only as root), swtpm, tpm2-tools, systemd-creds and cryptsetup")
-        self.d = tempfile.mkdtemp(dir="/tmp")
+        # under /run: the unit under test has a private /tmp and still has to reach the software TPM's socket
+        self.d = tempfile.mkdtemp(dir="/run", prefix="regalia-e2e-")
         self.addCleanup(shutil.rmtree, self.d, True)
         self.pids, self.tcti, self.names = {}, {}, {}
         self.addCleanup(lambda: [os.kill(pid, 15) for pid in self.pids.values()])
@@ -1034,7 +1071,9 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual(run(["umount", self.d + "/mnt"], capture_output=True).returncode, 0)
         self.assertEqual(run(["cryptsetup", "close", self.name], capture_output=True).returncode, 0)
 
-    def test_tpm_plus_one_peer_opens_the_disk_and_a_retired_image_a_stolen_disk_or_a_revoked_node_does_not(self):
+    def enrolled_disk(self):
+        """A LUKS2 volume with the recovery key, a filesystem holding a marker (on a block device), and one
+        peer path each from b and c. Returns the peers' endpoints."""
         cs = lambda args, stdin=None: self.assertEqual(run(["cryptsetup", *args], input=stdin, capture_output=True).returncode, 0, args)
         cs(["luksFormat", "--type", "luks2", "--batch-mode", *unlock.PBKDF, "--key-file", "-", self.device], RECOVERY)
         cs(["token", "import", "--json-file", "-", self.device], b'{"type":"systemd-recovery","keyslots":["0"]}')
@@ -1065,6 +1104,11 @@ class OnSwtpm(unittest.TestCase):
         del local, secret
         self.assertEqual(unlock.judge_tokens(unlock.luks_meta(self.device, run), "a", ["b", "c"])[:2],
                          (True, "peer-assisted unlock: b in keyslot 1 (path epoch 1), c in keyslot 2 (path epoch 1)"))
+
+        return endpoints
+
+    def test_tpm_plus_one_peer_opens_the_disk_and_a_retired_image_a_stolen_disk_or_a_revoked_node_does_not(self):
+        endpoints = self.enrolled_disk()
 
         # PoC 7.1: a reboots on the approved image; b restores it. First the reference client, then the
         # native one, which maps the volume for real when a block device is given.
@@ -1142,6 +1186,105 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual([self.contributions[p].epochs("a") for p in ("b", "c")], [[], []])       # and the peers' halves are gone
         # the recovery key still opens the volume: the manual path of a total outage (#77) does not go through a peer
         self.assertTrue(unlock.opens(self.device, 0, RECOVERY, run))
+
+
+    @unittest.skipUnless(os.environ.get("REGALIA_UNLOCK_SYSTEMD") == "1", "needs a running systemd and a block device (e2e/peer-unlock-swtpm.sh)")
+    def test_systemd_cryptsetup_takes_the_key_from_the_socket_and_gets_nothing_when_no_peer_helps(self):
+        """The shipped units, started by the real systemd, and the real systemd-cryptsetup as the one that
+        asks for the key: the crypttab key file is the socket. The only changes are in a drop-in, for what a
+        test machine lacks: the software TPM, a credential that is passed plain (systemd itself can unseal
+        only with the machine's own TPM), and the path of the binary under test."""
+        self.assertTrue(self.mapped, "REGALIA_UNLOCK_DEVICE must name a block device")
+        endpoints = self.enrolled_disk()
+        cryptsetup = shutil.which("systemd-cryptsetup", path="/usr/lib/systemd:/usr/bin:/lib/systemd")
+        self.assertTrue(cryptsetup, "systemd-cryptsetup is expected here")
+        units, source = "/run/systemd/system", os.path.join(REPO, "deploy", "baremetal", "initrd")
+        binary = "/usr/local/bin/regalia-unlock-e2e-%d" % os.getpid()
+        installed = [binary, units + "/regalia-unlock.socket", units + "/regalia-unlock.service", units + "/regalia-unlock.service.d"]
+
+        def remove():
+            run(["systemctl", "stop", "regalia-unlock.socket", "regalia-unlock.service"], capture_output=True)
+            for path in installed:
+                shutil.rmtree(path, True) if os.path.isdir(path) else os.path.exists(path) and os.unlink(path)
+            run(["systemctl", "daemon-reload"], capture_output=True)
+            run(["systemctl", "reset-failed", "regalia-unlock.service", "regalia-unlock.socket"], capture_output=True)
+        self.addCleanup(remove)
+        shutil.copy(self.client, binary)
+        os.chmod(binary, 0o755)
+        for name in ("regalia-unlock.socket", "regalia-unlock.service"):
+            shutil.copy(os.path.join(source, name), units)
+        os.mkdir(installed[3])
+        config, local = self.d + "/unlock.json", self.d + "/local"
+
+        def boot(endpoints):
+            """What changes from one boot to the next: the boot configuration, and the unsealed local half."""
+            with open(config, "w") as f:
+                json.dump(unlock.boot_config(self.m1, "a", self.device, [7, 11], endpoints), f)
+            sealed = [t for _, t in unlock.path_tokens(unlock.luks_meta(self.device, run))][0]["local"]
+            with open(os.open(local, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
+                f.write(unlock.unseal_local(sealed, tpm2_device=self.tcti["a"], run=run))
+            run(["systemctl", "reset-failed", "regalia-unlock.service"], capture_output=True)
+        with open(installed[3] + "/e2e.conf", "w") as f:
+            f.write("[Service]\nExecStart=\nExecStart=%s -config %s -tpm unix:%s -rounds 2 -wait 0s\n"
+                    "LoadCredentialEncrypted=\nLoadCredential=%s:%s\n" % (binary, config, self.tcti["a"][len("swtpm:path="):], unlock.LOCAL_NAME, local))
+        self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
+        started = run(["systemctl", "start", "regalia-unlock.socket"], capture_output=True, text=True)
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.assertTrue(stat.S_ISSOCK(os.stat(unlock.KEY_SOCKET).st_mode))
+        self.assertEqual(stat.S_IMODE(os.stat(unlock.KEY_SOCKET).st_mode), 0o600)
+
+        def attach():
+            """systemd-cryptsetup, as crypttab would run it: the key file is the socket. No console to ask at."""
+            started = time.monotonic()
+            done = run([cryptsetup, "attach", self.name, self.device, unlock.KEY_SOCKET, "luks,headless=true,tries=1"],
+                       capture_output=True, text=True, timeout=180)
+            return done.returncode, time.monotonic() - started, done.stderr
+
+        def state(unit, what):
+            return run(["systemctl", "show", unit, "-p", what, "--value"], capture_output=True, text=True).stdout.strip()
+
+        # 1  a reboots on the approved image: systemd starts the client on systemd-cryptsetup's connection,
+        #    a peer helps, and systemd-cryptsetup maps the volume with the key it read from the socket
+        self.reboot("a", "the approved image")
+        boot(endpoints)
+        code, took, err = attach()
+        self.assertEqual(code, 0, err)
+        self.marker()
+        self.assertEqual((state("regalia-unlock.service", "Result"), state("regalia-unlock.service", "ExecMainStatus")), ("success", "0"))
+        journal = run(["journalctl", "-u", "regalia-unlock.service", "-o", "cat", "--since", "-2min", "--no-pager"], capture_output=True, text=True).stdout
+        self.assertIn("gave the key of %s for keyslot 1, through b" % self.device, journal)
+
+        # 2  no peer answers: the client gives nothing, systemd-cryptsetup gets no key and maps nothing, in
+        #    a bounded time, and the socket goes on listening (it is not left waiting, nor started in a loop)
+        self.reboot("a", "the approved image")
+        boot({"b": self.dead, "c": self.dead})
+        runs = int(state("regalia-unlock.service", "NRestarts") or 0)
+        code, took, err = attach()
+        self.assertNotEqual(code, 0)
+        self.assertLess(took, 60)
+        self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
+        time.sleep(2)                                                 # a loop of re-activations would show by now
+        self.assertEqual((state("regalia-unlock.socket", "ActiveState"), state("regalia-unlock.service", "ActiveState")), ("active", "failed"))
+        self.assertEqual((state("regalia-unlock.service", "Result"), state("regalia-unlock.service", "ExecMainStatus")), ("exit-code", "1"))
+        self.assertEqual(int(state("regalia-unlock.service", "NRestarts") or 0), runs)
+        self.systemd_refusal = (code, round(took, 1), err.strip().splitlines()[-1] if err.strip() else "")
+        print("\nsystemd-cryptsetup with no key from the socket: exit %d after %.1fs: %s" % self.systemd_refusal, file=sys.stderr)
+
+        # 3  the next attempt (the peers are back): the same socket starts a new run, and the volume opens
+        self.reboot("a", "the approved image")
+        boot(endpoints)
+        code, took, err = attach()
+        self.assertEqual(code, 0, err)
+        self.marker()
+
+        # 4  a retired image: systemd-cryptsetup gets nothing, and the peers' refusal is in their audit
+        self.reboot("a", "a retired image")
+        boot(endpoints)
+        since = len(self.events)
+        code, took, err = attach()
+        self.assertNotEqual(code, 0)
+        self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
+        self.assertEqual(self.reasons(since), ["the subject's attestation is refused: the quoted PCR digest is not the expected PCR values"] * 4)
 
 
 if __name__ == "__main__":
