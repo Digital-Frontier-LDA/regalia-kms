@@ -218,11 +218,11 @@ func TestTheCardSignerRefusesAnythingButASHA256Digest(t *testing.T) {
 	t.Run("a different hash", func(t *testing.T) {
 		// Length is deliberately still 32, so the length rule below cannot be what refuses it.
 		_, err := signer.Sign(rand.Reader, digest[:], crypto.SHA512_256)
-		requireRefusal(t, err, "only SHA-256 certificate signatures are supported")
+		requireRefusal(t, err, "the certificate signature hash is not the one this key signs with")
 	})
 	t.Run("a digest of the wrong length", func(t *testing.T) {
 		_, err := signer.Sign(rand.Reader, digest[:31], crypto.SHA256)
-		requireRefusal(t, err, "not a SHA-256 digest")
+		requireRefusal(t, err, "the digest is not of the hash this key signs with")
 	})
 	t.Run("no card function", func(t *testing.T) {
 		unwired := &CardSigner{PublicKey: key.Public()}
