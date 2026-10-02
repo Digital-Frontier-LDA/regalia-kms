@@ -141,10 +141,11 @@ jobs:
             echo "::error::gofmt would rewrite these files:"; echo "$unformatted"; exit 1
           fi
 
-      - name: go vet (both modules)
+      - name: go vet (every module)
         run: |
           go vet ./...
           ( cd adapters/sops && go vet ./... )
+          ( cd adapters/gpgsign && go vet ./... )
 
       - name: build (default + piv tag)
         run: |
@@ -179,6 +180,25 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools opensc
           bash e2e/pin-import-swtpm.sh
 
+      - name: signed PCR 11 policy for the PIN, against a software TPM (swtpm; stub card)
+        # seal-hsm-pin.sh --tpm2-public-key/--tpm2-public-key-pcrs 11 (#57): sealed under PCR 7 plus a
+        # systemd-measure-signed PCR 11, opened across a signed kernel update without re-sealing, and
+        # refused for an unsigned kernel, another key, a changed PCR 7 or an uncovered boot phase.
+        run: bash e2e/pcr-signed-policy-swtpm.sh
+
+      - name: TPM lockout settings and power cuts, against software TPMs (swtpm)
+        # deploy/baremetal/tpm-lockout.sh sets the dictionary-attack policy and a lockout authorization;
+        # host_probe's tpm_lockout_policy measures it and fails on drift; the PIN import key (noda)
+        # is unaffected by power cuts, a PIN credential counts one try per cut and the tries heal (#57).
+        run: bash e2e/tpm-lockout-swtpm.sh
+
+      - name: Bare-metal host firewall, by behaviour, in network namespaces
+        # The rendered default-deny ruleset is loaded only inside a throwaway namespace; the zones probe
+        # it with network_probe.py, and outbound is checked against the declared sinks.
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends nftables iproute2
+          sudo bash e2e/baremetal-firewall-netns.sh
+
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
         # The Go suite does not cover the deployment tooling, the custody-manifest validator, the
         # alert rules or the documentation contracts — those are Python, and they gate the same
@@ -186,17 +206,29 @@ jobs:
         env:
           # promtool is provisioned above, so a missing one is a failure here, not a skip.
           ALERT_RULES_JOB: "1"
-        run: python3 -m unittest discover -s tests -p 'test_*.py'
+          # tests/test_shell_locale.py runs the shell validators under en_US.UTF-8, generated below,
+          # so a missing locale is a failure here, not a skip.
+          REGALIA_EXPECT_UTF8_LOCALE: "1"
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends locales >/dev/null
+          sudo locale-gen en_US.UTF-8 >/dev/null
+          python3 -m unittest discover -s tests -p 'test_*.py'
 
       - name: test (both modules, race + vet)
         env:
           # internal/pin's mlock refusal can only be exercised where mlock can be made to fail, and
           # on linux it can. With this set the test fails rather than skips if that stops being true.
           REGALIA_EXPECT_MLOCK_ENFORCED: "1"
+          # internal/pin's ACL guard needs a filesystem that takes POSIX ACLs; the runner's does.
+          REGALIA_EXPECT_ACL_GUARD_ENFORCED: "1"
         run: |
           umask 002
           go test -race ./...
           ( cd adapters/sops && go test -race ./... )
+          # regalia-sign's claim is that GnuPG and git accept what it makes, so both must be here:
+          # with this set, a test that cannot find them fails instead of skipping.
+          gpg --version | head -1 && git --version
+          ( cd adapters/gpgsign && REGALIA_EXPECT_GPG=1 go test -race ./... )
 
   # The benchmark harness is Python, and its regression tests need no card and no PyKCS11 — a fake
   # module stands in for the library. Without this job they would ship untested in a Go-only CI,
@@ -212,7 +244,15 @@ jobs:
         with:
           python-version: "3.12"
       - name: unit tests for the PKCS#11 benchmark harness
-        run: python3 tools/bench/test_hsm_bench.py
+        env:
+          # The per-curve peer-point checks need `cryptography`. It is installed here, hash-pinned,
+          # with the harness's own requirements; with this set, the test fails rather than passes
+          # if it is somehow absent. PyKCS11 is installed too and never used: the tests put a fake
+          # module in its place.
+          REGALIA_EXPECT_CRYPTOGRAPHY: "1"
+        run: |
+          python3 -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
+          python3 tools/bench/test_hsm_bench.py
 
   govulncheck:
     runs-on: ubuntu-latest
@@ -224,10 +264,11 @@ jobs:
           go-version-file: go.mod
       - name: Install govulncheck (pinned)
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-      - name: Scan both modules for known-vulnerable, reachable dependencies
+      - name: Scan every module for known-vulnerable, reachable dependencies
         run: |
           govulncheck ./...
           ( cd adapters/sops && govulncheck ./... )
+          ( cd adapters/gpgsign && govulncheck ./... )
 
   # THE CONCRETE PKCS#11 DRIVER, AGAINST A REAL (SOFTWARE) MODULE. Every test that proves the driver,
   # the KEK provenance guards, seal/release and the SOPS mTLS chain on a real PKCS#11 module skips
@@ -247,8 +288,10 @@ jobs:
       - name: Install the PKCS#11 emulator
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends softhsm2 opensc
+          sudo apt-get install -y --no-install-recommends softhsm2 opensc gnupg
           test -f /usr/lib/softhsm/libsofthsm2.so || { echo "libsofthsm2.so missing after install" >&2; exit 1; }
+          # Set in THIS step: gpg is provisioned here, so the regalia-sign test skipping is a failure.
+          echo "REGALIA_EXPECT_GPG=1" >> "$GITHUB_ENV"
 
       - name: Install checksum-pinned SOPS 3.13.3
         env:
@@ -262,6 +305,11 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           # Set in THIS step: sops is provisioned here, so a SOPS test that skips is a failure.
           echo "REGALIA_EXPECT_SOPS=1" >> "$GITHUB_ENV"
+
+      - name: PKCS#11 extraction probe calibration (protected key REFUSED, exposed key LEAK) — may not skip
+        env:
+          REGALIA_EXPECT_SOFTHSM: "1"
+        run: python3 -m unittest -v tests.test_p11_extract_probe
 
       - name: SoftHSM battery — and NOTHING in it may skip
         env:
@@ -279,8 +327,8 @@ jobs:
             exit 1
           fi
           # And the battery must have run at all.
-          [ "$(grep -cE -- '^--- PASS' "$RUNNER_TEMP/e2e.log")" -ge 15 ] || {
-            echo "::error::fewer than 15 tests passed in the SoftHSM battery" >&2; exit 1; }
+          [ "$(grep -cE -- '^--- PASS' "$RUNNER_TEMP/e2e.log")" -ge 17 ] || {
+            echo "::error::fewer than 17 tests passed in the SoftHSM battery" >&2; exit 1; }
 
   # Checks that need a context the main job does not have: root, and time.
   privileged-and-fuzz:
@@ -320,9 +368,46 @@ jobs:
       - name: Fuzz envelope parsing (refusal class and round-trip stability)
         run: go test ./internal/envelope -run='^$' -fuzz=FuzzParseAcceptsOnlyWhatItCanReproduce -fuzztime=20s
 
-  # regalia#439 ACCEPTANCE CRITERION 1, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts a
-  # transaction the KMS signed, and rejects a replay, a wrong-chain signature and a policy-refused
-  # destination (e2e/cosmos-simapp-kms-tx.sh). ADR-0002 D7: simd is built HERE from a pinned Cosmos
+  # #61, PoC 1.2: the KMS unit's sandbox by behaviour. A dummy service under the shipped unit and
+  # hardening drop-in is refused writes outside its state directory, home directories, the kernel,
+  # privilege and unused socket families; the same service with none of the settings is allowed each
+  # one (the control), and what the KMS needs still works. It starts root units on the runner's own
+  # system manager, which is why it has a job, and a runner, to itself.
+  kms-sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The shipped sandbox refuses what it should, with a control for every refusal
+        run: bash e2e/kms-sandbox-negative.sh
+
+  # #61: the other half of kms-sandbox. The REAL daemon, started by systemd from the shipped unit and
+  # hardening drop-in, serves a signature from a SoftHSM token that openssl verifies, and the hardening
+  # is measured on that process (os_probe.py). It installs a binary, a user, a unit and an AppArmor
+  # profile (complain mode) on the runner, so it has a runner to itself too.
+  kms-hardened-serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the PKCS#11 emulator and the AppArmor parser
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc apparmor acl
+      - name: The real daemon serves a verifiable signature inside the shipped sandbox
+        run: bash e2e/kms-hardened-serve.sh
+
+  # regalia#439, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts the transactions the KMS
+  # signed, and every negative case fails for its own reason — replay, chain id, destination,
+  # sequence, account number, fee and gas, several messages, malformed sign bytes, the daily quota
+  # and a superseded epoch (e2e/cosmos-simapp-kms-tx.sh; the table is in e2e/README.md). ADR-0002 D7: simd is built HERE from a pinned Cosmos
   # SDK commit — no binary is downloaded, so the node under test is exactly what the tag's source
   # says. The build is cached by that commit; a cache miss costs one build, never a different binary.
   cosmos-node:
@@ -362,10 +447,106 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/cosmpy"
           "$RUNNER_TEMP/cosmpy/bin/pip" install --quiet cosmpy==0.12.2 cryptography==50.0.1
 
-      - name: A live node accepts a KMS-signed transaction, and 3 negative arms hold
+      - name: A live node accepts KMS-signed transactions, and every negative case fails for its own reason
         env:
           REGALIA_COSMOS_SIMD_BIN: ${{ runner.temp }}/simd
           REGALIA_COSMOS_PYTHON: ${{ runner.temp }}/cosmpy/bin/python
         run: |
           "$REGALIA_COSMOS_SIMD_BIN" version
           e2e/cosmos-simapp-kms-tx.sh
+
+  # regalia-kms#65 PoC 5.1/5.4/5.5: a peer verifies a node's TPM quote. Two software TPMs (swtpm):
+  # the AK is bound to the recorded EK by MakeCredential/ActivateCredential, a fresh quote over the
+  # boot-session transcript is accepted, and a replay, each substituted transcript field, changed
+  # PCRs, another TPM's AK, a session carried across a reboot and rolled-back TPM state are refused.
+  # The script exits nonzero on any FAIL; the count guards against it passing by running nothing.
+  tpm-attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: TPM attestation against swtpm (enrollment, fresh quote, replay, reboots)
+        run: |
+          status=0
+          bash e2e/tpm-attest-swtpm.sh > "$RUNNER_TEMP/attest.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/attest.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^tpm-attest-swtpm: 31 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
+            echo "::error::the attestation battery did not run all 31 checks" >&2; exit 1; }
+
+  # regalia-kms#61: the AppArmor profile the bare-metal unit asks for by name. The parser compiles it
+  # without loading it, so this proves the profile is well-formed and says what the tests read in it;
+  # it does not prove a daemon runs under it. That is measured on the host (kms_apparmor_enforced).
+  apparmor-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the AppArmor parser and its abstractions
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends apparmor
+      - name: The profile compiles, and the parser check cannot pass by skipping
+        env:
+          REGALIA_EXPECT_APPARMOR_PARSER: "1"
+        run: python3 -m unittest -v tests.test_baremetal_apparmor
+
+  # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
+  # its own NV counter (replay and disk rollback refused), and the TPM clock behind the time floor.
+  # The script fails if any of its three tests is skipped.
+  heartbeat-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Heartbeat sequence counter and TPM clock against swtpm
+        run: bash e2e/heartbeat-swtpm.sh
+
+  # regalia-kms#74: runtime trust leases, on two software TPMs. Node a re-attests to peer b, b's TPM
+  # signs a 5-minute lease, a holds and renews it; a revoked a is refused renewal; a rebooted a needs
+  # a new attested session. The script fails if either of its two tests is skipped.
+  runtime-lease-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Runtime leases against swtpm (issue, hold, revoke, reboot)
+        run: bash e2e/runtime-lease-swtpm.sh
+
+  # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
+  # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
+  # holds a lease; the old hardware is refused by every decision; its identities cannot be enrolled
+  # again. The script fails if its test is skipped.
+  node-replacement-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Node replacement against swtpm (enroll the new node, refuse the old hardware)
+        run: bash e2e/node-replacement-swtpm.sh

@@ -9,8 +9,11 @@ upstream-generated classes the chain itself was built from.
 
     address   --pubkey-der F --prefix P            -> "<address> <compressed-pubkey-hex>"
     build     --rest URL --chain-id C --from A --to B --amount N --denom D --fee N --gas N
-              --pubkey-der F --out DIR [--account-number N --sequence N]
+              --pubkey-der F --out DIR [--account-number N] [--sequence N] [--memo TEXT]
               -> DIR/signdoc.bin, DIR/body.bin, DIR/authinfo.bin; prints "<account> <sequence>"
+              --to and --amount may be repeated, in pairs, for one MsgSend each. --account-number
+              and --sequence each override what the chain reports: that is how the negative arms
+              ask the KMS to sign something the chain will not accept.
     broadcast --rest URL --dir DIR --signature F   -> prints JSON {txhash, code, committed, log}
     balance   --rest URL --address A --denom D     -> prints the amount
 """
@@ -42,22 +45,43 @@ def compressed_pubkey(der_path):
     return key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.CompressedPoint)
 
 
-def http_json(url, body=None):
+def http_json(url, body=None, expect_ok=False):
+    """GET (or POST body) and return the JSON answer.
+
+    expect_ok is for a query whose answer the caller is about to read a value out of (a balance, an
+    account): an HTTP error is then a failure, retried and finally fatal, never a document to read a
+    default from. Without it an HTTP error's JSON body is returned, because for a broadcast and for
+    polling a transaction hash that body IS the answer (a rejection, or "not found yet")."""
     # urllib also opens file:// and ftp:// URLs. Every URL here is built from --rest, so refuse any
     # scheme but http(s) rather than let a mistyped or hostile value read a local file.
     if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
         raise SystemExit(f"refusing non-HTTP URL: {url!r}")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"} if data else {})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.load(resp)
-    except urllib.error.HTTPError as e:
-        payload = e.read()
+    # A QUERY that times out is asked again; a BROADCAST never is. A one-validator devnet on a busy
+    # machine can take longer than one timeout to answer a read, and a read is safe to repeat. A
+    # broadcast that timed out may have been accepted, so repeating it would turn "no answer" into
+    # a replay and the arms that count on exactly one submission would mean something else.
+    attempts = 1 if data else 4
+    for attempt in range(attempts):
         try:
-            return json.loads(payload)
-        except ValueError:
-            raise SystemExit(f"{url}: HTTP {e.code}: {payload[:300]!r}")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            payload = e.read()
+            if expect_ok:
+                if attempt == attempts - 1:
+                    raise SystemExit(f"{url}: HTTP {e.code}: {payload[:300]!r}")
+                time.sleep(2)
+                continue
+            try:
+                return json.loads(payload)
+            except ValueError:
+                raise SystemExit(f"{url}: HTTP {e.code}: {payload[:300]!r}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt == attempts - 1:
+                raise SystemExit(f"{url}: no answer from the node: {e}")
+            time.sleep(2)
 
 
 def cmd_address(a):
@@ -67,18 +91,27 @@ def cmd_address(a):
 
 def cmd_build(a):
     pub = compressed_pubkey(a.pubkey_der)
-    if a.account_number is None or a.sequence is None:
-        acct = http_json(f"{a.rest}/cosmos/auth/v1beta1/accounts/{getattr(a, 'from')}")["account"]
-        account_number, sequence = int(acct["account_number"]), int(acct.get("sequence") or 0)
-    else:
-        account_number, sequence = a.account_number, a.sequence
+    if len(a.to) != len(a.amount):
+        sys.exit("--to and --amount must be given in pairs")
+    account_number, sequence = a.account_number, a.sequence
+    if account_number is None or sequence is None:
+        acct = http_json(f"{a.rest}/cosmos/auth/v1beta1/accounts/{getattr(a, 'from')}", expect_ok=True).get("account")
+        if not isinstance(acct, dict) or "account_number" not in acct:
+            sys.exit("the node's answer names no account: nothing is built from a guess")
+        if account_number is None:
+            account_number = int(acct["account_number"])
+        if sequence is None:
+            sequence = int(acct.get("sequence") or 0)
 
-    msg = MsgSend(from_address=getattr(a, "from"), to_address=a.to, amount=[Coin(denom=a.denom, amount=str(a.amount))])
-    packed = Any()
-    packed.Pack(msg, type_url_prefix="/")
-    # No memo: the KMS parser admits only TxBody.messages (fail-closed allowlist). Whether it should
-    # ever sign a memo is a policy decision, not this harness's.
-    body = TxBody(messages=[packed])
+    messages = []
+    for to, amount in zip(a.to, a.amount):
+        msg = MsgSend(from_address=getattr(a, "from"), to_address=to, amount=[Coin(denom=a.denom, amount=str(amount))])
+        packed = Any()
+        packed.Pack(msg, type_url_prefix="/")
+        messages.append(packed)
+    # No memo by default: the KMS parser admits only TxBody.messages (fail-closed allowlist, ADR-0002
+    # D7). --memo exists so an arm can prove the parser refuses one.
+    body = TxBody(messages=messages, memo=a.memo)
     pk = Any()
     pk.Pack(PubKey(key=pub), type_url_prefix="/")
     auth = AuthInfo(
@@ -120,8 +153,13 @@ def cmd_broadcast(a):
 
 
 def cmd_balance(a):
-    resp = http_json(f"{a.rest}/cosmos/bank/v1beta1/balances/{a.address}/by_denom?denom={a.denom}")
-    print(int(resp.get("balance", {}).get("amount", "0")))
+    resp = http_json(f"{a.rest}/cosmos/bank/v1beta1/balances/{a.address}/by_denom?denom={a.denom}", expect_ok=True)
+    # NO DEFAULT. A missing amount used to print 0, and the shell then compared that 0 with the
+    # expected balance and reported a refused transaction as having moved it.
+    balance = resp.get("balance")
+    if not isinstance(balance, dict) or balance.get("denom") != a.denom or not str(balance.get("amount", "")).isdigit():
+        sys.exit(f"the node's answer carries no {a.denom} balance: {json.dumps(resp)[:200]}")
+    print(int(balance["amount"]))
 
 
 def main():
@@ -129,11 +167,12 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("address"); p.add_argument("--pubkey-der", required=True); p.add_argument("--prefix", default="cosmos")
     p = sub.add_parser("build")
-    for flag in ("--rest", "--chain-id", "--from", "--to", "--denom", "--pubkey-der", "--out"):
+    for flag in ("--rest", "--chain-id", "--from", "--denom", "--pubkey-der", "--out"):
         p.add_argument(flag, required=True)
-    for flag in ("--amount", "--fee", "--gas"):
+    p.add_argument("--to", required=True, action="append"); p.add_argument("--amount", required=True, type=int, action="append")
+    for flag in ("--fee", "--gas"):
         p.add_argument(flag, required=True, type=int)
-    p.add_argument("--account-number", type=int); p.add_argument("--sequence", type=int)
+    p.add_argument("--account-number", type=int); p.add_argument("--sequence", type=int); p.add_argument("--memo", default="")
     p = sub.add_parser("broadcast"); p.add_argument("--rest", required=True); p.add_argument("--dir", required=True); p.add_argument("--signature", required=True)
     p = sub.add_parser("balance"); p.add_argument("--rest", required=True); p.add_argument("--address", required=True); p.add_argument("--denom", required=True)
     a = ap.parse_args()

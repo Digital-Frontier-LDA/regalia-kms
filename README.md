@@ -2,9 +2,9 @@
 
 **A self-hosted, hardware-backed key-management service for the everyday key needs of a small or
 medium software company.** Keys are used through one centralized service, rooted in dedicated
-hardware you own — SmartCard-HSM tokens (Nitrokey HSM 2 for production, or a Raspberry Pi Pico
-running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) for staging), YubiKey PIV, and OpenPGP
-cards. Clients call a **mutually-authenticated API** and never receive a PIN, a PKCS#11 path, a key
+hardware you own — SmartCard-HSM tokens (Nitrokey HSM 2, or a Raspberry Pi Pico running
+[Pico-HSM](https://github.com/polhenarejos/pico-hsm), which is supported but not yet qualified),
+YubiKey PIV, and OpenPGP cards. Clients call a **mutually-authenticated API** and never receive a PIN, a PKCS#11 path, a key
 handle, or raw key bytes. Every operation is authenticated, policy-checked, and written to a
 tamper-evident audit log. No cloud KMS, no vendor-held custody, no per-call billing.
 
@@ -46,12 +46,15 @@ One device serving every cryptographic role a small company actually has:
 
 ## Backends
 
+Three token configurations are supported — Pico HSM alone, Pico HSM + YubiKey, and Nitrokey HSM 2 +
+YubiKey. What each can serve, and which are qualified, is in [`CONFIGURATIONS.md`](CONFIGURATIONS.md).
+
 | Backend | Transport | Status | Notes |
 |---|---|---|---|
 | **Nitrokey HSM 2** (SmartCard-HSM) | PKCS#11 | ✅ software · 🚧 production qualification | The designated production HSM (audited NXP firmware). Device-cert identity and on-token key-provenance probes await final hardware sign-off. |
-| **Pico HSM** — RP2350 running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) | PKCS#11 | ✅ staging | A fully-capable open-hardware SmartCard-HSM (~$5 board). It *could* hold production keys; Regalia **chooses** not to (policy D1) and reserves production for the Nitrokey — a trust decision, not a capability gap. Firmware/drills: [regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony). |
+| **Pico HSM** — RP2350 running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) | PKCS#11 | ✅ software · 🚧 not qualified | An open-hardware SmartCard-HSM (~$5 board), supported as a key-holding HSM but with no qualified stack yet ([`CONFIGURATIONS.md`](CONFIGURATIONS.md)). Digital Frontier's own fleet reserves production for the Nitrokey (policy D1) — a trust decision. Firmware/drills: [regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony). |
 | **YubiKey PIV** | PIV (`-tags piv`) | ✅ implemented · ⚠️ not wired into the default daemon | Built only under `-tags piv`; the default build links a stub. |
-| **OpenPGP card** | PC/SC (`-tags piv`) | 🚧 admission + protocol done; transport/wiring pending | ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)) |
+| **YubiKey OpenPGP applet** | PKCS#11, through OpenSC's OpenPGP card driver | ✅ served for Ed25519 signing · 🚧 not qualified | The home of Ed25519 keys, which neither HSM offers. Needs a `local-usb` attestation and a `token_label` ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)). The hand-written PC/SC adapter in `internal/backend/openpgp` is not served. |
 | Software / file-based KEK | — | ❌ refused in production **by design** | Production KEKs must be non-exportable hardware keys; there is no software fallback. |
 
 ## What it does / doesn't do
@@ -68,6 +71,8 @@ One device serving every cryptographic role a small company actually has:
 - ❌ Let clients choose a reader, slot, backend, or arbitrary mechanism.
 - ❌ Fall back to software cryptography or another token in production.
 - ❌ Authenticate human administrators through the cryptographic-operation API.
+- ❌ Manage public TLS certificates: no ACME client, DNS-provider API or certificate distribution
+  ([`CERTIFICATES.md`](CERTIFICATES.md)).
 - ❌ Promise transparent hot high-availability between two signing devices (see the trade below).
 - ❌ Turn rotation/revocation/destruction into unreviewed runtime verbs — those are manifest- and
   ceremony-controlled workflows ([regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony)).
@@ -118,10 +123,11 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `cmd/regalia-kms/` | Daemon entry point |
 | `internal/` | Server, operations, backends (PKCS#11 / PIV / OpenPGP), registry, policy, audit, fencing, envelope |
 | `adapters/sops/` | SOPS key-service sidecar adapter (separate Go module) |
+| `adapters/gpgsign/` | `regalia-sign`: OpenPGP release, commit and tag signatures from a KMS-held key (separate Go module) |
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
-| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `OPENPGP-COMPATIBILITY`, `TESTING`) |
+| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `CERTIFICATES`, `TESTING`) |
 
 ## Security
 

@@ -36,14 +36,19 @@ comes from the library's surface, not from the PIV specification or a card.
 
 ## Decision
 
-The KMS guest uses systemd encrypted service credentials sealed to the guest TPM2. The encrypted
+The KMS host uses systemd encrypted service credentials sealed to its TPM 2.0 **and** to systemd's
+host key on the encrypted root disk, together (see "Why the host key is in the seal" below). The encrypted
 credential blobs live outside the repository under `/etc/credstore.encrypted/`; systemd decrypts
 them only while starting `regalia-kms` and exposes them to that service under its private
 `/run/credentials/regalia-kms.service/` directory. The daemon accepts only absolute credential
 paths. It never accepts PIN values in JSON, environment variables, command arguments or logs.
 
 `internal/pin.LockedFileSource` opens credentials with `O_NOFOLLOW|O_CLOEXEC`, verifies the opened
-object is a root- or service-owned regular file with no group/world permission, bounds it to 64
+object is a root- or service-owned regular file with no group/world permission (the one POSIX ACL it
+accepts is systemd's own: read for the service's user and nothing for anyone else, which is how
+`LoadCredential`/`LoadCredentialEncrypted` deliver a credential to a unit with `User=`; that file
+reads as mode 0440, and was refused until `e2e/kms-hardened-serve.sh` ran the daemon under the
+shipped unit), bounds it to 64
 printable bytes, locks its pages with `mlock`, and returns a fresh buffer for one operation. Both
 providers zero and `munlock` that buffer through `Release` immediately after login and operation.
 Failure to lock or release memory fails the operation closed. *Verified by:* unit tests in
@@ -55,7 +60,7 @@ provides, and CI sets a variable that turns a skip there into a failure.
 `mlock` fail; it runs in the ordinary test step. `TestACredentialOwnedByAThirdUserIsRefused` also needs
 root, to create a file owned by a third user, and runs in a separate step under `sudo`.
 
-The encrypted credential is created interactively on the target guest with
+The encrypted credential is created interactively on the target host with
 `deploy/seal-hsm-pin.sh`, which **names the PCR set explicitly** and **names the credential**:
 
 ```sh
@@ -68,7 +73,7 @@ card, tests it on the card before sealing, reports the counter the card actually
 decrypts the blob back before installing it, and keeps a replaced credential. Underneath it runs:
 
 ```sh
-systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs="$KMS_CREDENTIAL_PCRS" --name=hsm-site-a.pin \
+systemd-creds encrypt --with-key=host+tpm2 --tpm2-pcrs="$KMS_CREDENTIAL_PCRS" --name=hsm-site-a.pin \
   - /etc/credstore.encrypted/regalia-kms-hsm-site-a.pin
 ```
 
@@ -77,16 +82,104 @@ systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs="$KMS_CREDENTIAL_PCRS" --name=
 defaulted to the file name (`regalia-kms-hsm-site-a.pin`), which does not match the ID
 `hsm-site-a.pin` in `deploy/systemd/regalia-kms-credentials.conf.example`, and the service died with
 `243/CREDENTIALS` (measured, systemd 257, 2026-09-29). *Verified by:* the bench run of
-`deploy/seal-hsm-pin.sh` recorded on regalia#20 (host key; a TPM guest is #46's).
+`deploy/seal-hsm-pin.sh` recorded on regalia#20 (host key; a real TPM is #46's).
 
 `$KMS_CREDENTIAL_PCRS` is the set chosen at commissioning and recorded, signed, as
-`guest.credential_tpm2_pcrs` in the Proxmox evidence (see below). The earlier version of this command
+`host.credential_tpm2_pcrs` in the commissioning evidence (`deploy/baremetal/evidence.py`; see below). The earlier version of this command
 passed no `--tpm2-pcrs` at all, so the binding it produced was whatever the tool defaulted to, not a
 recorded policy — while the text below it required binding to measured-boot PCRs. Do not pass the PIN
 as an argument or environment variable to `systemd-creds`; it reads the credential from standard
 input. Install the provided service drop-in only after its credential IDs match the non-secret device
 IDs in the custody manifest. *Verified by:* `hsm-host-role/files/verify-deployment.py`, which requires
 every `LoadCredentialEncrypted=` source to sit under `/etc/credstore.encrypted/regalia-kms-`.
+
+## Binding the kernel as well: a signed PCR 11 policy
+
+PCR 7 says which Secure Boot keys the firmware trusted, not which kernel and initrd ran. PCR 11 does,
+for a Unified Kernel Image: systemd-stub measures each UKI section into it, and systemd-pcrphase the
+boot phases. Bound **directly**, PCR 11 would strand the PIN at every kernel update, so
+`seal-hsm-pin.sh` refuses it in `--pcrs`. It binds PCR 11 through a **signed** policy instead: the
+TPM releases the PIN when PCR 11 holds *any* value signed by one PCR-signing key.
+
+```sh
+sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7 \
+  --tpm2-public-key /run/systemd/tpm2-pcr-public-key.pem --tpm2-public-key-pcrs 11
+```
+
+- Each UKI is signed once, at build time, for its expected PCR 11 (`systemd-measure sign`, or
+  `ukify build --pcr-private-key=…`, which embeds the signature); systemd-stub hands it to the
+  running system as `/run/systemd/tpm2-pcr-signature.json`. A kernel update signed by the same key
+  opens the same blob: nothing is re-sealed. A kernel nobody signed, one signed by another key, a
+  changed PCR 7, or a boot phase the signature does not cover (the initrd, shutdown) does not.
+- The key is RSA: the TPM policy systemd builds takes nothing else. The record prints its `pkfp`
+  (SHA-256 of the PKCS#1 DER public key), the same fingerprint each signature file carries.
+- Underneath, the key type is **`--with-key=host+tpm2-with-public-key`**. `--with-key=tpm2` and
+  `--with-key=host+tpm2` accept `--tpm2-public-key` and `--tpm2-public-key-pcrs`, say nothing, and
+  bind PCR 7 alone (measured, systemd 257, 2026-10-01 and 2026-10-02). So the script proves the
+  binding by behaviour before it installs anything: the blob must open with the running boot's
+  signature and must **not** open with a signature file that holds none.
+
+### Why the host key is in the seal (#75)
+
+A signed PCR policy has **no counter and no expiry**. The TPM checks that the current PCR 11 value
+carries a signature by the PCR-signing key, and nothing else: every image that key ever signed
+satisfies it for ever, including an old one with a known hole. systemd documents no revocation for
+it; `systemd-creds` cannot use an NV-backed (`systemd-pcrlock`) policy at all, and where pcrlock can
+be used (the LUKS token) it cannot be combined with a signed policy (systemd 257; sources read at
+v255, v257, v258 and main). So a PIN sealed to the TPM alone can be opened on a stolen server booted
+into any image that was ever signed.
+
+The PIN is therefore sealed to the TPM **and** to systemd's host key
+(`/var/lib/systemd/credential.secret`), which lives on the encrypted root disk. To open the PIN an
+image must satisfy the TPM policy and also unlock the root disk. Retiring an image is then the root
+disk's to enforce, in one place.
+
+- A kernel update still needs no reseal: the host key does not change.
+- The credential file copied onto another disk, in front of the same TPM, does not open.
+- `seal-hsm-pin.sh` tries the sealed blob with the host key out of reach and installs nothing if it
+  opens. `host_probe.py` fails a credential sealed to the TPM alone, and fails a host key that is not
+  root's, mode 0400, on a filesystem with dm-crypt beneath it.
+- **Losing the root disk loses the host key.** The PIN is then resealed from the PIN card, like after
+  a TPM reset or a replaced board. The card is kept for this.
+- The host key is a runtime credential: it is never in a backup or an export
+  (`runtime_credentials_excluded_from_backup`).
+
+*Verified by:* `e2e/pcr-signed-policy-swtpm.sh` section 8 (software TPM): the same blob opens on the
+image it was sealed on and on an updated one; with another disk's host key, or none, it does not
+open on either; and a TPM-only credential opens with no host key at all.
+
+**BLOCKING FOR PRODUCTION, not done:** this moves the question to the root disk, and today the root
+disk is unlocked by the local TPM alone, bound to PCR 7 (`root_disk_tpm_unlocked`). An old signed
+image with the same Secure Boot state unlocks it, reaches the host key, and opens the PIN. The seal
+is only as revocable as the disk unlock. The disk must need something a retired image cannot get: a
+peer's contribution, given only to an image the membership manifest currently accepts (#66, #67), or
+an NV-backed local policy. Until then a retired image is retired in name only.
+
+### Migrating a credential sealed before this change
+
+Every credential made by an earlier `seal-hsm-pin.sh` is sealed to the TPM alone, and
+`pin_credentials_sealed_as_recorded` now reports it as a failure. There is no conversion: reseal.
+
+1. Who: the operator who holds the sealed PIN card for that site, at the host's console, as root.
+2. When: at commissioning (ceremony day, the step that seals each site's PIN), or, for a host already
+   commissioned, at the next attended visit and before the host is counted as production.
+3. How: `sudo deploy/seal-hsm-pin.sh --id <id> --serial <serial> --pcrs 7 [signed-policy options]
+   --replace`, typing the PIN from the card (or `--from-blob`, if the ceremony's import blob for that
+   host's TPM was kept). The script tests the PIN on the card first, keeps the old credential as
+   `<file>.prev-<UTC time>`, and installs the new one in a single rename.
+4. Then: `host_probe.py` must report `pin_credentials_sealed_as_recorded` true. Remove the `.prev-`
+   file once it does: it is a TPM-only credential and opens without the host key.
+
+The recorded binding (`host.credential_tpm2_pcrs` and the signed policy's two fields) does not change.
+
+*Verified by:* `e2e/pcr-signed-policy-swtpm.sh` in CI (a software TPM, real `systemd-creds` and
+`systemd-measure`, a stub card). **Not done yet (#57):** the PCR-signing key's custody (its private
+half offline or in the HSM under the ceremony roots, ADR-0002 D19), signing the real UKIs, the same
+policy for the root disk (`systemd-cryptenroll --tpm2-public-key=… --tpm2-public-key-pcrs=11`), and
+measuring that policy on the disk. Until those land, production binds PCR 7 alone. The evidence
+schema records the signed PCRs and the key's `pkfp` beside the directly bound PCRs, and
+`host_probe.py` checks every installed PIN blob against that record
+(`pin_credentials_sealed_as_recorded`).
 
 ## Delivering the PIN to the host's TPM without typing it (TPM import)
 
@@ -107,6 +200,37 @@ it at the site, it travels **encrypted to a key that lives only in that host's T
 Typing the PIN from the PIN card stays as the fallback (re-sealing later, a host commissioned after
 the ceremony). Proven on DENK0404144 with two software TPMs as the two hosts:
 `e2e/nitrokey-pin-import-drill.sh` (14/0, 2026-10-01).
+
+## Power cuts and the TPM's own lockout
+
+The TPM has a retry counter of its own, separate from the card's: its dictionary-attack counter. A
+power cut feeds it. When a key subject to that protection was used since the last start and the TPM
+then loses power with no `TPM2_Shutdown`, it adds one failed try at the next start; at its limit it
+refuses every protected key until tries heal. A KMS host uses such a key at every boot: systemd
+unseals the PIN credential through a primary key it creates each time (the sealed object itself is
+exempt; the primary is not, and `systemd-creds` has no option for it). So a run of power cuts ends
+with the PIN not released, and the KMS not back, with nobody having typed anything wrong.
+
+Decisions (#57, 2026-10-02):
+
+- **The settings are commissioned, not left to the vendor's defaults:** 32 failed tries before
+  lockout, one try forgiven every 600 s, 86400 s of lockout-hierarchy recovery
+  (`deploy/baremetal/tpm-lockout.sh --set`). 31 cuts in a row are survived; counted tries heal on
+  their own, one every 10 minutes.
+- **The lockout authorization is set, and is a ceremony secret.** It is what changes these settings
+  or clears the counter. Empty, anyone on the host can. It is generated and escrowed with the other
+  ceremony secrets and typed at the console; it is never stored on the host. A wrong one blocks the
+  lockout hierarchy for a day, which is the TPM protecting it.
+- **The PIN import key and its parent are created `noda`.** The key has no authorization value to
+  guess (anyone on the host may ask it to decrypt; its protection is that only this TPM can), so the
+  counter guards nothing there and would only add a way to lock the host out.
+
+*Verified by:* `e2e/tpm-lockout-swtpm.sh` in CI (software TPMs: the settings, drift, a wrong
+authorization, the `noda` key across four power cuts with a control, one try counted per cut after
+an unseal, healing, and the PIN refused at swtpm's default limit of 3); `host_probe.py`
+(`tpm_lockout_policy`, `pin_import_key_present`) on the host. **Not verified: any physical TPM.** The
+DL360's defaults, and whether its firmware counts a real power cut the same way, are a PoC still to
+run (#57).
 
 ## Retry circuit breaker
 
@@ -143,41 +267,47 @@ automatic restart or retry. *Verified by:* unit tests in both providers, includi
 **One card, one PIN presenter.** Any other process that presents a PIN to the same card — a CI
 battery run, `ykman`, a second daemon — inherits both behaviours above. Its rejected VERIFY
 de-authenticates the card and can spend attempts this provider did not spend; that is how #442
-happened. Production requires that no other token client exists on the guest. *Verified by:* the
-Proxmox evidence tier (`direct_token_clients_absent`), which checks a signed description of the
-guest, not the guest itself. The staging bench does not meet this rule, by design: the CI battery and
+happened. Production requires that the KMS is the only PIN presenter on the host. *Verified by:*
+the host tier, in part (`token_clients_root_only` in `deploy/baremetal/host_probe.py`). It measures
+two things: every token client tool on `PATH` is `root:root` and not executable by anyone else, so
+the KMS user cannot run one; and every process connected to pcscd **when the probe runs** is the KMS
+binary. It does not exclude root, who seals PINs with these tools (`seal-hsm-pin.sh`), and it does
+not watch pcscd between measurements. The staging bench does not meet this rule, by design: the CI battery and
 bench tooling share its cards.
 
-## Proxmox and recovery limits
+## Recovery and rollback limits
 
-A virtual TPM narrows offline disk theft; it does not protect a running guest from Proxmox root,
-which can inspect guest memory or roll back VM and vTPM state. Therefore:
+A discrete TPM 2.0 keeps the sealed PIN from anyone who takes the disks. It does not protect a
+running host from its own root, who can read the daemon's memory, and it travels with the machine:
+whoever has the whole server has the TPM too. Therefore:
 
-- **Exclude the encrypted PIN blobs and vTPM state from ordinary Proxmox backup/snapshot jobs.**
-  *Verified by:* the evidence tier — `deploy/proxmox/verify.py` refuses VM snapshots, any backup
-  job including the VMID, and `runtime_credentials_excluded_from_backup` not proven.
-- **Disable live migration and suspend/hibernate for the KMS VM.** *Verified by:* the evidence tier
-  (`live_migration_allowed`, `hibernation_disabled`).
-- **Seal credentials to an explicit PCR set and record that set during commissioning.** The *record*
-  is verified: evidence schema v4 requires `guest.credential_tpm2_pcrs` as a non-empty list of distinct
-  PCR indices 0–23, signed with the rest of the evidence. **Not verified by any tier here: that the
-  blob installed on the guest is actually sealed to the recorded set.** That is a property of a file
-  inside the guest, which neither the evidence verifier nor the host role inspects. Choosing the set is
-  a per-site commissioning decision; this document does not choose it.
-- **Rollback detection — narrower than it looks.** This rule used to say "alert off-host on VM/vTPM
+- **Never back up, snapshot or image the host; the encrypted PIN blobs stay on it.** The only thing
+  carried off a host is the control-plane export, which excludes them
+  (`deploy/baremetal/README.md`, Backups). *Verified by:* the evidence tier —
+  `runtime_credentials_excluded_from_backup` is attested in the signed commissioning evidence. It is
+  not measured.
+- **Disable suspend and hibernation.** *Verified by:* the host tier (`hibernation_disabled`,
+  `deploy/baremetal/os_probe.py`).
+- **Seal credentials to an explicit PCR set and record that set during commissioning.** *Verified
+  by:* the evidence tier for the record (`host.credential_tpm2_pcrs`, and the signed policy's two
+  fields, signed with the rest of the evidence), and the host tier for the blob:
+  `pin_credentials_sealed_as_recorded` reads the header of every installed PIN blob and fails unless
+  it carries exactly the recorded binding.
+- **Rollback detection — narrower than it looks.** This rule used to say "alert off-host on
   rollback". No alert rule for rollback exists, and the word overstated what the repository does. What
   exists is a **refusal at the next start**: `audit.ReconcileContinuity` compares the local journal
   with the off-host collector's committed head, and refuses a host holding less history than it
-  already shipped. A whole-guest restore rolls the journal and its marks back together — the case every
+  already shipped. A whole-disk restore rolls the journal and its marks back together — the case every
   on-host check passes — and is caught that way.
   *Verified by:* `TestReconcileRefusesAJournalHoldingLessThanTheCollectorRemembers`.
   Two limits:
   - It holds **only when an audit sink is configured**. A journal-only host has nothing to reconcile
     against, and `README.md` records that no production off-host sink is configured today.
-  - A rollback of **vTPM state alone**, without the disk, is not detectable by anything in this
-    repository. It is mitigated by the snapshot and backup prohibitions above, not detected.
+  - It does not use the TPM. The fencing epoch in a TPM monotonic counter and audit checkpoints in
+    an NV index (ADR-0002 D21) are not built, so a restored disk is caught by the collector or not
+    at all.
 - **Keep a separately sealed encrypted credential export in the k-of-n recovery kit (4-of-6 by default)** so a rebuilt
-  guest can reseal it to a replacement TPM without requiring the failed primary HSM. *Verified by:*
+  host can reseal it to a replacement TPM without requiring the failed primary HSM. *Verified by:*
   nothing — prose only.
 - **Never use the Nitrokey to wrap the YubiKey fallback PIN**, which would make fallback depend on the
   failed primary. *Verified by:* nothing — prose only.
@@ -218,7 +348,7 @@ transient systemd service with `LoadCredentialEncrypted=`, on DENK0404144 initia
 - Not run: **Y** (replacement), which needs a second card attached (`… <primary> <replacement>`).
 
 **Bench substitute:** the qube has no TPM2, so both drills seal with systemd's host key. The TPM
-binding, and the PCR set in particular, is still #46's to prove on the target guest.
+binding, and the PCR set in particular, is still #46's to prove on the target host.
 
 Before these, the only credential drill recorded was `doc/drills/2026-08-01-so-pin-reset.md`, on a Pico.
 Its central finding (the SO-PIN alone resets the user PIN on a default-initialised card) was
@@ -235,11 +365,16 @@ results are not physical evidence.
 | refuse at ≤1, latch on login failure, no timed reset | unit, both providers |
 | YubiKey: card-first retry read, legible reading as fallback | unit, falsified per ordering |
 | credential drop-in sources under `/etc/credstore.encrypted/regalia-kms-` | host (`hsm-host-role/files/verify-deployment.py`) |
-| no snapshots/backups/live migration/hibernation; credentials excluded from backup; no other token client | evidence (signed JSON, not the VM) |
-| PCR set chosen and recorded | evidence (schema v4) |
-| **blob actually sealed to the recorded PCR set** | **none** |
-| whole-guest rollback refused at next start | unit — **only with an audit sink configured** |
-| **vTPM-only rollback** | **none** (mitigated, not detected) |
+| the host is never imaged; credentials excluded from the control-plane export | evidence (`runtime_credentials_excluded_from_backup`, attested, not measured) |
+| no hibernation, no core dumps, swap off or encrypted | host (`deploy/baremetal/os_probe.py`) |
+| the KMS is the only PIN presenter | host, in part (`token_clients_root_only`): token client tools are root-only and pcscd's clients are the KMS **at measurement time**; root is not excluded, and nothing watches between measurements |
+| PCR set chosen and recorded | evidence (`host.credential_tpm2_pcrs` and the signed policy's two fields) |
+| blob actually sealed to the recorded PCR set, signed policy and key; to the host key AND the TPM, never either alone; the host key root's, 0400, on dm-crypt | host (`host_probe.py`, `pin_credentials_sealed_as_recorded`, read from each blob's header) |
+| the PIN does not open without the host key (another disk, or none), on the sealed image or an updated one | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`, section 8); **no real host yet** |
+| a retired image cannot unlock the root disk, so cannot reach the host key | **none** (not built; blocking for production, #75) |
+| signed PCR 11 policy: opens across a signed kernel update, refused otherwise | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`); **no real host yet** |
+| whole-disk rollback refused at next start | unit — **only with an audit sink configured** |
+| rollback counters in the TPM (fencing epoch, audit checkpoints; ADR-0002 D21) | **none** (not built) |
 | sealed export in the recovery kit; no Nitrokey-wrapped YubiKey PIN | **none** (prose) |
 | AC4 drills | **not performed** |
 | Nitrokey token flags legible after login | staging SC-HSM code path only (D1: not the Nitrokey) |

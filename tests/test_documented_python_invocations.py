@@ -1,6 +1,6 @@
 """A documented `python3 …` command for a script in this repository must run as written.
 
-deploy/proxmox/README.md taught `python3 deploy/proxmox/verify.py …` and
+deploy/proxmox/README.md (since removed, #55) taught `python3 deploy/proxmox/verify.py …` and
 `sudo python3 deploy/proxmox/install_policy_guard.py …`, and both failed with
 `ModuleNotFoundError: No module named 'kms'` on a pristine checkout (#453). Running a file by path
 puts the FILE'S OWN DIRECTORY on sys.path[0], not the repository root, so a script that imports a
@@ -32,6 +32,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # with runnable entry points; a name outside this list is somebody else's python3.
 REPOSITORY_PACKAGES = ("deploy", "tools", "tests")
 INVOCATION = re.compile(r"(?:^|[\s`$(])(?:sudo\s+(?:-\S+\s+)*)?python3\s+(-m\s+)?([A-Za-z0-9_./-]+)")
+EXECUTED_AT_LEAST = {"deploy/baremetal/firewall.py", "deploy/baremetal/host_probe.py",
+                     "deploy/baremetal/network_probe.py"}
 IMPORTS_REPOSITORY_PACKAGE = re.compile(
     r"^(?:from|import)\s+(?:" + "|".join(REPOSITORY_PACKAGES) + r")\b", re.M)
 
@@ -104,7 +106,7 @@ class DocumentedPythonInvocationTests(unittest.TestCase):
 
     def test_every_documented_invocation_runs_as_written(self):
         """Executed, not inferred: run each documented form with --help from the repository root."""
-        executed = 0
+        executed = set()
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
         environment.pop("PYTHONPATH", None)  # an ambient PYTHONPATH would hide exactly this defect
         for (form, target, script), sites in sorted(self.invocations.items()):
@@ -113,14 +115,21 @@ class DocumentedPythonInvocationTests(unittest.TestCase):
             command = [sys.executable, "-m", target] if form == "module" else [sys.executable, target]
             result = subprocess.run(command + ["--help"], cwd=ROOT, env=environment,
                                     capture_output=True, text=True, timeout=60)
-            executed += 1
+            executed.add(script)
             with self.subTest(script=script, form=form):
                 self.assertEqual(
                     result.returncode, 0,
                     f"{', '.join(sites)} documents `python3 {'-m ' if form == 'module' else ''}{target}`, "
                     f"which does not run as written:\n{result.stderr.strip()[-400:]}")
-        self.assertGreaterEqual(executed, 4, f"only {executed} invocations were executed; the safety "
-                                             f"precheck may have stopped recognising argparse scripts")
+        # A FLOOR BY NAME, NOT BY COUNT. This used to require "at least 4 executed", which the
+        # Proxmox scripts made true; with them removed (#55) a count would have had to drop to 3 and
+        # would then say nothing about WHICH three. These are the documented commissioning commands
+        # whose --help is safe to run. If one stops being executed, the safety precheck has stopped
+        # recognising it (or its documentation is gone), and this test is inspecting less than it
+        # claims.
+        missing = EXECUTED_AT_LEAST - executed
+        self.assertFalse(missing, f"documented but no longer executed: {sorted(missing)}; the safety "
+                                  f"precheck may have stopped recognising argparse scripts")
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -82,15 +83,17 @@ func RefusalReason(err error) Reason {
 }
 
 type Binding struct {
-	Site               string `json:"site"`
-	Backend            string `json:"backend"`
-	DeviceID           string `json:"device_id"`
-	DeviceSerial       string `json:"device_serial,omitempty"`
-	DevAuthFingerprint string `json:"devaut_fingerprint,omitempty"`
-	ObjectID           string `json:"object_id"`
-	PublicFingerprint  string `json:"public_fingerprint,omitempty"`
-	PublicKeySHA256    string `json:"public_key_sha256,omitempty"` // enforced; see nitrokeyIdentityPinned
-	KeyCheck           string `json:"key_check,omitempty"`
+	Site         string `json:"site"`
+	Backend      string `json:"backend"`
+	DeviceID     string `json:"device_id"`
+	DeviceSerial string `json:"device_serial,omitempty"`
+	// TokenLabel tells apart two PKCS#11 tokens that report one serial. See validateBinding.
+	TokenLabel         TokenLabel `json:"token_label,omitempty"`
+	DevAuthFingerprint string     `json:"devaut_fingerprint,omitempty"`
+	ObjectID           string     `json:"object_id"`
+	PublicFingerprint  string     `json:"public_fingerprint,omitempty"`
+	PublicKeySHA256    string     `json:"public_key_sha256,omitempty"` // enforced; see nitrokeyIdentityPinned
+	KeyCheck           string     `json:"key_check,omitempty"`
 	// KEKAlgorithm names the wrapping key in this slot for objects whose own algorithm is not a
 	// key algorithm. See validateBinding.
 	KEKAlgorithm string `json:"kek_algorithm,omitempty"`
@@ -685,11 +688,19 @@ func validateObject(object *custodyObject, site string, occupied map[string]stri
 		if err := validateBinding(binding, object.Algorithm, object.Operations); err != nil {
 			return err
 		}
-		slot := binding.Site + "\x00" + binding.DeviceID + "\x00" + binding.ObjectID
-		if other, exists := occupied[slot]; exists && other != object.ID {
-			return fmt.Errorf("hardware slot is also assigned to %q", other)
+		// A slot is a site, a device, an object id and, on a card that is two tokens, the token's
+		// label: the same object id under two labels is two keys. A binding with no label may
+		// resolve to either token, so it shares a slot with every label of that device and object.
+		slot := binding.Site + "\x00" + binding.DeviceID + "\x00" + binding.ObjectID + "\x00"
+		for taken, other := range occupied {
+			if other == object.ID || !strings.HasPrefix(taken, slot) {
+				continue
+			}
+			if label := taken[len(slot):]; label == string(binding.TokenLabel) || label == "" || binding.TokenLabel == "" {
+				return fmt.Errorf("hardware slot is also assigned to %q", other)
+			}
 		}
-		occupied[slot] = object.ID
+		occupied[slot+string(binding.TokenLabel)] = object.ID
 	}
 	// AN OBJECT THAT DECLARES seal-envelope MUST HAVE SOMETHING THAT CAN SEAL.
 	//
@@ -716,6 +727,26 @@ func validateObject(object *custodyObject, site string, occupied map[string]stri
 	return err
 }
 
+// TokenLabel is a binding's token_label. It is a type of its own so that a label which is PRESENT
+// and empty is refused when the manifest is decoded: as a plain string, "token_label": "" would be
+// indistinguishable from no label at all, and the loader would accept a manifest that the schema
+// and tools/custody_manifest.py both refuse.
+type TokenLabel string
+
+func (label *TokenLabel) UnmarshalJSON(data []byte) error {
+	var value *string
+	if err := json.Unmarshal(data, &value); err != nil || value == nil || *value == "" {
+		return errors.New("token_label, when present, must be a non-empty string")
+	}
+	*label = TokenLabel(*value)
+	return nil
+}
+
+// tokenLabelPattern is what CK_TOKEN_INFO.label can hold once its padding is trimmed: at most 32
+// characters. Printable ASCII only, and no space at either end, because the driver compares against
+// the trimmed label and a value that could never equal one is a binding that never resolves.
+var tokenLabelPattern = regexp.MustCompile(`^[!-~]([ -~]{0,30}[!-~])?$`)
+
 func validateBinding(binding Binding, algorithm string, operations []string) error {
 	if binding.Site == "" || binding.DeviceID == "" || binding.ObjectID == "" {
 		return errors.New("binding site, device_id and object_id are required")
@@ -740,6 +771,20 @@ func validateBinding(binding Binding, algorithm string, operations []string) err
 		}
 	} else if binding.PINPolicy != "" || binding.TouchPolicy != "" {
 		return errors.New("interaction policy is only valid for YubiKey backends")
+	}
+	// ONE CARD CAN BE TWO TOKENS. OpenSC presents a YubiKey's OpenPGP applet as "OpenPGP card (User
+	// PIN)" and "OpenPGP card (User PIN (sig))", both under the card's one serial (measured on
+	// 35718625, regalia#541). The serial alone then names two slots, and the driver refuses rather
+	// than pick one by position. token_label is the configured answer: the driver matches it exactly,
+	// together with the serial. Only the PKCS#11 backend reads it, so anywhere else it would be a
+	// field nothing enforces.
+	if binding.TokenLabel != "" {
+		if binding.Backend != "nitrokey-pkcs11" && binding.Backend != "yubikey-openpgp" {
+			return errors.New("token_label is only valid for a backend served through PKCS#11")
+		}
+		if !tokenLabelPattern.MatchString(string(binding.TokenLabel)) {
+			return errors.New("token_label must be 1 to 32 printable ASCII characters with no space at either end")
+		}
 	}
 	releases := false
 	seals := false
@@ -1231,7 +1276,8 @@ func (registry *Registry) DeclaredPolicies() []DeclaredPolicy {
 //
 // The registry accepts bindings to backends the daemon may not actually serve. It knows about
 // yubikey-piv and yubikey-openpgp — it has capability entries for them and routes to them — while
-// the daemon only ever constructs a nitrokey-pkcs11 provider. An operator could bind a key to a
+// a given daemon serves the first only in a piv-tagged build with devices configured, and the
+// second only where its evidence carries a local-usb attestation. An operator could bind a key to a
 // YubiKey, watch the manifest validate and the daemon start clean, and then have every operation on
 // that key fail at signing time with a generic "unavailable". The routing table said yes and the
 // backend table said nothing.
@@ -1293,4 +1339,38 @@ func nitrokeyIdentityPinned(binding Binding) bool {
 		return false
 	}
 	return devAut || binding.PublicKeySHA256 != ""
+}
+
+// RoutedObject is one object the daemon routes, with the binding it routes to at this site.
+type RoutedObject struct {
+	ObjectID   string
+	Algorithm  string
+	Operations []string
+	Binding    Binding
+}
+
+// RoutedTo lists the objects this registry routes to one backend, in object-id order.
+//
+// It exists for startup checks that depend on how a backend is served rather than on what the
+// capability matrix says it can do: the matrix is one answer per backend name, and a backend may be
+// served for less than its row (the OpenPGP applet is served for signing only). Custody records are
+// left out for the reason RequiredBackends gives.
+func (registry *Registry) RoutedTo(backend string) []RoutedObject {
+	if registry == nil {
+		return nil
+	}
+	var routed []RoutedObject
+	for id, item := range registry.entries {
+		if isCustodyRecord(item.custody) || item.route.Binding.Backend != backend {
+			continue
+		}
+		operations := make([]string, 0, len(item.operations))
+		for operation := range item.operations {
+			operations = append(operations, operation)
+		}
+		sort.Strings(operations)
+		routed = append(routed, RoutedObject{ObjectID: id, Algorithm: item.route.Algorithm, Operations: operations, Binding: item.route.Binding})
+	}
+	sort.Slice(routed, func(i, j int) bool { return routed[i].ObjectID < routed[j].ObjectID })
+	return routed
 }

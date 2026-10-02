@@ -24,6 +24,9 @@ CKA_CLASS, CKA_ID, CKA_KEY_TYPE, CKA_LABEL = 0, 1, 2, 3
 CKA_EC_PARAMS, CKA_MODULUS_BITS = 4, 5
 CKO_PRIVATE_KEY, CKO_PUBLIC_KEY = 10, 11
 CKK_EC, CKK_RSA = 20, 21
+CKA_DERIVE, CKA_VALUE, CKA_TOKEN, CKA_SENSITIVE, CKA_EXTRACTABLE = 40, 41, 42, 43, 44
+CKO_SECRET_KEY, CKK_GENERIC_SECRET, CKD_NULL = 12, 22, 1
+P256 = bytes.fromhex("06082a8648ce3d030107")
 
 
 class FakeError(Exception):
@@ -35,6 +38,11 @@ class FakeMechanism:
         self.mech = mech
 
 
+class FakeECDHMechanism:
+    def __init__(self, publicData, kdf=1, sharedData=None):
+        self.publicData, self.kdf, self.sharedData = publicData, kdf, sharedData
+
+
 class FakeSession:
     """One session. Handles are unique per session, as a real module is free to make them."""
     counter = [0]
@@ -42,10 +50,15 @@ class FakeSession:
     def __init__(self, keys):
         FakeSession.counter[0] += 1
         self.gen = FakeSession.counter[0]
-        self.keys = keys                      # [(id bytes, ktype, label)]
+        self.keys = keys                      # [(id bytes, ktype, label[, {"derive": bool, "params": bytes}])]
         self.closed = False
         self.logins = 0
         self.fail_on = set()                  # handles whose sign() raises
+        self.derives = []                     # (key handle, mechanism, template) per deriveKey
+        self.live = set()                     # derived session objects not yet destroyed
+        self.derive_fails = False
+        self.unreadable_secret = False
+        self.unreadable_derive = False        # CKA_DERIVE cannot be read
 
     # -- handles are (generation, index), so a handle from another session is recognisable
     def findObjects(self, template):
@@ -53,20 +66,43 @@ class FakeSession:
         if t.get(CKA_CLASS) == CKO_PUBLIC_KEY:
             return []
         out = []
-        for i, (kid, _k, _l) in enumerate(self.keys):
+        for i, key in enumerate(self.keys):
+            kid = key[0]
             if CKA_ID in t and t[CKA_ID] != kid:
                 continue
             out.append((self.gen, i))
         return out
 
     def getAttributeValue(self, obj, attrs):
+        if isinstance(obj, tuple) and obj[0] == "derived":
+            if obj not in self.live:
+                raise FakeError("CKR_OBJECT_HANDLE_INVALID")
+            return [None if self.unreadable_secret else [7] * 32 for _ in attrs]
         gen, i = obj
         if gen != self.gen or self.closed:
             raise FakeError("CKR_OBJECT_HANDLE_INVALID")
-        kid, ktype, label = self.keys[i]
+        kid, ktype, label = self.keys[i][:3]
+        extra = self.keys[i][3] if len(self.keys[i]) > 3 else {}
+        if CKA_DERIVE in attrs and self.unreadable_derive:
+            raise FakeError("CKR_DEVICE_ERROR")
         vals = {CKA_ID: list(kid), CKA_KEY_TYPE: ktype, CKA_LABEL: label,
-                CKA_EC_PARAMS: None, CKA_MODULUS_BITS: 2048}
+                CKA_EC_PARAMS: list(extra["params"]) if extra.get("params") else None,
+                CKA_MODULUS_BITS: 2048, CKA_DERIVE: extra.get("derive", False)}
         return [vals[a] for a in attrs]
+
+    def deriveKey(self, baseKey, template, mecha):
+        gen, _i = baseKey
+        if gen != self.gen or self.closed:
+            raise FakeError("CKR_OBJECT_HANDLE_INVALID")
+        if self.derive_fails:
+            raise FakeError("CKR_FUNCTION_FAILED")
+        self.derives.append((baseKey, mecha, dict(template)))
+        handle = ("derived", self.gen, len(self.derives))
+        self.live.add(handle)
+        return handle
+
+    def destroyObject(self, obj):
+        self.live.discard(obj)
 
     def sign(self, obj, data, mech):
         gen, i = obj
@@ -129,6 +165,10 @@ def install_fake(keys):
     mod.CKM_ECDSA, mod.CKM_ECDSA_SHA256 = 30, 31
     mod.CKM_SHA256_RSA_PKCS, mod.CKM_RSA_PKCS = 32, 33
     mod.CKF_SERIAL_SESSION, mod.CKF_RW_SESSION = 1, 2
+    mod.ECDH1_DERIVE_Mechanism = FakeECDHMechanism
+    mod.CKA_DERIVE, mod.CKA_VALUE, mod.CKA_TOKEN = CKA_DERIVE, CKA_VALUE, CKA_TOKEN
+    mod.CKA_SENSITIVE, mod.CKA_EXTRACTABLE = CKA_SENSITIVE, CKA_EXTRACTABLE
+    mod.CKO_SECRET_KEY, mod.CKK_GENERIC_SECRET, mod.CKD_NULL = CKO_SECRET_KEY, CKK_GENERIC_SECRET, CKD_NULL
     lib = FakeLib(keys)
     mod.PyKCS11Lib = lambda: lib
     sys.modules["PyKCS11"] = mod
@@ -145,13 +185,35 @@ def load_bench(env):
     return m
 
 
+def PEER(curve_hex):
+    """A stand-in peer point: 0x04 and 64 bytes, the shape of an uncompressed P-256 point."""
+    return (b"\x04" + b"\x11" * 64, None) if curve_hex == P256.hex() else (None, "curve not known to this benchmark")
+
+
+def ecdh_rows(out):
+    return [l for l in out.splitlines() if "ECDH derive" in l]
+
+
 class BenchTest(unittest.TestCase):
     def setUp(self):
         FakeSession.counter[0] = 0
 
-    def run_bench(self, keys, fail_first_op=False, n="2"):
+    def run_bench(self, keys, fail_first_op=False, n="2", peer=PEER, prepare=None):
         lib = install_fake(keys)
         m = load_bench({"HSM_PIN": "123456", "BENCH_N": n, "PKCS11_MODULE": "/fake"})
+        # The peer point comes from `cryptography` in a real run. Here it is supplied, so the tests
+        # need neither that library nor a curve implementation: what is under test is what the
+        # harness does with a point, and with the absence of one.
+        if peer is not None:
+            m.peer_point = peer
+        if prepare is not None:
+            orig_open = lib.openSession
+
+            def prepared(slot, flags):
+                s = orig_open(slot, flags)
+                prepare(s, len(lib.sessions))
+                return s
+            lib.openSession = prepared
         if fail_first_op:
             orig = lib.openSession
 
@@ -235,6 +297,112 @@ class BenchTest(unittest.TestCase):
         for line in out.splitlines():
             if line.startswith("k1") and "ambiguous" not in line:
                 self.assertNotRegex(line, r"\d+\.\d", f"a timing was reported for an ambiguous id: {line}")
+
+    # ---- ECDH (regalia#532: the figure D20 needs to choose the class KEK) --------------------
+
+    DERIVE_KEY = (b"\x03", CKK_EC, "kek", {"derive": True, "params": P256})
+
+    def test_a_key_that_allows_derive_gets_an_ecdh_row_measured_as_the_daemon_derives(self):
+        lib, out = self.run_bench([self.DERIVE_KEY], n="3")
+        rows = ecdh_rows(out)
+        self.assertEqual(len(rows), 1, out)
+        self.assertNotIn("—", rows[0], f"the ECDH row carries no timing:\n{out}")
+        self.assertNotIn("not measured", out)
+        session = lib.sessions[0]
+        self.assertEqual(len(session.derives), 3, "one derive per sample")
+        for _key, mechanism, template in session.derives:
+            # CKD_NULL and a non-sensitive session object: the daemon's own template, so the number
+            # is the cost of what the daemon does, not of some other derivation.
+            self.assertEqual(mechanism.kdf, CKD_NULL)
+            self.assertEqual(mechanism.publicData, b"\x04" + b"\x11" * 64)
+            self.assertEqual(template, {CKA_CLASS: CKO_SECRET_KEY, CKA_KEY_TYPE: CKK_GENERIC_SECRET,
+                                        CKA_TOKEN: False, CKA_SENSITIVE: False, CKA_EXTRACTABLE: True})
+        self.assertEqual(session.live, set(), "derived secrets were left in the session")
+
+    def test_a_key_that_does_not_allow_derive_is_never_asked_and_the_output_says_so(self):
+        # A refused derive is a failed operation, and a failed operation costs a session reopen and
+        # a PIN verification. A sign-only key must not be asked.
+        lib, out = self.run_bench([(b"\x01", CKK_EC, "signer", {"derive": False, "params": P256})])
+        self.assertEqual(ecdh_rows(out), [], out)
+        self.assertEqual(lib.sessions[0].derives, [])
+        self.assertEqual(len(lib.sessions), 1, "the session was reopened although nothing failed")
+        self.assertIn("ECDH    : not measured", out, "the absence of an ECDH figure is not stated")
+
+    def test_no_peer_point_means_a_row_with_the_reason_and_no_derive(self):
+        for why in ("install `cryptography` to measure ECDH", "curve not known to this benchmark"):
+            with self.subTest(why=why):
+                lib, out = self.run_bench([self.DERIVE_KEY], peer=lambda _curve, why=why: (None, why))
+                rows = ecdh_rows(out)
+                self.assertEqual(len(rows), 1, out)
+                self.assertIn(why, rows[0])
+                self.assertEqual(lib.sessions[0].derives, [], "a derive was attempted without a peer point")
+                self.assertNotIn("ECDH    : not measured", out, "a key that allows derive was reported as none allowing it")
+
+    def test_a_failed_derive_is_reported_and_the_session_recovers(self):
+        def first_session_cannot_derive(session, count):
+            session.derive_fails = count == 1
+        keys = [self.DERIVE_KEY, (b"\x04", CKK_EC, "after", {"derive": False, "params": P256})]
+        lib, out = self.run_bench(keys, prepare=first_session_cannot_derive)
+        rows = ecdh_rows(out)
+        self.assertEqual(len(rows), 1, out)
+        self.assertIn("CKR_FUNCTION_FAILED", rows[0])
+        self.assertGreater(len(lib.sessions), 1, "the failed derive did not reopen the session")
+        for row in [l for l in out.splitlines() if l.startswith("after")]:
+            self.assertNotIn("—", row, f"a key after the failed derive went unmeasured:\n{out}")
+
+    def test_a_derived_secret_is_destroyed_even_when_it_cannot_be_read(self):
+        def unreadable(session, _count):
+            session.unreadable_secret = True
+        lib, out = self.run_bench([self.DERIVE_KEY], prepare=unreadable)
+        self.assertIn("could not be read", "\n".join(ecdh_rows(out)), out)
+        for session in lib.sessions:
+            self.assertEqual(session.live, set(), "a derived secret outlived a failed read")
+
+    def test_an_unreadable_derive_attribute_is_not_reported_as_no_key_allowing_derive(self):
+        # "Could not tell" is not "may not". A card that fails the attribute read must not print the
+        # definitive "no EC key allows derive".
+        def unreadable(session, _count):
+            session.unreadable_derive = True
+        lib, out = self.run_bench([self.DERIVE_KEY], prepare=unreadable)
+        rows = ecdh_rows(out)
+        self.assertEqual(len(rows), 1, out)
+        self.assertIn("CKA_DERIVE unreadable", rows[0])
+        self.assertEqual(lib.sessions[0].derives, [], "a derive was attempted on a key whose permission is unknown")
+        self.assertNotIn("no EC key on this token allows derive", out)
+        self.assertIn("could not establish whether 1 key(s) allow derive", out)
+
+    def test_an_ec_key_that_could_not_be_looked_up_is_not_counted_as_not_allowing_derive(self):
+        # Two EC keys share a CKA_ID, so neither is measured. Either may allow derive.
+        keys = [(b"\x01", CKK_EC, "a", {"derive": True, "params": P256}),
+                (b"\x01", CKK_EC, "b", {"derive": True, "params": P256})]
+        _lib, out = self.run_bench(keys)
+        self.assertIn("ambiguous", out)
+        self.assertNotIn("no EC key on this token allows derive", out)
+        self.assertIn("could not establish whether 2 key(s) allow derive", out)
+
+    def test_the_real_peer_point_is_a_point_on_the_keys_curve(self):
+        # The one test that uses `cryptography`: the shape of what the real function hands
+        # CKM_ECDH1_DERIVE, for every curve in ECDH_CURVE, and its refusal of a curve it does not
+        # know. Without the library there is nothing to check but the refusal — so CI installs it
+        # and sets REGALIA_EXPECT_CRYPTOGRAPHY, which turns "not installed" from a pass into a failure.
+        install_fake([])
+        m = load_bench({"HSM_PIN": "123456", "BENCH_N": "1", "PKCS11_MODULE": "/fake"})
+        self.assertEqual(m.peer_point("0000"), (None, "curve not known to this benchmark"))
+        try:
+            import cryptography  # noqa: F401
+        except ImportError:
+            if os.environ.get("REGALIA_EXPECT_CRYPTOGRAPHY", "") not in ("", "0"):
+                self.fail("REGALIA_EXPECT_CRYPTOGRAPHY is set, but `cryptography` is not installed: "
+                          "the per-curve checks did not run")
+            self.assertEqual(m.peer_point(P256.hex()), (None, "install `cryptography` to measure ECDH"))
+            return
+        sizes = {"06082a8648ce3d030107": 32, "06052b81040022": 48, "06052b81040023": 66, "06052b8104000a": 32}
+        self.assertEqual(set(sizes), set(m.ECDH_CURVE), "a curve in ECDH_CURVE has no check here")
+        for curve, size in sizes.items():
+            point, why = m.peer_point(curve)
+            self.assertIsNone(why)
+            self.assertEqual((point[0], len(point)), (4, 1 + 2 * size))
+        self.assertNotEqual(m.peer_point(P256.hex())[0], m.peer_point(P256.hex())[0], "the peer key is not fresh")
 
 
 if __name__ == "__main__":

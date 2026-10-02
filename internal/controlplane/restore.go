@@ -37,7 +37,7 @@ type RestoredFile struct {
 //   - The deployment version is REPORTED, never written. The deployed tree comes from the reviewed
 //     repository, not from a recovery point.
 //
-// root is the directory the guest's absolute paths are placed under: "/" on the rebuilt guest
+// root is the directory the host's absolute paths are placed under: "/" on the rebuilt host
 // itself, a scratch directory in a drill.
 func Restore(export *Export, root string) ([]RestoredFile, error) {
 	if export == nil {

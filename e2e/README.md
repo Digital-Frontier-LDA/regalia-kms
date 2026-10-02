@@ -68,10 +68,31 @@ evidence that the KMS hardware signed that transaction.
 transaction is built by cosmpy's generated protobuf bindings (`cosmos_kms_tx.py`, never an encoder
 in this repository), signed by the KMS path — the production SignDoc parser, the production policy
 engine and the concrete PKCS#11 provider with low-S — over a secp256k1 key on a SoftHSM token, and
-broadcast. It then checks four things against the live chain: the KMS-signed `MsgSend` is committed
-and moves the balances by exactly the amount and fee; the same `TxRaw` replayed is rejected; a KMS
-signature over another chain id is rejected by the node; and a destination the policy does not
-allow is refused before the token. Needs `REGALIA_COSMOS_SIMD_BIN` and `REGALIA_COSMOS_PYTHON` (a
+broadcast. The KMS keeps one durable policy journal for the whole run, as the daemon does, so the
+account sequence, the daily quota and the fencing epoch carry from one request to the next.
+
+It then checks, against the live chain, that a KMS-signed `MsgSend` is committed and moves the
+balances by exactly the amount and fee, and that each of these fails for its own reason:
+
+| Case | Refused by the KMS | Rejected by the node when another KMS signs it anyway |
+|---|---|---|
+| the committed `TxRaw` replayed | | code 19 |
+| another chain id | rule `cosmos-chain` | code 4 |
+| a destination outside the policy | rule `cosmos-destination` | |
+| a skipped or reused account sequence | rule `sequence` | code 32 |
+| another account number | rule `cosmos-account` | code 4 |
+| a fee or gas limit over the cap | rule `cosmos-fee`, `cosmos-gas` | |
+| a gas limit the chain cannot run in | | code 11 |
+| several messages: one disallowed destination, or a sum over the per-transaction cap | rule `cosmos-destination`, `cosmos-amount` | |
+| a memo, or a truncated SignDoc | the parser (`signdoc`) | |
+| a send that would cross the daily quota | rule `quota` | |
+| the superseded epoch after a promotion | rule `epoch` | |
+
+"Another KMS" is the same code with an empty journal and, where needed, a policy that allows what
+this one refuses: it shows what the node does when only the node is left to refuse. Two allowed
+`MsgSend`s in one transaction, a send at the same sequence after a quota refusal, and the promoted
+epoch's next sequence are each committed. The run ends by comparing the chain's own sequence and
+the KMS balance with the sum of what was committed. Needs `REGALIA_COSMOS_SIMD_BIN` and `REGALIA_COSMOS_PYTHON` (a
 Python with `cosmpy` and `cryptography`). Evidence class: **emulated** — the token is SoftHSM.
 
 Every `run.sh` mode declares what CLASS of evidence its arms produce, and the run

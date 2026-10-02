@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/x509"
@@ -34,7 +35,7 @@ const ckmEdDSA = 0x00001057
 // production driver cannot be constructed without this hardware identity
 // boundary because token labels and PKCS#11 slot numbers are not identities.
 type DevAuthProbe interface {
-	Fingerprint(context.Context, string, string) (string, error)
+	Fingerprint(ctx context.Context, deviceID, serial, tokenLabel string) (string, error)
 }
 
 // SecureChannel establishes the commissioned SmartCard-HSM secure-messaging
@@ -46,7 +47,7 @@ type SecureChannel interface {
 
 // PINRetryProbe reads retry metadata without attempting authentication.
 type PINRetryProbe interface {
-	Remaining(context.Context, string, string) (int, error)
+	Remaining(ctx context.Context, deviceID, serial, tokenLabel string) (int, error)
 }
 
 type cryptoki interface {
@@ -75,8 +76,48 @@ type PKCS11Driver struct {
 	module  cryptoki
 	devAuth DevAuthProbe
 	secure  SecureChannel
+	// local is the attestation for tokens that have no secure messaging. While it is nil (the
+	// daemon was given no such evidence) the OpenPGP applet backend is not served at all.
+	local   SecureChannel
 	retries PINRetryProbe
 	close   func() error
+}
+
+// The two backends this driver serves. Both are PKCS#11 tokens behind one OpenSC module.
+//
+// OpenPGPAppletBackend is a YubiKey's OpenPGP applet as OpenSC's own OpenPGP card driver presents
+// it (regalia#541): the home of Ed25519 signing keys, which neither SmartCard-HSM offers. It is
+// served for signing only, and only over an attestation of its own (ServeLocalTokens). The
+// hand-written card driver in internal/backend/openpgp is a different thing and is not served.
+const (
+	smartCardHSMBackend  = "nitrokey-pkcs11"
+	OpenPGPAppletBackend = "yubikey-openpgp"
+)
+
+// ServeLocalTokens lets the driver open OpenPGPAppletBackend bindings, establishing each one
+// against local, the attestation that the token has no secure messaging. Call it before the driver
+// is used. Without it every such binding is refused: the SmartCard-HSM evidence is never accepted
+// for a token it does not describe.
+func (driver *PKCS11Driver) ServeLocalTokens(local SecureChannel) error {
+	if driver == nil || local == nil {
+		return errors.New("a local-token attestation is required")
+	}
+	driver.local = local
+	return nil
+}
+
+// channelFor names the attestation a binding is opened under, by its backend.
+func (driver *PKCS11Driver) channelFor(binding registry.Binding) (SecureChannel, error) {
+	switch binding.Backend {
+	case smartCardHSMBackend:
+		return driver.secure, nil
+	case OpenPGPAppletBackend:
+		if driver.local == nil {
+			return nil, errors.New("PKCS#11 device is not configured")
+		}
+		return driver.local, nil
+	}
+	return nil, errors.New("PKCS#11 device is not configured")
 }
 
 // NewPKCS11Driver loads one PKCS#11 module. Every Open receives a server-owned
@@ -116,30 +157,72 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if binding.Backend != "nitrokey-pkcs11" || strings.TrimSpace(binding.DeviceID) == "" || strings.TrimSpace(binding.DeviceSerial) == "" {
+	if strings.TrimSpace(binding.DeviceID) == "" || strings.TrimSpace(binding.DeviceSerial) == "" {
 		return nil, errors.New("PKCS#11 device is not configured")
 	}
-	deviceID, expectedSerial := binding.DeviceID, binding.DeviceSerial
-	slots, err := driver.module.GetSlotList(true)
+	secure, err := driver.channelFor(binding)
 	if err != nil {
-		return nil, errors.New("PKCS#11 enumeration failed")
+		return nil, err
 	}
-	var selected uint
-	matches := 0
-	for _, slot := range slots {
-		info, infoErr := driver.module.GetTokenInfo(slot)
-		if infoErr == nil && strings.TrimSpace(info.SerialNumber) == expectedSerial {
-			selected, matches = slot, matches+1
-		}
-	}
-	if matches != 1 {
-		return nil, errors.New("commissioned PKCS#11 device is unavailable")
+	deviceID, expectedSerial := binding.DeviceID, binding.DeviceSerial
+	selected, err := resolveSlot(driver.module, expectedSerial, string(binding.TokenLabel))
+	if err != nil {
+		return nil, err
 	}
 	handle, err := driver.module.OpenSession(selected, pkcs11.CKF_SERIAL_SESSION)
 	if err != nil {
 		return nil, errors.New("PKCS#11 session unavailable")
 	}
-	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
+	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: string(binding.TokenLabel), devAuth: driver.devAuth, secure: secure, retries: driver.retries}, nil
+}
+
+// resolveSlot finds the one slot holding the commissioned token, on every call: a slot id is never
+// kept, because the list is rebuilt whenever a reader arrives or leaves.
+//
+// A token is named by its serial, and by its label as well when the binding configures one. The
+// label exists for a card that is two tokens under one serial, as OpenSC presents a YubiKey's
+// OpenPGP applet (regalia#541). It is matched exactly and only when configured. Whatever the
+// binding names, anything other than exactly one matching slot is refused: no match is an absent
+// device, and several are not told apart by position.
+//
+// A SLOT THAT CANNOT BE READ IS NOT A SLOT THAT DOES NOT MATCH. Skipping it would let one readable
+// match count as the only match while its twin sat unread beside it, so a failed C_GetTokenInfo
+// refuses the whole resolution. The two exceptions are the module's own statements that the slot
+// holds nothing it can drive: a card it does not recognise (a memory card in a reader on the same
+// host), or a token that left between the two calls. Neither can be the commissioned token.
+func resolveSlot(module cryptoki, serial, tokenLabel string) (uint, error) {
+	slots, err := module.GetSlotList(true)
+	if err != nil {
+		return 0, errors.New("PKCS#11 enumeration failed")
+	}
+	var selected uint
+	matches := 0
+	for _, slot := range slots {
+		info, infoErr := module.GetTokenInfo(slot)
+		if infoErr != nil {
+			if notAToken(infoErr) {
+				continue
+			}
+			return 0, errors.New("PKCS#11 token info unavailable")
+		}
+		if strings.TrimSpace(info.SerialNumber) != serial {
+			continue
+		}
+		if tokenLabel != "" && strings.TrimSpace(info.Label) != tokenLabel {
+			continue
+		}
+		selected, matches = slot, matches+1
+	}
+	if matches != 1 {
+		return 0, errors.New("commissioned PKCS#11 device is unavailable")
+	}
+	return selected, nil
+}
+
+// notAToken reports the two C_GetTokenInfo results that mean "nothing here this module can drive".
+func notAToken(err error) bool {
+	var code pkcs11.Error
+	return errors.As(err, &code) && (code == pkcs11.CKR_TOKEN_NOT_RECOGNIZED || code == pkcs11.CKR_TOKEN_NOT_PRESENT)
 }
 
 func (driver *PKCS11Driver) Ready(ctx context.Context) bool {
@@ -165,19 +248,22 @@ type pkcs11Session struct {
 	slot     uint
 	deviceID string
 	serial   string
-	devAuth  DevAuthProbe
-	secure   SecureChannel
-	retries  PINRetryProbe
-	mu       sync.Mutex
-	loggedIn bool
-	closed   bool
+	// tokenLabel is the binding's token_label, or empty. The probes resolve the slot themselves,
+	// so they are handed the same name the session was opened under.
+	tokenLabel string
+	devAuth    DevAuthProbe
+	secure     SecureChannel
+	retries    PINRetryProbe
+	mu         sync.Mutex
+	loggedIn   bool
+	closed     bool
 }
 
 func (session *pkcs11Session) Identity(ctx context.Context) (string, string, error) {
 	if err := session.usable(ctx); err != nil {
 		return "", "", err
 	}
-	fingerprint, err := session.devAuth.Fingerprint(ctx, session.deviceID, session.serial)
+	fingerprint, err := session.devAuth.Fingerprint(ctx, session.deviceID, session.serial, session.tokenLabel)
 	// A TOKEN THAT EXPOSES NO DEVICE CERTIFICATE IS NOT AN UNIDENTIFIABLE ONE. A genuine
 	// SmartCard-HSM keeps C.DevAut in EF 2F02, out of PKCS#11's reach (regalia#448), so this
 	// reports the serial with no DevAut and the provider decides: a binding that pins a DevAut
@@ -206,7 +292,7 @@ func (session *pkcs11Session) PINRetries(ctx context.Context) (int, error) {
 	if err := session.usable(ctx); err != nil {
 		return 0, err
 	}
-	remaining, err := session.retries.Remaining(ctx, session.deviceID, session.serial)
+	remaining, err := session.retries.Remaining(ctx, session.deviceID, session.serial, session.tokenLabel)
 	if err != nil || remaining < 0 {
 		return 0, errors.New("PIN retry metadata unavailable")
 	}
@@ -891,6 +977,43 @@ func signingMechanism(algorithm string) (*pkcs11.Mechanism, error) {
 	}
 }
 
+// namesEd25519 reports whether CKA_EC_PARAMS names the curve the other way PKCS#11 v3.0 allows for
+// an Edwards key: not an OID but the PrintableString "edwards25519" (section 2.3.5, curveName).
+//
+// The OID form (id-Ed25519) was the only one this driver read, and the only one its unit test fed
+// it — the fixture and the code shared the assumption. SoftHSM and pkcs11-tool use the string, so
+// the first Ed25519 key the driver ever met on a real module (2026-10-02) could not be read at all:
+// "invalid PKCS#11 EC parameters", and with it no identity pin and no public key for a verifier.
+func namesEd25519(params []byte) bool {
+	var name asn1.RawValue
+	rest, err := asn1.Unmarshal(params, &name)
+	return err == nil && len(rest) == 0 && name.Class == asn1.ClassUniversal && name.Tag == asn1.TagPrintableString &&
+		string(name.Bytes) == "edwards25519"
+}
+
+// marshalEd25519PublicKey encodes an Ed25519 public key as SubjectPublicKeyInfo (RFC 8410). The
+// point is the 32-byte key, wrapped in a DER OCTET STRING (the PKCS#11 v3.0 form, 34 bytes) or bare;
+// modules do both.
+//
+// THE WRAPPED FORM IS TRIED FIRST, AND WINS. A point that is exactly one OCTET STRING is read as
+// one, and must then hold 32 bytes. Checking the length first would take `04 1e` followed by 30
+// bytes — a wrapped value of the wrong size, 32 bytes long in all — for a bare key, and publish the
+// wrapper as key material. The price is that a bare key which happens to begin `04 1e` (one in
+// 65536) is refused on a module that does not wrap; that is a refusal with a reason, where the other
+// order is a wrong key pinned and handed to verifiers.
+func marshalEd25519PublicKey(point []byte) ([]byte, error) {
+	raw := point
+	var unwrapped []byte
+	if rest, err := asn1.Unmarshal(point, &unwrapped); err == nil && len(rest) == 0 {
+		raw = unwrapped
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, errors.New("invalid PKCS#11 EC point")
+	}
+	return asn1.Marshal(subjectPublicKeyInfo{Algorithm: publicKeyAlgorithm{Algorithm: oidEd25519},
+		PublicKey: asn1.BitString{Bytes: raw, BitLength: len(raw) * 8}})
+}
+
 func marshalPublicKey(attributes []*pkcs11.Attribute) ([]byte, error) {
 	values := make(map[uint][]byte, len(attributes))
 	for _, attribute := range attributes {
@@ -908,6 +1031,9 @@ func marshalPublicKey(attributes []*pkcs11.Attribute) ([]byte, error) {
 		return x509.MarshalPKIXPublicKey(&rsa.PublicKey{N: modulus, E: exponent})
 	}
 	params, point := values[pkcs11.CKA_EC_PARAMS], values[pkcs11.CKA_EC_POINT]
+	if namesEd25519(params) {
+		return marshalEd25519PublicKey(point)
+	}
 	var curveOID asn1.ObjectIdentifier
 	if _, err := asn1.Unmarshal(params, &curveOID); err != nil {
 		return nil, errors.New("invalid PKCS#11 EC parameters")

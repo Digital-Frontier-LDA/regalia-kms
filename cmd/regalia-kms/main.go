@@ -86,7 +86,7 @@ func run() error {
 	exportVersionFile := flag.String("export-version-file", "/etc/regalia-kms/deployment-version", "provenance file carried in the export; a missing file travels as an explicit absent marker, and an empty one is refused")
 	inspectExport := flag.String("inspect-export", "", "open and fully verify a sealed control-plane export and exit")
 	restoreExport := flag.String("restore-export", "", "verify a sealed control-plane export for -expect-site and place its journals under -restore-root, then exit")
-	restoreRoot := flag.String("restore-root", "", "the directory the export's guest paths are restored under (\"/\" on the rebuilt guest itself)")
+	restoreRoot := flag.String("restore-root", "", "the directory the export's host paths are restored under (\"/\" on the rebuilt host itself)")
 	expectSite := flag.String("expect-site", "", "bind an inspected export to the site it is being restored as; a file naming any other site is refused")
 	authorityKeyPEM := flag.String("authority-key-pem", "", "custody authority P-256 private key (PEM) that opens an export")
 	scanTree := flag.String("scan-tree", "", "scan a restored directory tree for secret shapes and exit")
@@ -118,7 +118,7 @@ func run() error {
 	}
 
 	// THE RESTORE SIDE OF #49. These run on the ceremony host, against an export file or a
-	// rebuilt guest's tree, with nothing else from the deployment — the same reachability
+	// rebuilt host's tree, with nothing else from the deployment — the same reachability
 	// rule as the journal verifiers above: a recovery control nobody can run at the point of
 	// use is a control that does not exist.
 	if *inspectExport != "" {
@@ -176,7 +176,7 @@ func run() error {
 	if *listen != "" {
 		settings.ListenAddress = *listen
 	}
-	// THE EXPORT SIDE OF #49: the durable, reconstructable control plane leaves the guest as
+	// THE EXPORT SIDE OF #49: the durable, reconstructable control plane leaves the host as
 	// a sealed envelope for the custody procedure — never as a machine image. Runs as the kms
 	// user against the live journals; every chain is verified before anything is sealed.
 	if *exportControlPlane != "" {
@@ -526,6 +526,22 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 		providers["nitrokey-pkcs11"] = provider
 		observer = provider
 		closers = append(closers, func() { _ = driver.Close() })
+		// A YUBIKEY'S OPENPGP APPLET IS A SECOND KIND OF TOKEN BEHIND THE SAME MODULE. It is served
+		// only when the evidence carries a local-usb attestation: that is the operator saying such
+		// a token exists on this host, and without it the driver refuses every applet binding. One
+		// provider answers for both backend names, so quarantine and PIN-budget state stay in the
+		// one place the metrics surface reads.
+		if local := channel.LocalTokens(); local != nil {
+			if err := requireOpenPGPAppletBindingsAreServable(keyRegistry, local); err != nil {
+				_ = driver.Close()
+				return nil, nil, nil, nil, err
+			}
+			if err := driver.ServeLocalTokens(local); err != nil {
+				_ = driver.Close()
+				return nil, nil, nil, nil, err
+			}
+			providers[nitrokey.OpenPGPAppletBackend] = provider
+		}
 	}
 	if len(settings.YubiKeyDevices) > 0 {
 		provider, providerErr := newYubiKeyBackend(settings.YubiKeyDevices, pins)
@@ -726,11 +742,12 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 // bindBackendToRegistry refuses a key registry that routes to a backend the daemon cannot serve.
 //
 // The registry accepts bindings to yubikey-piv and yubikey-openpgp — it has capability entries for
-// both and will route to them — while buildHardware only ever constructs a nitrokey-pkcs11
-// provider. Nothing connected the two, so an operator could bind a key to a YubiKey, watch the
-// custody manifest validate and the daemon start clean, and then have every operation on that key
-// fail at signing time as DEPENDENCY_UNAVAILABLE. Fail-closed, but discovered one request at a
-// time, at the moment someone needed the key.
+// both and will route to them — while buildHardware serves each only when this host is configured
+// for it: yubikey-piv with devices in a piv-tagged build, yubikey-openpgp with a local-usb
+// attestation in the evidence. Nothing connected the two, so an operator could bind a key to a
+// YubiKey, watch the custody manifest validate and the daemon start clean, and then have every
+// operation on that key fail at signing time as DEPENDENCY_UNAVAILABLE. Fail-closed, but discovered
+// one request at a time, at the moment someone needed the key.
 //
 // A backend the routing table names and the daemon cannot reach is a configuration error, and a
 // configuration error belongs at startup where somebody is watching.
@@ -874,7 +891,7 @@ func exportControlPlaneState(settings config.Config, outputPath, recipientPath, 
 	}
 	fmt.Printf("sealed to custody authority key sha256:%s\n", recipient.Digest)
 	fmt.Printf("envelope: %s (%d bytes, mode 0600)\n", outputPath, len(envelope))
-	fmt.Println("The authority signs this FILE after carry-out; the guest holds no signing key.")
+	fmt.Println("The authority signs this FILE after carry-out; the host holds no signing key.")
 	return nil
 }
 

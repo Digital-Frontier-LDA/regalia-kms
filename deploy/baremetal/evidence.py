@@ -3,7 +3,7 @@
 host_probe.py MEASURES what the running host can show. The firmware settings it cannot read (iLO,
 AC power recovery, chassis intrusion, used-hardware intake) and the records it compares against (the
 import key's fingerprint) are ATTESTED here, in a document signed with the commissioning evidence key
-(ECDSA P-256, as for the earlier Proxmox evidence). The key is trusted only by its SHA-256 fingerprint,
+(ECDSA P-256). The key is trusted only by its SHA-256 fingerprint,
 recorded at commissioning and supplied by the operator, never by whatever key file sits beside the
 evidence.
 
@@ -15,6 +15,8 @@ evidence.
         "pin_import_key_sha256": "<64 hex>",           # written by hand at --init-import-key
         "hsm_usb_path": "<sysfs USB path>",             # the INTERNAL port
         "credential_tpm2_pcrs": "7",                    # bound directly; never 10 or 11
+        "credential_tpm2_signed_pcrs": "11",            # bound through a signed PCR policy (#57): "11",
+        "credential_tpm2_pcr_key_pkfp": "<64 hex>",     #   with the PCR-signing key's pkfp; or both ""
         "ilo_isolated_or_disabled": true, "ac_power_recovery": true, "redundant_power_supplies": true,
         "chassis_intrusion_armed": true, "used_hardware_intake": true,
         "runtime_credentials_excluded_from_backup": true,
@@ -43,8 +45,8 @@ import tempfile
 SCHEMA = "regalia-kms/baremetal-evidence/v1"
 ATTESTED = ("ilo_isolated_or_disabled", "ac_power_recovery", "redundant_power_supplies", "chassis_intrusion_armed",
             "used_hardware_intake", "runtime_credentials_excluded_from_backup")
-RECORDS = ("pin_import_key_sha256", "hsm_usb_path", "credential_tpm2_pcrs", "system_rom_version",
-           "ilo_firmware_version", "tpm_ek_certificate_present")
+RECORDS = ("pin_import_key_sha256", "hsm_usb_path", "credential_tpm2_pcrs", "credential_tpm2_signed_pcrs",
+           "credential_tpm2_pcr_key_pkfp", "system_rom_version", "ilo_firmware_version", "tpm_ek_certificate_present")
 MAX_AGE = datetime.timedelta(hours=24)
 MAX_BYTES = 128 * 1024
 
@@ -80,6 +82,31 @@ def exact_keys(value, keys, label):
     return value
 
 
+def credential_binding(pcrs, signed_pcrs, pkfp, label="host."):
+    """The PIN credentials' recorded TPM binding: the PCRs bound directly, the PCRs bound through a
+    signed policy, and that policy's signing key. Returns (direct PCR numbers, signed PCR numbers, pkfp).
+    Shared with host_probe.py, which holds its --credential-* arguments to the same rules."""
+    require(isinstance(pcrs, str) and re.fullmatch(r"\d{1,2}(\+\d{1,2})*", pcrs),
+            "%scredential_tpm2_pcrs must be a PCR list such as 7" % label)
+    direct = [int(x) for x in pcrs.split("+")]
+    require(all(0 <= x <= 23 for x in direct) and len(set(direct)) == len(direct),
+            "%scredential_tpm2_pcrs must be distinct PCRs 0-23" % label)
+    require(7 in direct, "%scredential_tpm2_pcrs must include PCR 7 (Secure Boot state; README, section 3)" % label)
+    require(10 not in direct, "%scredential_tpm2_pcrs must not include PCR 10 (IMA): the credential is decrypted "
+            "before regalia-kms runs, so it could never unseal at an unattended start (README, section 3)" % label)
+    require(11 not in direct, "%scredential_tpm2_pcrs must not include PCR 11 directly: the kernel image changes "
+            "at every update; only a signed PCR policy binds it, recorded in credential_tpm2_signed_pcrs "
+            "(README, section 3)" % label)
+    # The signed policy: PCR 11 (the only PCR systemd-measure signs) by one RSA key, named by the
+    # fingerprint its signature files carry (SHA-256 of the PKCS#1 DER key). Both, or neither.
+    require(signed_pcrs in ("", "11"), '%scredential_tpm2_signed_pcrs must be "11" or "" (no signed policy)' % label)
+    require(isinstance(pkfp, str) and re.fullmatch(r"([0-9a-f]{64})?", pkfp),
+            '%scredential_tpm2_pcr_key_pkfp must be 64 lowercase hex, or "" with no signed policy' % label)
+    require(bool(signed_pcrs) == bool(pkfp), "%scredential_tpm2_signed_pcrs and credential_tpm2_pcr_key_pkfp "
+            "go together: a signed PCR needs its signing key's pkfp, and a key needs a PCR" % label)
+    return sorted(direct), [int(signed_pcrs)] if signed_pcrs else [], pkfp
+
+
 def validate(doc, measured_names, now=None):
     """The document's structure and values; returns its host section."""
     root = exact_keys(doc, ("schema", "site", "host_serial", "captured_at", "host"), "evidence")
@@ -100,19 +127,10 @@ def validate(doc, measured_names, now=None):
             "host.pin_import_key_sha256 must be 64 lowercase hex")
     require(isinstance(host["hsm_usb_path"], str) and re.fullmatch(r"\d+-\d+(\.\d+)*", host["hsm_usb_path"]),
             "host.hsm_usb_path must be a sysfs USB path such as 1-1.4")
-    require(isinstance(host["credential_tpm2_pcrs"], str) and re.fullmatch(r"\d{1,2}(\+\d{1,2})*", host["credential_tpm2_pcrs"]),
-            "host.credential_tpm2_pcrs must be a PCR list such as 7")
+    credential_binding(host["credential_tpm2_pcrs"], host["credential_tpm2_signed_pcrs"], host["credential_tpm2_pcr_key_pkfp"])
     for k in ("system_rom_version", "ilo_firmware_version"):
         require(isinstance(host[k], str) and re.fullmatch(r"[A-Za-z0-9 ._()/-]{1,64}", host[k]), "host.%s must be a version string" % k)
     require(isinstance(host["tpm_ek_certificate_present"], bool), "host.tpm_ek_certificate_present must be true or false")
-    pcrs = [int(x) for x in host["credential_tpm2_pcrs"].split("+")]
-    require(all(0 <= x <= 23 for x in pcrs) and len(set(pcrs)) == len(pcrs),
-            "host.credential_tpm2_pcrs must be distinct PCRs 0-23")
-    require(7 in pcrs, "host.credential_tpm2_pcrs must include PCR 7 (Secure Boot state; README, section 3)")
-    require(10 not in pcrs, "host.credential_tpm2_pcrs must not include PCR 10 (IMA): the credential is decrypted "
-            "before regalia-kms runs, so it could never unseal at an unattended start (README, section 3)")
-    require(11 not in pcrs, "host.credential_tpm2_pcrs must not include PCR 11 directly: the kernel image changes "
-            "at every update; only a signed PCR policy could bind it (README, section 3)")
     return host
 
 
