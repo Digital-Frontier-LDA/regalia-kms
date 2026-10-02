@@ -21,7 +21,7 @@ cd "$(dirname "$0")/.." || exit 2
 for t in swtpm tpm2_createek tpm2_createak tpm2_makecredential tpm2_quote tpm2_nvdefine tpm2_readclock openssl python3; do
   command -v "$t" >/dev/null || { echo "node-replacement-swtpm: $t is required (swtpm, tpm2-tools, openssl, python3)"; exit 2; }
 done
-out="$(REGALIA_EXPECT_SWTPM=1 python3 -m unittest -v tests.test_baremetal_replacement.OnSwtpm 2>&1)"; rc=$?
+out="$(REGALIA_EXPECT_SWTPM=1 python3 -Es -m unittest -v tests.test_baremetal_replacement.OnSwtpm 2>&1)"; rc=$?
 printf '%s\n' "$out"
 [ "$rc" = 0 ] || { echo "node-replacement-swtpm: FAILED"; exit 1; }
 grep -q '^Ran 1 test' <<< "$out" && ! grep -qi 'skipped' <<< "$out" || { echo "node-replacement-swtpm: the TPM test did not run"; exit 1; }

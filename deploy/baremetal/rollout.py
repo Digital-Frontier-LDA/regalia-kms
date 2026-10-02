@@ -72,17 +72,17 @@ signs, writes state, reboots or talks to a peer; the only file one may create is
 file under /run/lock. One of them, `propose`, prints an UNSIGNED manifest for the root's operator to
 check and sign.
 
-    python3 -m deploy.baremetal.rollout version   --measurements NEW.json
-    python3 -m deploy.baremetal.rollout transition --old OLD.json --new NEW.json [--emergency] [--dropped NODE]...
-    python3 -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016]
-    python3 -m deploy.baremetal.rollout propose   --membership CHAIN.json --root-key HEX --old OLD.json --new NEW.json
+    python3 -Es -m deploy.baremetal.rollout version   --measurements NEW.json
+    python3 -Es -m deploy.baremetal.rollout transition --old OLD.json --new NEW.json [--emergency] [--dropped NODE]...
+    python3 -Es -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016]
+    python3 -Es -m deploy.baremetal.rollout propose   --membership CHAIN.json --root-key HEX --old OLD.json --new NEW.json
                                                   [--emergency] [--dropped NODE]... [--issued-at YYYY-MM-DDTHH:MM:SSZ]
-    python3 -m deploy.baremetal.rollout may-reboot --membership CHAIN.json --root-key HEX --measurements DOC.json
+    python3 -Es -m deploy.baremetal.rollout may-reboot --membership CHAIN.json --root-key HEX --measurements DOC.json
                                                   --node-id ID --running LABEL --session-id HEX
                                                   --attest-state STATE.json --lease LEASE.json... [--now SECONDS]
-    python3 -m deploy.baremetal.rollout retire-ready --membership CHAIN.json --root-key HEX --measurements DOC.json
+    python3 -Es -m deploy.baremetal.rollout retire-ready --membership CHAIN.json --root-key HEX --measurements DOC.json
                                                   --state NODE=STATE.json...
-    python3 -m deploy.baremetal.rollout check-replacement --membership CHAIN.json --root-key HEX --candidate MANIFEST.json
+    python3 -Es -m deploy.baremetal.rollout check-replacement --membership CHAIN.json --root-key HEX --candidate MANIFEST.json
                                                   --old OLD.json --new NEW.json --old-id ID --new-id ID
 
 CHAIN.json is the node's membership file (the signed chain membership.Store keeps); it is verified from
@@ -118,26 +118,50 @@ def attesting(manifest):
     return sorted(n for n, node in nodes.items() if membership.CAPABILITIES[node["state"]] & {"request", "serve"})
 
 
+def _readable(last):
+    """A verifier's record of a node's last accepted quote: {"label", "epoch"} and, since the sets can be
+    per boot phase, "phase" (None, or one of attest.PHASES). Types are exact."""
+    return (isinstance(last, dict) and type(last.get("epoch")) is int and isinstance(last.get("label"), str)
+            and (last.get("phase") is None or (isinstance(last["phase"], str) and last["phase"] in attest.PHASES)))
+
+
+def _last(state, manifest, node_id):
+    nodes = state.get("nodes") if isinstance(state, dict) else None
+    record = nodes.get(node_id) if isinstance(nodes, dict) else None
+    last = record.get("measurement") if isinstance(record, dict) else None
+    if not _readable(last) or last["epoch"] != manifest["epoch"]:
+        return None
+    return last["label"], last.get("phase")
+
+
 def last_seen(state, manifest, node_id):
     """What one verifier's state (attest.py's state file, parsed) records for `node_id` under THIS
     manifest epoch: the label of the set it was last verified on, or None (never seen, seen under
     another epoch, or not a record). Types are exact: an epoch of 2.0 or True is not epoch 2."""
-    nodes = state.get("nodes") if isinstance(state, dict) else None
-    record = nodes.get(node_id) if isinstance(nodes, dict) else None
-    last = record.get("measurement") if isinstance(record, dict) else None
-    if not isinstance(last, dict) or type(last.get("epoch")) is not int or not isinstance(last.get("label"), str):
-        return None
-    return last["label"] if last["epoch"] == manifest["epoch"] else None
+    last = _last(state, manifest, node_id)
+    return last[0] if last else None
+
+
+def _up(target, phase):
+    """Whether a sighting in `phase` shows the node UP on `target`. Where the set is per phase, only a
+    quote from the booted system does: a node verified in its initrd asked for its disk, and may never
+    have come up. (A record written before the phase was recorded has none, and does not count either.)
+    A set with one value per PCR cannot tell the two apart, and any sighting counts, as before."""
+    return phase == "system" if "phases" in target else True
 
 
 def seen_on_target(state, manifest, document, node_id):
-    """Whether that verifier last saw `node_id` on its target set under this epoch. (yes, what it says)."""
-    want, label = measurements.target(document, node_id)["label"], last_seen(state, manifest, node_id)
-    if label == want:
-        return True, "on %s at epoch %d" % (want, manifest["epoch"])
-    if label is None:
+    """Whether that verifier last saw `node_id` up on its target set under this epoch. (yes, what it says)."""
+    target, last = measurements.target(document, node_id), _last(state, manifest, node_id)
+    want = target["label"]
+    if last is None:
         return False, "not verified under epoch %d" % manifest["epoch"]
-    return False, "last verified on %r at epoch %d, not on %s" % (label, manifest["epoch"], want)
+    label, phase = last
+    if label != want:
+        return False, "last verified on %r at epoch %d, not on %s" % (label, manifest["epoch"], want)
+    if not _up(target, phase):
+        return False, "last verified in the initrd of %s at epoch %d: it asked for its disk and has not been seen up since" % (want, manifest["epoch"])
+    return True, "on %s at epoch %d" % (want, manifest["epoch"])
 
 
 def may_reboot(manifest, document, node_id, running, session_id, own_state, leases, now, run=subprocess.run):
@@ -229,16 +253,19 @@ def retire_ready(manifest, document, states):
             if "measurement" not in record:
                 continue
             last = record["measurement"]
-            require(isinstance(last, dict) and type(last.get("epoch")) is int and isinstance(last.get("label"), str),
+            require(_readable(last),
                     "%s's state has an unreadable measurement for %s: it cannot be counted, and it cannot be ignored" % (peer_id, node_id))
             require(last["epoch"] <= manifest["epoch"], "%s last verified %s under epoch %d, later than the manifest given "
                     "(epoch %d): use the current manifest and its document" % (peer_id, node_id, last["epoch"], manifest["epoch"]))
     seen, behind = {}, []
     for node_id in attesting(manifest):
-        want = measurements.target(document, node_id)["label"]
-        said = {peer: last_seen(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id}
-        said = {peer: label for peer, label in said.items() if label is not None}
-        wrong = ["%s last saw it on %r" % (peer, label) for peer, label in said.items() if label != want]
+        target = measurements.target(document, node_id)
+        want = target["label"]
+        said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id}
+        said = {peer: last for peer, last in said.items() if last is not None}
+        # on another image, or on the target but only in its initrd: it asked for its disk, and may never have come up
+        wrong = ["%s last saw it on %r" % (peer, label) if label != want else "%s last saw it in the initrd of %r, not up" % (peer, label)
+                 for peer, (label, phase) in said.items() if label != want or not _up(target, phase)]
         if not said:
             behind.append("%s (no other node has verified it under epoch %d)" % (node_id, manifest["epoch"]))
         elif wrong:
@@ -385,7 +412,7 @@ def _cmd_check_replacement(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.rollout",
+    parser = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.rollout",
                                      description="The checks of a rolling boot-image update (KERNEL-UPDATE.md). Reads; never signs.")
     parser.add_argument("--json", action="store_true", help="print one JSON object instead of text")
     sub = parser.add_subparsers(dest="command", required=True)

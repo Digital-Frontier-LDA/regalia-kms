@@ -28,7 +28,7 @@ case "$OBJECT_ID" in *[!0-9A-Fa-f]*) echo "REGALIA_COSMOS_PKCS11_OBJECT_ID must 
 [ "${#PIN}" -ge 6 ] || { echo "refusing a PIN shorter than six characters" >&2; exit 2; }
 command -v pkcs11-tool >/dev/null || { echo "pkcs11-tool is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
-python3 -c 'import cryptography' 2>/dev/null || {
+python3 -I -c 'import cryptography' 2>/dev/null || {
   echo "python cryptography package is required for signature verification" >&2
   exit 2
 }
@@ -38,7 +38,7 @@ cleanup() { unset PIN; rm -rf -- "$STATE"; }
 trap cleanup EXIT HUP INT TERM
 chmod 700 "$STATE"
 
-python3 - "$ROOT/internal/policy/testdata/signdoc-akashnet2-msgsend.hex" "$STATE/digest.bin" <<'PY'
+python3 -I - "$ROOT/internal/policy/testdata/signdoc-akashnet2-msgsend.hex" "$STATE/digest.bin" <<'PY'
 import hashlib
 import pathlib
 import sys
@@ -56,7 +56,7 @@ PKCS11_PIN="$PIN" pkcs11-tool --module "$MODULE" "${SELECTOR[@]}" \
   --login --pin env:PKCS11_PIN --sign --mechanism ECDSA --id "$OBJECT_ID" \
   --input-file "$STATE/digest.bin" --output-file "$STATE/signature.raw" >/dev/null
 
-python3 - "$STATE/public.der" "$STATE/digest.bin" "$STATE/signature.raw" <<'PY'
+python3 -I - "$STATE/public.der" "$STATE/digest.bin" "$STATE/signature.raw" <<'PY'
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature, Prehashed

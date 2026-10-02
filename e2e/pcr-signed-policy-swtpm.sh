@@ -181,14 +181,14 @@ grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' <<< "$(tpm2_getcap properties-variable 2
 hdr "6  host_probe reads the binding from the blob, and a header that lies does not open"
 # deploy/baremetal/host_probe.py (pin_credentials_sealed_as_recorded) reads what a blob is sealed to
 # from its header. Here on the blob the script installed, not on a fixture.
-header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -c 'import sys
+header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -Ps -c 'import sys
 from deploy.baremetal import host_probe
 direct, signed, pkfp = host_probe.credential_header(sys.stdin.read())
 print("+".join(map(str, direct)), "+".join(map(str, signed)), pkfp)')"
 [ "$header" = "7 11 $fp" ] && P "the installed blob's header: PCR 7 direct, PCR 11 signed, by the key in the record" || F "host_probe read '$header', want '7 11 $fp'"
 # The header is only worth reading if systemd refuses a blob whose header was edited: drop PCR 7 from
 # the direct mask (offset 48), then drop PCR 11 from the signed mask, and try to open each.
-sudo cat "$BLOB" | python3 -c 'import base64, struct, sys
+sudo cat "$BLOB" | python3 -I -c 'import base64, struct, sys
 raw = bytearray(base64.b64decode(sys.stdin.read()))
 at = (32 + struct.unpack_from("<I", raw, 24)[0] + 7) & ~7
 mask, _, _, blob, policy = struct.unpack_from("<QHHII", raw, at)
@@ -246,7 +246,7 @@ printf '%s' "$PIN" | sudo systemd-creds encrypt --with-key=tpm2-with-public-key 
   --tpm2-public-key=pcr.pub --tpm2-public-key-pcrs=11 --name=t.pin - "$W/tpm-only.cred" 2>/dev/null
 [ "$(sudo env SYSTEMD_CREDENTIAL_SECRET="$W/absent.secret" systemd-creds decrypt --tpm2-device="$D" --name=t.pin --tpm2-signature=sig1.json "$W/tpm-only.cred" - 2>/dev/null)" = "$PIN" ] \
   && P "a TPM-only credential (the old form) opens on a signed image with NO host key: the gap" || F "the TPM-only control blob did not open"
-refusal="$(sudo cat "$W/tpm-only.cred" | PYTHONPATH="$HERE" python3 -c 'import sys
+refusal="$(sudo cat "$W/tpm-only.cred" | PYTHONPATH="$HERE" python3 -Ps -c 'import sys
 from deploy.baremetal import host_probe
 try: host_probe.credential_header(sys.stdin.read()); print("accepted")
 except ValueError as e: print(e)')"
@@ -266,7 +266,7 @@ plain(){ sudo env SYSTEMD_CREDENTIAL_SECRET="$W/$1" systemd-creds decrypt --tpm2
 for k in other absent; do
   o="$(plain "$k.secret")"; [ $? != 0 ] && [ -z "$o" ] && P "it does not open with $k host key" || F "the unsigned blob opened with $k host key"
 done
-header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -c 'import sys
+header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -Ps -c 'import sys
 from deploy.baremetal import host_probe
 direct, signed, pkfp = host_probe.credential_header(sys.stdin.read())
 print("+".join(map(str, direct)), "+".join(map(str, signed)) or "-", pkfp or "-")')"

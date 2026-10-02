@@ -89,7 +89,7 @@ pcr11(){ tpm2_pcrread sha256:11 | awk '/11 *:/{print tolower(substr($NF,3))}'; }
 approve(){ printf '%s' "$1" > "$W/word"; "$PCRLOCK" lock-raw --pcr=11 --pcrlock="$VARIANTS/$1.pcrlock" "$W/word" >/dev/null 2>&1; }
 # policy: remake the NV policy from the component files. Prints make-policy's last lines; its status is the function's.
 policy(){ "$PCRLOCK" --components="$COMP" make-policy >"$W/policy.log" 2>&1; local rc=$?; tail -4 "$W/policy.log" | cut -c1-200; return "$rc"; }
-nv(){ python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nvIndex"))' "$POLICY" 2>/dev/null; }
+nv(){ python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("nvIndex"))' "$POLICY" 2>/dev/null; }
 # unlock: 0 when the volume opens through its TPM token alone (no passphrase asked: headless).
 unlock(){ detach
   "$ATTACH" attach "$NAME" "$W/luks.img" - "tpm2-device=$D,tpm2-pcrlock=$POLICY,headless=true" >"$W/attach.log" 2>&1
@@ -113,7 +113,7 @@ truncate -s 32M "$W/luks.img"; (umask 077; head -c 32 /dev/urandom | base64 > "$
 cryptsetup luksFormat -q --type luks2 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --key-file "$W/key" "$W/luks.img" >/dev/null 2>&1 || F "luksFormat failed"
 out="$("$ENROLL" --unlock-key-file="$W/key" --tpm2-device="$D" --tpm2-pcrlock="$POLICY" --tpm2-pcrs= "$W/luks.img" 2>&1)" \
   && P "enrolled: $(tail -1 <<< "$out")" || F "systemd-cryptenroll failed: $out"
-token="$(cryptsetup luksDump --dump-json-metadata "$W/luks.img" 2>/dev/null | python3 -c 'import json,sys
+token="$(cryptsetup luksDump --dump-json-metadata "$W/luks.img" 2>/dev/null | python3 -I -c 'import json,sys
 t = [v for v in json.load(sys.stdin)["tokens"].values() if v.get("type") == "systemd-tpm2"]
 print(len(t), t[0].get("tpm2_pcrlock"), t[0].get("tpm2-pcrs"), "tpm2_pubkey" in t[0]) if t else print(0)' 2>/dev/null)"
 [ "$token" = "1 True [] False" ] && P "the header: one systemd-tpm2 token, NV-backed (tpm2_pcrlock), no PCR list of its own, no signed policy" || F "the token is not as expected: $token"

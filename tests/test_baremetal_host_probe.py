@@ -781,7 +781,9 @@ class HostProbe(unittest.TestCase):
         slots = lambda *names: {n: {"type": "luks2"} for n in names}
         cases = {
             "no systemd-recovery token": ({"keyslots": slots("1"), "tokens": {"0": tpm}}, "no recovery keyslot"),
-            "a recovery token naming no keyslot": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=[])}}, "ONE recovery key"),
+            # cryptsetup leaves such a token behind when a keyslot is destroyed by hand: it is not a key
+            "only a recovery token naming no keyslot": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=[])}}, "no recovery keyslot"),
+            "a recovery keyslot a boot prompt would not try": ({"keyslots": dict(slots("1"), **{"2": {"type": "luks2", "priority": 0}}), "tokens": {"0": tpm, "1": recovery}}, "priority 'ignore'"),
             "two recovery keys": ({"keyslots": slots("1", "2", "3"), "tokens": {"0": tpm, "1": recovery, "2": dict(recovery, keyslots=["3"])}}, "ONE recovery key"),
             "one recovery token naming two keyslots": ({"keyslots": slots("1", "2", "3"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=["2", "3"])}}, "ONE recovery key"),
             "a token naming a keyslot that is gone": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": recovery}}, "does not exist"),
@@ -796,6 +798,11 @@ class HostProbe(unittest.TestCase):
                 self.assertFalse(value, "%s passed: %s" % (name, why))
                 self.assertIn(reason, why)
         value, why = host_probe.recovery_keyslots(LUKS_META)
+        self.assertTrue(value, why)
+        # An empty recovery token beside the real one (a keyslot once removed by hand, a new key
+        # enrolled since) does not make a second recovery key: the host is correctly commissioned.
+        orphaned = dict(LUKS_META, tokens=dict(LUKS_META["tokens"], **{"7": dict(recovery, keyslots=[])}))
+        value, why = host_probe.recovery_keyslots(orphaned)
         self.assertTrue(value, why)
         self.assertIn("recovery keyslot 2", why)
         self.assertIn("systemd-tpm2 in keyslot 1", why)

@@ -33,9 +33,22 @@ cryptographic primitive.
     with one or two sets: CURRENT, and NEXT while an update rolls through the nodes (measurements.py
     builds these from the document the membership manifest commits to). A quote is accepted when it
     matches one set whole, its PCR values and its firmware version together; the verdict names the
-    set, and the verifier's state remembers the set and the epoch of each node's last accepted quote
-    (rollout.py reads that). Never more than two: a list that only grows is how a retired image
+    set, and the verifier's state remembers the set, the epoch and the boot phase of each node's last
+    accepted quote (rollout.py reads that). Never more than two: a list that only grows is how a retired image
     stays accepted. All sets of a node select the same PCRs, since the node quotes one selection.
+
+    PCR VALUES PER BOOT PHASE (#57, #156). On a host that boots a unified kernel image, systemd extends
+    PCR 11 as the boot passes its phases, so ONE image has two PCR 11 values at the two moments a peer
+    judges it: in the initrd, when the node asks for its disk to be unlocked, and once booted, when it
+    asks for a runtime lease. A set may therefore give some PCRs per phase, beside the ones that hold
+    one value throughout:
+      {"label": ..., "tpm_firmware_version": ..., "pcrs": {"7": ...},
+       "phases": {"initrd": {"11": "<64 hex>"}, "system": {"11": "<64 hex>"}}}
+    and verify() is told which phase the request must come from (PHASES). A quote that is the image's
+    OTHER phase is refused, and the refusal says so: a booted system does not get a disk key, and an
+    initrd does not get a lease. A set with no "phases" has one value per PCR, whatever the phase (a
+    host that does not boot a UKI, whose PCR 11 never moves). A policy with per-phase sets refuses a
+    verification that names no phase.
 
     state (what the verifier has learned; 0600, updated under a lock):
       enrolled AKs, outstanding nonces (single use, 120 s), each node's last accepted counters and
@@ -61,6 +74,10 @@ import time
 POLICY_SCHEMA = "regalia-kms/attest-policy/v1"
 MAX_SETS = 2          # CURRENT and NEXT; see the module text
 SET_KEYS = ("label", "tpm_firmware_version", "pcrs")
+# The phases a node is judged in, and what it may ask for there: "initrd" an unlock (replacement.may_unlock),
+# "system" a runtime lease (lease.issue). Which systemd phase path each one is belongs to the image's build
+# record (#57): enter-initrd, and enter-initrd:leave-initrd:sysinit:ready.
+PHASES = ("initrd", "system")
 STATE_SCHEMA = "regalia-kms/attest-state/v1"
 TRANSCRIPT_LABEL = b"regalia-kms/attest/v1"
 MAX_BYTES = 128 * 1024
@@ -217,15 +234,44 @@ def is_hex(value, n):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % n, value) is not None
 
 
-def validate_set(entry, label):
-    """One measurement set: a TPM firmware version and the expected value of each selected PCR."""
-    require(is_hex(entry["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
-    pcrs = entry["pcrs"]
-    require(isinstance(pcrs, dict) and pcrs, "%s.pcrs must expect at least one PCR" % label)
+def _validate_pcrs(pcrs, label):
+    require(isinstance(pcrs, dict) and pcrs, "%s must expect at least one PCR" % label)
     for index, value in pcrs.items():
         # [0-9], not \d: \d also matches the digits of other scripts, and int() reads them ("1" + ARABIC-INDIC ONE is 11)
-        require(isinstance(index, str) and re.fullmatch(r"0|[1-9][0-9]?", index) and int(index) <= 23, "%s.pcrs: %r is not a PCR 0-23" % (label, index))
-        require(is_hex(value, 64), "%s.pcrs.%s must be 64 lowercase hex" % (label, index))
+        require(isinstance(index, str) and re.fullmatch(r"0|[1-9][0-9]?", index) and int(index) <= 23, "%s: %r is not a PCR 0-23" % (label, index))
+        require(is_hex(value, 64), "%s.%s must be 64 lowercase hex" % (label, index))
+
+
+def validate_set(entry, label):
+    """One measurement set: a TPM firmware version and the expected value of each selected PCR, some of
+    them per boot phase (the module text)."""
+    require(is_hex(entry["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
+    _validate_pcrs(entry["pcrs"], "%s.pcrs" % label)
+    if "phases" not in entry:
+        return
+    phases = exact_keys(entry["phases"], PHASES, "%s.phases" % label)
+    for phase in PHASES:
+        _validate_pcrs(phases[phase], "%s.phases.%s" % (label, phase))
+    require(set(phases[PHASES[0]]) == set(phases[PHASES[1]]), "%s.phases: the two phases give different PCRs; a node quotes one selection" % label)
+    both = sorted(set(entry["pcrs"]) & set(phases[PHASES[0]]), key=int)
+    require(not both, "%s: PCR %s is given once for every phase and again per phase" % (label, ", ".join(both)))
+    # the same values in both phases would let the request of one phase pass as the other's
+    require(phases[PHASES[0]] != phases[PHASES[1]], "%s.phases: the two phases hold the same values; a PCR that does not move "
+            "between them belongs in pcrs" % label)
+
+
+def selection(entry):
+    """The PCRs a node on this set quotes: the ones with one value, and the ones given per phase."""
+    return sorted(int(i) for i in set(entry["pcrs"]) | set(entry.get("phases", {}).get(PHASES[0], {})))
+
+
+def values(entry, phase):
+    """The expected value of every selected PCR in `phase` (None: the set must have no per-phase PCR)."""
+    return dict(entry["pcrs"], **entry["phases"][phase]) if "phases" in entry else dict(entry["pcrs"])
+
+
+def _measurements(entry):
+    return (entry["tpm_firmware_version"], entry["pcrs"], entry.get("phases"))
 
 
 def validate_sets(sets, label):
@@ -234,14 +280,22 @@ def validate_sets(sets, label):
             "%s.accepted must hold one or two measurement sets (CURRENT, and NEXT during an update)" % label)
     for i, entry in enumerate(sets):
         here = "%s.accepted[%d]" % (label, i)
-        exact_keys(entry, SET_KEYS, here)
+        require(isinstance(entry, dict), "%s must be an object" % here)
+        exact_keys(entry, SET_KEYS + (("phases",) if "phases" in entry else ()), here)
         require(isinstance(entry["label"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,48}", entry["label"]), "%s.label must be a short plain name" % here)
         validate_set(entry, here)
     if len(sets) == 2:
         require(sets[0]["label"] != sets[1]["label"], "%s.accepted: two sets share the label %r" % (label, sets[0]["label"]))
-        require(set(sets[0]["pcrs"]) == set(sets[1]["pcrs"]), "%s.accepted: the two sets select different PCRs; a node quotes one selection" % label)
-        require((sets[0]["tpm_firmware_version"], sets[0]["pcrs"]) != (sets[1]["tpm_firmware_version"], sets[1]["pcrs"]),
-                "%s.accepted: the two sets are the same measurements under two labels" % label)
+        # compared as selections: during the move to a UKI, CURRENT gives PCR 11 once and NEXT gives it per phase
+        require(selection(sets[0]) == selection(sets[1]), "%s.accepted: the two sets select different PCRs; a node quotes one selection" % label)
+        require(_measurements(sets[0]) != _measurements(sets[1]), "%s.accepted: the two sets are the same measurements under two labels" % label)
+        # ... and no phase of one may read as a phase of the other: the label a quote is given would be a guess
+        seen = {}
+        for entry in sets:
+            for phase in (PHASES if "phases" in entry else (None,)):
+                key = (entry["tpm_firmware_version"], tuple(sorted(values(entry, phase).items())))
+                require(seen.setdefault(key, entry["label"]) == entry["label"], "%s.accepted: %r and %r hold the same PCR values "
+                        "in one of their phases" % (label, seen[key], entry["label"]))
 
 
 def validate_policy(doc):
@@ -394,11 +448,17 @@ class Verifier:
             save()
         return nonce
 
-    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature):
+    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature, phase=None):
         """A quote for one boot session. `node_id`, `epoch` and `nonce` are what THIS verifier holds (the
         node it is talking to, its manifest epoch, the nonce it issued); the session ID and the ephemeral
-        key are what the node sent. Returns the verdict, or raises Refused with the reason."""
+        key are what the node sent. `phase` is the boot phase the request must come from (PHASES): what
+        the CALLER is deciding, never something the node said. Returns the verdict, or raises Refused
+        with the reason."""
         expected = self.node(node_id)
+        require(phase is None or (isinstance(phase, str) and phase in PHASES), "the phase must be one of %s" % ", ".join(PHASES))
+        phased = [s["label"] for s in expected["accepted"] if "phases" in s]
+        require(phase is not None or not phased, "the accepted measurements of %s are per boot phase (%s): the verification must "
+                "name the phase the request comes from" % (node_id, ", ".join(phased)))
         check_session(node_id, epoch, session_id, ephemeral_public, nonce)
         require(len(quote) <= 1024 and len(signature) <= 256, "the quote or its signature is oversized")
         with locked_state(self.state_path) as (state, save):
@@ -417,25 +477,36 @@ class Verifier:
             require(hmac.compare_digest(q["extra_data"], qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce)),
                     "the quote is not bound to this transcript (node ID, manifest epoch, boot session ID, ephemeral key, nonce)")
             sets = expected["accepted"]
-            selection = sorted(int(i) for i in sets[0]["pcrs"])       # the same for every set of a node
-            require(q["pcrs"] == selection, "the quote covers PCRs %s, not the expected %s" % (q["pcrs"], selection))
+            selected = selection(sets[0])                              # the same for every set of a node
+            require(q["pcrs"] == selected, "the quote covers PCRs %s, not the expected %s" % (q["pcrs"], selected))
             # One set must match WHOLE: its PCR values and its firmware version together. A new image
             # under the old TPM firmware's set, or the reverse, is a combination nobody approved.
-            on_pcrs = [s for s in sets if hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(s["pcrs"]))]
+            on_pcrs = [s for s in sets if hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(values(s, phase)))]
+            matched = [s for s in on_pcrs if q["firmware_version"] == s["tpm_firmware_version"]]
+            if not matched and phase is not None:
+                # an accepted image, whole, in its other phase: say so, since "not the expected values" or "not
+                # the recorded firmware" would send an operator looking for a wrong image or a wrong TPM
+                other = PHASES[1 - PHASES.index(phase)]
+                elsewhere = [s["label"] for s in sets if "phases" in s and q["firmware_version"] == s["tpm_firmware_version"]
+                             and hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(values(s, other)))]
+                require(not elsewhere, "the node is in the %s phase of %s; this request is accepted only from the %s phase"
+                        % (other, elsewhere[0] if elsewhere else "", phase))
             require(on_pcrs, "the quoted PCR digest is not the expected PCR values" if len(sets) == 1 else
                     "the quoted PCR digest is none of the accepted measurement sets (%s)" % ", ".join(s["label"] for s in sets))
-            matched = [s for s in on_pcrs if q["firmware_version"] == s["tpm_firmware_version"]]
             require(matched, "the TPM firmware version %s is not the recorded %s" % (
                 q["firmware_version"], " or ".join(s["tpm_firmware_version"] for s in on_pcrs)))
             self.check_counters(record, q, session_id, ephemeral_public)
-            # Which set, and under which manifest epoch: what a rollout asks before it retires CURRENT.
-            record["measurement"] = {"label": matched[0]["label"], "epoch": epoch}
+            # Which set, under which manifest epoch, and in which phase: what a rollout asks before the next
+            # node reboots and before it retires CURRENT. A node verified in its initrd has asked for its disk;
+            # it is not yet a node that came up (rollout.py counts only "system" where the set is per phase).
+            seen_phase = phase if "phases" in matched[0] else None
+            record["measurement"] = {"label": matched[0]["label"], "epoch": epoch, "phase": seen_phase}
             save()
         # ak_name: the AK this quote was verified under, read inside the same lock as the verification, so
         # a caller that requires a particular AK (a runtime lease, lease.py) compares what was actually used
         return {"node": node_id, "epoch": epoch, "session_id": session_id.hex(), "ak_name": ak_name.hex(), "reset_count": q["reset_count"],
                 "restart_count": q["restart_count"], "clock": q["clock"], "clock_safe": bool(q["safe"]), "pcrs": q["pcrs"],
-                "measurement": matched[0]["label"]}
+                "measurement": matched[0]["label"], "phase": seen_phase}
 
     @staticmethod
     def check_counters(record, q, session_id, ephemeral_public):
@@ -575,6 +646,7 @@ def main(argv=None):
     c = sub.add_parser("verify", help="verifier: decide on a quote")
     verifier_args(c, node=False)
     session_args(c)
+    c.add_argument("--phase", choices=PHASES, help="the boot phase the request must come from; required when the node's sets are per phase")
     a = p.parse_args(argv)
 
     try:
@@ -601,7 +673,7 @@ def main(argv=None):
             print(v.nonce(a.node_id).hex())
         else:
             verdict = v.verify(a.node_id, a.epoch, unhex(a.session_id, "--session-id"), read(a.ephemeral_public, 512),
-                               unhex(a.nonce, "--nonce"), read(a.quote, 1024), read(a.signature, 256))
+                               unhex(a.nonce, "--nonce"), read(a.quote, 1024), read(a.signature, 256), phase=a.phase)
             print("ACCEPTED " + json.dumps(verdict, sort_keys=True))
         return 0
     except (Refused, OSError) as refusal:

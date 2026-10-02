@@ -41,7 +41,7 @@ for t in ykman systemd-creds systemd-run age age-keygen go python3 openssl; do c
 sudo -n true 2>/dev/null || die "needs sudo (systemd-creds and the service run as root); run 'sudo -v' first"
 
 # ---- the gate: two registered staging YubiKeys, proven by the key in 9A ----------------------------
-registered(){ python3 - "$HSM_STAGING_REGISTRY_FILE" "$1" <<'PY'
+registered(){ python3 -I - "$HSM_STAGING_REGISTRY_FILE" "$1" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 m = [x for x in d["devices"] if x.get("kind") == "yubikey-piv" and x.get("token_serial") == sys.argv[2] and x.get("role") == "staging"]
@@ -69,7 +69,7 @@ usb_of_yubikey(){ local d; for d in /sys/bus/usb/devices/*; do
   done; return 1; }
 authorize(){ echo "$2" | sudo tee "$1/authorized" >/dev/null; sleep 3; }
 # Change a card's PIN; both PINs on stdin to a pty-driven ykman, never argv.
-change_pin(){ OLD="$2" NEW="$3" python3 - "$1" <<'PY'
+change_pin(){ OLD="$2" NEW="$3" python3 -I - "$1" <<'PY'
 import os, pty, re, select, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
@@ -142,7 +142,7 @@ say "R1 — seal the primary's PIN (v1) and serve through it"
 printf '%s' "$YK_PIN_PRIMARY" | seal yubi-drill.pin "$STATE/v1.cred"
 phase serve "$PRIMARY" "$STATE/v1.cred" || die "v1 did not serve"; counters
 say "R2 — rotate: new PIN on the card, sealed as v2 BEFORE anything restarts"
-NEWPIN="$(python3 -c 'import secrets; print("".join(secrets.choice("0123456789") for _ in range(8)))')"
+NEWPIN="$(python3 -I -c 'import secrets; print("".join(secrets.choice("0123456789") for _ in range(8)))')"
 printf '%s' "$NEWPIN" | age -r "$BG" -o "$STATE/rotated.age"   # so a failed run can still restore it
 change_pin "$PRIMARY" "$YK_PIN_PRIMARY" "$NEWPIN" >/dev/null 2>&1 || die "PIN change on $PRIMARY"
 # Only now is the card's PIN the rotated one. Set earlier, a failed change would make the restore

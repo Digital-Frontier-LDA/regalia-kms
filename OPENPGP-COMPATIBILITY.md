@@ -32,8 +32,9 @@ daemon starts. RSA keys belong on an HSM.
 
 **What the host needs.**
 - The `card_atr` block of [`deploy/opensc/yubikey-openpgp.conf`](deploy/opensc/yubikey-openpgp.conf)
-  in `/etc/opensc/opensc.conf`, or that file named by `OPENSC_CONF`: OpenSC presents a YubiKey as
-  PIV unless told otherwise.
+  in the OpenSC configuration the daemon is started with: OpenSC presents a YubiKey as PIV unless
+  told otherwise. The shipped unit names `/etc/regalia-kms/opensc.conf` with `OPENSC_CONF`, so
+  that is where it goes; under that unit the daemon no longer reads `/etc/opensc/opensc.conf`.
 - A `local-usb` entry for the token in the secure-channel evidence
   ([`config/secure-channel.example.json`](config/secure-channel.example.json)). The applet has no
   secure messaging, so the SmartCard-HSM attestation would be false for it. The operator attests

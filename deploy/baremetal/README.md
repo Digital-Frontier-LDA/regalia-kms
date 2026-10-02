@@ -11,6 +11,11 @@ Commissioning has two halves:
   signed by the commissioning evidence key, which is trusted only by its recorded SHA-256). It exits 1
   unless every measured control is true AND the evidence is valid and agrees (section 5).
 
+> **Every Python command in this document is written `python3 -Es …`, and is meant to be typed that
+> way.** `-E` ignores the `PYTHON*` variables of the shell it is typed in and `-s` ignores the user's
+> own site-packages, so nothing left in root's environment or under `~/.local` runs inside a tool that
+> signs commissioning evidence or renders the firewall. Run them from the checkout's top directory.
+
 ## 1. Intake of a used server (before trusting it)
 
 1. Update the **System ROM** and **iLO 4** firmware from HPE's signed packages (the Service Pack for
@@ -82,7 +87,7 @@ Commissioning has two halves:
   `root_disk_recovery_keyslot` (exactly one recovery keyslot, of its own, and no keyslot left that no
   token names, such as the installer's passphrase). The probe reads the LUKS2 header only and never
   asks for the key. After **any** use of the key, a rehearsal included: `recovery-key.sh --replace`
-  with a new key from a new escrow.
+  with a new key printed by the ceremony disc's `pin-escrow.sh --new-recovery-key` (never invented by hand); escrow it only after `--replace` and `--check` have succeeded.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
@@ -140,7 +145,7 @@ Commissioning has two halves:
   (`deploy/baremetal/admission.py`) reports that this node holds a runtime lease: without one,
   `/v1/health/ready` is 503 and every key operation is a 503 `DEPENDENCY_UNAVAILABLE`, audited as
   `not-admitted`. `/run/regalia` must be root's, mode 0755, and the two files in it root's, mode 0644.
-  `python3 -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
+  `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
   it asked for after the token was back (after the daemon's own start, for a restart): until then that
@@ -152,10 +157,66 @@ Commissioning has two halves:
   PIN-block reset, as any failed login does. This holds for every key the daemon serves: the HSM's, a
   YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
+- **Authenticated time (`authtime.py`; the unit is NOT BUILT yet, #80).** Every expiry here (a
+  heartbeat's, a lease's) is judged against the clock, so the clock itself must be vouched for. It counts
+  as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
+  (declare servers of independent operators, so that no single operator can move the clock; with
+  exactly two, one operator's outage stops the nodes, so declare **three**), with no source that was not
+  declared or is not NTS, an update within the last hour, and no correction pending. `authtime.conf()`
+  renders the **whole** `chrony.conf`: no `pool`, no `sourcedir` (the distribution's default takes
+  servers from DHCP that way), no `refclock`; and chronyd must be the only thing on the host that sets
+  the clock (no systemd-timesyncd beside it). A host whose RTC is far off never authenticates, because
+  NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
+  service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
+  services believe it for 60 s.
+  **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
+  node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
+  intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
+  for the time itself; an outage of the NTS servers, or of that path, longer than those bounds stops the
+  nodes. Proven against live chrony daemons in `e2e/authtime-chrony-nts.py`.
+
+### OpenSC leaves the YubiKey to the PIV backend
+
+A host whose daemon serves both an HSM (PKCS#11, through OpenSC) and YubiKey PIV keys needs OpenSC
+told to ignore the YubiKey's reader. The PIV backend opens the card for itself alone, and OpenSC
+keeps a connection to every card it is not told to ignore: with OpenSC's defaults the daemon's own
+PKCS#11 module locks its PIV backend out (measured, regalia#541).
+
+- Install `deploy/opensc/ignore-yubikey.conf` as `/etc/regalia-kms/opensc.conf` (`root:root`, `0644`).
+  The shipped unit starts the daemon with `OPENSC_CONF` naming that path, and the AppArmor profile
+  already allows reading it.
+- **The daemon then reads that file and not `/etc/opensc/opensc.conf`.** Anything a host had put in
+  the system file for the daemon (a `card_atr` block for the OpenPGP applet, a slot limit) must move
+  to `/etc/regalia-kms/opensc.conf`, or it stops applying when the new unit is installed.
+- On an HSM-only host install the same file: ignoring a reader that is not there changes nothing.
+  If the file is missing, OpenSC uses its defaults (measured): the HSM is served as before, and a
+  host that also has PIV cards is refused at startup as described next.
+- **The daemon checks the effect at startup.** After its module has looked at the readers, every
+  configured PIV card must still open. A card that cannot be opened **while another connection
+  holds a YubiKey's reader** stops the daemon, with a message naming this setting: that is this
+  misconfiguration, or another process using the card, and neither heals by waiting. (The HSM's
+  reader does not count: the module holds it by design.) A card that is simply **not attached**
+  is a warning and the daemon starts, as it does with an HSM unplugged: the HSM's keys must not
+  go down for a missing YubiKey.
+- **What the startup check cannot see** is a YubiKey attached later to a daemon that started
+  without the setting. Its requests then fail, and the daemon logs the cause (an error, once a
+  minute at most, naming every configured card that is missing: a held reader cannot be asked
+  which card is in it) instead of leaving a bare "unavailable"; it does not stop. The host probe
+  below is what catches that host before the card is ever attached.
+- One host's YubiKeys then serve PIV only, not the OpenPGP applet through OpenSC
+  (`deploy/opensc/yubikey-openpgp.conf` asks OpenSC to drive the card; this asks it not to).
+
+Measured: `kms_opensc_leaves_piv_cards` (when the configuration the unit starts the daemon with names
+both a PKCS#11 module and YubiKey PIV devices, the unit's `Environment=` carries `OPENSC_CONF`, and
+in that file the block `opensc-pkcs11.so` reads, `app opensc-pkcs11` if there is one and else
+`app default`, has an `ignored_readers` entry naming a YubiKey's reader). The block and the statement
+are chosen as OpenSC chooses them, and a file that is not well formed (braces that do not balance,
+a list not ended by `;`) fails the control rather than being guessed at. An `EnvironmentFile=` on
+the unit fails it too: what it sets is not seen.
 
 ### Host firewall (default deny, both directions)
 
-The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` for a single-site
+The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` and `"service_mesh": null` for a single-site
 host, section 7 otherwise) declares the host's address, the
 KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
 (the audit and NTP sinks at least). From it:
@@ -165,7 +226,7 @@ install -d -m 0755 /etc/nftables.d
 # Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
 # a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
 tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
-if python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
+if python3 -Es deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
   chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
 else
   rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
@@ -189,7 +250,7 @@ Measured: `firewall_default_deny` (the table is loaded, with input, output and f
 drop). Checked by behaviour from each zone after commissioning:
 
 ```sh
-python3 deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
+python3 -Es deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
 ```
 
 (`monitoring`, `admin`, `unauthorized` likewise). `e2e/baremetal-firewall-netns.sh` runs the whole
@@ -228,7 +289,7 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
-4. **Attestation key (three-site, #65):** `python3 deploy/baremetal/attest.py node-init --out DIR`
+4. **Attestation key (three-site, #65):** `python3 -Es deploy/baremetal/attest.py node-init --out DIR`
    creates the EK and a restricted AK and exports their public areas; a peer enrolls the AK with
    `challenge` / `node-activate` / `enroll` and then verifies quotes with `nonce` / `node-quote` /
    `verify`. Proven on a software TPM (`e2e/tpm-attest-swtpm.sh`); the PCRs to expect and the EK
@@ -245,7 +306,22 @@ commits to: the manifest's `policy_version` is a digest of the document (174 bit
 peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
 restored disk cannot roll back: the epoch is anchored in the TPM).
 
-Each node has one accepted set, or two while an update is under way. An update is three documents:
+Each node has one accepted set, or two while an update is under way.
+
+**One image, two PCR 11 values.** On a host that boots a unified kernel image, systemd extends PCR 11
+as the boot passes its phases. So the same image measures one PCR 11 in the initrd, where the node asks
+a peer for its disk, and another once booted, where it asks for a runtime lease. A set therefore gives
+PCR 11 **per phase** (`"phases": {"initrd": {"11": …}, "system": {"11": …}}`, both values from the
+image's build record), and a peer accepts each request from its own phase only: **an unlock from the
+initrd, a lease from the booted system.** A booted system that asks for a disk key is refused, on an
+approved image too. A set with one value per PCR (a host that does not boot a UKI) is judged the same in
+both. The peer's record of a node says in which phase it last saw it, and **"back on the new image"
+means seen up**: a node verified only in its initrd has asked for its disk and may never have come up,
+so it does not let the next node reboot and does not count towards retiring the old image.
+Until this was added, a set held one PCR 11 value and a real UKI host would have been refused at
+one of the two requests; the software-TPM tests extended PCR 11 once and did not show it.
+
+An update is three documents:
 
 | Step | Document | The root signs | What works |
 |---|---|---|---|
@@ -306,7 +382,7 @@ Sign the evidence with the commissioning evidence key (`openssl dgst -sha256 -si
 E.json.sig E.json`), then:
 
 ```sh
-sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
   --evidence-key commissioning-p256.pem --evidence-key-sha256 <recorded fingerprint>
 ```
 
@@ -354,7 +430,8 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 - **The peer** (`deploy/baremetal/unlock.py`, on a booted host): the host sends a fresh TPM quote for
   this boot; the peer decides with `replacement.may_unlock`, and answers with its half encrypted to
   this boot's one-time key and signed by its own TPM. A captured exchange is useless in another boot.
-- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary; `unlock.py` also holds a
+- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary that talks to the TPM through
+  `go-tpm`, the standard Go library for it; `unlock.py` also holds a
   reference client that the tests use and that is not shipped). It holds no manifest and makes no
   membership decision. It runs no other program and writes no file:
   - systemd unseals the local half with the TPM and passes it as the unit's credential
@@ -434,6 +511,23 @@ a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network na
   refused at attestation, by the peer, against current measurements.
 - A WireGuard configuration is applied with its private key added in memory (`bootnet.with_key`),
   never without it: `wg syncconf` with a file that has no key unsets the interface's key.
+
+**The service mesh (#80).** The running services of the three nodes talk over a second WireGuard
+interface, `wg-svc` (the site config's `service_mesh`; it needs a `boot_mesh`, whose node ID and
+underlay addresses it uses). Inside it every address is derived from a node's WireGuard key, in one
+fixed prefix (`sitecfg.SERVICE_PREFIX`), so the site config names none of them. The host firewall gains,
+and only with a `service_mesh`:
+
+- WireGuard (its UDP port) with the peers' declared addresses, and the revocation authority's if one is
+  configured;
+- the sync port inside the tunnel, only between addresses of that prefix, in both directions;
+- **nothing else on that interface**, IPv4 or IPv6, in or out: the rule that drops the rest of the
+  interface comes before every zone rule, so a zone's address inside the tunnel opens nothing.
+
+It is the only IPv6 the host carries. Proven by behaviour, with real WireGuard, in section 5 of
+`e2e/baremetal-firewall-netns.sh`: a source outside the prefix, another port, the sync port on the
+wire, a client-zone address inside the tunnel, and a valid key at an undeclared address each get
+nothing.
 
 Not there yet, so **nothing here is to be run on a KMS host**: measured boot with a unified kernel
 image (a changed or retired initrd refused on a real boot), the commands an operator types to enrol a
