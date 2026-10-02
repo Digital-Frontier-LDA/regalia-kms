@@ -24,6 +24,9 @@ func completeSettings(t *testing.T) config.Config {
 		PolicyPath:       shippedExample(t, "policy.example.json"),
 		PolicyStatePath:  filepath.Join(dir, "policy-state.jsonl"),
 		OperationTimeout: 15_000_000_000, ShutdownTimeout: 10_000_000_000, MaxConcurrentOperations: 4,
+		// Stated because the fixtures built on this one configure a token; these tests run with no
+		// lease service, which is what the lab value is for.
+		RuntimeAdmission: config.RuntimeAdmissionDisabledForLab,
 	}
 }
 
