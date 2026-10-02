@@ -99,7 +99,7 @@ func baoConfig(t *testing.T, dir, address, cluster, pluginDigest string, c map[s
 	t.Helper()
 	var text strings.Builder
 	fmt.Fprintf(&text, "api_addr = %q\ncluster_addr = %q\nplugin_directory = %q\nlog_level = \"warn\"\n", "http://"+address, "https://"+cluster, dir)
-	fmt.Fprintf(&text, "storage \"raft\" {\n path = %q\n node_id = \"synthetic-poc-node\"\n}\nlistener \"tcp\" {\n address = %q\n cluster_address = %q\n tls_disable = true\n}\n", filepath.Join(dir, "storage"), address, cluster)
+	fmt.Fprintf(&text, "storage \"raft\" {\n path = %q\n node_id = %q\n}\nlistener \"tcp\" {\n address = %q\n cluster_address = %q\n tls_disable = true\n}\n", filepath.Join(dir, "storage"), filepath.Base(dir), address, cluster)
 	fmt.Fprintf(&text, "plugin \"kms\" \"regalia-poc\" {\n command = \"openbao-plugin-kms-regalia-poc\"\n version = \"v0.0.1\"\n sha256sum = %q\n}\nseal \"regalia-poc\" {\n", pluginDigest)
 	for _, key := range []string{"kms_url", "server_name", "ca_path", "certificate_path", "private_key_path", "object_id", "repository", "path", "environment", "kms_purpose", "timeout"} {
 		fmt.Fprintf(&text, " %s = %q\n", key, c[key])
@@ -136,6 +136,10 @@ func (b baoAPI) call(method, path string, input any) (int, []byte, error) {
 		}
 		body = bytes.NewReader(encoded)
 	}
+	return b.callBody(method, path, body, "application/json")
+}
+
+func (b baoAPI) callBody(method, path string, body io.Reader, contentType string) (int, []byte, error) {
 	req, err := http.NewRequest(method, b.base+path, body)
 	if err != nil {
 		return 0, nil, err
@@ -143,13 +147,16 @@ func (b baoAPI) call(method, path string, input any) (int, []byte, error) {
 	if b.token != "" {
 		req.Header.Set("X-Vault-Token", b.token)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	response, err := b.client.Do(req)
 	if err != nil {
 		return 0, nil, err
 	}
 	defer response.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	data, err := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
+	if len(data) > 2<<20 {
+		return response.StatusCode, nil, fmt.Errorf("synthetic response exceeds test limit")
+	}
 	return response.StatusCode, data, err
 }
 
@@ -216,6 +223,20 @@ func (b baoAPI) assertValue(t *testing.T) {
 	}
 }
 
+func (b *baoAPI) initialize(t *testing.T) {
+	t.Helper()
+	init := b.must(t, http.MethodPost, "/v1/sys/init", map[string]int{"recovery_shares": 1, "recovery_threshold": 1})
+	defer clear(init)
+	var initialized struct {
+		RootToken string `json:"root_token"`
+	}
+	if json.Unmarshal(init, &initialized) != nil || initialized.RootToken == "" {
+		t.Fatal("initialization returned no token")
+	}
+	b.token = initialized.RootToken
+	b.wait(t, true, false)
+}
+
 func (b baoAPI) assertBlocked(t *testing.T, p *baoProcess) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -272,16 +293,7 @@ func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
 	b := baoAPI{base: "http://" + address, client: &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 30 * time.Second}}
 	p := startBao(t, binary, config, dir)
 	b.wait(t, false, true, p)
-	init := b.must(t, http.MethodPost, "/v1/sys/init", map[string]int{"recovery_shares": 1, "recovery_threshold": 1})
-	var initialized struct {
-		RootToken string `json:"root_token"`
-	}
-	if json.Unmarshal(init, &initialized) != nil || initialized.RootToken == "" {
-		t.Fatal("initialization returned no token")
-	}
-	clear(init)
-	b.token = initialized.RootToken
-	b.wait(t, true, false)
+	b.initialize(t)
 	b.must(t, http.MethodPost, "/v1/sys/mounts/poc", map[string]any{"type": "kv", "options": map[string]string{"version": "2"}})
 	// KV mounts start as v1 and upgrade asynchronously; poll a read-only endpoint
 	// before writing once, rather than retrying an ambiguous write.
@@ -339,8 +351,12 @@ func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
 	p = startBao(t, binary, config, dir)
 	b.wait(t, true, false)
 	b.assertValue(t)
+	snapshot := b.must(t, http.MethodGet, "/v1/sys/storage/raft/snapshot", nil)
+	defer clear(snapshot)
 	p.stop(t)
-	for _, sensitive := range []string{b.token, syntheticValue} {
+	bootstrapToken := b.restoreToFreshNode(t, binary, dir, pluginBytes, hex.EncodeToString(digest[:]), snapshot, f)
+	wrongKeyToken := b.rejectWrongKeyRestore(t, binary, dir, pluginBytes, hex.EncodeToString(digest[:]), snapshot)
+	for _, sensitive := range []string{b.token, bootstrapToken, wrongKeyToken, syntheticValue} {
 		err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -361,5 +377,5 @@ func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Logf("OpenBao 2.7.1 + separate SDK plugin + real Regalia HTTP policy stack + software RSA: init, health checks, seal/restart, persisted KV, offline restart denial, unauthorized identity denial and recovery passed; successful wrap=%d unwrap=%d", f.audit.successful("wrap"), f.audit.successful("unwrap"))
+	t.Logf("OpenBao 2.7.1 + separate SDK plugin + real Regalia HTTP policy stack + software RSA: lifecycle, outage/identity denials, fresh-node snapshot restore/restart and wrong-key restore rejection passed; successful source-KMS wrap=%d unwrap=%d", f.audit.successful("wrap"), f.audit.successful("unwrap"))
 }

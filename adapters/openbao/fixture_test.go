@@ -157,6 +157,7 @@ func newKMSFixture(t *testing.T) *kmsFixture {
 	f.start()
 	pki.config["kms_url"] = f.server.URL
 	pki.strangerConfig["kms_url"] = f.server.URL
+	pki.restoreConfig["kms_url"] = f.server.URL
 	t.Cleanup(func() { f.server.Close() })
 	return f
 }

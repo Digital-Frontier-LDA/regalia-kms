@@ -44,6 +44,17 @@ process recovery, custody persistence or recovery with missing historical keys.
 OpenBao's plugin manager may respawn/retry a crashed plugin; ambiguous-operation
 reconciliation across that boundary remains unqualified.
 
+The recovery drill takes a real Raft snapshot, stops the source process and
+restores through the normal snapshot endpoint onto separately initialized, empty
+storage with a different node ID and newly issued mTLS credentials. It verifies
+the source token/data replace the target's initialization state, then restarts
+and checks authorized access and unauthorized-identity refusal. A separate KMS
+fixture with a different RSA key but the same logical object ID cannot restore
+that snapshot; its original target state remains usable. No force-restore
+endpoint is used. This proves a single-version software restore with the same
+original KMS key, not historical KEK routing, key rotation, recovery shares,
+hardware recovery or multi-node disaster recovery.
+
 Initial target: OpenBao 2.7.1, wrapping SDK 2.9.0, plugin SDK 2.4.0.
 External Keys, PKI, Transit, namespace grants, upgrades and production deployment
 remain separate qualification work.
@@ -69,7 +80,9 @@ and executes the plugin separately, initializes OpenBao, stores synthetic KV
 data, observes a periodic seal health check, seals/restarts, checks reads during
 a KMS listener outage, refuses offline and unauthorized restarts, then restores
 authorized access and checks that plaintext and the root token are absent from
-Raft storage and captured logs. All fixture identities/state are temporary.
+Raft storage and captured logs. It also exercises fresh-node snapshot restore,
+restored-node identity enforcement and rejection with different KMS key material.
+All fixture identities/state are temporary.
 `OPENBAO_POC_KEEP_FAILURE=1` optionally retains **synthetic** private debug
 artifacts on failure; remove the reported directory after inspection.
 
@@ -88,4 +101,6 @@ Upstream contracts:
 
 - https://openbao.org/docs/configuration/seal/
 - https://openbao.org/docs/configuration/plugins/
+- https://openbao.org/docs/commands/operator/raft/
+- https://github.com/openbao/openbao/blob/v2.7.1/website/content/docs/api/system/storage/raft.mdx
 - https://github.com/openbao/go-kms-wrapping/tree/v2.9.0
