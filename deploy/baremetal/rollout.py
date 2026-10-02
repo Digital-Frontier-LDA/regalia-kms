@@ -294,10 +294,17 @@ def _current(args):
     # The counter tells a shorter chain from the anchored one; only the TPM's record of the manifest digest
     # tells two root-signed chains of the SAME length apart (membership.Store.load refuses the other with
     # CONFLICT, and so must this). Both calls take HighWater's lock, which creates its lock file if absent.
-    require(anchor.verify(lambda epoch: membership.digest(manifests[epoch - 1]) if epoch else anchor.ZERO) == high_water,
-            "this host's TPM high-water moved during the check: run it again")
+    moved = "this host's TPM high-water moved during the check: run it again"
+
+    def digest_of(epoch):
+        # the node's service may commit between the two readings: the anchor then asks for an epoch this file lacks
+        require(epoch <= len(manifests), moved)
+        return membership.digest(manifests[epoch - 1]) if epoch else anchor.ZERO
+    require(anchor.verify(digest_of) == high_water, moved)
+    # No operator command completes the record: the node's service does, when it loads its membership at start.
     require(anchor.pinned(), "this host's TPM records the manifest at epoch %d, not yet the one at its high-water %d (the node's "
-            "service was interrupted while accepting it): let the service load its membership first" % (high_water - 1, high_water))
+            "service was interrupted while accepting it): restart the node's service, which completes the record when it "
+            "loads its membership" % (high_water - 1, high_water))
     return manifest, True
 
 
