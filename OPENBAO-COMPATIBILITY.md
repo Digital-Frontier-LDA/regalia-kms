@@ -1,9 +1,11 @@
 # OpenBao compatibility contract
 
-Contract version **1 (draft)**, for #120. It says what `openbao-plugin-kms-regalia` will support,
-against which upstream versions, and through which existing KMS operations. Nothing here is built
-yet: #121 implements auto-unseal, #122 External Keys, and #123 gates every claim below on a real
-OpenBao server. Until #123 passes for a row, that row is a design target and not a support claim.
+Contract version **2 (draft)**, for #120. It says what `openbao-plugin-kms-regalia` will support,
+against which upstream versions, and through which KMS operations. Version 2 changes one thing: a
+CA key signs only what the KMS has inspected (see "A CA key signs only what the KMS has read").
+Nothing here is built yet: #121 implements auto-unseal, #122 External Keys, and #123 gates every
+claim below on a real OpenBao server. Until #123 passes for a row, that row is a design target and
+not a support claim.
 
 OpenBao owns application authentication, authorization, namespaces, KV, leases and the PKI and
 Transit workflows. Regalia stays the custody boundary: it holds the keys and decides whether its
@@ -35,10 +37,11 @@ Version policy:
 The SDK lets one binary serve two interfaces (`ServeOpts.WrapperFactoryFunc` and
 `ServeOpts.KMSFactoryFunc`). They are separate features with separate keys, identities and grants.
 
-| Interface | OpenBao feature | Status in contract 1 |
+| Interface | OpenBao feature | Status in this contract |
 |---|---|---|
 | `wrapping.Wrapper` | Auto-unseal (`seal` stanza) | Supported, #121 |
-| `kms.KMS` / `kms.Key`: `Sign`, `Verify`, `ExportPublic` | External Keys for PKI and Transit signing | Supported with the limits below, #122 |
+| `kms.KMS` / `kms.Key`: `Sign`, `Verify`, `ExportPublic` with a signing key | External Keys for Transit signing | Supported with the limits below, #122 |
+| `kms.KMS` / `kms.Key`: `Sign`, `Verify`, `ExportPublic` with a CA key | External Keys for a PKI issuer | Supported **only with inspection by the KMS**, which the KMS does not serve yet (#122). Until it does, a PKI issuer is not supported. |
 | `kms.Key`: `Encrypt`, `Decrypt` | Transit encryption with an external key | **Not supported**: returns `kms.ErrNotImplemented` |
 | `wrapping.KeyExporter` | Exporting the seal key | **Never**: the KMS has no export |
 | SSH engine with external keys | | **Not claimed**: no upstream support to test against |
@@ -67,7 +70,7 @@ Why this pair and not `wrap`/`unwrap`:
   purpose, environment). A caller cannot choose it.
 - **No new server operation** is needed.
 
-Blob format, contract 1:
+Blob format (unchanged since contract 1):
 - `BlobInfo.Ciphertext` is the envelope document exactly as `seal-envelope` returned it
   (`regalia-envelope-v2`). `BlobInfo.Iv` is empty.
 - `BlobInfo.KeyInfo.KeyId` is `<object_id>@<kek_version>`, copied from the envelope's own KEK
@@ -102,9 +105,11 @@ party that can unwrap the data key can always read what it protects.
 | SDK call | What the plugin does | KMS operation |
 |---|---|---|
 | `KMS.Open` | Validates provider configuration and builds the mTLS client. Ignores `AllowEnvironment`: it never reads the environment. | none |
-| `KMS.GetKey` | Validates the key mapping (object, purpose, algorithm, pinned public key). No KMS call. | none |
-| `Key.Sign`, `Prehashed: true` | Sends the digest (ECDSA) or the PKCS #1 `DigestInfo` (RSA) with content type `application/vnd.regalia.digest`. Verifies the result against the pinned public key before returning it. | `sign` |
-| `Key.Sign`, `Prehashed: false` | ECDSA and RSA: hashes locally with the hash in `SignerOpts`, then as above. Ed25519: sends the message. | `sign` |
+| `KMS.GetKey` | Validates the key mapping (object, purpose, algorithm, `usage`, pinned public key). No KMS call. | none |
+| `Key.Sign` on a **signing key**, `Prehashed: true` | Sends the digest (ECDSA) or the PKCS #1 `DigestInfo` (RSA) with content type `application/vnd.regalia.digest`. Verifies the result against the pinned public key before returning it. | `sign` |
+| `Key.Sign` on a **signing key**, `Prehashed: false` | ECDSA and RSA: hashes locally with the hash in `SignerOpts`, then as above. Ed25519: sends the message. | `sign` |
+| `Key.Sign` on a **CA key**, `Prehashed: false` | Sends the complete to-be-signed certificate or CRL, unhashed, with content type `application/vnd.regalia.x509-tbs`. Never hashes locally. Verifies the result against the pinned public key. | `sign`, after the KMS has parsed the payload and checked it against the object's issuing profile |
+| `Key.Sign` on a **CA key**, `Prehashed: true` | **Refused** before any KMS call. The KMS refuses it too: a CA object's policy does not list the digest content type. | none |
 | `Key.Verify` | Verifies locally against the pinned public key. Returns `kms.ErrInvalidSignature` on a bad signature. | none |
 | `Key.ExportPublic` | Returns the pinned public key. | none |
 | `Key.Encrypt`, `Key.Decrypt` | Returns `kms.ErrNotImplemented`. | none |
@@ -116,38 +121,94 @@ converts ECDSA to ASN.1 DER and passes RSA and Ed25519 through.
 
 | Algorithm | `Sign` | Notes |
 |---|---|---|
-| ECDSA P-256 / SHA-256 | Supported | payload 32 bytes |
-| ECDSA P-384 / SHA-384 | Supported | payload 48 bytes |
-| RSA 2048, 3072, 4096, PKCS #1 v1.5 with SHA-256/384/512 | Supported | payload is the `DigestInfo` |
+| ECDSA P-256 / SHA-256 | Supported | signing key: payload 32 bytes |
+| ECDSA P-384 / SHA-384 | Supported | signing key: payload 48 bytes |
+| RSA 2048, 3072, 4096, PKCS #1 v1.5 with SHA-256/384/512 | Supported | signing key: payload is the `DigestInfo` |
 | RSA-PSS (`*rsa.PSSOptions`) | **Refused** | the KMS signs with `CKM_RSA_PKCS` only |
-| Ed25519 | Transit signing only, message ≤ 1024 bytes | measured limit of the applet through OpenSC; an Ed25519 **PKI issuer is not supported**, because a certificate's to-be-signed bytes are not bounded |
+| Ed25519 | Transit signing only, message ≤ 1024 bytes | measured limit of the applet through OpenSC; an Ed25519 **PKI issuer is not supported**, because a certificate's to-be-signed bytes exceed that limit |
 | ECDSA or RSA with a hash that does not match the key's policy | **Refused** | one key, one hash |
+
+A key mapping declares its `usage`: `signing` (Transit) or `x509-ca` (a PKI issuer). The declaration
+selects the plugin's behaviour above; it is not what protects the key. The KMS object's own policy
+lists exactly one content type, so a CA object signs nothing but inspected X.509 structures whatever
+the mapping says.
 
 A key mapping names **one immutable generation**: the object and the SHA-256 of its public key. If
 the key behind the object changes, every signature fails the pinned-key check and the mapping must
 be replaced deliberately. Deleting a mapping or a config in OpenBao deletes nothing in the KMS.
 
-### PKI is `sign`, not `certificate-sign`
+### A CA key signs only what the KMS has read
 
-OpenBao's PKI engine builds the certificate itself and asks its signer for a signature over a
-digest. That maps to `sign`. It does **not** map to `certificate-sign`, which takes a CSR and issues
-from a profile the KMS chooses.
+OpenBao's PKI engine builds the certificate itself and asks its signer for a signature. That is
+`sign`, not `certificate-sign`, which takes a CSR and issues from a profile the KMS chooses.
 
-The consequence is a trust-boundary fact, not an implementation detail: with a digest, the KMS
-cannot see what is being signed. For a CA key reachable through this plugin, **OpenBao decides what
-that CA signs**, and the KMS's purpose policy can bound only who asks, how often, and the payload
-size. So:
-- A CA key exposed to OpenBao is an **intermediate** created for that purpose, constrained by the
-  certificate that the ceremony issued for it (path length, name constraints, lifetime). Those
-  constraints are what holds if OpenBao is compromised.
-- Root keys and keys with their own purpose policy are never mapped. In particular a release-signing
-  key is **not** an External Key: that would bypass the approval it requires.
-- Public ACME issuance stays outside the KMS and outside this plugin
-  ([`CERTIFICATES.md`](CERTIFICATES.md)). The internal ACME flow in #122 is OpenBao's PKI engine
-  using an intermediate mapped as above.
+Contract 1 sent the KMS a digest, and with a digest the KMS cannot see what it signs: OpenBao alone
+decided what a mapped CA signed, with no approval and no inspection. That was a choice, not a limit
+of the interface. OpenBao wraps an external key with `kms.NewSigner`, which implements
+`crypto.MessageSigner`, and Go's `x509.CreateCertificate` and `CreateRevocationList` hand a
+`MessageSigner` the **complete to-be-signed bytes** (`Prehashed: false`). So the rule is the one
+[`POLICY.md`](POLICY.md) already applies to Cosmos transactions, where an opaque digest is never
+accepted in place of the thing being signed:
 
-Transit: an `external-key` Transit key signs and verifies through the mapping above. A normal Transit
-key stays a software key inside OpenBao and is not hardware-backed because this plugin is installed.
+- **The plugin forwards the to-be-signed certificate or CRL, whole.** It does not hash it.
+- **The KMS parses it and checks it against the issuing profile of that object, then hashes and
+  signs.** The profile is the server's, in the purpose policy:
+  - the issuer is this CA, and the signature algorithm named inside matches the key;
+  - `CA:false`, unless the profile allows a path length;
+  - every DNS, URI and IP name falls under a permitted suffix, and the subject is in an allowed form;
+  - the lifetime is at most the profile's maximum and starts no earlier than a small skew;
+  - key usages and extended key usages come from an allowlist;
+  - for a CRL: the issuer is this CA and the next update is within a bound.
+- **Anything the parser does not fully understand is refused**, including unknown critical
+  extensions. A new certificate shape needs a parser, policy and negative-test slice together, as a
+  new Cosmos message type does.
+- **A digest is refused for a CA key**, by the plugin and by the KMS. OCSP responses are signed over
+  a digest by `golang.org/x/crypto/ocsp` (to confirm in #122), so OCSP with a mapped CA key is not
+  supported; revocation is by CRL, or by a delegated responder key decided in #122.
+
+The KMS does not serve this yet. The content type, the parser and the profile are a new reviewed
+slice of #122, and **until they exist a PKI issuer is not supported**: there is no weaker mode to
+fall back to. #122 also has to show, on a real 2.7.1 server, that the full bytes reach the plugin for
+leaf issuance, for signing an intermediate, and for CRLs.
+
+Inspection bounds what OpenBao can make the CA sign. Three things bound the rest, and they hold
+even where inspection has a gap:
+
+- **The CA certificate itself.** A CA key mapped to OpenBao is an intermediate made for that
+  purpose: path length 0, name constraints to the names it serves, a short lifetime, one per
+  namespace or tenant tier. This is decided when the key is created at the ceremony.
+- **No trust path from that CA into the KMS.** The KMS's `tls_client_ca_path` and its approver keys
+  never chain to, and are never issued by, a CA that OpenBao can sign with. Otherwise a compromised
+  OpenBao issues itself a KMS client certificate and the two authorization layers below become one.
+- **A daily signature cap and a kill switch.** A cap per CA object bounds the damage of a burst;
+  removing the plugin principal's grant stops all signing with that CA at once, and the offline root
+  revokes the intermediate.
+
+Root keys and keys with their own purpose policy are never mapped. In particular a release-signing
+key is **not** an External Key: that would bypass the approval it requires. Public ACME issuance
+stays outside the KMS and outside this plugin ([`CERTIFICATES.md`](CERTIFICATES.md)); the internal
+ACME flow in #122 is OpenBao's PKI engine using an intermediate mapped as above.
+
+### Detecting a signature that should not exist
+
+Inspection and limits prevent; this detects. OpenBao stores the certificates it issues, so every
+signature the KMS made with a CA key should correspond to a certificate or CRL in OpenBao:
+
+- The KMS records the SHA-256 of each inspected payload it signs with a CA object.
+- A reconciliation job recomputes that digest for every certificate and CRL OpenBao holds and
+  compares the two sets. A KMS signature with no counterpart pages. `no_store` stays off for these
+  issuers so the comparison is possible.
+- OpenBao's audit device is shipped to the same off-host collector as the KMS journal, and the
+  signing rate per CA object is alerted on.
+
+The audit event has no payload or digest field today, by design ([`AUDIT.md`](AUDIT.md)), so the
+first point is a schema change listed below.
+
+### Transit
+
+An `external-key` Transit key is a signing key: it signs and verifies through the digest mapping
+above. What it signs is the tenant's data, which the KMS has no profile for. A normal Transit key
+stays a software key inside OpenBao and is not hardware-backed because this plugin is installed.
 
 ## Two layers of authorization
 
@@ -166,14 +227,16 @@ Identities and keys are separated by use:
 | Use | Principal (example) | Object | Operations |
 |---|---|---|---|
 | Auto-unseal | `spiffe://regalia/workload/openbao-seal-<environment>` | one `opaque` seal object | `seal-envelope`, `release-secret` |
-| PKI issuer | `spiffe://regalia/workload/openbao-keys-<environment>` | one intermediate CA key per mapping | `sign` |
-| Transit signing | the same, or a second principal per tenant tier | one key per mapping | `sign` |
+| PKI issuer | `spiffe://regalia/workload/openbao-ca-<environment>` | one intermediate CA key per mapping | `sign`, content type `application/vnd.regalia.x509-tbs` only |
+| Transit signing | `spiffe://regalia/workload/openbao-keys-<environment>`, or one per tenant tier | one key per mapping | `sign`, content type `application/vnd.regalia.digest` only |
 
-The seal principal holds no `sign` grant and the keys principal holds no envelope grant. A key has
+The seal principal holds no `sign` grant, the keys principal holds no envelope grant, and the CA
+principal is granted nothing but its CA objects. A key has
 one purpose and one policy entry per operation; grants are exact, with no wildcards
 ([`IDENTITY.md`](IDENTITY.md), [`POLICY.md`](POLICY.md)). These policies set
-`required_approvals: 0`: a seal cannot wait for a person. That is why a key that does require
-approval must not be mapped.
+`required_approvals: 0`: a seal cannot wait for a person, and neither can certificate issuance. That
+is why a key that does require approval must not be mapped, and why a CA key is protected by
+inspection and by its own certificate instead.
 
 ## Configuration
 
@@ -211,7 +274,7 @@ $ bao write sys/external-keys/configs/regalia \
     cert_path=/etc/openbao/kms/keys.crt key_path=/etc/openbao/kms/keys.key \
     environment=staging
 $ bao write sys/external-keys/configs/regalia/keys/issuing-ca \
-    object_id=example-intermediate-ca purpose=openbao-pki-ca \
+    object_id=example-intermediate-ca purpose=openbao-pki-ca usage=x509-ca \
     algorithm=p384 public_key_sha256=sha256:0000…0000 public_key=@intermediate.pub.pem
 $ bao write sys/external-keys/configs/regalia/keys/issuing-ca/grants/pki
 ```
@@ -317,3 +380,12 @@ the server today, for a decision on #120 rather than a silent change:
    explicit refusal above. Serving any of them is a new reviewed operation, not a plugin option.
 7. **Policy shape for the seal object.** It needs `seal-envelope` and `release-secret` on one object.
    #121 confirms the policy and manifest loaders accept that as two exact entries.
+8. **Inspected X.509 signing is not served.** A PKI issuer needs a `sign` content type for a
+   to-be-signed certificate or CRL, a parser at the trust boundary, an issuing profile in the purpose
+   policy, and the negative tests for each profile rule. Without it this contract supports no PKI
+   issuer. This is the largest item and belongs to #122.
+9. **The audit event carries no digest of what was signed.** The reconciliation above needs the
+   SHA-256 of the inspected payload for CA objects. The schema excludes payload fields on purpose,
+   so this is a reviewed addition for one class of object, not a general payload field.
+10. **Daily caps exist for Cosmos amounts only.** A plain count cap per object for `sign` is needed
+    to bound a CA key's daily output.
