@@ -25,6 +25,13 @@ operation automatically. Network errors are redacted. KMS requests use fresh
 request IDs/nonces, direct TLS 1.3 mutual authentication, a pinned CA and bounded
 timeouts, reusing the existing SOPS transport/client.
 
+The plugin field is `kms_purpose`, because OpenBao consumes the reserved seal
+field `purpose` before forwarding configuration to the plugin. Unknown plugin
+fields fail configuration. Plugin registration is declarative and checksum-bound,
+so it is available before OpenBao unseals. The fixture uses single-node Raft,
+independently issued synthetic mTLS identities, and an HTTP API bound to loopback
+only. This HTTP listener configuration is for disposable tests only.
+
 ## Scope of evidence
 
 The integration fixture uses Regalia's real HTTP authentication, registry, RBAC,
@@ -32,13 +39,53 @@ purpose policy, durable replay state and audit coordinator, with a software RSA
 provider standing in for the hardware. The deployed KMS executable, fencing,
 hardware key attributes and physical recovery are not exercised. Its software
 provider is test-only and is never linked into the plugin executable.
+Listener recovery reuses the fixture's in-memory RSA key; it does not prove KMS
+process recovery, custody persistence or recovery with missing historical keys.
+OpenBao's plugin manager may respawn/retry a crashed plugin; ambiguous-operation
+reconciliation across that boundary remains unqualified.
 
 Initial target: OpenBao 2.7.1, wrapping SDK 2.9.0, plugin SDK 2.4.0.
 External Keys, PKI, Transit, namespace grants, upgrades and production deployment
 remain separate qualification work.
 
+## Run
+
+Use Go 1.26.6 or newer, and a checkout containing the sibling SOPS and root
+modules (the replacements in go.mod are intentionally local for this PoC).
+
+```sh
+cd adapters/openbao
+go test -race ./...
+go vet ./...
+
+# Requires the official 2.7.1 release binary, checked against its release checksum.
+OPENBAO_POC_BAO=/absolute/path/to/bao OPENBAO_POC_REQUIRE_E2E=1 \
+  go test -race -count=1 -run TestOpenBao271 -v -timeout 4m
+```
+
+The default tests skip the real-server drill if the executable is absent;
+`OPENBAO_POC_REQUIRE_E2E=1` makes absence a failure. The real-server test builds
+and executes the plugin separately, initializes OpenBao, stores synthetic KV
+data, observes a periodic seal health check, seals/restarts, checks reads during
+a KMS listener outage, refuses offline and unauthorized restarts, then restores
+authorized access and checks that plaintext and the root token are absent from
+Raft storage and captured logs. All fixture identities/state are temporary.
+`OPENBAO_POC_KEEP_FAILURE=1` optionally retains **synthetic** private debug
+artifacts on failure; remove the reported directory after inspection.
+
+Pinned release archive hashes:
+
+| Archive | SHA-256 |
+| --- | --- |
+| openbao_2.7.1_linux_amd64.tar.gz | `0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243` |
+| openbao_2.7.1_darwin_arm64.tar.gz | `15625b5f69aee5bb4578b4e76e856a2141647342b0f8e5969a8875b44e0fbf91` |
+
+These were checked against the official v2.7.1 release's checksums.txt. CI pins
+the Linux archive and requires the real-server test; a unit-test pass alone is
+not compatibility evidence.
+
 Upstream contracts:
 
 - https://openbao.org/docs/configuration/seal/
-- https://openbao.org/docs/configuration/plugin/
+- https://openbao.org/docs/configuration/plugins/
 - https://github.com/openbao/go-kms-wrapping/tree/v2.9.0

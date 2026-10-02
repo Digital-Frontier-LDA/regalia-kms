@@ -1,0 +1,59 @@
+name: OpenBao seal PoC
+
+on:
+  pull_request:
+    paths:
+      - 'adapters/openbao/**'
+      - 'adapters/sops/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/openbao-poc.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'adapters/openbao/**'
+      - 'adapters/sops/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/openbao-poc.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: adapters/openbao
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: adapters/openbao/go.mod
+          cache-dependency-path: adapters/openbao/go.sum
+      - name: Install checksum-pinned OpenBao 2.7.1
+        env:
+          OPENBAO_SHA256: 0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/openbao.tar.gz" \
+            https://github.com/openbao/openbao/releases/download/v2.7.1/openbao_2.7.1_linux_amd64.tar.gz
+          echo "$OPENBAO_SHA256  $RUNNER_TEMP/openbao.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/openbao.tar.gz" --directory "$RUNNER_TEMP" bao
+          "$RUNNER_TEMP/bao" version
+      - name: Format, vet and build the development plugin
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go build ./cmd/openbao-plugin-kms-regalia-poc
+      - name: Unit and real-server tests (absence is a failure)
+        env:
+          OPENBAO_POC_REQUIRE_E2E: '1'
+        run: |
+          umask 002
+          OPENBAO_POC_BAO="$RUNNER_TEMP/bao" go test -race -count=1 -v -timeout 4m ./...
