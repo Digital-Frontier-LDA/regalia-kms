@@ -48,11 +48,13 @@ class RecoveryKey(unittest.TestCase):
         # the real call, THEN signals the script (the call succeeded: where a half-done state lives).
         # REGALIA_TEST_SIGNAL_AT: "<SIG>:<fragment>" signals the script and then runs the real call.
         # REGALIA_TEST_KILL: KILL at a call. Each of the last three may list several with "|".
+        # REGALIA_TEST_ARMED_BY: SIGNAL_AT fires only once a call containing this has been made.
         shim = os.path.join(self.bin, "cryptsetup")
         with open(shim, "w", encoding="ascii") as f:
             f.write('#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nline=" $* "\n'
                     'IFS="|" read -r -a at <<< "${REGALIA_TEST_SIGNAL_AT:-}"\n'
-                    'for item in "${at[@]}"; do [ -n "$item" ] && [[ "$line" == *" ${item#*:} "* ]] && kill -"${item%%%%:*}" "$PPID"; done\n'
+                    'armed=1; [ -z "${REGALIA_TEST_ARMED_BY:-}" ] || grep -qF -- "$REGALIA_TEST_ARMED_BY" "%s" || armed=0\n'
+                    'for item in "${at[@]}"; do [ "$armed" = 1 ] && [ -n "$item" ] && [[ "$line" == *" ${item#*:} "* ]] && kill -"${item%%%%:*}" "$PPID"; done\n'
                     'IFS="|" read -r -a fragments <<< "${REGALIA_TEST_FAIL:-}"\n'
                     'for fragment in "${fragments[@]}"; do [ -n "$fragment" ] && [[ "$line" == *" $fragment "* ]] && exit 1; done\n'
                     '[ -n "${REGALIA_TEST_SIGNAL:-}" ] && [[ "$line" == *" $REGALIA_TEST_SIGNAL "* ]] && { kill -TERM "$PPID"; exit 1; }\n'
@@ -60,7 +62,7 @@ class RecoveryKey(unittest.TestCase):
                     '"%s" "$@"; rc=$?\n'
                     'IFS="|" read -r -a after <<< "${REGALIA_TEST_SIGNAL_AFTER:-}"\n'
                     'for item in "${after[@]}"; do [ -n "$item" ] && [[ "$line" == *" ${item#*:} "* ]] && kill -"${item%%%%:*}" "$PPID"; done\n'
-                    'exit "$rc"\n' % (self.argv_log, CRYPTSETUP))
+                    'exit "$rc"\n' % (self.argv_log, self.argv_log, CRYPTSETUP))
         os.chmod(shim, os.stat(shim).st_mode | stat.S_IXUSR)
 
     def secret(self, value):
@@ -75,8 +77,8 @@ class RecoveryKey(unittest.TestCase):
             self.assertEqual(done.returncode, 0, "cryptsetup %s: %s" % (" ".join(args), done.stderr))
         return done
 
-    def env(self, fail_subcommand="", signal="", kill="", signal_after="", signal_at=""):
-        return dict(os.environ, PATH=self.bin + os.pathsep + PATH, REGALIA_TEST_FAIL=fail_subcommand, REGALIA_TEST_SIGNAL=signal,
+    def env(self, fail_subcommand="", signal="", kill="", signal_after="", signal_at="", armed_by=""):
+        return dict(os.environ, PATH=self.bin + os.pathsep + PATH, REGALIA_TEST_FAIL=fail_subcommand, REGALIA_TEST_SIGNAL=signal, REGALIA_TEST_ARMED_BY=armed_by,
                     REGALIA_TEST_KILL=kill, REGALIA_TEST_SIGNAL_AFTER=signal_after, REGALIA_TEST_SIGNAL_AT=signal_at)
 
     def run_script(self, mode, *lines, **faults):
@@ -369,7 +371,7 @@ class RecoveryKey(unittest.TestCase):
                 status = self.run_script("status")
                 self.assertEqual(status.returncode, 1)
                 self.assertIn("a --replace that did not finish", status.stderr)
-                self.assertIn("a --replace that did not finish", self.run_script("check", NEW_KEY).stderr)
+                self.assertIn("2 recovery keyslots; see --status", self.run_script("check", NEW_KEY).stderr)
                 # Not just any two keys finish it: the pair must be the used key of one and the new
                 # key of the other.
                 for wrong in ((THIRD_KEY, NEW_KEY), (KEY, THIRD_KEY)):
@@ -723,6 +725,77 @@ class RecoveryKey(unittest.TestCase):
         refused = self.run_script("replace", KEY, NEW_KEY)
         self.assertEqual(refused.returncode, 1)
         self.assertIn("this script will not guess which key to destroy", refused.stderr)
+        self.assertEqual(self.header(), header)
+
+
+    def test_a_key_added_later_in_a_recycled_keyslot_number_is_not_the_used_half_of_a_replace(self):
+        """Keyslot numbers are reused, and the mark "replaces keyslot N" outlives a completed replace.
+        A recovery key that systemd-cryptenroll (or a person) adds afterwards lands in number N again:
+        the header then reads "keyslot M replaces N, generation 1 = 0 + 1" for a pair no replace made.
+        The mark also names the replaced keyslot's SALT, which the newcomer does not have."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        first = next(iter(self.generations()))
+        # a recovery token with no generation: systemd-cryptenroll's, or this script's before generations
+        self.cs("token", "remove", "--token-id", next(iter(self.header()["tokens"])), self.img)
+        subprocess.run([CRYPTSETUP, "token", "import", "--json-file", "-", self.img], check=True, capture_output=True, text=True, timeout=60,
+                       input='{"type":"systemd-recovery","keyslots":["%s"]}' % first)
+        salt = self.header()["keyslots"][first]["kdf"]["salt"]
+        self.assertEqual(self.run_script("replace", KEY, NEW_KEY).returncode, 0)
+        survivor = next(iter(self.header()["tokens"].values()))
+        self.assertEqual((survivor["regalia_generation"], survivor["regalia_replaces"], survivor["regalia_replaces_salt"]), (1, first, salt))
+        # the newcomer, in the recycled number, with a bare token
+        self.cs("luksAddKey", "--batch-mode", *FAST, "--key-file", self.secret(NEW_KEY), "--new-key-slot", first, self.img, self.secret(THIRD_KEY))
+        subprocess.run([CRYPTSETUP, "token", "import", "--json-file", "-", self.img], check=True, capture_output=True, text=True, timeout=60,
+                       input='{"type":"systemd-recovery","keyslots":["%s"]}' % first)
+        header = self.header()
+        status = self.run_script("status")
+        self.assertEqual(status.returncode, 1)
+        self.assertIn("the header does not say that one replaces the other", status.stderr)
+        self.assertNotIn("Run --replace again", status.stderr)
+        for order in ((THIRD_KEY, NEW_KEY), (NEW_KEY, THIRD_KEY)):
+            refused = self.run_script("replace", *order)
+            self.assertEqual(refused.returncode, 1, refused.stderr)
+            self.assertIn("this script will not guess which key to destroy", refused.stderr)
+            self.assertNotIn("wrong order", refused.stderr)
+            self.assertEqual(self.header(), header, "the header was changed")
+        self.assertTrue(self.opens(THIRD_KEY) and self.opens(NEW_KEY))
+
+    def test_the_adopted_keyslot_message_is_read_from_the_header(self):
+        """"Left as it was, unlabelled" is only said when the label is really gone."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertEqual(self.run_script("replace", KEY, NEW_KEY, kill="token import").returncode, -9)
+        code, stderr = self.interrupted("replace", [KEY, NEW_KEY], signal_after="TERM:token import", fail_subcommand="token remove")
+        self.assertEqual(code, 130, stderr)
+        self.assertEqual(len(self.header()["tokens"]), 2, "the premise: the label could not be removed")
+        self.assertNotIn("left as it was, unlabelled", stderr)
+        self.assertIn("the label this run gave it could NOT be removed: cryptsetup token remove --token-id", stderr)
+
+    def test_a_signal_after_the_used_keyslot_is_destroyed_says_so(self):
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        code, stderr = self.interrupted("replace", [KEY, NEW_KEY], signal_at="TERM:--test-passphrase --key-file", armed_by="luksKillSlot --key-file")
+        self.assertEqual(code, 130, stderr)
+        self.assertIn("interrupted after the used keyslot was destroyed: the new key is the recovery key", stderr)
+        self.assertTrue(self.opens(NEW_KEY) and not self.opens(KEY))
+
+    def test_the_last_generation_this_script_writes_is_one_it_reads(self):
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        slot = next(iter(self.generations()))
+        self.cs("token", "remove", "--token-id", next(iter(self.header()["tokens"])), self.img)
+        subprocess.run([CRYPTSETUP, "token", "import", "--json-file", "-", self.img], check=True, capture_output=True, text=True, timeout=60,
+                       input='{"type":"systemd-recovery","keyslots":["%s"],"regalia_generation":2147483646}' % slot)
+        # stopped half way at the last generation: it must still be resumable
+        self.assertNotEqual(self.run_script("replace", KEY, NEW_KEY, fail_subcommand="luksKillSlot --key-file").returncode, 0)
+        done = self.run_script("replace", KEY, NEW_KEY)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(next(iter(self.header()["tokens"].values()))["regalia_generation"], 2147483647)
+        header = self.header()
+        refused = self.run_script("replace", NEW_KEY, THIRD_KEY)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("the last generation this script writes", refused.stderr)
         self.assertEqual(self.header(), header)
 
 
