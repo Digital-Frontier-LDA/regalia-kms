@@ -144,7 +144,8 @@ Commissioning has two halves:
 
 ### Host firewall (default deny, both directions)
 
-The site config (`site.example.json`, validated by `sitecfg.py`) declares the host's address, the
+The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` for a single-site
+host, section 7 otherwise) declares the host's address, the
 KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
 (the audit and NTP sinks at least). From it:
 
@@ -360,6 +361,25 @@ authority (#69). If the authority is unreachable for longer than a heartbeat liv
 reboots stays locked until someone types its recovery key. Where the authority runs and who is alerted
 when heartbeats stop are decided before commissioning.
 
-Not there yet, so **nothing here is to be run on a KMS host**: WireGuard before root under the TCP
-transport (#66), the systemd units and the initramfs that start the client, the operator commands, and
-every run on a physical TPM or a DL360 (#65).
+**The boot mesh (#66).** Unlock requests travel over WireGuard, and the network decides who can reach
+a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network namespaces by
+`e2e/wg-boot-netns.sh`):
+
+- The site config's `boot_mesh` says where the nodes are (their addresses outside and inside the
+  tunnel, the two ports). Which keys are WireGuard peers comes from the signed manifest only: a node
+  that may no longer be unlocked leaves every peer's list with the manifest that says so.
+- The booting node, in its initrd: interface `wg-boot` with its WG-BOOT key, and a default-deny ruleset
+  that lets out WireGuard to the peers' declared addresses and the unlock port inside the tunnel.
+- The running peer: interface `wg-unlock` with its WG-SERVICE key. The host firewall of section 3
+  gains two openings: WireGuard from the peers' declared addresses only, and the unlock port inside the
+  tunnel only. There is no SSH and no KMS port inside the tunnel.
+- A valid key at an undeclared address gets no answer: that is the stolen server powered on elsewhere.
+- **WG-BOOT is a transport identity, never an authorization.** Its key is sealed like the local half
+  (PCR 7 and the signed PCR 11 policy), so a retired but signed image still brings the tunnel up. It is
+  refused at attestation, by the peer, against current measurements.
+- A WireGuard configuration is applied with its private key added in memory (`bootnet.with_key`),
+  never without it: `wg syncconf` with a file that has no key unsets the interface's key.
+
+Not there yet, so **nothing here is to be run on a KMS host**: the systemd units and the initrd
+(dracut) that bring up the mesh and start the client, sealing the WG-BOOT key, the operator commands,
+and every run on a physical TPM, a DL360 (#65) or the real datacenter networks.
