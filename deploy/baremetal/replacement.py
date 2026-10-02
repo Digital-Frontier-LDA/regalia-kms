@@ -82,6 +82,8 @@ def check_replacement(current, candidate, old_id, new_id):
     require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
             "the replacement must be the next manifest: epoch %d, chained to the current one" % (current["epoch"] + 1))
     require(old_id in old, "%s is not in the current manifest" % old_id)
+    require(old[old_id]["state"] not in TERMINAL, "%s is already %s: it was replaced before, and a tombstone is not replaced again"
+            % (old_id, old.get(old_id, {}).get("state")))
     require(new_id not in old, "%s is already a node: a replacement gets a new node ID" % new_id)
     require(old_id in new and new[old_id]["state"] in TERMINAL, "%s must stay listed, as RETIRED or REVOKED_STOLEN" % old_id)
     require(new_id in new and membership.CAPABILITIES[new[new_id]["state"]], "%s must be enrolled in a state that can do something" % new_id)

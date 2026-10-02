@@ -215,12 +215,19 @@ TERMINAL = ("RETIRED", "REVOKED_STOLEN")
 
 def _tombstones(current, candidate):
     """Retirement is terminal for EVERY signer, the root included. A node that is RETIRED or REVOKED_STOLEN
-    stays in every later manifest as a tombstone: the same node_id, identities and HSM serials, and a
-    state that only moves from RETIRED to REVOKED_STOLEN. With the tombstone always present, validate()'s
+    stays in every later manifest as a tombstone: the same node_id, identities and HSM serials (as they
+    were BEFORE it was retired: the retiring manifest cannot change them either), and a state that only
+    moves from RETIRED to REVOKED_STOLEN. With the tombstone always present, validate()'s
     uniqueness rule refuses any reuse of its EK, AK, WireGuard keys, HSM serials or node ID, for ever."""
     old, new = validate(current), validate(candidate)
     for nid, node in old.items():
         if node["state"] not in TERMINAL:
+            # The manifest that retires a node must record the hardware as it was: identities rewritten in
+            # the same step would leave the real ones free and protect the substitutes for ever.
+            if nid in new and new[nid]["state"] in TERMINAL:
+                for k in IDENTITY_KEYS + ("hsm_serials",):
+                    require(new[nid][k] == node[k], "tombstone: %s becomes %s and its %s cannot change in the same manifest"
+                            % (nid, new[nid]["state"], k))
             continue
         require(nid in new, "tombstone: %s is %s and must stay in every later manifest (its identities are never reused)"
                 % (nid, node["state"]))

@@ -83,6 +83,17 @@ class Tombstones(Case):
                 with self.subTest(terminal, path="altered " + field):   # freeing an identity by rewriting the tombstone
                     self.refused("tombstone: a is %s and its %s cannot change" % (terminal, field), self.accept, current,
                                  self.chain(current, [self.entry("a", terminal, **{field: value})] + rest))
+        # nor in the very manifest that retires the node: the tombstone holds the hardware as it was
+        for terminal in ("RETIRED", "REVOKED_STOLEN"):
+            for field, value in (("ek_name", self.keys["x"].ek_name), ("ak_name", self.keys["x"].ak_name), ("wg_boot_pub", "ee" * 32),
+                                 ("wg_service_pub", "ef" * 32), ("hsm_serials", ["DENK0499999"])):
+                with self.subTest(terminal, path="rewritten while retiring: " + field):
+                    for key, signer in ((hbt.ROOT, "root"), (hbt.REVOKE, "revocation")):
+                        retiring = self.chain(self.m1, [self.entry("a", terminal, **{field: value}), self.entry("b"), self.entry("c")])
+                        with self.assertRaises(m.Refused) as caught:
+                            self.accept(self.m1, retiring, key, signer)
+                        if signer == "root":
+                            self.assertIn("tombstone: a becomes %s and its %s cannot change in the same manifest" % (terminal, field), str(caught.exception))
         stolen = self.accept(self.m1, self.replaced("REVOKED_STOLEN"))
         self.refused("tombstone: a is REVOKED_STOLEN, which is terminal for every signer (RETIRED refused)", self.accept, stolen,
                      self.chain(stolen, [self.entry("a", "RETIRED")] + rest))
@@ -152,6 +163,8 @@ class Tombstones(Case):
                 candidate = self.chain(self.m1, [freed, b, c, self.entry("a2", **{field: old[field]})])
                 m.validate(candidate)
                 self.refused("a2 reuses an identity the manifest already lists", replacement.check_replacement, self.m1, candidate, "a", "a2")
+        again = self.chain(self.m2, [a, b, c, a2, self.entry("x")])       # the tombstone named as "the old node" a second time
+        self.refused("a is already RETIRED: it was replaced before", replacement.check_replacement, self.m2, again, "a", "x")
         self.refused("the replacement must be the next manifest: epoch 2", replacement.check_replacement, self.m1, dict(self.m2, epoch=3), "a", "a2")
         self.refused("the replacement must be the next manifest: epoch 2", replacement.check_replacement, self.m1, dict(self.m2, prev_digest="00" * 32), "a", "a2")
         self.refused("a replacement does not change policy_version", replacement.check_replacement, self.m1, dict(self.m2, policy_version="p2"), "a", "a2")
