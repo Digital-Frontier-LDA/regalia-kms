@@ -69,6 +69,47 @@ Commissioning has two halves:
   brings its own client is caught by the pcscd check only while it is connected; restricting pcscd
   access with a polkit rule (root and the KMS user only) is recommended on top.
 
+### Host firewall (default deny, both directions)
+
+The site config (`site.example.json`, validated by `sitecfg.py`) declares the host's address, the
+KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
+(the audit and NTP sinks at least). From it:
+
+```sh
+install -d -m 0755 /etc/nftables.d
+# Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
+# a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
+tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
+if python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
+  chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
+else
+  rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
+fi
+```
+
+It must also survive a reboot, and the KMS must never start without it:
+- **Load it at boot:** in `/etc/nftables.conf`, keep Debian's `flush ruleset` first, then add
+  `include "/etc/nftables.d/*.nft"`, and `systemctl enable nftables.service`.
+- **Order the KMS after it**, with a drop-in `/etc/systemd/system/regalia-kms.service.d/firewall.conf`:
+  ```ini
+  [Unit]
+  Requires=nftables.service
+  After=nftables.service
+  ```
+  If the ruleset fails to load, nftables.service fails and the KMS does not start.
+- **Check again after the reboot** (section 5): `firewall_default_deny` is measured on the running
+  host, so a ruleset that loaded once but not at boot fails commissioning.
+
+Measured: `firewall_default_deny` (the table is loaded, with input, output and forward on policy
+drop). Checked by behaviour from each zone after commissioning:
+
+```sh
+python3 deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
+```
+
+(`monitoring`, `admin`, `unauthorized` likewise). `e2e/baremetal-firewall-netns.sh` runs the whole
+matrix in network namespaces in CI. Never load the ruleset on a workstation: it is default-deny.
+
 ## 4. TPM provisioning
 
 1. **PIN import key:** `sudo deploy/seal-hsm-pin.sh --init-import-key`. Copy the printed fingerprint

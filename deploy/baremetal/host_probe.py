@@ -34,6 +34,11 @@ PLATFORM AND TPM, measured:
                             fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt
   hsm_token_attached        a Nitrokey HSM 2 (USB 20a0:4230) is on the bus (sysfs; no token client
                             needed); its USB path is reported so the evidence can pin the INTERNAL port
+  firewall_default_deny     the table `inet regalia_kms` (deploy/baremetal/firewall.py) is loaded, with its
+                            input, output and forward base chains all on policy drop. nftables runs every
+                            base chain of a hook, and a drop in any one is final, so no other table's
+                            accept can weaken it. What the table lets through is checked by behaviour:
+                            network_probe.py from each zone (e2e/baremetal-firewall-netns.sh in the lab)
   token_clients_root_only   replaces the guest's direct_token_clients_absent: every token client tool on
                             PATH is root:root and not executable by group or others, so the KMS user
                             cannot run them, and every process connected to pcscd runs the KMS binary
@@ -67,7 +72,7 @@ SYSTEM_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin",
 IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "decrypt"}
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank",
             "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present", "hsm_token_attached",
-            "token_clients_root_only")
+            "token_clients_root_only", "firewall_default_deny")
 MEASURED = PLATFORM + os_probe.MEASURED
 UNMEASURED = evidence_mod.ATTESTED + evidence_mod.RECORDS
 
@@ -280,10 +285,29 @@ def token_clients_root_only(host):
     return ok, ("token client tools root-only; %s" % why if ok else why)
 
 
+def firewall(host):
+    rc, out = host.run(["nft", "-j", "list", "table", "inet", "regalia_kms"])
+    if rc != 0:
+        return False, "the table inet regalia_kms is not loaded (nft -f the firewall.py output)"
+    try:
+        items = json.loads(out).get("nftables", [])
+        chains = {c["chain"].get("hook"): c["chain"] for c in items if "chain" in c}
+        flags = [t["table"].get("flags") for t in items if "table" in t]
+    except (ValueError, AttributeError):
+        return False, "cannot parse nft -j output"
+    # A dormant table still lists its chains, but they are detached from the hooks and filter nothing.
+    if any(f and "dormant" in (f if isinstance(f, list) else [f]) for f in flags):
+        return False, "inet regalia_kms is loaded but DORMANT: its chains filter nothing (nft add table inet regalia_kms '{ flags ; }')"
+    bad = [h for h in ("input", "output", "forward") if (chains.get(h) or {}).get("policy") != "drop"]
+    if bad:
+        return False, "inet regalia_kms is loaded, but %s %s not on policy drop" % (", ".join(bad), "is" if len(bad) == 1 else "are")
+    return True, "inet regalia_kms loaded; input, output and forward default to drop"
+
+
 PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot, tpm2_present=tpm2,
               tpm_sha256_bank=sha256_bank, root_disk_tpm_unlocked=root_unlock, ima_policy_loaded=ima,
               pin_import_key_present=import_key, hsm_token_attached=hsm_token,
-              token_clients_root_only=token_clients_root_only)
+              token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
 
 def measure(host, import_key_sha256=None):

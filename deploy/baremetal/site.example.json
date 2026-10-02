@@ -1,0 +1,14 @@
+{
+  "schema": "regalia.baremetal-site/v1",
+  "site": "site-a",
+  "host_ipv4": "192.0.2.10",
+  "kms_port": 8443,
+  "ssh_port": 22,
+  "client_cidrs": ["198.51.100.0/24"],
+  "monitoring_cidrs": ["203.0.113.128/32"],
+  "admin_cidrs": ["203.0.113.0/28"],
+  "outbound": [
+    {"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
+    {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}
+  ]
+}
