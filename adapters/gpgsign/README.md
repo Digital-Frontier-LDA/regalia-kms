@@ -11,11 +11,14 @@ and `golang.org/x/sys` does not enter the daemon's build.
 ```sh
 regalia-sign --config /etc/regalia-sign/config.json --detach SHA256SUMS   # writes SHA256SUMS.asc
 gpg --verify SHA256SUMS.asc SHA256SUMS                                    # on any machine
+
+regalia-sign --config /etc/regalia-sign/config.json --clearsign Release --output InRelease   # an apt repository
 ```
 
 | Command | What it does | KMS operations |
 |---|---|---|
 | `--detach FILE` | writes `FILE.asc`, an armored detached signature (`--binary`: `FILE.sig`; `--output`: elsewhere; `-` reads stdin, writes stdout). Never replaces an existing file. | 1 |
+| `--clearsign FILE` | writes `FILE.asc` (or `--output`), the text followed by a signature over it: what `gpg --clearsign` makes, and what apt reads as `InRelease`. Never replaces an existing file. | 1 |
 | `--export-key` | prints the armored public key verifiers import | 1 |
 | `--fingerprint` | prints the key's fingerprint | 0 |
 | `--status-fd=2 -bsau KEY` | git's form: signs stdin to stdout | 1 |
@@ -80,6 +83,25 @@ git verify-tag v1.0.0        # runs the real gpg, through regalia-sign --verify
 The key git names (`user.signingkey`, or the committer identity) must be the configured key: its
 fingerprint, its key ID, or part of its user ID. Otherwise nothing is signed.
 
+## Signing an apt repository
+
+```sh
+regalia-sign --clearsign dists/stable/Release --output dists/stable/InRelease
+regalia-sign --detach    dists/stable/Release --output dists/stable/Release.gpg   # for older clients
+regalia-sign --export-key > regalia-release.asc    # users: /etc/apt/keyrings/, then signed-by=
+```
+
+A cleartext signature covers the text with line endings canonicalised and trailing blanks on each
+line removed, and the final line ending is a separator, not content. That is the framework's rule
+(RFC 9580 §7), the same for `gpg --clearsign`. A `Release` file with LF line endings, no trailing
+blanks and a final newline comes back byte for byte. One with CRLF line endings does not: the
+signature still verifies, but verifiers return the text with their own line endings. Anything that
+must be reproduced exactly belongs under `--detach`.
+
+The signature armor carries its CRC-24 line. go-crypto leaves it out by default, and GnuPG 2.4
+(`gpg` and `gpgv`, so every apt before 3.0) then exits 2 on a signature whose base64 needs no
+padding, while printing "Good signature": every RSA-3072 signature, measured here.
+
 ## From GitHub Actions
 
 The KMS is never exposed to the internet. The release workflow runs on a **self-hosted runner inside
@@ -95,8 +117,10 @@ signature, and the request's `subject` carries the SHA-256 of the file that was 
 - **No approvals.** A policy with `required_approvals` needs evidence over the exact payload, which
   here is a digest that includes the signature's own creation time. `regalia-sign` sends none, so
   such a policy denies it.
-- **No encryption, no clear-signed or inline signatures, no subkeys, no expiry.** The key is a
-  single version-4 signing key.
+- **No encryption, no inline (binary) signed messages, no subkeys, no expiry.** The key is a single
+  version-4 signing key.
+- **No Ed25519.** go-crypto takes an external signer for RSA and ECDSA only, and neither HSM offers
+  EdDSA through OpenSC today (regalia#530, regalia#541).
 
 ## How it is tested
 
@@ -105,6 +129,10 @@ signature, and the request's `subject` carries the SHA-256 of the file that was 
   each signature against the exported key and reject it over a changed file, for P-256, P-384 and
   RSA-3072. A real `git commit -S` and `git tag -s` are made with the built binary and checked with
   `git verify-commit` and `git verify-tag`.
+- Cleartext signatures are checked the same way, and also with apt's own verifiers: `gpgv`, and
+  `sqv` where it is installed. `TestAptAcceptsARepositoryWhoseInReleaseWasSignedThroughTheKMS` runs
+  `apt-get update` against a flat repository with the exported key as its only trust anchor, and
+  requires it to refuse the repository once the signed text changes or the key is absent.
 - `TestDeployedRegaliaSignExecutableThroughMTLS` in the parent module (run by
   `e2e/softhsm-pkcs11.sh`) uses no stand-in: the built binary reaches the daemon's policy stack over
   mTLS and the signature is made by the PKCS#11 driver on keys generated inside a SoftHSM token.

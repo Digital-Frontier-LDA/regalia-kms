@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 )
 
 // Both in the past: GnuPG and go-crypto refuse a signature, or a key, dated after their own clock.
@@ -483,5 +485,228 @@ func TestOnlySupportedKeysBecomeSigners(t *testing.T) {
 	}
 	if _, err := NewSigner(keyCases()[0].key.Public(), client, Target{ObjectID: "Bad Object", Environment: "staging", Purpose: "release-artifact"}); err == nil {
 		t.Error("an object ID the API would refuse was accepted")
+	}
+}
+
+// A Release file as apt reads one: no trailing whitespace, ends in a newline. Under the cleartext
+// framework such a text comes back byte for byte.
+const releaseFile = `Origin: Regalia
+Suite: stable
+Codename: stable
+Date: Thu, 01 Oct 2026 12:00:00 UTC
+Architectures: amd64
+Components: main
+SHA256:
+ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 main/binary-amd64/Packages
+`
+
+// THE CLAIM: a cleartext signature made through the KMS is one GnuPG, apt's verifiers (gpgv, and sqv
+// where it exists) and go-crypto all accept against the exported key, the text they extract is the
+// text that was signed, and none accepts it once a byte of the text changes.
+func TestAClearSignedDocumentVerifiesWithGnuPGAptsVerifiersAndGoCrypto(t *testing.T) {
+	for _, tc := range keyCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			kms := newFakeKMS(t, tc.key)
+			key := kms.key4(t, tc.key.Public())
+			var exported, signed bytes.Buffer
+			if err := key.ExportPublic(context.Background(), &exported); err != nil {
+				t.Fatal(err)
+			}
+			before := len(kms.seen())
+			result, err := key.ClearSign(context.Background(), &signed, strings.NewReader(releaseFile), fixedNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(signed.String(), "-----BEGIN PGP SIGNED MESSAGE-----\nHash: ") || !strings.Contains(signed.String(), "\n-----BEGIN PGP SIGNATURE-----\n") {
+				t.Fatalf("not a cleartext-signed document:\n%s", signed.String())
+			}
+			// THE CHECKSUM LINE IS LOAD-BEARING FOR GNUPG. Without it gpg and gpgv exit 2 on any
+			// signature whose base64 needs no padding (every RSA-3072 one, measured), while still
+			// printing "Good signature". Asserted on the bytes so it does not depend on this run's
+			// signature happening to have the unlucky length.
+			if !regexp.MustCompile(`\n=[A-Za-z0-9+/]{4}\n-----END PGP SIGNATURE-----\n$`).MatchString(signed.String()) {
+				t.Fatalf("the signature armor carries no CRC-24 line, or the document does not end in a newline:\n%s", signed.String())
+			}
+
+			// One KMS operation, whose subject names the document.
+			requests := kms.seen()[before:]
+			sum := sha256.Sum256([]byte(releaseFile))
+			if len(requests) != 1 || requests[0].document.Context.Subject != "openpgp-cleartext sha256:"+hex.EncodeToString(sum[:]) ||
+				len(requests[0].payload) != tc.payloadSize || result.DocumentHash != hex.EncodeToString(sum[:]) {
+				t.Fatalf("expected one operation over the document, saw %#v", requests)
+			}
+
+			// go-crypto, as an independent parser.
+			keyring, err := openpgp.ReadArmoredKeyRing(bytes.NewReader(exported.Bytes()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			block, rest := clearsign.Decode(signed.Bytes())
+			if block == nil || len(bytes.TrimSpace(rest)) != 0 {
+				t.Fatalf("go-crypto cannot read the document back (rest %q)", rest)
+			}
+			if _, err := block.VerifySignature(keyring, nil); err != nil {
+				t.Fatalf("go-crypto rejects the cleartext signature: %v", err)
+			}
+			// go-crypto returns the text without its final line ending, which the framework treats
+			// as the separator before the signature. GnuPG and sqv, below, give it back whole.
+			if string(block.Plaintext)+"\n" != releaseFile {
+				t.Fatalf("the text read back differs from the text signed:\n%q\n%q", block.Plaintext, releaseFile)
+			}
+			tampered := bytes.Replace(signed.Bytes(), []byte("Suite: stable"), []byte("Suite: sid   "), 1)
+			if other, _ := clearsign.Decode(tampered); other == nil {
+				t.Fatal("the tampered document did not parse at all; the control proves nothing")
+			} else if _, err := other.VerifySignature(keyring, nil); err == nil {
+				t.Fatal("go-crypto accepted the signature over a changed text")
+			}
+
+			// GnuPG, then the two verifiers apt has used.
+			gpg := requireGPG(t)
+			home, work := gnupgHome(t), t.TempDir()
+			keyPath, inRelease, tamperedPath := filepath.Join(work, "key.asc"), filepath.Join(work, "InRelease"), filepath.Join(work, "InRelease.tampered")
+			for path, contents := range map[string][]byte{keyPath: exported.Bytes(), inRelease: signed.Bytes(), tamperedPath: tampered} {
+				if err := os.WriteFile(path, contents, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if output, err := gnupg(t, gpg, home, "--import", keyPath); err != nil {
+				t.Fatalf("gpg --import: %v\n%s", err, output)
+			}
+			extracted := filepath.Join(work, "Release.gpg-out")
+			if output, err := gnupg(t, gpg, home, "--output", extracted, "--decrypt", inRelease); err != nil || !strings.Contains(output, "[GNUPG:] VALIDSIG "+key.Fingerprint()) {
+				t.Fatalf("gpg does not accept the cleartext signature: %v\n%s\n%s", err, output, signed.String())
+			}
+			if text, err := os.ReadFile(extracted); err != nil || string(text) != releaseFile {
+				t.Fatalf("gpg extracted a different text (%v):\n%q", err, text)
+			}
+			if output, err := gnupg(t, gpg, home, "--verify", tamperedPath); err == nil || !strings.Contains(output, "[GNUPG:] BADSIG") {
+				t.Fatalf("gpg accepted the signature over a changed text: %v\n%s", err, output)
+			}
+
+			// gpgv takes a binary keyring; apt before 3.0 runs it on InRelease.
+			keyring4gpgv := filepath.Join(work, "trusted.gpg")
+			if output, err := gnupg(t, gpg, home, "--output", keyring4gpgv, "--dearmor", keyPath); err != nil {
+				t.Fatalf("gpg --dearmor: %v\n%s", err, output)
+			}
+			gpgv := requireVerifier(t, "gpgv", true)
+			if output, err := exec.Command(gpgv, "--keyring", keyring4gpgv, "--status-fd", "1", inRelease).CombinedOutput(); err != nil || !strings.Contains(string(output), "[GNUPG:] VALIDSIG "+key.Fingerprint()) {
+				t.Fatalf("gpgv does not accept InRelease: %v\n%s", err, output)
+			}
+			if output, err := exec.Command(gpgv, "--keyring", keyring4gpgv, "--status-fd", "1", tamperedPath).CombinedOutput(); err == nil {
+				t.Fatalf("gpgv accepted the changed InRelease:\n%s", output)
+			}
+			// sqv (Sequoia) is apt 3's verifier. It is not on every system this test runs on, so
+			// its absence is logged, not failed.
+			if sqv := requireVerifier(t, "sqv", false); sqv != "" {
+				out := filepath.Join(work, "Release.sqv-out")
+				if output, err := exec.Command(sqv, "--keyring", keyPath, "--output", out, "--cleartext", inRelease).CombinedOutput(); err != nil {
+					t.Fatalf("sqv does not accept InRelease: %v\n%s", err, output)
+				}
+				// sqv returns the text without its final line ending (the framework's separator);
+				// GnuPG, above, puts one back.
+				if text, err := os.ReadFile(out); err != nil || strings.TrimSuffix(string(text), "\n")+"\n" != releaseFile {
+					t.Fatalf("sqv extracted a different text (%v):\n%q", err, text)
+				}
+				if output, err := exec.Command(sqv, "--keyring", keyPath, "--output", out+".tampered", "--cleartext", tamperedPath).CombinedOutput(); err == nil {
+					t.Fatalf("sqv accepted the changed InRelease:\n%s", output)
+				}
+			} else {
+				t.Log("sqv is not installed; apt 3's verifier was not exercised here")
+			}
+		})
+	}
+}
+
+// requireVerifier finds an apt verifier. A required one follows REGALIA_EXPECT_GPG (absent is a
+// failure when the job says it installed GnuPG); an optional one returns "" when absent.
+func requireVerifier(t *testing.T, name string, required bool) string {
+	t.Helper()
+	path, err := exec.LookPath(name)
+	if err == nil {
+		return path
+	}
+	if !required {
+		return ""
+	}
+	if expect, _ := strconv.ParseBool(os.Getenv("REGALIA_EXPECT_GPG")); expect {
+		t.Fatalf("REGALIA_EXPECT_GPG is set, but %s is not on PATH: %v", name, err)
+	}
+	t.Skipf("%s is not on PATH: %v", name, err)
+	return ""
+}
+
+// The framework's own rules, held to GnuPG's reading of them: a line that begins with a dash is
+// escaped and comes back whole, a text without a final newline is signed and comes back without
+// one, and trailing blanks on a line are outside the signature.
+func TestClearSigningFollowsTheCleartextFrameworkAsGnuPGReadsIt(t *testing.T) {
+	gpg := requireGPG(t)
+	tc := keyCases()[1]
+	kms := newFakeKMS(t, tc.key)
+	key := kms.key4(t, tc.key.Public())
+	var exported bytes.Buffer
+	if err := key.ExportPublic(context.Background(), &exported); err != nil {
+		t.Fatal(err)
+	}
+	home, work := gnupgHome(t), t.TempDir()
+	keyPath := filepath.Join(work, "key.asc")
+	if err := os.WriteFile(keyPath, exported.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := gnupg(t, gpg, home, "--import", keyPath); err != nil {
+		t.Fatalf("gpg --import: %v\n%s", err, output)
+	}
+	for name, text := range map[string]string{
+		"lines beginning with a dash": "- a list item\n-----BEGIN PGP SIGNATURE-----\nnot a signature\n",
+		"no final newline":            "one line, unterminated",
+		"an empty document":           "",
+		"blank lines":                 "first\n\n\nlast\n",
+		"a From line":                 "From here on\nFrom there\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var signed bytes.Buffer
+			if _, err := key.ClearSign(context.Background(), &signed, strings.NewReader(text), fixedNow); err != nil {
+				t.Fatal(err)
+			}
+			path, out := filepath.Join(t.TempDir(), "signed.asc"), filepath.Join(t.TempDir(), "text")
+			if err := os.WriteFile(path, signed.Bytes(), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if output, err := gnupg(t, gpg, home, "--output", out, "--decrypt", path); err != nil || !strings.Contains(output, "[GNUPG:] VALIDSIG "+key.Fingerprint()) {
+				t.Fatalf("gpg does not accept it: %v\n%s\n%s", err, output, signed.String())
+			}
+			// GnuPG ends the extracted text with a newline whether or not the original had one.
+			if extracted, err := os.ReadFile(out); err != nil || strings.TrimSuffix(string(extracted), "\n") != strings.TrimSuffix(text, "\n") {
+				t.Fatalf("gpg extracted %q, signed %q (%v)", extracted, text, err)
+			}
+		})
+	}
+	// Trailing blanks are not signed: two texts that differ only there carry interchangeable
+	// signatures. That is the framework, and the reason a byte-exact artifact gets a detached one.
+	var signed bytes.Buffer
+	if _, err := key.ClearSign(context.Background(), &signed, strings.NewReader("value: 1\n"), fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	padded := filepath.Join(work, "padded.asc")
+	if err := os.WriteFile(padded, bytes.Replace(signed.Bytes(), []byte("value: 1\n"), []byte("value: 1  \t\n"), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := gnupg(t, gpg, home, "--verify", padded); err != nil {
+		t.Fatalf("gpg rejected a text that differs only in trailing blanks, so the framework is not what this test says it is: %v\n%s", err, output)
+	}
+}
+
+func TestARefusedClearSignWritesNothing(t *testing.T) {
+	tc := keyCases()[2] // RSA: the path where go-crypto would lose the signer's error
+	kms := newFakeKMS(t, tc.key)
+	kms.respond = func(writer http.ResponseWriter, seen seenRequest, _ []byte) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(writer).Encode(map[string]any{"request_id": seen.requestID, "code": "DENIED", "message": "request failed", "retryable": false})
+	}
+	var out bytes.Buffer
+	_, err := kms.key4(t, tc.key.Public()).ClearSign(context.Background(), &out, strings.NewReader(releaseFile), fixedNow)
+	var failure *KMSError
+	if !errors.As(err, &failure) || failure.Code != "DENIED" || out.Len() != 0 {
+		t.Fatalf("expected KMSError DENIED and no output, got %v (%d bytes written)", err, out.Len())
 	}
 }
