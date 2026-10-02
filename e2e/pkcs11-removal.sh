@@ -149,9 +149,34 @@ else
 fi
 
 hdr "4  startup without the token"
+# THE PIN GOES TO THIS TOKEN OR TO NOTHING. This step once logged in by a hard-coded token LABEL;
+# with the token under test removed, that label matched ANOTHER token on the bench, which was handed
+# this token's PIN and spent a try (2026-10-02). It now does what the daemon does: the token is
+# looked for by serial (absent), and the operation is attempted on the removed token's own slot ID,
+# which must hold no token at all, so no card can receive the PIN. If any token sits in that slot,
+# the attempt is not made.
+STALE="$SLOT"
 remove; sleep 2
-out="$(pkcs11-tool --module "$MODULE" --login --pin env:REGALIA_Q_PIN --token-label regalia-staging --sign --mechanism ECDSA --id "$ID_EC" -i "$W/h1" -o "$W/sx" 2>&1)"; rc=$?; log "startup without token: rc=$rc $out"
-[ "$rc" != 0 ] && [ ! -s "$W/sx" ] && P "an operation with the token absent fails outright (no fallback, no output)" || F "an operation succeeded without the token"
+slot_has_token(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+import re, sys
+want, cur, hit = sys.argv[1], None, False
+for line in sys.stdin:
+    m = re.match(r"Slot \d+ \((0x[0-9a-f]+)\)", line)
+    if m:
+        cur = m.group(1)
+    elif cur == want and "token label" in line:
+        hit = True
+sys.exit(0 if hit else 1)' "$1"; }
+if [ -n "$(slot_of)" ]; then
+  F "the token is still listed while removed: no startup test"
+elif slot_has_token "$STALE"; then
+  F "slot $STALE holds another token after the removal: not presenting this token's PIN to it"
+else
+  out="$(p11l --sign --mechanism ECDSA --id "$ID_EC" -i "$W/h1" -o "$W/sx" 2>&1)"; rc=$?; log "startup without token (slot $STALE, empty): rc=$rc $out"
+  [ "$rc" != 0 ] && [ ! -s "$W/sx" ] && ! grep -q 'CKR_PIN' <<< "$out" \
+    && P "an operation with the token absent fails outright (no fallback, no output, no PIN presented)" \
+    || F "an operation with the token absent did not fail cleanly: $(tail -1 <<< "$out")"
+fi
 restore; wait_back && sign_once start && P "it works once the token is back" || F "no recovery after restore"
 
 hdr "5  cleanup"
