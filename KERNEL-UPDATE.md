@@ -72,9 +72,9 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 | # | Step | Status |
 |---|---|---|
 | 1.1 | Build the new kernel as a Unified Kernel Image (UKI) | **NOT BUILT**: no UKI build exists for these hosts (#57) |
-| 1.2 | Predict its PCR 11: `systemd-measure calculate` | **manual**; shown on a software TPM (`e2e/pcr-signed-policy-swtpm.sh`) |
+| 1.2 | Predict its PCR 11 **in the two phases a host is judged in**: `systemd-measure calculate --phase=enter-initrd --phase=enter-initrd:leave-initrd:sysinit:ready`. The first is what the host measures when it asks for its disk, the second when it asks for a lease | **manual**; shown on a software TPM (`e2e/pcr-signed-policy-swtpm.sh`) |
 | 1.3 | Sign that prediction with the PCR-signing key (`systemd-measure sign`, or `ukify --pcr-private-key`), so the PIN and the local unlock share open under the new image with no reseal | **manual**; the key's custody is undecided (#57, ADR-0002 D19) |
-| 1.4 | For each host, write its new accepted set: its TPM firmware version and its PCR values with the new PCR 11. The other PCRs come from that host's own survey (`pcr_survey.py snapshot`, `classify`) | survey **exists**; assembling the document is **NOT BUILT** (hand-written JSON today) |
+| 1.4 | For each host, write its new accepted set: its TPM firmware version, its PCR values, and the new PCR 11 **per phase** (`"phases": {"initrd": {"11": …}, "system": {"11": …}}`, the two values of step 1.2). The other PCRs come from that host's own survey (`pcr_survey.py snapshot`, `classify`) | the per-phase set **exists** (`attest.py`, `measurements.py`); survey **exists**; assembling the document is **NOT BUILT** (hand-written JSON today) |
 | 1.5 | Write the CURRENT + NEXT measurement document: for every host, its current set, then the new one **listed last** | format and checks **exist** (`measurements.validate`); no authoring tool |
 
 ### 2. Approve: the root signs "both are accepted"
@@ -89,7 +89,7 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
 | 2.6 | Sign with the offline root key | **NOT BUILT**: the root key is "proposed" (THREE-SITE-SECRETS.md); no ceremony generates it and no tool signs with it |
 | 2.7 | Bring manifest N+1 and the document to all three hosts; each commits the manifest (its TPM epoch counter rises) and rebuilds its attestation policy from the document | commit **exists** (`membership.Store`), exchange between nodes **exists** (`convergence.py`); installing the document and reloading the policy on a running host is **NOT BUILT** |
-| 2.8 | Check that all three hold epoch N+1: on each host, `python3 -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced), and compare the three answers | **exists**, one host at a time; nothing collects the three |
+| 2.8 | Check that all three hold epoch N+1: on each host, `python3 -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced; a chain that is not the one the TPM recorded is refused), and compare the three answers | **exists**, one host at a time; nothing collects the three |
 
 ### 3. Update the hosts, one at a time, in the order of their node IDs
 
@@ -100,7 +100,7 @@ For each host, in order:
 | 3.1 | Install the new UKI beside the current one; the current one stays the fallback entry | **manual** (`kernel-install`, `bootctl`); not rehearsed on these hosts |
 | 3.2 | Ask whether this host may reboot now: `python3 -m deploy.baremetal.rollout may-reboot …` (the manifest, the document, this node, the image it runs, its boot session, its verifier state, its leases). It refuses unless an update is approved for this host, the hosts before it are back on the new image, and both peers have vouched for this boot in the last five minutes | **exists** as a command; where the leases, the boot session and authenticated time come from on a running host is **NOT BUILT** (the lease service of #74 holds them) |
 | 3.3 | Reboot into the new image | **manual** |
-| 3.4 | The host is unlocked by a peer and the KMS serves again, with nobody present | the peer's decision **exists** (`replacement.may_unlock`, `unlock.py`); the boot-time client that asks for it is **NOT BUILT** (#66, #67 in progress). Today the disk unlocks from the local TPM alone (#135) |
+| 3.4 | The host is unlocked by a peer and the KMS serves again, with nobody present. The peer accepts the unlock request only from the image's initrd phase, and the lease request only once the host has booted | the peer's decision **exists** (`replacement.may_unlock`, `unlock.py`); the boot-time client that asks for it is **NOT BUILT** (#66, #67 in progress). Today the disk unlocks from the local TPM alone (#135) |
 | 3.5 | **Wait until the host is back and serving before touching the next one.** `may_reboot` alone is not the interlock: for up to five minutes after a host falls back or goes down, the next one may still be told it can go | the limit is stated and tested (`rollout.py`, LIMITS) |
 | 3.6 | If the new image does not boot: the boot loader falls back to the current image by itself, and the host is unlocked as before, because both are accepted | systemd-boot boot counting: **manual**, not rehearsed; the acceptance of both **exists** |
 | 3.7 | If it boots but its peers refuse it, the prediction in step 1 was wrong: boot the current image, fix the document, and repeat step 2 with a new manifest | **manual** |
@@ -109,7 +109,7 @@ For each host, in order:
 
 | # | Step | Status |
 |---|---|---|
-| 4.1 | Collect each host's attestation state file and ask `python3 -m deploy.baremetal.rollout retire-ready … --state a=A.json --state b=B.json --state c=C.json`. It needs every host's file and refuses unless every host was last seen on the new image by every peer that has seen it | **exists**; collecting the files is **manual** |
+| 4.1 | Collect each host's attestation state file and ask `python3 -m deploy.baremetal.rollout retire-ready … --state a=A.json --state b=B.json --state c=C.json`. It needs every host's file and refuses unless every host was last seen **up** on the new image by every peer that has seen it (a host seen only in its initrd, where it asks for its disk, does not count) | **exists**; collecting the files is **manual** |
 | 4.2 | Let the cluster run on the new image for the agreed time before retiring the old one. Until step 5 the old image is the fallback | **manual**; the time is not decided |
 
 ### 5. Retire: the root signs "only the new one"

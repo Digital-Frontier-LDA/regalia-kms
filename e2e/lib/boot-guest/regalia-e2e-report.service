@@ -1,0 +1,10 @@
+[Unit]
+Description=regalia e2e: report that the root filesystem is up, and power off
+After=regalia-e2e-enrol.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/regalia/e2e-report
+
+[Install]
+WantedBy=multi-user.target

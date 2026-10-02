@@ -51,8 +51,8 @@ class Case(rt.Case):
         rc, out, _ = self.run_cli("--json", *argv)
         return rc, json.loads(out)
 
-    def on(self, manifests):
-        return ["--membership", self.chain(*manifests), "--root-key", self.root]
+    def on(self, manifests, name="membership.json"):
+        return ["--membership", self.chain(*manifests, name=name), "--root-key", self.root]
 
 
 class Documents(Case):
@@ -124,7 +124,8 @@ class Epoch(Case):
         with mock.patch.object(m.HighWater, "advance", advanced), mock.patch.object(m.HighWater, "_advance", advanced), \
                 mock.patch.object(m.HighWater, "define", advanced):
             for high_water, want in ((2, None), (3, "ROLLBACK: "), (1, "which this host has not anchored yet (TPM high-water 1)")):
-                with self.subTest(high_water=high_water), mock.patch.object(m.HighWater, "value", return_value=high_water):
+                with self.subTest(high_water=high_water), mock.patch.object(m.HighWater, "value", return_value=high_water), \
+                        mock.patch.object(m.HighWater, "verify", return_value=high_water), mock.patch.object(m.HighWater, "pinned", return_value=True):
                     rc, out, err = self.run_cli(*argv)
                     if want is None:
                         self.assertEqual((rc, err), (0, ""))
@@ -133,9 +134,84 @@ class Epoch(Case):
                     else:
                         self.assertEqual(rc, 1)
                         self.assertIn(want, err)
+            with mock.patch.object(m.HighWater, "value", return_value=2), mock.patch.object(m.HighWater, "verify", return_value=3), \
+                    mock.patch.object(m.HighWater, "pinned", return_value=True):
+                self.assertIn("TPM high-water moved during the check: run it again", self.run_cli(*argv)[2])
             with mock.patch.object(m.HighWater, "value", side_effect=m.Refused("cannot read NV index 0x1500016")):
                 self.assertIn("cannot read NV index", self.run_cli(*argv)[2])
         advanced.assert_not_called()
+
+    def anchored(self, *manifests):
+        """A HighWater on a fake TPM that a node's Store has anchored to this chain."""
+        tpm = hbt.FakeTpm()
+        anchor = m.HighWater("0x1500016", lock_path=os.path.join(self.d, "hw.lock"), run=tpm)
+        anchor.define()
+        store = m.Store(os.path.join(self.d, "node-membership.json"), self.root, anchor)
+        for manifest in manifests:
+            store.commit(rt.sign(manifest))
+        return tpm, anchor, store
+
+    def test_with_a_tpm_index_a_substituted_chain_of_the_same_length_is_refused(self):
+        """The counter alone cannot tell two root-signed chains of one length apart; the TPM's record of the
+        manifest does, and membership.Store.load refuses the other. So must the operator's check."""
+        tpm, anchor, store = self.anchored(self.m1)
+        rival = self.under(NEXT, epoch=2, prev=m.digest(self.m1))
+        self.assertNotEqual(m.digest(rival), m.digest(self.m2))
+        mine = ["epoch", *self.on([self.m1, self.m2]), "--tpm-index", "0x1500016"]
+        substituted = self.on([self.m1, rival], name="rival.json")
+        with mock.patch.object(rollout.membership, "HighWater", return_value=anchor) as built:
+            # The crash window, as a crash leaves it: the chain with epoch 2 is on disk, the counter moved to 2,
+            # the record still names epoch 1. The service completes it on its next load; the operator's check
+            # does not, and does not vouch for epoch 2 meanwhile.
+            self.write("node-membership.json", [rt.sign(self.m1), rt.sign(self.m2)])
+            anchor.advance(2)
+            self.assertFalse(anchor.pinned())
+            behind = repr(sorted(tpm.nv.items()))
+            for chain in (mine[1:-2], substituted):
+                rc, out, err = self.run_cli("epoch", *chain, "--tpm-index", "0x1500016")
+                self.assertEqual((rc, out), (1, ""))
+                self.assertIn("records the manifest at epoch 1, not yet the one at its high-water 2", err)
+                self.assertIn("restart the node's service", err)
+            self.assertEqual(repr(sorted(tpm.nv.items())), behind)                   # nothing was repaired
+            self.assertEqual(store.load()["epoch"], 2)                               # the service's load completes the record
+            self.assertTrue(anchor.pinned())
+            before = repr(sorted(tpm.nv.items()))
+            rc, out, err = self.run_cli(*mine)
+            self.assertEqual((rc, err), (0, ""))
+            self.assertTrue(self.as_json(*mine)[1]["checked_against_tpm"])
+            built.assert_called_with("0x1500016")
+            for argv in (["epoch", *substituted], ["propose", *substituted, "--old", self.write("o.json", BOTH), "--new", self.write("n.json", NEXT)]):
+                with self.subTest(argv[0]):
+                    rc, out, err = self.run_cli(*argv, "--tpm-index", "0x1500016")
+                    self.assertEqual((rc, out), (1, ""))
+                    self.assertIn("CONFLICT: the manifest at epoch 2 is not the one this node's TPM recorded", err)
+                    rc, report = self.as_json(*argv, "--tpm-index", "0x1500016")
+                    self.assertEqual(rc, 1)
+                    self.assertNotIn("checked_against_tpm", report)
+                    self.assertNotIn("unsigned_manifest", report)
+            self.assertEqual(self.run_cli("epoch", *substituted)[0], 0)          # without the TPM it is believed, and the output says so
+            self.assertIn("NOT checked", self.run_cli("epoch", *substituted)[1])
+            self.assertEqual(repr(sorted(tpm.nv.items())), before)               # the checks wrote nothing to the TPM
+            # the service commits epoch 3 between the command's two readings of the anchor: refused, not a traceback
+            m3 = self.under(NEXT, epoch=3, prev=m.digest(self.m2))
+            store.commit(rt.sign(m3))
+            with mock.patch.object(anchor, "value", return_value=2):     # the first reading, taken before that commit
+                rc, out, err = self.run_cli(*mine)
+            self.assertEqual((rc, out), (1, ""))
+            self.assertIn("TPM high-water moved during the check: run it again", err)
+            self.assertNotIn("Traceback", err)
+
+    def test_a_malformed_tpm_index_is_refused_and_never_reaches_the_tpm(self):
+        with mock.patch.object(rollout.membership, "HighWater", side_effect=AssertionError("the TPM was reached")):
+            for index in ("zz", "1500016", "0x", "0x1500016 ", "0x15000160000", "-0x1"):
+                with self.subTest(index=index):
+                    argv = ["epoch", *self.on([self.m1]), "--tpm-index=" + index]
+                    rc, out, err = self.run_cli(*argv)
+                    self.assertEqual((rc, out), (1, ""))
+                    self.assertIn("--tpm-index must be an NV index as 0x followed by 1 to 8 hex digits", err)
+                    rc, report = self.as_json(*argv)
+                    self.assertEqual(rc, 1)
+                    self.assertIn("--tpm-index must be", json.dumps(report))
 
 
 class Propose(Case):
