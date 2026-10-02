@@ -23,6 +23,7 @@ INSTALLER = "the installer's passphrase"
 # Two recovery keys in systemd's format. Test values: they open nothing but the images made here.
 KEY = "cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"
 NEW_KEY = "vvuuttrr-nnllkkjj-iihhggff-eeddccbb-cbdefghi-jklnrtuv-bcdefghi-jklnrtuc"
+THIRD_KEY = "rtuvcbde-fghijkln-bcdefghi-jklnrtuv-vvttrrnn-llkkjjii-hhggffee-ddccbbcc"
 FAST = ["--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000"]
 
 
@@ -41,10 +42,16 @@ class RecoveryKey(unittest.TestCase):
         self.bin = os.path.join(self.dir, "bin")
         os.mkdir(self.bin)
         self.argv_log = os.path.join(self.dir, "argv.log")
+        # REGALIA_TEST_FAIL: command-line fragments separated by "|"; a call containing one exits 1
+        # without reaching cryptsetup. REGALIA_TEST_SIGNAL: on a call containing it, the script that
+        # made the call is sent TERM (and the call fails); REGALIA_TEST_KILL: it is sent KILL.
         shim = os.path.join(self.bin, "cryptsetup")
         with open(shim, "w", encoding="ascii") as f:
-            f.write('#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n'
-                    'case " $* " in *" $REGALIA_TEST_FAIL_SUBCOMMAND "*) [ -n "$REGALIA_TEST_FAIL_SUBCOMMAND" ] && exit 1;; esac\n'
+            f.write('#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\nline=" $* "\n'
+                    'IFS="|" read -r -a fragments <<< "${REGALIA_TEST_FAIL:-}"\n'
+                    'for fragment in "${fragments[@]}"; do [ -n "$fragment" ] && [[ "$line" == *" $fragment "* ]] && exit 1; done\n'
+                    '[ -n "${REGALIA_TEST_SIGNAL:-}" ] && [[ "$line" == *" $REGALIA_TEST_SIGNAL "* ]] && { kill -TERM "$PPID"; exit 1; }\n'
+                    '[ -n "${REGALIA_TEST_KILL:-}" ] && [[ "$line" == *" $REGALIA_TEST_KILL "* ]] && { kill -KILL "$PPID"; exit 1; }\n'
                     'exec "%s" "$@"\n' % (self.argv_log, CRYPTSETUP))
         os.chmod(shim, os.stat(shim).st_mode | stat.S_IXUSR)
 
@@ -60,8 +67,9 @@ class RecoveryKey(unittest.TestCase):
             self.assertEqual(done.returncode, 0, "cryptsetup %s: %s" % (" ".join(args), done.stderr))
         return done
 
-    def run_script(self, mode, *lines, fail_subcommand=""):
-        env = dict(os.environ, PATH=self.bin + os.pathsep + PATH, REGALIA_TEST_FAIL_SUBCOMMAND=fail_subcommand)
+    def run_script(self, mode, *lines, fail_subcommand="", signal="", kill=""):
+        env = dict(os.environ, PATH=self.bin + os.pathsep + PATH, REGALIA_TEST_FAIL=fail_subcommand,
+                   REGALIA_TEST_SIGNAL=signal, REGALIA_TEST_KILL=kill)
         return subprocess.run(["bash", SCRIPT, "--" + mode, self.img], input="".join(l + "\n" for l in lines),
                               capture_output=True, text=True, env=env, timeout=120)
 
@@ -157,7 +165,7 @@ class RecoveryKey(unittest.TestCase):
     def test_enrol_refuses_and_changes_nothing(self):
         before = self.header()
         cases = {
-            "a passphrase that does not open the volume": (("not the passphrase", KEY), "refused to add the keyslot"),
+            "a passphrase that does not open the volume": (("not the passphrase", KEY), "that passphrase does not open"),
             "a key in capitals": ((INSTALLER, KEY.upper()), "CAPITALS"),
             "a key without dashes": ((INSTALLER, KEY.replace("-", "")), "wrong grouping"),
             "the lockout authorization typed here by mistake": ((INSTALLER, "ABCDEFGHJKMNPQRSTUVW"), "not a recovery key"),
@@ -174,7 +182,7 @@ class RecoveryKey(unittest.TestCase):
         # is exactly when a keyslot removal that read standard input would wait for ever.
         # So the pipe is HELD OPEN here, as a terminal or a wrapper script would hold it: the lines are
         # written and the writing end is not closed until the script has returned.
-        env = dict(os.environ, PATH=self.bin + os.pathsep + PATH, REGALIA_TEST_FAIL_SUBCOMMAND="token import")
+        env = dict(os.environ, PATH=self.bin + os.pathsep + PATH, REGALIA_TEST_FAIL="token import")
         with subprocess.Popen(["bash", SCRIPT, "--enrol", self.img], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env) as held:
             held.stdin.write(INSTALLER + "\n" + KEY + "\n")
             held.stdin.flush()
@@ -201,7 +209,7 @@ class RecoveryKey(unittest.TestCase):
         self.assertEqual(self.header(), before)
         # The new keyslot does not open with the key (cryptsetup's own test fails): it is taken back,
         # keyslot and token.
-        done = self.run_script("enrol", INSTALLER, KEY, fail_subcommand="--test-passphrase")
+        done = self.run_script("enrol", INSTALLER, KEY, fail_subcommand="--test-passphrase --key-slot 1")
         self.assertEqual(done.returncode, 1)
         self.assertIn("was removed again", done.stderr)
         self.assertEqual(self.header(), before)
@@ -217,7 +225,7 @@ class RecoveryKey(unittest.TestCase):
         self.cs("luksKillSlot", "--batch-mode", self.img, "0")
         before = self.header()
         for name, (lines, reason) in {
-            "a used key that is not this host's": ((NEW_KEY, NEW_KEY), "does not open the recovery keyslot"),
+            "a used key that is not this host's": ((THIRD_KEY, NEW_KEY), "does not open the recovery keyslot"),
             "the same key again": ((KEY, KEY), "the new key is the used key"),
             "a new key in capitals": ((KEY, NEW_KEY.upper()), "CAPITALS"),
         }.items():
@@ -248,6 +256,145 @@ class RecoveryKey(unittest.TestCase):
         done = subprocess.run(["bash", SCRIPT, "--check", self.img, KEY], capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 1)
         self.assertIn("one device", done.stderr)
+
+    def tokens(self):
+        return {i: (t["type"], t["keyslots"]) for i, t in self.header()["tokens"].items()}
+
+    def test_the_script_does_not_say_removed_when_its_own_removal_failed(self):
+        """undo is the script's promise that a failed run changed nothing. It is checked against the
+        header, and when the keyslot is still there the operator is told that the key just typed
+        opens the disk, with the commands that remove it."""
+        before = self.header()
+        # The token cannot be written AND the keyslot cannot be taken back (a header that stopped
+        # being writable after the key was added).
+        done = self.run_script("enrol", INSTALLER, KEY, fail_subcommand="token import|luksKillSlot")
+        self.assertEqual(done.returncode, 1)
+        self.assertNotIn("removed again", done.stderr)
+        self.assertNotIn("Nothing was changed", done.stderr)
+        self.assertIn("keyslot 1 of %s COULD NOT BE REMOVED and holds the key just typed" % self.img, done.stderr)
+        self.assertIn("cryptsetup luksKillSlot %s 1" % self.img, done.stderr)
+        self.assertTrue(self.opens(KEY), "the premise: the key is in the header, unlabelled")
+        self.assertEqual(self.tokens(), {})
+        # ... and the next --enrol does not enrol another key beside it: a keyslot no token names
+        # that the typed passphrase does not open is refused.
+        again = self.run_script("enrol", INSTALLER, NEW_KEY)
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("keyslot 1 is a passphrase no token names and it is NOT the one you typed", again.stderr)
+        self.assertFalse(self.opens(NEW_KEY))
+        self.cs("luksKillSlot", "--batch-mode", self.img, "1")
+        self.assertEqual(self.header(), before)
+        # The proof fails, the keyslot IS removed, and only the token removal fails: the message says
+        # the keyslot is gone and which token is left; the next --enrol sweeps the empty token.
+        done = self.run_script("enrol", INSTALLER, KEY, fail_subcommand="--test-passphrase --key-slot 1|token remove")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("its token 0 remains", done.stderr)
+        self.assertFalse(self.opens(KEY))
+        self.assertEqual(self.tokens(), {"0": ("systemd-recovery", [])})
+        self.assertEqual(self.run_script("enrol", INSTALLER, KEY).returncode, 0)
+        self.assertEqual(self.tokens(), {"0": ("systemd-recovery", ["1"])}, "the empty token was not swept before the new one was written")
+
+    def test_replace_takes_back_its_new_keyslot_or_says_it_could_not(self):
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        slot = next(t["keyslots"][0] for t in self.header()["tokens"].values())
+        # The new keyslot does not prove, and cannot be removed: the new key opens the disk and the
+        # script says so. It must not strip the new keyslot's token and call it "removed".
+        done = self.run_script("replace", KEY, NEW_KEY, fail_subcommand="--test-passphrase --key-slot 0|luksKillSlot --batch-mode")
+        self.assertEqual(done.returncode, 1)
+        self.assertNotIn("was removed", done.stderr)
+        self.assertIn("COULD NOT BE REMOVED", done.stderr)
+        self.assertTrue(self.opens(NEW_KEY) and self.opens(KEY))
+        self.assertEqual(sorted(k for _, k in self.tokens().values()), [["0"], [slot]], "the stuck keyslot lost its token")
+
+    def test_a_new_key_is_proven_the_way_a_boot_prompt_tries_it(self):
+        """The new keyslot must open when it is named AND when no keyslot is named. If the second
+        fails, the used key is not destroyed for a key that a console could not use."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        before = self.header()
+        # only the open that names no keyslot fails ("--test-passphrase --key-file …")
+        done = self.run_script("replace", KEY, NEW_KEY, fail_subcommand="--test-passphrase --key-file")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("did not open with the new key and was removed; the used key is still enrolled", done.stderr)
+        self.assertEqual(self.header(), before)
+        self.assertTrue(self.opens(KEY))
+        self.assertFalse(self.opens(NEW_KEY))
+
+    def test_a_replace_that_stopped_half_way_is_finished_by_running_it_again(self):
+        """Between adding the new keyslot and destroying the used one, BOTH keys open the disk. A
+        failure or a kill there must not leave a state no mode of this script will touch."""
+        for name, how in {"the used keyslot could not be destroyed": {"fail_subcommand": "luksKillSlot --key-file"},
+                          "the script was killed at that step": {"kill": "luksKillSlot --key-file"}}.items():
+            with self.subTest(name=name):
+                self.setUp()
+                self.enrolled()
+                self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+                done = self.run_script("replace", KEY, NEW_KEY, **how)
+                self.assertNotEqual(done.returncode, 0)
+                if "fail_subcommand" in how:
+                    self.assertIn("Run --replace again with the same two keys to finish", done.stderr)
+                    self.assertIn("cryptsetup token remove --token-id", done.stderr)
+                self.assertTrue(self.opens(KEY) and self.opens(NEW_KEY), "the premise: both keys open the disk")
+                status = self.run_script("status")
+                self.assertEqual(status.returncode, 1)
+                self.assertIn("a --replace that did not finish", status.stderr)
+                self.assertIn("a --replace that did not finish", self.run_script("check", NEW_KEY).stderr)
+                # Not just any two keys finish it: the pair must be the used key of one and the new
+                # key of the other.
+                for wrong in ((THIRD_KEY, NEW_KEY), (KEY, THIRD_KEY)):
+                    refused = self.run_script("replace", *wrong)
+                    self.assertEqual(refused.returncode, 1)
+                    self.assertIn("these are not the used key of one and the new key of the other", refused.stderr)
+                done = self.run_script("replace", KEY, NEW_KEY)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                self.assertIn("an unfinished --replace was completed", done.stderr)
+                self.assertFalse(self.opens(KEY), "the used key still opens the disk")
+                self.assertTrue(self.opens(NEW_KEY))
+                ok, why = host_probe.recovery_keyslots(self.header())
+                self.assertTrue(ok, why)
+                self.assertEqual(self.run_script("status").returncode, 0)
+                self.assertEqual(len(self.tokens()), 1)
+
+    def test_a_signal_while_the_new_keyslot_is_unproven_takes_it_back(self):
+        before = self.header()
+        done = self.run_script("enrol", INSTALLER, KEY, signal="token import")
+        self.assertEqual(done.returncode, 130)
+        self.assertIn("interrupted: taking back keyslot 1", done.stderr)
+        self.assertEqual(self.header(), before)
+        self.assertFalse(self.opens(KEY))
+        # A kill cannot be caught: the key stays, as a keyslot no token names. The next --enrol
+        # refuses to work beside it (above), and --status does not pass.
+        done = self.run_script("enrol", INSTALLER, KEY, kill="token import")
+        self.assertEqual(done.returncode, -9)
+        self.assertTrue(self.opens(KEY))
+        self.assertEqual(self.run_script("status").returncode, 1)
+        self.assertIn("NOT the one you typed", self.run_script("enrol", INSTALLER, NEW_KEY).stderr)
+
+    def test_a_keyslot_removed_by_hand_leaves_a_host_that_can_be_commissioned_again(self):
+        """The documented revocation was 'kill the keyslot'. cryptsetup then leaves the recovery token
+        behind, naming nothing: --status says so, and enrolling a new key gives a header the probe
+        accepts (one recovery key, not 'two tokens')."""
+        self.enrolled()
+        slot = next(t["keyslots"][0] for t in self.header()["tokens"].values())
+        self.cs("luksKillSlot", "--batch-mode", self.img, slot)
+        self.assertEqual(self.tokens(), {"0": ("systemd-recovery", [])})
+        self.assertEqual(self.run_script("enrol", INSTALLER, NEW_KEY).returncode, 0)
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        ok, why = host_probe.recovery_keyslots(self.header())
+        self.assertTrue(ok, why)
+        self.assertEqual(self.run_script("status").returncode, 0)
+
+    def test_a_keyslot_a_boot_prompt_would_skip_does_not_pass_check(self):
+        self.enrolled()
+        slot = next(t["keyslots"][0] for t in self.header()["tokens"].values())
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.cs("config", "--priority", "ignore", "--key-slot", slot, self.img)
+        self.assertTrue(self.opens(KEY, slot))
+        self.assertFalse(self.opens(KEY), "the premise: with no keyslot named, an ignored keyslot is not tried")
+        done = self.run_script("check", KEY)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("NOT the volume as a boot prompt tries it", done.stderr)
+        self.assertIn("priority 'ignore'", host_probe.recovery_keyslots(self.header())[1])
 
 
 if __name__ == "__main__":
