@@ -74,6 +74,12 @@ jobs:
         # refused for an unsigned kernel, another key, a changed PCR 7 or an uncovered boot phase.
         run: bash e2e/pcr-signed-policy-swtpm.sh
 
+      - name: TPM lockout settings and power cuts, against software TPMs (swtpm)
+        # deploy/baremetal/tpm-lockout.sh sets the dictionary-attack policy and a lockout authorization;
+        # host_probe's tpm_lockout_policy measures it and fails on drift; the PIN import key (noda)
+        # is unaffected by power cuts, a PIN credential counts one try per cut and the tries heal (#57).
+        run: bash e2e/tpm-lockout-swtpm.sh
+
       - name: Bare-metal host firewall, by behaviour, in network namespaces
         # The rendered default-deny ruleset is loaded only inside a throwaway namespace; the zones probe
         # it with network_probe.py, and outbound is checked against the declared sinks.
