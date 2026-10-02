@@ -367,7 +367,9 @@ func (session *pkcs11Session) OffersMechanism(ctx context.Context, operation, al
 		return nil
 	}
 	offered, err := session.module.GetMechanismList(session.slot)
-	if err != nil {
+	// A list with nothing in it is not a token that can do nothing: it is a list that was not
+	// read. Calling it a definite "no" would refuse every object on the token at startup.
+	if err != nil || len(offered) == 0 {
 		return errors.New("PKCS#11 mechanism list unavailable")
 	}
 	for _, mechanism := range offered {

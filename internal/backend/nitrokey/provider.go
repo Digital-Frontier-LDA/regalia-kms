@@ -207,8 +207,10 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	// this object on this token, so nothing is gained by logging in to be told so again, and an
 	// answer that could not be read is refused the same way. The device is NOT latched: the fault is
 	// in one object's binding, and latching would let whoever may call that object take every other
-	// key on the token out of service. The daemon names the object at startup instead
-	// (requireTokensOfferBoundMechanisms).
+	// key on the token out of service. The daemon names the object at startup when the token is
+	// attached then (requireTokensOfferBoundMechanisms). When it is not, this refusal is all there
+	// is: the caller sees the same retryable "unavailable" as before, and nothing names the cause.
+	// What changed for that case is that the PIN is no longer presented for it.
 	if session.OffersMechanism(ctx, operation, route.Algorithm) != nil {
 		return nil, "", ErrUnavailable
 	}

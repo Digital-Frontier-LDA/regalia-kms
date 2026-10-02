@@ -94,6 +94,12 @@ func TestAMechanismListThatCannotBeReadIsNeitherAnswer(t *testing.T) {
 	if err == nil || errors.Is(err, ErrMechanismNotOffered) {
 		t.Fatalf("an unreadable mechanism list answered %v", err)
 	}
+	// A list with nothing in it was not read: a token that offered no mechanism at all would be
+	// refused for every object at startup on the strength of it.
+	err = mechanismSession(t, &fakeCryptoki{mechanisms: []uint{}}).OffersMechanism(context.Background(), "sign", "p384")
+	if err == nil || errors.Is(err, ErrMechanismNotOffered) {
+		t.Fatalf("an empty mechanism list answered %v", err)
+	}
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := mechanismSession(t, &fakeCryptoki{}).OffersMechanism(cancelled, "sign", "p384"); err == nil {
@@ -106,7 +112,8 @@ func TestAMechanismListThatCannotBeReadIsNeitherAnswer(t *testing.T) {
 func TestAnOperationTheTokenCannotDoIsRefusedBeforeThePINAndDoesNotLatchTheDevice(t *testing.T) {
 	for name, answer := range map[string]error{"the token does not offer it": ErrMechanismNotOffered, "the list could not be read": errors.New("unreadable")} {
 		session := &fakeSession{serial: "serial-1", devaut: binding().DevAuthFingerprint, mechanismErr: answer}
-		provider, err := New(&fakeDriver{session: session}, &fakePIN{value: []byte("123456")})
+		pins := &fakePIN{value: []byte("123456")}
+		provider, err := New(&fakeDriver{session: session}, pins)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -116,6 +123,19 @@ func TestAnOperationTheTokenCannotDoIsRefusedBeforeThePINAndDoesNotLatchTheDevic
 		}
 		if session.logged || session.loginCalls != 0 || len(session.pin) != 0 {
 			t.Fatalf("%s: the PIN was presented (logged=%v, calls=%d)", name, session.logged, session.loginCalls)
+		}
+		// Not fetched either, and the retry counter not read: the question comes first, and it is
+		// asked about this operation on this key.
+		if pins.calls != 0 {
+			t.Fatalf("%s: the PIN was fetched %d times for an operation the token cannot do", name, pins.calls)
+		}
+		if len(session.mechanismAsked) != 1 || session.mechanismAsked[0] != "sign/ed25519" {
+			t.Fatalf("%s: the token was asked %v, want [sign/ed25519]", name, session.mechanismAsked)
+		}
+		for _, step := range session.order {
+			if step == "PINRetries" || step == "Login" {
+				t.Fatalf("%s: %s was reached: %v", name, step, session.order)
+			}
 		}
 		if reason, latched := provider.QuarantineReason(binding().DeviceID); latched {
 			t.Fatalf("%s: the device was latched (%s)", name, reason)
@@ -130,13 +150,17 @@ func TestAnOperationTheTokenCannotDoIsRefusedBeforeThePINAndDoesNotLatchTheDevic
 	if _, _, err := provider.Execute(context.Background(), registry.Route{Algorithm: "p384", Binding: binding()}, "sign", "", "application/vnd.regalia.digest", []byte("digest"), nil); err != nil || !session.logged {
 		t.Fatalf("the control did not sign: err=%v logged=%v", err, session.logged)
 	}
-	asked := false
-	for _, step := range session.order {
-		if step == "mechanism" {
-			asked = true
+	position := map[string]int{}
+	for index, step := range session.order {
+		if _, seen := position[step]; !seen {
+			position[step] = index + 1
 		}
 	}
-	if !asked {
-		t.Fatalf("the provider did not ask the token about the mechanism: %v", session.order)
+	if position["mechanism"] == 0 || position["PINRetries"] == 0 || position["Login"] == 0 ||
+		position["mechanism"] > position["PINRetries"] || position["mechanism"] > position["Login"] {
+		t.Fatalf("the token must be asked before the retry counter is read and before login: %v", session.order)
+	}
+	if len(session.mechanismAsked) != 1 || session.mechanismAsked[0] != "sign/p384" {
+		t.Fatalf("the token was asked %v, want [sign/p384]", session.mechanismAsked)
 	}
 }

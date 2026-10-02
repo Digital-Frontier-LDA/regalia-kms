@@ -57,12 +57,17 @@ func (*mechanismToken) AssertKEKNonExportable(context.Context, string) error    
 type mechanismTokens struct {
 	token  *mechanismToken
 	absent bool
-	opened []registry.Binding
+	// sessionWithError makes Open return the session together with its error.
+	sessionWithError bool
+	opened           []registry.Binding
 }
 
 func (tokens *mechanismTokens) Open(_ context.Context, binding registry.Binding) (nitrokey.Session, error) {
 	tokens.opened = append(tokens.opened, binding)
 	if tokens.absent {
+		if tokens.sessionWithError {
+			return tokens.token, errors.New("commissioned PKCS#11 device is unavailable")
+		}
 		return nil, errors.New("commissioned PKCS#11 device is unavailable")
 	}
 	return tokens.token, nil
@@ -117,9 +122,12 @@ func TestObjectsATokenCannotServeAreRefusedAtStartupByName(t *testing.T) {
 	)
 	// What a SmartCard-HSM does not offer, as measured: EdDSA and AES.
 	hsm := &mechanismTokens{token: &mechanismToken{missing: map[string]bool{"sign/ed25519": true, "unwrap/aes-256": true}}}
-	err := requireTokensOfferBoundMechanisms(ctx, hsm, loaded)
+	unchecked, err := requireTokensOfferBoundMechanisms(ctx, hsm, loaded)
 	if err == nil {
 		t.Fatal("a registry binding ed25519 and an aes-256 KEK to a SmartCard-HSM was accepted")
+	}
+	if len(unchecked) != 0 {
+		t.Fatalf("a token that answered every question is reported unchecked: %v", unchecked)
 	}
 	for _, want := range []string{"release-ed25519 declares sign on a ed25519 key", "deploy-token declares release-secret on a aes-256 key", "DENK0000001"} {
 		if !strings.Contains(err.Error(), want) {
@@ -149,36 +157,45 @@ func TestObjectsATokenCannotServeAreRefusedAtStartupByName(t *testing.T) {
 
 	// A certificate needs the CA key's signing mechanism, under the name the manifest uses.
 	noECDSA := &mechanismTokens{token: &mechanismToken{missing: map[string]bool{"sign/p384": true}}}
-	if err := requireTokensOfferBoundMechanisms(ctx, noECDSA, hsmRegistry(t, "issuing-ca p384 - certificate-sign")); err == nil || !strings.Contains(err.Error(), "issuing-ca declares certificate-sign on a p384 key") {
+	if _, err := requireTokensOfferBoundMechanisms(ctx, noECDSA, hsmRegistry(t, "issuing-ca p384 - certificate-sign")); err == nil || !strings.Contains(err.Error(), "issuing-ca declares certificate-sign on a p384 key") {
 		t.Fatalf("a CA key the token cannot sign with: %v", err)
 	}
 
 	// The control: a token that offers everything refuses nothing.
-	if err := requireTokensOfferBoundMechanisms(ctx, &mechanismTokens{token: &mechanismToken{}}, loaded); err != nil {
-		t.Fatalf("a token offering every mechanism was refused: %v", err)
+	if unchecked, err := requireTokensOfferBoundMechanisms(ctx, &mechanismTokens{token: &mechanismToken{}}, loaded); err != nil || len(unchecked) != 0 {
+		t.Fatalf("a token offering every mechanism: err=%v unchecked=%v", err, unchecked)
 	}
 }
 
-// Only a definite "no" stops the daemon. An absent token, or a list that cannot be read, is a daemon
-// that is not ready yet; refusing to start for it would turn a pulled token into an outage that
-// outlives the token's return.
-func TestAnAbsentOrUnreadableTokenDoesNotStopTheDaemonStarting(t *testing.T) {
+// Only a definite "no" stops the daemon. An absent token, or a list that cannot be read, must not:
+// that would turn a pulled token into an outage that outlives the token's return. But it is
+// reported as unchecked, so that "checked and fine" and "not checked" do not look the same.
+func TestAnAbsentOrUnreadableTokenDoesNotStopTheDaemonAndIsReportedUnchecked(t *testing.T) {
 	loaded := hsmRegistry(t, "release-ed25519 ed25519 - sign", "wallet secp256k1 - sign")
 	absent := &mechanismTokens{absent: true}
-	if err := requireTokensOfferBoundMechanisms(context.Background(), absent, loaded); err != nil {
-		t.Fatalf("an absent token stopped the daemon: %v", err)
+	unchecked, err := requireTokensOfferBoundMechanisms(context.Background(), absent, loaded)
+	if err != nil || len(unchecked) != 1 || unchecked[0] != "DENK0000001" {
+		t.Fatalf("an absent token: err=%v unchecked=%v, want no error and the token named once", err, unchecked)
 	}
 	if len(absent.opened) != 1 {
-		t.Fatalf("the absent token was tried %d times, want 1: the check did not look", len(absent.opened))
+		t.Fatalf("the absent token was tried %d times, want 1", len(absent.opened))
 	}
 	unreadable := &mechanismTokens{token: &mechanismToken{unreadable: true}}
-	if err := requireTokensOfferBoundMechanisms(context.Background(), unreadable, loaded); err != nil {
-		t.Fatalf("an unreadable mechanism list stopped the daemon: %v", err)
+	unchecked, err = requireTokensOfferBoundMechanisms(context.Background(), unreadable, loaded)
+	if err != nil || len(unchecked) != 1 || unchecked[0] != "DENK0000001" {
+		t.Fatalf("an unreadable mechanism list: err=%v unchecked=%v, want no error and the token named once", err, unchecked)
 	}
 	if len(unreadable.token.asked) != 2 || unreadable.token.closed != 1 {
 		t.Fatalf("asked %v, closed %d: the token was not asked, or its session was left open", unreadable.token.asked, unreadable.token.closed)
 	}
-	if err := requireTokensOfferBoundMechanisms(context.Background(), absent, nil); err != nil {
-		t.Fatalf("an empty registry was refused: %v", err)
+	// A driver that hands back a session together with an error: the session is closed, and the
+	// token is unchecked, not used.
+	stray := &mechanismTokens{token: &mechanismToken{}, absent: true, sessionWithError: true}
+	unchecked, err = requireTokensOfferBoundMechanisms(context.Background(), stray, loaded)
+	if err != nil || len(unchecked) != 1 || stray.token.closed != 1 || len(stray.token.asked) != 0 {
+		t.Fatalf("a session returned with an error: err=%v unchecked=%v closed=%d asked=%v", err, unchecked, stray.token.closed, stray.token.asked)
+	}
+	if unchecked, err := requireTokensOfferBoundMechanisms(context.Background(), absent, nil); err != nil || len(unchecked) != 0 {
+		t.Fatalf("an empty registry: err=%v unchecked=%v", err, unchecked)
 	}
 }

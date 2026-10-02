@@ -18,9 +18,13 @@ import (
 type fakePIN struct {
 	value []byte
 	err   error
+	// calls counts fetches: "the PIN was not presented" and "the PIN was not even fetched" are
+	// different claims, and only this can tell them apart.
+	calls int
 }
 
 func (source *fakePIN) PIN(context.Context, string) ([]byte, error) {
+	source.calls++
 	// Return source.value alongside source.err so a test can isolate the err clause (provider.go:191)
 	// from the len(pin) clauses by setting value to a valid length (6..64) and err to non-nil —
 	// otherwise both clauses fire on the same fixture and the err operand is undetectable.
@@ -57,7 +61,8 @@ type fakeSession struct {
 	retriesErr error
 	loginErr   error
 	// mechanismErr is what OffersMechanism answers; nil means the token offers it.
-	mechanismErr error
+	mechanismErr   error
+	mechanismAsked []string
 	// closeErr makes Close refuse. Every other session fake in this package returns nil from
 	// Close unconditionally, which is why #312's guard had nothing that could fail it: a fake
 	// that makes the valid case convenient makes the invalid case unreachable.
@@ -154,8 +159,9 @@ func (session *fakeSession) Unwrap(_ context.Context, _, _ string, _, aad []byte
 	out = append(out, plaintext...)
 	return out, nil
 }
-func (session *fakeSession) OffersMechanism(context.Context, string, string) error {
+func (session *fakeSession) OffersMechanism(_ context.Context, operation, algorithm string) error {
 	session.order = append(session.order, "mechanism")
+	session.mechanismAsked = append(session.mechanismAsked, operation+"/"+algorithm)
 	return session.mechanismErr
 }
 
