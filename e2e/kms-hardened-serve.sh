@@ -251,8 +251,8 @@ hdr "4  the hardening, measured on that process"
 sudo env PYTHONPATH="$HERE" python3 - > "$W/probes" <<'PY'
 from deploy.baremetal import os_probe
 host = os_probe.Host()
-for name, probe in (("kms_service_unprivileged", os_probe.PROBES["kms_service_unprivileged"]),) + tuple(os_probe.SANDBOX_PROBES.items()):
-    ok, why = probe(host)
+for name in ("kms_service_unprivileged", "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced"):
+    ok, why = os_probe.PROBES[name](host)
     print("%s\t%s\t%s" % (name, "true" if ok else "false", why))
 PY
 probe(){ awk -F'\t' -v n="$1" '$1==n{print $2 "\t" $3}' "$W/probes"; }

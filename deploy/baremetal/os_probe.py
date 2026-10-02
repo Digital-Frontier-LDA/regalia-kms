@@ -14,8 +14,7 @@ Used by deploy/baremetal/host_probe.py. Each probe reads the host and returns (v
 and pcscd_clients(): every process connected to pcscd runs the KMS binary (matched by socket inode,
 identified by /proc/<pid>/exe, never by the name a process gives itself).
 
-The KMS unit's sandbox (#61), SANDBOX_MEASURED: a list of its own beside MEASURED. host_probe.py
-measures both and the signed evidence requires both.
+and the KMS unit's sandbox (#61):
 
   kms_service_sandboxed       the unit's effective ProtectSystem=strict, ProtectHome, PrivateTmp,
                               ProtectKernelTunables/Modules/Logs, ProtectControlGroups,
@@ -37,8 +36,8 @@ import subprocess
 import sys
 
 SERVICE = "regalia-kms.service"
-MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged")
-SANDBOX_MEASURED = ("kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced")
+MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
+            "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced")
 # property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
 # directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
 SANDBOX_PROPERTIES = {
@@ -292,6 +291,6 @@ def pcscd_clients(host):
 
 
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
-          "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged}
-SANDBOX_PROBES = {"kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
-                  "kms_apparmor_enforced": apparmor}
+          "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
+          "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
+          "kms_apparmor_enforced": apparmor}
