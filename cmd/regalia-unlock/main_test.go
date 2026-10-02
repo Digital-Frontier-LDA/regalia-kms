@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1164,6 +1165,41 @@ func TestAnAskerThatLeftDoesNotSpendTheBootsResponse(t *testing.T) {
 	}
 	listener.Close()
 	<-done
+}
+
+// failingOnce is a key socket whose first accept fails as a full descriptor table would.
+type failingOnce struct {
+	*net.UnixListener
+	failed bool
+}
+
+func (f *failingOnce) AcceptUnix() (*net.UnixConn, error) {
+	if !f.failed {
+		f.failed = true
+		return nil, syscall.EMFILE
+	}
+	return f.UnixListener.AcceptUnix()
+}
+
+// An accept that fails for any other reason than a closed socket does not end the process: the next
+// connection would start another one, with another session.
+func TestAnAcceptErrorDoesNotEndTheBootsClient(t *testing.T) {
+	porto := newFakePeer(t, "porto")
+	var l locked
+	u := newUnlocker(t, t.TempDir(), &l, porto)
+	listener, ask := socketPair(t)
+	done := make(chan error, 1)
+	go func() { done <- u.serve(&failingOnce{UnixListener: listener}) }()
+	if key, err := ask(); err != nil || len(key) == 0 {
+		t.Fatalf("after a failed accept the client gave %q, %v", key, err)
+	}
+	if !strings.Contains(l.said(), "could not accept a connection, trying again") {
+		t.Fatalf("the failed accept is not said:\n%s", l.said())
+	}
+	listener.Close()
+	if err := <-done; err != nil {
+		t.Fatalf("serve ended with %v", err)
+	}
 }
 
 // A client started again in the same boot would be a second session: a peer that recorded the first

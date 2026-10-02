@@ -17,7 +17,9 @@ check() {
     # systemd unseals the two credentials through this library, and its package only suggests it: without
     # it the image builds, and no boot can unseal anything
     local library found=
-    for library in /usr/lib/*/libtss2-tcti-device.so.0 /usr/lib64/libtss2-tcti-device.so.0 /usr/lib/libtss2-tcti-device.so.0; do
+    # (under --sysroot, in the tree the image is built from)
+    for library in "${dracutsysrootdir-}"/usr/lib/*/libtss2-tcti-device.so.0 "${dracutsysrootdir-}"/usr/lib64/libtss2-tcti-device.so.0 \
+        "${dracutsysrootdir-}"/usr/lib/libtss2-tcti-device.so.0; do
         [ -e "$library" ] && found=yes
     done
     if [ -z "$found" ]; then
@@ -31,7 +33,7 @@ check() {
     # on after an install() that fails.
     local line
     for line in 'RuntimeDirectory=regalia' 'RuntimeDirectoryPreserve=yes' 'Conflicts=initrd-switch-root.target shutdown.target'; do
-        if ! grep -qxF "$line" "${systemdsystemunitdir:?}/regalia-unlock.service" 2>/dev/null; then
+        if ! grep -qxF "$line" "${dracutsysrootdir-}${systemdsystemunitdir:?}/regalia-unlock.service" 2>/dev/null; then
             derror "regalia-unlock: the installed regalia-unlock.service is not the one of this client (no '$line')"
             return 1
         fi

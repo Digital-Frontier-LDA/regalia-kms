@@ -200,7 +200,7 @@ const earlierSession = "the disk stays locked: an earlier unlock client of this 
 
 // serve answers each connection on the key socket: with the key, or with nothing. It ends when it is
 // stopped (systemd stops the unit before the root filesystem takes over), or after one connection with -once.
-func (u *unlocker) serve(listener *net.UnixListener) error {
+func (u *unlocker) serve(listener keySocket) error {
 	// boot-session is written before a session's first quote, and /run is empty at every boot: so if it
 	// is there now, a client before this one, in this boot, presented a session whose key is gone with it.
 	// A peer may hold that session and would refuse this one; another peer might accept this one, and the
@@ -277,6 +277,12 @@ func (u *unlocker) answer(connection *net.UnixConn) error {
 	return nil
 }
 
+// keySocket is the listening socket as serve uses it (a *net.UnixListener; tests pass others).
+type keySocket interface {
+	AcceptUnix() (*net.UnixConn, error)
+	SetDeadline(time.Time) error
+}
+
 // gone reports whether the other end has closed the connection. Not by reading: systemd-cryptsetup
 // shuts down its sending side as soon as it has connected, so a read ends at once while it is still
 // waiting for the key. A hang-up is both directions closed.
@@ -304,20 +310,23 @@ func gone(connection *net.UnixConn) bool {
 // A record that cannot be written is said and is NOT a reason to leave the disk locked: the node then
 // boots, its leases may be refused until the next boot, and that can be repaired without the recovery key.
 func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, error) {
-	if !u.presented {
-		u.presented = true
-		if u.o.sessionDir != "" {
-			if err := publishSession(u.o.sessionDir, u.boot); err != nil {
-				fmt.Fprintln(u.diagnostics, "regalia-unlock: "+err.Error()+
-					": the running system will not find this boot's session, and its leases may be refused until the next boot")
-			}
+	// Tried again before each quote until it is written: a full /run may have room a moment later.
+	if !u.presented && u.o.sessionDir != "" {
+		if err := publishSession(u.o.sessionDir, u.boot); err != nil {
+			fmt.Fprintln(u.diagnostics, "regalia-unlock: "+err.Error()+
+				": the running system will not find this boot's session, and its leases may be refused until the next boot")
+		} else {
+			u.presented = true
 		}
 	}
 	return u.quote(qualifying)
 }
 
-// forget zeroes what this process held: the local half, the volume's key, and the session's private
-// key as far as this package can reach it (Go's crypto keeps a copy of its own that it does not expose).
+// forget zeroes what this process held: the local half and the volume's key, and the session's private
+// key only as far as this package can reach it: Go's crypto keeps its own copy, which it does not
+// expose and which ends with the process. Called from the signal handler, it can race an answer in
+// progress; that answer then gives a zeroed key, which the volume refuses: a failed attempt, never a
+// secret written anywhere.
 func (u *unlocker) forget() {
 	wipe(u.local)
 	wipe(u.key)

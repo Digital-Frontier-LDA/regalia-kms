@@ -393,10 +393,18 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   `/run/regalia`, `boot-session` and `boot-session.pub` (the session's ID and public key, written
   before the session's first quote is taken: the runtime leases of this boot are asked for under them)
   and `key-given-through` (the peer and keyslot). None is secret. systemd stops the process before
-  switch-root; it zeroes the local half, the key and the session's private key. **If the client is
+  switch-root; it zeroes the local half and the key (the session's private key ends with the process:
+  Go keeps a copy of it that a program cannot reach). **If the client is
   started a second time in one boot** (it crashed, or was restarted by hand) it finds the first one's
   session on record and asks no peer, because a peer that recorded the first session refuses any
   other: that boot ends at the recovery-key prompt, and a reboot is a new boot with a new session.
+  **A kexec is not a new boot for the TPM** (its counters and PCRs are not reset), so the peers refuse
+  the new initrd's session and a kexec always ends at the recovery-key prompt; reboot instead.
+  `systemctl soft-reboot` does not run the initrd again and keeps `/run/regalia`. **What remains
+  open:** if `/run/regalia` cannot be written when the first quote is taken (a full `/run`) and the
+  client then restarts in the same boot, the record can name a session one peer does not hold; that
+  peer refuses this boot's leases until the next reboot. The client says so in the journal; it does
+  not leave the disk locked for it.
 - **The initrd** is built with dracut and the module `deploy/baremetal/initrd/dracut/90regalia-unlock`
   (`dracut --add regalia-unlock`): the client, the two units above, `regalia-wg-boot.service` with its
   script (the initrd ruleset first, then the declared address, then WireGuard with the WG-BOOT key

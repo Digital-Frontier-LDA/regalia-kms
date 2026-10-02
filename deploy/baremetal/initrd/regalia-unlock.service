@@ -7,7 +7,7 @@
 # The program runs no other program and writes no secret anywhere. It stays for as long as the initrd
 # lasts and answers each connection with the key or with nothing, always under the ONE boot session it
 # made when it started: a peer accepts one session per boot. systemd stops it before the root filesystem
-# takes over; it zeroes the local half, the key and the session's private key and ends. Started again in
+# takes over; it zeroes the local half and the key and ends. Started again in
 # the same boot (after a crash), it finds the first one's session on record and asks no peer.
 
 [Unit]
