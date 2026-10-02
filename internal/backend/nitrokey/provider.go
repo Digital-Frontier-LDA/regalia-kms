@@ -212,12 +212,25 @@ func stillAnswers(ctx context.Context, session Session) (answers bool) {
 	return err == nil
 }
 
+// goneUnlessTheRequestEnded is what a failed Open means. The driver refuses to open anything under a
+// context that has ended, so a request that arrives already cancelled, or past its deadline, fails
+// here with the token in place: that says nothing about the token, and marking it gone would let a
+// caller who hangs up take every key on it out of service until the next renewal. Under a live
+// context a failed Open is the token not being there. A token that IS gone while a request ends is
+// marked by the next look made under a live context: the health check of the next routing decision.
+func (provider *Provider) goneUnlessTheRequestEnded(ctx context.Context, deviceID string) {
+	if ctx.Err() == nil {
+		provider.tokenGone(deviceID)
+	}
+}
+
 // tokenGone records that a token could not be opened, or stopped answering while it was open.
 // Whatever lease the node holds now was asked for before the token comes back.
 func (provider *Provider) tokenGone(deviceID string) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
-	if provider.reauthorizer != nil {
+	// "" is not a device: it is the key the baseline for never-seen devices is kept under.
+	if provider.reauthorizer != nil && deviceID != "" {
 		provider.absences[deviceID] = tokenAbsence{}
 	}
 }
@@ -231,6 +244,10 @@ func (provider *Provider) reauthorized(ctx context.Context, deviceID string) boo
 	if gate == nil {
 		provider.mu.Unlock()
 		return true
+	}
+	if deviceID == "" { // not a device: the baseline's own key, which serving must never overwrite
+		provider.mu.Unlock()
+		return false
 	}
 	absence, known := provider.absences[deviceID]
 	if !known {
@@ -295,7 +312,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
-		provider.tokenGone(binding.DeviceID)
+		provider.goneUnlessTheRequestEnded(ctx, binding.DeviceID)
 		return nil, "", ErrUnavailable
 	}
 	// gated is set once this token has passed the reauthorization check below: from then on, a
@@ -509,7 +526,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
-		provider.tokenGone(binding.DeviceID)
+		provider.goneUnlessTheRequestEnded(ctx, binding.DeviceID)
 		return false
 	}
 	// A session that will not close means this device cannot serve, so Healthy must not

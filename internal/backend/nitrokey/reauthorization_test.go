@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
@@ -18,8 +19,12 @@ type removableDriver struct {
 	opens    int
 }
 
-func (driver *removableDriver) Open(context.Context, registry.Binding) (Session, error) {
+func (driver *removableDriver) Open(ctx context.Context, _ registry.Binding) (Session, error) {
 	driver.opens++
+	// as the PKCS#11 driver: nothing is opened under a context that has ended
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if driver.gone {
 		return nil, errors.New("token not present")
 	}
@@ -574,5 +579,83 @@ func TestARequestThatIsCancelledOrTimesOutDoesNotMarkTheTokenGone(t *testing.T) 
 	}
 	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
 		t.Fatalf("waiting = %v: a token that left during a cancelled request was not marked gone", w.waiting())
+	}
+}
+
+// A REQUEST THAT HAD ALREADY ENDED DOES NOT TAKE THE TOKEN OUT OF SERVICE (found while reading the
+// PIV provider's hook; present here since #151). The driver opens nothing under an ended context,
+// and every failed Open marked the token gone: a caller that hung up before its request reached
+// the token, or a request past its deadline, made every key on the token wait for the next renewal.
+func TestAFailedOpenUnderAnEndedContextIsNotAnAbsence(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	w.now = 5_000 // past the lease's request time: a wrong mark would make the token wait
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	late, cancelLate := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancelLate()
+	for name, ctx := range map[string]context.Context{"cancelled": ended, "past its deadline": late} {
+		_, _, err := w.provider.Execute(ctx, registry.Route{Algorithm: "rsa2048", Binding: binding()}, "sign",
+			"", "application/vnd.regalia.digest", []byte("digest"), nil)
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if w.provider.Healthy(ctx, binding()) {
+			t.Fatalf("%s: healthy under an ended context", name)
+		}
+		if len(w.waiting()) != 0 {
+			t.Fatalf("%s: waiting = %v: a request that had ended took the token out of service", name, w.waiting())
+		}
+	}
+	if !w.serves() || !w.healthy() {
+		t.Fatal("the token does not serve the next caller")
+	}
+	// under a live context a token that cannot be opened is gone, as before
+	w.driver.gone = true
+	if w.healthy() {
+		t.Fatal("healthy with the token gone")
+	}
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
+		t.Fatalf("waiting = %v", w.waiting())
+	}
+	// and a token that is gone while a request ends is seen by the next look under a live context
+	other := newReauthWorld(t)
+	other.gate.requestedMs, other.now, other.driver.gone = 1_001, 5_000, true
+	if other.provider.Healthy(ended, binding()) || len(other.waiting()) != 0 {
+		t.Fatalf("an ended request decided something: %v", other.waiting())
+	}
+	if other.healthy() || !reflect.DeepEqual(other.waiting(), map[string]int64{"hsm-sitea": -1}) {
+		t.Fatalf("the next live look did not see the token gone: %v", other.waiting())
+	}
+}
+
+// THE BASELINE FOR NEVER-SEEN DEVICES IS NOT A DEVICE. It is kept under the empty device ID. A binding
+// with no device ID is refused before it gets here (the registry, Execute, the driver); if one ever
+// did, serving it would overwrite the baseline with "already vouched for" and every token first seen
+// afterwards would start as served.
+func TestAnEmptyDeviceIDNeverTouchesTheBaseline(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	w.now = 5_000
+	if w.provider.reauthorized(context.Background(), "") {
+		t.Fatal("the empty device ID was served")
+	}
+	w.provider.tokenGone("")
+	if len(w.waiting()) != 0 {
+		t.Fatalf("waiting = %v", w.waiting())
+	}
+	// a token first seen now still starts from the process's start (1000), not from "served" and not from "gone"
+	if w.healthy(); !reflect.DeepEqual(w.waiting(), map[string]int64{}) {
+		t.Fatalf("waiting = %v: the lease asked for at 1001 is after the start", w.waiting())
+	}
+	late := newReauthWorld(t)
+	late.gate.requestedMs = 999 // a lease from BEFORE the process started
+	_ = late.provider.reauthorized(context.Background(), "")
+	late.provider.tokenGone("")
+	if late.serves() {
+		t.Fatal("after the empty device ID was touched, a never-seen token served on a lease from before the start")
+	}
+	if !reflect.DeepEqual(late.waiting(), map[string]int64{"hsm-sitea": 1_000}) {
+		t.Fatalf("waiting = %v, want the process's start", late.waiting())
 	}
 }
