@@ -14,7 +14,8 @@ node claims (THREE-SITE-THREAT-MODEL.md S2, ADR-0002 D23).
                 "heartbeat_max_lifetime_s": <int> (v2 only),
                 "revocation_keys": ["<hex Ed25519 public key>", ...],
                 "nodes": [{"node_id": ..., "state": ..., "ek_name": ..., "ak_name": ..., "wg_boot_pub": ...,
-                           "wg_service_pub": ..., "hsm_serials": [...], "ssh_host_pub": ... (v2 only)}]}
+                           "wg_service_pub": ..., "hsm_serials": [...],
+                           "ssh_host_pub": ... (v2; absent from a node retired before it had one)}]}
 
 Signed message: b"regalia-membership/v1\\0" + canonical JSON of the manifest (sorted keys, no spaces,
 ASCII). Parsing refuses duplicate keys, unknown or missing fields, floats and non-ASCII names, so one
@@ -24,7 +25,10 @@ the schema is a field of the signed manifest.
 Schemas (#143). v2 is v1 plus two required fields.
   * A node field, `ssh_host_pub`: the node's SSH host key, a raw Ed25519 public key as 64 lowercase hex.
     It is an identity like the others: unique by value across every node and every role, unchangeable
-    by a revocation key, and kept by a tombstone.
+    by a revocation key, and kept by a tombstone. It is required of every node that is not RETIRED or
+    REVOKED_STOLEN. A node retired under v1 has no host key on record, and its hardware may be gone:
+    its tombstone keeps exactly the fields it had, in v2 manifests too, and nothing is invented for
+    it. A node retired under v2 keeps the key it had.
   * A manifest field, `heartbeat_max_lifetime_s` (#69): the longest life a heartbeat may have under this
     manifest, in seconds, from one hour to HEARTBEAT_HARD_MAX_S (seven days, a constant here that no
     manifest can exceed). It is the window in which a partitioned peer still helps a node revoked
@@ -167,7 +171,7 @@ def validate(manifest):
     require(manifest.get("schema") in SCHEMAS, "schema must be %s" % " or ".join(SCHEMAS))
     second = manifest["schema"] == SCHEMA_V2
     exact(manifest, V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
-    node_keys, identities = (V2_NODE_KEYS, V2_IDENTITY_KEYS) if second else (NODE_KEYS, IDENTITY_KEYS)
+    node_keys = V2_NODE_KEYS if second else NODE_KEYS
     if second:
         life = manifest["heartbeat_max_lifetime_s"]
         require(isinstance(life, int) and HEARTBEAT_MIN_S <= life <= HEARTBEAT_HARD_MAX_S,
@@ -193,7 +197,9 @@ def validate(manifest):
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
     for i, node in enumerate(nodes):
-        exact(node, node_keys, "nodes[%d]" % i)
+        # the one entry that may lack ssh_host_pub under v2: a tombstone (the transition rules keep it as it was)
+        bare = isinstance(node, dict) and "ssh_host_pub" not in node and node.get("state") in TERMINAL
+        exact(node, NODE_KEYS if bare else node_keys, "nodes[%d]" % i)
         require(isinstance(node["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node["node_id"]),
                 "nodes[%d].node_id must be a short lowercase name" % i)
         require(node["node_id"] not in by_id, "duplicate node_id %r" % node["node_id"])
@@ -202,14 +208,14 @@ def validate(manifest):
         hex_field(node["ak_name"], 68, "nodes[%d].ak_name" % i)
         hex_field(node["wg_boot_pub"], 64, "nodes[%d].wg_boot_pub" % i)
         hex_field(node["wg_service_pub"], 64, "nodes[%d].wg_service_pub" % i)
-        if "ssh_host_pub" in node_keys:
+        if "ssh_host_pub" in node:
             hex_field(node["ssh_host_pub"], 64, "nodes[%d].ssh_host_pub" % i)
         require(isinstance(node["hsm_serials"], list) and all(isinstance(s, str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", s)
                                                              for s in node["hsm_serials"]), "nodes[%d].hsm_serials" % i)
         # No identity may belong to two nodes: a substituted TPM, key or token would otherwise pass as another.
         # Compared by value across roles: one WireGuard key cannot be a boot key and a service key, on
         # one node or two, one TPM name cannot be an EK and an AK, and an SSH host key is no other key.
-        for k in identities:
+        for k in identity_keys(node):
             require(node[k] not in seen, "%s of %s is already used (%s)" % (k, node["node_id"], seen.get(node[k])))
             seen[node[k]] = "%s of %s" % (k, node["node_id"])
         for s in node["hsm_serials"]:
@@ -268,8 +274,8 @@ def _tombstones(current, candidate):
     were BEFORE it was retired: the retiring manifest cannot change them either), and a state that only
     moves from RETIRED to REVOKED_STOLEN. With the tombstone always present, validate()'s
     uniqueness rule refuses any reuse of its EK, AK, WireGuard keys, SSH host key, HSM serials or node ID,
-    for ever. The fields compared are those the CURRENT entry has: in the manifest that moves a chain to
-    v2 every node, a tombstone included, is given its ssh_host_pub, and from then on it is kept too."""
+    for ever. An entry that is, or becomes, a tombstone has exactly the FIELDS it had: a node retired
+    under v1 is never given an ssh_host_pub, and one retired under v2 never loses it."""
     old, new = validate(current), validate(candidate)
     for nid, node in old.items():
         if node["state"] not in TERMINAL:
@@ -279,12 +285,16 @@ def _tombstones(current, candidate):
             # The manifest that retires a node must record the hardware as it was: identities rewritten in
             # the same step would leave the real ones free and protect the substitutes for ever.
             if new[nid]["state"] in TERMINAL:
+                require(set(new[nid]) == set(node), "tombstone: %s becomes %s and its fields cannot change in the same manifest "
+                        "(ssh_host_pub is neither added nor dropped)" % (nid, new[nid]["state"]))
                 for k in identity_keys(node) + ("hsm_serials",):
                     require(new[nid][k] == node[k], "tombstone: %s becomes %s and its %s cannot change in the same manifest"
                             % (nid, new[nid]["state"], k))
             continue
         require(nid in new, "tombstone: %s is %s and must stay in every later manifest (its identities are never reused)"
                 % (nid, node["state"]))
+        require(set(new[nid]) == set(node), "tombstone: %s is %s and its fields cannot change (ssh_host_pub is neither added "
+                "nor dropped)" % (nid, node["state"]))
         for k in identity_keys(node) + ("hsm_serials",):
             require(new[nid][k] == node[k], "tombstone: %s is %s and its %s cannot change" % (nid, node["state"], k))
         require(new[nid]["state"] == node["state"] or (node["state"], new[nid]["state"]) == ("RETIRED", "REVOKED_STOLEN"),
