@@ -69,7 +69,7 @@ AUTH=""; AUTH2=""; trap 'AUTH=""; AUTH2=""' EXIT
 ask_current(){
   if [ -t 0 ]; then
     say "the lockout authorization is asked for ONCE. A wrong one blocks the lockout hierarchy for $(prop TPM2_PT_LOCKOUT_RECOVERY) s."
-    read -r -s -p "Lockout authorization, from the escrow (hidden): " AUTH; echo >&2
+    IFS= read -r -s -p "Lockout authorization, from the escrow (hidden): " AUTH; echo >&2
   else IFS= read -r AUTH || true; fi
   [ -n "$AUTH" ] || fail "no authorization given; nothing was tried on the TPM"; }
 
@@ -89,8 +89,8 @@ set)
     # No authorization yet: the settings first, with the empty one, so that nothing typed below can
     # be the reason they are refused; then the authorization.
     if [ -t 0 ]; then
-      read -r -s -p "NEW lockout authorization, from the escrow (16-32 characters, hidden): " AUTH; echo >&2
-      read -r -s -p "Again: " AUTH2; echo >&2
+      IFS= read -r -s -p "NEW lockout authorization, from the escrow (16-32 characters, hidden): " AUTH; echo >&2
+      IFS= read -r -s -p "Again: " AUTH2; echo >&2
       [ "$AUTH" = "$AUTH2" ] || fail "the two entries differ; nothing was changed"
     else IFS= read -r AUTH || true; fi
     printable='^[[:graph:]]{16,32}$'
