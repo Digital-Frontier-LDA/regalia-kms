@@ -69,9 +69,8 @@ Commissioning has two halves:
   `kms_service_sandboxed` (ProtectSystem=strict, ProtectHome, PrivateTmp, ProtectKernelTunables/
   Modules/Logs, ProtectControlGroups, RestrictSUIDSGID, LockPersonality), `kms_capabilities_minimal`
   (no capability in the unit's bounding or ambient set, nor in the running process's) and
-  `kms_apparmor_enforced` (the running process is confined by a profile in enforce mode). The
-  AppArmor profile is not shipped yet (#61): until one is written and loaded, the drop-in keeps the
-  service from starting and this control fails.
+  `kms_apparmor_enforced` (the running process is confined by a profile in enforce mode; the
+  profile and how to load it are under **AppArmor** below). All three are required in the evidence.
 - **Token clients root-only.** Unlike the guest, this host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
