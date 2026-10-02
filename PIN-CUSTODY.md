@@ -178,9 +178,12 @@ automatic restart or retry. *Verified by:* unit tests in both providers, includi
 **One card, one PIN presenter.** Any other process that presents a PIN to the same card — a CI
 battery run, `ykman`, a second daemon — inherits both behaviours above. Its rejected VERIFY
 de-authenticates the card and can spend attempts this provider did not spend; that is how #442
-happened. Production requires that nothing but the KMS can present a PIN on the host. *Verified
-by:* the host tier (`token_clients_root_only` in `deploy/baremetal/host_probe.py`): every token
-client tool is root-only, and every process connected to pcscd is the KMS binary. The staging bench does not meet this rule, by design: the CI battery and
+happened. Production requires that the KMS is the only PIN presenter on the host. *Verified by:*
+the host tier, in part (`token_clients_root_only` in `deploy/baremetal/host_probe.py`). It measures
+two things: every token client tool on `PATH` is `root:root` and not executable by anyone else, so
+the KMS user cannot run one; and every process connected to pcscd **when the probe runs** is the KMS
+binary. It does not exclude root, who seals PINs with these tools (`seal-hsm-pin.sh`), and it does
+not watch pcscd between measurements. The staging bench does not meet this rule, by design: the CI battery and
 bench tooling share its cards.
 
 ## Recovery and rollback limits
@@ -274,7 +277,8 @@ results are not physical evidence.
 | YubiKey: card-first retry read, legible reading as fallback | unit, falsified per ordering |
 | credential drop-in sources under `/etc/credstore.encrypted/regalia-kms-` | host (`hsm-host-role/files/verify-deployment.py`) |
 | the host is never imaged; credentials excluded from the control-plane export | evidence (`runtime_credentials_excluded_from_backup`, attested, not measured) |
-| no hibernation, no core dumps, swap off or encrypted; no other token client | host (`deploy/baremetal/os_probe.py`; `token_clients_root_only`) |
+| no hibernation, no core dumps, swap off or encrypted | host (`deploy/baremetal/os_probe.py`) |
+| the KMS is the only PIN presenter | host, in part (`token_clients_root_only`): token client tools are root-only and pcscd's clients are the KMS **at measurement time**; root is not excluded, and nothing watches between measurements |
 | PCR set chosen and recorded | evidence (`host.credential_tpm2_pcrs` and the signed policy's two fields) |
 | blob actually sealed to the recorded PCR set, signed policy and key; TPM alone | host (`host_probe.py`, `pin_credentials_sealed_as_recorded`, read from each blob's header) |
 | signed PCR 11 policy: opens across a signed kernel update, refused otherwise | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`); **no real host yet** |
