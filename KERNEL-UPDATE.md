@@ -83,6 +83,7 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 |---|---|---|
 | 2.1 | Check the step: `python3 -m deploy.baremetal.rollout transition --old CURRENT.json --new BOTH.json` must answer `approve`. It refuses a renamed set, a changed label, a dropped host, two steps in one document | **exists** |
 | 2.2 | **Compare the document with each host's PCR survey by eye.** No check can tell an unapproved image entered under an approved name | **manual**, and it is the control |
+| 2.2a | **Review what the image's initrd does to open the root disk**: its own `etc/crypttab`, its `etc/cmdline.d`, and the unlock client's units and socket. The initrd must take the key from the unlock client's socket and from nowhere else. This is checked on the image, before it is approved, because it cannot be checked afterwards: once a host has booted, nothing on it shows what the initrd held (measured, #135). `host_probe.py` reads the root's `/etc/crypttab` and the kernel command line only | **NOT BUILT**: needs the UKI (#57), whose PCR 11 then covers the initrd; no command lists an image's unlock configuration yet |
 | 2.3 | Compute the document's version from the file in hand, at signing time: `python3 -m deploy.baremetal.rollout version --measurements BOTH.json` | **exists** |
 | 2.4 | Write manifest N+1, unsigned: `python3 -m deploy.baremetal.rollout propose --membership CHAIN.json --root-key HEX --old CURRENT.json --new BOTH.json`. It prints the current manifest with `epoch + 1`, `prev_digest`, and `policy_version` set to that version, and signs nothing | writing the proposal **exists**; signing it is step 2.6 |
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
@@ -153,7 +154,8 @@ either the next update, or a document that re-approves the old image.
    Still missing around it: where a running host's leases, boot session and authenticated time come
    from for `may-reboot`, and collecting the three hosts' answers in one place.
 3. Installing a measurement document on a running host and reloading its attestation policy.
-4. A UKI build for these hosts, the PCR-signing key's custody, and signed images (#57).
+4. A UKI build for these hosts, the PCR-signing key's custody, and signed images (#57); with it, a stated
+   way to list what an image's initrd uses to open the root disk (step 2.2a).
 5. The boot-time unlock client, so that a peer is actually needed to open the disk (#66, #67, #135).
 6. A rehearsal on the three DL360s (#65), including the boot loader's automatic fallback.
 7. The owner's decision on who approves an image (above).
