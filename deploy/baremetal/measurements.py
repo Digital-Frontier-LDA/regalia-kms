@@ -9,8 +9,15 @@ SIGNED MEMBERSHIP MANIFEST COMMITS TO, with one or two sets per node.
     document = {"schema": "regalia.measurements/v1",
                 "name": "<a short human name, e.g. 2026.11-kernel-6.12.57>",
                 "nodes": {"<node_id>": {"accepted": [
-                    {"label": "<image name>", "tpm_firmware_version": "<16 hex>", "pcrs": {"0": "<64 hex>", ...}},
+                    {"label": "<image name>", "tpm_firmware_version": "<16 hex>", "pcrs": {"0": "<64 hex>", ...},
+                     "phases": {"initrd": {"11": "<64 hex>"}, "system": {"11": "<64 hex>"}}},    # optional
                     ...]}}}                     # one set, or two while an update rolls through
+
+PER BOOT PHASE. A host that boots a unified kernel image has two PCR 11 values for one image: in the
+initrd, where it asks a peer for its disk, and once booted, where it asks for a lease (attest.py, "PCR
+VALUES PER BOOT PHASE"). Such an image's set gives PCR 11 under "phases"; both values come from the
+image's build record (#57). A peer accepts an unlock only from the initrd value and a lease only from
+the booted one. They are part of the set: a label keeps them, and they are in the version.
 
 HOW IT IS AUTHENTICATED. The document is not signed. The manifest's `policy_version` field is the
 document's version: version(document) = "m1-" + the first 29 characters of the base64url SHA-256 of its
@@ -185,7 +192,16 @@ def target(document, node_id):
 
 
 def _key(entry):
-    return (entry["tpm_firmware_version"], tuple(sorted(entry["pcrs"].items())))
+    """A set's measurements, whole: the per-phase values are as much the image as the others."""
+    return (entry["tpm_firmware_version"], tuple(sorted(entry["pcrs"].items())),
+            tuple((phase, tuple(sorted(pcrs.items()))) for phase, pcrs in sorted(entry.get("phases", {}).items())))
+
+
+def _states(entry):
+    """Every PCR state a node on this set is accepted in: one per phase, or one. An image is recognised by
+    any of them: a set that keeps a dropped image's initrd values and changes the others still unlocks it."""
+    return {(entry["tpm_firmware_version"], tuple(sorted(attest.values(entry, phase).items())))
+            for phase in (attest.PHASES if "phases" in entry else (None,))}
 
 
 def transition(old, new, emergency=False, dropped=()):
@@ -201,7 +217,7 @@ def transition(old, new, emergency=False, dropped=()):
             "retired or replaced, name it in `dropped`" % ", ".join(sorted(gone - dropped)))
     require(dropped <= gone, "`dropped` names nodes that are still in the new document or never were in the old one: %s"
             % ", ".join(sorted(dropped - gone)))
-    kinds, replaced, compromised, compromised_keys, replacing, lost = {}, [], set(), set(), set(), {}
+    kinds, replaced, compromised, compromised_states, replacing, lost = {}, [], set(), set(), set(), {}
     for node_id in sorted(set(before) & set(after)):
         b, a = before[node_id], after[node_id]
         was, now = {e["label"]: _key(e) for e in b}, {e["label"]: _key(e) for e in a}
@@ -225,7 +241,8 @@ def transition(old, new, emergency=False, dropped=()):
                     % (node_id, ", ".join(e["label"] for e in a)))
             replaced.append(node_id)
             compromised |= set(was) - set(now)       # the labels the emergency drops
-            compromised_keys |= removed              # and their measurements, on this node's hardware
+            # and their measurements, on this node's hardware: every state the dropped image is accepted in
+            compromised_states |= set().union(*(_states(e) for e in b if _key(e) in removed))
             replacing.add(a[0]["label"])
         elif added:
             # target() reads the LAST set as the image to end up on, so the newcomer goes last.
@@ -254,7 +271,7 @@ def transition(old, new, emergency=False, dropped=()):
         require(not kept, "an emergency replacement drops %s, but %s would still accept it"
                 % (", ".join(sorted(compromised)), ", ".join(kept)))
         # the same measurements under another name, on a node that was not compared (a new one) or anywhere else
-        disguised = sorted(n for n, sets in after.items() if {_key(e) for e in sets} & compromised_keys)
+        disguised = sorted(n for n, sets in after.items() if set().union(*(_states(e) for e in sets)) & compromised_states)
         require(not disguised, "an emergency replacement drops %s, but %s would still accept the same measurements under "
                 "another label" % (", ".join(sorted(compromised)), ", ".join(disguised)))
         return "replace-without-overlap"

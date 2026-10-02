@@ -35,6 +35,12 @@ def document(name, **nodes):
     return {"schema": measurements.SCHEMA, "name": name, "nodes": {n: {"accepted": sets} for n, sets in nodes.items()}}
 
 
+def uki(label, initrd, system, fw=FW):
+    """A set of a host that boots a UKI: PCR 7 once, PCR 11 in the initrd and once booted (#57, #156)."""
+    return {"label": label, "tpm_firmware_version": fw, "pcrs": {"7": "00" * 32},
+            "phases": {"initrd": {"11": initrd * 32}, "system": {"11": system * 32}}}
+
+
 CURRENT = document("v1", **{n: [one("image-1", IMAGE1)] for n in "abc"})
 BOTH = document("v2", **{n: [one("image-1", IMAGE1), one("image-2", IMAGE2)] for n in "abc"})
 NEXT = document("v3", **{n: [one("image-2", IMAGE2)] for n in "abc"})
@@ -344,6 +350,42 @@ class Transition(Case):
         mixed = document("mixed", a=[one("image-2", IMAGE2)], b=[one("image-1", IMAGE1), one("image-2", IMAGE2)],
                          c=[one("image-1", IMAGE1)])
         self.refused("one document does two things: approve on b; retire on a", measurements.transition, only_a, mixed)
+
+    def test_per_phase_values_are_part_of_the_set(self):
+        """A UKI image's set gives PCR 11 in the initrd and once booted. Both are the image: they are in the
+        version, a label keeps them, and a dropped image is recognised by either."""
+        u1, u2, u3 = uki("uki-1", "a1", "a2"), uki("uki-2", "b1", "b2"), uki("uki-3", "c1", "c2")
+        v1, v2, v3 = (document(name, **{n: list(sets) for n in "abc"}) for name, sets in (("u1", [u1]), ("u2", [u1, u2]), ("u3", [u2])))
+        self.assertEqual([measurements.transition(*step) for step in ((v1, v2), (v2, v3), (v2, v1))], ["approve", "retire", "abandon"])
+        self.assertEqual(measurements.target(v2, "a"), u2)
+        # the version covers the per-phase values
+        changed = document("u1", **{n: [uki("uki-1", "a1", "a3")] for n in "abc"})
+        self.assertNotEqual(measurements.version(changed), measurements.version(v1))
+        # a label keeps them: one phase's value changed under the same label is another image
+        self.refused("the set 'uki-1' has other measurements than before; a changed image gets a new label", measurements.transition, v1, changed)
+        self.refused("has other measurements than before", measurements.transition, v1,
+                     document("u2", **{n: [uki("uki-1", "a1", "a3"), u2] for n in "abc"}))
+        # the move from GRUB (PCR 11 stays zero) to a UKI is an approval like any other
+        grub = one("grub", {"7": "00" * 32, "11": "00" * 32})
+        g1, g2 = document("g1", **{n: [grub] for n in "abc"}), document("g2", **{n: [grub, u1] for n in "abc"})
+        self.assertEqual(measurements.transition(g1, g2), "approve")
+        self.assertEqual(measurements.transition(g2, v1), "retire")
+        # an emergency drops uki-1. A "new" image that keeps uki-1's INITRD value would still get its disk unlocked.
+        self.assertEqual(measurements.transition(v1, document("e", **{n: [u3] for n in "abc"}), emergency=True), "replace-without-overlap")
+        for label, disguise in (("the initrd value kept", uki("fresh", "a1", "c2")), ("the booted value kept", uki("fresh", "c1", "a2")),
+                                ("the two swapped", uki("fresh", "a2", "a1")),
+                                ("as a one-value set", one("fresh", {"7": "00" * 32, "11": "a1" * 32}))):
+            with self.subTest(label):
+                self.refused("drops uki-1, but a, b, c would still accept the same measurements under another label",
+                             measurements.transition, v1, document("e", **{n: [disguise] for n in "abc"}), emergency=True)
+                new_node = document("e", **dict({n: [u3] for n in "abc"}, d=[disguise]))
+                self.refused("drops uki-1, but d would still accept the same measurements under another label",
+                             measurements.transition, v1, new_node, emergency=True)
+        # the schema refusals of attest.py reach a document
+        self.refused("nodes.a.accepted[0].phases: the two phases hold the same values", measurements.version,
+                     document("x", a=[uki("uki-1", "a1", "a1")]))
+        self.refused("'uki-1' and 'other' hold the same PCR values in one of their phases", measurements.version,
+                     document("x", a=[u1, uki("other", "a2", "d2")]))
 
     def test_a_label_keeps_its_measurements_and_the_newcomer_is_listed_last(self):
         relabelled = document("v2", **{n: [one("image-1", IMAGE3), one("image-2", IMAGE2)] for n in "abc"})
@@ -690,7 +732,10 @@ class OnSwtpm(unittest.TestCase):
     """Three software TPMs, a, b and c. Each is a node that boots an image and a peer that judges the
     other two: its own membership store anchored in its TPM, its own heartbeat counter, its own
     attestation verifier, and leases signed by its TPM. A "boot" restarts the TPM (PCRs zeroed, the reset
-    counter up by one) and extends PCR 7 (a Secure Boot stand-in) and PCR 11 (the image).
+    counter up by one) and extends PCR 7 (a Secure Boot stand-in) and PCR 11 (the image, then the phase
+    "enter-initrd", as systemd-stub and systemd-pcrphase do on a UKI host). The node is then in its initrd,
+    where it asks for its disk; `up()` takes it through the rest of the boot (PCR 11 extended by
+    "leave-initrd", "sysinit", "ready"), where it asks for leases. One image, two PCR 11 values.
     Where the tools are provisioned (REGALIA_EXPECT_SWTPM=1) a missing one is a failure, not a skip."""
 
     NODES = ("a", "b", "c")
@@ -704,7 +749,7 @@ class OnSwtpm(unittest.TestCase):
             self.skipTest("needs swtpm, tpm2-tools and openssl")
         self.d = tempfile.mkdtemp(dir="/tmp")
         self.addCleanup(shutil.rmtree, self.d, True)
-        self.pid, self.tcti, self.names, self.session, self.image, self.boots = {}, {}, {}, {}, {}, 0
+        self.pid, self.tcti, self.names, self.session, self.image, self.phase, self.boots = {}, {}, {}, {}, {}, {}, 0
         self.addCleanup(lambda: [self.stop(n) for n in list(self.pid)])
         for name in self.NODES:
             self.tcti[name] = "swtpm:path=%s/%s.sock" % (self.d, name)
@@ -762,23 +807,43 @@ class OnSwtpm(unittest.TestCase):
                 break
             time.sleep(0.2)
         self.on(name, subprocess.run, ["tpm2_pcrextend", "7:sha256=" + self.PCR7, "11:sha256=" + self.IMAGES[image]], check=True, capture_output=True)
+        self.extend_phases(name, self.INITRD)
         self.boots += 1
         self.session[name] = hashlib.sha256(b"boot %d" % self.boots).hexdigest()
-        self.image[name] = image
+        self.image[name], self.phase[name] = image, "initrd"
+
+    INITRD, SYSTEM = ("enter-initrd",), ("leave-initrd", "sysinit", "ready")
+
+    def extend_phases(self, name, phases):
+        for phase in phases:
+            self.on(name, subprocess.run, ["tpm2_pcrextend", "11:sha256=" + hashlib.sha256(phase.encode()).hexdigest()], check=True, capture_output=True)
+
+    def up(self, name):
+        """`name` leaves its initrd and finishes booting (once per boot)."""
+        if self.phase[name] == "initrd":
+            self.extend_phases(name, self.SYSTEM)
+            self.phase[name] = "system"
 
     def on(self, tpm, fn, *args, **kw):
         with unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI=self.tcti[tpm]):
             return fn(*args, **kw)
 
     @staticmethod
-    def extended(digest):
-        """A PCR that started at zero and was extended once."""
-        return hashlib.sha256(bytes(32) + bytes.fromhex(digest)).hexdigest()
+    def extended(*digests):
+        """A PCR that started at zero and was extended by each digest in turn."""
+        value = bytes(32)
+        for digest in digests:
+            value = hashlib.sha256(value + bytes.fromhex(digest)).digest()
+        return value.hex()
 
     # ---- what the root signs ----
 
     def reference(self, image, firmware):
-        return {"label": image, "tpm_firmware_version": firmware, "pcrs": {"7": self.extended(self.PCR7), "11": self.extended(self.IMAGES[image])}}
+        """The set of one image: PCR 7 once, PCR 11 as it is in the initrd and as it is once booted."""
+        initrd = [self.IMAGES[image]] + [hashlib.sha256(p.encode()).hexdigest() for p in self.INITRD]
+        system = initrd + [hashlib.sha256(p.encode()).hexdigest() for p in self.SYSTEM]
+        return {"label": image, "tpm_firmware_version": firmware, "pcrs": {"7": self.extended(self.PCR7)},
+                "phases": {"initrd": {"11": self.extended(*initrd)}, "system": {"11": self.extended(*system)}}}
 
     def doc(self, name, firmware, *images):
         return {"schema": measurements.SCHEMA, "name": name,
@@ -824,12 +889,16 @@ class OnSwtpm(unittest.TestCase):
         return {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": lt.slurp(paths[0]).hex(), "signature": lt.slurp(paths[1]).hex()}
 
     def unlock(self, peer, node):
-        """`peer` decides whether to help `node` boot: the #59 unlock decision."""
+        """`peer` decides whether to help `node` boot: the #59 unlock decision. The node asks from wherever
+        it is; a test that wants the refusal of a booted node asks after up()."""
         return replacement.may_unlock(self.manifest_now, peer, node, self.session[node], self.evidence(peer, node),
                                       self.att[peer], self.freshness[peer])
 
-    def vouch(self, peer, node):
-        """A runtime lease for `node`, signed by `peer`'s TPM after it re-attested the node."""
+    def vouch(self, peer, node, booted=True):
+        """A runtime lease for `node`, signed by `peer`'s TPM after it re-attested the node. A node asks for
+        leases once it is up, so it finishes booting first (`booted=False`: it asks from its initrd)."""
+        if booted:
+            self.up(node)
         request = {"node_id": node, "session_id": self.session[node], "nonce": os.urandom(32).hex()}
         return lease.issue(self.manifest_now, peer, request, self.att[peer], self.evidence(peer, node), self.freshness[peer], self.signer[peer])
 
@@ -871,6 +940,16 @@ class OnSwtpm(unittest.TestCase):
                 self.enroll(peer, node)
                 self.assertGreater(self.unlock(peer, node), 0)
                 self.assertEqual(self.seen(peer, node), "image-1")
+        # ---- the phase rule: one image has two PCR 11 values, and each request is accepted from one of them ----
+        # b, still in its initrd, asks for a lease: an initrd does not get one
+        self.refused("the node is in the initrd phase of image-1; this request is accepted only from the system phase",
+                     self.vouch, "a", "b", booted=False)
+        self.assertGreater(self.unlock("a", "b"), 0)                      # ... and that refusal cost it nothing
+        # b finishes booting, gets its leases, and now asks for a disk key: a booted system does not get one
+        self.assertGreater(lease.verify(self.vouch("a", "b"), m1, self.now), 280)
+        self.refused("the node is in the system phase of image-1; this request is accepted only from the initrd phase", self.unlock, "a", "b")
+        self.refused("the node is in the system phase of image-1", self.unlock, "c", "b")
+        self.assertEqual(self.seen("a", "b"), "image-1")
         # an image nobody approved yet: c boots image-2 before the root has signed anything
         self.boot("c", "image-2")
         self.refused("the subject's attestation is refused: the quoted PCR digest is not the expected PCR values", self.unlock, "a", "c")
@@ -937,7 +1016,7 @@ class OnSwtpm(unittest.TestCase):
         old_lease_for_c = self.vouch("a", "c")
         self.publish(m3, v3)
         for peer, node in (("b", "a"), ("c", "b"), ("a", "c")):
-            self.assertGreater(self.unlock(peer, node), 0)                # NEXT keeps working
+            self.assertGreater(lease.verify(self.vouch(peer, node), m3, self.now), 280)   # NEXT keeps working
 
         # ---- 15.8: the old image is booted again. Its peers refuse it. ----
         self.boot("c", "image-1")
