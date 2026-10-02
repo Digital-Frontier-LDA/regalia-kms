@@ -846,6 +846,15 @@ class Units(unittest.TestCase):
         self.assertEqual((socket_unit["SocketMode"], socket_unit["DirectoryMode"]), ("0600", "0700"))
         self.assertNotIn("Accept", socket_unit)                       # one service takes the listening socket itself
 
+    def test_every_credential_of_the_initrd_is_unsealed_after_pcr_11_holds_the_initrd_phase(self):
+        """A credential sealed to the image's initrd-phase PCR 11 signature opens only once systemd-pcrphase-initrd
+        has extended "enter-initrd"; a unit that unseals one without that ordering fails when it wins the race."""
+        for name in ("regalia-unlock.service", "regalia-wg-boot.service"):
+            unit = self.unit(name)
+            self.assertTrue([v for k, v in unit["Service"] if k.startswith("LoadCredential")], name)
+            after = " ".join(v for k, v in unit["Unit"] if k == "After").split()
+            self.assertIn("systemd-pcrphase-initrd.service", after, name)
+
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]
         values = dict(service)
