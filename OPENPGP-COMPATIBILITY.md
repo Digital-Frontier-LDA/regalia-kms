@@ -1,5 +1,47 @@
 # Limited OpenPGP compatibility
 
+## Served for signing, through OpenSC and PKCS#11 (owner, 2026-10-02)
+
+Everything below this section describes the hand-written adapter in `internal/backend/openpgp`,
+which the daemon still does not serve. This section is the one use of the applet the daemon does
+serve, and it does not go through that adapter.
+
+**Decision.** A YubiKey's OpenPGP applet is the home of Ed25519 signing keys. Neither SmartCard-HSM
+offers Ed25519 through OpenSC, and OpenSC's own OpenPGP card driver presents the applet as a PKCS#11
+token that signs with `CKM_EDDSA`. The owner's rule is the most standard interface and reviewed
+open-source middleware over code written here, so the daemon reaches the applet with the PKCS#11
+driver it already uses for the HSM. That is a new use of the applet, which ADR-0001 §4 had limited
+to legacy card integration; the decision is recorded in ADR-0002.
+
+**What is served.** `sign`, on a binding with backend `yubikey-openpgp`, and nothing else. `unwrap`
+stays in the capability row for the legacy `sops-pgp` path and is refused here before the token is
+opened.
+
+**What a binding needs**, checked when the daemon starts:
+- `token_label`: OpenSC presents the applet as two tokens under one serial, `OpenPGP card (User PIN)`
+  and `OpenPGP card (User PIN (sig))`. The signature key is on the second.
+- `public_key_sha256`: the applet has no device certificate, so the commissioned public key is what
+  identifies the card.
+- `pin_policy` and `touch_policy: never`, as for every YubiKey binding.
+
+**What the host needs.**
+- [`deploy/opensc/yubikey-openpgp.conf`](deploy/opensc/yubikey-openpgp.conf) named by `OPENSC_CONF`:
+  OpenSC presents a YubiKey as PIV unless told otherwise.
+- A `local-usb` entry for the token in the secure-channel evidence
+  ([`config/secure-channel.example.json`](config/secure-channel.example.json)). The applet has no
+  secure messaging, so the SmartCard-HSM attestation would be false for it. The operator attests
+  what is true instead, under the same rules: one serial, who verified it, when, on which firmware,
+  and an expiry. The two claims never stand in for each other, and the backend is not served at all
+  on a host whose evidence names no such token.
+
+**Evidence.** [`e2e/YUBIKEY-OPENPGP-PKCS11.md`](e2e/YUBIKEY-OPENPGP-PKCS11.md): the driver, the
+daemon's construction path and `regalia-sign` end to end, on a YubiKey 5 NFC, firmware 5.7.4. It is
+not a qualification: removal and recovery are not recorded.
+
+**Not checked through PKCS#11.** The adapter below reads the card's PW1 status byte and its
+User Interaction Flags, and refuses a binding the card contradicts. PKCS#11 exposes neither. A key
+that requires touch does not sign unattended here; it fails, and the operation is refused.
+
 ## Decision
 
 ADR-0001 §4 allocates the YubiKey OpenPGP applet to **unavoidable legacy card integration** and to

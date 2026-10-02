@@ -259,8 +259,8 @@ def validate_binding(binding: Any, path: str) -> dict[str, Any]:
         # Mirrors validateBinding in internal/registry/registry.go: the label that tells apart two
         # PKCS#11 tokens reporting one serial, read by the PKCS#11 backend alone.
         label = require_string(item["token_label"], f"{path}.token_label")
-        if backend != "nitrokey-pkcs11":
-            fail(f"{path}.token_label", "is only valid for the PKCS#11 backend")
+        if backend not in {"nitrokey-pkcs11", "yubikey-openpgp"}:
+            fail(f"{path}.token_label", "is only valid for a backend served through PKCS#11")
         if not TOKEN_LABEL_PATTERN.fullmatch(label):
             fail(f"{path}.token_label", "must be 1 to 32 printable ASCII characters with no space at either end")
 

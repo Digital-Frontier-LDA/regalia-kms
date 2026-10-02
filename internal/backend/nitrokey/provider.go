@@ -112,7 +112,14 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 
 func (provider *Provider) Execute(ctx context.Context, route registry.Route, operation, format, contentType string, data, aad []byte) (output []byte, outputType string, err error) {
 	binding := route.Binding
-	if binding.Backend != "nitrokey-pkcs11" || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
+	if !servedBackend(binding.Backend) || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
+		return nil, "", ErrUnavailable
+	}
+	// THE OPENPGP APPLET SIGNS, AND DOES NOTHING ELSE HERE. Its capability row also lists unwrap,
+	// which belongs to the legacy sops-pgp path this driver does not implement, and wrapping to an
+	// applet key would create material only that applet can open. Refused before the token is
+	// opened, so no PIN is presented for an operation that cannot be served.
+	if binding.Backend == OpenPGPAppletBackend && operation != "sign" && operation != "public-key" {
 		return nil, "", ErrUnavailable
 	}
 	if provider.pinBlocked(binding.DeviceID) {
@@ -289,8 +296,15 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	return output, outputType, nil
 }
 
+// servedBackend reports the backend names this provider answers for. Whether the OpenPGP applet is
+// actually served is the driver's decision (ServeLocalTokens): the provider only declines names
+// that are not PKCS#11 tokens at all.
+func servedBackend(name string) bool {
+	return name == smartCardHSMBackend || name == OpenPGPAppletBackend
+}
+
 func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding) (healthy bool) {
-	if binding.Backend != "nitrokey-pkcs11" || !identifiable(binding) {
+	if !servedBackend(binding.Backend) || !identifiable(binding) {
 		return false
 	}
 	if provider.pinBlocked(binding.DeviceID) {

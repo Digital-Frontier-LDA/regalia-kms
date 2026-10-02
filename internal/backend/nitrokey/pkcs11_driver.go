@@ -76,8 +76,48 @@ type PKCS11Driver struct {
 	module  cryptoki
 	devAuth DevAuthProbe
 	secure  SecureChannel
+	// local is the attestation for tokens that have no secure messaging. It is nil unless the
+	// daemon was given such evidence, and then the OpenPGP applet backend is not served at all.
+	local   SecureChannel
 	retries PINRetryProbe
 	close   func() error
+}
+
+// The two backends this driver serves. Both are PKCS#11 tokens behind one OpenSC module.
+//
+// OpenPGPAppletBackend is a YubiKey's OpenPGP applet as OpenSC's own OpenPGP card driver presents
+// it (regalia#541): the home of Ed25519 signing keys, which neither SmartCard-HSM offers. It is
+// served for signing only, and only over an attestation of its own (ServeLocalTokens). The
+// hand-written card driver in internal/backend/openpgp is a different thing and is not served.
+const (
+	smartCardHSMBackend  = "nitrokey-pkcs11"
+	OpenPGPAppletBackend = "yubikey-openpgp"
+)
+
+// ServeLocalTokens lets the driver open OpenPGPAppletBackend bindings, establishing each one
+// against local, the attestation that the token has no secure messaging. Call it before the driver
+// is used. Without it every such binding is refused: the SmartCard-HSM evidence is never accepted
+// for a token it does not describe.
+func (driver *PKCS11Driver) ServeLocalTokens(local SecureChannel) error {
+	if driver == nil || local == nil {
+		return errors.New("a local-token attestation is required")
+	}
+	driver.local = local
+	return nil
+}
+
+// channelFor names the attestation a binding is opened under, by its backend.
+func (driver *PKCS11Driver) channelFor(binding registry.Binding) (SecureChannel, error) {
+	switch binding.Backend {
+	case smartCardHSMBackend:
+		return driver.secure, nil
+	case OpenPGPAppletBackend:
+		if driver.local == nil {
+			return nil, errors.New("PKCS#11 device is not configured")
+		}
+		return driver.local, nil
+	}
+	return nil, errors.New("PKCS#11 device is not configured")
 }
 
 // NewPKCS11Driver loads one PKCS#11 module. Every Open receives a server-owned
@@ -117,8 +157,12 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if binding.Backend != "nitrokey-pkcs11" || strings.TrimSpace(binding.DeviceID) == "" || strings.TrimSpace(binding.DeviceSerial) == "" {
+	if strings.TrimSpace(binding.DeviceID) == "" || strings.TrimSpace(binding.DeviceSerial) == "" {
 		return nil, errors.New("PKCS#11 device is not configured")
+	}
+	secure, err := driver.channelFor(binding)
+	if err != nil {
+		return nil, err
 	}
 	deviceID, expectedSerial := binding.DeviceID, binding.DeviceSerial
 	selected, err := resolveSlot(driver.module, expectedSerial, string(binding.TokenLabel))
@@ -129,7 +173,7 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 	if err != nil {
 		return nil, errors.New("PKCS#11 session unavailable")
 	}
-	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: string(binding.TokenLabel), devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
+	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: string(binding.TokenLabel), devAuth: driver.devAuth, secure: secure, retries: driver.retries}, nil
 }
 
 // resolveSlot finds the one slot holding the commissioned token, on every call: a slot id is never

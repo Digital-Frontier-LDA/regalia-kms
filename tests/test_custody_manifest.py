@@ -107,12 +107,19 @@ class CustodyManifestTests(unittest.TestCase):
             self.assert_invalid(labelled(label), "token_label")
         self.assert_invalid(labelled(7), "token_label")
         self.assert_invalid(labelled("PIV_II", backend="yubikey-piv"), "token_label")
+        # The OpenPGP applet is served through PKCS#11 too, and it is the card the label exists for.
+        applet = direct_key()
+        applet["algorithm"] = "ed25519"
+        for binding in applet["bindings"]:
+            binding.update(backend="yubikey-openpgp", pin_policy="once", touch_policy="never",
+                           token_label="OpenPGP card (User PIN (sig))")
+        validate_manifest(manifest_with(applet))
         # The published schema says the same: a consumer validating against it alone must not accept
         # a label on a backend that ignores it.
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
         rules = [rule for rule in schema["$defs"]["binding"]["allOf"] if rule.get("if") == {"required": ["token_label"]}]
         self.assertEqual(len(rules), 1)
-        self.assertEqual(rules[0]["then"], {"properties": {"backend": {"const": "nitrokey-pkcs11"}}})
+        self.assertEqual(rules[0]["then"], {"properties": {"backend": {"enum": ["nitrokey-pkcs11", "yubikey-openpgp"]}}})
         # A schema pattern is SEARCHED, and in some engines "$" also matches before a final newline.
         # The pattern must refuse what the validators refuse under those semantics too.
         pattern = re.compile(schema["$defs"]["binding"]["properties"]["token_label"]["pattern"])

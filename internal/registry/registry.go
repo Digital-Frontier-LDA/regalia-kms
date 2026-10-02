@@ -779,8 +779,8 @@ func validateBinding(binding Binding, algorithm string, operations []string) err
 	// together with the serial. Only the PKCS#11 backend reads it, so anywhere else it would be a
 	// field nothing enforces.
 	if binding.TokenLabel != "" {
-		if binding.Backend != "nitrokey-pkcs11" {
-			return errors.New("token_label is only valid for the PKCS#11 backend")
+		if binding.Backend != "nitrokey-pkcs11" && binding.Backend != "yubikey-openpgp" {
+			return errors.New("token_label is only valid for a backend served through PKCS#11")
 		}
 		if !tokenLabelPattern.MatchString(string(binding.TokenLabel)) {
 			return errors.New("token_label must be 1 to 32 printable ASCII characters with no space at either end")
@@ -1338,4 +1338,37 @@ func nitrokeyIdentityPinned(binding Binding) bool {
 		return false
 	}
 	return devAut || binding.PublicKeySHA256 != ""
+}
+
+// RoutedObject is one object the daemon routes, with the binding it routes to at this site.
+type RoutedObject struct {
+	ObjectID   string
+	Operations []string
+	Binding    Binding
+}
+
+// RoutedTo lists the objects this registry routes to one backend, in object-id order.
+//
+// It exists for startup checks that depend on how a backend is served rather than on what the
+// capability matrix says it can do: the matrix is one answer per backend name, and a backend may be
+// served for less than its row (the OpenPGP applet is served for signing only). Custody records are
+// left out for the reason RequiredBackends gives.
+func (registry *Registry) RoutedTo(backend string) []RoutedObject {
+	if registry == nil {
+		return nil
+	}
+	var routed []RoutedObject
+	for id, item := range registry.entries {
+		if isCustodyRecord(item.custody) || item.route.Binding.Backend != backend {
+			continue
+		}
+		operations := make([]string, 0, len(item.operations))
+		for operation := range item.operations {
+			operations = append(operations, operation)
+		}
+		sort.Strings(operations)
+		routed = append(routed, RoutedObject{ObjectID: id, Operations: operations, Binding: item.route.Binding})
+	}
+	sort.Slice(routed, func(i, j int) bool { return routed[i].ObjectID < routed[j].ObjectID })
+	return routed
 }

@@ -526,6 +526,22 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 		providers["nitrokey-pkcs11"] = provider
 		observer = provider
 		closers = append(closers, func() { _ = driver.Close() })
+		// A YUBIKEY'S OPENPGP APPLET IS A SECOND KIND OF TOKEN BEHIND THE SAME MODULE. It is served
+		// only when the evidence carries a local-usb attestation: that is the operator saying such
+		// a token exists on this host, and without it the driver refuses every applet binding. One
+		// provider answers for both backend names, so quarantine and PIN-budget state stay in the
+		// one place the metrics surface reads.
+		if local := channel.LocalTokens(); local != nil {
+			if err := requireOpenPGPAppletBindingsAreServable(keyRegistry); err != nil {
+				_ = driver.Close()
+				return nil, nil, nil, nil, err
+			}
+			if err := driver.ServeLocalTokens(local); err != nil {
+				_ = driver.Close()
+				return nil, nil, nil, nil, err
+			}
+			providers[nitrokey.OpenPGPAppletBackend] = provider
+		}
 	}
 	if len(settings.YubiKeyDevices) > 0 {
 		provider, providerErr := newYubiKeyBackend(settings.YubiKeyDevices, pins)

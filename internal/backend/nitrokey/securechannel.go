@@ -45,7 +45,16 @@ type channelEvidence struct {
 	ExpiresAt    time.Time `json:"expires_at"`
 	Firmware     string    `json:"firmware"`
 	SecureMsg    bool      `json:"secure_messaging_established"`
+	// Channel says what kind of claim this entry makes. Absent or "secure-messaging" is the
+	// original one. "local-usb" is the claim that the token has NO secure messaging and is
+	// attached by USB to this host; see LocalTokens.
+	Channel string `json:"channel,omitempty"`
 }
+
+const (
+	channelSecureMessaging = "secure-messaging"
+	channelLocalUSB        = "local-usb"
+)
 
 type channelEvidenceDocument struct {
 	SchemaVersion int               `json:"schema_version"`
@@ -98,6 +107,19 @@ func LoadSecureChannelEvidence(path string, now func() time.Time) (*AttestedSecu
 		if !device.ExpiresAt.After(device.VerifiedAt) {
 			return nil, errors.New("secure-channel evidence expires before it was made")
 		}
+		switch device.Channel {
+		case "":
+			device.Channel = channelSecureMessaging
+		case channelSecureMessaging:
+		case channelLocalUSB:
+			// The two claims contradict each other. An entry making both is refused when it is
+			// loaded, not at the first operation, so it cannot sit in the file unnoticed.
+			if device.SecureMsg {
+				return nil, fmt.Errorf("secure-channel evidence for %q claims both local-usb and established secure messaging", serial)
+			}
+		default:
+			return nil, fmt.Errorf("secure-channel evidence for %q names an unknown channel", serial)
+		}
 		if _, duplicate := entries[serial]; duplicate {
 			return nil, fmt.Errorf("secure-channel evidence names %q twice", serial)
 		}
@@ -117,11 +139,61 @@ func (channel *AttestedSecureChannel) Establish(ctx context.Context, _, serial s
 	if !present {
 		return fmt.Errorf("no secure-channel evidence for device %q", serial)
 	}
+	// This is also what keeps a local-usb entry from standing in here: such an entry cannot load
+	// with secure messaging recorded as established.
 	if !evidence.SecureMsg {
 		return fmt.Errorf("secure messaging is recorded as NOT established for device %q", serial)
 	}
 	if !channel.now().Before(evidence.ExpiresAt) {
 		return fmt.Errorf("secure-channel evidence for device %q expired at %s", serial, evidence.ExpiresAt.Format(time.RFC3339))
+	}
+	return nil
+}
+
+// LocalTokens is the same evidence read for the tokens that have NO secure messaging.
+//
+// A YubiKey's OpenPGP applet, reached through OpenSC, has no secure-messaging session to attest:
+// an entry saying "established" for it would be false. Dropping the check for that backend would
+// leave nothing on record at all. So the operator attests what is true instead, under the same
+// rules as the other claim: it names one serial, says who verified it, when and on which firmware,
+// it expires, and a missing, expired or mismatched entry fails closed.
+//
+// The two claims do not stand in for each other. Establish above refuses a local-usb entry, and
+// this refuses a secure-messaging one, so declaring a SmartCard-HSM "local-usb" does not relax the
+// check on it: the PKCS#11 backend never asks this type.
+//
+// It returns nil when the evidence names no such token, which is how the daemon knows not to serve
+// that backend.
+func (channel *AttestedSecureChannel) LocalTokens() SecureChannel {
+	if channel == nil {
+		return nil
+	}
+	for _, evidence := range channel.entries {
+		if evidence.Channel == channelLocalUSB {
+			return localTokens{evidence: channel}
+		}
+	}
+	return nil
+}
+
+type localTokens struct{ evidence *AttestedSecureChannel }
+
+func (local localTokens) Establish(ctx context.Context, _, serial string) error {
+	if local.evidence == nil {
+		return errors.New("no local-token evidence is loaded")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	evidence, present := local.evidence.entries[strings.TrimSpace(serial)]
+	if !present {
+		return fmt.Errorf("no local-token evidence for device %q", serial)
+	}
+	if evidence.Channel != channelLocalUSB {
+		return fmt.Errorf("the evidence for device %q is not a local-usb attestation", serial)
+	}
+	if !local.evidence.now().Before(evidence.ExpiresAt) {
+		return fmt.Errorf("local-token evidence for device %q expired at %s", serial, evidence.ExpiresAt.Format(time.RFC3339))
 	}
 	return nil
 }
