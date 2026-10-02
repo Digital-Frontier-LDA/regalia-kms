@@ -29,7 +29,7 @@ import (
 // the script asked for is refused, and the refusal arms check the reason.
 //
 // REGALIA_COSMOS_NODE_EXPECT_REFUSAL names the refusal an arm expects: "signdoc" (the parser refuses
-// the bytes) or a policy decision rule ("cosmos", "sequence", "quota", "epoch"). The test passes only
+// the bytes) or a policy decision rule ("cosmos-destination", "sequence", "quota", "epoch", …). The test passes only
 // on EXACTLY that refusal, and a refused request never reaches the token: nothing is written, so the
 // script finds no signature to broadcast.
 //

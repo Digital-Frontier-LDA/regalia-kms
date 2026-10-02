@@ -52,15 +52,25 @@ def http_json(url, body=None):
         raise SystemExit(f"refusing non-HTTP URL: {url!r}")
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"} if data else {})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.load(resp)
-    except urllib.error.HTTPError as e:
-        payload = e.read()
+    # A QUERY that times out is asked again; a BROADCAST never is. A one-validator devnet on a busy
+    # machine can take longer than one timeout to answer a read, and a read is safe to repeat. A
+    # broadcast that timed out may have been accepted, so repeating it would turn "no answer" into
+    # a replay and the arms that count on exactly one submission would mean something else.
+    attempts = 1 if data else 4
+    for attempt in range(attempts):
         try:
-            return json.loads(payload)
-        except ValueError:
-            raise SystemExit(f"{url}: HTTP {e.code}: {payload[:300]!r}")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            payload = e.read()
+            try:
+                return json.loads(payload)
+            except ValueError:
+                raise SystemExit(f"{url}: HTTP {e.code}: {payload[:300]!r}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt == attempts - 1:
+                raise SystemExit(f"{url}: no answer from the node: {e}")
+            time.sleep(2)
 
 
 def cmd_address(a):

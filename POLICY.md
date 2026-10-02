@@ -26,3 +26,31 @@ control-plane export and off-host audit heads because a fully compromised root c
 
 Policy decisions expose stable codes and rule identifiers suitable for the redacted audit event.
 They never include destination, amount, certificate, payload or internal state error details.
+
+## Denial rules
+
+A denial carries the rule that produced it, and the audit record stores it as
+`policy-DENIED:<rule>`. The API answer does not change with the rule: the caller is told `DENIED`
+(`API.md`), so the rule is evidence for the operator, never an oracle for the client.
+
+A Cosmos transaction is checked one dimension at a time, in this order, and the first refusal is the
+one reported:
+
+| Rule | The transaction is refused because |
+|---|---|
+| `cosmos-transaction` | there is no parsed transaction, or it carries no messages |
+| `cosmos-chain` | its chain ID is not one the policy lists |
+| `cosmos-account` | its account number is not one the policy lists |
+| `cosmos-message` | a message is of a type the policy does not list, or moves no coins |
+| `cosmos-destination` | a message pays a destination the policy does not list |
+| `cosmos-source` | a message spends from a source the policy does not list |
+| `cosmos-amount` | a coin is in an unknown denomination, is zero, or the transaction moves more than the per-transaction cap |
+| `cosmos-gas` | the gas limit is zero or over the cap |
+| `cosmos-fee` | a fee coin is in an unknown denomination, is zero, or the fee is over the cap |
+
+After these, the durable state can still refuse: `sequence` (not the next account sequence),
+`quota` (the daily cap), `epoch` (a superseded fencing epoch) and `replay` (a nonce already used).
+
+`TestCosmosPolicyRejectsEveryControlledDimension` provokes every rule in the table and fails if one
+is never produced; `TestTheFirstRefusingCosmosDimensionIsTheOneReported` pins the order.
+`e2e/cosmos-simapp-kms-tx.sh` asserts the same rules against a live node.

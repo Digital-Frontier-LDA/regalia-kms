@@ -61,13 +61,13 @@ balances by exactly the amount and fee, and that each of these fails for its own
 | Case | Refused by the KMS | Rejected by the node when another KMS signs it anyway |
 |---|---|---|
 | the committed `TxRaw` replayed | | code 19 |
-| another chain id | rule `cosmos` | code 4 |
-| a destination outside the policy | rule `cosmos` | |
+| another chain id | rule `cosmos-chain` | code 4 |
+| a destination outside the policy | rule `cosmos-destination` | |
 | a skipped or reused account sequence | rule `sequence` | code 32 |
-| another account number | rule `cosmos` | code 4 |
-| a fee or gas limit over the cap | rule `cosmos` | |
+| another account number | rule `cosmos-account` | code 4 |
+| a fee or gas limit over the cap | rule `cosmos-fee`, `cosmos-gas` | |
 | a gas limit the chain cannot run in | | code 11 |
-| several messages: one disallowed destination, or a sum over the per-transaction cap | rule `cosmos` | |
+| several messages: one disallowed destination, or a sum over the per-transaction cap | rule `cosmos-destination`, `cosmos-amount` | |
 | a memo, or a truncated SignDoc | the parser (`signdoc`) | |
 | a send that would cross the daily quota | rule `quota` | |
 | the superseded epoch after a promotion | rule `epoch` | |

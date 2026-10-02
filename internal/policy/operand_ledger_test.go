@@ -629,8 +629,8 @@ func policyOperandRows() []operandLeaf {
 				if decision.Allowed {
 					t.Fatalf("a Cosmos policy allowed a request carrying no transaction: %#v", decision)
 				}
-				if decision.Rule != "cosmos" {
-					t.Fatalf("refused as %q, want the cosmos rule", decision.Rule)
+				if decision.Rule != RuleCosmosTransaction {
+					t.Fatalf("refused as %q, not as the rule for this dimension", decision.Rule)
 				}
 			},
 		},
@@ -658,8 +658,8 @@ func policyOperandRows() []operandLeaf {
 						"this policy enforces lives inside the per-message loop, so an empty one "+
 						"satisfies all of them", decision)
 				}
-				if decision.Rule != "cosmos" {
-					t.Fatalf("refused as %q, want the cosmos rule", decision.Rule)
+				if decision.Rule != RuleCosmosTransaction {
+					t.Fatalf("refused as %q, not as the rule for this dimension", decision.Rule)
 				}
 			},
 		},
@@ -688,8 +688,8 @@ func policyOperandRows() []operandLeaf {
 				if decision.Allowed {
 					t.Fatalf("a MsgSend carrying no coins was allowed (%#v)", decision)
 				}
-				if decision.Rule != "cosmos" {
-					t.Fatalf("refused as %q, want the cosmos rule", decision.Rule)
+				if decision.Rule != RuleCosmosMessage {
+					t.Fatalf("refused as %q, not as the rule for this dimension", decision.Rule)
 				}
 			},
 		},
@@ -729,8 +729,8 @@ func policyOperandRows() []operandLeaf {
 				if decision.Allowed {
 					t.Fatalf("a coin of zero was allowed: %#v", decision)
 				}
-				if decision.Code != CodeDenied || decision.Rule != "cosmos" {
-					t.Fatalf("a zero-amount coin came back as code %q rule %q, want %q / cosmos. "+
+				if decision.Code != CodeDenied || decision.Rule != RuleCosmosAmount {
+					t.Fatalf("a zero-amount coin came back as code %q rule %q, want %q / cosmos-amount. "+
 						"CodeStateUnavailable is what this becomes when the amount reaches the "+
 						"reservation instead of being refused here, and it is a 503 the caller is "+
 						"told to retry", decision.Code, decision.Rule, CodeDenied)
@@ -778,8 +778,8 @@ func policyOperandRows() []operandLeaf {
 				if decision.Allowed {
 					t.Fatalf("two coins summing past 2^64 were allowed: %#v", decision)
 				}
-				if decision.Code != CodeDenied || decision.Rule != "cosmos" {
-					t.Fatalf("an overflowing sum came back as code %q rule %q, want %q / cosmos — "+
+				if decision.Code != CodeDenied || decision.Rule != RuleCosmosAmount {
+					t.Fatalf("an overflowing sum came back as code %q rule %q, want %q / cosmos-amount — "+
 						"without the overflow operand the total wraps to zero, every later comparison "+
 						"is satisfied, and the refusal that does happen comes from the reservation "+
 						"validator complaining about an amount of zero", decision.Code, decision.Rule, CodeDenied)
@@ -815,8 +815,8 @@ func policyOperandRows() []operandLeaf {
 						"cap (%#v) — the cap is per transaction, and splitting a payment across coins "+
 						"is the obvious way to exceed one", decision)
 				}
-				if decision.Rule != "cosmos" {
-					t.Fatalf("refused as %q, want the cosmos rule", decision.Rule)
+				if decision.Rule != RuleCosmosAmount {
+					t.Fatalf("refused as %q, not as the rule for this dimension", decision.Rule)
 				}
 				// The control: two coins that DO fit must still be allowed, or this row is
 				// consistent with a validator that refuses every multi-coin message.
