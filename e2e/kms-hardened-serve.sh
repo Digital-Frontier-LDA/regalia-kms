@@ -54,7 +54,7 @@ MODULE=""; for c in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/so
 # Everything the cleanup removes must not exist yet: a host that has any of it is somebody's installation.
 for existing in /etc/systemd/system/regalia-kms.service /etc/systemd/system/regalia-kms.service.d /etc/regalia-kms \
                 /var/lib/regalia-kms /usr/local/sbin/regalia-kms; do
-  [ ! -e "$existing" ] || die "this machine already has $existing: not a throwaway host, and the cleanup would delete it"
+  [ ! -e "$existing" ] && [ ! -L "$existing" ] || die "this machine already has $existing: not a throwaway host, and the cleanup would delete it"
 done
 if sudo grep -q '^regalia-kms ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
   die "an AppArmor profile named regalia-kms is already loaded: not a throwaway host, and the cleanup would unload it"
