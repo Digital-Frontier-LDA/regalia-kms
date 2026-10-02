@@ -1,0 +1,18 @@
+{
+  "schema": "regalia.debian-package-snapshot/v1",
+  "timestamp": "20261002T000000Z",
+  "architecture": "amd64",
+  "max_snapshot_age_days": 7,
+  "archives": {
+    "debian": {
+      "suite": "trixie",
+      "key_file": "archive-key-13.asc",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD"
+    },
+    "debian-security": {
+      "suite": "trixie-security",
+      "key_file": "archive-key-13-security.asc",
+      "primary_fingerprint": "5E04A1E3223A19A20706E20F9904613D4CCE68C6"
+    }
+  }
+}

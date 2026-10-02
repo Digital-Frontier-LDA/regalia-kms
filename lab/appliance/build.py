@@ -14,6 +14,7 @@ import time
 
 from deploy.images.verify import VerificationError, hash_regular, require, verify_gpg
 from .probe import normal_boot
+from deploy.images.snapshot import validate as validate_snapshot, check_installed, render_preseed, POLICY as SNAPSHOT_POLICY
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,7 +50,10 @@ def install_guest(args: list[str], log: Path, timeout: float):
                     process.wait()
 
 
-def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: int, acceleration: str = "tcg") -> dict:
+def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: int, acceleration: str = "tcg", packages: Path | None = None) -> dict:
+    packages = packages or ROOT / "deploy/images/.artifacts/package-snapshot"
+    package_report, package_inventory = validate_snapshot(packages)
+    snapshot_policy = json.loads(SNAPSHOT_POLICY.read_text())
     policy = json.loads((ROOT / "deploy/images/debian-policy.json").read_text())
     media_report = verify_gpg(media / policy["image"], media / policy["checksum"],
                               media / policy["signature"], media / "debian-cd.pub",
@@ -59,13 +63,15 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
     staging = Path(tempfile.mkdtemp(prefix=".appliance-build-", dir=output.parent))
     report = {"schema": "regalia.appliance-build/v1", "status": "building",
               "evidence_class": "emulated", "production_approved": False, "acceleration": acceleration,
-              "installer": media_report, "sources": {}}
+              "installer": media_report, "package_snapshot": package_report, "sources": {}}
     try:
         frozen = staging / "inputs"
         frozen.mkdir()
         for source, target in (("preseed.cfg", "preseed.cfg"), ("finish.sh", "regalia-finish.sh"),
                                ("acceptance.sh", "regalia-acceptance.sh")):
             data = (HERE / source).read_bytes()
+            if source == "preseed.cfg":
+                data = render_preseed(data.decode(), snapshot_policy).encode()
             (frozen / target).write_bytes(data)
             report["sources"][source] = hashlib.sha256(data).hexdigest()
         commit = command(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
@@ -126,6 +132,7 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
         report.update({"status": "passed", "elapsed_seconds": round(time.monotonic() - started),
                        "disk_sha256": digest, "acceleration": acceleration})
+        report["installed_package_binding"] = check_installed(export / "packages.tsv", package_inventory)
         report["export"] = {path.name: hash_regular(path, "sha256")[0] for path in export.iterdir()}
         # Preserve useful final artifacts and evidence, not the compiler source
         # snapshot or installer initramfs. Failed builds retain diagnostics.
@@ -145,6 +152,7 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--media", type=Path, required=True)
+    parser.add_argument("--packages", type=Path, default=ROOT / "deploy/images/.artifacts/package-snapshot")
     parser.add_argument("--output", type=Path, default=HERE / ".artifacts/debian13-prototype")
     linux = Path("/usr/share/OVMF/OVMF_CODE_4M.fd").is_file()
     parser.add_argument("--firmware", type=Path, default=Path("/usr/share/OVMF/OVMF_CODE_4M.fd" if linux else "/opt/homebrew/share/qemu/edk2-x86_64-code.fd"))
@@ -154,7 +162,7 @@ def main():
     args = parser.parse_args()
     try:
         print(json.dumps(build(args.media.resolve(), args.output.resolve(), args.firmware.resolve(),
-                               args.variables.resolve(), args.timeout, args.acceleration), sort_keys=True, indent=2))
+                               args.variables.resolve(), args.timeout, args.acceleration, args.packages.resolve()), sort_keys=True, indent=2))
     except (VerificationError, OSError, subprocess.SubprocessError) as error:
         parser.exit(1, f"REFUSED: {error}\n")
 

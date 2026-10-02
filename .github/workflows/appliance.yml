@@ -40,6 +40,7 @@ jobs:
       - name: Authenticate installer and scanner publishers
         run: |
           python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+          python3 -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
           python3 -m deploy.images.tools deploy/images/.artifacts/scanners
       - name: Install and boot the hardened prototype
         run: sudo -u "$(id -un)" -g kvm -- python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
@@ -81,6 +82,8 @@ jobs:
             lab/appliance/.artifacts/**/normal-boot.stderr
             lab/appliance/.artifacts/scan/*.json
             lab/appliance/.artifacts/triage/*
+            deploy/images/.artifacts/package-snapshot/verification.json
+            deploy/images/.artifacts/package-snapshot/policy.json
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14

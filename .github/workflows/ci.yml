@@ -49,7 +49,9 @@ jobs:
         run: sh lab/appliance/ci-kvm.sh
       - name: Authenticate the pinned Debian installer
         if: steps.recipe.outputs.changed == 'true'
-        run: python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+        run: |
+          python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+          python3 -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
       - name: Install and exercise the actual daemon inside the appliance
         if: steps.recipe.outputs.changed == 'true'
         run: sudo -u "$(id -un)" -g kvm -- python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
@@ -81,6 +83,8 @@ jobs:
             lab/appliance/.artifacts/**/normal-boot.stderr
             lab/appliance/.artifacts/scan/*.json
             lab/appliance/.artifacts/triage/*
+            deploy/images/.artifacts/package-snapshot/verification.json
+            deploy/images/.artifacts/package-snapshot/policy.json
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
