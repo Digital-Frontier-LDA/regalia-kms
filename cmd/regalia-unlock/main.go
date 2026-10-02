@@ -8,7 +8,7 @@
 // unlocked. What it checks itself is only that the answer is the one it asked for, from the peer it
 // asked: the peer's TPM signature, this boot's session, this boot's key.
 //
-// It runs no other program and writes no file. Three things reach it from systemd:
+// It runs no other program and writes no secret anywhere. Three things reach it from systemd:
 //
 //   - the local half of the credential, unsealed by systemd with the TPM and passed as the unit's
 //     credential regalia-unlock-local ($CREDENTIALS_DIRECTORY);
@@ -21,17 +21,25 @@
 // library, and go-tpm (github.com/google/go-tpm), the standard Go library for talking to a TPM: the
 // transport, TPM2_Quote, and the parsing of TPM structures are go-tpm's, not written here.
 //
+// What it leaves for the running system, under /run/regalia (which survives switch-root), none of it
+// secret: boot-session and boot-session.pub, the ID and the public key of the boot session it presented
+// to the peers, and after a successful run unlocked-through, the peer and keyslot. A peer accepts ONE
+// session per boot of this TPM, so the runtime leases of this boot must be asked for under that same
+// session (deploy/baremetal/lease.py); they need its public key and never its private one.
+//
 // Exit status 0: the key was given. 1: the disk stays locked; each peer's reason is on standard error,
 // systemd-cryptsetup gets no key, and the console falls back to the recovery key (#77).
 package main
 
 import (
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -55,9 +63,10 @@ func main() {
 }
 
 type options struct {
-	tpm    string
-	rounds int
-	wait   time.Duration
+	tpm        string
+	sessionDir string
+	rounds     int
+	wait       time.Duration
 }
 
 func run(arguments []string, out, diagnostics io.Writer) error {
@@ -79,6 +88,7 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	configPath := flags.String("config", "/etc/regalia/unlock.json", "the boot configuration (deploy/baremetal/unlock.py, boot_config)")
 	var o options
 	flags.StringVar(&o.tpm, "tpm", "/dev/tpmrm0", "the TPM: the resource-manager device, or unix:PATH for a software TPM in tests")
+	flags.StringVar(&o.sessionDir, "session-dir", "/run/regalia", "where the boot session's ID and public key are left for the running system")
 	flags.IntVar(&o.rounds, "rounds", 5, "how many times to go round the peers before giving up")
 	flags.DurationVar(&o.wait, "wait", 5*time.Second, "pause between rounds")
 	if err := flags.Parse(arguments); err != nil {
@@ -132,6 +142,12 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	if err != nil {
 		return errors.New("cannot make this boot's session key")
 	}
+	// Before any quote is sent: a peer records the session when it VERIFIES a quote, whether or not the
+	// unlock then succeeds, and from then on accepts no other session in this boot. So the session this
+	// run is about to present is on record here first, replacing an earlier run's.
+	if err := publishSession(o.sessionDir, boot); err != nil {
+		return err
+	}
 	key, peer, slot, err := deriveKey(config, o, paths, local, boot, tcpTransport, quote, time.Sleep, diagnostics)
 	if err != nil {
 		return err
@@ -142,6 +158,43 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "regalia-unlock: gave the key of %s for keyslot %s, through %s\n", config.Device, slot, peer)
+	// for the journal and the probe; nothing in the protocol reads it, so failing to write it fails nothing
+	_ = writeFile(o.sessionDir, "unlocked-through", fmt.Sprintf("%s %s\n", peer, slot))
+	return nil
+}
+
+// publishSession leaves the boot session's ID and public key for the running system: boot-session (64
+// lowercase hex and a newline, what the KMS daemon reads) and boot-session.pub (the hex of the DER bytes
+// that go into the quote's transcript). Never the private key.
+func publishSession(directory string, boot *session) error {
+	if err := writeFile(directory, "boot-session.pub", hex.EncodeToString(boot.ephemeralPublic)+"\n"); err != nil {
+		return err
+	}
+	return writeFile(directory, "boot-session", hex.EncodeToString(boot.id)+"\n")
+}
+
+// writeFile replaces one file in the directory, whole or not at all, readable by everyone.
+func writeFile(directory, name, content string) error {
+	failed := errors.New("cannot record " + name + " in " + directory)
+	temporary, err := os.CreateTemp(directory, "."+name+".")
+	if err != nil {
+		return failed
+	}
+	defer os.Remove(temporary.Name())
+	if _, err := temporary.WriteString(content); err != nil {
+		temporary.Close()
+		return failed
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return failed
+	}
+	if err := temporary.Close(); err != nil {
+		return failed
+	}
+	if err := os.Rename(temporary.Name(), filepath.Join(directory, name)); err != nil {
+		return failed
+	}
 	return nil
 }
 

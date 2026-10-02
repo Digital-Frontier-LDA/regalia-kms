@@ -923,6 +923,69 @@ func TestTheTransportIsOneBoundedRequestPerConnection(t *testing.T) {
 	}
 }
 
+// The running system must ask for its leases under the session the peers saw. What is left for it is
+// the session's ID and public key, exactly, and never anything of the private key.
+func TestTheBootSessionIsLeftForTheRunningSystem(t *testing.T) {
+	directory := t.TempDir()
+	read := func(name string) string {
+		content, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info, _ := os.Stat(filepath.Join(directory, name)); info.Mode().Perm() != 0o644 {
+			t.Fatalf("%s has mode %o", name, info.Mode().Perm())
+		}
+		return string(content)
+	}
+	first := testSession(t)
+	if err := publishSession(directory, first); err != nil {
+		t.Fatal(err)
+	}
+	if read("boot-session") != hex.EncodeToString(first.id)+"\n" || len(read("boot-session")) != 65 {
+		t.Fatalf("boot-session is %q", read("boot-session"))
+	}
+	if read("boot-session.pub") != hex.EncodeToString(first.ephemeralPublic)+"\n" {
+		t.Fatal("boot-session.pub is not the hex of the key in the transcript")
+	}
+	// a later run of the same boot presents another session: the record is replaced, whole
+	second := testSession(t)
+	if err := publishSession(directory, second); err != nil || read("boot-session") != hex.EncodeToString(second.id)+"\n" ||
+		read("boot-session.pub") != hex.EncodeToString(second.ephemeralPublic)+"\n" {
+		t.Fatalf("the later session did not replace the earlier one: %v", err)
+	}
+	// nothing of the private key, and nothing left over
+	private := x509.MarshalPKCS1PrivateKey(second.key)
+	entries, _ := os.ReadDir(directory)
+	for _, entry := range entries {
+		content, _ := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if strings.Contains(string(content), hex.EncodeToString(second.key.D.Bytes())) || bytes.Contains(content, private[:64]) {
+			t.Fatalf("%s holds private key material", entry.Name())
+		}
+	}
+	if len(entries) != 2 {
+		t.Fatalf("the directory holds %d entries, not the two files", len(entries))
+	}
+	wantError(t, publishSession(filepath.Join(directory, "absent"), second), "cannot record boot-session.pub")
+
+	// it is on record BEFORE the first quote: a peer records the session when it verifies one
+	peer, boot := newFakePeer(t, "porto"), testSession(t)
+	paths, _ := pathsOf(t, tokensFor(peer))
+	recorded := ""
+	quote := func(qualifying []byte) ([]byte, []byte, error) {
+		recorded = read("boot-session")
+		return noQuote(qualifying)
+	}
+	if err := publishSession(directory, boot); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := deriveKey(configFor(peer), options{rounds: 1}, paths, bytes.Repeat([]byte{0x11}, 32), boot, dialer(peer), quote, func(time.Duration) {}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != hex.EncodeToString(boot.id)+"\n" {
+		t.Fatal("the session was not on record when the quote was taken")
+	}
+}
+
 func TestTheCommandLine(t *testing.T) {
 	var out, diagnostics bytes.Buffer
 	t.Setenv("LISTEN_FDS", "")

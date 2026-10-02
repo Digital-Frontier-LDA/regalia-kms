@@ -372,7 +372,7 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 - **The pre-root client** (`cmd/regalia-unlock`, a static Go binary that talks to the TPM through
   `go-tpm`, the standard Go library for it; `unlock.py` also holds a
   reference client that the tests use and that is not shipped). It holds no manifest and makes no
-  membership decision. It runs no other program and writes no file:
+  membership decision. It runs no other program and writes no secret anywhere:
   - systemd unseals the local half with the TPM and passes it as the unit's credential
     `regalia-unlock-local` (`LoadCredentialEncrypted=`);
   - the client reads the LUKS2 header for the peer paths, asks the peers of its boot configuration in

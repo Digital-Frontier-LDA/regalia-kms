@@ -850,6 +850,9 @@ class Units(unittest.TestCase):
         service = self.unit("regalia-unlock.service")["Service"]
         values = dict(service)
         self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config /etc/regalia/unlock.json")
+        # the one place it may write: root's, 0755, kept after the unit ends (the lease service and the daemon use it)
+        self.assertEqual((values["RuntimeDirectory"], values["RuntimeDirectoryMode"], values["RuntimeDirectoryPreserve"]), ("regalia", "0755", "yes"))
+        self.assertNotIn("ReadWritePaths", values)
         self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
         self.assertEqual(values["LoadCredentialEncrypted"], unlock.LOCAL_NAME + ":/etc/regalia/unlock-local.cred")
         self.assertNotIn("LoadCredential", values)                    # never a credential that is not sealed
@@ -1044,9 +1047,12 @@ class OnSwtpm(unittest.TestCase):
             os.dup2(listener.fileno(), 3)
             os.set_inheritable(3, True)
             os.putenv("LISTEN_PID", str(os.getpid()))
+        self.session_dir = self.d + "/run-regalia"                    # stands for /run/regalia
+        os.makedirs(self.session_dir, exist_ok=True)
         try:
             with unittest.mock.patch.dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=creds):
-                done = subprocess.run([self.client, "-config", config, "-tpm", "unix:" + self.tcti[tpm][len("swtpm:path="):], "-wait", "0s", *flags],
+                done = subprocess.run([self.client, "-config", config, "-tpm", "unix:" + self.tcti[tpm][len("swtpm:path="):], "-wait", "0s",
+                                       "-session-dir", self.session_dir, *flags],
                                       capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, preexec_fn=activated, close_fds=False)
             listener.close()
             asker.settimeout(5)
@@ -1062,6 +1068,26 @@ class OnSwtpm(unittest.TestCase):
             asker.close()
             listener.close()
             shutil.rmtree(creds)
+
+    def left_session(self, directory):
+        """(SHA-256 of the session ID, SHA-256 of the public key) from the two files the client left, checked
+        for their form: what regalia-sync and the KMS daemon will read."""
+        with open(directory + "/boot-session") as f:
+            session = f.read()
+        with open(directory + "/boot-session.pub") as f:
+            public = f.read()
+        self.assertRegex(session, r"\A[0-9a-f]{64}\n\Z")
+        self.assertRegex(public, r"\A([0-9a-f]{2}){1,512}\n\Z")
+        unlock.recipient_key(bytes.fromhex(public.strip()))            # the DER RSA-3072 key of the transcript
+        for name in ("boot-session", "boot-session.pub"):
+            self.assertEqual(stat.S_IMODE(os.stat(directory + "/" + name).st_mode), 0o644)
+        return hashlib.sha256(bytes.fromhex(session.strip())).hexdigest(), hashlib.sha256(bytes.fromhex(public.strip())).hexdigest()
+
+    def recorded_session(self, peer):
+        """What `peer`'s attestation verifier recorded for node a's current boot: (session hash, key hash)."""
+        with open("%s/%s-attest.json" % (self.d, peer)) as f:
+            boot = json.load(f)["nodes"]["a"]["boot"]
+        return boot["session"], boot["key"]
 
     def marker(self):
         """The mapped volume's filesystem mounts and holds the marker; then it is closed again."""
@@ -1116,6 +1142,10 @@ class OnSwtpm(unittest.TestCase):
         self.reboot("a", "the approved image")
         self.assertEqual(self.native(endpoints, mapped=self.mapped),
                          (0, "regalia-unlock: gave the key of %s for keyslot 1, through b\n" % self.device, "", 1))
+        # what it left for the running system: the session and key b's verifier recorded for this boot, and who opened the disk
+        self.assertEqual(self.left_session(self.session_dir), self.recorded_session("b"))
+        with open(self.session_dir + "/unlocked-through") as f:
+            self.assertEqual(f.read(), "b 1\n")
         if self.mapped:
             self.marker()
         # PoC 7.2, 7.3: b is unreachable; c restores a through its own keyslot
@@ -1129,8 +1159,11 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual(self.unlock(peers=("c",)), ("c", 2))
         # PoC 7.4: no peer; the TPM half alone opens nothing, after a bounded number of rounds
         self.reboot("a", "the approved image")
+        before = self.left_session(self.session_dir)
         code, out, err, slot = self.native({"b": self.dead, "c": self.dead}, "-rounds", "2")
         self.assertEqual((code, out, slot), (1, "", None), err)
+        # a run that got nothing still left ITS session, replacing the earlier one: it is the one a peer may have verified
+        self.assertNotEqual(self.left_session(self.session_dir), before)
         self.assertIn("regalia-unlock: the disk stays locked: no peer helped in 2 rounds", err)
         self.assertEqual(err.count("the transport failed (no connection)"), 4)
         self.refused("the disk stays locked: no peer to ask", self.unlock, peers=())
@@ -1205,10 +1238,11 @@ class OnSwtpm(unittest.TestCase):
 
         def remove():
             run(["systemctl", "stop", "regalia-unlock.socket", "regalia-unlock.service"], capture_output=True)
-            for path in installed:
+            for path in installed + ([] if had_runtime_directory else ["/run/regalia"]):
                 shutil.rmtree(path, True) if os.path.isdir(path) else os.path.exists(path) and os.unlink(path)
             run(["systemctl", "daemon-reload"], capture_output=True)
             run(["systemctl", "reset-failed", "regalia-unlock.service", "regalia-unlock.socket"], capture_output=True)
+        had_runtime_directory = os.path.exists("/run/regalia")        # the unit creates it and keeps it: not left on a test machine
         self.addCleanup(remove)
         shutil.copy(self.client, binary)
         os.chmod(binary, 0o700)
@@ -1257,6 +1291,13 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual((state("regalia-unlock.service", "Result"), state("regalia-unlock.service", "ExecMainStatus")), ("success", "0"))
         journal = run(["journalctl", "-u", "regalia-unlock.service", "-o", "cat", "--since", "-2min", "--no-pager"], capture_output=True, text=True).stdout
         self.assertIn("gave the key of %s for keyslot 1, through b" % self.device, journal)
+        # the unit's runtime directory outlives it, is root's and nobody else's to write, and holds the session b recorded
+        self.assertEqual(state("regalia-unlock.service", "ActiveState"), "inactive")
+        directory = os.stat("/run/regalia")
+        self.assertEqual((directory.st_uid, directory.st_gid, stat.S_IMODE(directory.st_mode)), (0, 0, 0o755))
+        self.assertEqual(self.left_session("/run/regalia"), self.recorded_session("b"))
+        with open("/run/regalia/unlocked-through") as f:
+            self.assertEqual(f.read(), "b 1\n")
 
         # 2  no peer answers: the client gives nothing, systemd-cryptsetup gets no key and maps nothing, in
         #    a bounded time, and the socket goes on listening (it is not left waiting, nor started in a loop)

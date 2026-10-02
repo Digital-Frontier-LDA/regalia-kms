@@ -15,4 +15,6 @@ echo "REGALIA-E2E-ATTACH unit: $(systemctl show 'systemd-cryptsetup@root.service
 echo "REGALIA-E2E-ATTACH generator: $(ls /run/systemd/generator /run/systemd/generator.late 2>&1 | tr -s ' \n' ' ' | cut -c1-300)" > /dev/console
 echo "REGALIA-E2E-ATTACH dm: $(dmsetup table root 2>&1 | cut -d' ' -f1-4) crypttab-in-root: $(test -e /etc/crypttab && echo present || echo absent)" > /dev/console
 echo "REGALIA-E2E-CMDLINE $(cat /proc/cmdline)" > /dev/console
+# what the unlock client left for the running system, after switch-root (public values)
+echo "REGALIA-E2E-SESSION dir=$(stat -c '%U:%G:%a' /run/regalia 2>&1) id=$(cat /run/regalia/boot-session 2>&1) through=$(cat /run/regalia/unlocked-through 2>&1 | tr -s ' \n' ' ')" > /dev/console
 systemctl --no-block poweroff

@@ -4,7 +4,7 @@
 #   - it unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On
 #     another machine, or on a boot the TPM's policy refuses, that fails and the program never starts;
 #   - it passes the listening socket (socket activation).
-# The program runs no other program and writes no file. One run answers one connection: with the key,
+# The program runs no other program and writes no secret anywhere. One run answers one connection: with the key,
 # or with nothing. After a run that gave nothing the socket still listens, so the next attempt of
 # systemd-cryptsetup starts a new run.
 
@@ -27,8 +27,15 @@ Before=shutdown.target
 Type=exec
 ExecStart=/usr/bin/regalia-unlock -config /etc/regalia/unlock.json
 LoadCredentialEncrypted=regalia-unlock-local:/etc/regalia/unlock-local.cred
-# The program is root with nothing root can do: no capability, no new privilege, no write anywhere, no
-# device but the TPM and the disks it reads the LUKS2 header of, no socket family but the three it uses.
+# What it leaves for the running system: the boot session's ID and public key, and who opened the disk,
+# in /run/regalia. The directory is root's, 0755, and stays when this unit ends and across switch-root:
+# the lease service and the KMS daemon read and write there after boot.
+RuntimeDirectory=regalia
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# The program is root with nothing root can do: no capability, no new privilege, no write anywhere but
+# that directory, no device but the TPM and the disks it reads the LUKS2 header of, no socket family but
+# the three it uses.
 CapabilityBoundingSet=
 NoNewPrivileges=yes
 ProtectSystem=strict
