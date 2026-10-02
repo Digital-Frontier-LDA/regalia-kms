@@ -89,7 +89,7 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
 | 2.6 | Sign with the offline root key | **NOT BUILT**: the root key is "proposed" (THREE-SITE-SECRETS.md); no ceremony generates it and no tool signs with it |
 | 2.7 | Bring manifest N+1 and the document to all three hosts; each commits the manifest (its TPM epoch counter rises) and rebuilds its attestation policy from the document | commit **exists** (`membership.Store`), exchange between nodes **exists** (`convergence.py`); installing the document and reloading the policy on a running host is **NOT BUILT** |
-| 2.8 | Check that all three hold epoch N+1: on each host, `python3 -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced), and compare the three answers | **exists**, one host at a time; nothing collects the three |
+| 2.8 | Check that all three hold epoch N+1: on each host, `python3 -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced; a chain that is not the one the TPM recorded is refused), and compare the three answers | **exists**, one host at a time; nothing collects the three |
 
 ### 3. Update the hosts, one at a time, in the order of their node IDs
 
