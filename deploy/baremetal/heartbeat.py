@@ -28,10 +28,10 @@ A heartbeat is accepted (Freshness.accept) and later relied on (Freshness.check)
     stops while the node is off and may lose a few seconds at a power loss, so the floor is a lower
     bound and is never used to show that a heartbeat is still live;
   * it is not expired and not issued in the future (5 minutes of skew);
-  * ITS SEQUENCE IS NEW. The highest accepted sequence is a TPM NV counter (Counter), outside restorable
-    disk state: a sequence at or below it is refused, and the heartbeat on disk must carry exactly the
-    counter's value, so a disk rolled back to an older heartbeat is refused however valid that heartbeat
-    still looks.
+  * ITS SEQUENCE IS NEW. The highest accepted sequence is a TPM NV counter (Counter, which is
+    membership.HighWater on an index pair of its own), outside restorable disk state: a sequence at or
+    below it is refused, and the heartbeat on disk must not be below it, so a disk rolled back to an
+    older heartbeat is refused however valid that heartbeat still looks.
 
 Order of writes in accept(): the heartbeat reaches the disk first (durably), then the counter advances.
 A crash between the two leaves a verified heartbeat above the counter; check() finishes the advance. The
@@ -82,12 +82,12 @@ def _time(text, label):
 
 def validate(heartbeat):
     """Schema only. Returns (issued, expires) in seconds."""
-    membership._exact(heartbeat, HEARTBEAT_KEYS, "heartbeat")
+    membership.exact(heartbeat, HEARTBEAT_KEYS, "heartbeat")
     require(heartbeat["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
     for k in ("epoch", "sequence"):
         v = heartbeat[k]
         require(isinstance(v, int) and not isinstance(v, bool) and 1 <= v < 2 ** 63, "%s must be an integer >= 1" % k)
-    membership._hex(heartbeat["manifest_digest"], 64, "manifest_digest")
+    membership.hex_field(heartbeat["manifest_digest"], 64, "manifest_digest")
     issued, expires = _time(heartbeat["issued_at"], "issued_at"), _time(heartbeat["expires_at"], "expires_at")
     require(issued < expires, "expires_at must be after issued_at")
     require(expires - issued <= MAX_LIFETIME, "a heartbeat lives at most 24 hours (this one: %d s)" % (expires - issued))
@@ -97,11 +97,11 @@ def validate(heartbeat):
 def verify(envelope, manifest):
     """The heartbeat inside an envelope, if it is signed by a revocation key the CURRENT manifest names
     and is for that manifest. Time and sequence are Freshness's to check."""
-    membership._exact(envelope, ("heartbeat", "signature"), "envelope")
+    membership.exact(envelope, ("heartbeat", "signature"), "envelope")
     sig = envelope["signature"]
-    membership._exact(sig, ("key", "sig"), "signature")
-    membership._hex(sig["key"], 64, "signature.key")
-    membership._hex(sig["sig"], 128, "signature.sig")
+    membership.exact(sig, ("key", "sig"), "signature")
+    membership.hex_field(sig["key"], 64, "signature.key")
+    membership.hex_field(sig["sig"], 128, "signature.sig")
     heartbeat = envelope["heartbeat"]
     validate(heartbeat)
     membership.validate(manifest)
@@ -117,55 +117,16 @@ def verify(envelope, manifest):
     return heartbeat
 
 
-class Counter:
-    """The highest accepted heartbeat sequence, in a TPM NV counter (TPM_NT_COUNTER) of its own.
-
-    A TPM failure is never read as zero: an index that is missing, is not a counter, or cannot be read is
-    a refusal. A counter cannot be rewound by deleting it either: a new counter's first increment lands
-    above the highest value any deleted counter on that TPM ever held."""
-
-    MAX_JUMP = 1000
-
-    def __init__(self, index, tcti=None, run=subprocess.run):
-        self.index, self.run = index, run
-        self.env = dict(os.environ, TPM2TOOLS_TCTI=tcti) if tcti else None
-
-    def _tpm(self, *args):
-        return self.run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=self.env)
-
-    def define(self):
-        done = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
-        require(done.returncode == 0, "cannot define the NV counter %s" % self.index)
-
-    def value(self):
-        """0 for a counter never incremented; otherwise what the TPM holds."""
-        public = self._tpm("nvreadpublic", self.index)
-        require(public.returncode == 0, "the NV counter %s cannot be read (not defined, or the TPM is unavailable)" % self.index)
-        found = re.search(r"attributes:\s*\n\s*friendly: (\S+)", public.stdout.decode(errors="replace"))
-        require(found is not None, "unexpected tpm2_nvreadpublic output for %s" % self.index)
-        attributes = found.group(1).split("|")
-        require("nt=0x1" in attributes, "NV index %s is not a counter" % self.index)
-        if "written" not in attributes:
-            return 0
-        read = self._tpm("nvread", self.index, "-C", "o")
-        require(read.returncode == 0 and len(read.stdout) == 8, "the NV counter %s cannot be read" % self.index)
-        return int.from_bytes(read.stdout, "big")
+class Counter(membership.HighWater):
+    """The highest accepted heartbeat sequence: membership.HighWater (a TPM NV counter and its write-once
+    base, outside restorable disk state) under the heartbeat rule, where a sequence AT the counter is a
+    replay too. It needs an index pair of its own: membership uses 0x1500016/0x1500017, so this takes
+    e.g. 0x1500018 (its base is then 0x1500019). A TPM that cannot be read is a refusal, never zero."""
 
     def advance(self, sequence):
-        """Raise the counter to `sequence`, which must be above it and within the jump bound."""
         now = self.value()
         require(sequence > now, "REPLAY: sequence %d is not above the TPM counter %d" % (sequence, now))
-        require(sequence - now <= self.MAX_JUMP, "sequence jump %d exceeds the bound %d: anomaly" % (sequence - now, self.MAX_JUMP))
-        while now < sequence:
-            done = self._tpm("nvincrement", self.index, "-C", "o")
-            require(done.returncode == 0, "cannot increment the NV counter %s" % self.index)
-            after = self.value()
-            require(after > now, "the NV counter did not advance (%d -> %d)" % (now, after))
-            # A first increment starts above every counter this TPM ever deleted, which may be past the target.
-            require(after <= sequence, "the NV counter reads %d, already past sequence %d: this TPM held counters "
-                    "before; wait for the authority's sequence to pass it" % (after, sequence))
-            now = after
-        return now
+        return super().advance(sequence)
 
 
 class TpmClock:
@@ -199,9 +160,9 @@ class Freshness:
             return {"envelope": None, "floor": None}
         require(len(raw) <= MAX_BYTES, "the freshness state is oversized")
         state = membership.load(raw)
-        membership._exact(state, ("envelope", "floor"), "freshness state")
+        membership.exact(state, ("envelope", "floor"), "freshness state")
         if state["floor"] is not None:
-            membership._exact(state["floor"], ("time", "tpm_clock"), "floor")
+            membership.exact(state["floor"], ("time", "tpm_clock"), "floor")
             require(all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in state["floor"].values()), "floor must be integers")
         return state
 
@@ -255,8 +216,8 @@ class Freshness:
         left = self._live(heartbeat, now)
         held = self.counter.value()
         require(heartbeat["sequence"] > held, "REPLAY: sequence %d is not above the TPM counter %d" % (heartbeat["sequence"], held))
-        require(heartbeat["sequence"] - held <= Counter.MAX_JUMP, "sequence jump %d exceeds the bound %d: anomaly"
-                % (heartbeat["sequence"] - held, Counter.MAX_JUMP))
+        require(heartbeat["sequence"] - held <= self.counter.MAX_JUMP, "sequence jump %d exceeds the bound %d: anomaly"
+                % (heartbeat["sequence"] - held, self.counter.MAX_JUMP))
         state["envelope"] = envelope
         self._write(state)                          # disk first, durably
         self.counter.advance(heartbeat["sequence"])  # then the counter
@@ -274,7 +235,10 @@ class Freshness:
         require(heartbeat["sequence"] >= held, "ROLLBACK: the heartbeat on disk is sequence %d but the TPM counter is %d; "
                 "wait for a newer heartbeat" % (heartbeat["sequence"], held))
         left = self._live(heartbeat, now)
-        if heartbeat["sequence"] > held:   # accept() was interrupted between the disk and the counter
+        # accept() was interrupted between the disk and the counter. Only a heartbeat that has just passed
+        # every check above (signature, a key of the current manifest, lifetime, expiry) moves the counter:
+        # a file planted on the disk cannot push it forward and strand the node.
+        if heartbeat["sequence"] > held:
             self.counter.advance(heartbeat["sequence"])
         return left
 

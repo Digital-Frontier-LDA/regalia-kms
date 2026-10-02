@@ -51,29 +51,45 @@ def beat(man, sequence, issued=T0, lifetime=hb.MAX_LIFETIME, key=REVOKE, domain=
 
 
 class FakeTpm:
-    """tpm2-tools as Counter calls them: NV counters with the real first-increment rule."""
+    """tpm2-tools as HighWater calls them: NV indices with the real rules. A counter's first increment
+    lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes."""
+    COUNTER, WRITTEN, LOCKED = 0x10, 0x20000000, 0x800
 
-    def __init__(self):
-        self.counters, self.highest_deleted, self.broken = {}, 0, False
+    def __init__(self, highest=0):
+        self.nv, self.highest, self.broken = {}, highest, False
 
-    def __call__(self, argv, **kw):
-        tool, index = argv[0], argv[1]
+    def __call__(self, argv, input=None, **kw):
+        tool, index = argv[0][len("tpm2_"):], argv[1]
         ok = lambda out=b"": subprocess.CompletedProcess(argv, 0, out, b"")
-        if self.broken or (tool != "tpm2_nvdefine" and index not in self.counters):
-            return subprocess.CompletedProcess(argv, 1, b"", b"the TPM said no")
-        if tool == "tpm2_nvdefine":
-            self.counters[index] = None
+        no = subprocess.CompletedProcess(argv, 1, b"", b"the TPM said no")
+        if self.broken:
+            return no
+        if tool == "nvdefine":
+            if index in self.nv:
+                return no
+            self.nv[index] = [self.COUNTER if "nt=counter" in argv[argv.index("-a") + 1] else 0, None]
             return ok()
-        value = self.counters[index]
-        if tool == "tpm2_nvreadpublic":
-            flags = "ownerwrite|authwrite|nt=0x1|ownerread|authread" + ("" if value is None else "|written")
-            return ok(("%s:\n  attributes:\n    friendly: %s\n    value: 0x60016\n  size: 8\n" % (index, flags)).encode())
-        if tool == "tpm2_nvread":
-            return ok(value.to_bytes(8, "big")) if value is not None else subprocess.CompletedProcess(argv, 1, b"", b"0x14a")
-        if tool == "tpm2_nvincrement":
-            self.counters[index] = self.highest_deleted + 1 if value is None else value + 1
+        if index not in self.nv:
+            return no
+        entry = self.nv[index]
+        if tool == "nvreadpublic":
+            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: 8\n" % (index, entry[0] | 0x60006)).encode())
+        if tool == "nvread":
+            return ok(entry[1].to_bytes(8, "big")) if entry[1] is not None else no
+        if tool == "nvincrement" and entry[0] & self.COUNTER:
+            entry[1] = self.highest + 1 if entry[1] is None else entry[1] + 1
+            self.highest, entry[0] = max(self.highest, entry[1]), entry[0] | self.WRITTEN
             return ok()
-        raise AssertionError(argv)
+        if tool == "nvwrite" and not entry[0] & (self.COUNTER | self.LOCKED):
+            entry[1], entry[0] = int.from_bytes(input, "big"), entry[0] | self.WRITTEN
+            return ok()
+        if tool == "nvwritelock":
+            entry[0] |= self.LOCKED
+            return ok()
+        if tool == "nvundefine":
+            del self.nv[index]
+            return ok()
+        return no
 
 
 class Case(unittest.TestCase):
@@ -81,7 +97,7 @@ class Case(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tpm = FakeTpm()
-        self.counter = hb.Counter("0x1500017", run=self.tpm)
+        self.counter = hb.Counter("0x1500018", run=self.tpm)
         self.counter.define()
         self.now, self.authenticated, self.ticks = T0 + 60, True, 5000
         self.state = os.path.join(self.d, "freshness.json")
@@ -262,7 +278,7 @@ class Sequence(Case):
         # and the counter itself refuses, whoever calls it
         self.refused("REPLAY: sequence 5 is not above the TPM counter 5", self.counter.advance, 5)
         self.refused("REPLAY: sequence 1 is not above the TPM counter 5", self.counter.advance, 1)
-        self.refused("sequence jump 1001 exceeds the bound 1000: anomaly", self.counter.advance, 1006)
+        self.refused("jump 1001 exceeds the bound 1000: anomaly", self.counter.advance, 1006)
         self.assertEqual(self.counter.value(), 5)
         self.assertEqual(self.f.accept(beat(self.m1, 6), self.m1), hb.MAX_LIFETIME - 60)
         self.assertEqual(self.counter.value(), 6)
@@ -308,50 +324,76 @@ class Sequence(Case):
     def test_a_tpm_failure_is_never_read_as_zero(self):
         self.f.accept(beat(self.m1, 3), self.m1)
         self.tpm.broken = True
-        self.refused("cannot be read", self.counter.value)
-        self.refused("cannot be read", self.f.check, self.m1)
-        self.refused("cannot be read", self.f.accept, beat(self.m1, 4), self.m1)
+        self.refused("fail closed", self.counter.value)
+        self.refused("fail closed", self.f.check, self.m1)
+        self.refused("fail closed", self.f.accept, beat(self.m1, 4), self.m1)
         self.tpm.broken = False
-        self.refused("cannot be read", hb.Counter("0x1500099", run=self.tpm).value)   # an index nobody defined
+        self.refused("fail closed", hb.Counter("0x1500099", run=self.tpm).value)   # an index nobody defined
         self.assertEqual(self.f.check(self.m1), hb.MAX_LIFETIME - 60)
 
-    def test_only_a_counter_index_counts(self):
-        def ordinary(argv, **kw):
-            return subprocess.CompletedProcess(argv, 0, b"0x1500017:\n  attributes:\n    friendly: ownerwrite|ownerread|written\n", b"")
-        self.refused("is not a counter", hb.Counter("0x1500017", run=ordinary).value)
-        self.refused("unexpected tpm2_nvreadpublic output", hb.Counter("0x1500017", run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"", b"")).value)
+    def test_a_tpm_that_held_counters_before_still_starts_at_zero(self):
+        used = FakeTpm(highest=40)
+        counter = hb.Counter("0x1500018", run=used)
+        self.assertEqual(counter.define(), 41)             # where the counter landed: its base
+        self.assertEqual(counter.value(), 0)
+        f = hb.Freshness(counter, lambda: (self.now, True), lambda: self.ticks, os.path.join(self.d, "used.json"))
+        f.accept(beat(self.m1, 1), self.m1)
+        self.assertEqual(counter.value(), 1)
 
-    def test_a_counter_cannot_be_rewound_by_deleting_it(self):
-        """A TPM starts a new counter above the highest value any deleted counter held."""
-        self.tpm.highest_deleted = 40
-        fresh = hb.Counter("0x1500020", run=self.tpm)
-        fresh.define()
-        self.assertEqual(fresh.value(), 0)
-        f = hb.Freshness(fresh, lambda: (self.now, True), lambda: self.ticks, os.path.join(self.d, "f2.json"))
-        self.refused("already past sequence 7", f.accept, beat(self.m1, 7), self.m1)
-        self.assertEqual(fresh.value(), 41)
-        self.refused("REPLAY", f.accept, beat(self.m1, 41), self.m1)
-        f.accept(beat(self.m1, 42), self.m1)
+    def test_a_deleted_counter_refuses_and_a_recreated_one_does_not_count_from_below(self):
+        self.f.accept(beat(self.m1, 7), self.m1)
+        self.tpm(["tpm2_nvundefine", "0x1500018", "-C", "o"])
+        self.refused("fail closed", self.f.check, self.m1)                  # no counter: no decision
+        self.refused("already exists", self.counter.define)                 # its base is still there
+        self.tpm(["tpm2_nvdefine", "0x1500018", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite"])
+        self.refused("is not a written counter", self.f.check, self.m1)
+        self.tpm(["tpm2_nvincrement", "0x1500018", "-C", "o"])
+        self.assertGreaterEqual(self.counter.value(), 7)                    # above every value it ever held
+        self.refused("REPLAY", self.f.accept, beat(self.m1, 3), self.m1)
+        self.refused("REPLAY", self.f.accept, beat(self.m1, 7), self.m1)
 
-    def test_a_counter_that_does_not_move_is_refused(self):
-        stuck = FakeTpm()
-        counter = hb.Counter("0x1500017", run=lambda argv, **kw: stuck(argv) if argv[0] != "tpm2_nvincrement" else subprocess.CompletedProcess(argv, 0, b"", b""))
-        counter.define()
-        self.refused("did not advance", counter.advance, 1)
-        stuck.broken = True
-        self.refused("cannot define", counter.define)
+    def test_the_sequence_counter_does_not_share_membership_s_indices(self):
+        epochs = m.HighWater("0x1500016", run=self.tpm)
+        epochs.define()
+        epochs.advance(3)
+        self.assertEqual(self.counter.value(), 0)
+        self.f.accept(beat(self.m1, 2), self.m1)
+        self.assertEqual((epochs.value(), self.counter.value()), (3, 2))
+        self.assertEqual(len({epochs.index, epochs.base_index, self.counter.index, self.counter.base_index}), 4)
+        self.refused("already exists", hb.Counter("0x1500017", run=self.tpm).define)   # membership's base index
 
-    def test_a_failed_increment_or_read_of_a_written_counter_is_a_refusal(self):
-        self.counter.advance(2)
+    def test_a_counter_that_does_not_move_or_cannot_be_incremented_is_refused(self):
+        def stuck(argv, **kw):
+            return subprocess.CompletedProcess(argv, 0, b"", b"") if argv[0] == "tpm2_nvincrement" else self.tpm(argv, **kw)
 
-        def failing(tool, result):
-            return lambda argv, **kw: result(argv) if argv[0] == tool else self.tpm(argv)
-        no = lambda argv: subprocess.CompletedProcess(argv, 1, b"", b"no")
-        short = lambda argv: subprocess.CompletedProcess(argv, 0, b"\x00\x02", b"")
-        self.refused("cannot increment the NV counter", hb.Counter("0x1500017", run=failing("tpm2_nvincrement", no)).advance, 3)
-        self.refused("cannot be read", hb.Counter("0x1500017", run=failing("tpm2_nvread", no)).value)
-        self.refused("cannot be read", hb.Counter("0x1500017", run=failing("tpm2_nvread", short)).value)
-        self.assertEqual(self.counter.value(), 2)
+        def failing(argv, **kw):
+            return subprocess.CompletedProcess(argv, 1, b"", b"no") if argv[0] == "tpm2_nvincrement" else self.tpm(argv, **kw)
+        self.refused("did not advance by one", hb.Counter("0x1500018", run=stuck).advance, 1)
+        self.refused("cannot increment the NV counter", hb.Counter("0x1500018", run=failing).advance, 1)
+        self.assertEqual(self.counter.value(), 0)
+
+    def test_a_planted_heartbeat_cannot_push_the_counter_forward(self):
+        """check() finishes an interrupted accept, so what is on disk must pass every check before the
+        counter moves: otherwise a planted file strands the node above the authority's sequence."""
+        self.f.accept(beat(self.m1, 1), self.m1)
+        with open(self.state) as f:
+            state = json.load(f)
+        for label, reason, envelope in (
+                ("a stranger's signature", "not a revocation key named by the current manifest", beat(self.m1, 900, key=OTHER)),
+                ("an altered sequence", "signature does not verify", dict(beat(self.m1, 2), heartbeat=dict(beat(self.m1, 2)["heartbeat"], sequence=900))),
+                ("another manifest", "digest mismatch", beat(manifest(c="DRAINING"), 900)),
+                ("too long a life", "at most 24 hours", beat(self.m1, 900, lifetime=hb.MAX_LIFETIME * 30)),
+                ("expired", "EXPIRED", beat(self.m1, 900, issued=T0 - 2 * hb.MAX_LIFETIME)),
+                ("from the future", "issued in the future", beat(self.m1, 900, issued=self.now + 3600)),
+                ("a jump", "exceeds the bound 1000: anomaly", beat(self.m1, 5000))):
+            with self.subTest(label):
+                with open(self.state, "w") as f:
+                    json.dump(dict(state, envelope=envelope), f)
+                self.refused(reason, self.f.check, self.m1)
+                self.assertEqual(self.counter.value(), 1)
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        self.assertGreater(self.f.check(self.m1), 0)
 
 
 class State(Case):
@@ -439,9 +481,9 @@ class OnSwtpm(unittest.TestCase):
         with open(self.d + "/pid") as f:
             self.addCleanup(os.kill, int(f.read()), 15)
         self.tcti = "swtpm:path=" + sock
-        self.epochs = m.HighWater("0x1500016", tcti=self.tcti)
+        self.epochs = m.HighWater("0x1500016", tcti=self.tcti)    # with its base at 0x1500017
         self.epochs.define()
-        self.counter = hb.Counter("0x1500017", tcti=self.tcti)
+        self.counter = hb.Counter("0x1500018", tcti=self.tcti)    # with its base at 0x1500019
         self.counter.define()
         self.now = T0 + 60
         self.state = self.d + "/freshness.json"
@@ -474,15 +516,18 @@ class OnSwtpm(unittest.TestCase):
     def test_the_counter_survives_a_tpm_restart_and_cannot_be_rewound_by_deleting_it(self):
         self.f.accept(beat(self.m1, 7), self.m1)
         env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
-        subprocess.run(["tpm2_shutdown", "-c"], check=True, capture_output=True, env=env)
-        subprocess.run(["tpm2_startup", "-c"], check=True, capture_output=True, env=env)
+        tpm = lambda *argv: subprocess.run(argv, check=True, capture_output=True, env=env)
+        tpm("tpm2_shutdown", "-c")
+        tpm("tpm2_startup", "-c")
         self.assertEqual(self.counter.value(), 7)
-        subprocess.run(["tpm2_nvundefine", "0x1500017", "-C", "o"], check=True, capture_output=True, env=env)
-        self.refused("cannot be read", self.f.check, self.m1)   # no counter: no decision
-        self.counter.define()
-        self.assertEqual(self.counter.value(), 0)               # it reads as new,
-        self.refused("already past sequence 3", self.f.accept, beat(self.m1, 3), self.m1)   # but it will not count from below
-        self.assertGreater(self.counter.value(), 7)
+        tpm("tpm2_nvundefine", "0x1500018", "-C", "o")
+        self.refused("fail closed", self.f.check, self.m1)      # no counter: no decision
+        self.refused("already exists", self.counter.define)     # the write-once base is still there
+        tpm("tpm2_nvdefine", "0x1500018", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
+        tpm("tpm2_nvincrement", "0x1500018", "-C", "o")
+        self.assertGreaterEqual(self.counter.value(), 7)        # a re-created counter starts above what it held
+        self.refused("REPLAY", self.f.accept, beat(self.m1, 3), self.m1)
+        self.refused("REPLAY", self.f.accept, beat(self.m1, 7), self.m1)
 
     def test_the_tpm_clock_runs_forward_and_an_unreachable_tpm_is_a_refusal(self):
         clock = hb.TpmClock(tcti=self.tcti)
@@ -493,7 +538,7 @@ class OnSwtpm(unittest.TestCase):
         self.now -= 3600
         self.refused("the clock went backwards", self.f.check, self.m1)
         self.refused("the TPM clock cannot be read", hb.TpmClock(tcti="swtpm:path=" + self.d + "/absent"))
-        self.refused("cannot be read", hb.Counter("0x1500017", tcti="swtpm:path=" + self.d + "/absent").value)
+        self.refused("fail closed", hb.Counter("0x1500018", tcti="swtpm:path=" + self.d + "/absent").value)
 
 
 if __name__ == "__main__":
