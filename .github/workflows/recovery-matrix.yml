@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'lab/recovery/**'
+      - 'deploy/baremetal/recovery-key.sh'
       - 'tests/test_recovery_matrix_observer.py'
       - '.github/workflows/recovery-matrix.yml'
   workflow_dispatch:
@@ -20,6 +21,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cryptsetup-bin
+      - name: Verify recovery-header observer guards
+        run: python3 -m unittest discover -s tests -p test_recovery_matrix_observer.py -v
       - name: Observe every successful and single-failure cleanup boundary
         run: |
           mkdir -p "$RUNNER_TEMP/recovery-evidence"
