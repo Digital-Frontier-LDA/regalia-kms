@@ -87,7 +87,9 @@ Local native arm64 validation completed 272 assertions with seed 20261002 and
 36 fault actions. Counts vary with the chosen seed because fault families carry
 different assertions. The original IPC regression passed 121 checks and the
 repository Python guards passed 190 tests. CI independently reruns the cluster
-suite with both configured seeds.
+suite with both configured seeds. Both seeds also passed native amd64 CI on
+76725d7; translated amd64 locally passed 268 assertions with seed 20261003.
+The patched dependency revision is verified separately by the same CI gates.
 
 The daemon renews automatically through either configured peer, checks readiness
 before and after each PKCS#11 operation, and closes its session after expiry.
@@ -113,7 +115,11 @@ private token data and TPM state.
 Review focused on remote administrative mutations, source identity, signed
 policy/lease binding, client verification and PKCS#11 session lifecycle.
 Acknowledgments are checked before the harness reports successful delivery.
-A quarantined runtime caller cannot use the signing endpoint. Internal errors
+A quarantined runtime caller cannot use the signing endpoint. The dependency
+review found four advisories against the initial host cryptography 48.0.0 pin;
+the harness now pins 50.0.2, passes a full resolved-dependency audit, and has an
+independent CI audit gate. Container dependency versions and host Python/packages
+are recorded separately. Internal errors
 fail the harness and are not counted as expected authorization refusals.
 
 ## Checks Performed
@@ -130,6 +136,12 @@ fail the harness and are not counted as expected authorization refusals.
   full-cluster authorization loss requires one offline LUKS recovery credential.
 
 ## Residual Risk
+
+The host audit does not audit Debian's entire package set. Debian's recorded
+cryptography package has open X.509 verifier advisories; this runner uses pinned
+raw keys and does not invoke X.509 chain/name verification. Review package
+maintenance and reachable APIs before extending this prototype. See the
+[Debian security tracker](https://security-tracker.debian.org/tracker/source-package/python-cryptography).
 
 No native Nitrokey/PicoHSM PKA, wrapped-key interoperability, hardware key custody,
 TPM NV epoch journal, complete DL360 measured boot, authenticated time, production
@@ -150,3 +162,6 @@ References: [PyKCS11 API](https://pkcs11wrap.sourceforge.io/api/api.html),
 [SoftHSM source](https://github.com/softhsm/SoftHSMv2),
 [signed membership contract](MEMBERSHIP.md), and
 [secret inventory and trust boundaries](THREAT-MODEL.md).
+
+Dependency references: [cryptography release notes](https://cryptography.io/en/latest/changelog/),
+[upstream wheel security advisory](https://github.com/pyca/cryptography/security/advisories/GHSA-537c-gmf6-5ccf).

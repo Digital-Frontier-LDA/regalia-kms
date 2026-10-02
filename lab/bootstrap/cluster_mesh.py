@@ -3,6 +3,8 @@
 import copy
 import hashlib
 import json
+import platform
+from importlib.metadata import version
 import os
 import signal
 import time
@@ -187,10 +189,13 @@ def main():
                   "runtime_cases.py", "device_cases.py", "chaos_cases.py", "peer.py", "network.py", "lab.py", "mesh.py",
                   "Dockerfile", "compose.network.yaml", "run-cluster.sh", "run-network.sh", "harness-requirements.txt"]},
               "docker_daemon_platform": os.environ["REGALIA_LAB_DAEMON_PLATFORM"],
-              "swtpm_seccomp": os.environ["REGALIA_LAB_SWTPM_SECCOMP"]}
+              "swtpm_seccomp": os.environ["REGALIA_LAB_SWTPM_SECCOMP"],
+              "host_python": platform.python_version(),
+              "host_packages": {name: version(name) for name in ["cryptography", "PyYAML", "cffi", "pycparser"]}}
     cluster = Cluster(report)
     try:
         cluster.start()
+        report["packages"] = command("exec", "-T", "a", "cat", "/opt/packages.tsv").stdout.decode().splitlines()
         from policy_cases import policy_cases
         policy_cases(cluster)
         from runtime_cases import runtime_cases
@@ -199,7 +204,6 @@ def main():
         device_cases(cluster)
         from chaos_cases import chaos_cases
         chaos_cases(cluster)
-        report["packages"] = command("exec", "-T", "a", "cat", "/opt/packages.tsv").stdout.decode().splitlines()
         report["status"] = "passed"
     finally:
         cleanup = command("down", "--volumes", "--remove-orphans", required=False)

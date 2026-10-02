@@ -10,6 +10,19 @@ permissions:
   contents: read
 
 jobs:
+  bootstrap-harness-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Audit pinned host harness dependencies and their transitive packages
+        run: |
+          python3 -m venv "$RUNNER_TEMP/bootstrap-audit"
+          "$RUNNER_TEMP/bootstrap-audit/bin/python" -m pip install --quiet pip-audit==2.9.0
+          "$RUNNER_TEMP/bootstrap-audit/bin/pip-audit" -r lab/bootstrap/harness-requirements.txt
+
   bootstrap-cluster:
     runs-on: ubuntu-latest
     timeout-minutes: 15
