@@ -1082,8 +1082,10 @@ def main(argv=None, host=None, run=None):
             want = ev_host["pin_import_key_sha256"]
             binding = evidence_mod.credential_binding(ev_host["credential_tpm2_pcrs"], ev_host["credential_tpm2_signed_pcrs"],
                                                       ev_host["credential_tpm2_pcr_key_pkfp"])
-            # The root disk is judged against the SIGNED record of which node this is and who its peers are.
-            # Arguments may repeat it; they never replace it.
+            # The root disk is judged against the SIGNED record of which node this is and who its peers are
+            # (the signature was verified just above). Arguments may repeat it; they never replace it. When
+            # the evidence is refused, the disk is judged against the arguments, and the run still fails on
+            # "evidence REFUSED": the disk controls in the report may pass while the run does not.
             recorded = evidence_mod.unlock_record(ev_host["node_id"], ev_host["unlock_peers"])
             if unlock_record is not None and (unlock_record[0], sorted(unlock_record[1])) != (recorded[0], sorted(recorded[1])):
                 problems.append("the arguments say node %s with unlock peers %s, the evidence node %s with %s: they disagree, "
