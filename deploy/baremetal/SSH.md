@@ -53,8 +53,10 @@ or the revocation you are acting on). Do not reuse the number from a previous co
 - **Rollback.** A workstation has no TPM anchor. `--at-least-epoch` is the lowest epoch the
   administrator accepts; an older chain is refused. There is no default. The program also never goes
   back by itself: the file in place records the epoch and manifest it came from, and a chain that ends
-  below it, or holds another manifest at that epoch, does not replace it. A file in the way that the
-  program did not write is not replaced either.
+  below it, or does not hold that manifest at that epoch, does not replace it. A file in the way that
+  the program did not write is not replaced either. **That file is the program's only memory.** If you
+  move it away or delete it, `--at-least-epoch` is the only floor again, even if a newer generated
+  `ssh_config` still points at the path.
 - `addresses.json` is `{"a": "192.0.2.10", ...}`. The manifest holds no addresses, and none is
   trusted: a wrong address reaches a host whose key does not match the name.
 
@@ -106,23 +108,35 @@ ssh-keygen -t ed25519-sk -O resident -O verify-required -O application=ssh:regal
 ssh-keygen -t ed25519-sk -O resident -O verify-required -O application=ssh:regalia-user-ca -C regalia-user-ca-2 -f ca2
 cat ca1.pub ca2.pub > regalia-user-ca.pub      # goes to every node as /etc/ssh/regalia-user-ca.pub
 
-# once per administrator, with their own token
-ssh-keygen -t ed25519-sk -O verify-required -C jonathan -f id_regalia
+# once per administrator, with their own token ("alice" stands for the administrator's name)
+ssh-keygen -t ed25519-sk -O verify-required -C alice -f id_regalia
 
 # each session: a certificate for 12 hours, from either CA token
-ssh-keygen -s ca1 -I jonathan-2026-10-02 -n jonathan -V +12h -z 42 \
+ssh-keygen -s ca1 -I alice-2026-10-02 -n alice -V +12h -z 42 \
     -O clear -O permit-pty -O source-address=203.0.113.0/28 id_regalia.pub
+```
 
-# revoke certificate 42 of CA 1 before it expires; the file goes to every node as /etc/ssh/regalia-revoked-keys.
-# Serial numbers belong to the CA that signed: -s names it. revoked.spec holds "serial: 42".
-ssh-keygen -k -f regalia-revoked-keys -s ca1.pub -z 1 revoked.spec
-ssh-keygen -k -u -f regalia-revoked-keys -s ca2.pub -z 2 revoked-ca2.spec     # -u adds to the list: here, a certificate of CA 2
+**Revoking a certificate before it expires.** The list goes to every node as
+`/etc/ssh/regalia-revoked-keys`. Serial numbers belong to the CA that signed: `-s` names it. The spec
+file holds one line, `serial: 42`.
+
+```sh
+# THE FIRST revocation ever: without -u. The file on the nodes is empty until then, and -u refuses an empty file.
+ssh-keygen -k -f regalia-revoked-keys -s ca1.pub -z 1 revoked-42.spec
+
+# EVERY LATER revocation, for either CA: WITH -u. Without it the list is REPLACED, and certificate 42 is good again.
+ssh-keygen -k -u -f regalia-revoked-keys -s ca1.pub -z 2 revoked-43.spec
+ssh-keygen -k -u -f regalia-revoked-keys -s ca2.pub -z 3 revoked-ca2-7.spec
+
+# before sending it out: what the list holds, and that a given certificate is on it
+ssh-keygen -Q -l -f regalia-revoked-keys
+ssh-keygen -Q -f regalia-revoked-keys id_regalia-cert.pub
 ```
 
 **A CA token is lost.** Issue from the other. Take the lost token's line out of
-`/etc/ssh/regalia-user-ca.pub` on every node (its certificates stop at once, not after 12 hours), make
-a key on a new token, and add its line. Until the new token is enrolled there is one CA token again:
-do it the same day.
+`/etc/ssh/regalia-user-ca.pub` on every node: from then on no new login with its certificates is
+accepted (sessions already open go on until they end). Make a key on a new token and add its line.
+Until the new token is enrolled there is one CA token again: do it the same day.
 
 **Single owner.** Today one person holds both CA tokens and logs in. The CA then gives expiry,
 revocation and a touch per certificate; it does not separate two people. When staff or an investor

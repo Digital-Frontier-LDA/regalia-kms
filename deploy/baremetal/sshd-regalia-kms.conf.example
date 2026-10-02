@@ -6,7 +6,8 @@
 # these keywords (a Match block overrides the global value whatever the order).
 # Check the result on the host for the account and address a login would have, because plain
 # `sshd -T` prints the global values and does not evaluate Match:
-#     sshd -T -C user=<account>,addr=<an admin address>,host=<this host>
+#     sshd -T -C user=<account>,addr=<an admin address>,host=<the admin machine's name>,laddr=<this host's address>,lport=22
+# (addr and host are the CLIENT's; laddr and lport are this host's, for Match LocalAddress and LocalPort)
 # tests/test_baremetal_ssh_trust.py runs a real sshd on this file (with the paths moved to a
 # temporary directory and, for want of a FIDO token, the two "sk-" algorithm lines widened).
 
