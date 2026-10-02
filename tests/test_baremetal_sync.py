@@ -41,20 +41,20 @@ class Case(ct.Case):
         self.servers = {name: self.server(name) for name in ("b", "c")}
         self.authority = Held()
         self.servers["authority"] = sync.Server(convergence.AUTHORITY, self.stores["authority"], self.authority, None, None,
-                                                self.identify, self.events.append, sync.Buckets(clock=lambda: self.tick))
+                                                self.identify, self.events.append, sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now)
         # node a's own store and freshness, and its asking side
         self.stores["a"] = self.store("a")
         self.own = self.peer("a", tag="-own")["freshness"]
         self.client = self.client_of("a", self.stores["a"], self.own)
 
-    def identify(self, source):
+    def identify(self, manifest, source):
         m.require(source in self.keys_at, "no WireGuard peer owns %s" % source)
         return self.keys_at[source]
 
     def server(self, name):
         p = self.peers[name]
         return sync.Server(name, self.stores[name], p["freshness"], p["attester"], p["signer"], self.identify, self.events.append,
-                           sync.Buckets(clock=lambda: self.tick))
+                           sync.Buckets(clock=lambda: self.tick), clock=lambda: self.now)
 
     def client_of(self, name, store, freshness, sources=("b", "c", "authority")):
         transports = {(convergence.AUTHORITY if s == "authority" else s): self.wire(s, name) for s in sources}
@@ -78,6 +78,13 @@ class Case(ct.Case):
 
     def last(self):
         return self.events[-1]
+
+    def denied(self, reason, answer):
+        """A caller this node did not identify, or will not talk to: told "refused" and nothing more; the
+        reason is in the trail."""
+        self.assertEqual(answer, {"v": 1, "ok": False, "refused": "refused"})
+        self.assertEqual(self.last()["outcome"], "DENY")
+        self.assertIn(reason, self.last()["reason"])
 
     def quote(self, nonce, manifest, session=lt.SESSION, node="a"):
         """Node a's fresh quote over a nonce a peer issued."""
@@ -105,17 +112,17 @@ class Identity(Case):
         self.assertEqual(sync.peer_of(self.m1, self.entry("c")["wg_boot_pub"], "wg_boot_pub"), "c")
 
     def test_an_address_no_wireguard_peer_owns_is_refused_and_recorded_by_its_address(self):
-        self.refusal("no WireGuard peer owns 2001:db8::1", self.pull("b", caller="2001:db8::1"))
+        self.denied("no WireGuard peer owns 2001:db8::1", self.pull("b", caller="2001:db8::1"))
         self.assertEqual((self.last()["subject"], self.last()["outcome"], self.last()["event"]), ("2001:db8::1", "DENY", "sync"))
 
     def test_a_key_the_current_manifest_does_not_pin_is_refused(self):
-        self.refusal("the tunnel's key is not pinned to a node by the current manifest (epoch 1)", self.pull("b", caller="a2"))
+        self.denied("the tunnel's key is not pinned to a node by the current manifest (epoch 1)", self.pull("b", caller="a2"))
         self.keys_at[ADDRESS["a"]] = self.entry("a")["wg_boot_pub"]                 # the boot key is not the service key
-        self.refusal("not pinned to a node", self.pull("b"))
+        self.denied("not pinned to a node", self.pull("b"))
         for bad in ("", "zz" * 32, "AB" * 32, "ab" * 31, None, 7):
             with self.subTest(key=bad):
                 self.keys_at[ADDRESS["a"]] = bad
-                self.refusal("the tunnel's key", self.pull("b"))
+                self.denied("the tunnel's key", self.pull("b"))
         twice = dict(self.m1, nodes=self.m1["nodes"] + [dict(self.entry("a2"), wg_service_pub=self.entry("a")["wg_service_pub"])])
         with self.assertRaises(m.Refused):
             sync.peer_of(twice, self.entry("a")["wg_service_pub"])                   # never chosen between
@@ -124,15 +131,15 @@ class Identity(Case):
         self.assertTrue(self.pull("b")["ok"])
         revoking = self.revoke(self.m1)
         self.stores["b"].commit(revoking)                                           # b has the manifest; nothing touched the tunnel table
-        self.refusal("a is REVOKED_STOLEN under epoch 2", self.pull("b"))
+        self.denied("a is REVOKED_STOLEN under epoch 2", self.pull("b"))            # and it is not told why: it is no longer a peer
         self.assertEqual((self.last()["epoch"], self.last()["subject"], self.last()["outcome"]), (2, "a", "DENY"))
-        self.refusal("a is REVOKED_STOLEN", self.ask("b", v=1, op="lease-nonce", node_id="a"))
+        self.denied("a is REVOKED_STOLEN", self.ask("b", v=1, op="lease-nonce", node_id="a"))
         self.assertTrue(self.pull("c")["ok"])                                       # c has not heard: its own manifest decides for it
 
     def test_a_retired_node_gets_nothing_and_a_quarantined_one_may_still_learn(self):
         retired = self.accept(self.m1, self.replaced())
         self.stores["b"].commit(rt.sign(retired))
-        self.refusal("a is RETIRED under epoch 2", self.pull("b"))
+        self.denied("a is RETIRED under epoch 2", self.pull("b"))
         self.assertTrue(self.pull("b", caller="a2")["ok"])                          # its replacement is a node now
         quarantined = self.revoke(self.m1, state="QUARANTINED")
         self.stores["c"].commit(quarantined)
@@ -157,8 +164,17 @@ class Identity(Case):
             self.refusal("the request names", self.ask("b", v=1, op="lease-nonce", node_id=odd))
 
     def test_a_node_does_not_ask_itself(self):
-        self.refusal("a node does not ask itself", self.pull("b", caller="b"))
+        self.denied("a node does not ask itself", self.pull("b", caller="b"))
 
+    def test_what_this_node_holds_is_not_told_to_a_caller_it_did_not_identify(self):
+        """The store's own refusal, and this node's epoch, are for the trail. Found by an independent read:
+        an address nobody owns was told "ROLLBACK: ... the TPM high-water is 3"."""
+        def rolled_back():
+            raise m.Refused("ROLLBACK: the membership on disk is epoch 1 but the TPM high-water is 3; fetch the chain from a peer")
+        with unittest.mock.patch.object(self.stores["b"], "load", rolled_back):
+            for caller in ("2001:db8::1", "a"):
+                self.denied("ROLLBACK", self.pull("b", caller=caller))
+        self.denied("epoch 1", self.pull("b", caller="a2"))                         # an unpinned key does not learn the epoch
 
 class Bounds(Case):
     def test_exact_fields_a_version_and_a_known_operation(self):
@@ -202,25 +218,74 @@ class Bounds(Case):
         self.assertFalse(deep["ok"])
         self.assertEqual(self.last()["outcome"], "DENY")
 
-    def test_a_caller_has_twenty_requests_a_minute_and_six_of_them_may_ask_for_a_lease(self):
+    def test_an_address_has_twenty_requests_a_minute_and_over_it_costs_this_node_nothing(self):
         for _ in range(20):
             self.assertTrue(self.pull("b")["ok"])
-        self.refusal("RATE: more than 20 any requests in 60 s from a", self.pull("b"))
-        self.assertEqual((self.last()["event"], self.last()["outcome"]), ("sync", "DENY"))     # refused before it is even read
+        with unittest.mock.patch.object(self.stores["b"], "load", wraps=self.stores["b"].load) as loads:
+            self.denied("RATE: more than 20 address requests in 60 s from %s" % ADDRESS["a"], self.pull("b"))
+            self.assertEqual((self.last()["event"], self.last()["subject"]), ("sync", ADDRESS["a"]))
+            before = len(self.events)
+            for _ in range(500):                                                    # a flood: answered, and that is all
+                self.assertEqual(self.pull("b"), {"v": 1, "ok": False, "refused": "refused"})
+            self.assertEqual((loads.call_count, len(self.events) - before), (0, 0))   # no manifest read, no TPM, no event
         self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])   # c has its own bucket
-        self.assertTrue(self.pull("c")["ok"])                                                  # and c's server its own count of a
+        self.assertTrue(self.pull("c")["ok"])                                       # and c's server its own count of a
         self.tick += 3
-        self.assertTrue(self.pull("b")["ok"])                                                  # one request every three seconds refills
-        self.refusal("RATE", self.pull("b"))
-        self.tick += 3600
-        for _ in range(6):
-            self.assertTrue(self.ask("b", v=1, op="lease-nonce", node_id="a")["ok"])
-        self.refusal("RATE: more than 6 lease requests in 60 s from a", self.ask("b", v=1, op="lease-nonce", node_id="a"))
-        self.assertTrue(self.pull("b")["ok"])                                                  # the lease limit does not stop a pull
+        self.assertTrue(self.pull("b")["ok"])                                       # one request every three seconds refills
+        self.assertEqual(self.pull("b")["refused"], "refused")
+        self.assertEqual(len(self.events) - before, 3)                              # c's pull and a's two: the refusal is still inside the reported minute
+        self.tick += 60
+        for _ in range(20):
+            self.pull("b")
+        self.denied("(501 more refused since the last report)", self.pull("b"))     # the next minute's report carries the count
         self.tick += 3600
         for _ in range(21):
             last = self.pull("b")
-        self.refusal("RATE", last)                                                             # the bucket does not grow past its size
+        self.assertEqual(last["refused"], "refused")                                # the bucket does not grow past its size
+
+    def test_a_revoked_node_whose_tunnel_is_still_up_cannot_drive_this_node(self):
+        """Found by an independent read: refused callers reached no bucket, so each request cost a chain
+        verification, TPM reads and an audit event, without limit."""
+        self.stores["b"].commit(self.revoke(self.m1))
+        with unittest.mock.patch.object(self.stores["b"], "load", wraps=self.stores["b"].load) as loads:
+            for _ in range(500):
+                self.assertEqual(self.pull("b")["refused"], "refused")
+        self.assertEqual(loads.call_count, 20)
+        self.assertEqual(len([e for e in self.events if e["subject"] in ("a", ADDRESS["a"])]), 21)   # twenty denials by name, one RATE report
+        self.keys_at["2001:db8::9"] = "77" * 32                                     # a WireGuard peer the manifest does not pin
+        before = len(self.events)
+        for _ in range(500):
+            self.pull("b", caller="2001:db8::9")
+        self.assertEqual(len(self.events) - before, 21)
+
+    def test_a_node_has_twenty_requests_a_minute_whatever_address_it_comes_from_and_six_may_ask_for_a_lease(self):
+        self.keys_at["fd72:6567:616c::a:2"] = self.entry("a")["wg_service_pub"]      # a second address of node a's key
+        for _ in range(20):
+            self.assertTrue(self.pull("b")["ok"])
+        self.denied("RATE: more than 20 any requests in 60 s from a", self.pull("b", caller="fd72:6567:616c::a:2"))
+        self.assertEqual(self.last()["subject"], "a")
+        self.tick += 3600
+        for _ in range(6):
+            self.assertTrue(self.ask("b", v=1, op="lease-nonce", node_id="a")["ok"])
+        self.refusal("RATE: more than 6 lease requests in 60 s from a", self.ask("b", v=1, op="lease-nonce", node_id="a"))   # identified: told why
+        self.assertTrue(self.pull("b")["ok"])                                       # the lease limit does not stop a pull
+        self.tick += 3600
+        nonces = [self.ask("b", v=1, op="lease-nonce", node_id="a")["nonce"] for _ in range(3)]
+        for nonce in nonces:                                                        # three nonces and three leases: six
+            self.assertTrue(self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1))["ok"])
+        nonce = self.peers["b"]["attester"].nonce("a").hex()                        # a seventh, with a nonce b did issue
+        self.refusal("RATE: more than 6 lease requests", self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1)))
+
+    def test_the_buckets_forget_idle_callers_and_refuse_when_full_of_busy_ones(self):
+        buckets = sync.Buckets(clock=lambda: self.tick)
+        with unittest.mock.patch.object(sync, "MAX_BUCKETS", 3):
+            for name in ("x", "y", "z"):
+                buckets.take(name, "address")
+            self.refused("RATE: too many callers at once", buckets.take, "w", "address")
+            buckets.take("x", "address")                                            # a caller already known is still served
+            self.tick += 61                                                         # the three are idle: forgotten for a newcomer
+            buckets.take("w", "address")
+            self.assertEqual(sorted(k[0] for k in buckets.state), ["w"])
 
     def test_a_bundle_is_at_most_64_envelopes_and_a_node_far_behind_catches_up_in_rounds(self):
         self.advance(130)
@@ -289,17 +354,25 @@ class Pull(Case):
         self.assertEqual((answer["ok"], answer["summary"]["epoch"], answer["bundle"]), (True, 1, {"envelopes": [], "heartbeat": None}))
         self.assertEqual(self.last()["outcome"], "ALLOW")
 
-    def test_a_conflict_is_refused_and_recorded(self):
-        self.client.pull("b")
+    def test_an_unsigned_summary_proves_nothing_and_a_signed_envelope_proves_the_conflict(self):
+        """Found by an independent read: any node could have this peer record "two manifests were signed for
+        one epoch; record an incident" by SAYING it held another digest. A summary is unsigned. The peer
+        now answers with its own chain from that epoch; a caller that really holds another signed manifest
+        proves the conflict itself."""
+        claimed = self.pull("b", summary={"epoch": 1, "manifest_digest": "ab" * 32})
+        self.assertEqual((claimed["ok"], [e["manifest"]["epoch"] for e in claimed["bundle"]["envelopes"]], claimed["bundle"]["heartbeat"]),
+                         (True, [1], None))
+        self.assertEqual((self.last()["outcome"], self.last()["reason"]), ("ALLOW", ""))    # no incident on a claim
+        self.assertEqual(self.client.pull("b")[0]["epoch"], 1)
+        # a real fork: a holds one signed manifest at epoch 2, b another
         fork = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "DRAINING")]))
         self.stores["a"].commit(fork)
         self.stores["b"].commit(self.revoke(self.m1, node="c"))
-        self.refusal("CONFLICT", self.pull("b", summary=convergence.summary(self.stores["a"])))
-        self.assertIn("CONFLICT", self.last()["reason"])
         with self.assertRaises(m.Refused) as caught:
             self.client.pull("b")
-        self.assertIn("the source refused: CONFLICT", str(caught.exception))
-        self.assertEqual((self.last()["event"], self.last()["outcome"], self.last()["peer"]), ("sync-apply", "DENY", "b"))
+        self.assertIn("CONFLICT: a different manifest at epoch 2: two manifests were signed for one epoch", str(caught.exception))
+        self.assertEqual((self.last()["event"], self.last()["outcome"], self.last()["subject"], self.last()["peer"]), ("sync-apply", "DENY", "a", "b"))
+        self.assertEqual(convergence.summary(self.stores["a"])["manifest_digest"], m.digest(fork["manifest"]))   # and a keeps what it holds
 
     def test_the_authority_is_a_source_like_any_other_and_issues_no_leases(self):
         revoked = self.revoke(self.m1, node="c")["manifest"]
@@ -321,9 +394,19 @@ class Pull(Case):
 
     def test_a_node_with_no_manifest_answers_nobody(self):
         self.servers["x"] = sync.Server("b", self.store("empty"), self.peers["b"]["freshness"], None, None, self.identify, self.events.append)
-        self.refusal("this node holds no manifest", self.pull("x"))
+        self.denied("this node holds no manifest", self.pull("x"))
         self.assertEqual((self.last()["epoch"], self.last()["manifest_digest"], self.last()["subject"]), (0, "", ADDRESS["a"]))
 
+    def test_a_heartbeat_that_has_expired_is_not_passed_on(self):
+        """Found by an independent read: the peer handed on a heartbeat its own check called EXPIRED, and
+        every pull from it then raised at the caller."""
+        self.assertIsNotNone(self.pull("b")["bundle"]["heartbeat"])
+        self.later(hb.MAX_LIFETIME)
+        self.refused("EXPIRED", self.peers["b"]["freshness"].check, self.m1)
+        answer = self.pull("b")
+        self.assertEqual((answer["ok"], answer["bundle"]["heartbeat"], len(answer["bundle"]["envelopes"])), (True, None, 1))
+        self.assertEqual(self.client.pull("b"), ({"epoch": 1, "manifest_digest": m.digest(self.m1)}, None))   # no refusal at the caller
+        self.assertEqual(self.pull("b", summary=convergence.summary(self.stores["a"]))["bundle"]["heartbeat"], None)
 
 class Lying(Case):
     """A source can delay. It cannot make the node accept what the authority did not sign."""
@@ -336,11 +419,11 @@ class Lying(Case):
         return dict({"v": 1, "ok": True, "summary": {"epoch": 9, "manifest_digest": "ab" * 32},
                      "bundle": {"envelopes": envelopes, "heartbeat": heartbeat}}, **more)
 
-    def refused_pull(self, reason, source):
+    def refused_pull(self, reason, source, event="sync-apply"):
         with self.assertRaises(m.Refused) as caught:
             self.client.pull(source)
         self.assertIn(reason, str(caught.exception))
-        self.assertEqual((self.last()["event"], self.last()["outcome"]), ("sync-apply", "DENY"))
+        self.assertEqual((self.last()["event"], self.last()["outcome"]), (event, "DENY"))
         self.assertIn(reason, self.last()["reason"])
 
     def test_a_forged_manifest_a_stale_heartbeat_and_a_malformed_answer_change_nothing(self):
@@ -349,10 +432,11 @@ class Lying(Case):
         forged = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "REVOKED_STOLEN")]), hbt.OTHER, "revocation")
         old = hbt.beat(self.m1, 1, issued=self.now - 2 * hb.MAX_LIFETIME)
         other = hbt.beat(self.m1, 9, key=hbt.OTHER)
-        for label, reason, answer in (
+        for label, reason, answer, *where in (
                 ("a manifest signed by a stranger", "the signing revocation key is not named by the current manifest", self.answer([forged])),
-                ("an expired heartbeat", "EXPIRED", self.answer([], old)),
-                ("a heartbeat signed by a stranger", "not a revocation key named by the current manifest", self.answer([], other)),
+                ("an expired heartbeat", "EXPIRED", self.answer([], old), "sync-heartbeat"),
+                ("a heartbeat signed by a stranger", "not a revocation key named by the current manifest", self.answer([], other), "sync-heartbeat"),
+                ("a heartbeat that is no object", "envelope", self.answer([], "soon"), "sync-heartbeat"),
                 ("too many envelopes", "at most 64 envelopes", self.answer([self.e1] * 65)),
                 ("envelopes that are no list", "at most 64 envelopes", self.answer({"0": self.e1})),
                 ("a bundle with more", "bundle fields mismatch", dict(self.answer([]), bundle={"envelopes": [], "heartbeat": None, "more": 1})),
@@ -366,9 +450,16 @@ class Lying(Case):
                 ("not JSON", "not valid JSON", b"<html>"),
                 ("too large", "the answer exceeds 1048576 bytes", b" " * (sync.MAX_ANSWER + 1))):
             with self.subTest(label):
-                self.refused_pull(reason, self.source(answer))
+                self.refused_pull(reason, self.source(answer), *where)
                 self.assertEqual(convergence.summary(self.stores["a"]), held)
+                self.assertNotIn("had moved", self.last()["reason"])                  # nothing moved, and the refusal does not say it did
         self.assertEqual(self.own.check(self.stores["a"].load()), hb.MAX_LIFETIME - 60)            # the heartbeat it had is untouched
+
+    def test_a_heartbeat_handed_to_a_node_with_no_manifest_is_refused_by_name(self):
+        self.assertEqual(convergence.summary(self.stores["a"])["epoch"], 0)
+        self.refused_pull("a heartbeat cannot be taken before the first manifest", self.source(self.answer([], hbt.beat(self.m1, 1, issued=self.now))),
+                          "sync-heartbeat")
+        self.assertEqual(convergence.summary(self.stores["a"])["epoch"], 0)
 
     def test_a_source_that_does_not_answer_is_a_refusal_and_an_unknown_source_is_not_asked(self):
         def down(raw):
@@ -391,6 +482,51 @@ class Lying(Case):
         now_at, fresh = self.client.pull("liar")           # the same envelope again and again: verified, the same, no progress
         self.assertEqual((now_at["epoch"], len(calls)), (1, sync.MAX_ROUNDS))
 
+    def test_an_answer_that_breaks_the_code_reading_it_is_a_recorded_refusal_not_an_exception(self):
+        """Found by an independent read: a deeply nested answer raised RecursionError out of pull, and an
+        envelope whose node state is a list raised TypeError, with no audit event. A loop that catches
+        Refused, as the docstring invites, died on one bad answer."""
+        self.client.pull("b")
+        held = convergence.summary(self.stores["a"])
+        deep = b"[" * 30000 + b"]" * 30000
+        odd = rt.sign(dict(self.chain(self.m1, self.m1["nodes"]), nodes=[dict(self.entry("a"), state=["ACTIVE"]), self.entry("b"), self.entry("c")]))
+        for label, answer in (("a deeply nested answer", deep),
+                              ("a deeply nested bundle", b'{"v":1,"ok":true,"summary":{"epoch":1,"manifest_digest":"' + b"ab" * 32
+                               + b'"},"bundle":' + deep + b"}"),
+                              ("a node state that is a list", self.answer([odd])),
+                              ("a node state that is an object", self.answer([dict(odd, manifest=dict(odd["manifest"], nodes=[dict(self.entry("a"), state={})]))]))):
+            with self.subTest(label):
+                before = len(self.events)
+                with self.assertRaises(m.Refused):                      # a Refused, whatever the code underneath raised
+                    self.client.pull(self.source(answer))
+                self.assertEqual((len(self.events) - before, self.last()["event"], self.last()["outcome"]), (1, "sync-apply", "DENY"))
+                self.assertEqual(convergence.summary(self.stores["a"]), held)
+        self.client.transports["liar"] = lambda raw: deep
+        with self.assertRaises(m.Refused) as caught:
+            self.client.renewer("liar", self.quote)(self.holder.request())
+        self.assertIn("could not be read (RecursionError)", str(caught.exception))
+
+        def broken_quote(nonce, manifest):
+            raise KeyError("tpm")
+        with self.assertRaises(m.Refused):
+            self.client.renewer("b", broken_quote)(self.holder.request())
+
+    def test_a_round_that_moved_the_membership_and_was_then_refused_says_so(self):
+        """Found by an independent read: manifests are durable as each is accepted, so a round could commit a
+        revocation and then be refused on its heartbeat, and the only event was a DENY at the OLD epoch."""
+        self.client.pull("b")
+        e2 = self.revoke(self.m1, node="c")
+        m2 = e2["manifest"]
+        del self.events[:]
+        self.refused_pull("signature fields mismatch", self.source(self.answer([e2], {"heartbeat": {}, "signature": {}})), "sync-heartbeat")
+        self.assertEqual([(e["event"], e["outcome"], e["epoch"]) for e in self.events], [("sync-apply", "ALLOW", 1), ("sync-heartbeat", "DENY", 2)])
+        self.assertEqual(convergence.summary(self.stores["a"])["epoch"], 2)          # the trail and the store agree: it moved
+        # a later envelope refused after an earlier one was accepted: one DENY, and it says how far it got
+        e3 = rt.sign(self.chain(m2, [self.entry("a", "DRAINING"), self.entry("b"), self.entry("c", "REVOKED_STOLEN")]), hbt.REVOKE, "revocation")
+        forged = rt.sign(self.chain(e3["manifest"], e3["manifest"]["nodes"]), hbt.OTHER, "revocation")
+        del self.events[:]
+        self.refused_pull("(the membership had moved from epoch 2 to 3 before this)", self.source(self.answer([e3, forged])))
+        self.assertEqual(convergence.summary(self.stores["a"])["epoch"], 3)
 
 class Leases(Case):
     def test_a_lease_is_asked_for_and_issued_over_the_transport(self):
@@ -438,7 +574,7 @@ class Recording(Case):
 
     def test_an_answer_that_would_not_fit_is_refused_not_sent(self):
         huge = {"envelopes": [], "heartbeat": {"pad": "x" * sync.MAX_ANSWER}}
-        with unittest.mock.patch.object(self.servers["b"], "_fitting", lambda theirs, held: huge):
+        with unittest.mock.patch.object(sync.Server, "_fit", staticmethod(lambda bundle_of: huge)):
             raw = self.servers["b"].handle(m.canonical({"v": 1, "op": "pull", "summary": dict(convergence.NOT_ENROLLED), "sequence": 0}), ADDRESS["a"])
         self.assertLess(len(raw), 200)
         self.refusal("the answer would exceed 1048576 bytes", json.loads(raw))
@@ -446,9 +582,16 @@ class Recording(Case):
     def test_nothing_is_answered_that_could_not_be_recorded(self):
         def full(event):
             raise OSError("the journal is full")
-        self.servers["b"].sink = full
-        with self.assertRaises(OSError):
-            self.pull("b")
+
+        def refusing(event):                              # a sink that fails with the library's own refusal type
+            raise m.Refused("the audit file is full")
+        for sink in (full, refusing):
+            with self.subTest(sink=sink.__name__):
+                self.servers["b"].sink = sink
+                with self.assertRaises(sync.SinkFailed):   # for an accepted request, and for one that would be refused
+                    self.pull("b")
+                with self.assertRaises(sync.SinkFailed):
+                    self.ask("b", v=1, op="lease-nonce", node_id="c")
 
     def test_every_request_is_exactly_one_event(self):
         del self.events[:]
@@ -502,6 +645,9 @@ class Sockets(Case):
         time.sleep(0.3)
         self.assertEqual([(e["outcome"], e["reason"]) for e in self.events], [("DENY", "a request is at most 65536 bytes")])
 
+    def drops(self):
+        return [(e["subject"], e["outcome"], e["reason"]) for e in self.events if e["event"] == "sync-drop"]
+
     def test_a_caller_that_never_finishes_its_request_is_dropped_at_the_deadline(self):
         with socket.create_connection(("127.0.0.1", self.port)) as conn:
             conn.sendall(b'{"v":1,')
@@ -509,7 +655,51 @@ class Sockets(Case):
             started = time.monotonic()
             self.assertEqual(conn.recv(100), b"")                                   # closed, unanswered
             self.assertLess(time.monotonic() - started, 4)
-        self.assertEqual([e for e in self.events if e["event"].startswith("sync")], [])     # nothing was decided
+        time.sleep(0.2)
+        self.assertEqual(self.drops(), [("127.0.0.1", "DENY", "no complete request within 1 s")])   # no request was decided; the drop is recorded
+        self.assertEqual([e for e in self.events if e["event"] != "sync-drop"], [])
+
+    def test_a_caller_that_drips_its_request_is_dropped_at_the_same_deadline(self):
+        """The deadline is for the whole request, not for each read: a byte every 300 ms would otherwise hold
+        a place for as long as the caller liked."""
+        with socket.create_connection(("127.0.0.1", self.port)) as conn:
+            started, closed = time.monotonic(), None
+            try:
+                for _ in range(20):
+                    conn.sendall(b" ")
+                    time.sleep(0.3)
+            except OSError:
+                closed = time.monotonic() - started
+            if closed is None:
+                conn.settimeout(1)
+                closed = time.monotonic() - started if conn.recv(10) == b"" else None
+        self.assertIsNotNone(closed)
+        self.assertLess(closed, 3)                                                  # twenty drips would have taken six seconds
+        self.assertEqual(len(self.drops()), 1)
+
+    def test_a_caller_that_never_reads_its_answer_gives_its_place_back_at_the_deadline(self):
+        class Flood:
+            def handle(self, raw, source):
+                return b" " * (64 * 1024 * 1024)                                    # far more than the socket buffers hold
+
+            def dropped(self, source, reason):
+                pass
+        listener = socket.create_server(("127.0.0.1", 0))
+        listener.settimeout(0.05)
+        stopped = []
+        thread = threading.Thread(target=sync.serve, args=(Flood(), listener, lambda: bool(stopped)),
+                                  kwargs={"deadline": 1.0, "per_address": 1}, daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (stopped.append(1), thread.join(5), listener.close()))
+        port = listener.getsockname()[1]
+        silent = socket.create_connection(("127.0.0.1", port))
+        self.addCleanup(silent.close)
+        silent.sendall(b"{}")
+        silent.shutdown(socket.SHUT_WR)                                             # a whole request, and then it reads nothing
+        time.sleep(0.3)
+        self.assertEqual(self.complete(port), b"")                                  # its place is taken while the answer is being sent
+        time.sleep(2.0)                                                             # past the deadline for sending it
+        self.assertEqual(self.complete(port)[:4], b"    ")                          # the place is free again
 
     def complete(self, port=None):
         """A whole request on a new connection; what came back (b"" when it was closed unanswered)."""
@@ -558,6 +748,23 @@ class Sockets(Case):
         self.release(third)
         self.hold(port)                                                             # the refused ones were never counted:
         self.assertIn(b'"ok"', self.complete(port))                                 # two at once again
+        # five connections were closed unanswered: ONE event, not five (the next minute's would carry the count)
+        self.assertEqual(self.drops(), [("127.0.0.1", "DENY", "over the connection limit (8 in all, 2 from one address)")])
+
+    def test_drops_are_reported_once_a_minute_with_the_count(self):
+        server = self.servers["b"]
+        for _ in range(7):
+            server.dropped("127.0.0.9", "over the connection limit")
+        self.assertEqual(self.drops(), [("127.0.0.9", "DENY", "over the connection limit")])
+        self.tick += 61
+        server.dropped("127.0.0.9", "over the connection limit")
+        self.assertEqual(self.drops()[-1], ("127.0.0.9", "DENY", "over the connection limit (6 more dropped since the last report)"))
+        server.dropped("127.0.0.8", "no complete request within 10 s")                # another address: its own report
+        self.assertEqual(len(self.drops()), 3)
+        server.sink = lambda event: (_ for _ in ()).throw(OSError("full"))
+        self.tick += 61
+        with self.assertRaises(sync.SinkFailed):
+            server.dropped("127.0.0.9", "over the connection limit")                  # serve() swallows this; the method does not hide it
 
     def test_no_more_connections_in_all_than_the_limit(self):
         port = self.serving(deadline=60.0, connections=3, per_address=10)
