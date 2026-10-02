@@ -41,6 +41,25 @@ Commissioning has two halves:
 - **Full-disk encryption** (LUKS2), enrolled to the TPM:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
   `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
+  - **A disk enrolled this way FAILS `root_disk_unlock_revocable`, and `host_probe.py` exits 1. That is
+    intended (#135): it is the known blocker for production.** PCR 7 does not change with the kernel, so
+    an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
+    passes only when the unlock can retire an image: a peer's contribution (#67, being built), or an
+    NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
+    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
+    A host that is otherwise commissioned shows this as its only failing control. Signed evidence
+    (section 5) records every measured control as true, so no evidence can be signed for such a host:
+    with `--evidence` the run says the evidence is refused; run it without, to see the one control.
+  - The probe judges every dm-crypt volume under `/`, under the host key and under the credstore, and
+    every token that names a keyslot on them: a second volume, a `clevis` token or a stale token fails
+    it, and so does a keyslot that no token names (a passphrase, or a key file) on any of them. For an
+    NV-backed token it also requires `/var/lib/systemd/pcrlock.json` to bind PCR 7 and a PCR that tells
+    boot images apart, with measured values: `systemd-pcrlock` leaves out a PCR it cannot predict, and a
+    PCR nothing was measured into is all zeros for every image. PCR 11 qualifies on a UKI boot
+    (systemd-stub measures the image into it); PCR 4 qualifies when the kernel is started as an EFI
+    image, as a UKI is, and not when GRUB loads the kernel itself. It
+    does not measure that the NV index holds that policy, nor that a retired image is refused on the
+    host; that is the #65 checklist, section D.
 - **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this
   host's disk by itself after a total outage (#77; PIN-CUSTODY.md, "The disk recovery key"). It is a
   ceremony secret, one per host, written on the KMS host recovery card and carried in every escrow;

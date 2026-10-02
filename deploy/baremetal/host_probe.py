@@ -27,6 +27,28 @@ PLATFORM AND TPM, measured:
   root_disk_tpm_unlocked    a dm-crypt device is among the root filesystem's block-device ancestors
                             (lsblk -s: LUKS directly or under LVM), and its crypttab entry unlocks with
                             the TPM (a tpm2-device=<value> option, parsed exactly)
+  root_disk_unlock_revocable
+                            NO keyslot of a volume that holds this host's secrets is released by the
+                            local TPM on a policy that cannot retire a boot image (#135). The volumes
+                            judged are every dm-crypt device under "/", under the host key and under the
+                            credstore (all members of a multi-device btrfs). A systemd-tpm2 token bound
+                            to PCR values, or to a signed PCR policy, is such a policy: PCR 7 does not
+                            change with the kernel, and a signed policy accepts every image its key ever
+                            signed. An old signed image then unlocks the disk, reads the host key and
+                            opens the HSM PIN. What passes, on EVERY judged volume: at least one
+                            NV-backed systemd-tpm2 token (tpm2_pcrlock), and no token naming a keyslot
+                            that is anything but such a token or the systemd-recovery token; each names
+                            keyslots that exist; and /var/lib/systemd/pcrlock.json, the policy systemd
+                            keeps for the NV index, binds PCR 7 and a PCR that tells boot images apart
+                            (11 or 4), each with measured values (an all-zero value binds nothing); and
+                            every keyslot of those volumes is named by exactly one such token. A token of any other type (clevis, an unknown name) fails: this
+                            check cannot say what releases its keyslot. NOT measured: that the NV index
+                            holds that file's policy, and that a retired image is in fact refused on this
+                            host (#65 checklist, section D). The peer contribution of #67 will be a
+                            second passing shape. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY
+                            DESIGN: it is the known blocker for production, and there is no option to
+                            skip it. Signed commissioning evidence records every measured control as
+                            true, so no evidence can be signed for such a host either.
   root_disk_recovery_keyslot
                             the same LUKS2 header carries the per-host RECOVERY keyslot (#77): exactly
                             one systemd-recovery token, naming one keyslot that no other token names,
@@ -125,7 +147,8 @@ HOST_KEY = "/var/lib/systemd/credential.secret"
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
-            "root_disk_tpm_unlocked", "root_disk_recovery_keyslot", "ima_policy_loaded", "pin_import_key_present",
+            "root_disk_tpm_unlocked", "root_disk_unlock_revocable", "root_disk_recovery_keyslot", "ima_policy_loaded",
+            "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
             "token_clients_root_only", "firewall_default_deny")
 MEASURED = PLATFORM + os_probe.MEASURED
@@ -218,7 +241,26 @@ def luks_header(host, name):
         parsed = None
     if not isinstance(parsed, dict):
         return None, "cannot read the LUKS2 header of %s (cryptsetup luksDump --dump-json-metadata)" % dev
+    # Every check below walks tokens and keyslots as objects of objects. Anything else is not a header
+    # cryptsetup wrote, and is refused here once instead of raising somewhere later.
+    for part in ("tokens", "keyslots"):
+        value = parsed.setdefault(part, {})
+        if not isinstance(value, dict) or not all(isinstance(v, dict) for v in value.values()):
+            return None, "the LUKS2 header of %s is malformed: %s is not an object of objects" % (dev, part)
+    for token_id, token in parsed["tokens"].items():
+        slots = token.get("keyslots", [])
+        if not isinstance(slots, list) or not all(isinstance(slot, str) for slot in slots):
+            return None, "the LUKS2 header of %s is malformed: token %s names keyslots %r, not a list of keyslot IDs" % (dev, token_id, slots)
     return dev, parsed
+
+
+def token_keyslots(token, meta):
+    """The keyslots a token names, as a list of IDs, if it is a list of strings that all exist in the
+    header; None otherwise (a stale token naming a wiped keyslot unlocks nothing, whatever it claims)."""
+    slots = token.get("keyslots")
+    if not isinstance(slots, list) or not all(isinstance(s, str) for s in slots) or not set(slots) <= set(meta["keyslots"]):
+        return None
+    return slots
 
 
 def root_unlock(host):
@@ -241,19 +283,189 @@ def root_unlock(host):
         dev, meta = luks_header(host, name)
         if dev is None:
             return False, meta
-        tokens = meta.get("tokens", {})
-        tpm = [t for t in tokens.values() if t.get("type") == "systemd-tpm2" and t.get("keyslots")]
+        tokens = meta["tokens"]
+        tpm = [t for t in tokens.values() if t.get("type") == "systemd-tpm2" and token_keyslots(t, meta)]
         if not tpm:
             return False, "%s (%s) has no systemd-tpm2 token in its LUKS2 header: enrol it with " \
                 "systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7" % (name, dev)
         # The commissioning policy binds the disk to PCR 7 exactly (README, section 3): a token with no
-        # PCRs, or other ones, would release the disk key whatever the Secure Boot state.
-        wrong = [t.get("tpm2-pcrs") for t in tpm if sorted(t.get("tpm2-pcrs") or []) != [7]]
+        # PCRs, or other ones, would release the disk key whatever the Secure Boot state. The one other
+        # shape is an NV-backed token (tpm2_pcrlock): it lists no PCRs, they are in the policy the NV
+        # index holds, so that policy must be shown to cover PCR 7. Whether a token can RETIRE an image
+        # is root_disk_unlock_revocable's.
+        wrong = [t.get("tpm2-pcrs") for t in tpm if not nv_backed(t) and t.get("tpm2-pcrs") != [7]]
         if wrong:
-            return False, "%s (%s) has a TPM2 token bound to PCRs %s, not exactly [7]: re-enrol with " \
+            return False, "%s (%s) has a TPM2 token bound to PCRs %s, not exactly [7] and not NV-backed: re-enrol with " \
                 "systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7" % (name, dev, wrong)
+        if any(nv_backed(t) for t in tpm):
+            pcrs, why = pcrlock_pcrs(host)
+            if pcrs is None or 7 not in pcrs:
+                return False, "%s (%s) has an NV-backed TPM2 token, but %s: nothing shows that its policy binds PCR 7" % (
+                    name, dev, why or "%s does not cover PCR 7 (it covers %s)" % (PCRLOCK_POLICY, sorted(pcrs)))
     return True, "%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (
         ", ".join(crypts), "; ".join(entries[n] for n in crypts))
+
+
+def nv_backed(token):
+    """A systemd-tpm2 token whose policy lives in a TPM NV index (systemd-cryptenroll --tpm2-pcrlock):
+    exactly `"tpm2_pcrlock": true`, and no PCR list of its own."""
+    return token.get("tpm2_pcrlock") is True and not token.get("tpm2-pcrs")
+
+
+PCRLOCK_POLICY = "/var/lib/systemd/pcrlock.json"
+# The PCRs that differ between two boot images: 11 (systemd-stub measures the UKI's sections into it) and 4
+# (the firmware measures each EFI binary it starts: the boot loader, and the kernel WHEN it is started as an
+# EFI image, as a UKI is; a kernel that GRUB loads itself is not in PCR 4). Not 12 (the command line and
+# credentials), nor 9: the same image boots with either.
+IMAGE_PCRS = frozenset({4, 11})
+
+
+def pcrlock_pcrs(host):
+    """The PCRs BOUND by the policy systemd keeps for its NV index (systemd-pcrlock make-policy writes
+    it): (set of PCR numbers whose accepted values are all measured ones, never the all-zero value of a
+    PCR nothing was extended into, ""), or (None, why). make-policy LEAVES OUT a PCR whose measurements it
+    cannot match to components, and says so only in its log, so an NV-backed token says nothing by
+    itself about WHICH PCRs bind the disk. The file is not authenticated here: whether the NV index
+    holds this policy is not measured."""
+    text = host.read(PCRLOCK_POLICY)
+    if text is None:
+        return None, "there is no %s (systemd-pcrlock make-policy writes it)" % PCRLOCK_POLICY
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        doc = None
+    values = doc.get("pcrValues") if isinstance(doc, dict) else None
+    if not isinstance(values, list) or not values or doc.get("pcrBank") != "sha256":
+        return None, "%s is not a SHA-256 pcrlock policy with PCR values" % PCRLOCK_POLICY
+    pcrs, listed = set(), set()
+    for entry in values:
+        good = isinstance(entry, dict) and type(entry.get("pcr")) is int and 0 <= entry["pcr"] <= 23 \
+            and isinstance(entry.get("values"), list) and entry["values"] \
+            and all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) for v in entry["values"])
+        if not good:
+            return None, "%s has a PCR entry that is not {pcr, values: [64 hex, ...]}" % PCRLOCK_POLICY
+        # A PCR nothing was measured into is all zeros, on every boot of every image: accepting that value
+        # binds nothing. PCR 11 is extended only by systemd-stub (a UKI boot); on a GRUB + initramfs host it
+        # stays zero, and a policy "covering" it is satisfied by every old kernel.
+        # one entry per PCR: with two, a second one accepting zeros would hide behind a first that does not
+        if entry["pcr"] in listed:
+            return None, "%s lists PCR %d twice" % (PCRLOCK_POLICY, entry["pcr"])
+        listed.add(entry["pcr"])
+        if "0" * 64 not in entry["values"]:
+            pcrs.add(entry["pcr"])
+    return pcrs, ""
+
+
+# Where this host's secrets are: the root filesystem, systemd's host key (the other half of every PIN
+# credential) and the credentials themselves. A separate /var, or a second device of the root
+# filesystem, is a volume an old image can open like any other.
+# NOT resolved: a filesystem that spans devices without naming them as its source (an f2fs with several
+# devices, an ext4 or xfs with an external journal) is judged as its one named device. Swap is not judged.
+SECRET_PATHS = ("/", HOST_KEY, CREDSTORE)
+
+
+def secret_volumes(host):
+    """The dm-crypt names under every filesystem that holds a secret: {name: [the paths it is under]},
+    or (None, why). A multi-device btrfs is resolved to ALL its members (findmnt names one)."""
+    volumes = {}
+    for path in SECRET_PATHS:
+        rc, out = host.run(["findmnt", "-n", "-o", "SOURCE,FSTYPE,UUID", "-T", path])
+        fields = out.split()
+        if rc != 0 or len(fields) < 2:
+            return None, "cannot find the filesystem that holds %s (findmnt)" % path
+        sources, fstype = [re.sub(r"\[.*\]$", "", fields[0])], fields[1]
+        if fstype == "btrfs":
+            rc, listing = host.run(["lsblk", "-n", "-r", "-o", "PATH,UUID"])
+            members = [f[0] for f in (line.split() for line in listing.splitlines()) if len(f) == 2 and len(fields) == 3 and f[1] == fields[2]]
+            if rc != 0 or not members:
+                return None, "cannot list the devices of the btrfs filesystem that holds %s (lsblk)" % path
+            sources = members
+        for src in sources:
+            rc, out = host.run(["lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", src])
+            crypts = [f[0] for f in (line.split() for line in out.splitlines()) if len(f) == 2 and f[1] == "crypt"]
+            if rc != 0 or not crypts:
+                return None, "%s is on %s, which is not on dm-crypt" % (path, src)
+            for name in crypts:
+                volumes.setdefault(name, [])
+                if path not in volumes[name]:
+                    volumes[name].append(path)
+    return volumes, ""
+
+
+NOT_REVOCABLE = (
+    "%s (%s) is unlocked by the local TPM alone, under a policy that cannot retire a boot image (%s). An old signed "
+    "kernel image unlocks this disk, reads the host key and opens the HSM PIN. BLOCKING FOR PRODUCTION (#135). "
+    "What clears it: a peer's contribution to the unlock (#67, not built yet), or an NV-backed policy "
+    "(systemd-cryptenroll --tpm2-pcrlock; measured on a software TPM only, e2e/pcrlock-luks-swtpm.sh). "
+    "There is no option to skip this check")
+
+
+def unlock_revocable(host):
+    volumes, why = secret_volumes(host)
+    if volumes is None:
+        return False, why
+    for name, paths in volumes.items():
+        dev, meta = luks_header(host, name)
+        if dev is None:
+            return False, meta
+        where = "%s (%s, under %s)" % (name, dev, ", ".join(paths)) if paths != ["/"] and set(paths) != set(SECRET_PATHS) else "%s (%s)" % (name, dev)
+        nv, fixed, named, recovery = 0, [], {}, 0
+        for token_id, token in sorted(meta["tokens"].items()):
+            if token.get("keyslots") and token_keyslots(token, meta) is None:
+                return False, "%s: token %s (%s) names keyslots %r, which are not all keyslots of this header: a stale or " \
+                    "damaged token. BLOCKING FOR PRODUCTION (#135): what unlocks this volume cannot be judged" % (
+                        where, token_id, token.get("type"), token.get("keyslots"))
+            for slot in token.get("keyslots") or []:
+                named.setdefault(slot, []).append(token_id)
+        # A keyslot that no token names is opened by something this check cannot see: a passphrase, a key file
+        # (on the ESP, say), or a TPM-sealed key from a tool that writes no token. On the root volume
+        # root_disk_recovery_keyslot says the same; here it holds for EVERY volume with a secret on it.
+        stray = sorted(set(meta["keyslots"]) - set(named), key=lambda slot: (len(slot), slot))
+        if stray:
+            return False, "%s: keyslot %s is named by no token: a passphrase, a key file or a sealed key this check cannot " \
+                "judge. BLOCKING FOR PRODUCTION (#135): wipe it, or enrol what opens it as a token" % (where, ", ".join(stray))
+        shared = sorted(slot for slot, ids in named.items() if len(ids) > 1)
+        if shared:
+            return False, "%s: keyslot %s is named by more than one token (%s): what releases it cannot be judged. BLOCKING FOR " \
+                "PRODUCTION (#135)" % (where, ", ".join(shared), ", ".join("token " + i for i in named[shared[0]]))
+        for token_id, token in sorted(meta["tokens"].items()):
+            if not token.get("keyslots"):
+                continue                       # a token that names no keyslot releases nothing
+            kind = token.get("type")
+            if kind == "systemd-recovery":
+                recovery += 1                  # the recovery key: root_disk_recovery_keyslot judges the root volume's
+                continue
+            if kind != "systemd-tpm2":
+                return False, "%s: token %s of type %r names keyslot %s. This check knows what releases a systemd-tpm2 " \
+                    "keyslot and the recovery key's, and nothing else: an unknown token may be a TPM-sealed key that no " \
+                    "update retires. BLOCKING FOR PRODUCTION (#135)" % (where, token_id, kind, ", ".join(token["keyslots"]))
+            if nv_backed(token):
+                nv += 1
+                continue
+            how = "PCRs %s" % (token.get("tpm2-pcrs") or "none")
+            if token.get("tpm2_pubkey") or token.get("tpm2_pubkey_pcrs"):
+                how += ", and a signed policy on PCRs %s (every image its key ever signed)" % (token.get("tpm2_pubkey_pcrs") or "?")
+            fixed.append(how)
+        if fixed:
+            return False, NOT_REVOCABLE % (name, dev, "; ".join(fixed))
+        if recovery > 1:
+            return False, "%s has %d systemd-recovery tokens: one volume has one recovery key (a second is a second secret " \
+                "that opens it). BLOCKING FOR PRODUCTION (#135)" % (where, recovery)
+        if not nv:
+            return False, "%s has no systemd-tpm2 token that names a keyslot: nothing to judge (root_disk_tpm_unlocked says " \
+                "what is missing on the root volume; a volume opened by a key file cannot be judged here). BLOCKING FOR " \
+                "PRODUCTION (#135)" % where
+    pcrs, why = pcrlock_pcrs(host)
+    if pcrs is None:
+        return False, "the TPM tokens are NV-backed, but %s: nothing shows what their policy binds. BLOCKING FOR PRODUCTION (#135)" % why
+    if 7 not in pcrs or not pcrs & IMAGE_PCRS:
+        return False, "the TPM tokens are NV-backed, but %s binds PCRs %s (with measured values): it must bind PCR 7 and a PCR " \
+            "that tells boot images apart (11, or 4). systemd-pcrlock leaves out a PCR it cannot predict, a PCR nothing was " \
+            "measured into is all zeros for every image, and a policy without the image is satisfied by every old one. " \
+            "BLOCKING FOR PRODUCTION (#135)" % (PCRLOCK_POLICY, sorted(pcrs))
+    return True, "%s: every token that names a keyslot is NV-backed (tpm2_pcrlock) or the recovery key, and %s covers PCRs %s. " \
+        "NOT measured: that the NV index holds this policy, and that a retired image is refused on this host" % (
+            ", ".join(volumes), PCRLOCK_POLICY, ", ".join(str(n) for n in sorted(pcrs)))
 
 
 def recovery_keyslots(meta):
@@ -619,7 +831,7 @@ def firewall(host):
 
 PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
               tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock,
-              root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
+              root_disk_unlock_revocable=unlock_revocable, root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
@@ -631,7 +843,13 @@ def measure(host, import_key_sha256=None, credential_binding=None):
         if name == "pin_credentials_sealed_as_recorded":
             return pin_credentials(host, credential_binding)
         return PROBES[name](host)
-    return {name: dict(zip(("value", "why"), run(name))) for name in MEASURED}
+
+    def judged(name):
+        try:
+            return run(name)
+        except Exception as error:      # noqa: BLE001  a probe that cannot run has not measured its control
+            return False, "the probe raised %s: %s (not measured: counted as failing)" % (type(error).__name__, error)
+    return {name: dict(zip(("value", "why"), judged(name))) for name in MEASURED}
 
 
 def compare(measured, host, ports=()):
