@@ -877,8 +877,7 @@ class OnSwtpm(unittest.TestCase):
                 self.fail("root, swtpm, tpm2-tools, openssl, systemd-creds and cryptsetup are expected here (missing: %s; uid %d)"
                           % (", ".join(missing) or "none", os.geteuid()))
             self.skipTest("needs root (systemd-creds seals to a TPM only as root), swtpm, tpm2-tools, systemd-creds and cryptsetup")
-        # under /run: the unit under test has a private /tmp and still has to reach the software TPM's socket
-        self.d = tempfile.mkdtemp(dir="/run", prefix="regalia-e2e-")
+        self.d = tempfile.mkdtemp(dir="/tmp")
         self.addCleanup(shutil.rmtree, self.d, True)
         self.pids, self.tcti, self.names = {}, {}, {}
         self.addCleanup(lambda: [os.kill(pid, 15) for pid in self.pids.values()])
@@ -1193,14 +1192,16 @@ class OnSwtpm(unittest.TestCase):
         """The shipped units, started by the real systemd, and the real systemd-cryptsetup as the one that
         asks for the key: the crypttab key file is the socket. The only changes are in a drop-in, for what a
         test machine lacks: the software TPM, a credential that is passed plain (systemd itself can unseal
-        only with the machine's own TPM), and the path of the binary under test."""
+        only with the machine's own TPM), the path of the binary under test, and a read-only view of the
+        test's directory."""
         self.assertTrue(self.mapped, "REGALIA_UNLOCK_DEVICE must name a block device")
         endpoints = self.enrolled_disk()
         cryptsetup = shutil.which("systemd-cryptsetup", path="/usr/lib/systemd:/usr/bin:/lib/systemd")
         self.assertTrue(cryptsetup, "systemd-cryptsetup is expected here")
         units, source = "/run/systemd/system", os.path.join(REPO, "deploy", "baremetal", "initrd")
         binary = "/usr/local/bin/regalia-unlock-e2e-%d" % os.getpid()
-        installed = [binary, units + "/regalia-unlock.socket", units + "/regalia-unlock.service", units + "/regalia-unlock.service.d"]
+        inside = "/run/regalia-e2e-%d" % os.getpid()                  # where the unit sees the test's directory
+        installed = [binary, units + "/regalia-unlock.socket", units + "/regalia-unlock.service", units + "/regalia-unlock.service.d", inside]
 
         def remove():
             run(["systemctl", "stop", "regalia-unlock.socket", "regalia-unlock.service"], capture_output=True)
@@ -1210,7 +1211,7 @@ class OnSwtpm(unittest.TestCase):
             run(["systemctl", "reset-failed", "regalia-unlock.service", "regalia-unlock.socket"], capture_output=True)
         self.addCleanup(remove)
         shutil.copy(self.client, binary)
-        os.chmod(binary, 0o755)
+        os.chmod(binary, 0o700)
         for name in ("regalia-unlock.socket", "regalia-unlock.service"):
             shutil.copy(os.path.join(source, name), units)
         os.mkdir(installed[3])
@@ -1224,9 +1225,12 @@ class OnSwtpm(unittest.TestCase):
             with open(os.open(local, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
                 f.write(unlock.unseal_local(sealed, tpm2_device=self.tcti["a"], run=run))
             run(["systemctl", "reset-failed", "regalia-unlock.service"], capture_output=True)
+        # The unit keeps its private /tmp. The test's directory (the boot configuration, the software TPM's
+        # socket) is shown to it read-only under /run.
         with open(installed[3] + "/e2e.conf", "w") as f:
-            f.write("[Service]\nExecStart=\nExecStart=%s -config %s -tpm unix:%s -rounds 2 -wait 0s\n"
-                    "LoadCredentialEncrypted=\nLoadCredential=%s:%s\n" % (binary, config, self.tcti["a"][len("swtpm:path="):], unlock.LOCAL_NAME, local))
+            f.write("[Service]\nExecStart=\nExecStart=%s -config %s/unlock.json -tpm unix:%s/a.sock -rounds 2 -wait 0s\n"
+                    "LoadCredentialEncrypted=\nLoadCredential=%s:%s\nBindReadOnlyPaths=%s:%s\n"
+                    % (binary, inside, inside, unlock.LOCAL_NAME, local, self.d, inside))
         self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
         started = run(["systemctl", "start", "regalia-unlock.socket"], capture_output=True, text=True)
         self.assertEqual(started.returncode, 0, started.stderr)
