@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run sc-hsm-tool with its PINs and DKEK password typed into its own prompts, never on argv.
 
-sc-hsm-tool has no `env:` form (OpenSC 0.26.1), so `--so-pin X --pin Y --password Z` puts the
-secrets in the process list for as long as the card takes, which is minutes for an initialise. Left
-out, the tool prompts for each one; this answers those prompts over a pty from the environment:
+`--so-pin X --pin Y --password Z` puts the secrets in the process list for as long as the card takes,
+which is minutes for an initialise. Left out, the tool prompts for each one; this answers those
+prompts over a pty from the environment:
 
     SCHSM_SO_PIN=… SCHSM_USER_PIN=… SCHSM_DKEK_PW=… e2e/lib/sc-hsm-pty.py sc-hsm-tool --reader 3 --initialize …
 
@@ -11,6 +11,12 @@ A secret is typed only once the prompt has turned echo OFF (input typed earlier 
 prompt, and would be echoed back). The tool's output is passed through with every secret redacted.
 The exit status is the tool's. A prompt whose secret is not in the environment is a hard stop, never
 a guess, because a wrong guess at a PIN prompt spends a retry.
+
+This is ONE way, not the only one. sc-hsm-tool also takes `--so-pin env:NAME`, `--pin env:NAME` and
+`--password env:NAME`: it reads all three through util_get_pin, as pkcs11-tool does (OpenSC 0.26.1,
+src/tools/util.c and sc-hsm-tool.c; read from the source, regalia-ceremony#94). An earlier version of
+this text said it had no such form; that was wrong. The wrapper stays because the drills that use it
+were run on cards this way, and because it redacts the tool's output.
 """
 import os
 import pty
