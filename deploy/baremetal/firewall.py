@@ -52,8 +52,10 @@ def render(cfg):
     callers = cfg["client_cidrs"] + [n for n in cfg["monitoring_cidrs"] if n not in cfg["client_cidrs"]]
     mesh, mesh_rules = cfg["boot_mesh"], ""
     if mesh:
+        # After "ct state established,related accept": what reaches this rule begins a connection, and a
+        # connection begins with a SYN and nothing else (see the service mesh below for why).
         mesh_rules = (
-            "    iifname \"%s\" ip daddr %s tcp dport %d ip saddr %s accept comment \"boot mesh: unlock requests, inside the tunnel\"\n"
+            "    iifname \"%s\" ip daddr %s tcp dport %d ip saddr %s tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"boot mesh: a new unlock request, inside the tunnel\"\n"
             "    iifname \"%s\" drop comment \"boot mesh: nothing else inside the tunnel\"\n"
             "    ip daddr %s udp dport %d ip saddr %s accept comment \"boot mesh: WireGuard, from the peers' declared addresses\"\n"
             % (mesh["interface"], mesh["address"], mesh["unlock_port"], _set([p["address"] + "/32" for p in mesh["peers"]]), mesh["interface"],
