@@ -91,3 +91,23 @@ def runtime_cases(c):
     c.check("explicit root recovery restores running-node service", c.verify("A", *c.sign("A")))
     c.check("bootstrap identity cannot reach service plane", not probe("B", "10.77.91.1", 8446, {})["reachable"])
     c.check("cleartext bridge cannot reach signing service", not probe("B", "10.89.91.1", 8446, {})["reachable"])
+    c.fresh()
+    c.rpc("A", "start_lease_agent", peers=["B", "C"])
+    try:
+        time.sleep(2)
+        c.check("automatic peer renewal keeps service ready beyond the initial lease",
+                c.rpc("A", "status")["service_ready"] and not c.rpc("A", "status")["agent_error"])
+        admin("B", "ip", "link", "set", "wg-service", "down")
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                status = c.rpc("A", "status")
+                if status["service_ready"] and status["lease_issuer"] == "C":
+                    break
+                time.sleep(0.1)
+            c.check("automatic lease agent switches to surviving peer C",
+                    status["service_ready"] and status["lease_issuer"] == "C" and not status["agent_error"])
+        finally:
+            admin("B", "ip", "link", "set", "wg-service", "up")
+    finally:
+        c.rpc("A", "stop_lease_agent")

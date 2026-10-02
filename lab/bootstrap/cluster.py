@@ -37,6 +37,10 @@ class ClusterNode(Node):
         self.runtime = Runtime(self)
         self.service = Service(self)
         self.lease_lifetime = 1500
+        self.agent_enabled = False
+        self.agent_error = False
+        self.agent_peers = []
+        self.renewal_lock = threading.Lock()
 
     def invalidate(self):
         self.lease = None
@@ -62,6 +66,30 @@ class ClusterNode(Node):
                         self.ready()
                     except Refusal:
                         self.invalidate()
+
+    def lease_agent(self):
+        while True:
+            time.sleep(0.2)
+            with self.lock:
+                if not self.agent_enabled:
+                    continue
+                try:
+                    self.current()
+                    if self.lease is not None and self.lease["payload"]["expires_at"] - self.clock.now() > 1250:
+                        continue
+                except Refusal:
+                    self.invalidate()
+                    continue
+                peers = list(self.agent_peers)
+            try:
+                self.renew(peers)
+            except Refusal:
+                pass  # Bounded expiry still applies; retry while policy permits.
+            except Exception:
+                with self.lock:
+                    self.agent_error = True
+                    self.agent_enabled = False
+                    self.invalidate()
 
     def policy(self):
         return json.loads(self.state.read_bytes())
@@ -99,6 +127,10 @@ class ClusterNode(Node):
         return result
 
     def renew(self, peers):
+        with self.renewal_lock:
+            return self._renew(peers)
+
+    def _renew(self, peers):
         if not isinstance(peers, list) or not peers or not all(isinstance(p, str) and p in self.pins for p in peers):
             raise Refusal("INVALID_REQUEST")
         with self.lock:
@@ -167,6 +199,22 @@ class ClusterNode(Node):
         if op == "renew":
             fields(command, {"op", "peers"})
             return self.renew(command["peers"])
+        if op == "start_lease_agent":
+            fields(command, {"op", "peers"})
+            peers = command["peers"]
+            if not isinstance(peers, list) or not peers or not all(isinstance(p, str) and p in self.pins for p in peers):
+                raise Refusal("INVALID_REQUEST")
+            with self.lock:
+                self.agent_peers = peers
+                self.agent_enabled = True
+            return {}
+        if op == "stop_lease_agent":
+            fields(command, {"op"})
+            with self.lock:
+                self.agent_enabled = False
+            with self.renewal_lock:
+                pass  # Join any in-flight renewal before reporting stop.
+            return {}
         if op == "runtime_request":
             fields(command, {"op", "peer", "command"})
             if command["peer"] not in list("ABC"):
@@ -266,7 +314,8 @@ class ClusterNode(Node):
             return dict(super().control(command), fresh=fresh, epoch=policy["epoch"],
                         manifest_digest=policy["manifest_digest"], nodes=policy["nodes"],
                         service_ready=ready, device_session=self.device.session is not None,
-                        device_present=self.device.present)
+                        device_present=self.device.present, agent_enabled=self.agent_enabled,
+                        agent_error=self.agent_error, lease_issuer=None if self.lease is None else self.lease["payload"]["issuer_id"])
         return super().control(command)
 
 
@@ -381,6 +430,9 @@ class Service:
         message = hex_bytes(command["message"], maximum=4096)
         with self.node.lock:
             self.node.ready()
+            caller = next(node for node in "ABC" if service_address(node) == source)
+            if self.node.policy()["nodes"][caller] != "ACTIVE":
+                raise Refusal()
             lease = self.node.lease
             statement = service_statement(self.node.node_id, command["request_id"], message, lease)
             signature = self.node.device.sign(SERVICE_DOMAIN + canonical(statement))
@@ -415,6 +467,7 @@ def main():
                BoundedServer(("127.0.0.1", 9444), node, local=True)]
     try:
         threading.Thread(target=node.sweep, daemon=True).start()
+        threading.Thread(target=node.lease_agent, daemon=True).start()
         for server in servers[:-1]:
             threading.Thread(target=server.serve_forever, daemon=True).start()
         servers[-1].serve_forever()
