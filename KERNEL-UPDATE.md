@@ -109,7 +109,7 @@ For each host, in order:
 
 | # | Step | Status |
 |---|---|---|
-| 4.1 | Collect each host's attestation state file and ask `python3 -m deploy.baremetal.rollout retire-ready … --state a=A.json --state b=B.json --state c=C.json`. It needs every host's file and refuses unless every host was last seen on the new image by every peer that has seen it | **exists**; collecting the files is **manual** |
+| 4.1 | Collect each host's attestation state file and ask `python3 -m deploy.baremetal.rollout retire-ready … --state a=A.json --state b=B.json --state c=C.json`. It needs every host's file and refuses unless every host was last seen **up** on the new image by every peer that has seen it (a host seen only in its initrd, where it asks for its disk, does not count) | **exists**; collecting the files is **manual** |
 | 4.2 | Let the cluster run on the new image for the agreed time before retiring the old one. Until step 5 the old image is the fallback | **manual**; the time is not decided |
 
 ### 5. Retire: the root signs "only the new one"
