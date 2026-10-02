@@ -264,3 +264,28 @@ jobs:
         run: |
           "$REGALIA_COSMOS_SIMD_BIN" version
           e2e/cosmos-simapp-kms-tx.sh
+
+  # regalia-kms#65 PoC 5.1/5.4/5.5: a peer verifies a node's TPM quote. Two software TPMs (swtpm):
+  # the AK is bound to the recorded EK by MakeCredential/ActivateCredential, a fresh quote over the
+  # boot-session transcript is accepted, and a replay, each substituted transcript field, changed
+  # PCRs, another TPM's AK, a session carried across a reboot and rolled-back TPM state are refused.
+  # The script exits nonzero on any FAIL; the count guards against it passing by running nothing.
+  tpm-attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: TPM attestation against swtpm (enrollment, fresh quote, replay, reboots)
+        run: |
+          status=0
+          bash e2e/tpm-attest-swtpm.sh > "$RUNNER_TEMP/attest.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/attest.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^tpm-attest-swtpm: 31 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
+            echo "::error::the attestation battery did not run all 31 checks" >&2; exit 1; }
