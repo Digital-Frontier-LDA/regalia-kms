@@ -89,3 +89,28 @@ Three sampled findings were checked against Debian's security tracker:
 Keep the complete scanner findings and package inventory while deciding whether
 to remove unnecessary packages, consume authenticated Debian fixes when available,
 or seek a reviewed, time-limited exception for a specific unreachable issue.
+
+## Debian tracker review — 2026-10-02
+
+The hash-bound cleaned appliance findings were compared with an HTTPS snapshot
+of Debian's security tracker. All 345 High/Critical matches remain blocking,
+covering 224 distinct CVEs and 224 source/version review groups. The diagnostic
+reports 279 vendor-open matches, 57 vendor-fixed candidates, six vendor-not-affected
+candidates, two unknown records and one installed version older than a recorded
+fix. No waiver was issued and the scanner verdict was not changed.
+
+The actionable package is `libpcre2-8-0`: installed source `10.46-1~deb13u2`,
+Debian's trixie-security fix `10.46-1~deb13u3` for
+[CVE-2026-103111](https://security-tracker.debian.org/tracker/CVE-2026-103111).
+Kernel candidates require separate review: the cataloged kernel path maps to its
+unique signed Debian image package; binary version `6.12.111-1` is compared to
+Linux source fixes instead of the signed wrapper's `6.12.111+1` source version.
+This is package ownership evidence, not proof that every upstream advisory or
+patch is applicable. Generic CPE matches stay in the original scan.
+
+Snapshot hash: `88cc970658bade2e79e754a6067398dea5e453f5b9b8c89882ab5dafe2caf22c`.
+Fetched at `2026-10-02T15:52:28.218357+00:00`; distribution relies on HTTPS without
+an independent tracker signature. Full snapshot, grouped JSON and Markdown are
+retained under `lab/appliance/.artifacts/triage-clean/`. Nine targeted guards
+cover version ordering/tool failure, source-version matching, package/scan
+binding, unique kernel ownership, repeated binary matches and no-waiver behavior.

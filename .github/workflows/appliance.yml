@@ -57,6 +57,11 @@ jobs:
           path: lab/appliance/.artifacts/release/
           if-no-files-found: error
           retention-days: 7
+      - name: Prepare Debian review evidence without overriding scan results
+        if: ${{ always() && hashFiles('lab/appliance/.artifacts/scan/scan-report.json') != '' }}
+        run: |
+          python3 -m deploy.images.triage lab/appliance/.artifacts/scan \
+            --output lab/appliance/.artifacts/triage
       - name: Retain diagnostics, including blocked scans
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -67,6 +72,7 @@ jobs:
             lab/appliance/.artifacts/**/install.log
             lab/appliance/.artifacts/**/acceptance.log
             lab/appliance/.artifacts/scan/*.json
+            lab/appliance/.artifacts/triage/*
           if-no-files-found: warn
           retention-days: 14
 

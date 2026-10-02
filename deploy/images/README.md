@@ -184,3 +184,24 @@ builder verification or disk-image reproducibility: package snapshots, filesyste
 UUIDs, firmware variable stores and boot/install timestamps still need a design.
 
 The full SBOMs retain file inventory. `sbom.attestation.spdx.json` retains every package and package relationship, removes file nodes/edges and marks `filesAnalyzed: false`. This package inventory fits the pinned GitHub action's 16 MiB SBOM limit. Both documents are hash-bound in the release manifest; consumers compare the attested predicate against the exact released package document.
+# Debian vulnerability review
+
+After a completed scan, create a diagnostic report against the current
+[Debian security tracker](https://security-tracker.debian.org/tracker):
+
+```sh
+python3 -m deploy.images.triage SCAN_EVIDENCE --output NEW_REVIEW_DIRECTORY
+```
+
+This requires `dpkg` for Debian version ordering. The tool verifies inventory and
+finding hashes against the scan report, joins binary packages to their source
+versions and records every High/Critical finding. Kernel findings map to a unique
+Debian package owning the cataloged kernel path; that association needs review.
+The report groups repeated matches and identifies vendor-fixed/not-affected
+**candidates**, open issues and installed versions older than recorded fixes.
+It grants no waiver and never modifies the scan verdict or release policy.
+
+The HTTPS tracker snapshot, timestamp and hash are retained beside the report.
+It has no detached publisher signature. `--tracker FILE` permits an explicitly
+operator-supplied snapshot, which is recorded without claiming HTTPS freshness.
+Candidate findings still require patch/changelog and applicability review.
