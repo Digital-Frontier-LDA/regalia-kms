@@ -198,10 +198,10 @@ func TestAnOversizedRequestIsRefusedBeforeParsing(t *testing.T) {
 	requireRefusal(t, err, "empty or oversized")
 }
 
-// THE CARD SIGNER'S INPUT CONTRACT. The RSA branch prepends a SHA-256 DigestInfo prefix to whatever
-// it is handed, so a digest that is not a SHA-256 digest produces a structurally valid signature
-// over a lie. None of these three refusals had a test.
-func TestTheCardSignerRefusesAnythingButASHA256Digest(t *testing.T) {
+// THE CARD SIGNER'S INPUT CONTRACT. A supported hash must match its digest size;
+// the routed curve decides which hash it can sign. This P-256 fixture isolates
+// unknown hash identifiers and incorrectly sized SHA-256 inputs.
+func TestTheCardSignerRefusesUnknownHashesAndWrongDigestSizes(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestTheCardSignerRefusesAnythingButASHA256Digest(t *testing.T) {
 	t.Run("a different hash", func(t *testing.T) {
 		// Length is deliberately still 32, so the length rule below cannot be what refuses it.
 		_, err := signer.Sign(rand.Reader, digest[:], crypto.SHA512_256)
-		requireRefusal(t, err, "only SHA-256 certificate signatures are supported")
+		requireRefusal(t, err, "only SHA-256, SHA-384 and SHA-512")
 	})
 	t.Run("a digest of the wrong length", func(t *testing.T) {
 		_, err := signer.Sign(rand.Reader, digest[:31], crypto.SHA256)

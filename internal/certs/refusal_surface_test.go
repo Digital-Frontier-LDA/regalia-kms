@@ -289,7 +289,7 @@ func TestASigningFailureIsAnErrorRatherThanAnEmptyCertificate(t *testing.T) {
 // neutralised on its own: the first dereferences `signer.Sign_` and the second calls
 // `opts.HashFunc()` on a nil interface. Both panic.
 //
-// TestTheCardSignerRefusesAnythingButASHA256Digest covers the OTHER operand of the second
+// TestTheCardSignerRefusesUnknownHashesAndWrongDigestSizes covers the OTHER operand of the second
 // condition -- a non-SHA-256 hash -- and always passes a real opts value.
 func TestTheCardSignerRefusesANilReceiverAndAbsentOptions(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

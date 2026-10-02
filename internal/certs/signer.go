@@ -8,21 +8,21 @@ package certs
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/asn1"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 )
 
-// digestInfoPrefixSHA256 is the DER header of DigestInfo(SHA-256, digest).
-//
-// The Nitrokey path signs with CKM_RSA_PKCS, which applies PKCS#1 v1.5 padding to EXACTLY the bytes
-// it is given — it does not build a DigestInfo. Handing it a bare digest produces a signature that
-// no verifier accepts, so the header is prepended here.
-var digestInfoPrefixSHA256 = []byte{
-	0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48,
-	0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20,
+// PKCS#1 v1.5 DigestInfo headers (RFC 8017 section 9.2). CKM_RSA_PKCS
+// pads exactly these bytes and the digest; it does not construct this header.
+var digestInfoPrefixes = map[crypto.Hash][]byte{
+	crypto.SHA256: {0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20},
+	crypto.SHA384: {0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05, 0x00, 0x04, 0x30},
+	crypto.SHA512: {0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40},
 }
 
 // ecdsaSignature is the DER form X.509 requires: SEQUENCE { r INTEGER, s INTEGER }.
@@ -51,16 +51,23 @@ func (signer *CardSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpt
 	if signer == nil || signer.Sign_ == nil || len(digest) == 0 {
 		return nil, errors.New("card signer is not configured")
 	}
-	if opts == nil || opts.HashFunc() != crypto.SHA256 {
-		return nil, errors.New("only SHA-256 certificate signatures are supported")
+	if opts == nil || digestInfoPrefixes[opts.HashFunc()] == nil {
+		return nil, errors.New("only SHA-256, SHA-384 and SHA-512 certificate signatures are supported")
 	}
-	if len(digest) != crypto.SHA256.Size() {
-		return nil, errors.New("digest is not a SHA-256 digest")
+	hash := opts.HashFunc()
+	if len(digest) != hash.Size() {
+		return nil, fmt.Errorf("digest is not a %s digest", hash)
 	}
 
 	switch public := signer.PublicKey.(type) {
 	case *rsa.PublicKey:
-		signature, err := signer.Sign_(append(append([]byte{}, digestInfoPrefixSHA256...), digest...))
+		if public == nil {
+			return nil, errors.New("unsupported certificate signing key type")
+		}
+		if _, pss := opts.(*rsa.PSSOptions); pss {
+			return nil, errors.New("card certificate signing uses PKCS#1 v1.5, not RSA-PSS")
+		}
+		signature, err := signer.Sign_(append(append([]byte{}, digestInfoPrefixes[hash]...), digest...))
 		if err != nil {
 			return nil, err
 		}
@@ -70,6 +77,21 @@ func (signer *CardSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpt
 		return signature, nil
 
 	case *ecdsa.PublicKey:
+		if public == nil {
+			return nil, errors.New("unsupported certificate signing key type")
+		}
+		expected := crypto.Hash(0)
+		switch public.Curve {
+		case elliptic.P256():
+			expected = crypto.SHA256
+		case elliptic.P384():
+			expected = crypto.SHA384
+		default:
+			return nil, errors.New("unsupported certificate signing curve")
+		}
+		if hash != expected {
+			return nil, errors.New("certificate digest does not match the signing curve")
+		}
 		raw, err := signer.Sign_(digest)
 		if err != nil {
 			return nil, err
@@ -77,7 +99,7 @@ func (signer *CardSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpt
 		// A raw ECDSA signature is exactly two fixed-width field elements. An odd length means the
 		// card returned something else — DER already, or a truncated read — and guessing would
 		// produce a plausible-looking certificate, so refuse.
-		if len(raw) == 0 || len(raw)%2 != 0 {
+		if len(raw) != 2*((public.Curve.Params().BitSize+7)/8) {
 			return nil, errors.New("card returned a malformed raw ECDSA signature")
 		}
 		half := len(raw) / 2
