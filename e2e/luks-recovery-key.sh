@@ -104,8 +104,8 @@ why="$(judge)" && P "5: the probe still measures one recovery keyslot: $why" || 
 
 # the file-backed half, where a skip is a failure
 out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
-[ "$rc" = 0 ] && grep -q '^Ran 6 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
-  && P "the 6 file-backed tests of recovery-key.sh ran and passed" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
+[ "$rc" = 0 ] && grep -q '^Ran 30 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
+  && P "the 30 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a rollback that fails, a replace that stops half way, a signal)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
 
 echo "luks-recovery-key: $pass passed, $failed failed"
 [ "$failed" = 0 ]

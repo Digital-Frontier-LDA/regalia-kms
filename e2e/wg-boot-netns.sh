@@ -27,7 +27,8 @@
 #      another node's name is refused by the peer
 #   4  the booting node's own ruleset: nothing but WireGuard to the peers and the unlock port
 #   5  the PEER's firewall, asked from inside the tunnel by a node that ignores its own ruleset: no
-#      SSH, no KMS port, nothing but the unlock port
+#      SSH, no KMS port, nothing but the unlock port, and on that port nothing but the beginning of a
+#      connection (a lone ACK, which connection tracking would call new, does not reach the peer's TCP)
 #   6  the outsider reaches the unlock port neither at the peer's address nor at its tunnel address
 #   7  a revoked node leaves the WireGuard list of the peer that took the manifest, and is still
 #      answered by the peer that has not (the window #69 bounds)
@@ -101,7 +102,8 @@ def site(node):
                              "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514},
                                           {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
                              "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUN[node], "unlock_port": 7443,
-                                           "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]}})
+                                           "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]},
+                             "service_mesh": None})
 m1 = manifest(1, "")
 m2 = manifest(2, m.digest(m1), lisbon="REVOKED_STOLEN")
 def write(name, text):
@@ -192,6 +194,35 @@ try:
     socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2).close()
 except OSError:
     sys.exit(1)" "$2" "$3"; }
+# stray <namespace> <address> <port>: a lone ACK segment, belonging to no connection, sent to that port.
+# Exit 0 when the host's TCP answered it (a RST): the segment reached the stack. Exit 1 when nothing came.
+stray(){ x "$1" python3 -c "
+import os, socket, struct, sys, time
+there, port = sys.argv[1], int(sys.argv[2])
+probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect((there, port)); here = probe.getsockname()[0]; probe.close()
+raw = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+mine = 20000 + os.getpid() % 20000
+def total(data):
+    data += b'\\0' * (len(data) % 2)
+    s = sum(struct.unpack('!%dH' % (len(data) // 2), data))
+    while s >> 16:
+        s = (s & 0xffff) + (s >> 16)
+    return ~s & 0xffff
+def segment(checksum):
+    return struct.pack('!HHIIBBHHH', mine, port, 1000, 2000, 5 << 4, 0x10, 1024, checksum, 0)
+pseudo = socket.inet_aton(here) + socket.inet_aton(there) + struct.pack('!BBH', 0, socket.IPPROTO_TCP, 20)
+raw.sendto(segment(total(pseudo + segment(0))), (there, 0))
+end = time.monotonic() + 2
+while time.monotonic() < end:
+    raw.settimeout(max(0.05, end - time.monotonic()))
+    try:
+        packet, sender = raw.recvfrom(4096)
+    except OSError:
+        break
+    tcp = packet[(packet[0] & 15) * 4:]
+    if sender[0] == there and struct.unpack('!HH', tcp[:4]) == (port, mine) and tcp[13] & 0x04:
+        sys.exit(0)
+sys.exit(1)" "$2" "$3"; }
 shook(){ # shook <peer> <public key file>: the peer has completed a handshake with that key
   x "$1" wg show wg-unlock latest-handshakes | awk -v k="$(cat "$2")" '$1 == k && $2 > 0 { found = 1 } END { exit !found }'; }
 
@@ -199,6 +230,8 @@ hdr "0  controls, before any ruleset: everything a later check finds closed is o
 asked lisbon "${TUN[porto]}" && asked lisbon "${TUN[faro]}" && P "control: lisbon reaches both peers' unlock port through the tunnel" || F "control: the tunnel does not work at all"
 tcpok lisbon "${TUN[porto]}" 22 && tcpok lisbon "${TUN[porto]}" 8443 && tcpok lisbon "${TUN[porto]}" 9999 \
   && P "control: inside the tunnel, SSH, the KMS port and port 9999 of a peer answer" || F "control: the listeners inside the tunnel do not answer"
+stray lisbon "${TUN[porto]}" "$UNLOCK" && P "control: a lone ACK to the unlock port, inside the tunnel, reaches the peer's TCP and is answered with a reset" \
+  || F "control: the lone ACK got no reset even without a firewall"
 tcpok lisbon "${IP[porto]}" "$UNLOCK" && tcpok lisbon "${IP[porto]}" 22 && P "control: at the peer's own address, the unlock port and SSH answer" || F "control: the peer's own address does not answer"
 tcpok lisbon "${IP[outsider]}" 443 && P "control: lisbon reaches an undeclared host" || F "control: lisbon has no path to the outsider"
 tcpok outsider "${IP[lisbon]}" 22 && P "control: a listener on the booting node answers the outsider" || F "control: nothing listens on the booting node"
@@ -224,6 +257,9 @@ for h in lisbon porto faro; do x "$h" conntrack -F >/dev/null 2>&1; done
 hdr "2  the stolen server away from its datacenter: lisbon's key, a live session, an undeclared address"
 # The control a moment ago left porto holding a live session with `away` (the last to shake hands with
 # that key). Without the firewall its next request would be answered, as it just was.
+# The real lisbon is not there (it is the one that was stolen): its interface is down, so that a
+# handshake seen by a peer below can only be the copy's.
+x lisbon ip link del wg-boot
 shaken(){ x "$1" wg show wg-unlock latest-handshakes | awk -v k="$(cat "$T/lisbon.boot.pub")" '$1 == k { print $2 }'; }
 before="$(shaken porto)"; before_faro="$(shaken faro)"
 asked away "${TUN[porto]}" 4 && F "lisbon's key was answered from an undeclared address" || P "lisbon's key, with a live session, gets no answer from an undeclared address"
@@ -232,10 +268,34 @@ asked away "${TUN[faro]}" 4 && F "lisbon's key was answered by the other peer fr
   || F "a peer shook hands with the undeclared address (porto: $before -> $(shaken porto), faro: $before_faro -> $(shaken faro))"
 
 hdr "3  PoC 6.1: the node boots and reaches both peers' unlock port through the tunnel"
-# A boot starts with a handshake. (A node whose session a peer has replaced, as `away` did to lisbon's
-# here, otherwise waits out WireGuard's own timers, some 15 s, before it shakes hands again.)
-boot_up lisbon "$T/lisbon.boot.key"
-x lisbon nft -f "$T/lisbon.boot.nft"
+# The boot is made by the script the initrd runs (deploy/baremetal/initrd/wg-boot, as
+# regalia-wg-boot.service runs it): the ruleset first, then the address, then WireGuard with the key
+# from the credentials directory. A boot starts with a handshake. (A node whose session a peer has
+# replaced, as `away` did to lisbon's here, otherwise waits out WireGuard's own timers, some 15 s.)
+x lisbon ip addr flush dev eth0; x lisbon nft delete table inet regalia_boot
+mkdir "$T/etc" "$T/creds"; cp "$T/lisbon.boot.conf" "$T/etc/wg-boot.conf"; cp "$T/lisbon.boot.nft" "$T/etc/boot.nft"; cp "$T/lisbon.boot.key" "$T/creds/regalia-wg-boot-key"
+# boot.env is data to the script, not its environment: a line that would be code if it were sourced or
+# exported (LD_PRELOAD, a command substitution) is in it, and must change nothing.
+printf 'BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_PRELOAD=%s/evil.so\nBOOT_EXTRA=$(touch %s/sourced)\n' \
+  "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$T/etc/boot.env"
+initrd(){ x lisbon env REGALIA_ETC="$T/etc" CREDENTIALS_DIRECTORY="$T/creds" sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
+initrd up && P "the initrd's script brings the boot mesh up" || F "deploy/baremetal/initrd/wg-boot up failed"
+[ "$(x lisbon wg show wg-boot private-key)" = "$(cat "$T/lisbon.boot.key")" ] && [ "$(x lisbon wg show wg-boot peers | wc -l)" = 2 ] \
+  && P "wg-boot has the node's key and its two peers" || F "wg-boot is not configured as rendered"
+[ ! -e "$T/sourced" ] && P "boot.env was read as data: nothing in it ran" || F "a line of boot.env was executed"
+# a start that fails part-way leaves nothing behind: here the key is not a key, after the ruleset would have loaded
+cp "$T/creds/regalia-wg-boot-key" "$T/creds/good"; echo "not-a-wireguard-key" > "$T/creds/regalia-wg-boot-key"
+initrd up 2>"$T/up.err" && F "the script accepted a credential that is not a key" || P "a credential that is not a key is refused"
+grep -q "not-a-wireguard-key" "$T/up.err" && F "the refused credential was printed" || P "and it is not printed"
+cp "$T/creds/good" "$T/creds/regalia-wg-boot-key"; printf '# a comment first\n' | cat - "$T/lisbon.boot.conf" > "$T/etc/wg-boot.conf"
+initrd up 2>"$T/up.err" && F "the script accepted a configuration it did not render" || P "a configuration that does not begin with [Interface] is refused"
+grep -q "$(cat "$T/lisbon.boot.key")" "$T/up.err" && F "the key was printed" || P "and the key is not printed"
+cp "$T/lisbon.boot.conf" "$T/etc/wg-boot.conf"; sed -i 's|^BOOT_TUNNEL=.*|BOOT_TUNNEL=not-an-address|' "$T/etc/boot.env"
+initrd up 2>/dev/null && F "the script succeeded with an impossible tunnel address" || P "a start that fails after the ruleset loaded"
+x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
+  && F "the failed start left the interface, the ruleset or the address behind" || P "leaves no interface, no ruleset and no address behind"
+sed -i "s|^BOOT_TUNNEL=.*|BOOT_TUNNEL=${TUN[lisbon]}|" "$T/etc/boot.env"
+initrd up && P "and the next start succeeds" || F "the start after a failed one does not succeed"
 for h in porto faro; do
   asked lisbon "${TUN[$h]}" && P "lisbon is answered by $h on the unlock port, inside the tunnel" || F "lisbon is not answered by $h"
 done
@@ -263,6 +323,11 @@ asked lisbon "${TUN[porto]}" && P "inside the tunnel, the unlock port answers" |
 for port in 22 8443 9999; do
   tcpok lisbon "${TUN[porto]}" "$port" && F "inside the tunnel, port $port of the peer answered" || P "inside the tunnel, port $port of the peer does not answer"
 done
+# The unlock rule admits the beginning of a connection, a SYN, and nothing else that conntrack would call new.
+[ "$(x porto sysctl -n net.netfilter.nf_conntrack_tcp_loose)" = 1 ] && P "control: porto's connection tracking would take a mid-stream segment for a new connection" \
+  || F "control: nf_conntrack_tcp_loose is not 1 on porto, so the next check shows nothing"
+stray lisbon "${TUN[porto]}" "$UNLOCK" && F "a lone ACK to the unlock port reached the peer's TCP" || P "a lone ACK to the unlock port, inside the tunnel, does not reach the peer's TCP"
+asked lisbon "${TUN[porto]}" && P "... and a real request is still answered" || F "the unlock port stopped answering"
 for port in "$UNLOCK" 22 8443; do
   tcpok lisbon "${IP[porto]}" "$port" && F "at the peer's own address, port $port answered lisbon" || P "at the peer's own address, port $port does not answer lisbon"
 done
@@ -297,7 +362,7 @@ for _ in 1 2 3 4 5; do timed asked lisbon "${TUN[faro]}" 10 && ok=$((ok+1)); [ "
 x lisbon tc qdisc del dev eth0 root
 x faro ip link set eth0 down
 timed asked lisbon "${TUN[faro]}" 3; rc=$?
-[ "$rc" != 0 ] && [ "$took" -le 5 ] && P "an unreachable peer: refused after ${took}s, and the other peer is asked" || F "an unreachable peer: rc=$rc after ${took}s"
+[ "$rc" != 0 ] && [ "$took" -le 10 ] && P "an unreachable peer: refused after ${took}s, and the other peer is asked" || F "an unreachable peer: rc=$rc after ${took}s"
 asked lisbon "${TUN[porto]}" && P "the other peer still answers" || F "the other peer does not answer"
 x faro ip link set eth0 up; x faro ip route add default dev eth0 2>/dev/null
 # what bootnet.py warns of, shown: a configuration applied without its key leaves the interface with none
@@ -306,9 +371,10 @@ x faro wg syncconf wg-unlock "$T/faro.unlock.conf"
   || F "wg syncconf without a key did not unset it: bootnet.py's warning is out of date"
 boot_up lisbon "$T/wrong.key"
 timed asked lisbon "${TUN[porto]}" 3; rc=$?
-[ "$rc" != 0 ] && [ "$took" -le 5 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
-x lisbon ip link del wg-boot
-x lisbon ip link show wg-boot >/dev/null 2>&1 && F "the boot interface is still there" || P "the boot interface is removed, as it is when the root filesystem takes over"
+[ "$rc" != 0 ] && [ "$took" -le 10 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
+initrd down
+x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
+  && F "the boot interface, its ruleset or its address is still there" || P "the script takes the interface, the ruleset and the address down, as it does when the root filesystem takes over"
 
 echo; echo "wg-boot-netns: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

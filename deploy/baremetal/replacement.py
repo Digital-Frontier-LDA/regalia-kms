@@ -69,7 +69,9 @@ def may_unlock(manifest, peer_id, requester_id, session_id, evidence, attester, 
     membership.hex_field(session_id, 64, "session_id")
     # The freshness of the unlock is the attester-issued nonce inside `evidence` (good once, two minutes);
     # no nonce chosen by the requester takes part.
-    lease.reattest(attester, evidence, requester_id, session_id, manifest, membership.validate(manifest)[requester_id])
+    # A disk key is asked for from the initrd, before the root volume is open, and from nowhere else: on
+    # per-phase measurements a booted system, even on an approved image, is refused one.
+    lease.reattest(attester, evidence, requester_id, session_id, manifest, membership.validate(manifest)[requester_id], phase="initrd")
     # and again, after it: the verification takes time, and the answer must hold when it is given
     return heartbeat.authorize(manifest, peer_id, requester_id, freshness)
 

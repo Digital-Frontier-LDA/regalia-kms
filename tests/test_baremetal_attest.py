@@ -223,13 +223,13 @@ class Verification(unittest.TestCase):
         return attest.qualified_name(self.ek_name, attest.ak_identity(ak_pub or self.ak_pub)[0])
 
     def attempt(self, session=SESSION, key=KEY, epoch=EPOCH, node="site-a", quoted=None, sign_with=None, nonce=None,
-                signature=None, **fields):
+                signature=None, phase=None, **fields):
         """The node quotes `quoted` (default: exactly what the verifier holds); the verifier checks its own values."""
         nonce = nonce or self.v.nonce("site-a")
         told = dict(node_id=node, epoch=epoch, session_id=session, ephemeral_public=key, nonce=nonce)
         extra = attest.qualifying_data(*dict(told, **(quoted or {})).values())
         blob = quote(extra, fields.pop("signer", self.signer()), **fields)
-        return self.v.verify(node, epoch, session, key, nonce, blob, signature or self.sign(blob, sign_with))
+        return self.v.verify(node, epoch, session, key, nonce, blob, signature or self.sign(blob, sign_with), **({"phase": phase} if phase else {}))
 
     def refused(self, reason, **kw):
         with self.assertRaises(attest.Refused) as caught:
@@ -282,7 +282,7 @@ class Verification(unittest.TestCase):
         self.assertEqual(verdict, {"node": "site-a", "epoch": EPOCH, "session_id": SESSION.hex(),
                                    "ak_name": attest.ak_identity(self.ak_pub)[0].hex(), "reset_count": 3,
                                    "restart_count": 1, "clock": 42, "clock_safe": True, "pcrs": [0, 7],
-                                   "measurement": ""})   # the one-set form has no label
+                                   "measurement": "", "phase": None})   # the one-set form has no label, and no phase
         self.assertEqual(os.stat(os.path.join(self.d, "state.json")).st_mode & 0o777, 0o600)
 
     def test_a_nonce_is_single_use_issued_by_this_verifier_for_this_node_and_short_lived(self):
@@ -341,11 +341,11 @@ class Verification(unittest.TestCase):
     def test_during_an_update_either_accepted_set_passes_and_the_verdict_names_it(self):
         self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
         self.assertEqual(self.attempt()["measurement"], "image-1")
-        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": None})
         # the same node after its update: a new boot, the NEXT image
         verdict = self.attempt(session=b"T" * 32, key=b"k2", reset=2, digest=attest.expected_pcr_digest(NEXT_PCRS))
         self.assertEqual(verdict["measurement"], "image-2")
-        self.assertEqual(self.measurement(), {"label": "image-2", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-2", "epoch": EPOCH, "phase": None})
         # and a node that fell back to CURRENT is still accepted while both are approved
         self.assertEqual(self.attempt(session=b"U" * 32, key=b"k3", reset=3)["measurement"], "image-1")
 
@@ -353,7 +353,7 @@ class Verification(unittest.TestCase):
         self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
         self.attempt()
         self.refused("none of the accepted measurement sets (image-1, image-2)", digest=hashlib.sha256(b"image 3").digest())
-        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH})
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": None})
 
     def test_after_retirement_the_old_image_is_refused(self):
         self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
@@ -519,6 +519,141 @@ class Verification(unittest.TestCase):
         self.attempt(reset=1)
         self.refused("not the expected PCR values", reset=9, session=b"T" * 32, key=b"k2", digest=b"\x00" * 32)
         self.attempt(reset=2, session=b"T" * 32, key=b"k2")
+
+
+    # ---- PCR values per boot phase (#57, #156): one image, two PCR 11 values, each request accepted from one only ----
+
+    IMAGE1 = {"initrd": {"11": "a1" * 32}, "system": {"11": "a2" * 32}}
+    IMAGE2 = {"initrd": {"11": "b1" * 32}, "system": {"11": "b2" * 32}}
+
+    @staticmethod
+    def one(label, phases, pcrs=PCRS, fw=FW):
+        entry = {"label": label, "tpm_firmware_version": fw, "pcrs": dict(pcrs)}
+        return dict(entry, phases={k: dict(v) for k, v in phases.items()}) if phases else entry
+
+    def phased(self, *sets):
+        self.policy["nodes"]["site-a"] = {"ek_name": self.ek_name.hex(), "accepted": list(sets)}
+        self.v = self.verifier()
+
+    def fresh(self, **kw):
+        """A new boot: its own session, ephemeral key and reset count."""
+        self.boots = getattr(self, "boots", 0) + 1
+        return dict(session=bytes([self.boots]) * 32, key=b"key %d" % self.boots, reset=self.boots, **kw)
+
+    def boot(self, image, phase):
+        """A quote from `image` in `phase`, over PCRs 0, 7 and 11."""
+        return self.fresh(pcrs=(0, 7, 11), digest=attest.expected_pcr_digest(dict(PCRS, **image[phase])))
+
+    def test_each_phase_of_an_image_is_accepted_for_its_own_request_only(self):
+        self.phased(self.one("image-1", self.IMAGE1))
+        verdict = self.attempt(phase="initrd", **self.boot(self.IMAGE1, "initrd"))
+        self.assertEqual((verdict["measurement"], verdict["phase"], verdict["pcrs"]), ("image-1", "initrd", [0, 7, 11]))
+        self.assertEqual(self.attempt(phase="system", **self.boot(self.IMAGE1, "system"))["phase"], "system")
+        # the booted system asks for what only an initrd gets (a disk key), and the reverse (a lease)
+        self.refused("the node is in the system phase of image-1; this request is accepted only from the initrd phase",
+                     phase="initrd", **self.boot(self.IMAGE1, "system"))
+        self.refused("the node is in the initrd phase of image-1; this request is accepted only from the system phase",
+                     phase="system", **self.boot(self.IMAGE1, "initrd"))
+        # another image is refused as before, in either phase
+        for phase in attest.PHASES:
+            self.refused("the quoted PCR digest is not the expected PCR values", phase=phase, **self.boot(self.IMAGE2, phase))
+        # a quote that leaves PCR 11 out does not pass on the other PCRs
+        self.refused("the quote covers PCRs [0, 7], not the expected [0, 7, 11]", phase="initrd")
+
+    def test_a_refused_phase_leaves_the_record_alone(self):
+        self.phased(self.one("image-1", self.IMAGE1), self.one("image-2", self.IMAGE2))
+        self.attempt(phase="initrd", **self.boot(self.IMAGE1, "initrd"))
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": "initrd"})
+        self.refused("the node is in the system phase of image-2", phase="initrd", **self.boot(self.IMAGE2, "system"))
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": "initrd"})
+        # the record says in which phase the node was last seen: asking for its disk is not being up (rollout.py)
+        self.attempt(phase="system", **self.boot(self.IMAGE1, "system"))
+        self.assertEqual(self.measurement(), {"label": "image-1", "epoch": EPOCH, "phase": "system"})
+
+    def test_per_phase_sets_refuse_a_verification_that_names_no_phase(self):
+        self.phased(self.one("image-1", self.IMAGE1))
+        self.refused("the accepted measurements of site-a are per boot phase (image-1): the verification must name the phase",
+                     **self.boot(self.IMAGE1, "initrd"))
+        for bad in ("boot", "", 1, ["initrd"]):
+            with self.subTest(phase=bad), self.assertRaises(attest.Refused) as caught:
+                self.v.verify("site-a", EPOCH, SESSION, KEY, bytes(32), b"q", b"s", phase=bad)
+            self.assertIn("the phase must be one of initrd, system", str(caught.exception))
+        # the refusal comes before the nonce is looked at: the node's nonce is not burnt by a caller's mistake
+        nonce = self.v.nonce("site-a")
+        with self.assertRaises(attest.Refused):
+            self.v.verify("site-a", EPOCH, SESSION, KEY, nonce, b"q", b"s")
+        self.attempt(nonce=nonce, phase="initrd", **self.boot(self.IMAGE1, "initrd"))
+
+    def test_another_phase_under_another_firmware_set_is_still_called_a_wrong_phase(self):
+        """Two sets may share a PCR state when their TPM firmware differs. A's initrd quote asking for a lease
+        then matches B's system values and not B's firmware: the refusal is the phase, not the firmware."""
+        newer = "2026010100000001"
+        shared = {"11": "ab" * 32}
+        self.phased(self.one("old-fw", {"initrd": shared, "system": {"11": "a2" * 32}}),
+                    self.one("new-fw", {"initrd": {"11": "b1" * 32}, "system": shared}, fw=newer))
+        quote = self.fresh(pcrs=(0, 7, 11), digest=attest.expected_pcr_digest(dict(PCRS, **shared)))
+        self.refused("the node is in the initrd phase of old-fw; this request is accepted only from the system phase", phase="system", **quote)
+        self.assertEqual(self.attempt(phase="initrd", **self.fresh(pcrs=(0, 7, 11), digest=quote["digest"]))["measurement"], "old-fw")
+        self.assertEqual(self.attempt(phase="system", firmware=newer, **self.fresh(pcrs=(0, 7, 11), digest=quote["digest"]))["measurement"], "new-fw")
+        # a firmware that is neither set's is still a firmware refusal
+        self.refused("the TPM firmware version 2019102300163637 is not the recorded", phase="system", firmware="2019102300163637",
+                     **self.fresh(pcrs=(0, 7, 11), digest=quote["digest"]))
+
+    def test_a_set_with_one_value_per_pcr_is_judged_the_same_in_any_phase(self):
+        """A host that does not boot a UKI: its PCR 11 never moves. Naming the phase changes nothing."""
+        self.phased(self.one("grub", None))
+        for phase in (None, "initrd", "system"):
+            self.assertEqual(self.attempt(phase=phase, **self.fresh())["phase"], None)
+
+    def test_the_move_to_a_uki_is_a_rollout_like_any_other(self):
+        """CURRENT gives PCR 11 once (it stays zero under GRUB), NEXT gives it per phase: one selection."""
+        grub = self.one("grub", None, pcrs=dict(PCRS, **{"11": "00" * 32}))
+        self.phased(grub, self.one("uki", self.IMAGE2))
+        zero = dict(pcrs=(0, 7, 11), digest=attest.expected_pcr_digest(dict(PCRS, **{"11": "00" * 32})))
+        for phase in attest.PHASES:
+            self.assertEqual(self.attempt(phase=phase, **self.fresh(**zero))["measurement"], "grub")
+            verdict = self.attempt(phase=phase, **self.boot(self.IMAGE2, phase))
+            self.assertEqual((verdict["measurement"], verdict["phase"]), ("uki", phase))
+        self.refused("the node is in the system phase of uki", phase="initrd", **self.boot(self.IMAGE2, "system"))
+
+    def test_what_a_per_phase_set_may_hold(self):
+        def policy(*sets):
+            return {"schema": attest.POLICY_SCHEMA, "nodes": {"site-a": {"ek_name": self.ek_name.hex(), "accepted": list(sets)}}}
+        one = self.one
+        attest.validate_policy(policy(one("a", self.IMAGE1)))
+        attest.validate_policy(policy(one("a", self.IMAGE1), one("b", self.IMAGE2)))
+        self.assertEqual(attest.selection(one("a", self.IMAGE1)), [0, 7, 11])
+        self.assertEqual(attest.values(one("a", self.IMAGE1), "system"), dict(PCRS, **{"11": "a2" * 32}))
+        swapped = {"initrd": self.IMAGE1["system"], "system": self.IMAGE1["initrd"]}
+        cases = (
+            ("one phase only", "phases fields mismatch", [one("a", {"initrd": {"11": "a1" * 32}})]),
+            ("a third phase", "phases fields mismatch", [one("a", dict(self.IMAGE1, shutdown={"11": "a3" * 32}))]),
+            ("phases that is not an object", "phases must be an object", [dict(one("a", None), phases=[])]),
+            ("a phase with no PCR", "phases.initrd must expect at least one PCR", [one("a", {"initrd": {}, "system": {"11": "a2" * 32}})]),
+            ("a phase value that is not hex", "phases.system.11 must be 64 lowercase hex", [one("a", {"initrd": {"11": "a1" * 32}, "system": {"11": "A2" * 32}})]),
+            ("a PCR that is no PCR", "phases.initrd: '24' is not a PCR 0-23", [one("a", {"initrd": {"24": "a1" * 32}, "system": {"24": "a2" * 32}})]),
+            ("the phases give different PCRs", "the two phases give different PCRs", [one("a", {"initrd": {"11": "a1" * 32}, "system": {"12": "a2" * 32}})]),
+            ("a PCR given once and per phase", "PCR 7 is given once for every phase and again per phase",
+             [one("a", {"initrd": {"7": "a1" * 32}, "system": {"7": "a2" * 32}})]),
+            ("both phases the same", "the two phases hold the same values", [one("a", {"initrd": {"11": "a1" * 32}, "system": {"11": "a1" * 32}})]),
+            ("two sets, one without PCR 11", "select different PCRs", [one("a", None), one("b", self.IMAGE2)]),
+            ("the same per-phase measurements twice", "the same measurements under two labels", [one("a", self.IMAGE1), one("b", self.IMAGE1)]),
+            ("one image's initrd value is the other's system value", "'a' and 'b' hold the same PCR values in one of their phases",
+             [one("a", self.IMAGE1), one("b", {"initrd": {"11": "a2" * 32}, "system": {"11": "b2" * 32}})]),
+            ("the same image with its phases swapped", "'a' and 'b' hold the same PCR values in one of their phases", [one("a", self.IMAGE1), one("b", swapped)]),
+            ("a one-value set equal to a phase of the other", "'a' and 'b' hold the same PCR values in one of their phases",
+             [one("a", None, pcrs=dict(PCRS, **{"11": "b1" * 32})), one("b", self.IMAGE2)]),
+        )
+        for label, reason, sets in cases:
+            with self.subTest(label), self.assertRaises(attest.Refused) as caught:
+                attest.validate_policy(policy(*sets))
+            self.assertIn(reason, str(caught.exception))
+        # the one-set form (the fields beside the EK) has no phases
+        flat = {"schema": attest.POLICY_SCHEMA, "nodes": {"site-a": dict(one("", self.IMAGE1), ek_name=self.ek_name.hex())}}
+        del flat["nodes"]["site-a"]["label"]
+        with self.assertRaises(attest.Refused) as caught:
+            attest.validate_policy(flat)
+        self.assertIn("fields mismatch", str(caught.exception))
 
 
 class Node(unittest.TestCase):

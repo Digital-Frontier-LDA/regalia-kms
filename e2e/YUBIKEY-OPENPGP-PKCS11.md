@@ -8,7 +8,9 @@ it again.
 
 - `opensc-pkcs11.so` with the `card_atr` block of
   [`deploy/opensc/yubikey-openpgp.conf`](../deploy/opensc/yubikey-openpgp.conf) in
-  `/etc/opensc/opensc.conf`, or that file named by `OPENSC_CONF` as the commands below do.
+  the OpenSC configuration in use: the file named by `OPENSC_CONF`, as the commands below do and as
+  the shipped unit does (`/etc/regalia-kms/opensc.conf`), or `/etc/opensc/opensc.conf` where
+  `OPENSC_CONF` is not set.
 - An Ed25519 signature key on the applet, generated on the card, **with its creation time and
   fingerprint set**. OpenSC lists no key object for a slot whose fingerprint is all zeros.
 - PIN policy "once" for signatures and touch off: the daemon signs unattended.

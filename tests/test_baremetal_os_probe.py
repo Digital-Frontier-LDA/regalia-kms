@@ -3,6 +3,7 @@ unprivileged service) and the pcscd client check, against a fake host. Moved her
 the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
 import json
+import pathlib
 import unittest
 from pathlib import Path
 
@@ -306,7 +307,14 @@ class OSProbeTests(unittest.TestCase):
                 results = measure(host)
                 self.assertFalse(results["kms_runtime_admission_required"]["value"])
                 self.assertIn(reason, results["kms_runtime_admission_required"]["why"])
-                self.assertTrue(all(v["value"] for k, v in results.items() if k != "kms_runtime_admission_required"))
+                # The other control read from that same file: where the file cannot be read at all, it
+                # fails for the same reason (what the daemon is started with is unknown, so nothing can
+                # be said about its token backends); where the file is readable and only its admission
+                # setting is wrong, it is not affected.
+                from_the_config = ("kms_runtime_admission_required", "kms_opensc_leaves_piv_cards")
+                opensc = results["kms_opensc_leaves_piv_cards"]
+                self.assertEqual(opensc["value"], reason not in opensc["why"], opensc["why"])
+                self.assertTrue(all(v["value"] for k, v in results.items() if k not in from_the_config))
         # the other spellings of the flag are read too, and it is the file the unit names that counts
         for arguments in ("--config " + CONFIG, "-config=" + CONFIG, "--config=" + CONFIG, "-listen 0.0.0.0:8443 -config " + CONFIG):
             with self.subTest(arguments=arguments):
@@ -379,6 +387,145 @@ class OSProbeTests(unittest.TestCase):
                 host = FakeHost()
                 breaker(host)
                 self.assertFalse(os_probe.pcscd_clients(host)[0])
+
+
+ENV_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "Environment,EnvironmentFiles")
+OPENSC = "/etc/regalia-kms/opensc.conf"
+BOTH_TOKENS = dict(ADMISSION, pkcs11_module_path="/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so", yubikey_devices={"yubikey-site-a": "35718625"})
+IGNORE_YUBIKEY = (pathlib.Path(__file__).resolve().parent.parent / "deploy/opensc/ignore-yubikey.conf").read_text()
+
+
+class OpenSCLeavesThePIVCards(unittest.TestCase):
+    """kms_opensc_leaves_piv_cards: a daemon with a PKCS#11 module AND YubiKey PIV devices is started with
+    an OpenSC configuration that ignores the YubiKey's reader (regalia#541)."""
+
+    control = "kms_opensc_leaves_piv_cards"
+
+    def host(self, config=BOTH_TOKENS, environment="OPENSC_CONF=" + OPENSC, conf=IGNORE_YUBIKEY, environment_files=""):
+        host = FakeHost()
+        host.files[CONFIG] = json.dumps(config)
+        if environment is not None:
+            host.commands[ENV_SHOW] = "Environment=%s\nEnvironmentFiles=%s\n" % (environment, environment_files)
+        if conf is not None:
+            host.files[OPENSC] = conf
+        return host
+
+    def verdict(self, host):
+        result = measure(host)[self.control]
+        return result["value"], result["why"]
+
+    def test_the_shipped_unit_and_the_shipped_configuration_pass(self):
+        unit = (pathlib.Path(__file__).resolve().parent.parent / "deploy/systemd/regalia-kms.service").read_text()
+        stated = [line.split("=", 1)[1] for line in unit.splitlines() if line.startswith("Environment=")]
+        self.assertEqual(stated, ["OPENSC_CONF=" + OPENSC], "the shipped unit must name the daemon's own OpenSC configuration")
+        value, why = self.verdict(self.host(environment=" ".join(stated)))
+        self.assertTrue(value, why)
+        self.assertIn("ignored_readers 'Yubico'", why)
+        # and nothing else on the host is disturbed by the measurement
+        self.assertTrue(all(v["value"] for v in measure(self.host()).values()))
+
+    def test_one_backend_or_none_has_nothing_to_keep_apart(self):
+        for name, config in {"neither": ADMISSION,
+                             "only the module": dict(ADMISSION, pkcs11_module_path="/usr/lib/opensc-pkcs11.so"),
+                             "only the cards": dict(ADMISSION, yubikey_devices={"yubikey-site-a": "35718625"}),
+                             "an empty device map": dict(BOTH_TOKENS, yubikey_devices={}),
+                             "an empty module path": dict(BOTH_TOKENS, pkcs11_module_path="")}.items():
+            with self.subTest(name):
+                value, why = self.verdict(self.host(config=config, environment=None, conf=None))
+                self.assertTrue(value, why)
+                self.assertIn("nothing to keep apart", why)
+
+    def test_both_backends_need_the_unit_to_name_a_configuration_that_ignores_the_yubikey(self):
+        broken = {
+            "the unit sets no Environment": (dict(environment=None), "does not set OPENSC_CONF"),
+            "the unit sets another variable only": (dict(environment="SOFTHSM2_CONF=/etc/softhsm2.conf"), "does not set OPENSC_CONF"),
+            "OPENSC_CONF is not absolute": (dict(environment="OPENSC_CONF=opensc.conf"), "does not set OPENSC_CONF"),
+            "the named file is missing": (dict(conf=None), "cannot read the OpenSC configuration " + OPENSC),
+            "the file ignores nothing": (dict(conf="app default {\n}\n"), "no ignored_readers entry"),
+            "the line is commented out": (dict(conf='app default {\n  # ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "it ignores another reader": (dict(conf='app default {\n  ignored_readers = "ACS ACR40U";\n}\n'), "no ignored_readers entry"),
+            "an empty entry matches nothing": (dict(conf='app default {\n  ignored_readers = "";\n}\n'), "no ignored_readers entry"),
+            "the applet configuration, which asks OpenSC to drive the card": (dict(conf=(
+                pathlib.Path(__file__).resolve().parent.parent / "deploy/opensc/yubikey-openpgp.conf").read_text()), "no ignored_readers entry"),
+            # where OpenSC would not apply the line
+            "the line is in another application's block": (dict(conf='app opensc-tool {\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "the line is at the top level": (dict(conf='ignored_readers = "Yubico";\napp default {\n}\n'), "no ignored_readers entry"),
+            "the line is in a nested block": (dict(conf='app default {\n  reader_driver pcsc {\n    ignored_readers = "Yubico";\n  }\n}\n'), "no ignored_readers entry"),
+            "an opensc-pkcs11 block exists and the line is only in default": (dict(
+                conf='app opensc-pkcs11 {\n  pkcs11 {\n    max_virtual_slots = 32;\n  }\n}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "a second statement in the block, where the first names another reader": (dict(
+                conf='app default {\n  ignored_readers = "ACS";\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "a # inside a comment hides the rest of the line": (dict(conf='app default {\n  debug = 0; # ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            # entries that would take the HSM's reader too
+            "an entry that matches every reader": (dict(conf='app default {\n  ignored_readers = " ";\n}\n'), "no ignored_readers entry"),
+            "a single letter": (dict(conf='app default {\n  ignored_readers = "i";\n}\n'), "no ignored_readers entry"),
+            "a second app default block has it, the first does not": (dict(
+                conf='app default {\n}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "the app block is inside another block": (dict(
+                conf='reader_driver pcsc {\n  app default {\n    ignored_readers = "Yubico";\n  }\n}\n'), "no ignored_readers entry"),
+            "a backslash before the name": (dict(conf='app default {\n  ignored_readers = "\\Yubico";\n}\n'), "no ignored_readers entry"),
+            # what OpenSC might not parse proves nothing
+            "a missing semicolon swallows the next statement": (dict(
+                conf='app default {\n  ignored_readers = "ACS"\n  foo = "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "braces round the value": (dict(conf='app default {\n  ignored_readers = { "Yubico" };\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a block that is not closed": (dict(conf='app default {\n  ignored_readers = "Yubico";\n'), "cannot be read as an OpenSC configuration"),
+            "a } that closes nothing, after": (dict(conf='app default {\n  ignored_readers = "Yubico";\n}\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a } that closes nothing, before": (dict(conf='}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "two values with no comma": (dict(conf='app default {\n  ignored_readers = "ACS" "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a list ending in a comma": (dict(conf='app default {\n  ignored_readers = "Yubico",;\n}\n'), "cannot be read as an OpenSC configuration"),
+            # what cannot be read
+            "a string that never ends": (dict(conf='app default {\n  ignored_readers = "Yubico;\n}\n'), "cannot be read as an OpenSC configuration"),
+            "the unit has an EnvironmentFile": (dict(environment_files="/etc/default/regalia-kms (ignore_errors=no)"), "has an EnvironmentFile"),
+            "the Environment cannot be parsed": (dict(environment='OPENSC_CONF="/etc/regalia-kms/opensc.conf'), "cannot read the Environment"),
+            "OPENSC_CONF is set twice and the last one is not a path": (dict(environment="OPENSC_CONF=" + OPENSC + " OPENSC_CONF=relative.conf"), "does not set OPENSC_CONF"),
+        }
+        for name, (change, reason) in broken.items():
+            with self.subTest(name):
+                host = self.host(**change)
+                value, why = self.verdict(host)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
+                self.assertTrue(all(v["value"] for k, v in measure(host).items() if k != self.control))
+
+    def test_an_entry_counts_when_openSC_would_match_it_against_the_reader_name(self):
+        for entry in ("Yubico", "YubiKey", "Yubico YubiKey", "Yubi"):
+            with self.subTest(entry):
+                value, why = self.verdict(self.host(conf='app default {\n  ignored_readers = "ACS", "%s";\n}\n' % entry))
+                self.assertTrue(value, why)
+
+    def test_the_configuration_is_read_as_openSC_reads_it(self):
+        accepted = {
+            "a list over several lines": 'app default {\n  ignored_readers = "ACS",\n    "Yubico";\n}\n',
+            "a block on one line": 'app default { ignored_readers = "Yubico"; }\n',
+            "after another statement on the line": 'app default {\n  debug = 0; ignored_readers = "Yubico";\n}\n',
+            "an unquoted value": 'app default {\n  ignored_readers = Yubico;\n}\n',
+            "a # inside an earlier string": 'app default {\n  ignored_readers = "A#1", "Yubico";\n}\n',
+            "in the opensc-pkcs11 block, which is the one preferred": 'app default {\n}\napp opensc-pkcs11 {\n  ignored_readers = "Yubico";\n}\n',
+            "the first of two app default blocks has it": 'app default {\n  ignored_readers = "Yubico";\n}\napp default {\n}\n',
+            "the application name quoted": 'app "default" {\n  ignored_readers = "Yubico";\n}\n',
+            "no space before the brace, CRLF line ends": 'app default{\r\n  ignored_readers = "Yubico";\r\n}\r\n',
+            "after a nested block in the same application block": 'app default {\n  reader_driver pcsc {\n    max_send_size = 255;\n  }\n  ignored_readers = "Yubico";\n}\n',
+        }
+        for name, conf in accepted.items():
+            with self.subTest(name):
+                value, why = self.verdict(self.host(conf=conf))
+                self.assertTrue(value, why)
+
+    def test_a_variable_set_twice_counts_as_the_last(self):
+        value, why = self.verdict(self.host(environment="OPENSC_CONF=/etc/other.conf OPENSC_CONF=" + OPENSC))
+        self.assertTrue(value, why)
+
+    def test_a_module_path_of_spaces_is_no_module(self):
+        value, why = self.verdict(self.host(config=dict(BOTH_TOKENS, pkcs11_module_path="  "), environment=None, conf=None))
+        self.assertTrue(value, why)
+        self.assertIn("nothing to keep apart", why)
+
+    def test_a_daemon_configuration_that_cannot_be_read_fails_the_control(self):
+        host = self.host()
+        host.files[CONFIG] = "{"
+        value, why = self.verdict(host)
+        self.assertFalse(value)
+        self.assertIn("not valid JSON", why)
 
 
 if __name__ == "__main__":
