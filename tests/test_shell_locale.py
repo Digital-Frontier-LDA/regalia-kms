@@ -89,7 +89,7 @@ class ShellLocale(unittest.TestCase):
             with self.subTest(name):
                 text = (ROOT / name).read_text(encoding="utf-8")
                 whole = re.search(r"(?m)^export LC_ALL=C$", text)
-                collation = re.search(r"(?m)^if \[ -n \"\$\{LC_ALL:-\}\" \]; then export LANG=\"\$LC_ALL\"; unset LC_ALL; fi\nexport LC_COLLATE=C$", text)
+                collation = re.search(r"(?m)^if \[ -n \"\$\{LC_ALL:-\}\" \]; then export LANG=\"\$LC_ALL\" LC_CTYPE=\"\$LC_ALL\"; unset LC_ALL; fi\nexport LC_COLLATE=C$", text)
                 pin = whole or collation
                 self.assertIsNotNone(pin, f"{name} validates input with bracket ranges and must pin LC_ALL=C, or LC_COLLATE=C with LC_ALL unset")
                 # ...and before the first pattern it relies on.
@@ -117,6 +117,13 @@ class ShellLocale(unittest.TestCase):
                 rc, last = run(**values)
                 self.assertEqual(rc, 2, last)
                 self.assertIn(refusal, last)
+        # An inherited LC_CTYPE that LC_ALL was overriding must not come back when LC_ALL is moved away:
+        # with LC_CTYPE=C bash would count the three letters as six bytes.
+        env = dict(os.environ, LC_ALL=LOCALE, LANG=LOCALE, LC_CTYPE="C", REGALIA_COSMOS_PKCS11_MODULE=str(script),
+                   REGALIA_COSMOS_PKCS11_SLOT="0", REGALIA_COSMOS_PKCS11_PIN="ééé", REGALIA_COSMOS_PKCS11_OBJECT_ID="01")
+        done = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env, errors="replace")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("shorter than six characters", done.stderr)
         # The control: plain ASCII values get past all of them, to the first thing that needs a tool or a token.
         rc, last = run()
         self.assertNotRegex(last, r"decimal number|hexadecimal|shorter than six")
