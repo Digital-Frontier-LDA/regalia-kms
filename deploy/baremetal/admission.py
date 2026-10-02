@@ -37,13 +37,13 @@ returned, with no comparison between two machines' clocks (#72, PoC 12.4).
 COOPERATIVE, as lease.Holder is: root on the node can write this file. What bounds a compromised node is
 outside it: peers refuse its unlocks, verifiers refuse its lease, the fencing authority decides who signs.
 
-The call to a peer is injected (`renew`): the transport is #80. The command line takes it as a program.
+The call to a peer is injected (`renew`): the transport is #80. Run as a program, this only SHOWS the
+admission file the daemon reads.
 """
 import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 import time
@@ -165,16 +165,6 @@ class Service:
                 write(self.path, self._document(None, None, 0, "the lease service failed: %s" % failure))
                 raise
             time.sleep(interval)
-
-
-def command_renewer(argv):
-    """`renew` as a program: the request is its stdin (JSON), the lease envelope its stdout. The stand-in for
-    the transport (#80)."""
-    def renew(request):
-        done = subprocess.run(argv, input=json.dumps(request).encode(), capture_output=True, timeout=60)
-        require(done.returncode == 0, "the renewal command failed (exit %d)" % done.returncode)
-        return membership.load(done.stdout)
-    return renew
 
 
 def read(path):

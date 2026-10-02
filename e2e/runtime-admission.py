@@ -83,8 +83,7 @@ def main():
     if not module:
         die("libsofthsm2.so not found")
 
-    w = Path(tempfile.mkdtemp(dir="/tmp"))
-    os.chmod(w, 0o755)                                   # the daemon's gate requires every directory above its file to be its owner's alone
+    w = Path(tempfile.mkdtemp(dir="/tmp"))               # 0700, this user's: only the root-owned run/ inside it is the gate's concern
     etc, state, runtime = w / "etc", w / "state", w / "run"
     for d in (etc, state, state / "tokens", w / "collector"):
         d.mkdir(mode=0o700)

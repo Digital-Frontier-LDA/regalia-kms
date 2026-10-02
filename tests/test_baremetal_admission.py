@@ -185,14 +185,6 @@ class Admission(Case):
         with unittest.mock.patch("builtins.print"):
             self.assertEqual(admission.main([os.path.join(self.d, "absent.json")]), 1)
 
-    def test_the_renewal_command_stands_in_for_the_transport(self):
-        script = os.path.join(self.d, "renew.py")
-        with open(script, "w") as f:
-            f.write("import json, sys\nrequest = json.load(sys.stdin)\njson.dump({'echo': request}, sys.stdout)\n")
-        renew = admission.command_renewer(["python3", script])
-        self.assertEqual(renew({"node_id": "a"}), {"echo": {"node_id": "a"}})
-        self.refused("the renewal command failed (exit 3)", admission.command_renewer(["python3", "-c", "import sys; sys.exit(3)"]), {})
-
     def test_held_returns_a_copy_of_the_lease(self):
         self.assertIsNone(self.holder.held())
         self.service.step()
