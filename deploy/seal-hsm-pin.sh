@@ -60,6 +60,12 @@
 # directory, for tests. REGALIA_TPM2_DEVICE names another TPM for systemd-creds (a private swtpm, e.g.
 # swtpm:path=/…/tpm.sock), also for tests: the record then says so, and it is not production.
 set -uo pipefail
+# Every check below that says [0-9], [a-z0-9] or [0-9a-fA-F] means those ASCII characters and no
+# others. In a UTF-8 locale bash matches a range by the locale's collation: [0-9] then takes
+# full-width and Arabic-Indic digits and [a-z0-9] takes accented letters, so --serial, --yubikey,
+# --pcrs (and with it the refusal of PCR 10 and 11), --id and --import-handle all accepted look-alikes
+# (measured, bash 5.2, glibc 2.41, en_US.UTF-8, which sudo passes through). In C a range is bytes.
+export LC_ALL=C
 PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=(); LOOKUP_WARN=""
 ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
