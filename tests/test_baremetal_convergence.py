@@ -264,6 +264,17 @@ class Exchange(Case):
         with open(c.path, "w") as f:
             f.write("{")                                                                     # or unreadable
         self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        # or well-formed JSON with a corrupt tail: only the valid prefix counts, and a tail of junk as long as
+        # the real chain, or longer, does not make the fetched chain "shorter"
+        for label, tail in (("an empty object", [{}]), ("junk entries", [{}, {"manifest": {}}, "x", 7]),
+                            ("a forged epoch 2", [dict(e2, signature=dict(e2["signature"], sig="00" * 64)), e3])):
+            with self.subTest(label):
+                with open(c.path, "wb") as f:
+                    f.write(m.canonical([self.e1] + tail))
+                with self.assertRaises(m.Refused):
+                    c.load()
+                self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+                self.assertEqual(c.load()["epoch"], 3)
         # a node that is merely behind may be restored forward too: its TPM anchor moves with the chain
         behind = self.store("behind")
         behind.commit(self.e1)

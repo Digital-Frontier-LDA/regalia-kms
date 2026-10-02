@@ -467,16 +467,22 @@ class Store:
             # leaving a disk ahead of the TPM that load() could never anchor
             require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
                     "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
+            # What is still on disk counts only as far as it is itself a valid chain: a corrupt or unsigned
+            # tail is what recovery is for, and must neither block it nor be compared.
+            held, previous = [], None
             try:
-                on_disk = self._read_chain()
+                for stored in self._read_chain():
+                    nxt = accept(previous, stored, self.root_key)
+                    if nxt is previous:
+                        break
+                    held.append(nxt)
+                    previous = nxt
             except Refused:
-                on_disk = []                    # unreadable: nothing on disk to agree with
-            for mine, theirs in zip(on_disk, envelopes):
-                if not isinstance(mine, dict) or not isinstance(mine.get("manifest"), dict):
-                    break
-                require(digest(mine["manifest"]) == digest(theirs["manifest"]), "CONFLICT: the fetched chain differs from the "
-                        "stored one at epoch %s: record an incident" % theirs["manifest"]["epoch"])
-            require(len(on_disk) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
+                pass
+            for mine, theirs in zip(held, envelopes):
+                require(digest(mine) == digest(theirs["manifest"]), "CONFLICT: the fetched chain differs from the "
+                        "stored one at epoch %d: record an incident" % mine["epoch"])
+            require(len(held) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
             self._write(copy.deepcopy(envelopes))
             if current["epoch"] > hw:
                 self.hw.advance(current["epoch"])
