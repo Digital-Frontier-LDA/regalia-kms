@@ -249,12 +249,16 @@ class Arithmetic(unittest.TestCase):
 
     def test_the_command_line(self):
         self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200\n"), "root=/dev/mapper/root ro quiet console=ttyS0,115200")
+        # the forms that turn a shell OFF are what an image should carry (the unlock test boots with them)
+        hardened = "root=/dev/mapper/root ro rd.shell=0 rd.emergency=poweroff systemd.debug_shell=0 rd.systemd.debug-shell=off"
+        self.assertEqual(uki.cmdline_text(hardened.encode()), hardened)
         for raw, reason in ((b"", "one line of printable ASCII"), (b"\n", "one line of printable ASCII"), (b"a\nb\n", "one line of printable ASCII"),
                             (b"root=x\tro", "one line of printable ASCII"), ("root=é".encode(), "not ASCII")):
             with self.subTest(raw=raw), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(raw)
             self.assertIn(reason, str(caught.exception))
-        for word in ("rd.luks.uuid=abcd", "rd.luks=0", "luks.key=/x", "rd.luks.options=tpm2-device=auto", "rd.break", "rd.break=pre-mount", "rd.shell",
+        for word in ("rd.luks.uuid=abcd", "rd.luks=0", "luks=no", "luks.key=/x", "rd.shell", "rd.shell=1", "rd.shell=yes", "rd.break=0",
+                     "root=UUID=0b6c3d34-1e0a-4b1e-9c2e-8a1f8c9f0a11", "root=PARTUUID=abcd", "root=PARTLABEL=regalia-root", "rd.luks.options=tpm2-device=auto", "rd.break", "rd.break=pre-mount", "rd.shell",
                      "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "init=/bin/sh", "rdinit=/bin/sh",
                      "systemd.unit=emergency.target", "rd.systemd.unit=rescue.target", "emergency", "rescue", "single", "S", "s", "1", "-b"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:

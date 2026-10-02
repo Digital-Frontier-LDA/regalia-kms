@@ -78,8 +78,17 @@ KEY_BITS = 2048
 KEY_SOURCES = ("file", "engine:pkcs11")
 MAX_IMAGE = 512 * 1024 * 1024
 # Words that have no place on a KMS host's command line. NOT a review: it catches the obvious.
+#   rd.luks*, luks*   every form, rd.luks=0 included: the root volume is opened from the image's crypttab
+#                     through the unlock client's socket, and no command-line word may change how
+#   rd.break, rd.shell, systemd.debug_shell, init=, systemd.unit=, emergency, rescue, single
+#                     a shell or another target before the disk is judged
+#   root=UUID=…, root=PARTUUID=…   names ONE host's disk, so the image would be per host (the root is the
+#                     mapping, root=/dev/mapper/root, and the partition is found by its label)
 CMDLINE_REFUSED = (r"(rd\.)?luks(\.[a-z0-9_.-]+)?(=.*)?", r"rd\.break(=.*)?", r"rd\.shell(=.*)?", r"(rd\.)?systemd\.debug[-_]shell(=.*)?",
-                   r"(rd)?init=.*", r"(rd\.)?systemd\.unit=.*", r"emergency", r"rescue", r"single", r"[sS1]", r"-b")
+                   r"(rd)?init=.*", r"(rd\.)?systemd\.unit=.*", r"emergency", r"rescue", r"single", r"[sS1]", r"-b",
+                   r"root=(UUID|PARTUUID|LABEL|PARTLABEL)=.*")
+# ... except the forms that turn a shell OFF, which a KMS host's image should carry (rd.shell=0).
+CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off)"
 TOOLS = {"ukify": "ukify", "measure": "/usr/lib/systemd/systemd-measure", "sbsign": "sbsign", "sbverify": "sbverify", "openssl": "openssl"}
 
 
@@ -179,6 +188,8 @@ def cmdline_text(raw):
         raise Refused("the command line is not ASCII")
     require(text and re.fullmatch(r"[\x20-\x7e]+", text) is not None, "the command line must be one line of printable ASCII")
     for word in text.split():
+        if re.fullmatch(CMDLINE_HARDENING, word):
+            continue
         for pattern in CMDLINE_REFUSED:
             require(re.fullmatch(pattern, word) is None, "the command line holds %r, which a KMS host's image does not carry" % word)
     return text
