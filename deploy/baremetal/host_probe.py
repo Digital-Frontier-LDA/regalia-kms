@@ -434,11 +434,14 @@ def host_key_protected(host):
     """The other half of every PIN credential: systemd's host key. It must be root's alone and on a
     filesystem with a dm-crypt device beneath it. On a clear disk it is one more file an old image can
     read, and the credential is then worth no more than the TPM half alone."""
-    rc, out = host.run(["stat", "-c", "%F|%u|%a", HOST_KEY])
+    # %f is the raw st_mode in hex: 8100 is a regular file (0100000) with mode 0400. Not %F, the file
+    # type in words, which coreutils translates to the operator's language.
+    rc, out = host.run(["stat", "-c", "%f|%u", HOST_KEY])
     if rc != 0:
         return False, "the host key %s cannot be read (stat): seal-hsm-pin.sh creates it" % HOST_KEY
-    if out.strip() != "regular file|0|400":
-        return False, "the host key %s must be a regular file, root's, mode 0400 (it is %s)" % (HOST_KEY, out.strip())
+    if out.strip() != "8100|0":
+        return False, "the host key %s must be a regular file, root's, mode 0400 (stat says mode 0x%s, owner %s)" % (
+            (HOST_KEY,) + tuple((out.strip().split("|") + ["?", "?"])[:2]))
     rc, out = host.run(["findmnt", "-n", "-o", "SOURCE", "-T", HOST_KEY])
     src = re.sub(r"\[.*\]$", "", out.strip())
     if rc != 0 or not src:

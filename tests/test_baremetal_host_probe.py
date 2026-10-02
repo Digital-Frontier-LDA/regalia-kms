@@ -82,7 +82,7 @@ PKFP = "dcef0dc2e16a41f9d72045af7b7e04e813c83fd8da97fd295b3bf5b8c75ad3b0"   # op
 PIN_FILE = host_probe.CREDSTORE + "/regalia-kms-hsm-site-a.pin"
 # How the probe asks systemd to open a blob: by the name the unit loads it under, the secret to /dev/null.
 OPEN_PIN = ("systemd-creds", "decrypt", "--name=hsm-site-a.pin", PIN_FILE, "/dev/null")
-HOST_KEY_STAT = ("stat", "-c", "%F|%u|%a", host_probe.HOST_KEY)
+HOST_KEY_STAT = ("stat", "-c", "%f|%u", host_probe.HOST_KEY)   # raw mode in hex: not the translated %F
 HOST_KEY_MOUNT = ("findmnt", "-n", "-o", "SOURCE", "-T", host_probe.HOST_KEY)
 PCR7 = ([7], [], "")
 SIGNED = ([7], [11], PKFP)
@@ -136,7 +136,7 @@ class FakeHost:
             GETCAP_CMD: (0, GETCAP),
             OPEN_PIN: (0, ""),
             # the host key: root's, 0400, on the LUKS root
-            HOST_KEY_STAT: (0, "regular file|0|400\n"),
+            HOST_KEY_STAT: (0, "8100|0\n"),
             HOST_KEY_MOUNT: (0, "/dev/mapper/vg-root\n"),
         }
 
@@ -444,9 +444,12 @@ class HostProbe(unittest.TestCase):
         self.assertIn("the host key is root's, 0400, on root_crypt", why)
         cases = {
             "no host key file": ({HOST_KEY_STAT: (1, "")}, "cannot be read"),
-            "group-readable": ({HOST_KEY_STAT: (0, "regular file|0|440\n")}, "must be a regular file, root's, mode 0400"),
-            "owned by another user": ({HOST_KEY_STAT: (0, "regular file|1000|400\n")}, "must be a regular file, root's, mode 0400"),
-            "a symbolic link": ({HOST_KEY_STAT: (0, "symbolic link|0|777\n")}, "must be a regular file"),
+            "group-readable (0440)": ({HOST_KEY_STAT: (0, "8120|0\n")}, "mode 0x8120, owner 0"),
+            "writable by root (0600)": ({HOST_KEY_STAT: (0, "8180|0\n")}, "must be a regular file, root's, mode 0400"),
+            "owned by another user": ({HOST_KEY_STAT: (0, "8100|1000\n")}, "mode 0x8100, owner 1000"),
+            "a symbolic link": ({HOST_KEY_STAT: (0, "a1ff|0\n")}, "must be a regular file"),
+            "a directory": ({HOST_KEY_STAT: (0, "4100|0\n")}, "must be a regular file"),
+            "an answer that is not a mode": ({HOST_KEY_STAT: (0, "\n")}, "must be a regular file"),
             "no filesystem found": ({HOST_KEY_MOUNT: (1, "")}, "cannot find the filesystem"),
             "on a clear disk": ({HOST_KEY_MOUNT: (0, "/dev/sdb1\n"),
                                  ("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/sdb1"): (0, "sdb1 part\nsdb disk\n")},

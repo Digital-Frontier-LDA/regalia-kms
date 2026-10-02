@@ -26,6 +26,7 @@
 #   8  the host-key half (#75): the same blob does not open without the host key, or with another
 #      disk's, on the image it was sealed on, on an updated one, or on a retired one; the TPM half
 #      alone never retires an image, which is why a TPM-only credential is refused
+#   9  the same through the script with NO signed policy (--pcrs 7 alone): host+tpm2, not tpm2
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
 pass=0; fail=0
@@ -252,6 +253,28 @@ except ValueError as e: print(e)')"
 grep -q "the TPM alone, with no host key" <<< "$refusal" && P "host_probe refuses that credential and says to reseal it" || F "host_probe on a TPM-only blob: $refusal"
 tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
   && P "the TPM's lockout counter is still 0: no refusal in this section was a lockout" || F "the TPM counted failed tries: the refusals above prove nothing"
+
+hdr "9  no signed policy: --pcrs 7 alone is sealed to the host key and the TPM too"
+# The other branch of the script. A regression to --with-key=tpm2 there would seal to the TPM alone.
+out="$(seal --pcrs 7 --replace)"; rc=$?
+[ "$rc" = 0 ] && grep -q '^SEALED' <<< "$out" && P "sealed with --pcrs 7 and no public key" || F "unsigned seal failed (exit $rc): $out"
+grep -q 'host key + tpm2, PCRs 7 (TEST TPM' <<< "$out" && ! grep -q 'signed PCRs' <<< "$out" && P "the record: the host key and the TPM, PCR 7, no signed policy" || F "record: $out"
+[ "$(sudo cat "$BLOB" | base64 -d | head -c 16 | od -An -tx1 | tr -d ' \n')" = 93a894094874449090caf2fc93cab553 ] \
+  && P "the blob's key type is host+tpm2 (93a89409…), not tpm2" || F "the unsigned blob has another key type"
+plain(){ sudo env SYSTEMD_CREDENTIAL_SECRET="$W/$1" systemd-creds decrypt --tpm2-device="$D" --name=t.pin "$BLOB" - 2>/dev/null; }
+[ "$(plain host.secret)" = "$PIN" ] && P "it opens with this disk's host key" || F "the unsigned blob did not open"
+for k in other absent; do
+  o="$(plain "$k.secret")"; [ $? != 0 ] && [ -z "$o" ] && P "it does not open with $k host key" || F "the unsigned blob opened with $k host key"
+done
+header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -c 'import sys
+from deploy.baremetal import host_probe
+direct, signed, pkfp = host_probe.credential_header(sys.stdin.read())
+print("+".join(map(str, direct)), "+".join(map(str, signed)) or "-", pkfp or "-")')"
+[ "$header" = "7 - -" ] && P "host_probe reads it as PCR 7, no signed policy" || F "host_probe read '$header', want '7 - -'"
+boot 1 another-secure-boot-state
+o="$(plain host.secret)"; [ $? != 0 ] && [ -z "$o" ] && P "under a different PCR 7 it does not open, host key or not" || F "the unsigned blob opened under another PCR 7"
+tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+  && P "the TPM's lockout counter is still 0" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 echo; echo "pcr-signed-policy-swtpm: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
