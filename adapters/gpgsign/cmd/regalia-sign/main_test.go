@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -40,7 +41,7 @@ type deployment struct {
 	directory  string
 	configPath string
 	server     *httptest.Server
-	key        *ecdsa.PrivateKey
+	key        crypto.Signer // *ecdsa.PrivateKey (P-384) or ed25519.PrivateKey
 
 	mu       sync.Mutex
 	requests int
@@ -53,6 +54,21 @@ func newDeployment(t *testing.T) *deployment {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newDeploymentFor(t, key)
+}
+
+// newEd25519Deployment is the same deployment around an Ed25519 release key.
+func newEd25519Deployment(t *testing.T) *deployment {
+	t.Helper()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newDeploymentFor(t, key)
+}
+
+func newDeploymentFor(t *testing.T, key crypto.Signer) *deployment {
+	t.Helper()
 	result := &deployment{t: t, directory: t.TempDir(), key: key}
 	caPEM, caPool, issue := testCA(t)
 	serverPair, _, _ := issue(true)
@@ -125,11 +141,17 @@ func (d *deployment) serve(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	digest, _ := base64.StdEncoding.DecodeString(document.Payload)
-	r, s, err := ecdsa.Sign(rand.Reader, d.key, digest)
-	if err != nil {
-		d.t.Fatal(err)
+	var signature []byte
+	switch key := d.key.(type) {
+	case *ecdsa.PrivateKey:
+		r, s, err := ecdsa.Sign(rand.Reader, key, digest)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		signature = append(r.FillBytes(make([]byte, 48)), s.FillBytes(make([]byte, 48))...)
+	case ed25519.PrivateKey:
+		signature = ed25519.Sign(key, digest) // CKM_EDDSA: the digest is the message
 	}
-	signature := append(r.FillBytes(make([]byte, 48)), s.FillBytes(make([]byte, 48))...)
 	_ = json.NewEncoder(writer).Encode(map[string]string{
 		"request_id": request.Header.Get("X-Request-ID"), "operation_id": "op-1", "object_id": document.ObjectID,
 		"content_type": "application/vnd.regalia.digest", "result_base64": base64.StdEncoding.EncodeToString(signature),
@@ -333,8 +355,13 @@ func TestTheGitFormSignsStdinAndReportsOnTheStatusDescriptor(t *testing.T) {
 // THE REAL THING: git itself, with the built binary as gpg.program, makes a signed commit and a
 // signed tag, and git's own verification — which runs GnuPG through that same binary — accepts both.
 func TestGitSignsAndVerifiesACommitAndATagThroughTheBinary(t *testing.T) {
+	for name, deploy := range map[string]func(*testing.T) *deployment{"P-384": newDeployment, "Ed25519": newEd25519Deployment} {
+		t.Run(name, func(t *testing.T) { gitSignsAndVerifies(t, deploy(t)) })
+	}
+}
+
+func gitSignsAndVerifies(t *testing.T, d *deployment) {
 	git, gpg := requireTool(t, "git"), requireTool(t, "gpg")
-	d := newDeployment(t)
 	binary := filepath.Join(t.TempDir(), "regalia-sign")
 	if output, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build regalia-sign: %v\n%s", err, output)
@@ -601,11 +628,16 @@ func TestClearsignWritesADocumentBesideTheFileAndNeverABinaryOne(t *testing.T) {
 // signed Release text changes. Whatever verifier this apt uses (gpgv before 3.0, sqv after) is the
 // one that decides, with apt's own policy on top.
 func TestAptAcceptsARepositoryWhoseInReleaseWasSignedThroughTheKMS(t *testing.T) {
+	for name, deploy := range map[string]func(*testing.T) *deployment{"P-384": newDeployment, "Ed25519": newEd25519Deployment} {
+		t.Run(name, func(t *testing.T) { aptAcceptsTheRepository(t, deploy(t)) })
+	}
+}
+
+func aptAcceptsTheRepository(t *testing.T, d *deployment) {
 	apt, err := exec.LookPath("apt-get")
 	if err != nil {
 		t.Skip("apt-get is not on PATH: this is not a Debian or Ubuntu system")
 	}
-	d := newDeployment(t)
 	_, exported, stderr := d.invoke("", "--export-key")
 	if !strings.HasPrefix(exported, "-----BEGIN PGP PUBLIC KEY BLOCK-----") {
 		t.Fatalf("--export-key: %q", stderr)
