@@ -44,7 +44,7 @@ W="$(mktemp -d)"; ID_EC=""; ID_RSA=""; CREATED=()
 # selected, so a concurrent OpenPGP login by another process lands on PIV and spends PIV PIN tries (three
 # were spent that way on 2026-10-02). Unless the caller set OPENSC_CONF, the YubiKey's reader is ignored.
 if [ -z "${OPENSC_CONF:-}" ]; then
-  IGN="$(python3 -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()))' "${HSM_IGNORE_READERS:-Yubico}")"
+  IGN="$(python3 -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()) or "\"__none__\"")' "${HSM_IGNORE_READERS:-Yubico}")"
   printf 'app default {\n  ignored_readers = %s;\n}\n' "$IGN" > "$W/opensc.conf"
   export OPENSC_CONF="$W/opensc.conf"; OWN_OPENSC_CONF=1
 fi
@@ -61,7 +61,7 @@ F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); 
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 
 # The slot holding the token with this serial; exactly one, or refuse.
-slot_of(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+slot_of(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
@@ -76,17 +76,17 @@ if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
   HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
     || die "cannot isolate this token's reader in OpenSC"
   SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
-  [ "$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
+  [ "$(timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
 fi
 # EVERY LOGIN IS GATED ON WHAT IS IN THE SLOT NOW (review of #152): slot $SLOT must hold the token with
 # serial $SERIAL, no other slot may hold that serial, and under the suite's own isolated config it must
 # be the ONLY slot. During a removal the check fails and no PIN is sent; a reader that arrived later and
 # took this slot ID fails it too. Residual: the token removed AND another arriving in the milliseconds
 # between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s).
-target_ok(){ pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+target_ok(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
 import re, sys
 slot, serial, isolated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
-cur, slots, hits, here = None, 0, [], False
+cur, slots, hits = None, 0, []
 for line in sys.stdin:
     m = re.match(r"Slot \d+ \((0x[0-9a-f]+)\)", line)
     if m:
