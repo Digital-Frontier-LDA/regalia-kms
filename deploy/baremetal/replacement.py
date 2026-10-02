@@ -63,9 +63,10 @@ def may_unlock(manifest, peer_id, requester_id, session_id, evidence, attester, 
     the peer may authorize under a live heartbeat, and the requester has just proved, with a fresh quote,
     that it is the hardware the manifest names. Returns the seconds of freshness left."""
     left = heartbeat.authorize(manifest, peer_id, requester_id, freshness)
-    request = {"node_id": requester_id, "session_id": session_id, "nonce": "00" * 32}
-    lease.validate_request(request)
-    lease.reattest(attester, evidence, request, manifest, membership.validate(manifest)[requester_id])
+    membership.hex_field(session_id, 64, "session_id")
+    # The freshness of the unlock is the attester-issued nonce inside `evidence` (good once, two minutes);
+    # no nonce chosen by the requester takes part.
+    lease.reattest(attester, evidence, requester_id, session_id, manifest, membership.validate(manifest)[requester_id])
     return left
 
 

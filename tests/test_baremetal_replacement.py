@@ -3,6 +3,7 @@ deploy/baremetal/replacement.py, and every decision a peer makes about the old a
 
 The TPM identities are OpenSSL P-256 keys (the fixtures of tests/test_baremetal_lease.py); the last class
 runs the replacement on three software TPMs: the old node, the new one, and a peer."""
+import inspect
 import json
 import os
 import shutil
@@ -169,7 +170,8 @@ class Decisions(Case):
             policy = replacement.attest_policy(self.m2, {n: MEASURED for n in ("a", "a2", "b", "c")}, peer_id=name)
             attester = attest.Verifier(policy, os.path.join(self.d, name + "-attest-m2.json"), now=lambda: self.now)
             with open(attester.state_path, "w") as f:
-                json.dump({"schema": attest.STATE_SCHEMA, "nodes": {"a2": {"ak_public": self.keys["a2"].ak_public.hex()}}, "nonces": {}}, f)
+                json.dump({"schema": attest.STATE_SCHEMA, "nonces": {},
+                           "nodes": {n: {"ak_public": self.keys[n].ak_public.hex()} for n in ("a2", "c")}}, f)
             self.peers[name]["attester"] = attester
         self.new_holder = lease.Holder("a2", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "a2-lease.json"))
 
@@ -258,8 +260,16 @@ class Decisions(Case):
         used = self.quote(b["attester"], "a2", "a2")
         replacement.may_unlock(self.m2, "b", "a2", SESSION, used, *args)
         self.refused("attestation is refused: the nonce is not outstanding", replacement.may_unlock, self.m2, "b", "a2", SESSION, used, *args)
+        # evidence made for another session, another node, or another peer, through may_unlock itself
         self.refused("attestation is refused: the quote is not bound to this transcript", replacement.may_unlock, self.m2, "b", "a2", "0c" * 32,
                      self.quote(b["attester"], "a2", "a2"), *args)
+        for_c = self.quote(b["attester"], "c", "a2")                     # the peer's nonce for c, quoted by a2's TPM
+        self.refused("attestation is refused: the nonce was issued to another node", replacement.may_unlock, self.m2, "b", "a2", SESSION, for_c, *args)
+        own_nonce = dict(self.quote(b["attester"], "a2", "a2"), nonce="5a" * 32)   # a nonce the requester picked itself
+        self.refused("attestation is refused: the nonce is not outstanding", replacement.may_unlock, self.m2, "b", "a2", SESSION, own_nonce, *args)
+        to_c = self.quote(self.peers["c"]["attester"], "a2", "a2")       # an answer to peer c's nonce, shown to b
+        self.refused("attestation is refused: the nonce is not outstanding", replacement.may_unlock, self.m2, "b", "a2", SESSION, to_c, *args)
+        self.assertNotIn("nonce", inspect.signature(replacement.may_unlock).parameters)   # nothing requester-chosen stands for freshness
         self.authenticated = False
         self.refused("time is not authenticated", replacement.may_unlock, self.m2, "b", "a2", SESSION, self.quote(b["attester"], "a2", "a2"), *args)
 
