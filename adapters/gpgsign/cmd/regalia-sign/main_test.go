@@ -6,12 +6,14 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -514,5 +516,133 @@ func TestTheCommandLineIsStrict(t *testing.T) {
 	}
 	if code, _, stderr := (&deployment{t: t}).invoke("", "--frobnicate"); code != 2 || !strings.Contains(stderr, "usage:") {
 		t.Errorf("an unknown option: exit %d, stderr %q", code, stderr)
+	}
+}
+
+func TestClearsignWritesADocumentBesideTheFileAndNeverABinaryOne(t *testing.T) {
+	d := newDeployment(t)
+	release := d.write("Release", []byte("Origin: Regalia\nSuite: stable\n"), 0o644)
+	if code, stdout, stderr := d.invoke("", "--clearsign", release); code != 0 || stdout != "" {
+		t.Fatalf("--clearsign: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	signed, err := os.ReadFile(release + ".asc")
+	if err != nil || !bytes.HasPrefix(signed, []byte("-----BEGIN PGP SIGNED MESSAGE-----\n")) || !bytes.Contains(signed, []byte("\nOrigin: Regalia\nSuite: stable\n-----BEGIN PGP SIGNATURE-----\n")) {
+		t.Fatalf("no cleartext-signed document beside the file (%v):\n%s", err, signed)
+	}
+	if code, _, stderr := d.invoke("", "--clearsign", release); code == 0 || !strings.Contains(stderr, "already exists") {
+		t.Fatalf("a second --clearsign replaced the document: exit %d, stderr %q", code, stderr)
+	}
+	inRelease := filepath.Join(d.directory, "InRelease")
+	if code, _, stderr := d.invoke("", "--clearsign", release, "--output", inRelease); code != 0 {
+		t.Fatalf("--output: exit %d, stderr %q", code, stderr)
+	}
+	if code, stdout, stderr := d.invoke("Origin: stdin\n", "--clearsign", "-"); code != 0 || !strings.HasPrefix(stdout, "-----BEGIN PGP SIGNED MESSAGE-----") {
+		t.Fatalf("--clearsign -: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+	before := d.seen()
+	for _, args := range [][]string{{"--clearsign", release, "--binary"}, {"--clearsign", release, "--detach", release}} {
+		if code, _, _ := d.invoke("", args...); code != 2 || d.seen() != before {
+			t.Fatalf("%v: exit %d, %d KMS requests", args, code, d.seen()-before)
+		}
+	}
+}
+
+// THE REAL CONSUMER: apt itself. A flat repository whose InRelease regalia-sign made is accepted by
+// `apt-get update` with the exported key as its only trust anchor, and refused once one byte of the
+// signed Release text changes. Whatever verifier this apt uses (gpgv before 3.0, sqv after) is the
+// one that decides, with apt's own policy on top.
+func TestAptAcceptsARepositoryWhoseInReleaseWasSignedThroughTheKMS(t *testing.T) {
+	apt, err := exec.LookPath("apt-get")
+	if err != nil {
+		t.Skip("apt-get is not on PATH: this is not a Debian or Ubuntu system")
+	}
+	d := newDeployment(t)
+	_, exported, stderr := d.invoke("", "--export-key")
+	if !strings.HasPrefix(exported, "-----BEGIN PGP PUBLIC KEY BLOCK-----") {
+		t.Fatalf("--export-key: %q", stderr)
+	}
+	// apt drops privileges to _apt when run as root and must be able to read everything, so the
+	// repository lives in a world-readable directory rather than under t.TempDir() (0700 parents).
+	root, err := os.MkdirTemp("/tmp", "rgl-apt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Chmod(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	repository, state := filepath.Join(root, "repo"), filepath.Join(root, "apt")
+	for _, directory := range []string{repository, filepath.Join(state, "lists", "partial"), filepath.Join(state, "cache", "archives", "partial")} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, contents string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	packages := "Package: regalia-example\nVersion: 1.0.0\nArchitecture: all\nMaintainer: Releases <releases@example.invalid>\nFilename: ./regalia-example_1.0.0_all.deb\nSize: 1\nSHA256: 0000000000000000000000000000000000000000000000000000000000000000\nDescription: an example\n\n"
+	write(filepath.Join(repository, "Packages"), packages)
+	sum := sha256.Sum256([]byte(packages))
+	release := fmt.Sprintf("Origin: Regalia\nLabel: Regalia\nSuite: stable\nDate: %s\nSHA256:\n %x %d Packages\n",
+		time.Now().UTC().Add(-time.Hour).Format("Mon, 02 Jan 2006 15:04:05 UTC"), sum, len(packages))
+	releasePath, inRelease := filepath.Join(repository, "Release"), filepath.Join(repository, "InRelease")
+	write(releasePath, release)
+	if code, _, stderr := d.invoke("", "--clearsign", releasePath, "--output", inRelease); code != 0 {
+		t.Fatalf("--clearsign: exit %d, stderr %q", code, stderr)
+	}
+	if err := os.Remove(releasePath); err != nil { // only InRelease is served: apt must rely on it
+		t.Fatal(err)
+	}
+	key := filepath.Join(root, "regalia-release.asc")
+	write(key, exported)
+	sources := filepath.Join(root, "sources.list")
+	write(sources, fmt.Sprintf("deb [signed-by=%s] file:%s ./\n", key, repository))
+	write(filepath.Join(state, "status"), "")
+
+	update := func() (string, error) {
+		// No list from an earlier run may answer for this one.
+		_ = os.RemoveAll(filepath.Join(state, "lists"))
+		if err := os.MkdirAll(filepath.Join(state, "lists", "partial"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(apt, "update",
+			"-o", "Dir::Etc::sourcelist="+sources, "-o", "Dir::Etc::sourceparts=/dev/null",
+			"-o", "Dir::Etc::trusted=/dev/null", "-o", "Dir::Etc::trustedparts=/dev/null",
+			"-o", "Dir::State::lists="+filepath.Join(state, "lists"), "-o", "Dir::State::status="+filepath.Join(state, "status"),
+			"-o", "Dir::Cache="+filepath.Join(state, "cache"), "-o", "Debug::NoLocking=1",
+			"-o", "APT::Sandbox::User=", "-o", "APT::Update::Error-Mode=any",
+			"-o", "Acquire::AllowInsecureRepositories=false", "-o", "Acquire::AllowDowngradeToInsecureRepositories=false")
+		command.Env = append(os.Environ(), "LC_ALL=C")
+		output, err := command.CombinedOutput()
+		return string(output), err
+	}
+
+	output, err := update()
+	if err != nil {
+		t.Fatalf("apt-get update refused the repository: %v\n%s", err, output)
+	}
+	listed, _ := filepath.Glob(filepath.Join(state, "lists", "*Packages*"))
+	if len(listed) == 0 {
+		t.Fatalf("apt-get update exited 0 but fetched no Packages index, so it verified nothing:\n%s", output)
+	}
+
+	// The control. One changed byte in the signed text, same signature.
+	signed, err := os.ReadFile(inRelease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(inRelease, strings.Replace(string(signed), "Suite: stable", "Suite: sid   ", 1))
+	if output, err := update(); err == nil {
+		t.Fatalf("apt-get update accepted an InRelease whose text was changed after signing:\n%s", output)
+	}
+	// And with no key at all the untouched repository is refused too: it was the signature, checked
+	// against THIS key, that admitted it.
+	write(inRelease, string(signed))
+	write(key, "")
+	if output, err := update(); err == nil {
+		t.Fatalf("apt-get update accepted the repository with an empty keyring:\n%s", output)
 	}
 }

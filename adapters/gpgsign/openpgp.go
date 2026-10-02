@@ -18,6 +18,7 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	pgpecdsa "github.com/ProtonMail/go-crypto/openpgp/ecdsa"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
@@ -183,6 +184,92 @@ func (key *Key) DetachSign(ctx context.Context, w io.Writer, message io.Reader, 
 	}
 	hashID := hashIDs[key.signer.hash]
 	return Signed{Created: now, PubKeyAlgo: uint8(key.public.PubKeyAlgo), HashAlgo: hashID, DocumentHash: documentHash}, nil
+}
+
+// ClearSign writes message to w as a cleartext-signed document (RFC 9580 §7): the text itself,
+// readable, followed by an armored signature over its canonical form — what `gpg --clearsign` makes,
+// and what an apt repository serves as InRelease. It costs exactly one KMS operation.
+//
+// The signature covers the text with line endings canonicalised and trailing whitespace removed from
+// each line; that is the framework's rule, not a choice here. A document that must be reproduced
+// byte for byte belongs under a detached signature instead.
+func (key *Key) ClearSign(ctx context.Context, w io.Writer, message io.Reader, now time.Time) (Signed, error) {
+	now = now.UTC().Truncate(time.Second)
+	text, err := io.ReadAll(message)
+	if err != nil {
+		return Signed{}, errors.New("read the document to sign")
+	}
+	documentHash := sha256.Sum256(text)
+	subject := "openpgp-cleartext sha256:" + hex.EncodeToString(documentHash[:])
+	// The line ending before the signature armor is a separator, not part of the signed text
+	// (RFC 9580 §7.1), and the encoder writes that separator itself. So the text's own final line
+	// ending is dropped here, exactly as `gpg --clearsign` does: handing it over would sign an
+	// extra empty line, and every verifier would then extract the text with a blank line added.
+	body := text
+	if bytes.HasSuffix(body, []byte("\r\n")) {
+		body = body[:len(body)-2]
+	} else if bytes.HasSuffix(body, []byte("\n")) {
+		body = body[:len(body)-1]
+	}
+	// Framed in memory: w receives a whole signed document or nothing.
+	var framed bytes.Buffer
+	err = key.sign(ctx, subject, func(private *packet.PrivateKey) error {
+		plaintext, err := clearsign.Encode(&framed, private, key.config(now))
+		if err != nil {
+			return err
+		}
+		if _, err := plaintext.Write(body); err != nil {
+			return err
+		}
+		return plaintext.Close() // the signature is made here
+	})
+	if err != nil {
+		return Signed{}, err
+	}
+	document, err := withArmorChecksum(framed.Bytes())
+	if err != nil {
+		return Signed{}, err
+	}
+	if _, err := w.Write(document); err != nil {
+		return Signed{}, err
+	}
+	return Signed{Created: now, PubKeyAlgo: uint8(key.public.PubKeyAlgo), HashAlgo: hashIDs[key.signer.hash], DocumentHash: hex.EncodeToString(documentHash[:])}, nil
+}
+
+// withArmorChecksum re-armors the signature block of a cleartext-signed document WITH its CRC-24
+// line, and ends the document with a newline.
+//
+// go-crypto's clearsign leaves the checksum out, as RFC 9580 now recommends. GnuPG 2.4 (gpg and
+// gpgv, so every apt before 3.0) then cannot find the end of the armor when the base64 happens to
+// need no padding: it reports "no valid OpenPGP data found" and exits 2, although it also prints
+// "Good signature". Whether a signature needs padding depends on its length — measured here: every
+// RSA-3072 signature failed, the ECDSA ones passed. With the checksum line GnuPG reads all of them,
+// and the verifiers that ignore the checksum (Sequoia, go-crypto) are unaffected.
+//
+// Both steps use the library's own armor reader and writer; nothing is encoded by hand.
+func withArmorChecksum(document []byte) ([]byte, error) {
+	const begin = "\n-----BEGIN PGP SIGNATURE-----"
+	at := bytes.LastIndex(document, []byte(begin))
+	if at < 0 {
+		return nil, errors.New("the cleartext-signed document has no signature block")
+	}
+	block, err := armor.Decode(bytes.NewReader(document[at+1:]))
+	if err != nil || block.Type != openpgp.SignatureType {
+		return nil, errors.New("the cleartext-signed document's signature block is not readable")
+	}
+	signature, err := io.ReadAll(block.Body)
+	if err != nil || len(signature) == 0 {
+		return nil, errors.New("the cleartext-signed document's signature block is not readable")
+	}
+	var out bytes.Buffer
+	out.Write(document[:at+1])
+	if err := serialize(&out, openpgp.SignatureType, true, func(w io.Writer) error {
+		_, err := w.Write(signature)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 // hashIDs are the OpenPGP hash algorithm numbers (RFC 9580 §9.5), for the status line only.

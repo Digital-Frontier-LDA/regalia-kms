@@ -82,11 +82,29 @@ func TestDeployedRegaliaSignExecutableThroughMTLS(t *testing.T) {
 				t.Fatalf("GnuPG accepted the signature over a changed file: %v\n%s", err, output)
 			}
 
-			// Two operations reached the token — the key certification and the document — and each
-			// is an authorized/success pair in the audit journal, for this object and nothing else.
+			// A cleartext signature, the form an apt repository serves as InRelease: GnuPG accepts
+			// it and gives back the text that was signed.
+			release := filepath.Join(deployment, "Release")
+			releaseText := "Origin: Regalia\nSuite: stable\nSHA256:\n e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 Packages\n"
+			if err := os.WriteFile(release, []byte(releaseText), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			inRelease, extracted := filepath.Join(deployment, "InRelease"), filepath.Join(deployment, "Release.extracted")
+			regaliaSign(t, binary, config, "--clearsign", release, "--output", inRelease)
+			output, err = exec.Command(gpg, "--homedir", home, "--batch", "--no-tty", "--status-fd", "1", "--output", extracted, "--decrypt", inRelease).CombinedOutput()
+			if err != nil || !strings.Contains(string(output), "[GNUPG:] VALIDSIG "+fingerprint) {
+				t.Fatalf("GnuPG does not accept the KMS-made cleartext signature: %v\n%s", err, output)
+			}
+			if text, err := os.ReadFile(extracted); err != nil || string(text) != releaseText {
+				t.Fatalf("GnuPG extracted a different text (%v): %q", err, text)
+			}
+
+			// Three operations reached the token — the key certification, the detached signature
+			// and the cleartext one — and each is an authorized/success pair in the audit journal,
+			// for this object and nothing else.
 			events := daemon.sink.snapshot()[baseline:]
-			if len(events) != 4 {
-				t.Fatalf("expected 4 audit events for 2 signatures, got %d: %#v", len(events), events)
+			if len(events) != 6 {
+				t.Fatalf("expected 6 audit events for 3 signatures, got %d: %#v", len(events), events)
 			}
 			for index, event := range events {
 				wantOutcome := []string{"authorized", "success"}[index%2]

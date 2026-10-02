@@ -1,6 +1,7 @@
 // regalia-sign makes OpenPGP signatures with a key the Regalia KMS holds.
 //
 //	regalia-sign --config FILE --detach SHA256SUMS      writes SHA256SUMS.asc; check with gpg --verify
+//	regalia-sign --config FILE --clearsign Release --output InRelease     an apt repository's InRelease
 //	regalia-sign --config FILE --export-key             the public key verifiers import, on stdout
 //	regalia-sign --config FILE --fingerprint            the key's fingerprint; no KMS call
 //
@@ -27,6 +28,7 @@ import (
 
 const usage = `usage:
   regalia-sign [--config FILE] --detach FILE [--output FILE] [--binary]
+  regalia-sign [--config FILE] --clearsign FILE [--output FILE]
   regalia-sign [--config FILE] --export-key
   regalia-sign [--config FILE] --fingerprint
   regalia-sign --status-fd=2 -bsau KEY        (as git's gpg.program; signs stdin to stdout)
@@ -40,6 +42,7 @@ func main() {
 type invocation struct {
 	configPath  string
 	detach      string // file to sign, or "-" for stdin
+	clearsign   string // file to clear-sign, or "-" for stdin
 	output      string
 	binary      bool
 	exportKey   bool
@@ -86,6 +89,8 @@ func parse(args []string) (invocation, error) {
 			result.configPath, err = take()
 		case name == "--detach":
 			result.detach, err = take()
+		case name == "--clearsign":
+			result.clearsign, err = take()
 		case name == "--output":
 			result.output, err = take()
 		case argument == "--binary":
@@ -138,21 +143,25 @@ func parse(args []string) (invocation, error) {
 	}
 	gpgForm := result.gpgDetach || result.gpgSign || result.gpgArmor || result.localUser != "" || result.statusFD != -1
 	modes := 0
-	for _, chosen := range []bool{result.detach != "", result.exportKey, result.fingerprint, gpgForm} {
+	for _, chosen := range []bool{result.detach != "", result.clearsign != "", result.exportKey, result.fingerprint, gpgForm} {
 		if chosen {
 			modes++
 		}
 	}
 	if modes != 1 {
-		return result, errors.New("choose exactly one of --detach, --export-key, --fingerprint, or gpg's -bsau form")
+		return result, errors.New("choose exactly one of --detach, --clearsign, --export-key, --fingerprint, or gpg's -bsau form")
 	}
 	if gpgForm && !(result.gpgDetach && result.gpgSign && result.gpgArmor && result.localUser != "") {
 		// git asks for exactly a detached, armored signature by a named key. Anything else in gpg's
 		// vocabulary (a clear-signed or inline signature, an unnamed key) is not what this makes.
 		return result, errors.New("the gpg form supported is a detached armored signature: -bsau KEY")
 	}
-	if (result.output != "" || result.binary) && result.detach == "" {
-		return result, errors.New("--output and --binary go with --detach")
+	if result.output != "" && result.detach == "" && result.clearsign == "" {
+		return result, errors.New("--output goes with --detach or --clearsign")
+	}
+	if result.binary && result.detach == "" {
+		// A cleartext signature is text by definition; there is no binary form of one.
+		return result, errors.New("--binary goes with --detach")
 	}
 	return result, nil
 }
@@ -196,8 +205,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 			return fail(1, err)
 		}
 		return 0
-	case request.detach != "":
-		if err := detachToFile(ctx, key, request, stdin, stdout, now()); err != nil {
+	case request.detach != "" || request.clearsign != "":
+		if err := signToFile(ctx, key, request, stdin, stdout, now()); err != nil {
 			return fail(1, err)
 		}
 		return 0
@@ -232,33 +241,42 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	return 0
 }
 
-// detachToFile signs request.detach and writes the signature beside it (or to --output). The
-// signature is complete before the file exists, and an existing file is never replaced: a release
-// directory with two different signatures for one artifact, at different times, is a question
-// nobody should have to answer.
-func detachToFile(ctx context.Context, key *gpgsign.Key, request invocation, stdin io.Reader, stdout io.Writer, at time.Time) error {
+// signToFile signs request.detach or request.clearsign and writes the result beside the file (or to
+// --output). The output is complete before the file exists, and an existing file is never replaced:
+// a release directory with two different signatures for one artifact, at different times, is a
+// question nobody should have to answer.
+func signToFile(ctx context.Context, key *gpgsign.Key, request invocation, stdin io.Reader, stdout io.Writer, at time.Time) error {
+	source, suffix := request.detach, ".asc"
+	if request.clearsign != "" {
+		source = request.clearsign
+	} else if request.binary {
+		suffix = ".sig"
+	}
 	var document io.Reader = stdin
 	destination := request.output
-	if request.detach != "-" {
-		file, err := os.Open(request.detach)
+	if source != "-" {
+		file, err := os.Open(source)
 		if err != nil {
 			return errors.New("open the file to sign")
 		}
 		defer file.Close()
 		document = file
 		if destination == "" {
-			destination = request.detach + ".asc"
-			if request.binary {
-				destination = request.detach + ".sig"
-			}
+			destination = source + suffix
 		}
 	}
-	var signature strings.Builder
-	if _, err := key.DetachSign(ctx, &signature, document, at, !request.binary); err != nil {
+	var signed strings.Builder
+	var err error
+	if request.clearsign != "" {
+		_, err = key.ClearSign(ctx, &signed, document, at)
+	} else {
+		_, err = key.DetachSign(ctx, &signed, document, at, !request.binary)
+	}
+	if err != nil {
 		return err
 	}
 	if destination == "" || destination == "-" {
-		_, err := io.WriteString(stdout, signature.String())
+		_, err := io.WriteString(stdout, signed.String())
 		return err
 	}
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
@@ -266,12 +284,12 @@ func detachToFile(ctx context.Context, key *gpgsign.Key, request invocation, std
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("%s already exists; remove it first", filepath.Base(destination))
 		}
-		return errors.New("create the signature file")
+		return errors.New("create the output file")
 	}
-	if _, err := io.WriteString(output, signature.String()); err != nil {
+	if _, err := io.WriteString(output, signed.String()); err != nil {
 		_ = output.Close()
 		_ = os.Remove(destination)
-		return errors.New("write the signature file")
+		return errors.New("write the output file")
 	}
 	return output.Close()
 }
