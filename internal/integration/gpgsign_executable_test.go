@@ -50,6 +50,10 @@ func TestDeployedRegaliaSignExecutableThroughMTLS(t *testing.T) {
 	for _, key := range []struct{ name, objectID, tokenID string }{
 		{"P-384", "release-signing-p384", "0b"},
 		{"RSA-3072", "release-signing-rsa", "0c"},
+		// Ed25519: neither HSM has it through OpenSC, so this run is what SoftHSM can show — the
+		// daemon's CKM_EDDSA path and regalia-sign's sign-twice path (adapters/gpgsign/eddsa.go)
+		// meeting on a real PKCS#11 module, judged by GnuPG.
+		{"Ed25519", "release-signing-ed25519", "0f"},
 	} {
 		t.Run(key.name, func(t *testing.T) {
 			deployment := t.TempDir()
@@ -284,6 +288,10 @@ func tokenPublicKeyPEM(t *testing.T, modulePath, id string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// pkcs11-tool writes an RSA or EC public key as DER and an Ed25519 one already as PEM.
+	if block, _ := pem.Decode(der); block != nil && block.Type == "PUBLIC KEY" {
+		der = block.Bytes
+	}
 	if _, err := x509.ParsePKIXPublicKey(der); err != nil {
 		t.Fatalf("public key %s is not PKIX: %v", id, err)
 	}
@@ -375,6 +383,7 @@ func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidec
 	}{
 		{"release-signing-p384", "p384", "0b", 48},
 		{"release-signing-rsa", "rsa3072", "0c", 51},
+		{"release-signing-ed25519", "ed25519", "0f", 32},
 		{"release-signing-p384b", "p384", "0d", 48},
 		{"release-signing-ungranted", "p384", "0e", 48},
 	}

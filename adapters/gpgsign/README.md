@@ -35,9 +35,14 @@ Generated **on the token** and never imported:
 | ECDSA P-384 | `p384` | SHA-384 | 48 |
 | ECDSA P-256 | `p256` | SHA-256 | 32 |
 | RSA-3072 (also 2048, 4096) | `rsa3072` | SHA-256, sent as DigestInfo | 51 |
+| Ed25519 | `ed25519` | SHA-256 | 32 |
 
-The Nitrokey HSM 2 has no Ed25519. One key signs with one digest: `regalia-sign` refuses any other,
-so the policy's payload size can be exact.
+One key signs with one digest: `regalia-sign` refuses any other, so the policy's payload size can be
+exact.
+
+**Ed25519 needs a token that has it.** Neither the Nitrokey HSM 2 nor the Pico HSM offers EdDSA
+through OpenSC. The YubiKey's OpenPGP applet does (measured through PKCS#11, regalia#541), but the
+KMS cannot open that applet yet. Today an Ed25519 release key works end to end on SoftHSM only.
 
 ## Setting up a release key
 
@@ -119,8 +124,9 @@ signature, and the request's `subject` carries the SHA-256 of the file that was 
   such a policy denies it.
 - **No encryption, no inline (binary) signed messages, no subkeys, no expiry.** The key is a single
   version-4 signing key.
-- **No Ed25519.** go-crypto takes an external signer for RSA and ECDSA only, and neither HSM offers
-  EdDSA through OpenSC today (regalia#530, regalia#541).
+- **No release signing under the example production policy yet.** `release-signing` requires one
+  approval, and `regalia-sign` sends no approval evidence, so that policy denies it. That is the
+  intended failure until an approval flow exists (regalia#530).
 
 ## How it is tested
 
@@ -140,6 +146,30 @@ signature, and the request's `subject` carries the SHA-256 of the file that was 
   CI sets it.
 
 Evidence class: **emulated**. No release has been signed on a Nitrokey through this path yet.
+
+## Ed25519: signing twice (a recorded deviation)
+
+go-crypto lets an external signer make RSA and ECDSA signatures. For EdDSA it accepts only its own
+private-key type, so a KMS-held Ed25519 key cannot be plugged in. Until the library takes one,
+`eddsa.go` does this instead (decided on regalia#530, 2026-10-02):
+
+1. go-crypto builds the complete signature packet once, signing with a **throwaway** Ed25519 key.
+   The public key, issuer fingerprint and issuer key ID in the packet are the KMS key's; only the
+   private half is a dummy.
+2. The hash object is ours, so the digest being signed is observed.
+3. The KMS signs that digest (pure Ed25519 over the 32 bytes), checked against the pinned key.
+4. The throwaway signature's two integers, R and S, are replaced with the KMS's.
+5. The finished packet is parsed back and verified against the KMS public key before one byte is
+   written. This step now runs for every key type.
+
+What this adapter encodes itself is exactly the two integers of step 4. The project's rule is that
+the library does the encoding, so this is a deviation, and it goes away when go-crypto accepts a
+`crypto.Signer` for EdDSA.
+
+Tests: the same GnuPG, `gpgv`, `sqv`, git and apt checks as the other key types;
+`TestTheThrowawayEd25519SignatureCanNeverLeave` skips step 4 and requires every output path to refuse
+and write nothing; `TestAnEd25519SignatureAndKeyNameTheKMSKeyAndNothingOfTheThrowawayKey` parses the
+output; a signature whose R or S begins with a zero byte is held to GnuPG.
 
 ## A note on go-crypto v1.5.2
 
