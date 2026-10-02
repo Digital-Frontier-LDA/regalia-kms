@@ -49,12 +49,12 @@ class Key:
         self.ak_name = attest.ak_identity(self.ak_public)[0].hex()
         self.ek_name = "000b" + ("%02x" % (0x10 + n)) * 32
 
-    def signer(self, ek_name=None, domain=True, ak_public=None):
-        """What TpmSigner returns: a quote over the digest, by this AK under this EK."""
+    def signer(self, ek_name=None, ak_public=None, reset=1):
+        """What TpmSigner returns: a quote over the digest, by this AK under this EK (in the TPM's boot `reset`)."""
         def sign(digest):
             signer = attest.qualified_name(bytes.fromhex(ek_name or self.ek_name), bytes.fromhex(self.ak_name))
             quote = (struct.pack(">IH", attest.TPM_GENERATED, attest.ST_ATTEST_QUOTE) + b2(signer) + b2(digest)
-                     + struct.pack(">QIIB", 1000, 1, 0, 1) + bytes(8) + struct.pack(">IHB", 1, attest.ALG_SHA256, 3)
+                     + struct.pack(">QIIB", 1000, reset, 0, 1) + bytes(8) + struct.pack(">IHB", 1, attest.ALG_SHA256, 3)
                      + bytes([0x80, 0, 0]) + b2(hashlib.sha256(bytes(32)).digest()))
             with tempfile.NamedTemporaryFile() as f:
                 f.write(quote)
@@ -105,7 +105,7 @@ class Case(unittest.TestCase):
         freshness = hb.Freshness(counter, self.clock, lambda: self.ticks, os.path.join(self.d, name + tag + "-freshness.json"))
         policy = {"schema": attest.POLICY_SCHEMA, "nodes": {"a": {"ek_name": self.keys["a"].ek_name,
                                                                   "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}}}
-        attester = attest.Verifier(policy, os.path.join(self.d, name + tag + "-attest.json"))
+        attester = attest.Verifier(policy, os.path.join(self.d, name + tag + "-attest.json"), now=lambda: self.now)
         self.enroll(attester, self.keys["a"].ak_public)
         return {"freshness": freshness, "attester": attester, "signer": self.keys[name].signer()}
 
@@ -123,18 +123,26 @@ class Case(unittest.TestCase):
         self.now += seconds
         self.ticks += seconds * 1000
 
-    def verdict(self, manifest, **override):
-        """What attest.Verifier.verify returns once node a has re-attested."""
-        return dict({"node": "a", "epoch": manifest["epoch"], "session_id": SESSION, "reset_count": 1, "restart_count": 0,
-                     "clock": 1, "clock_safe": True, "pcrs": [7]}, **override)
+    def evidence(self, attester, manifest, session=SESSION, reset=1, **quoted):
+        """Node a's fresh quote for `attester`: over a nonce it issues now, this epoch and that boot session
+        (`quoted` overrides what the quote is really over)."""
+        nonce = attester.nonce("a")
+        key = b"ephemeral key of boot " + bytes.fromhex(session)
+        fields = dict(node_id="a", epoch=manifest["epoch"], session_id=bytes.fromhex(session), ephemeral_public=key, nonce=nonce)
+        fields.update(quoted)
+        signed = self.keys["a"].signer(reset=reset)(attest.qualifying_data(*fields.values()))
+        return {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": signed["quote"], "signature": signed["sig"]}
 
-    def issue(self, issuer="b", manifest=None, request=None, attested="default", **kw):
+    def issue(self, issuer="b", manifest=None, request=None, evidence="default", reset=1, **kw):
         manifest = manifest or self.m1
         peer = self.peers.get(issuer, self.peers["b"])
-        args = dict(attester=peer["attester"], freshness=peer["freshness"], clock=self.clock, signer=peer["signer"])
+        args = dict(attester=peer["attester"], freshness=peer["freshness"], signer=peer["signer"])
         args.update(kw)
-        return lease.issue(manifest, issuer, request or self.holder.request(),
-                           attested=self.verdict(manifest) if attested == "default" else attested, **args)
+        request = request or self.holder.request()
+        if evidence == "default":
+            session = request["session_id"] if m.re.fullmatch("[0-9a-f]{64}", str(request.get("session_id"))) else SESSION
+            evidence = self.evidence(args["attester"], manifest, session, reset)
+        return lease.issue(manifest, issuer, request, evidence=evidence, **args)
 
     def body(self, manifest=None, **override):
         """A well-formed lease body for node a from peer b."""
@@ -294,25 +302,60 @@ class Issue(Case):
         self.now -= 3600
         self.refused("the clock went backwards", self.issue)
 
-    def test_the_subject_must_have_just_re_attested_as_the_node_the_manifest_names(self):
-        self.refused("has not re-attested", self.issue, attested=None)
-        for field, value in (("node", "c"), ("session_id", OTHER_SESSION), ("epoch", 7)):
-            with self.subTest(field=field):
-                self.refused("the attestation is for another %s" % field, self.issue, attested=self.verdict(self.m1, **{field: value}))
+    def test_the_subject_re_attests_in_the_call_as_the_node_the_manifest_names(self):
         b = self.peers["b"]
+        self.refused("has not re-attested", self.issue, evidence=None)
+        # recency: the quote answers a nonce the peer issued just now, once
+        used = self.evidence(b["attester"], self.m1)
+        self.issue(evidence=used)
+        self.refused("attestation is refused: the nonce is not outstanding", self.issue, evidence=used)       # an earlier attestation, replayed
+        stale = self.evidence(b["attester"], self.m1)
+        self.later(attest.NONCE_TTL + 1)
+        self.refused("attestation is refused: the nonce expired", self.issue, evidence=stale)                  # a quote from minutes ago
+        to_c = self.evidence(self.peers["c"]["attester"], self.m1)
+        self.refused("attestation is refused: the nonce is not outstanding", self.issue, evidence=to_c)        # a quote made for another peer
+        # what the quote is over: this node, this epoch, the boot session in the request
+        for field, value in (("session_id", bytes.fromhex(OTHER_SESSION)), ("epoch", 7), ("node_id", "c")):
+            with self.subTest(field=field):
+                self.refused("attestation is refused: the quote is not bound to this transcript", self.issue,
+                             evidence=self.evidence(b["attester"], self.m1, **{field: value}))
+        self.refused("attestation is refused: the quote is not bound to this transcript", self.issue,
+                     request=dict(self.holder.request(), session_id=OTHER_SESSION), evidence=self.evidence(b["attester"], self.m1))
+        # and the identities attest.py checks are the manifest's
         b["attester"].nodes["a"]["ek_name"] = self.keys["c"].ek_name
         self.refused("does not pin the manifest's EK for a", self.issue)
         b["attester"].nodes["a"]["ek_name"] = self.keys["a"].ek_name
         self.enroll(b["attester"], self.keys["c"].ak_public)
         self.refused("the attested AK is not the AK the manifest names for a", self.issue)
-        with open(b["attester"].state_path, "w") as f:
-            json.dump({"schema": attest.STATE_SCHEMA, "nodes": {}, "nonces": {}}, f)
-        self.refused("the attested AK is not the AK the manifest names for a", self.issue)
+        self.enroll(b["attester"], self.keys["a"].ak_public)
+        good = self.evidence(b["attester"], self.m1)
+        for label, reason, change in (("an extra field", "attestation evidence fields mismatch", lambda e: e.update(verdict="ok")),
+                                      ("uppercase", "evidence.quote must be lowercase hex", lambda e: e.update(quote=e["quote"].upper())),
+                                      ("an oversized key", "evidence.ephemeral_public must be lowercase hex, at most 512 bytes", lambda e: e.update(ephemeral_public="00" * 513)),
+                                      ("an altered signature", "attestation is refused: the quote's signature does not verify", lambda e: e.update(signature=e["signature"][:-2] + "00"))):
+            with self.subTest(label):
+                evidence = dict(good)
+                change(evidence)
+                self.refused(reason, self.issue, evidence=evidence)
         with open(b["attester"].state_path, "w") as f:
             f.write("{")
-        self.refused("the attestation state is refused", self.issue)
+        self.refused("the subject's attestation is refused", self.issue, evidence=good)
         del b["attester"].nodes["a"]
-        self.refused("does not pin the manifest's EK for a", self.issue)
+        self.refused("does not pin the manifest's EK for a", self.issue, evidence=good)
+
+    def test_a_slow_attestation_cannot_carry_the_lease_past_the_heartbeat(self):
+        self.later(hb.MAX_LIFETIME - 60 - 100)           # the heartbeat has 100 s left
+        heartbeat_expiry = self.now + 100
+        b = self.peers["b"]
+        real = b["attester"].verify
+
+        def slow(*args):
+            self.later(50)                               # the attestation takes 50 s
+            return real(*args)
+        b["attester"].verify = slow
+        envelope = self.issue()
+        self.assertEqual(envelope["lease"]["expires_at"], hbt.stamp(heartbeat_expiry))
+        self.assertEqual(envelope["lease"]["issued_at"], hbt.stamp(heartbeat_expiry - 100))
 
     def test_a_malformed_request_is_refused(self):
         for label, reason, request in (("extra field", "lease request fields mismatch", {"node_id": "a", "session_id": SESSION, "nonce": "11" * 32, "ttl": 9}),
@@ -352,7 +395,7 @@ class Hold(Case):
         self.refused("no runtime lease is held", fresh.check, self.m1)
         new = fresh.request()
         self.assertEqual(new["session_id"], OTHER_SESSION)
-        self.assertEqual(fresh.install(self.issue(request=new, attested=self.verdict(self.m1, session_id=OTHER_SESSION)), self.m1), 300)
+        self.assertEqual(fresh.install(self.issue(request=new, reset=2), self.m1), 300)
 
     def test_a_lease_for_another_node_is_not_installed(self):
         other = lease.Holder("c", SESSION, self.clock, lambda: self.ticks, os.path.join(self.d, "c.json"))
@@ -394,7 +437,7 @@ class Hold(Case):
         revoked = self.manifest(2, m.digest(self.m1), a="REVOKED_STOLEN")
         self.beat(revoked, issued=self.now)                              # b and c have the revoking manifest and a heartbeat for it
         for peer in ("b", "c"):
-            self.refused("a may not serve under epoch 2: no lease", self.issue, peer, manifest=revoked, attested=self.verdict(revoked))
+            self.refused("a may not serve under epoch 2: no lease", self.issue, peer, manifest=revoked)
         # wherever the manifest has arrived, the lease is dead already
         self.refused("a may not serve under epoch 2", self.holder.check, revoked)
         with open(self.holder.state_path) as f:
@@ -433,6 +476,51 @@ class Hold(Case):
         self.refused("the quote is not over this lease", lease.verify, forged, self.m1, T0 + 60 + lease.MAX_LIFETIME + 5)
         self_signed = sign(self.body(issuer="a", issued_at=hbt.stamp(T0 + 400), expires_at=hbt.stamp(T0 + 700)), self.keys["a"])
         self.refused("a node does not vouch for itself", lease.verify, self_signed, self.m1, T0 + 500)
+
+    def test_every_method_waits_for_the_state_lock(self):
+        """A renewal thread's install() and the daemon's check() each read, decide and rewrite the state.
+        Held from outside as another process would hold it, the lock makes each of them wait."""
+        import fcntl
+        import threading
+        self.holder.install(self.issue(), self.m1)
+        self.later(10)
+        envelope = self.issue()                          # a renewal, expiring later than the held lease
+        with open(self.holder.state_path, "rb") as f:
+            before = f.read()
+        lock = os.open(self.holder.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, lock)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        results = {}
+        calls = {"install": lambda: self.holder.install(envelope, self.m1), "check": lambda: self.holder.check(self.m1),
+                 "request": self.holder.request, "due": lambda: self.holder.due(self.m1)}
+        workers = {name: threading.Thread(target=lambda name=name, fn=fn: results.update({name: fn()})) for name, fn in calls.items()}
+        for worker in workers.values():
+            worker.start()
+        for name, worker in workers.items():
+            worker.join(1)
+            self.assertTrue(worker.is_alive(), "%s did not wait for the lock" % name)
+        with open(self.holder.state_path, "rb") as f:
+            self.assertEqual(f.read(), before)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        for worker in workers.values():
+            worker.join(30)
+        self.assertEqual(sorted(results), ["check", "due", "install", "request"])
+        with open(self.holder.state_path) as f:
+            state = json.load(f)
+        # nothing was lost: the new lease is held, its nonce is spent, and the request made meanwhile is outstanding
+        self.assertEqual(state["envelope"], envelope)
+        self.assertEqual(state["nonces"], [results["request"]["nonce"]])
+
+    def test_a_failed_write_leaves_no_temporary_file_and_the_state_as_it_was(self):
+        self.holder.install(self.issue(), self.m1)
+        with open(self.holder.state_path, "rb") as f:
+            before = f.read()
+        with unittest.mock.patch.object(lease.os, "fsync", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.holder.request()
+        self.assertEqual(sorted(n for n in os.listdir(self.d) if n.startswith(".lease-")), [])
+        with open(self.holder.state_path, "rb") as f:
+            self.assertEqual(f.read(), before)
 
     def test_renewal_is_due_at_a_third_of_the_lifetime(self):
         self.assertTrue(self.holder.due(self.m1))        # nothing held
@@ -536,14 +624,15 @@ class OnSwtpm(unittest.TestCase):
         self.on(name, attest.node_quote, name, epoch, bytes.fromhex(session), b"ephemeral key of boot " + bytes.fromhex(session), bytes.fromhex(nonce), [7], *paths)
         return tuple(slurp(p) for p in paths)
 
-    def reattest(self, session, manifest):
-        """Node a proves its boot session to peer b with a fresh quote; returns b's verdict."""
+    def evidence(self, session, manifest):
+        """Node a answers peer b's fresh nonce with a quote from its TPM over its boot session."""
         nonce = self.attester.nonce("a")
         quote, signature = self.quote("a", session, nonce.hex(), manifest["epoch"])
-        return self.attester.verify("a", manifest["epoch"], bytes.fromhex(session), b"ephemeral key of boot " + bytes.fromhex(session), nonce, quote, signature)
+        return {"ephemeral_public": (b"ephemeral key of boot " + bytes.fromhex(session)).hex(), "nonce": nonce.hex(),
+                "quote": quote.hex(), "signature": signature.hex()}
 
     def issue(self, holder, manifest, session):
-        return lease.issue(manifest, "b", holder.request(), self.attester, self.reattest(session, manifest), self.freshness, self.clock, self.signer)
+        return lease.issue(manifest, "b", holder.request(), self.attester, self.evidence(session, manifest), self.freshness, self.signer)
 
     def refused(self, reason, fn, *args):
         with self.assertRaises(m.Refused) as caught:
@@ -582,12 +671,12 @@ class OnSwtpm(unittest.TestCase):
         self.tcti["a"] = self.boot("a")                  # a reboots: /run is gone, the TPM's resetCount moves on
         rebooted = lease.Holder("a", OTHER_SESSION, self.clock, hb.TpmClock(tcti=self.tcti["a"]), self.d + "/lease-after-reboot.json")
         self.refused("no runtime lease is held", rebooted.check, self.m1)
-        with self.assertRaises(attest.Refused) as caught:    # the old session cannot be re-attested after the reboot
-            self.reattest(SESSION, self.m1)
-        self.assertIn("from an earlier boot", str(caught.exception))
-        # a peer handed the old boot's request with the new boot's attestation refuses: the sessions differ
-        self.refused("the attestation is for another session_id", lease.issue, self.m1, "b", old_request, self.attester,
-                     self.reattest(OTHER_SESSION, self.m1), self.freshness, self.clock, self.signer)
+        # the old boot session cannot be re-attested after the reboot, so a request from the old boot gets nothing
+        self.refused("attestation is refused: a boot session or ephemeral key from an earlier boot", lease.issue, self.m1, "b",
+                     old_request, self.attester, self.evidence(SESSION, self.m1), self.freshness, self.signer)
+        # nor does the new boot's attestation answer the old boot's request: the sessions differ
+        self.refused("attestation is refused: the quote is not bound to this transcript", lease.issue, self.m1, "b",
+                     old_request, self.attester, self.evidence(OTHER_SESSION, self.m1), self.freshness, self.signer)
         self.assertEqual(rebooted.install(self.issue(rebooted, self.m1, OTHER_SESSION), self.m1), 300)
 
 

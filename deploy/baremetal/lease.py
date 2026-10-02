@@ -31,9 +31,10 @@ here; the issuer's own state is judged when IT asks for a lease.)
 
 A PEER ISSUES (issue) only if, in its current manifest, it is ACTIVE and the subject may serve (ACTIVE
 or DRAINING), it is not the subject, it holds a live heartbeat for that manifest (authenticated time, no
-rollback: heartbeat.py), and the subject has just re-attested as the node the manifest names (attest.py:
-the same EK and AK, this epoch, the boot session in the request). The lease lives at most 5 minutes and
-never past the issuer's heartbeat.
+rollback: heartbeat.py), and the subject re-attests in that very call as the node the manifest names
+(attest.py: the same EK and AK, this epoch, the boot session in the request, a quote over a nonce the
+peer issued within its last two minutes and accepts once). The lease lives at most 5 minutes and never
+past the issuer's heartbeat's own expiry.
 
 ANYONE VERIFIES (verify: the node itself, a peer, a gateway) against ITS OWN current manifest: the
 subject may still serve and has that AK, the issuer may still authorize, the lease's epoch is not newer
@@ -57,6 +58,7 @@ LIMITS, stated:
     lease, and short-lived service certificates. Wiring check() into the Go daemon's admission is a
     separate change.
 """
+import contextlib
 import hashlib
 import hmac
 import json
@@ -186,41 +188,52 @@ class TpmSigner:
             return dict(zip(("ak_public", "quote", "sig"), out))
 
 
-def _attested(attester, attested, request, manifest, subject):
-    """The subject re-attested just now, as the node the manifest names: the attestation policy pins the
-    manifest's EK for it, the enrolled AK is the manifest's AK, and the verdict is for this request."""
-    require(isinstance(attested, dict), "the subject has not re-attested: no lease")
-    for k, want in (("node", request["node_id"]), ("session_id", request["session_id"]), ("epoch", manifest["epoch"])):
-        require(attested.get(k) == want, "the attestation is for another %s (%r, not %r)" % (k, attested.get(k), want))
-    policy = attester.nodes.get(request["node_id"])
+EVIDENCE_KEYS = ("ephemeral_public", "nonce", "quote", "signature")
+
+
+def _reattest(attester, evidence, request, manifest, subject):
+    """The subject re-attests NOW, as the node the manifest names. The peer's attestation verifier
+    (attest.Verifier) pins the manifest's EK for it and has the manifest's AK enrolled; the quote in
+    `evidence` answers a nonce that verifier issued within its last two minutes, good once, and is over
+    this node ID, this epoch and the boot session in the request. An earlier verdict cannot be passed
+    in: issue() runs the verification itself."""
+    require(isinstance(evidence, dict), "the subject has not re-attested: no lease")
+    membership.exact(evidence, EVIDENCE_KEYS, "attestation evidence")
+    for k, limit in (("ephemeral_public", 512), ("nonce", 32), ("quote", 1024), ("signature", 256)):
+        require(isinstance(evidence[k], str) and re.fullmatch(r"([0-9a-f]{2}){1,%d}" % limit, evidence[k]) is not None,
+                "evidence.%s must be lowercase hex, at most %d bytes" % (k, limit))
+    node_id = request["node_id"]
+    policy = attester.nodes.get(node_id)
     require(policy is not None and policy["ek_name"] == subject["ek_name"],
-            "the attestation policy does not pin the manifest's EK for %s" % request["node_id"])
+            "the attestation policy does not pin the manifest's EK for %s" % node_id)
     try:
         with attest.locked_state(attester.state_path) as (state, _):
-            enrolled = state["nodes"].get(request["node_id"], {}).get("ak_public")
+            enrolled = state["nodes"].get(node_id, {}).get("ak_public")
         require(enrolled is not None and attest.ak_identity(bytes.fromhex(enrolled))[0].hex() == subject["ak_name"],
-                "the attested AK is not the AK the manifest names for %s" % request["node_id"])
+                "the attested AK is not the AK the manifest names for %s" % node_id)
+        attester.verify(node_id, manifest["epoch"], bytes.fromhex(request["session_id"]), *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS))
     except attest.Refused as refusal:
-        raise Refused("the attestation state is refused: %s" % refusal)
+        raise Refused("the subject's attestation is refused: %s" % refusal)
 
 
-def issue(manifest, issuer_id, request, attester, attested, freshness, clock, signer):
-    """A peer's lease for the node in `request`, or Refused. `attested` is the verdict attest.Verifier.verify
-    returned for that node a moment ago (by `attester`); `freshness` is the peer's heartbeat.Freshness;
-    `clock` its authenticated clock; `signer(digest)` its TpmSigner."""
+def issue(manifest, issuer_id, request, attester, evidence, freshness, signer):
+    """A peer's lease for the node in `request`, or Refused. `evidence` is the subject's fresh quote
+    ({ephemeral_public, nonce, quote, signature}, hex) answering a nonce from `attester`, the peer's
+    attest.Verifier; `freshness` is the peer's heartbeat.Freshness; `signer(digest)` its TpmSigner."""
     validate_request(request)
     nodes = membership.validate(manifest)
     subject_id = request["node_id"]
     require(membership.may(manifest, issuer_id, "authorize"), "%s may not authorize under epoch %d" % (issuer_id, manifest["epoch"]))
     require(issuer_id != subject_id, "a node does not vouch for itself")
     require(membership.may(manifest, subject_id, "serve"), "%s may not serve under epoch %d: no lease" % (subject_id, manifest["epoch"]))
-    fresh_for = freshness.check(manifest)      # live heartbeat, authenticated time, no rollback
-    _attested(attester, attested, request, manifest, nodes[subject_id])
-    now, _ = heartbeat.authenticated_now(clock, lambda: 0, None)
-    lifetime = min(MAX_LIFETIME, fresh_for)   # fresh_for > 0: check() refuses an expired heartbeat
+    # One reading of the peer's authenticated clock (with its floor) dates the lease, and the heartbeat's
+    # absolute expiry bounds it: however long the attestation below takes, the lease cannot outlive the
+    # heartbeat. A lease dated slightly early only ends slightly early.
+    now, fresh_until = freshness.live_until(manifest)
+    _reattest(attester, evidence, request, manifest, nodes[subject_id])
     lease = {"schema": SCHEMA, "node_id": subject_id, "ak_name": nodes[subject_id]["ak_name"], "issuer": issuer_id,
              "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "session_id": request["session_id"],
-             "nonce": request["nonce"], "issued_at": _stamp(now), "expires_at": _stamp(now + lifetime)}
+             "nonce": request["nonce"], "issued_at": _stamp(now), "expires_at": _stamp(min(now + MAX_LIFETIME, fresh_until))}
     return {"lease": lease, "signature": signer(signed_digest(lease))}
 
 
@@ -233,6 +246,9 @@ class Holder:
         membership.hex_field(session_id, 64, "session_id")
         self.node_id, self.session_id, self.clock, self.tpm_clock = node_id, session_id, clock, tpm_clock
         self.state_path, self.rand, self.run = state_path, rand, run
+        # every method reads, decides and rewrites the state: one at a time, across threads and processes,
+        # or a check() racing an install() could drop the new lease or hand a used nonce back
+        self.lock_path = state_path + ".lock"
 
     def _read(self):
         try:
@@ -252,11 +268,16 @@ class Holder:
     def _write(self, state):
         directory = os.path.dirname(os.path.abspath(self.state_path))
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".lease-")
-        with os.fdopen(fd, "wb") as f:
-            f.write(json.dumps(state, sort_keys=True).encode())
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, self.state_path)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(json.dumps(state, sort_keys=True).encode())
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.state_path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
 
     def _now(self, state):
         seconds, state["floor"] = heartbeat.authenticated_now(self.clock, self.tpm_clock, state["floor"])
@@ -268,14 +289,19 @@ class Holder:
 
     def request(self):
         """What to send a peer to ask for a lease. The nonce is good for one install."""
-        state = self._read()
         nonce = self.rand(32).hex()
-        state["nonces"] = (state["nonces"] + [nonce])[-MAX_OUTSTANDING:]
-        self._write(state)
+        with membership._exclusive(self.lock_path):
+            state = self._read()
+            state["nonces"] = (state["nonces"] + [nonce])[-MAX_OUTSTANDING:]
+            self._write(state)
         return {"node_id": self.node_id, "session_id": self.session_id, "nonce": nonce}
 
     def install(self, envelope, manifest):
         """Take a lease a peer returned. Returns the seconds the held lease has left."""
+        with membership._exclusive(self.lock_path):
+            return self._install(envelope, manifest)
+
+    def _install(self, envelope, manifest):
         state = self._read()
         now = self._now(state)
         left = verify(envelope, manifest, now, self.run)
@@ -300,19 +326,24 @@ class Holder:
 
     def check(self, manifest):
         """Whether this node may serve right now. Returns the seconds left, or raises Refused: stop serving."""
+        with membership._exclusive(self.lock_path):
+            return self._check(manifest)[0]
+
+    def _check(self, manifest):
         state = self._read()
         now = self._now(state)
         self._write(state)   # the floor moves whatever follows
         require(state["envelope"] is not None, "no runtime lease is held: no peer vouches for this node")
         left = verify(state["envelope"], manifest, now, self.run)
         self._mine(state["envelope"]["lease"])
-        return left
+        return left, state["envelope"]["lease"]
 
     def due(self, manifest):
         """Whether to ask for a renewal now: no usable lease, or a third of its lifetime used."""
         try:
-            left = self.check(manifest)
+            with membership._exclusive(self.lock_path):
+                left, held = self._check(manifest)
         except Refused:
             return True
-        issued, expires = validate(self._read()["envelope"]["lease"])
+        issued, expires = validate(held)
         return left <= (expires - issued) * 2 / 3

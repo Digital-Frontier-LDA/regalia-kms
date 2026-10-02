@@ -45,6 +45,7 @@ NOT HERE: the authenticated time source itself. NTS-authenticated chrony on the 
 clock that answers that question and refuses when the answer is no.
 """
 import calendar
+import contextlib
 import json
 import os
 import re
@@ -179,6 +180,8 @@ class Freshness:
 
     def __init__(self, counter, clock, tpm_clock, state_path):
         self.counter, self.clock, self.tpm_clock, self.state_path = counter, clock, tpm_clock, state_path
+        # accept() and check() each read, decide and rewrite the state: one at a time, across processes
+        self.lock_path = state_path + ".lock"
 
     # ---- state on disk ----
 
@@ -197,11 +200,16 @@ class Freshness:
     def _write(self, state):
         directory = os.path.dirname(os.path.abspath(self.state_path))
         fd, tmp = tempfile.mkstemp(dir=directory, prefix=".freshness-")
-        with os.fdopen(fd, "wb") as f:
-            f.write(json.dumps(state, sort_keys=True).encode())
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, self.state_path)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(json.dumps(state, sort_keys=True).encode())
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.state_path)
+        except BaseException:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(tmp)
+            raise
         entry = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(entry)
@@ -226,6 +234,10 @@ class Freshness:
 
     def accept(self, envelope, manifest):
         """Take a new heartbeat for the current manifest. Returns the seconds it has left."""
+        with membership._exclusive(self.lock_path):
+            return self._accept(envelope, manifest)
+
+    def _accept(self, envelope, manifest):
         heartbeat = verify(envelope, manifest)
         state = self._read()
         now = self._now(state)
@@ -242,6 +254,17 @@ class Freshness:
     def check(self, manifest):
         """Whether this peer may authorize under `manifest` right now. Returns the seconds the heartbeat has
         left, or raises Refused with the reason."""
+        now, expires = self.live_until(manifest)
+        return expires - now
+
+    def live_until(self, manifest):
+        """check(), returning (now, expires): the authenticated reading the decision was made at and the
+        heartbeat's absolute expiry. A caller that must not outlive the heartbeat (a runtime lease) bounds
+        itself by `expires` and dates itself `now`, without reading the clock a second time."""
+        with membership._exclusive(self.lock_path):
+            return self._live_until(manifest)
+
+    def _live_until(self, manifest):
         state = self._read()
         now = self._now(state)
         self._write(state)   # the floor moves whatever follows
@@ -256,7 +279,7 @@ class Freshness:
         # a file planted on the disk cannot push it forward and strand the node.
         if heartbeat["sequence"] > held:
             self.counter.advance(heartbeat["sequence"])
-        return left
+        return now, now + left
 
 
 def authorize(manifest, peer_id, requester_id, freshness):
