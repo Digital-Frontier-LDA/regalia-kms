@@ -7,6 +7,8 @@
 !network.py
 !cluster.py
 !tokens.py
+!leases.py
+!device.py
 !vm.py
 !guest.py
 !guest-init.sh

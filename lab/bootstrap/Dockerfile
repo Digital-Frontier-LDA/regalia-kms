@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends softhsm2 python
     && dpkg-query -W -f='${Package}\t${Version}\n' > /opt/packages.tsv \
     && rm -rf /var/lib/apt/lists/*
 FROM cluster-tools AS cluster
-COPY lab.py peer.py network.py cluster.py tokens.py /opt/
+COPY lab.py peer.py network.py cluster.py tokens.py leases.py device.py /opt/
 ENTRYPOINT ["python3", "/opt/cluster.py"]
 
 FROM network-tools AS vm-tools

@@ -6,13 +6,16 @@ import json
 import os
 import signal
 import time
+import tempfile
 from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from mesh import ROOT, NODES, admin, command
-from peer import Refusal, ak_digest, canonical
-from tokens import Clock, FRESHNESS_DOMAIN, signed_token
+from peer import Refusal, ak_digest, apply_manifest, canonical
+from tokens import Clock, FRESHNESS_DOMAIN, freshness, signed_token
+from leases import verify_service
+from cryptography.hazmat.primitives import serialization
 
 
 class Authority:
@@ -53,6 +56,8 @@ class Authority:
 class Cluster:
     def __init__(self, report):
         self.report = report
+        self.client_clock = Clock()
+        self.client_directory = tempfile.TemporaryDirectory(prefix="regalia-client-")
 
     def check(self, label, valid):
         self.report["checks"].append({"name": label, "status": "passed" if valid else "failed"})
@@ -85,6 +90,9 @@ class Cluster:
         return self.rpc(source, "relay", peer=target, command=dict(values, op=op))
 
     def publish(self, envelope, nodes=NODES, source="C"):
+        from pathlib import Path
+        apply_manifest({"op": "apply_manifest", "envelope": envelope}, self.client_policy,
+                       Path(self.client_directory.name) / "policy.json")
         for node in nodes:
             self.relay(source, node, "apply_manifest", envelope=envelope)
 
@@ -102,6 +110,20 @@ class Cluster:
             for envelope in batch:
                 self.relay(source, node, "apply_manifest", envelope=envelope)
         raise RuntimeError("bounded policy catch-up exhausted")
+
+    def sign(self, node, message=None, request_id=None):
+        message = message or os.urandom(32)
+        request_id = request_id or os.urandom(16).hex()
+        reply = self.rpc("C", "service_request", peer=node,
+                         command={"op": "sign", "message": message.hex(), "request_id": request_id})
+        return reply, request_id, message
+
+    def verify(self, node, reply, request_id, message):
+        freshness(self.authority.fresh(), self.authority.keys["freshness"].public_key().public_bytes_raw(),
+                  self.client_policy, self.client_clock)
+        public = serialization.load_der_public_key(bytes.fromhex(self.identities[node]["device_public"]))
+        return verify_service(reply, public, {peer: bytes.fromhex(pin) for peer, pin in self.signing.items()},
+                              self.client_policy, self.client_clock, node, request_id, message)
 
     def start(self):
         command("up", "--detach", "--no-build", "--pull", "never")
@@ -132,6 +154,8 @@ class Cluster:
                           "allowed-ips", f"{prefix}.{index}/32", "endpoint", f"10.89.91.{index}:{port}",
                           "persistent-keepalive", "1")
         self.authority = Authority(identities)
+        self.client_policy = {"epoch": 0, "manifest": None, "manifest_digest": "00" * 32,
+                              "authorities": self.authority.pins, "targets": {}, "nodes": {}}
         self.signing = {}
         for node in NODES:
             targets = {peer: {field: identities[peer][field] for field in ["ak_pem", "approved_pcr"]}
@@ -152,12 +176,15 @@ def main():
               "timestamp": datetime.now(timezone.utc).isoformat(), "source_commit": os.environ["REGALIA_LAB_COMMIT"],
               "image_id": os.environ["REGALIA_LAB_IMAGE_ID"], "platform": os.environ["REGALIA_LAB_PLATFORM"],
               "sources_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in [
-                  "cluster.py", "cluster_mesh.py", "tokens.py", "policy_cases.py", "peer.py", "network.py", "Dockerfile"]}}
+                  "cluster.py", "cluster_mesh.py", "tokens.py", "leases.py", "device.py", "policy_cases.py",
+                  "runtime_cases.py", "peer.py", "network.py", "Dockerfile"]}}
     cluster = Cluster(report)
     try:
         cluster.start()
         from policy_cases import policy_cases
         policy_cases(cluster)
+        from runtime_cases import runtime_cases
+        runtime_cases(cluster)
         report["packages"] = command("exec", "-T", "a", "cat", "/opt/packages.tsv").stdout.decode().splitlines()
         report["status"] = "passed"
     finally:
