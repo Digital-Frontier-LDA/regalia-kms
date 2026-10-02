@@ -200,6 +200,69 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    `verify`. Proven on a software TPM (`e2e/tpm-attest-swtpm.sh`); the PCRs to expect and the EK
    certificate check are set on the DL360s (#65 PoC 5.2/5.3).
 
+## 4a. Updating the kernel on three nodes without locking the cluster out (#75)
+
+A peer unlocks a node only if its quote matches the reference values the peer holds. Those values are
+a **measurement document** (`deploy/baremetal/measurements.py`) that the signed membership manifest
+commits to: the manifest's `policy_version` is a digest of the document (174 bits of its SHA-256), so a
+peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
+restored disk cannot roll back: the epoch is anchored in the TPM).
+
+Each node has one accepted set, or two while an update is under way. An update is three documents:
+
+| Step | Document | The root signs | What works |
+|---|---|---|---|
+| before | CURRENT | manifest N | the running image |
+| approve | CURRENT + NEXT | manifest N+1 | both; nodes reboot into NEXT one at a time |
+| retire | NEXT | manifest N+2 | NEXT only; the old image is refused by every peer |
+
+1. **Build and predict.** Build the new UKI, predict its PCR 11 (`systemd-measure calculate`), sign it
+   with the PCR-signing key (so the PIN and the disk unseal under it with no reseal), and write the
+   CURRENT + NEXT document. `measurements.transition(old, new)` must say `approve`.
+2. **Approve.** The root's operator computes `measurements.version(document)` from the file in hand, at
+   signing time, and the root signs manifest N+1 with that as `policy_version`. Distribute the manifest
+   and the document to all three nodes.
+3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
+   pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
+   before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
+   unlock it holds the new manifest and has vouched for it, in its current boot, in the last five
+   minutes (a runtime lease for this boot session). With every record current, one node can pass at
+   a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
+   back" from its own last re-attestation of that node, which it repeats only at the next lease
+   renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
+   to the lease lifetime (five minutes), and two nodes can then be down together. Three cannot. So
+   wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
+   as the interlock. A node that is down
+   and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
+   unsigned way to skip it.
+4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
+   accepted until the retirement. That is the fallback, at every step up to step 5.
+5. **Retire.** When `rollout.retire_ready(...)` passes (given the state of every node that may
+   authorize: under manifest N+1, every peer that has seen a node last saw it on NEXT, for every node), and `transition` says `retire` (not `abandon`, which is
+   the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
+   From then on a node booted
+   into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
+   within five minutes.
+
+Both manifests can be signed in one root-key session and the second released later; if a revocation
+is published in between, the second no longer chains and is signed again.
+
+**Replacing a node during all this** (#76) changes the document too, since the new node needs an entry:
+`measurements.check_replacement(...)` requires the manifest to replace the node and the document to
+differ by that node's and the new node's entries, and nothing else.
+
+**An emergency** (the current image is compromised) skips the overlap: `transition(..., emergency=True)`
+accepts a document that drops CURRENT at once, on every node. Every node still on it is then locked out until it boots
+the new image; that is the intent.
+
+Proven on three software TPMs, with real quotes, NV counters and TPM-signed leases
+(`e2e/rolling-policy-swtpm.sh`); the rules themselves in `tests/test_baremetal_rollout.py`. **Not done:**
+nothing here is wired into a service or reboots a machine; `may_reboot` is a check an operator or a
+script must call, and it does not stop a reboot it was not asked about. Real UKIs, systemd-boot's boot
+counting and automatic fallback, a TPM firmware update (staged the same way, as a second set) and the
+timing of three reboots are for the DL360s (#65). And retirement by the peers protects what needs a peer:
+see PIN-CUSTODY.md, "Why the host key is in the seal", for the local seal and what is still open there.
+
 ## 5. Pass criteria
 
 Sign the evidence with the commissioning evidence key (`openssl dgst -sha256 -sign key.pem -out
