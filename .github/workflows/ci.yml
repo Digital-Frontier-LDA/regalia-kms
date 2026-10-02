@@ -289,3 +289,20 @@ jobs:
           [ "$status" -eq 0 ] || exit "$status"
           grep -q '^tpm-attest-swtpm: 31 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
             echo "::error::the attestation battery did not run all 31 checks" >&2; exit 1; }
+
+  # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
+  # its own NV counter (replay and disk rollback refused), and the TPM clock behind the time floor.
+  # The script fails if any of its three tests is skipped.
+  heartbeat-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Heartbeat sequence counter and TPM clock against swtpm
+        run: bash e2e/heartbeat-swtpm.sh
