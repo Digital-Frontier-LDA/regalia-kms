@@ -37,7 +37,8 @@ TERMINAL = ("RETIRED", "REVOKED_STOLEN")
 def attest_policy(manifest, measurements, peer_id=None):
     """The attestation policy a peer holds under `manifest`. `measurements` maps a node ID to that node's
     reference values, {"tpm_firmware_version": ..., "pcrs": {...}} (attest.py's policy fields, without the
-    EK). Every node that may `request` or `serve` gets an entry pinned to the manifest's EK Name; `peer_id`
+    EK), or {"accepted": [...]} with one or two sets, which is what measurements.bind(manifest, document)
+    returns for the document the manifest commits to. Every node that may `request` or `serve` gets an entry pinned to the manifest's EK Name; `peer_id`
     (the peer itself) is left out. A node that may be attested but has no reference values is a refusal,
     not an omission: the peer would otherwise refuse it at boot for a reason nobody configured."""
     require(isinstance(measurements, dict), "measurements must map node IDs to reference values")
@@ -47,7 +48,9 @@ def attest_policy(manifest, measurements, peer_id=None):
             continue
         reference = measurements.get(node_id)
         require(isinstance(reference, dict), "no reference measurements for %s, which the manifest lets attest" % node_id)
-        membership.exact(reference, ("tpm_firmware_version", "pcrs"), "measurements of %s" % node_id)
+        # one set (the firmware version and the PCRs), or the one-or-two accepted sets measurements.bind() gives (#75)
+        membership.exact(reference, ("accepted",) if "accepted" in reference else ("tpm_firmware_version", "pcrs"),
+                         "measurements of %s" % node_id)
         policy[node_id] = dict(reference, ek_name=node["ek_name"])
     require(policy, "the manifest leaves no node this peer could attest")
     document = {"schema": attest.POLICY_SCHEMA, "nodes": policy}
@@ -72,12 +75,24 @@ def may_unlock(manifest, peer_id, requester_id, session_id, evidence, attester, 
 
 
 def identities(node):
-    """Every value that identifies a node's hardware: its TPM names, its WireGuard keys, its HSM serials."""
-    return {node[k] for k in membership.IDENTITY_KEYS} | {"hsm:" + s for s in node["hsm_serials"]}
+    """Every value that identifies a node's hardware: its TPM names, its WireGuard keys, its SSH host key
+    (schema v2), its HSM serials."""
+    return {node[k] for k in membership.identity_keys(node)} | {"hsm:" + s for s in node["hsm_serials"]}
 
 
 def check_replacement(current, candidate, old_id, new_id):
-    """`candidate` replaces `old_id` by `new_id` and does nothing else. Raises Refused with the reason."""
+    """`candidate` replaces `old_id` by `new_id` and does nothing else. Raises Refused with the reason.
+
+    Where policy_version commits to a measurement document (measurements.py, #75) the new node needs an
+    entry in it, so policy_version changes with the replacement and this check refuses it: use
+    measurements.check_replacement, which also compares the two documents."""
+    _check_replacement(current, candidate, old_id, new_id, policy_version_may_change=False)
+
+
+def _check_replacement(current, candidate, old_id, new_id, policy_version_may_change):
+    """check_replacement, for measurements.check_replacement only: with the flag, policy_version may
+    change, and the caller answers for WHAT changed by comparing the documents. Not a public switch."""
+    require(isinstance(old_id, str) and isinstance(new_id, str), "node IDs are text")
     old, new = membership.validate(current), membership.validate(candidate)
     require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
             "the replacement must be the next manifest: epoch %d, chained to the current one" % (current["epoch"] + 1))
@@ -97,5 +112,5 @@ def check_replacement(current, candidate, old_id, new_id):
                     "the retired entry of %s must keep its identities" % old_id)
         else:
             require(new[node_id] == node, "a replacement does not change %s" % node_id)
-    for k in ("policy_version", "revocation_keys"):
+    for k in ("revocation_keys",) if policy_version_may_change else ("policy_version", "revocation_keys"):
         require(candidate[k] == current[k], "a replacement does not change %s" % k)

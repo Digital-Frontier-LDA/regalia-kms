@@ -2,6 +2,7 @@
 unprivileged service) and the pcscd client check, against a fake host. Moved here with the probes from
 the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
+import json
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", ",".join(os_probe.SANDBOX_PROPERTIES) + ",LoadState")
 CAPS_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "CapabilityBoundingSet,AmbientCapabilities,LoadState")
 PID_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "MainPID")
+EXEC_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "ExecStart,LoadState")
+CONFIG = "/etc/regalia-kms/config.json"
+ADMISSION = {"listen_address": "0.0.0.0:8443", "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission.json",
+             "node_id": "site-a", "boot_session_path": "/run/regalia/boot-session"}
+
+
+def exec_start(arguments="-config " + CONFIG, load="loaded"):
+    """What `systemctl show -p ExecStart,LoadState` prints for the shipped unit (systemd 257)."""
+    binary = "/usr/local/sbin/regalia-kms"
+    return ("ExecStart={ path=%s ; argv[]=%s %s ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+            "code=(null) ; status=0/0 }\nLoadState=%s\n" % (binary, binary, arguments, load))
 # What `systemctl show` prints for a unit that sets none of this (measured, systemd 257).
 UNSET_BOUNDING_SET = ("cap_chown cap_dac_override cap_dac_read_search cap_fowner cap_fsetid cap_kill cap_setgid "
                       "cap_setuid cap_setpcap cap_linux_immutable cap_net_bind_service cap_net_broadcast cap_net_admin "
@@ -65,6 +77,7 @@ class FakeHost:
             "/sys/module/apparmor/parameters/enabled": "Y\n",
             "/proc/20/status": proc_status(),
             "/proc/20/attr/apparmor/current": "regalia-kms (enforce)\n",
+            CONFIG: json.dumps(ADMISSION),
         }
         self.commands = {
             ("systemctl", "show", os_probe.SERVICE, "-p", "LimitCORE,LoadState"): "LimitCORE=0\nLoadState=loaded\n",
@@ -73,6 +86,7 @@ class FakeHost:
             SANDBOX_SHOW: hardened_sandbox(),
             CAPS_SHOW: show(CapabilityBoundingSet="", AmbientCapabilities="", LoadState="loaded"),
             PID_SHOW: "MainPID=20\n",
+            EXEC_SHOW: exec_start(),
             ("systemd-analyze", "cat-config", "systemd/coredump.conf"): "[Coredump]\n#Storage=external\nStorage=none\n",
             ("systemd-analyze", "cat-config", "systemd/sleep.conf"): "[Sleep]\n",
             # The real layout (measured with pcsc_scan): the server endpoint carries the socket path,
@@ -246,6 +260,63 @@ class OSProbeTests(unittest.TestCase):
                     self.assertTrue(all(others.values()), others)
                     # And nothing here touches the host-role controls measured beside them.
                     self.assertTrue(all(v["value"] for k, v in measure(host).items() if k not in SANDBOX))
+
+    def test_the_daemon_s_own_configuration_must_require_a_runtime_lease(self):
+        """kms_runtime_admission_required reads the file the unit starts the daemon with (#74)."""
+        results = measure(FakeHost())
+        self.assertTrue(results["kms_runtime_admission_required"]["value"])
+        self.assertIn("runtime_admission required, node site-a, admission file /run/regalia/admission.json",
+                      results["kms_runtime_admission_required"]["why"])
+
+        def config(**changed):
+            document = dict(ADMISSION)
+            for key, value in changed.items():
+                if value is None:
+                    document.pop(key)
+                else:
+                    document[key] = value
+            return lambda g: g.files.__setitem__(CONFIG, json.dumps(document))
+
+        def started(arguments, load="loaded"):
+            return lambda g: g.commands.__setitem__(EXEC_SHOW, exec_start(arguments, load))
+        cases = (
+            ("the lab value", 'says runtime_admission "disabled-for-lab": this daemon serves with no runtime lease', config(runtime_admission="disabled-for-lab")),
+            ("the setting left out", "does not state runtime_admission \"required\" (it says None)", config(runtime_admission=None)),
+            ("another word", "does not state runtime_admission \"required\" (it says 'optional')", config(runtime_admission="optional")),
+            ("true instead of the word", "does not state runtime_admission \"required\" (it says True)", config(runtime_admission=True)),
+            ("no admission file", "requires runtime admission but lacks runtime_admission_path", config(runtime_admission_path=None)),
+            ("an empty node ID", "requires runtime admission but lacks node_id", config(node_id="")),
+            ("no boot session file", "requires runtime admission but lacks boot_session_path", config(boot_session_path=None)),
+            ("a node ID that is not text", "requires runtime admission but lacks node_id", config(node_id=7)),
+            ("a configuration that cannot be read", "cannot read the daemon's configuration " + CONFIG, lambda g: g.files.pop(CONFIG)),
+            ("not JSON", CONFIG + " is not valid JSON", lambda g: g.files.__setitem__(CONFIG, "{")),
+            ("not an object", CONFIG + " is not a JSON object", lambda g: g.files.__setitem__(CONFIG, "[]")),
+            ("no -config", "is not started with exactly one absolute -config file", started("-listen 127.0.0.1:8443")),
+            ("a relative -config", "is not started with exactly one absolute -config file", started("-config config.json")),
+            ("two -config", "is not started with exactly one absolute -config file", started("-config /etc/a.json -config " + CONFIG)),
+            ("-config last, with no value", "is not started with exactly one absolute -config file", started("-check-config -config")),
+            ("the unit not loaded", "regalia-kms.service is not loaded", started("-config " + CONFIG, "not-found")),
+            ("systemctl answers nothing", "regalia-kms.service is not loaded", lambda g: g.commands.pop(EXEC_SHOW)),
+            ("another file than the one the unit names", "cannot read the daemon's configuration /etc/other.json", started("-config /etc/other.json")),
+        )
+        for label, reason, breaker in cases:
+            with self.subTest(label):
+                host = FakeHost()
+                breaker(host)
+                results = measure(host)
+                self.assertFalse(results["kms_runtime_admission_required"]["value"])
+                self.assertIn(reason, results["kms_runtime_admission_required"]["why"])
+                self.assertTrue(all(v["value"] for k, v in results.items() if k != "kms_runtime_admission_required"))
+        # the other spellings of the flag are read too, and it is the file the unit names that counts
+        for arguments in ("--config " + CONFIG, "-config=" + CONFIG, "--config=" + CONFIG, "-listen 0.0.0.0:8443 -config " + CONFIG):
+            with self.subTest(arguments=arguments):
+                host = FakeHost()
+                host.commands[EXEC_SHOW] = exec_start(arguments)
+                self.assertTrue(measure(host)["kms_runtime_admission_required"]["value"])
+        host = FakeHost()
+        host.files["/etc/other.json"] = json.dumps(dict(ADMISSION, runtime_admission="disabled-for-lab"))
+        host.commands[EXEC_SHOW] = exec_start("-config /etc/other.json")
+        self.assertFalse(measure(host)["kms_runtime_admission_required"]["value"])
 
     def test_a_stopped_service_cannot_prove_its_capabilities_or_its_confinement(self):
         for pid in ("MainPID=0\n", "MainPID=\n", ""):

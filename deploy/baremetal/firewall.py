@@ -12,6 +12,14 @@ One table, `inet regalia_kms`, default-deny in BOTH directions:
           nothing else: a compromised process cannot open a connection anywhere else
   forward dropped (the host routes nothing)
 
+With a `boot_mesh` (three-site, #66), two more openings, and nothing else:
+  input   WireGuard (UDP listen_port) from the peers' declared addresses only: a node that holds a valid
+          key and sits anywhere else gets no handshake (THREE-SITE-THREAT-MODEL.md, attacker case 1);
+          and unlock_port, only inside the tunnel, only from the peers' tunnel addresses, only to this
+          host's. EVERYTHING ELSE that arrives on the mesh interface is dropped before the zone rules are
+          reached: no SSH and no KMS port inside the tunnel, whatever addresses the packet carries.
+The WireGuard peers themselves (which keys) come from the manifest: deploy/baremetal/bootnet.py.
+
 host_probe.py measures the loaded table (firewall_default_deny); network_probe.py checks the result
 from each zone. The rendered text is deterministic, so a reviewed copy can be compared byte for byte.
 """
@@ -32,6 +40,14 @@ def _set(nets):
 def render(cfg):
     kms, ssh = cfg["kms_port"], cfg["ssh_port"]
     callers = cfg["client_cidrs"] + [n for n in cfg["monitoring_cidrs"] if n not in cfg["client_cidrs"]]
+    mesh, mesh_rules = cfg["boot_mesh"], ""
+    if mesh:
+        mesh_rules = (
+            "    iifname \"%s\" ip daddr %s tcp dport %d ip saddr %s accept comment \"boot mesh: unlock requests, inside the tunnel\"\n"
+            "    iifname \"%s\" drop comment \"boot mesh: nothing else inside the tunnel\"\n"
+            "    ip daddr %s udp dport %d ip saddr %s accept comment \"boot mesh: WireGuard, from the peers' declared addresses\"\n"
+            % (mesh["interface"], mesh["address"], mesh["unlock_port"], _set([p["address"] + "/32" for p in mesh["peers"]]), mesh["interface"],
+               cfg["host_ipv4"], mesh["listen_port"], _set([p["underlay"] + "/32" for p in mesh["peers"]])))
     out_rules = "\n".join(
         "    ip daddr %s %s dport %d accept comment \"%s\"" % (o["cidr"], o["proto"], o["port"], o["name"])
         for o in cfg["outbound"])
@@ -45,7 +61,7 @@ table inet %(table)s {
     meta nfproto ipv6 drop
     ct state invalid drop
     ct state established,related accept
-    ip daddr %(host)s tcp dport %(kms)d ip saddr %(callers)s accept comment "kms: clients and monitoring"
+%(mesh_rules)s    ip daddr %(host)s tcp dport %(kms)d ip saddr %(callers)s accept comment "kms: clients and monitoring"
     ip daddr %(host)s tcp dport %(ssh)d ip saddr %(admins)s accept comment "ssh: admin only"
     ip saddr %(admins)s icmp type echo-request accept comment "ping: admin only"
     icmp type { destination-unreachable, time-exceeded } accept comment "path MTU discovery"
@@ -64,7 +80,7 @@ table inet %(table)s {
   }
 }
 """ % {"site": cfg["site"], "table": TABLE, "host": cfg["host_ipv4"], "kms": kms, "ssh": ssh,
-       "callers": _set(callers), "admins": _set(cfg["admin_cidrs"]), "out_rules": out_rules}
+       "callers": _set(callers), "admins": _set(cfg["admin_cidrs"]), "out_rules": out_rules, "mesh_rules": mesh_rules}
 
 
 def main(argv=None):

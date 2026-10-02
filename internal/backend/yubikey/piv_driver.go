@@ -172,7 +172,7 @@ func (session *pivSession) Sign(ctx context.Context, objectID, algorithm string,
 	if !valid || !algorithmMatches(info.Algorithm, algorithm) {
 		return nil, ErrUnavailable
 	}
-	value, err := signer.Sign(rand.Reader, digest, hash)
+	value, err := contractSign(signer, algorithm, digest, hash)
 	if err != nil || len(value) == 0 {
 		return nil, ErrUnavailable
 	}
@@ -306,16 +306,6 @@ func touchPolicyName(value piv.TouchPolicy) string {
 func algorithmMatches(value piv.Algorithm, algorithm string) bool {
 	return (value == piv.AlgorithmEC256 && algorithm == "p256") ||
 		(value == piv.AlgorithmEC384 && algorithm == "p384") ||
-		(value == piv.AlgorithmRSA2048 && algorithm == "rsa2048")
-}
-
-func signingHash(algorithm string, size int) (crypto.Hash, bool) {
-	switch algorithm {
-	case "p256", "rsa2048":
-		return crypto.SHA256, size == crypto.SHA256.Size()
-	case "p384":
-		return crypto.SHA384, size == crypto.SHA384.Size()
-	default:
-		return 0, false
-	}
+		(value == piv.AlgorithmRSA2048 && algorithm == "rsa2048") ||
+		(value == piv.AlgorithmEd25519 && algorithm == "ed25519")
 }

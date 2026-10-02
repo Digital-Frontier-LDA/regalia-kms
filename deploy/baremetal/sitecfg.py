@@ -14,8 +14,24 @@ network_probe.py checks the result from each zone, so the two can never describe
       "outbound": [                                  # the ONLY destinations the host may reach
         {"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
         {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}
+      ],
+      "boot_mesh": null                              # a single-site host; or, in a three-site cluster (#66):
+    }
+
+    "boot_mesh": {
+      "node_id": "lisbon",                           # this host's node ID in the membership manifest
+      "interface": "wg-unlock",                      # the running host's WireGuard interface for unlock requests
+      "listen_port": 51820,                          # its UDP port, reachable from the peers' declared addresses only
+      "address": "10.89.0.1",                        # this node's address inside the tunnel
+      "unlock_port": 7443,                           # TCP, inside the tunnel only: deploy/baremetal/unlock.py's serve()
+      "peers": [                                     # the other nodes: where each is, outside and inside the tunnel
+        {"node_id": "porto", "underlay": "198.51.100.7", "address": "10.89.0.2"},
+        {"node_id": "faro", "underlay": "198.51.100.9", "address": "10.89.0.3"}
       ]
     }
+
+WHO is a WireGuard peer, and with which key, is never in this file: it comes from the signed membership
+manifest (deploy/baremetal/bootnet.py). This file says only where the nodes are.
 """
 import ipaddress
 import json
@@ -23,8 +39,11 @@ import re
 
 SCHEMA = "regalia.baremetal-site/v1"
 KEYS = ("schema", "site", "host_ipv4", "kms_port", "ssh_port", "client_cidrs", "monitoring_cidrs", "admin_cidrs",
-        "outbound")
+        "outbound", "boot_mesh")
 OUTBOUND_KEYS = ("name", "cidr", "proto", "port")
+MESH_KEYS = ("node_id", "interface", "listen_port", "address", "unlock_port", "peers")
+MESH_PEER_KEYS = ("node_id", "underlay", "address")
+NODE_ID = r"[a-z0-9][a-z0-9-]{0,31}"
 
 
 class InvalidSite(ValueError):
@@ -92,7 +111,59 @@ def validate(doc):
         cfg["outbound"].append({"name": o["name"], "cidr": _networks([o["cidr"]], "outbound[%d].cidr" % i)[0],
                                 "proto": o["proto"], "port": _port(o["port"], "outbound[%d].port" % i)})
     require({"audit", "ntp"} <= names, "outbound must include the 'audit' and 'ntp' sinks")
+    cfg["boot_mesh"] = _boot_mesh(doc["boot_mesh"], cfg)
     return cfg
+
+
+def _address(value, label):
+    require(isinstance(value, str), "%s must be an IPv4 address, as text" % label)     # IPv4Address(True) is 0.0.0.1
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ValueError:
+        raise InvalidSite("%s must be an IPv4 address" % label)
+    require(not (address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local or address.is_reserved),
+            "%s must be a host address" % label)
+    return str(address)
+
+
+def _boot_mesh(mesh, cfg):
+    """The addresses of the boot mesh (#66), or None for a single-site host. Every address is one host;
+    no two nodes share one, inside or outside the tunnel; the tunnel's addresses are not the host's own."""
+    if mesh is None:
+        return None
+    require(isinstance(mesh, dict) and set(mesh) == set(MESH_KEYS), "boot_mesh must be null or hold exactly %s" % list(MESH_KEYS))
+    require(isinstance(mesh["node_id"], str) and re.fullmatch(NODE_ID, mesh["node_id"]), "boot_mesh.node_id is not a node ID")
+    # Its own WireGuard interface, by name: the firewall trusts what arrives on it to come from a peer's
+    # key. Named after a physical interface, the unlock rule would open the port on the wire.
+    require(isinstance(mesh["interface"], str) and re.fullmatch(r"wg-[a-z0-9-]{1,12}", mesh["interface"]) and mesh["interface"] != "wg-boot",
+            "boot_mesh.interface must be a WireGuard interface of its own, named wg-… (at most 15 characters, and not wg-boot, the initrd's)")
+    listen, unlock = _port(mesh["listen_port"], "boot_mesh.listen_port"), _port(mesh["unlock_port"], "boot_mesh.unlock_port")
+    require(unlock not in (cfg["kms_port"], cfg["ssh_port"]), "boot_mesh.unlock_port must differ from kms_port and ssh_port")
+    out = {"node_id": mesh["node_id"], "interface": mesh["interface"], "listen_port": listen, "unlock_port": unlock,
+           "address": _address(mesh["address"], "boot_mesh.address"), "peers": []}
+    require(isinstance(mesh["peers"], list) and 1 <= len(mesh["peers"]) <= 8, "boot_mesh.peers must list 1 to 8 nodes")
+    nodes, inside, outside = {out["node_id"]}, {out["address"]}, {cfg["host_ipv4"]}
+    require(out["address"] != cfg["host_ipv4"], "boot_mesh.address is the tunnel's address, not host_ipv4")
+    for i, peer in enumerate(mesh["peers"]):
+        require(isinstance(peer, dict) and set(peer) == set(MESH_PEER_KEYS), "boot_mesh.peers[%d] needs exactly %s" % (i, list(MESH_PEER_KEYS)))
+        require(isinstance(peer["node_id"], str) and re.fullmatch(NODE_ID, peer["node_id"]) and peer["node_id"] not in nodes,
+                "boot_mesh.peers[%d].node_id must be another node's ID, listed once" % i)
+        entry = {"node_id": peer["node_id"], "underlay": _address(peer["underlay"], "boot_mesh.peers[%d].underlay" % i),
+                 "address": _address(peer["address"], "boot_mesh.peers[%d].address" % i)}
+        require(entry["address"] not in inside and entry["underlay"] not in outside and entry["address"] not in outside
+                and entry["underlay"] not in inside and entry["address"] != entry["underlay"],
+                "boot_mesh.peers[%d]: no two nodes share an address, inside or outside the tunnel, and no address is both" % i)
+        nodes.add(entry["node_id"]), inside.add(entry["address"]), outside.add(entry["underlay"])
+        out["peers"].append(entry)
+    # A tunnel address inside a zone would carry that zone's permission into the tunnel: the KMS port or
+    # SSH, for whoever holds a boot key. The zones and the tunnel are disjoint. (The firewall also drops
+    # everything else that arrives on the mesh interface; this refuses the configuration that needs it.)
+    zones = [(k, n) for k in ("client_cidrs", "monitoring_cidrs", "admin_cidrs") for n in cfg[k]] + [("outbound", o["cidr"]) for o in cfg["outbound"]]
+    for address in sorted(inside):
+        for zone, network in zones:
+            require(ipaddress.ip_address(address) not in ipaddress.ip_network(network),
+                    "the tunnel address %s is inside %s (%s): the tunnel and the zones must be disjoint" % (address, zone, network))
+    return out
 
 
 def _unique(pairs):

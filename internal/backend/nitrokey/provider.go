@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/keywrap"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
@@ -91,6 +92,27 @@ type Provider struct {
 	// this cache; a read that fails updates nothing, because an aging timestamp is
 	// the signal that the number is stale.
 	pinReadings map[string]pinRetryReading
+
+	// REAUTHORIZATION AFTER A TOKEN'S ABSENCE (regalia-kms#72, PoC 12.4). Nil unless
+	// RequireReauthorization was called. A token that was gone and is back serves again only once
+	// the node holds a runtime lease it asked for AFTER the token returned, so that a peer has
+	// vouched for the node since. Until then the binding is unavailable and unhealthy; the OS and
+	// the rest of the daemon stay up.
+	reauthorizer Reauthorizer
+	boottime     func() (int64, error)
+	// absences is keyed by device id. An entry with returned == false is a token last seen
+	// missing; with returned == true it is back and waiting for the lease.
+	absences map[string]tokenAbsence
+}
+
+// Reauthorizer says whether the node holds a runtime lease it asked for after a moment, given in
+// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter). It is the gate
+// every provider takes (internal/backend/reauth), under the name this package has always used.
+type Reauthorizer = reauth.Gate
+
+type tokenAbsence struct {
+	returned     bool
+	returnedAtMs int64
 }
 
 type pinRetryReading struct {
@@ -114,6 +136,148 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 	provider.mu.Unlock()
 }
 
+// RequireReauthorization makes every token serve only under a runtime lease asked for after the
+// token was last seen to arrive. Call it before the provider serves.
+//
+// EVERY TOKEN STARTS AS JUST ARRIVED. The provider cannot know what happened to a token before this
+// process started (a token pulled, the daemon restarted, the token put back would otherwise resume
+// on the old lease), so the first time each token is seen it is treated as having returned at
+// sinceMs: when this process started, on the boot clock. After a daemon restart key operations
+// therefore wait for a lease asked for since; the lease service sees the same start time and asks
+// at once (deploy/baremetal/admission.py), and the node's readiness says so meanwhile. sinceMs
+// must not be in the future: a start time ahead of the clock would be a lease nobody can ask for.
+//
+// WHAT COUNTS AS SEEN GONE. A token that cannot be opened. And a token that stopped answering while
+// it was open: when a call on an open session fails, the token is asked for its identity again, and
+// if it does not answer (the driver looks for the token by serial among the slots and reads it
+// afresh: a pulled card is not found), or the session will not close, it is marked gone. A token
+// that still answers was not gone: the failure was about the request (a payload the key refuses, a
+// malformed blob) or about the caller (it hung up, or its deadline passed). That distinction
+// matters, because marking on any failure would let a caller who may sign take a token out of
+// service at will, for up to a third of a lease each time.
+//
+// The question is asked under a context of ITS OWN, not the request's. Every driver call refuses an
+// ended context, so under the request's context a caller that disconnects mid-signature, or a
+// request that reaches its deadline, would make the token look gone.
+//
+// Two limits of the question. The driver refuses to pick a slot while ANOTHER slot's token answers
+// with an error, so a refused request that coincides with a second token misbehaving costs this one
+// a renewal. And a token pulled and put back within the one failed call answers, and is not seen.
+//
+// WHAT IT CANNOT SEE: an absence nobody looked during. Every routing decision and every readiness
+// probe opens the token, so the window is the gap between two of those.
+func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime func() (int64, error), sinceMs int64) error {
+	if gate == nil || boottime == nil {
+		return errors.New("reauthorization needs the admission gate and the boot clock")
+	}
+	now, err := boottime()
+	if err != nil {
+		return errors.New("reauthorization cannot read the boot clock")
+	}
+	if sinceMs <= 0 || sinceMs > now {
+		return errors.New("reauthorization needs the time this process started, on the boot clock and not in the future")
+	}
+	started := sinceMs
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	provider.reauthorizer, provider.boottime = gate, boottime
+	provider.absences = map[string]tokenAbsence{"": {returned: true, returnedAtMs: started}}
+	return nil
+}
+
+// gates reports whether reauthorization is required at all.
+func (provider *Provider) gates() bool {
+	provider.mu.RLock()
+	defer provider.mu.RUnlock()
+	return provider.reauthorizer != nil
+}
+
+// stillAnswersWithin bounds the question stillAnswers asks: long enough for a token that is there,
+// short enough that a failed request does not hold its caller.
+const stillAnswersWithin = 5 * time.Second
+
+// stillAnswers asks the token for its identity again after a call on it failed. A token that was
+// pulled is not found. A driver that panics is not answering either. The context is the question's
+// own: the request's may already be cancelled or past its deadline, and that says nothing about the
+// token.
+func stillAnswers(ctx context.Context, session Session) (answers bool) {
+	defer func() {
+		if recover() != nil {
+			answers = false
+		}
+	}()
+	own, cancel := context.WithTimeout(context.WithoutCancel(ctx), stillAnswersWithin)
+	defer cancel()
+	_, _, err := session.Identity(own)
+	return err == nil
+}
+
+// tokenGone records that a token could not be opened, or stopped answering while it was open.
+// Whatever lease the node holds now was asked for before the token comes back.
+func (provider *Provider) tokenGone(deviceID string) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.reauthorizer != nil {
+		provider.absences[deviceID] = tokenAbsence{}
+	}
+}
+
+// reauthorized reports whether a token that has just been opened, and has proved to be the right
+// one, may serve. The first time it is seen back, that moment is recorded; it serves once the node
+// holds a lease asked for after it.
+func (provider *Provider) reauthorized(ctx context.Context, deviceID string) bool {
+	provider.mu.Lock()
+	gate := provider.reauthorizer
+	if gate == nil {
+		provider.mu.Unlock()
+		return true
+	}
+	absence, known := provider.absences[deviceID]
+	if !known {
+		// never seen in this process: it arrived, at the earliest, when reauthorization was required
+		absence = provider.absences[""]
+	}
+	if !absence.returned {
+		now, err := provider.boottime()
+		if err != nil {
+			provider.mu.Unlock()
+			return false
+		}
+		absence = tokenAbsence{returned: true, returnedAtMs: now}
+	}
+	provider.absences[deviceID] = absence
+	provider.mu.Unlock()
+	if !gate.RequestedAfter(ctx, absence.returnedAtMs) {
+		return false
+	}
+	provider.mu.Lock()
+	// cleared only if nothing changed meanwhile: a token that went away again during the check stays marked
+	if current, still := provider.absences[deviceID]; still && current == absence {
+		provider.absences[deviceID] = tokenAbsence{returned: true, returnedAtMs: -1}
+	}
+	provider.mu.Unlock()
+	return true
+}
+
+// AwaitingReauthorization lists the devices that are present but not yet serving, each with the
+// CLOCK_BOOTTIME (ms) since which a lease must have been asked for, and the devices last seen
+// missing (-1). For the log and the metrics surface.
+func (provider *Provider) AwaitingReauthorization() map[string]int64 {
+	provider.mu.RLock()
+	defer provider.mu.RUnlock()
+	waiting := map[string]int64{}
+	for device, absence := range provider.absences {
+		switch {
+		case device == "":
+		case !absence.returned:
+			waiting[device] = -1
+		case absence.returnedAtMs >= 0:
+			waiting[device] = absence.returnedAtMs
+		}
+	}
+	return waiting
+}
+
 func (provider *Provider) Execute(ctx context.Context, route registry.Route, operation, format, contentType string, data, aad []byte) (output []byte, outputType string, err error) {
 	binding := route.Binding
 	if !servedBackend(binding.Backend) || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
@@ -131,14 +295,25 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
+		provider.tokenGone(binding.DeviceID)
 		return nil, "", ErrUnavailable
 	}
+	// gated is set once this token has passed the reauthorization check below: from then on, a
+	// failure is looked at to see whether the token itself went away (RequireReauthorization).
+	gated := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		panicked := recover() != nil
+		if panicked {
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
 		}
+		if gated && (panicked || (err != nil && !stillAnswers(ctx, session))) {
+			provider.tokenGone(binding.DeviceID)
+		}
 		if closeErr := session.Close(); closeErr != nil {
+			if gated {
+				provider.tokenGone(binding.DeviceID)
+			}
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
 		}
@@ -161,6 +336,13 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		provider.quarantine(binding.DeviceID, reason)
 		return nil, "", ErrUnavailable
 	}
+	// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (#72 PoC 12.4). Checked after the identity and
+	// the pinned key, so that a different card in the slot is still quarantined as a swap and only
+	// the RIGHT token, back, is what waits; and before anything is done with it, the PIN included.
+	if !provider.reauthorized(ctx, binding.DeviceID) {
+		return nil, "", ErrUnavailable
+	}
+	gated = provider.gates()
 	if operation == "public-key" {
 		output, err = session.PublicKey(ctx, binding.ObjectID)
 		if err != nil || len(output) == 0 {
@@ -327,6 +509,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
+		provider.tokenGone(binding.DeviceID)
 		return false
 	}
 	// A session that will not close means this device cannot serve, so Healthy must not
@@ -344,8 +527,12 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	// registry.safeHealthy is called from Route, RouteForUnwrap and Ready, with no cache and
 	// no latch -- so returning false skips the device exactly while it is failing and stops
 	// skipping it the moment it recovers, with no operator action. See #312.
+	gated := false
 	defer func() {
 		if session.Close() != nil {
+			if gated {
+				provider.tokenGone(binding.DeviceID)
+			}
 			healthy = false
 		}
 	}()
@@ -361,9 +548,17 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 		provider.quarantine(binding.DeviceID, reason)
 		return false
 	}
+	// Present, the right token, and not yet vouched for again: not healthy, so routing and
+	// readiness say so, and this is also where its return is first noticed.
+	if !provider.reauthorized(ctx, binding.DeviceID) {
+		return false
+	}
+	gated = provider.gates()
 	retries, err := session.PINRetries(ctx)
 	if err == nil {
 		provider.notePINRetries(binding.DeviceID, retries)
+	} else if gated && !stillAnswers(ctx, session) {
+		provider.tokenGone(binding.DeviceID)
 	}
 	return err == nil && retries > 1
 }

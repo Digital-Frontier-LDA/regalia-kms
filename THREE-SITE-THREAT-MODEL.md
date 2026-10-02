@@ -87,7 +87,8 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 **1. Freshness of restrictive membership updates under partition.** A newer manifest proves only
 *ordering*, not that no restrictive update happened since. Freshness therefore comes from a
 **heartbeat** the revocation authority signs: it carries the current manifest epoch, a monotonic
-sequence number, an issue time and an **expiry** (proposed: 24 hours after issue). A peer authorizes a
+sequence number, an issue time and an **expiry** (at most 24 hours after issue under a v1 manifest; a
+v2 manifest states the bound, `heartbeat_max_lifetime_s`, root-signed, from one hour to seven days). A peer authorizes a
 bootstrap only while it holds an unexpired heartbeat for its manifest's epoch, and it checks:
 - the expiry against **authenticated time** (NTS-authenticated NTP, with the TPM clock as a monotonic
   floor between syncs). FENCING.md already requires authenticated time for the same reason: an
@@ -95,7 +96,9 @@ bootstrap only while it holds an unexpired heartbeat for its manifest's epoch, a
 - the sequence against the highest one it has accepted, kept in **TPM NV** outside restorable disk
   state, so a captured older heartbeat cannot be replayed after a rollback.
 Without authenticated time, or past the expiry, the peer fails closed: availability yields to
-security, and A3 covers the gap. The bound is the explicit trade; its value is set in #69.
+security, and A3 covers the gap. The bound is the explicit trade: it is both how long a partitioned
+peer goes on helping a node revoked meanwhile and how long the authority may be down before every reboot
+needs the recovery key. The owner sets it in the manifest; `heartbeat_watch.py` warns while it runs out.
 
 **2. The powered-off theft claim before revocation.** As case 1: denied away from the datacenter
 networks; inside them, bounded by detection plus the heartbeat expiry (question 1). Not "immediately

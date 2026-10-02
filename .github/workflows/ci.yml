@@ -439,10 +439,32 @@ jobs:
       - name: The recovery key alone opens the volume (loop device, LUKS2)
         run: sudo bash e2e/luks-recovery-key.sh
 
+  # regalia-kms#66: the boot mesh, by behaviour, in network namespaces with real WireGuard interfaces.
+  # A booting node reaches its peers' unlock port through the tunnel and nothing else; an outsider, a
+  # key from an undeclared address (the stolen server elsewhere) and a revoked node get no answer;
+  # loss, latency, an unreachable peer and a wrong key each end within a bound. Every ruleset is
+  # loaded only inside a throwaway namespace.
+  wg-boot-netns:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install WireGuard tools, nftables, conntrack, and the kernel's extra modules (netem)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wireguard-tools nftables iproute2 conntrack "linux-modules-extra-$(uname -r)"
+      - name: The boot mesh, by behaviour (WireGuard, the initrd ruleset, the host firewall)
+        run: sudo bash e2e/wg-boot-netns.sh
+
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
   # restores the node, no peer leaves it locked, and a retired boot image, another machine and a
-  # revoked node get nothing. The script fails if any of its tests is skipped.
+  # revoked node get nothing. Each step is made with the native pre-root client (cmd/regalia-unlock)
+  # against the Python peer over TCP. Then the shipped systemd units (deploy/baremetal/initrd/) are
+  # started by the runner's systemd and the real systemd-cryptsetup takes the key from their socket.
+  # The script fails if any of its tests is skipped.
   peer-unlock-swtpm:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -450,12 +472,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: Install the software TPM, tpm2-tools and cryptsetup
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools cryptsetup-bin
-      - name: TPM plus one peer opens the volume (swtpm, loop device, LUKS2)
-        run: sudo bash e2e/peer-unlock-swtpm.sh
+          # systemd-cryptsetup is its own package from systemd 256 on; before that it is part of systemd
+          sudo apt-get install -y -qq --no-install-recommends systemd-cryptsetup 2>/dev/null || true
+      - name: Build the pre-root client (static, no cgo)
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: TPM plus one peer opens the volume (swtpm, loop device, LUKS2; the native client and the reference one)
+        # REGALIA_EXPECT_SYSTEMD: the runner has a running systemd, so the shipped units are started for real
+        # and systemd-cryptsetup itself asks for the key; without them the script fails instead of skipping.
+        run: sudo REGALIA_EXPECT_SYSTEMD=1 REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/peer-unlock-swtpm.sh
 
   # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
   # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
@@ -514,3 +545,67 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
       - name: Manifest convergence against swtpm (bundle, partition, catch-up, rollback)
         run: bash e2e/convergence-swtpm.sh
+
+  # regalia-kms#75: a kernel update rolled through three nodes, on three software TPMs. The root approves
+  # CURRENT and NEXT in one manifest; the nodes reboot one at a time, in order, each unlocked by its
+  # peers on the new image; a failed image falls back to CURRENT; CURRENT is retired once every node was
+  # seen on NEXT; the old image, booted again, is then refused, and so is a peer's membership restored
+  # from before the retirement. The script fails if its test is skipped.
+  rolling-policy-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Rolling measured-boot update against swtpm (approve, one node at a time, retire, refuse the old image)
+        run: bash e2e/rolling-policy-swtpm.sh
+
+  # regalia-kms#143: a real sshd on the example configuration and a real ssh on the known_hosts that
+  # ssh_trust.py writes from a membership manifest. A certificate from the user CA logs in to the node
+  # it names; another node's name, a retired node's key, a bare key and a bad certificate are refused.
+  # No port (ProxyCommand runs `sshd -i`), no FIDO token. The script fails if a test is skipped.
+  ssh-trust-sshd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the OpenSSH server
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends openssh-server openssh-client
+      - name: SSH host identity from the manifest, and certificate-only logins, against sshd
+        run: bash e2e/ssh-trust-sshd.sh
+
+  # regalia-kms#74: the real daemon serves key operations only while the node holds a runtime lease.
+  # SoftHSM for the token; the lease is real (node and peer on software TPMs) and reaches the daemon
+  # through the admission file. Not ready and 503 without a lease; a verified signature with one;
+  # stops by itself when renewal stops; refuses at once when the node is revoked.
+  runtime-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the PKCS#11 emulator, the software TPM and their tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc swtpm swtpm-tools tpm2-tools libpcsclite-dev
+      - name: The daemon serves only while admitted (SoftHSM, leases on swtpm)
+        run: |
+          status=0
+          python3 e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/admission.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^runtime-admission: 32 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
+            echo "::error::the admission test did not run all 32 checks" >&2; exit 1; }
