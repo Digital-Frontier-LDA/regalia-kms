@@ -37,7 +37,8 @@ TERMINAL = ("RETIRED", "REVOKED_STOLEN")
 def attest_policy(manifest, measurements, peer_id=None):
     """The attestation policy a peer holds under `manifest`. `measurements` maps a node ID to that node's
     reference values, {"tpm_firmware_version": ..., "pcrs": {...}} (attest.py's policy fields, without the
-    EK). Every node that may `request` or `serve` gets an entry pinned to the manifest's EK Name; `peer_id`
+    EK), or {"accepted": [...]} with one or two sets, which is what measurements.bind(manifest, document)
+    returns for the document the manifest commits to. Every node that may `request` or `serve` gets an entry pinned to the manifest's EK Name; `peer_id`
     (the peer itself) is left out. A node that may be attested but has no reference values is a refusal,
     not an omission: the peer would otherwise refuse it at boot for a reason nobody configured."""
     require(isinstance(measurements, dict), "measurements must map node IDs to reference values")
@@ -47,7 +48,9 @@ def attest_policy(manifest, measurements, peer_id=None):
             continue
         reference = measurements.get(node_id)
         require(isinstance(reference, dict), "no reference measurements for %s, which the manifest lets attest" % node_id)
-        membership.exact(reference, ("tpm_firmware_version", "pcrs"), "measurements of %s" % node_id)
+        # one set (the firmware version and the PCRs), or the one-or-two accepted sets measurements.bind() gives (#75)
+        membership.exact(reference, ("accepted",) if "accepted" in reference else ("tpm_firmware_version", "pcrs"),
+                         "measurements of %s" % node_id)
         policy[node_id] = dict(reference, ek_name=node["ek_name"])
     require(policy, "the manifest leaves no node this peer could attest")
     document = {"schema": attest.POLICY_SCHEMA, "nodes": policy}
