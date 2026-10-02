@@ -316,6 +316,14 @@ func TestTheReauthorizationBaselineIsTheProcessStart(t *testing.T) {
 	if got < before || got > after {
 		t.Fatalf("with no process start, the baseline is %d, not now (%d..%d)", got, before, after)
 	}
+	// The start time is the tick AFTER the true start, so a process in its first 10 ms reads one just
+	// ahead of the clock: "now" is the baseline then, and the daemon starts.
+	before, _ = admission.Boottime()
+	got = baseline(func() (int64, error) { ahead, _ := admission.Boottime(); return ahead + 9, nil })
+	after, _ = admission.Boottime()
+	if got < before || got > after {
+		t.Fatalf("with a start time one tick ahead, the baseline is %d, not now (%d..%d)", got, before, after)
+	}
 	// a start time in the future is refused rather than waited for
 	provider, _ := nitrokey.New(presentDriver{}, noPIN{})
 	if err := requireReauthorization(provider, gate, func() (int64, error) { return after + 3_600_000, nil }); err == nil {
