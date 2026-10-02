@@ -1,0 +1,51 @@
+# The pre-root unlock client (cmd/regalia-unlock), started by a connection on regalia-unlock.socket.
+#
+# systemd does two things for it, and the program does neither itself:
+#   - it unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On
+#     another machine, or on a boot the TPM's policy refuses, that fails and the program never starts;
+#   - it passes the listening socket (socket activation).
+# The program runs no other program and writes no file. One run answers one connection: with the key,
+# or with nothing. After a run that gave nothing the socket still listens, so the next attempt of
+# systemd-cryptsetup starts a new run.
+
+[Unit]
+Description=Give the root volume's key: TPM plus one peer
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+DefaultDependencies=no
+Requires=regalia-unlock.socket
+# the boot mesh, when the initrd has it (#66); without that unit this line does nothing
+Wants=regalia-wg-boot.service
+After=regalia-wg-boot.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/regalia-unlock -config /etc/regalia/unlock.json
+LoadCredentialEncrypted=regalia-unlock-local:/etc/regalia/unlock-local.cred
+# The program is root with nothing root can do: no capability, no new privilege, no write anywhere, no
+# device but the TPM and the disks it reads the LUKS2 header of, no socket family but the three it uses.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=block-* r
+UMask=0077
