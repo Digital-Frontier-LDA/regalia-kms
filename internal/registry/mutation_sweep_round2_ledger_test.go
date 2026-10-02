@@ -122,12 +122,12 @@ var sweepSurvivors = []ledgerRow{
 	// unmarshal on its original path, and the round-1 sweep did not
 	// construct an input where that path's err value matters.
 	{
-		ID: "registry.go:271[0]", LineNo: 271,
+		ID: "registry.go:273[0]", LineNo: 273,
 		Site:    "\tif err := json.Unmarshal(raw, &policy); err != nil {",
 		Operand: "err != nil", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 71,
 		Detector: "",
-		MaskedBy: "registry.go:274[0]",
+		MaskedBy: "registry.go:276[0]",
 		Notes:    "joint bypass when rotation deadline is malformed; the round-2 control arm triggers the explicit error path on 71 failing tests",
 		Bucket:   "MASKED",
 	},
@@ -138,12 +138,12 @@ var sweepSurvivors = []ledgerRow{
 	// and 297 more importantly L304 (days < 1 check) catches integer
 	// negatives immediately.
 	{
-		ID: "registry.go:300[0]", LineNo: 300,
+		ID: "registry.go:302[0]", LineNo: 302,
 		Site:    "\tif err := json.Unmarshal(policy.EnvelopeMaxAgeDays, &days); err != nil {",
 		Operand: "err != nil", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 3,
 		Detector: "",
-		MaskedBy: "registry.go:305[0]",
+		MaskedBy: "registry.go:307[0]",
 		Notes:    "sole operand; the L304 days<1 check catches the wrong-integer case before the if fires; joint-experiment for the err-side bypass pending",
 		Bucket:   "MASKED",
 	},
@@ -153,24 +153,24 @@ var sweepSurvivors = []ledgerRow{
 	// regular file passes L374, and L374 fires first if the file's
 	// mode bits are wrong.
 	{
-		ID: "registry.go:367[0]", LineNo: 367,
+		ID: "registry.go:369[0]", LineNo: 369,
 		Site:    "\tif err != nil {",
 		Operand: "err != nil", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 71,
 		Detector: "",
-		MaskedBy: "registry.go:375[0]",
+		MaskedBy: "registry.go:377[0]",
 		Notes:    "sole operand in LoadFile's open/stat/mode chain; L374 mode check is the catch-the-bypass guard",
 		Bucket:   "MASKED",
 	},
 
 	// LoadFile: file.Stat err check. L374 (mode check) follows.
 	{
-		ID: "registry.go:372[0]", LineNo: 372,
+		ID: "registry.go:374[0]", LineNo: 374,
 		Site:    "\tif err != nil {",
 		Operand: "err != nil", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 3,
 		Detector: "",
-		MaskedBy: "registry.go:375[0]",
+		MaskedBy: "registry.go:377[0]",
 		Notes:    "sole operand; mode-bits check at L374 catches before the stat-err path matters for round-1 tests",
 		Bucket:   "MASKED",
 	},
@@ -179,12 +179,12 @@ var sweepSurvivors = []ledgerRow{
 	// validateObject check fires first and refuses a malformed binding
 	// before the selectBinding call.
 	{
-		ID: "registry.go:428[0]", LineNo: 428,
+		ID: "registry.go:430[0]", LineNo: 430,
 		Site:    "\t\tif err != nil {",
 		Operand: "err != nil", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 71,
 		Detector: "",
-		MaskedBy: "registry.go:421[0]",
+		MaskedBy: "registry.go:423[0]",
 		Notes:    "sole operand in Load's per-object validation chain; validateObject refusal pre-empts selectBinding errors",
 		Bucket:   "MASKED",
 	},
@@ -194,12 +194,12 @@ var sweepSurvivors = []ledgerRow{
 	// `EnvelopMaxAgeDays set with malformed days` test path trips
 	// envelopeMaxAge first.
 	{
-		ID: "registry.go:436[0]", LineNo: 436,
+		ID: "registry.go:438[0]", LineNo: 438,
 		Site:    "\t\tif err != nil {",
 		Operand: "err != nil", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 71,
 		Detector: "",
-		MaskedBy: "registry.go:439[0]",
+		MaskedBy: "registry.go:441[0]",
 		Notes:    "sole operand; envelopeMaxage (L438) precedes rotationDeadline error visibility in the round-1 test paths",
 		Bucket:   "MASKED",
 	},
@@ -209,12 +209,12 @@ var sweepSurvivors = []ledgerRow{
 	// !ok is bypassed (made true), the table access panics, which
 	// round-1's tests do not exercise.
 	{
-		ID: "registry.go:930[0]", LineNo: 930,
+		ID: "registry.go:951[0]", LineNo: 951,
 		Site:    "\tif !ok {",
 		Operand: "!ok", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 76,
 		Detector: "",
-		MaskedBy: "registry.go:933[0]",
+		MaskedBy: "registry.go:954[0]",
 		Notes:    "sole operand; the post-map-lookup access at L932 returns the operation's truth value without an intermediate !ok short-circuit",
 		Bucket:   "MASKED",
 	},
@@ -225,12 +225,12 @@ var sweepSurvivors = []ledgerRow{
 	// at L970) or many-but-not-many-on-right-site bindings (caught at
 	// L942).
 	{
-		ID: "registry.go:971[0]", LineNo: 971,
+		ID: "registry.go:992[0]", LineNo: 992,
 		Site:    "\tif !found {",
 		Operand: "!found", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 7,
 		Detector: "",
-		MaskedBy: "registry.go:943[0]",
+		MaskedBy: "registry.go:964[0]",
 		Notes:    "sole operand at the loop's exit; round-1 tests do not exercise the no-allowed-state end case",
 		Bucket:   "MASKED",
 	},
@@ -240,22 +240,22 @@ var sweepSurvivors = []ledgerRow{
 	// Registry.clock: registry == nil checks first; the sibling [1]
 	// catches the joint bypass via the `else now()`-with-nil path.
 	{
-		ID: "registry.go:978[0]", LineNo: 978,
+		ID: "registry.go:999[0]", LineNo: 999,
 		Site:    "\tif registry == nil || registry.now == nil {",
 		Operand: "registry == nil", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 1,
 		Detector: "",
-		MaskedBy: "registry.go:978[1]",
+		MaskedBy: "registry.go:999[1]",
 		Notes:    "first operand of the nil-receiver/now-func chain; sibling [1] masks via the same if",
 		Bucket:   "MASKED",
 	},
 	{
-		ID: "registry.go:978[1]", LineNo: 978,
+		ID: "registry.go:999[1]", LineNo: 999,
 		Site:    "\tif registry == nil || registry.now == nil {",
 		Operand: "registry.now == nil", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 1,
 		Detector: "",
-		MaskedBy: "registry.go:978[0]",
+		MaskedBy: "registry.go:999[0]",
 		Notes:    "second operand of the same chain; sibling [0] masks it; the if uses `time.Now()` as the fallback, so neither side fires when both are masked",
 		Bucket:   "MASKED",
 	},
@@ -265,22 +265,22 @@ var sweepSurvivors = []ledgerRow{
 	// still trip the if. round-2's polarity forces the if always true
 	// and triggers the explicit CodeDependencyUnavailable error path.
 	{
-		ID: "registry.go:1000[0]", LineNo: 1000,
+		ID: "registry.go:1021[0]", LineNo: 1021,
 		Site:    "\tif !entry.assigned || registry.health == nil || !safeHealthy(ctx, registry.health, entry.route.Binding) {",
 		Operand: "!entry.assigned", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 7,
 		Detector: "",
-		MaskedBy: "registry.go:1000[1]",
+		MaskedBy: "registry.go:1021[1]",
 		Notes:    "first of three operands in Route's dependency-unavailable chain; siblings [1] and [2] catch the joint bypass",
 		Bucket:   "MASKED",
 	},
 	{
-		ID: "registry.go:1000[1]", LineNo: 1000,
+		ID: "registry.go:1021[1]", LineNo: 1021,
 		Site:    "\tif !entry.assigned || registry.health == nil || !safeHealthy(ctx, registry.health, entry.route.Binding) {",
 		Operand: "registry.health == nil", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 7,
 		Detector: "",
-		MaskedBy: "registry.go:1000[0]",
+		MaskedBy: "registry.go:1021[0]",
 		Notes:    "second of three operands; sibling [0] catches; sibling [2] is the equivalent health-call operand on the same chain",
 		Bucket:   "MASKED",
 	},
@@ -289,12 +289,12 @@ var sweepSurvivors = []ledgerRow{
 	// route-validation guards (L985/L988/L991) that catch the same
 	// downstream effect on round-1's tests.
 	{
-		ID: "registry.go:1040[0]", LineNo: 1040,
+		ID: "registry.go:1061[0]", LineNo: 1061,
 		Site:    "\tif isCustodyRecord(entry.custody) {",
 		Operand: "isCustodyRecord(entry.custody)", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 9,
 		Detector: "",
-		MaskedBy: "registry.go:986[0]",
+		MaskedBy: "registry.go:1007[0]",
 		Notes:    "sole operand in Route's denial chain; L985 (entries-not-found) pre-empts the custody refusal for round-1's test inputs",
 		Bucket:   "MASKED",
 	},
@@ -302,12 +302,12 @@ var sweepSurvivors = []ledgerRow{
 	// RouteForKEKVersion: registry.health check paired with
 	// safeHealthy. Two operands; sibling [1] masks.
 	{
-		ID: "registry.go:1090[0]", LineNo: 1090,
+		ID: "registry.go:1111[0]", LineNo: 1111,
 		Site:    "\tif registry.health == nil || !safeHealthy(ctx, registry.health, selected) {",
 		Operand: "registry.health == nil", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 6,
 		Detector: "",
-		MaskedBy: "registry.go:1090[1]",
+		MaskedBy: "registry.go:1111[1]",
 		Notes:    "first of two operands in RouteForKEKVersion's dependency-unavailable chain",
 		Bucket:   "MASKED",
 	},
@@ -315,24 +315,24 @@ var sweepSurvivors = []ledgerRow{
 	// RouteForSeal: isCustodyRecord check. Masked by L1127 (operations
 	// set does not contain "seal-envelope").
 	{
-		ID: "registry.go:1131[0]", LineNo: 1131,
+		ID: "registry.go:1152[0]", LineNo: 1152,
 		Site:    "\tif isCustodyRecord(entry.custody) {",
 		Operand: "isCustodyRecord(entry.custody)", Join: "",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 7,
 		Detector: "",
-		MaskedBy: "registry.go:1128[0]",
+		MaskedBy: "registry.go:1149[0]",
 		Notes:    "sole operand in RouteForSeal's denial chain; L1127 (operations check) pre-empts the custody refusal for seal's test inputs",
 		Bucket:   "MASKED",
 	},
 
 	// RouteForSeal: registry.health check paired with safeHealthy.
 	{
-		ID: "registry.go:1143[0]", LineNo: 1143,
+		ID: "registry.go:1164[0]", LineNo: 1164,
 		Site:    "\tif registry.health == nil || !safeHealthy(ctx, registry.health, binding) {",
 		Operand: "registry.health == nil", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 6,
 		Detector: "",
-		MaskedBy: "registry.go:1143[1]",
+		MaskedBy: "registry.go:1164[1]",
 		Notes:    "first of two operands in RouteForSeal's dependency-unavailable chain",
 		Bucket:   "MASKED",
 	},
@@ -340,22 +340,22 @@ var sweepSurvivors = []ledgerRow{
 	// Registry.Ready: entries-empty || health-nil. Two operands;
 	// sibling [1] masks.
 	{
-		ID: "registry.go:1163[0]", LineNo: 1163,
+		ID: "registry.go:1184[0]", LineNo: 1184,
 		Site:    "\tif len(registry.entries) == 0 || registry.health == nil {",
 		Operand: "len(registry.entries) == 0", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 3,
 		Detector: "",
-		MaskedBy: "registry.go:1163[1]",
+		MaskedBy: "registry.go:1184[1]",
 		Notes:    "first of two operands in Ready's early-exit chain; sibling [1] catches the joint bypass",
 		Bucket:   "MASKED",
 	},
 	{
-		ID: "registry.go:1163[1]", LineNo: 1163,
+		ID: "registry.go:1184[1]", LineNo: 1184,
 		Site:    "\tif len(registry.entries) == 0 || registry.health == nil {",
 		Operand: "registry.health == nil", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 3,
 		Detector: "",
-		MaskedBy: "registry.go:1163[0]",
+		MaskedBy: "registry.go:1184[0]",
 		Notes:    "second operand; sibling [0] masks it",
 		Bucket:   "MASKED",
 	},
@@ -363,12 +363,12 @@ var sweepSurvivors = []ledgerRow{
 	// Ready's per-entry operability check. Two operands; sibling [1]
 	// masks via the safeHealthy refutation.
 	{
-		ID: "registry.go:1177[0]", LineNo: 1177,
+		ID: "registry.go:1198[0]", LineNo: 1198,
 		Site:    "\t\tif !entry.assigned || !safeHealthy(ctx, registry.health, entry.route.Binding) {",
 		Operand: "!entry.assigned", Join: "||",
 		MAlone: "SURVIVED", Control: "KILLED", ControlFailingCount: 3,
 		Detector: "",
-		MaskedBy: "registry.go:1177[1]",
+		MaskedBy: "registry.go:1198[1]",
 		Notes:    "first of two operands in per-entry operability check; siblings [1] catches the joint bypass",
 		Bucket:   "MASKED",
 	},

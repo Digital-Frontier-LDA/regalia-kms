@@ -82,10 +82,12 @@ func RefusalReason(err error) Reason {
 }
 
 type Binding struct {
-	Site               string `json:"site"`
-	Backend            string `json:"backend"`
-	DeviceID           string `json:"device_id"`
-	DeviceSerial       string `json:"device_serial,omitempty"`
+	Site         string `json:"site"`
+	Backend      string `json:"backend"`
+	DeviceID     string `json:"device_id"`
+	DeviceSerial string `json:"device_serial,omitempty"`
+	// TokenLabel tells apart two PKCS#11 tokens that report one serial. See validateBinding.
+	TokenLabel         string `json:"token_label,omitempty"`
 	DevAuthFingerprint string `json:"devaut_fingerprint,omitempty"`
 	ObjectID           string `json:"object_id"`
 	PublicFingerprint  string `json:"public_fingerprint,omitempty"`
@@ -716,6 +718,11 @@ func validateObject(object *custodyObject, site string, occupied map[string]stri
 	return err
 }
 
+// tokenLabelPattern is what CK_TOKEN_INFO.label can hold once its padding is trimmed: at most 32
+// characters. Printable ASCII only, and no space at either end, because the driver compares against
+// the trimmed label and a value that could never equal one is a binding that never resolves.
+var tokenLabelPattern = regexp.MustCompile(`^[!-~]([ -~]{0,30}[!-~])?$`)
+
 func validateBinding(binding Binding, algorithm string, operations []string) error {
 	if binding.Site == "" || binding.DeviceID == "" || binding.ObjectID == "" {
 		return errors.New("binding site, device_id and object_id are required")
@@ -740,6 +747,20 @@ func validateBinding(binding Binding, algorithm string, operations []string) err
 		}
 	} else if binding.PINPolicy != "" || binding.TouchPolicy != "" {
 		return errors.New("interaction policy is only valid for YubiKey backends")
+	}
+	// ONE CARD CAN BE TWO TOKENS. OpenSC presents a YubiKey's OpenPGP applet as "OpenPGP card (User
+	// PIN)" and "OpenPGP card (User PIN (sig))", both under the card's one serial (measured on
+	// 35718625, regalia#541). The serial alone then names two slots, and the driver refuses rather
+	// than pick one by position. token_label is the configured answer: the driver matches it exactly,
+	// together with the serial. Only the PKCS#11 backend reads it, so anywhere else it would be a
+	// field nothing enforces.
+	if binding.TokenLabel != "" {
+		if binding.Backend != "nitrokey-pkcs11" {
+			return errors.New("token_label is only valid for the PKCS#11 backend")
+		}
+		if !tokenLabelPattern.MatchString(binding.TokenLabel) {
+			return errors.New("token_label must be 1 to 32 printable ASCII characters with no space at either end")
+		}
 	}
 	releases := false
 	seals := false

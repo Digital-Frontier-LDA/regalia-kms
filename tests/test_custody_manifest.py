@@ -86,6 +86,27 @@ class CustodyManifestTests(unittest.TestCase):
         loaded = load_and_validate(EXAMPLE)
         self.assertGreaterEqual(len(loaded["objects"]), 4)
 
+    def test_token_label_is_accepted_only_where_the_driver_can_match_it(self):
+        """token_label tells apart two PKCS#11 tokens that report one serial (regalia#541).
+
+        The Go loader enforces the same rule; a manifest CI accepts and the daemon refuses is the
+        defect this validator exists to prevent.
+        """
+        def labelled(label, backend=None):
+            obj = direct_key()
+            binding = obj["bindings"][0]
+            binding["token_label"] = label
+            if backend is not None:
+                binding.update(backend=backend, pin_policy="once", touch_policy="never")
+            return manifest_with(obj)
+
+        for label in ("OpenPGP card (User PIN)", "OpenPGP card (User PIN (sig))", "x", "a" * 32):
+            validate_manifest(labelled(label))
+        for label in ("a" * 33, " leading", "trailing ", " ", "tab\tinside", "c\u00e4rd", ""):
+            self.assert_invalid(labelled(label), "token_label")
+        self.assert_invalid(labelled(7), "token_label")
+        self.assert_invalid(labelled("PIV_II", backend="yubikey-piv"), "token_label")
+
     def test_published_schema_matches_validator_enums(self):
         schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
         object_properties = schema["$defs"]["custodyObject"]["properties"]

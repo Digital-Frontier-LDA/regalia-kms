@@ -35,7 +35,7 @@ const ckmEdDSA = 0x00001057
 // production driver cannot be constructed without this hardware identity
 // boundary because token labels and PKCS#11 slot numbers are not identities.
 type DevAuthProbe interface {
-	Fingerprint(context.Context, string, string) (string, error)
+	Fingerprint(ctx context.Context, deviceID, serial, tokenLabel string) (string, error)
 }
 
 // SecureChannel establishes the commissioned SmartCard-HSM secure-messaging
@@ -47,7 +47,7 @@ type SecureChannel interface {
 
 // PINRetryProbe reads retry metadata without attempting authentication.
 type PINRetryProbe interface {
-	Remaining(context.Context, string, string) (int, error)
+	Remaining(ctx context.Context, deviceID, serial, tokenLabel string) (int, error)
 }
 
 type cryptoki interface {
@@ -121,26 +121,46 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 		return nil, errors.New("PKCS#11 device is not configured")
 	}
 	deviceID, expectedSerial := binding.DeviceID, binding.DeviceSerial
-	slots, err := driver.module.GetSlotList(true)
+	selected, err := resolveSlot(driver.module, expectedSerial, binding.TokenLabel)
 	if err != nil {
-		return nil, errors.New("PKCS#11 enumeration failed")
-	}
-	var selected uint
-	matches := 0
-	for _, slot := range slots {
-		info, infoErr := driver.module.GetTokenInfo(slot)
-		if infoErr == nil && strings.TrimSpace(info.SerialNumber) == expectedSerial {
-			selected, matches = slot, matches+1
-		}
-	}
-	if matches != 1 {
-		return nil, errors.New("commissioned PKCS#11 device is unavailable")
+		return nil, err
 	}
 	handle, err := driver.module.OpenSession(selected, pkcs11.CKF_SERIAL_SESSION)
 	if err != nil {
 		return nil, errors.New("PKCS#11 session unavailable")
 	}
-	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
+	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: binding.TokenLabel, devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
+}
+
+// resolveSlot finds the one slot holding the commissioned token, on every call: a slot id is never
+// kept, because the list is rebuilt whenever a reader arrives or leaves.
+//
+// A token is named by its serial, and by its label as well when the binding configures one. The
+// label exists for a card that is two tokens under one serial, as OpenSC presents a YubiKey's
+// OpenPGP applet (regalia#541). It is matched exactly and only when configured. Whatever the
+// binding names, anything other than exactly one matching slot is refused: no match is an absent
+// device, and several are not told apart by position.
+func resolveSlot(module cryptoki, serial, tokenLabel string) (uint, error) {
+	slots, err := module.GetSlotList(true)
+	if err != nil {
+		return 0, errors.New("PKCS#11 enumeration failed")
+	}
+	var selected uint
+	matches := 0
+	for _, slot := range slots {
+		info, infoErr := module.GetTokenInfo(slot)
+		if infoErr != nil || strings.TrimSpace(info.SerialNumber) != serial {
+			continue
+		}
+		if tokenLabel != "" && strings.TrimSpace(info.Label) != tokenLabel {
+			continue
+		}
+		selected, matches = slot, matches+1
+	}
+	if matches != 1 {
+		return 0, errors.New("commissioned PKCS#11 device is unavailable")
+	}
+	return selected, nil
 }
 
 func (driver *PKCS11Driver) Ready(ctx context.Context) bool {
@@ -166,19 +186,22 @@ type pkcs11Session struct {
 	slot     uint
 	deviceID string
 	serial   string
-	devAuth  DevAuthProbe
-	secure   SecureChannel
-	retries  PINRetryProbe
-	mu       sync.Mutex
-	loggedIn bool
-	closed   bool
+	// tokenLabel is the binding's token_label, or empty. The probes resolve the slot themselves,
+	// so they are handed the same name the session was opened under.
+	tokenLabel string
+	devAuth    DevAuthProbe
+	secure     SecureChannel
+	retries    PINRetryProbe
+	mu         sync.Mutex
+	loggedIn   bool
+	closed     bool
 }
 
 func (session *pkcs11Session) Identity(ctx context.Context) (string, string, error) {
 	if err := session.usable(ctx); err != nil {
 		return "", "", err
 	}
-	fingerprint, err := session.devAuth.Fingerprint(ctx, session.deviceID, session.serial)
+	fingerprint, err := session.devAuth.Fingerprint(ctx, session.deviceID, session.serial, session.tokenLabel)
 	// A TOKEN THAT EXPOSES NO DEVICE CERTIFICATE IS NOT AN UNIDENTIFIABLE ONE. A genuine
 	// SmartCard-HSM keeps C.DevAut in EF 2F02, out of PKCS#11's reach (regalia#448), so this
 	// reports the serial with no DevAut and the provider decides: a binding that pins a DevAut
@@ -207,7 +230,7 @@ func (session *pkcs11Session) PINRetries(ctx context.Context) (int, error) {
 	if err := session.usable(ctx); err != nil {
 		return 0, err
 	}
-	remaining, err := session.retries.Remaining(ctx, session.deviceID, session.serial)
+	remaining, err := session.retries.Remaining(ctx, session.deviceID, session.serial, session.tokenLabel)
 	if err != nil || remaining < 0 {
 		return 0, errors.New("PIN retry metadata unavailable")
 	}

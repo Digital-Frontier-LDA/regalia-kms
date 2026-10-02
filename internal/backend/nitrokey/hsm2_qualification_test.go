@@ -67,7 +67,7 @@ func TestNitrokeyHSM2Qualification(t *testing.T) {
 	}
 
 	// #448 — device certificate as a PKCS#11 object.
-	fingerprint, fpErr := probes.Fingerprint(ctx, "qual", serial)
+	fingerprint, fpErr := probes.Fingerprint(ctx, "qual", serial, "")
 	t.Logf("#448 device-certificate probe: fingerprint=%q err=%v", fingerprint, fpErr)
 	certPresent := fpErr == nil && fingerprint != ""
 	if control {
@@ -85,7 +85,7 @@ func TestNitrokeyHSM2Qualification(t *testing.T) {
 	}
 
 	// PIN retry health (read-only, from the token flags).
-	if remaining, rErr := probes.Remaining(ctx, "qual", serial); rErr != nil {
+	if remaining, rErr := probes.Remaining(ctx, "qual", serial, ""); rErr != nil {
 		t.Logf("PIN retry probe: err=%v", rErr)
 	} else {
 		t.Logf("PIN retries remaining: %d", remaining)

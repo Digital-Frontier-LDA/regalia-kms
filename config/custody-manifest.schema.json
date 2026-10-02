@@ -63,6 +63,10 @@
           "type": "string",
           "minLength": 1
         },
+        "token_label": {
+          "type": "string",
+          "pattern": "^[!-~]([ -~]{0,30}[!-~])?$"
+        },
         "devaut_fingerprint": {
           "type": "string",
           "pattern": "^sha256:[0-9a-f]{64}$"
