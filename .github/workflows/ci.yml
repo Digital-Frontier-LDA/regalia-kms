@@ -540,6 +540,24 @@ jobs:
       - name: Rolling measured-boot update against swtpm (approve, one node at a time, retire, refuse the old image)
         run: bash e2e/rolling-policy-swtpm.sh
 
+  # regalia-kms#143: a real sshd on the example configuration and a real ssh on the known_hosts that
+  # ssh_trust.py writes from a membership manifest. A certificate from the user CA logs in to the node
+  # it names; another node's name, a retired node's key, a bare key and a bad certificate are refused.
+  # No port (ProxyCommand runs `sshd -i`), no FIDO token. The script fails if a test is skipped.
+  ssh-trust-sshd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the OpenSSH server
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends openssh-server openssh-client
+      - name: SSH host identity from the manifest, and certificate-only logins, against sshd
+        run: bash e2e/ssh-trust-sshd.sh
+
   # regalia-kms#74: the real daemon serves key operations only while the node holds a runtime lease.
   # SoftHSM for the token; the lease is real (node and peer on software TPMs) and reaches the daemon
   # through the admission file. Not ready and 503 without a lease; a verified signature with one;
