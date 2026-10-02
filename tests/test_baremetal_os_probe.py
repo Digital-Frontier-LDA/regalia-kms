@@ -459,6 +459,20 @@ class OpenSCLeavesThePIVCards(unittest.TestCase):
             # entries that would take the HSM's reader too
             "an entry that matches every reader": (dict(conf='app default {\n  ignored_readers = " ";\n}\n'), "no ignored_readers entry"),
             "a single letter": (dict(conf='app default {\n  ignored_readers = "i";\n}\n'), "no ignored_readers entry"),
+            "a second app default block has it, the first does not": (dict(
+                conf='app default {\n}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "the app block is inside another block": (dict(
+                conf='reader_driver pcsc {\n  app default {\n    ignored_readers = "Yubico";\n  }\n}\n'), "no ignored_readers entry"),
+            "a backslash before the name": (dict(conf='app default {\n  ignored_readers = "\\Yubico";\n}\n'), "no ignored_readers entry"),
+            # what OpenSC might not parse proves nothing
+            "a missing semicolon swallows the next statement": (dict(
+                conf='app default {\n  ignored_readers = "ACS"\n  foo = "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "braces round the value": (dict(conf='app default {\n  ignored_readers = { "Yubico" };\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a block that is not closed": (dict(conf='app default {\n  ignored_readers = "Yubico";\n'), "cannot be read as an OpenSC configuration"),
+            "a } that closes nothing, after": (dict(conf='app default {\n  ignored_readers = "Yubico";\n}\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a } that closes nothing, before": (dict(conf='}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "two values with no comma": (dict(conf='app default {\n  ignored_readers = "ACS" "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a list ending in a comma": (dict(conf='app default {\n  ignored_readers = "Yubico",;\n}\n'), "cannot be read as an OpenSC configuration"),
             # what cannot be read
             "a string that never ends": (dict(conf='app default {\n  ignored_readers = "Yubico;\n}\n'), "cannot be read as an OpenSC configuration"),
             "the unit has an EnvironmentFile": (dict(environment_files="/etc/default/regalia-kms (ignore_errors=no)"), "has an EnvironmentFile"),
@@ -487,6 +501,9 @@ class OpenSCLeavesThePIVCards(unittest.TestCase):
             "an unquoted value": 'app default {\n  ignored_readers = Yubico;\n}\n',
             "a # inside an earlier string": 'app default {\n  ignored_readers = "A#1", "Yubico";\n}\n',
             "in the opensc-pkcs11 block, which is the one preferred": 'app default {\n}\napp opensc-pkcs11 {\n  ignored_readers = "Yubico";\n}\n',
+            "the first of two app default blocks has it": 'app default {\n  ignored_readers = "Yubico";\n}\napp default {\n}\n',
+            "the application name quoted": 'app "default" {\n  ignored_readers = "Yubico";\n}\n',
+            "no space before the brace, CRLF line ends": 'app default{\r\n  ignored_readers = "Yubico";\r\n}\r\n',
             "after a nested block in the same application block": 'app default {\n  reader_driver pcsc {\n    max_send_size = 255;\n  }\n  ignored_readers = "Yubico";\n}\n',
         }
         for name, conf in accepted.items():

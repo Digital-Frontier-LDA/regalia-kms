@@ -341,8 +341,8 @@ def opensc_tokens(text):
         elif c == '"':
             end, value = at + 1, []
             while end < size and text[end] != '"':
-                if text[end] == "\\" and end + 1 < size:
-                    end += 1
+                if text[end] == "\\" and end + 1 < size and text[end + 1] in '"\\':
+                    end += 1          # \" and \\ are the character itself; any other backslash is kept
                 value.append(text[end])
                 end += 1
             if end >= size:
@@ -362,39 +362,70 @@ def opensc_tokens(text):
 
 
 def ignored_readers(text):
-    """The ignored_readers list opensc-pkcs11.so applies, or [] when it applies none.
+    """The ignored_readers list opensc-pkcs11.so applies, or [] when it applies none. Raises ValueError
+    for a file that is not well formed.
 
-    READ AS OPENSC READS IT, not as a line of text. OpenSC takes the list from the application block it
-    selected: `app opensc-pkcs11 { }` if the file has one, else `app default { }`; from the first such
-    block, its first ignored_readers statement, as a direct item of the block. A line inside another
-    application's block, inside a nested block, or at the top level is not applied, and neither is one
-    in `app default` when an `app opensc-pkcs11` block exists: some OpenSC versions consult only the
-    first block they selected, so only that one is counted here."""
+    READ AS OPENSC READS IT, not as a line of text, and STRICTLY. OpenSC takes the list from the
+    application block it selected: `app opensc-pkcs11 { }` if the file has one, else `app default { }`;
+    from the first such block at the top level, its first ignored_readers statement, as a direct item
+    of the block. A line inside another application's block, inside a nested block, or at the top level
+    is not applied, and neither is one in `app default` when an `app opensc-pkcs11` block exists: some
+    OpenSC versions consult only the first block they selected, so only that one is counted here.
+
+    A file OpenSC might not parse proves nothing about what it applies, so one is refused rather than
+    guessed at: braces that do not balance, and an ignored_readers statement that is not `= value, value
+    ... ;` (a missing semicolon would otherwise swallow the next statement's words into the list)."""
     tokens = opensc_tokens(text or "")
-    blocks, at = {}, 0   # app name -> the statement lists of its first block
+    depth = 0
+    for kind, value in tokens:
+        if (kind, value) == ("p", "{"):
+            depth += 1
+        elif (kind, value) == ("p", "}"):
+            depth -= 1
+            if depth < 0:
+                raise ValueError("a } closes nothing")
+    if depth != 0:
+        raise ValueError("a block is not closed")
+
+    def statement(at):
+        """The values of `ignored_readers = v, v, ... ;` starting at tokens[at], and where it ends."""
+        if at + 1 >= len(tokens) or tokens[at + 1] != ("p", "="):
+            raise ValueError("ignored_readers is not followed by =")
+        values, at, want_value = [], at + 2, True
+        while at < len(tokens) and tokens[at] != ("p", ";"):
+            kind, value = tokens[at]
+            if want_value and kind in "ws":
+                values.append(value)
+            elif not want_value and (kind, value) == ("p", ","):
+                pass
+            else:
+                raise ValueError("the ignored_readers list is not values separated by commas and ended by ;")
+            want_value, at = not want_value, at + 1
+        if at >= len(tokens) or (want_value and values):
+            raise ValueError("the ignored_readers list is not ended by ;")
+        return values, at + 1
+
+    blocks, at, depth = {}, 0, 0   # app name -> the ignored_readers lists of its first top-level block
     while at < len(tokens):
-        # a top-level block: `app <name> {`
-        if (tokens[at] == ("w", "app") and at + 2 < len(tokens) and tokens[at + 1][0] in "ws"
-                and tokens[at + 2] == ("p", "{")):
-            name, depth, at = tokens[at + 1][1], 1, at + 3
+        if tokens[at] == ("p", "{"):
+            depth += 1
+        elif tokens[at] == ("p", "}"):
+            depth -= 1
+        elif (depth == 0 and tokens[at] == ("w", "app") and at + 2 < len(tokens) and tokens[at + 1][0] in "ws"
+              and tokens[at + 2] == ("p", "{")):
+            name, inner, at = tokens[at + 1][1], 1, at + 3
             lists = []
-            while at < len(tokens) and depth:
-                kind, value = tokens[at]
-                if (kind, value) == ("p", "{"):
-                    depth += 1
-                elif (kind, value) == ("p", "}"):
-                    depth -= 1
-                elif (depth == 1 and (kind, value) == ("w", "ignored_readers") and at + 1 < len(tokens)
-                      and tokens[at + 1] == ("p", "=") and (at == 0 or tokens[at - 1] in (("p", "{"), ("p", "}"), ("p", ";")))):
-                    entries, at = [], at + 2
-                    while at < len(tokens) and tokens[at] != ("p", ";") and tokens[at] != ("p", "}"):
-                        if tokens[at][0] in "ws":
-                            entries.append(tokens[at][1])
-                        at += 1
-                    lists.append(entries)
+            while inner:
+                if tokens[at] == ("p", "{"):
+                    inner += 1
+                elif tokens[at] == ("p", "}"):
+                    inner -= 1
+                elif inner == 1 and tokens[at] == ("w", "ignored_readers") and tokens[at - 1] in (("p", "{"), ("p", "}"), ("p", ";")):
+                    values, at = statement(at)
+                    lists.append(values)
                     continue
                 at += 1
-            blocks.setdefault(name, lists)
+            blocks.setdefault(name, lists)   # a second block of the same name is not the one selected
             continue
         at += 1
     for app in OPENSC_APPS:

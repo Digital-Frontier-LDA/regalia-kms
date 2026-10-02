@@ -1,9 +1,12 @@
 package yubikey
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,6 +99,30 @@ func TestALockoutMetWhileRunningIsNamedAndNotOnEveryRequest(t *testing.T) {
 	sign()
 	if driver.looks != 2 {
 		t.Fatalf("after the minute the readers were looked at %d times in all, want twice", driver.looks)
+	}
+}
+
+// Two cards are missing and a YubiKey's reader is held: either may be the one behind it. Both are
+// named in the one look the minute allows, whichever card's request took it.
+func TestALockoutNamesEveryCardThatMayBeBehindTheHeldReader(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(previous)
+	provider, err := New(&reachingDriver{missing: []string{"yubi-sitea", "yubi-siteb"}, held: true}, &fakePIN{value: []byte("123456")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !provider.nameLockout(context.Background(), "yubi-sitea") {
+		t.Fatal("the lockout was not named")
+	}
+	for _, device := range []string{"yubi-sitea", "yubi-siteb"} {
+		if !strings.Contains(logged.String(), device) {
+			t.Errorf("%s is missing behind a held reader and is not named: %s", device, logged.String())
+		}
+	}
+	if !strings.Contains(logged.String(), "deploy/opensc/ignore-yubikey.conf") || !strings.Contains(logged.String(), "level=ERROR") {
+		t.Errorf("the log does not name the setting as an error: %s", logged.String())
 	}
 }
 

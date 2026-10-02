@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -496,15 +498,17 @@ func (provider *Provider) nameLockout(ctx context.Context, deviceID string) bool
 	if err != nil || !held {
 		return false
 	}
-	for _, device := range missing {
-		if device == deviceID {
-			slog.Error("KMS YubiKey PIV card cannot be opened: another connection holds a YubiKey's reader. "+
-				"If this daemon also loads a PKCS#11 module, OpenSC must be told to ignore the YubiKey (OPENSC_CONF naming deploy/opensc/ignore-yubikey.conf); otherwise another process is using the card",
-				"device", deviceID)
-			return true
-		}
+	// A held reader cannot be asked which card is in it, so every card that is missing may be the
+	// one behind it. All of them are named, as the startup refusal does: with one look a minute for
+	// the whole provider, naming only the card this request was for would leave another card's
+	// lockout unsaid for as long as this one's requests keep taking the look.
+	if !slices.Contains(missing, deviceID) {
+		return false
 	}
-	return false
+	slog.Error("KMS YubiKey PIV card(s) cannot be opened and another connection holds a YubiKey's reader: one of them is behind it. "+
+		"If this daemon also loads a PKCS#11 module, OpenSC must be told to ignore the YubiKey (OPENSC_CONF naming deploy/opensc/ignore-yubikey.conf); otherwise another process is using the card",
+		"devices", strings.Join(missing, ", "))
+	return true
 }
 
 // reacher is a driver that can say, without opening a session, which commissioned cards cannot be
