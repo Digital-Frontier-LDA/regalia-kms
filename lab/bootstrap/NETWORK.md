@@ -63,7 +63,7 @@ behavior instead of counting it as successful theft protection.
 
 ## Checks Performed
 
-The network runner exercises 67 assertions, including actual handshakes, all six
+The network runner exercises 69 assertions, including actual handshakes, all six
 recovery directions, simultaneous two-node recovery, manual seeding of each
 possible survivor, request/source binding, bounded parsing, partitions, routing
 failure, lost grants, known policy/epoch mismatches, and genuine TPM policy refusal.
@@ -95,3 +95,24 @@ membership, freshness and access leases. It tests denial after old signed
 freshness expires, including partitioned stale peers. This original network
 runner intentionally retains the stale unsigned-policy drill; neither mode
 qualifies hardware epoch protection or instantaneous global revocation.
+
+## Established-flow underlay regression
+
+The firewall binds each overlay's source and destination subnet to its intended
+WireGuard interface **before** accepting established/related traffic, in both
+directions. The same boundary applies to `wg-bootstrap` and `wg-service`.
+
+A real regression test establishes an encrypted UDP echo flow, then sends the
+same five-tuple in plaintext through a second disposable bridge. A receiver-side
+counter must prove packet arrival, and the application record must prove refusal;
+a timeout alone is insufficient. The old rules admitted and echoed the plaintext
+packet. The updated rules deny it while normal recovery and service tests pass.
+The cluster runner repeats the test for both planes.
+
+The controller temporarily allows one UDP echo port and the sender's one attack
+tuple. It adds no service capabilities or raw-socket privileges, publishes no
+ports, and restores routes, rules, bounded workers and the temporary bridge.
+This test checks interface isolation for an established UDP tuple. It does not
+reproduce TCP sequence inference, qualify IPv6 deployment policy, or waive
+[CVE-2019-14899](https://www.openwall.com/lists/oss-security/2019/12/05/1).
+The uncommissioned appliance's loopback-only firewall is a separate policy.

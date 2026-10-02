@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from mesh import ROOT, NODES, admin, command
+from mesh import ROOT, NODES, admin, command, underlay_spoof_case
 from peer import Refusal, ak_digest, apply_manifest, canonical
 from tokens import Clock, FRESHNESS_DOMAIN, freshness, signed_token
 from leases import verify_service
@@ -160,6 +160,14 @@ class Cluster:
                     admin(node, "wg", "set", interface, "peer", identities[peer][field],
                           "allowed-ips", f"{prefix}.{index}/32", "endpoint", f"10.89.91.{index}:{port}",
                           "persistent-keepalive", "1")
+        self.report["underlay_isolation"] = {}
+        for plane in ("bootstrap", "service"):
+            isolation = underlay_spoof_case(plane)
+            self.report["underlay_isolation"][plane] = isolation
+            self.check(f"{plane}: encrypted control and underlay arrival are proved",
+                       isolation["encrypted_control"] and isolation["underlay_arrived"])
+            self.check(f"{plane}: established overlay tuple is refused on underlay",
+                       not isolation["underlay_delivered"] and not isolation["underlay_reply"])
         self.authority = Authority(identities)
         self.client_policy = {"epoch": 0, "manifest": None, "manifest_digest": "00" * 32,
                               "authorities": self.authority.pins, "targets": {}, "nodes": {}}

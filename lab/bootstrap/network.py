@@ -79,12 +79,18 @@ def configure(node, service=False):
     rules = b'''table inet lab {
       chain input { type filter hook input priority 0; policy drop;
         iifname "lo" accept
+        ip saddr 10.77.91.0/24 iifname != "wg-bootstrap" drop
+        ip daddr 10.77.91.0/24 iifname != "wg-bootstrap" drop
+        ct state invalid drop
         ct state established,related accept
         iifname "eth0" ip saddr 10.89.91.0/24 udp dport 51820 accept
         iifname "wg-bootstrap" ip saddr 10.77.91.0/24 tcp dport 8443 accept
       }
       chain output { type filter hook output priority 0; policy drop;
         oifname "lo" accept
+        ip saddr 10.77.91.0/24 oifname != "wg-bootstrap" drop
+        ip daddr 10.77.91.0/24 oifname != "wg-bootstrap" drop
+        ct state invalid drop
         ct state established,related accept
         oifname "eth0" ip daddr 10.89.91.0/24 udp dport 51820 accept
         oifname "wg-bootstrap" ip daddr 10.77.91.0/24 tcp dport 8443 accept
@@ -93,6 +99,11 @@ def configure(node, service=False):
     }'''
     if service:
         rules = rules.replace(b"udp dport 51820", b"udp dport {51820,51821}")
+        for direction in (b"iifname", b"oifname"):
+            original = direction + b' "lo" accept'
+            boundary = (b'ip saddr 10.78.91.0/24 ' + direction + b' != "wg-service" drop\n        '
+                        b'ip daddr 10.78.91.0/24 ' + direction + b' != "wg-service" drop')
+            rules = rules.replace(original, original + b"\n        " + boundary)
         for direction, subnet in [(b"iifname", b"saddr"), (b"oifname", b"daddr")]:
             original = direction + b' "wg-bootstrap" ip ' + subnet + b" 10.77.91.0/24 tcp dport 8443 accept"
             extra = direction + b' "wg-service" ip ' + subnet + b" 10.78.91.0/24 tcp dport {8444,8445,8446} accept"

@@ -1,6 +1,7 @@
 """Trusted host orchestration; prints only sanitized software-lab evidence."""
 
 import hashlib
+import ipaddress
 import json
 import os
 import subprocess
@@ -55,6 +56,120 @@ finally:
                               "" if content_length is None else str(content_length), route).stdout)
 
 
+def underlay_spoof_case(plane="bootstrap"):
+    """A conntracked overlay tuple must not be accepted from the physical bridge."""
+    prefix = {"bootstrap": "10.77.91", "service": "10.78.91"}[plane]
+    interface, subnet = "wg-" + plane, prefix + ".0/24"
+    source, target = prefix + ".1", prefix + ".2"
+    tag = "regalia-underlay-" + os.urandom(8).hex()
+    ready, seen = "/tmp/" + tag + ".ready", "/tmp/" + tag + ".seen"
+    port = 49152
+    server = '''import os,pathlib,socket,sys,time
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind((sys.argv[3],49152));s.settimeout(.2)
+pathlib.Path(sys.argv[1]).write_text(str(os.getpid()))
+deadline=time.monotonic()+30
+try:
+ while time.monotonic()<deadline:
+  try: data,peer=s.recvfrom(64)
+  except socket.timeout: continue
+  if data not in (b"encrypted-control",b"underlay-probe"): continue
+  with open(sys.argv[2],"ab") as record: record.write(data+b"\\n")
+  s.sendto(data,peer)
+finally: s.close()
+'''
+    client = '''import json,socket,sys
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.bind((sys.argv[3],int(sys.argv[1])));s.settimeout(1)
+port=s.getsockname()[1];data=sys.argv[2].encode()
+try:
+ s.sendto(data,(sys.argv[4],49152)); ok=s.recvfrom(64)[0]==data
+except OSError: ok=False
+finally: s.close()
+print(json.dumps({"reply":ok,"port":port}))
+'''
+    cleanup_process = '''import os,pathlib,signal,sys
+p=pathlib.Path(sys.argv[1])
+if p.exists():
+ pid=int(p.read_text()); assert pid>1
+ cmd=pathlib.Path(f"/proc/{pid}/cmdline")
+ if cmd.exists() and sys.argv[1].encode() in cmd.read_bytes(): os.kill(pid,signal.SIGTERM)
+for name in sys.argv[1:]: pathlib.Path(name).unlink(missing_ok=True)
+'''
+    routes = []
+    attack_network = PROJECT + "-spoof"
+    connected = []
+    network_created = False
+    try:
+        # Only the temporary echo fixture gains a UDP exception. Main bootstrap
+        # endpoints and service capabilities remain unchanged.
+        for node in "AB":
+            for chain, direction, address_side in [("input", "iifname", "saddr"), ("output", "oifname", "daddr")]:
+                admin(node, "nft", "add", "rule", "inet", "lab", chain, direction, interface,
+                      "ip", address_side, subnet, "udp", "dport", str(port), "accept", "comment", tag)
+        command("exec", "--detach", "--user", "0:0", "b", "python3", "-c", server, ready, seen, target)
+        for _ in range(30):
+            if command("exec", "-T", "--user", "0:0", "b", "test", "-f", ready,
+                       required=False).returncode == 0:
+                break
+            time.sleep(.1)
+        else:
+            raise RuntimeError("underlay echo fixture did not start")
+        control_result = json.loads(admin("A", "python3", "-c", client, "0", "encrypted-control", source, target).stdout)
+        if not control_result["reply"]:
+            raise RuntimeError("encrypted control failed; a dropped probe would prove nothing")
+        # Docker's internal bridge can itself discard packets carrying overlay
+        # addresses. A second unpublished bridge gives this fixture a controlled
+        # underlay path. Every node keeps its existing default-deny firewall.
+        subprocess.run(["docker", "network", "create", attack_network], check=True, capture_output=True, timeout=30)
+        network_created = True
+        data = json.loads(subprocess.run(["docker", "network", "inspect", attack_network],
+                          check=True, capture_output=True, timeout=30).stdout)[0]
+        attack_subnet = ipaddress.IPv4Network(data["IPAM"]["Config"][0]["Subnet"])
+        attack_addresses = {node: str(attack_subnet.network_address + index) for index, node in enumerate("AB", 2)}
+        for node in "AB":
+            container = command("ps", "--quiet", node.lower()).stdout.decode().strip()
+            subprocess.run(["docker", "network", "connect", "--ip", attack_addresses[node],
+                            attack_network, container], check=True, capture_output=True, timeout=30)
+            connected.append(container)
+        for node, overlay, peer in [("A", target, "B"), ("B", source, "A")]:
+            admin(node, "ip", "route", "add", overlay + "/32", "via", attack_addresses[peer], "dev", "eth1")
+            routes.append((node, overlay))
+        # The attacker fixture may transmit its one exact tuple in plaintext.
+        # This bypasses only the sender's policy, so receiver INPUT is measured.
+        admin("A", "nft", "insert", "rule", "inet", "lab", "output", "oifname", "eth1",
+              "ip", "saddr", source, "ip", "daddr", target, "udp", "sport",
+              str(control_result["port"]), "udp", "dport", str(port), "accept", "comment", tag)
+        admin("B", "nft", "insert", "rule", "inet", "lab", "input", "iifname", "eth1",
+              "ip", "daddr", target, "udp", "dport", str(port), "counter", "comment", tag)
+        probe_result = json.loads(admin("A", "python3", "-c", client,
+                                        str(control_result["port"]), "underlay-probe", source, target).stdout)
+        table = json.loads(admin("B", "nft", "--json", "list", "table", "inet", "lab").stdout)
+        arrivals = sum(expr["counter"]["packets"] for item in table["nftables"]
+                       if "rule" in item and item["rule"].get("comment") == tag
+                       for expr in item["rule"]["expr"] if "counter" in expr)
+        delivered = b"underlay-probe" in admin("B", "cat", seen).stdout
+        return {"plane": plane, "encrypted_control": True, "underlay_arrived": arrivals > 0,
+                "underlay_delivered": delivered, "underlay_reply": probe_result["reply"]}
+    finally:
+        try:
+            for node, overlay in reversed(routes):
+                admin(node, "ip", "route", "del", overlay + "/32")
+            for node in "AB":
+                table = json.loads(admin(node, "nft", "--json", "list", "table", "inet", "lab").stdout)
+                for item in table["nftables"]:
+                    rule = item.get("rule", {})
+                    if rule.get("comment") == tag:
+                        admin(node, "nft", "delete", "rule", "inet", "lab", rule["chain"], "handle", str(rule["handle"]))
+            # The fixture is root-owned, bounded, and identified by its unique argv.
+            admin("B", "python3", "-c", cleanup_process, ready, seen)
+        finally:
+            for container in reversed(connected):
+                subprocess.run(["docker", "network", "disconnect", attack_network, container],
+                               check=False, capture_output=True, timeout=30)
+            if network_created:
+                subprocess.run(["docker", "network", "rm", attack_network], check=True, capture_output=True, timeout=30)
+
+
+
 def main():
     def interrupted(signum, frame):
         raise KeyboardInterrupt()
@@ -103,6 +218,12 @@ def main():
             signing[node] = control(node, "enroll", targets=targets)["peer_public_key"]
         for node in NODES:
             control(node, "pins", pins={peer: signing[peer] for peer in NODES if peer != node})
+        isolation = underlay_spoof_case()
+        report["underlay_isolation"] = isolation
+        check("spoof fixture proves encrypted connectivity and underlay arrival",
+              isolation["encrypted_control"] and isolation["underlay_arrived"])
+        check("established overlay tuple cannot arrive through the underlay",
+              not isolation["underlay_delivered"] and not isolation["underlay_reply"])
         recovery = {node: control(node, "disk")["recovery_key"] for node in NODES}
         check("all three disposable LUKS images are commissioned over WireGuard", len(recovery) == 3)
         for node in NODES:
