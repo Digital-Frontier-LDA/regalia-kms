@@ -94,7 +94,13 @@ jobs:
         env:
           # promtool is provisioned above, so a missing one is a failure here, not a skip.
           ALERT_RULES_JOB: "1"
-        run: python3 -m unittest discover -s tests -p 'test_*.py'
+          # tests/test_shell_locale.py runs the shell validators under en_US.UTF-8, generated below,
+          # so a missing locale is a failure here, not a skip.
+          REGALIA_EXPECT_UTF8_LOCALE: "1"
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends locales >/dev/null
+          sudo locale-gen en_US.UTF-8 >/dev/null
+          python3 -m unittest discover -s tests -p 'test_*.py'
 
       - name: test (both modules, race + vet)
         env:

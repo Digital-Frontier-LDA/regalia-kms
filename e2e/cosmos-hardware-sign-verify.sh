@@ -3,6 +3,9 @@
 # against the public key returned by the same token. This is intentionally opt-in: it touches a
 # real token and therefore requires an explicit module, token selector, PIN, and object id.
 set -euo pipefail
+# [0-9] and [0-9A-Fa-f] below mean ASCII: in a UTF-8 locale bash ranges follow the locale's collation
+# and take full-width digits (deploy/seal-hsm-pin.sh has the measurement).
+export LC_ALL=C
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE="${REGALIA_COSMOS_PKCS11_MODULE:-}"
