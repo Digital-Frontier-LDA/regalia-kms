@@ -172,7 +172,7 @@ func (session *pivSession) Sign(ctx context.Context, objectID, algorithm string,
 	if !valid || !algorithmMatches(info.Algorithm, algorithm) {
 		return nil, ErrUnavailable
 	}
-	value, err := signer.Sign(rand.Reader, digest, hash)
+	value, err := contractSign(signer, algorithm, digest, hash)
 	if err != nil || len(value) == 0 {
 		return nil, ErrUnavailable
 	}
@@ -308,26 +308,4 @@ func algorithmMatches(value piv.Algorithm, algorithm string) bool {
 		(value == piv.AlgorithmEC384 && algorithm == "p384") ||
 		(value == piv.AlgorithmRSA2048 && algorithm == "rsa2048") ||
 		(value == piv.AlgorithmEd25519 && algorithm == "ed25519")
-}
-
-// maxEd25519MessageBytes is the longest message an Ed25519 key signs through this API.
-const maxEd25519MessageBytes = 1024
-
-func signingHash(algorithm string, size int) (crypto.Hash, bool) {
-	switch algorithm {
-	case "p256", "rsa2048":
-		return crypto.SHA256, size == crypto.SHA256.Size()
-	case "p384":
-		return crypto.SHA384, size == crypto.SHA384.Size()
-	case "ed25519":
-		// Ed25519 hashes what it is given itself, so there is no hash to name and no digest size
-		// to hold it to: the card signs the bytes as the message (pure Ed25519; firmware 5.7 and
-		// later). regalia-sign sends a 32-byte digest (regalia#530); OpenBao Transit sends the
-		// message itself. The bound is the one the contract already states for Ed25519
-		// (OPENBAO-COMPATIBILITY.md), and the card was measured well past it (3000 bytes signed,
-		// 4096 refused). The purpose policy's max_payload_bytes is what narrows it per key.
-		return crypto.Hash(0), size >= 1 && size <= maxEd25519MessageBytes
-	default:
-		return 0, false
-	}
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -86,7 +87,13 @@ func TestYubiKeyPINCustodyDrill(t *testing.T) {
 		}
 		key, err := x509.ParsePKIXPublicKey(public)
 		ecKey, ok := key.(*ecdsa.PublicKey)
-		if err != nil || !ok || !ecdsa.VerifyASN1(ecKey, digest[:], signature) {
+		// r||s at the width of the curve order: the one encoding every backend returns
+		// (regalia-kms#162). This used to parse the answer as ASN.1 DER.
+		width := 0
+		if ok {
+			width = (ecKey.Curve.Params().BitSize + 7) / 8
+		}
+		if err != nil || !ok || len(signature) != 2*width || !ecdsa.Verify(ecKey, digest[:], new(big.Int).SetBytes(signature[:width]), new(big.Int).SetBytes(signature[width:])) {
 			t.Fatal("the signature does not verify under the slot's public key")
 		}
 		t.Logf("served: %s slot %s signed through the systemd credential %q; signature verifies", serial, object, credential)

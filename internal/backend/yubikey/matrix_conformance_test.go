@@ -26,9 +26,10 @@ var pivAlgorithms = map[string]piv.Algorithm{
 
 // digestSizes is the digest length each advertised signing algorithm must accept.
 var digestSizes = map[string]int{
-	"p256":    crypto.SHA256.Size(),
-	"p384":    crypto.SHA384.Size(),
-	"rsa2048": crypto.SHA256.Size(),
+	"p256": crypto.SHA256.Size(),
+	"p384": crypto.SHA384.Size(),
+	// RSA is sent the PKCS #1 DigestInfo, not a bare digest (sign_contract.go).
+	"rsa2048": len(digestInfoPrefixes[crypto.SHA256]) + crypto.SHA256.Size(),
 	"ed25519": crypto.SHA256.Size(),
 }
 
