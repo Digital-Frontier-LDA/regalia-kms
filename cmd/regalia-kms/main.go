@@ -365,6 +365,11 @@ func run() error {
 		// that could drift from the one an operator runs before deploying.
 		tokenProbe = manager
 		tokenObserver = observer
+		// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (regalia-kms#72 PoC 12.4). Only where runtime
+		// admission is required: without a lease service there is no lease to wait for.
+		if err := requireReauthorization(observer, admissionGate); err != nil {
+			return err
+		}
 
 		var auditErr error
 		// COLLECTOR RECONCILIATION before the recorder opens: the off-host copy's committed
@@ -807,6 +812,20 @@ func admitRunner(settings config.Config, base operations.Runner, onTransition fu
 		return nil, nil, fmt.Errorf("runtime admission: %w", err)
 	}
 	return admission.NewRunner(gate, base), gate, nil
+}
+
+// requireReauthorization makes the token provider wait, after a token's absence and after a start
+// of this daemon, for a runtime lease asked for since. A nil gate (admission not required) or a nil
+// provider (no PKCS#11 token: a YubiKey-only host) changes nothing.
+func requireReauthorization(provider *nitrokey.Provider, gate *admission.Gate) error {
+	if provider == nil || gate == nil {
+		return nil
+	}
+	if err := provider.RequireReauthorization(gate, admission.Boottime); err != nil {
+		return fmt.Errorf("token reauthorization: %w", err)
+	}
+	slog.Info("KMS token reauthorization required: a token that was absent serves again only under a runtime lease asked for after its return")
+	return nil
 }
 
 // reportAdmission logs a change in this node's admission and writes its audit event. The

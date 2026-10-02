@@ -91,6 +91,28 @@ type Provider struct {
 	// this cache; a read that fails updates nothing, because an aging timestamp is
 	// the signal that the number is stale.
 	pinReadings map[string]pinRetryReading
+
+	// REAUTHORIZATION AFTER A TOKEN'S ABSENCE (regalia-kms#72, PoC 12.4). Nil unless
+	// RequireReauthorization was called. A token that was gone and is back serves again only once
+	// the node holds a runtime lease it asked for AFTER the token returned, so that a peer has
+	// vouched for the node since. Until then the binding is unavailable and unhealthy; the OS and
+	// the rest of the daemon stay up.
+	reauthorizer Reauthorizer
+	boottime     func() (int64, error)
+	// absences is keyed by device id. An entry with returned == false is a token last seen
+	// missing; with returned == true it is back and waiting for the lease.
+	absences map[string]tokenAbsence
+}
+
+// Reauthorizer says whether the node holds a runtime lease it asked for after a moment, given in
+// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter).
+type Reauthorizer interface {
+	RequestedAfter(ctx context.Context, boottimeMs int64) bool
+}
+
+type tokenAbsence struct {
+	returned     bool
+	returnedAtMs int64
 }
 
 type pinRetryReading struct {
@@ -114,6 +136,99 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 	provider.mu.Unlock()
 }
 
+// RequireReauthorization makes every token serve only under a runtime lease asked for after the
+// token was last seen to arrive. Call it before the provider serves.
+//
+// EVERY TOKEN STARTS AS JUST ARRIVED. The provider cannot know what happened to a token before this
+// process started (a token pulled, the daemon restarted, the token put back would otherwise resume
+// on the old lease), so the first time each token is seen it is treated as having returned at this
+// call. The cost is that after a daemon restart key operations wait for the lease service's next
+// renewal; the node's readiness says so meanwhile.
+//
+// WHAT IT CANNOT SEE: an absence nobody looked during. A token is known to be gone only when an
+// operation or a health check opens it and fails. Every routing decision and every readiness probe
+// does open it, so the window is the gap between two of those.
+func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime func() (int64, error)) error {
+	if gate == nil || boottime == nil {
+		return errors.New("reauthorization needs the admission gate and the boot clock")
+	}
+	started, err := boottime()
+	if err != nil {
+		return errors.New("reauthorization cannot read the boot clock")
+	}
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	provider.reauthorizer, provider.boottime = gate, boottime
+	provider.absences = map[string]tokenAbsence{"": {returned: true, returnedAtMs: started}}
+	return nil
+}
+
+// tokenGone records that a token could not be opened. Whatever lease the node holds now was asked
+// for before the token comes back.
+func (provider *Provider) tokenGone(deviceID string) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	if provider.reauthorizer != nil {
+		provider.absences[deviceID] = tokenAbsence{}
+	}
+}
+
+// reauthorized reports whether a token that has just been opened, and has proved to be the right
+// one, may serve. The first time it is seen back, that moment is recorded; it serves once the node
+// holds a lease asked for after it.
+func (provider *Provider) reauthorized(ctx context.Context, deviceID string) bool {
+	provider.mu.Lock()
+	gate := provider.reauthorizer
+	if gate == nil {
+		provider.mu.Unlock()
+		return true
+	}
+	absence, known := provider.absences[deviceID]
+	if !known {
+		// never seen in this process: it arrived, at the earliest, when reauthorization was required
+		absence = provider.absences[""]
+	}
+	if !absence.returned {
+		now, err := provider.boottime()
+		if err != nil {
+			provider.mu.Unlock()
+			return false
+		}
+		absence = tokenAbsence{returned: true, returnedAtMs: now}
+	}
+	provider.absences[deviceID] = absence
+	provider.mu.Unlock()
+	if !gate.RequestedAfter(ctx, absence.returnedAtMs) {
+		return false
+	}
+	provider.mu.Lock()
+	// cleared only if nothing changed meanwhile: a token that went away again during the check stays marked
+	if current, still := provider.absences[deviceID]; still && current == absence {
+		provider.absences[deviceID] = tokenAbsence{returned: true, returnedAtMs: -1}
+	}
+	provider.mu.Unlock()
+	return true
+}
+
+// AwaitingReauthorization lists the devices that are present but not yet serving, each with the
+// CLOCK_BOOTTIME (ms) since which a lease must have been asked for, and the devices last seen
+// missing (-1). For the log and the metrics surface.
+func (provider *Provider) AwaitingReauthorization() map[string]int64 {
+	provider.mu.RLock()
+	defer provider.mu.RUnlock()
+	waiting := map[string]int64{}
+	for device, absence := range provider.absences {
+		switch {
+		case device == "":
+		case !absence.returned:
+			waiting[device] = -1
+		case absence.returnedAtMs >= 0:
+			waiting[device] = absence.returnedAtMs
+		}
+	}
+	return waiting
+}
+
 func (provider *Provider) Execute(ctx context.Context, route registry.Route, operation, format, contentType string, data, aad []byte) (output []byte, outputType string, err error) {
 	binding := route.Binding
 	if !servedBackend(binding.Backend) || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
@@ -131,6 +246,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
+		provider.tokenGone(binding.DeviceID)
 		return nil, "", ErrUnavailable
 	}
 	defer func() {
@@ -159,6 +275,12 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
 		provider.quarantine(binding.DeviceID, reason)
+		return nil, "", ErrUnavailable
+	}
+	// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (#72 PoC 12.4). Checked after the identity and
+	// the pinned key, so that a different card in the slot is still quarantined as a swap and only
+	// the RIGHT token, back, is what waits; and before anything is done with it, the PIN included.
+	if !provider.reauthorized(ctx, binding.DeviceID) {
 		return nil, "", ErrUnavailable
 	}
 	if operation == "public-key" {
@@ -327,6 +449,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	session, err := provider.driver.Open(ctx, binding)
 	if err != nil || session == nil {
+		provider.tokenGone(binding.DeviceID)
 		return false
 	}
 	// A session that will not close means this device cannot serve, so Healthy must not
@@ -359,6 +482,11 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
 		provider.quarantine(binding.DeviceID, reason)
+		return false
+	}
+	// Present, the right token, and not yet vouched for again: not healthy, so routing and
+	// readiness say so, and this is also where its return is first noticed.
+	if !provider.reauthorized(ctx, binding.DeviceID) {
 		return false
 	}
 	retries, err := session.PINRetries(ctx)
