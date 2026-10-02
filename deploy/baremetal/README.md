@@ -360,8 +360,27 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   the volume is mapped with the key from the socket; with no peer, systemd-cryptsetup gets no key and
   gives up within a second, maps nothing, and the socket goes on listening for the next attempt.
   **One boot carries one attested session**: after a peer has answered once in a boot, a second run in
-  that boot gets no second answer. NOT shown yet: the prompt for the recovery key at a console after
-  that (it needs a console: the boot test), and the units inside an initrd.
+  that boot gets no second answer.
+- **The initrd** is built with dracut and the module `deploy/baremetal/initrd/dracut/90regalia-unlock`
+  (`dracut --add regalia-unlock`): the client, the two units above, `regalia-wg-boot.service` with its
+  script (the initrd ruleset first, then the declared address, then WireGuard with the WG-BOOT key
+  systemd unsealed), `ip`, `wg`, `nft`, and the network drivers. The files that differ per host and
+  per manifest are under `/etc/regalia` (the boot configuration, the two sealed credentials, the
+  WireGuard configuration, the ruleset, `boot.env`), with the root volume's crypttab entry:
+  `root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach`.
+- **Shown on a real boot** (`e2e/unlock-boot-qemu.sh`: a Debian 13 guest in QEMU with a software TPM,
+  its whole disk one LUKS2 volume, the peers reached over WireGuard):
+  - enrolment: with nothing enrolled the console asks "Please enter recovery key for disk root", and
+    the key opens the volume; the running guest seals the two boot credentials to its own TPM;
+  - unattended: systemd unseals both credentials in the initrd, the boot mesh comes up, a peer
+    verifies the guest's quote and gives its half, and the root volume is open about four seconds
+    after the kernel starts, with nobody typing anything; after switch-root the boot interface, its
+    ruleset and its address are gone;
+  - no peer: the client gives nothing after its five rounds (about two minutes), systemd-cryptsetup
+    reports that the key file failed, and the console asks for the passphrase or recovery key, which
+    opens the volume.
+  NOT shown: measured boot (the guest boots a plain kernel and initrd, so PCR 11 is zero and a changed
+  initrd is not told apart: that needs a unified kernel image), and any physical machine.
 - **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
   keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
   disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
@@ -392,6 +411,8 @@ a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network na
 - A WireGuard configuration is applied with its private key added in memory (`bootnet.with_key`),
   never without it: `wg syncconf` with a file that has no key unsets the interface's key.
 
-Not there yet, so **nothing here is to be run on a KMS host**: the systemd units and the initrd
-(dracut) that bring up the mesh and start the client, sealing the WG-BOOT key, the operator commands,
-and every run on a physical TPM, a DL360 (#65) or the real datacenter networks.
+Not there yet, so **nothing here is to be run on a KMS host**: measured boot with a unified kernel
+image (a changed or retired initrd refused on a real boot), the commands an operator types to enrol a
+host and to write `/etc/regalia` after each manifest, the long-running peer process, and every run on
+a physical TPM, a DL360 (#65) or the real datacenter networks. Sections 3 to 5 above still describe
+the single-site baseline (initramfs-tools, TPM-only crypttab); they change when this is commissioned.

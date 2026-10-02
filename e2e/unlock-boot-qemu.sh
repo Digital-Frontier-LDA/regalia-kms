@@ -109,7 +109,8 @@ if [ "$rc" != 0 ]; then
   for log in "$W"/console-*.log; do [ -e "$log" ] && { echo "----- $(basename "$log") (last 80 lines)"; tail -80 "$log"; }; done
   echo "unlock-boot-qemu: FAILED"; exit 1
 fi
-if ! grep -q '^test_a_host_boots_through_a_peer.*ok$' <<< "$out" || grep -qi 'skipped' <<< "$out"; then
+# (the test prints each boot's console digest between its name and its "ok", so the two are not on one line)
+if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: passed"
+echo "unlock-boot-qemu: 3 boots passed (enrolment with the recovery key, unattended through a peer, no peer and the recovery key)"
