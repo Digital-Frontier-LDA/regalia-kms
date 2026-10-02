@@ -61,7 +61,7 @@ run(){ local name="$1" out="$2"; shift 2
   # shellcheck disable=SC2024  # the report is written by this user, on purpose: only the unit is root
   sudo systemd-run --quiet --wait --pipe --collect --unit="$name-$$" -p StateDirectory=regalia-sandbox-probe \
     -E "MARKER_ROOT=/root/$tag" -E "MARKER_HOME=/home/$tag" -E "MARKER_TMP=/tmp/$tag" "$@" \
-    /usr/bin/python3 - < "$PROBE" > "$out" 2> "$out.err"; }
+    /usr/bin/python3 -I - < "$PROBE" > "$out" 2> "$out.err"; }
 run regalia-sandbox-control "$W/control.json";             rc_control=$?
 run regalia-sandbox-hardened "$W/hardened.json" "${hardening[@]}"; rc_hardened=$?
 
