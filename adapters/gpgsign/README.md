@@ -93,9 +93,10 @@ regalia-sign --export-key > regalia-release.asc    # users: /etc/apt/keyrings/, 
 
 A cleartext signature covers the text with line endings canonicalised and trailing blanks on each
 line removed, and the final line ending is a separator, not content. That is the framework's rule
-(RFC 9580 §7), the same for `gpg --clearsign`. A `Release` file has neither trailing blanks nor a
-missing final newline, so it comes back byte for byte. Anything that must be reproduced exactly
-belongs under `--detach`.
+(RFC 9580 §7), the same for `gpg --clearsign`. A `Release` file with LF line endings, no trailing
+blanks and a final newline comes back byte for byte. One with CRLF line endings does not: the
+signature still verifies, but verifiers return the text with their own line endings. Anything that
+must be reproduced exactly belongs under `--detach`.
 
 The signature armor carries its CRC-24 line. go-crypto leaves it out by default, and GnuPG 2.4
 (`gpg` and `gpgv`, so every apt before 3.0) then exits 2 on a signature whose base64 needs no
