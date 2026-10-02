@@ -9,8 +9,8 @@ probes (core dumps, hibernation, swap, an unprivileged service) are deploy/barem
 Token clients are checked by token_clients_root_only (below): on bare metal the host itself seals and
 re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 
-    sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
-    sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+    sudo python3 -Es deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
+    sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
         --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX      # the commissioning pass criterion
 
 PLATFORM AND TPM, measured:

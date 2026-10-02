@@ -11,6 +11,11 @@ Commissioning has two halves:
   signed by the commissioning evidence key, which is trusted only by its recorded SHA-256). It exits 1
   unless every measured control is true AND the evidence is valid and agrees (section 5).
 
+> **Every Python command in this document is written `python3 -Es …`, and is meant to be typed that
+> way.** `-E` ignores the `PYTHON*` variables of the shell it is typed in and `-s` ignores the user's
+> own site-packages, so nothing left in root's environment or under `~/.local` runs inside a tool that
+> signs commissioning evidence or renders the firewall. Run them from the checkout's top directory.
+
 ## 1. Intake of a used server (before trusting it)
 
 1. Update the **System ROM** and **iLO 4** firmware from HPE's signed packages (the Service Pack for
@@ -140,7 +145,7 @@ Commissioning has two halves:
   (`deploy/baremetal/admission.py`) reports that this node holds a runtime lease: without one,
   `/v1/health/ready` is 503 and every key operation is a 503 `DEPENDENCY_UNAVAILABLE`, audited as
   `not-admitted`. `/run/regalia` must be root's, mode 0755, and the two files in it root's, mode 0644.
-  `python3 -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
+  `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
   it asked for after the token was back (after the daemon's own start, for a restart): until then that
@@ -165,7 +170,7 @@ install -d -m 0755 /etc/nftables.d
 # Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
 # a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
 tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
-if python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
+if python3 -Es deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
   chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
 else
   rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
@@ -189,7 +194,7 @@ Measured: `firewall_default_deny` (the table is loaded, with input, output and f
 drop). Checked by behaviour from each zone after commissioning:
 
 ```sh
-python3 deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
+python3 -Es deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
 ```
 
 (`monitoring`, `admin`, `unauthorized` likewise). `e2e/baremetal-firewall-netns.sh` runs the whole
@@ -228,7 +233,7 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
-4. **Attestation key (three-site, #65):** `python3 deploy/baremetal/attest.py node-init --out DIR`
+4. **Attestation key (three-site, #65):** `python3 -Es deploy/baremetal/attest.py node-init --out DIR`
    creates the EK and a restricted AK and exports their public areas; a peer enrolls the AK with
    `challenge` / `node-activate` / `enroll` and then verifies quotes with `nonce` / `node-quote` /
    `verify`. Proven on a software TPM (`e2e/tpm-attest-swtpm.sh`); the PCRs to expect and the EK
@@ -321,7 +326,7 @@ Sign the evidence with the commissioning evidence key (`openssl dgst -sha256 -si
 E.json.sig E.json`), then:
 
 ```sh
-sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
   --evidence-key commissioning-p256.pem --evidence-key-sha256 <recorded fingerprint>
 ```
 
