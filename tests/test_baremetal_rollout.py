@@ -407,21 +407,39 @@ class Transition(Case):
             with self.subTest(label):
                 self.refused("an emergency replaces an image, it does not change what is measured",
                              measurements.transition, v1, document("e", **{n: [disguise] for n in "abc"}), emergency=True)
-                # on a NEW node, which has no dropped set to be compared with: found by the PCRs it shares with the dropped image
+                # on a NEW node, which has no dropped set of its own: a set over other PCRs than the dropped image
+                # was measured on cannot be shown to be another image, and does not come in with an emergency
                 new_node = document("e", **dict({n: [u3] for n in "abc"}, d=[disguise]))
-                if label != "one more PCR selected":
-                    self.refused("drops uki-1, but d would still accept the same measurements under another label",
-                                 measurements.transition, v1, new_node, emergency=True)
-        # the dropped image's own values with one more PCR selected, on a new node: still the dropped image
+                self.refused("d comes in with the set 'fresh' over PCRs", measurements.transition, v1, new_node, emergency=True)
         grown = dict(uki("fresh", "a1", "a2"), pcrs={"4": "44" * 32, "7": "00" * 32})
-        self.refused("drops uki-1, but d would still accept the same measurements under another label", measurements.transition, v1,
-                     document("e", **dict({n: [u3] for n in "abc"}, d=[grown])), emergency=True)
+        self.refused("d comes in with the set 'fresh' over PCRs 4, 7, 11, which cannot be compared with the dropped image (measured on PCRs 7, 11): "
+                     "enrol it in a step of its own", measurements.transition, v1, document("e", **dict({n: [u3] for n in "abc"}, d=[grown])), emergency=True)
         # the same dropped image under another TPM firmware version is the same image
         self.refused("would still accept the same measurements under another label", measurements.transition, v1,
                      document("e", **dict({n: [u3] for n in "abc"}, d=[uki("fresh", "a1", "a2", fw="1" * 16)])), emergency=True)
         # a new node on the replacing image, on its own hardware (another PCR 7), is not a disguise
         own = dict(uki("uki-3", "c1", "c2"), pcrs={"7": "dd" * 32})
         self.assertEqual(measurements.transition(v1, document("e", **dict({n: [u3] for n in "abc"}, d=[own])), emergency=True), "replace-without-overlap")
+        # A MIXED cluster (the move from GRUB to a UKI): b is still on GRUB, untouched, and shares only the Secure
+        # Boot PCR with the dropped image. Its set was approved before and is not a suspect: the emergency goes through.
+        grub = one("grub-1", {"4": "b4" * 32, "7": "00" * 32})
+        mixed = document("m1", a=[u1], b=[grub], c=[uki("uki-1", "c1", "c2")])
+        dropped = document("m2", a=[uki("uki-2", "a3", "a4")], b=[grub], c=[uki("uki-2", "c3", "c4")])
+        self.assertEqual(measurements.transition(mixed, dropped, emergency=True), "replace-without-overlap")
+        # ... b's set CHANGED in that document is judged like any other: the same label with other values, or a new image
+        self.refused("b: the set 'grub-1' has other measurements than before", measurements.transition, mixed,
+                     document("m2", a=dropped["nodes"]["a"]["accepted"], b=[one("grub-1", {"4": "b5" * 32, "7": "00" * 32})], c=dropped["nodes"]["c"]["accepted"]),
+                     emergency=True)
+        self.refused("puts every replaced node on ONE image, not on grub-2, uki-2", measurements.transition, mixed,
+                     document("m2", a=dropped["nodes"]["a"]["accepted"], b=[one("grub-2", {"4": "b5" * 32, "7": "00" * 32})], c=dropped["nodes"]["c"]["accepted"]),
+                     emergency=True)
+        # ... and a NEW node with a GRUB-shaped set does not come in with that emergency
+        self.refused("d comes in with the set 'grub-1' over PCRs 4, 7, which cannot be compared with the dropped image (measured on PCRs 7, 11)",
+                     measurements.transition, mixed, document("m2", **dict({n: e["accepted"] for n, e in dropped["nodes"].items()}, d=[grub])),
+                     emergency=True)
+        # a node that had the dropped image beside another keeps the other, unchanged and uncompared
+        beside = document("m1", a=[u1], b=[u2, u1], c=[u1])
+        self.assertEqual(measurements.transition(beside, document("m2", **{n: [u2] for n in "abc"}), emergency=True), "replace-without-overlap")
         # the schema refusals of attest.py reach a document
         self.refused("nodes.a.accepted[0].phases: the two phases hold the same values", measurements.version,
                      document("x", a=[uki("uki-1", "a1", "a1")]))

@@ -69,9 +69,11 @@ must be able to revoke an image at once.
 
 WHAT IT CANNOT SEE. A label is a name, and the PCR values of one image differ between machines. The
 checks compare labels across nodes and measurements within a node (a set keeps its label; a label keeps
-its measurements), and in an emergency refuse the dropped measurements wherever they reappear: a set
-that agrees with a dropped image's state, in any of its phases, on every PCR both give, and on a
-replaced node a set that selects other PCRs than the one it replaces. They
+its measurements), and in an emergency refuse the dropped measurements wherever the document brings
+them in: a set that is new in the document and holds a dropped image's PCR state, in any of its
+phases; a replacing set that selects other PCRs than the one it replaces; and a new node's set that
+selects other PCRs than the dropped image was measured on. A set carried over unchanged is not
+compared: it was approved before, and no node may keep the dropped label. They
 cannot recognise the compromised image on OTHER hardware under a new label, nor an unapproved image
 enrolled under an approved label. The control for both is the operator comparing the document with
 each node's PCR survey (pcr_survey.py) before signing.
@@ -208,12 +210,8 @@ def _states(entry):
     return [attest.values(entry, phase) for phase in (attest.PHASES if "phases" in entry else (None,))]
 
 
-def _may_be(state, dropped):
-    """Whether a quote of the dropped state could be what `state` accepts: they agree on every PCR both
-    give. A set that keeps a dropped image's initrd values and changes the others, selects fewer PCRs, or
-    adds one whose value on the dropped image nobody stated, is not shown to be another image. The TPM
-    firmware version is left out: it does not tell images apart."""
-    return all(state[i] == dropped[i] for i in set(state) & set(dropped))
+def _pcrs(state):
+    return ", ".join(sorted(state, key=int))
 
 
 def transition(old, new, emergency=False, dropped=()):
@@ -229,7 +227,7 @@ def transition(old, new, emergency=False, dropped=()):
             "retired or replaced, name it in `dropped`" % ", ".join(sorted(gone - dropped)))
     require(dropped <= gone, "`dropped` names nodes that are still in the new document or never were in the old one: %s"
             % ", ".join(sorted(dropped - gone)))
-    kinds, replaced, compromised, compromised_states, replacing, lost = {}, [], set(), [], set(), {}
+    kinds, replaced, compromised, compromised_states, replacing, lost = {}, [], set(), {}, set(), {}
     for node_id in sorted(set(before) & set(after)):
         b, a = before[node_id], after[node_id]
         was, now = {e["label"]: _key(e) for e in b}, {e["label"]: _key(e) for e in a}
@@ -259,7 +257,7 @@ def transition(old, new, emergency=False, dropped=()):
             replaced.append(node_id)
             compromised |= set(was) - set(now)       # the labels the emergency drops
             # and their measurements, on this node's hardware: every state the dropped image is accepted in
-            compromised_states += [s for e in b if _key(e) in removed for s in _states(e)]
+            compromised_states[node_id] = [s for e in b if _key(e) in removed for s in _states(e)]
             replacing.add(a[0]["label"])
         elif added:
             # target() reads the LAST set as the image to end up on, so the newcomer goes last.
@@ -288,8 +286,27 @@ def transition(old, new, emergency=False, dropped=()):
         require(not kept, "an emergency replacement drops %s, but %s would still accept it"
                 % (", ".join(sorted(compromised)), ", ".join(kept)))
         # the same measurements under another name, on a node that was not compared (a new one) or anywhere else
-        disguised = sorted(n for n, sets in after.items()
-                           if any(_may_be(state, dropped) for e in sets for state in _states(e) for dropped in compromised_states))
+        # A disguise can only come in with a set this document INTRODUCES: the replacing set of a replaced node, or
+        # any set of a new node. A set carried over unchanged was approved before, under its own label, and the
+        # label rule above covers it (a GRUB host beside the dropped UKI image shares its Secure Boot PCR and
+        # nothing that tells images apart: it is not a suspect). An introduced set is compared with the states of
+        # the dropped image, in any of its phases and whatever the TPM firmware version: on a replaced node with
+        # that node's own (same hardware, same PCRs: checked above), on a new node with every node's. One that
+        # selects other PCRs than the dropped image was measured on cannot be shown to be another image.
+        disguised = []
+        for node_id, sets in sorted(after.items()):
+            carried = {_key(e) for e in before.get(node_id, [])}
+            against = compromised_states.get(node_id) if node_id in before else [s for states in compromised_states.values() for s in states]
+            for entry in sets:
+                if _key(entry) in carried:
+                    continue
+                for state in _states(entry):
+                    for was in against or []:
+                        require(set(state) == set(was), "an emergency replacement drops %s; %s comes in with the set %r over PCRs %s, which cannot "
+                                "be compared with the dropped image (measured on PCRs %s): enrol it in a step of its own"
+                                % (", ".join(sorted(compromised)), node_id, entry["label"], _pcrs(state), _pcrs(was)))
+                        if state == was and node_id not in disguised:
+                            disguised.append(node_id)
         require(not disguised, "an emergency replacement drops %s, but %s would still accept the same measurements under "
                 "another label" % (", ".join(sorted(compromised)), ", ".join(disguised)))
         return "replace-without-overlap"
