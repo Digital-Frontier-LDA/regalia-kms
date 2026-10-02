@@ -1,6 +1,7 @@
 *
 !Dockerfile
 !lab.py
+!tpm_soak.py
 !peer.py
 !peer_cases.py
 !membership_cases.py

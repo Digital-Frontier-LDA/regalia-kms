@@ -81,6 +81,22 @@ class Cluster:
             raise RuntimeError("invalid cluster control response")
         return response["result"]
 
+    def renew(self, node, peers):
+        """Positive control: retry fresh transactions while the lab authority is live.
+
+        Expiry/membership/PIN denials remain strict inside the node; this never
+        reuses a rejected request or extends a lease. Negative cases use rpc.
+        """
+        deadline = time.monotonic() + 10
+        while True:
+            self.fresh()
+            try:
+                return self.rpc(node, "renew", peers=peers)
+            except Refusal as error:
+                if error.code != "DENIED" or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
     def denied(self, label, function):
         try:
             function()

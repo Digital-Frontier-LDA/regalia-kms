@@ -10,11 +10,11 @@ def device_cases(c):
     for node in "ABC":
         c.fresh()
         peer = next(p for p in "ABC" if p != node)
-        cached = c.rpc(node, "renew", peers=[peer])["lease"]
+        cached = c.renew(node, peers=[peer])["lease"]
         c.check(f"{node} actual PKCS11 logout refuses private signing",
                 c.rpc(node, "device_auth_probe")["refused"])
         c.check(f"{node} actual module rejects a wrong operational PIN", c.rpc(node, "device_bad_pin")["refused"])
-        c.rpc(node, "renew", peers=[peer])
+        c.renew(node, peers=[peer])
         c.rpc(node, "device_remove")
         status = c.rpc(node, "status")
         c.check(f"{node} removal leaves OS online but token unavailable", status["active"] and not status["service_ready"]
@@ -26,7 +26,7 @@ def device_cases(c):
                 and not c.rpc(node, "status")["device_session"])
         c.denied(f"{node} reinsertion cannot reuse an earlier lease", lambda: c.rpc(node, "adopt_lease", lease=cached))
         c.denied(f"{node} reinsertion still requires fresh peer authorization", lambda: c.sign(node))
-        c.rpc(node, "renew", peers=[peer])
+        c.renew(node, peers=[peer])
         c.check(f"{node} fresh peer authorization restores the same token key", c.verify(node, *c.sign(node)))
     c.fresh()
     request = c.rpc("A", "prepare_lease_request", peer="B")
