@@ -1,0 +1,26 @@
+{
+  "schema": "regalia.scanner-tools/v1",
+  "issuer": "https://token.actions.githubusercontent.com",
+  "tools": {
+    "syft": {
+      "version": "1.54.0",
+      "identity": "https://github.com/anchore/syft/.github/workflows/release.yaml@refs/heads/main",
+      "proof": "bundle",
+      "archives": {
+        "darwin_arm64": "7e0bdad94c569fc6d5785c9a657bbae3d4c4e140ccb5eace3d0b5b6bc2b6dbcf",
+        "linux_amd64": "54a87372498168b2d033e876fd41fa4e8035b872699e525a57046e1f2f09c860",
+        "linux_arm64": "ee6d4566373a05b344bc6b5f1706f14419bf9338ba39ff686e247deefe9b8818"
+      }
+    },
+    "grype": {
+      "version": "0.119.0",
+      "identity": "https://github.com/anchore/grype/.github/workflows/release.yaml@refs/heads/main",
+      "proof": "certificate",
+      "archives": {
+        "darwin_arm64": "500c9b2b6c089d21481815f57a553fabbd441ec7d1e79d95e3aaf40c3bfc7e36",
+        "linux_amd64": "3fa2dc4b924621ab65404cf08d0b8438d896d80ab949c9d5a4ca283c36004c9b",
+        "linux_arm64": "29f0ec7c549ddb0e2b6a0ca714851f7399438afc399b80c12808e065edc9a8f8"
+      }
+    }
+  }
+}

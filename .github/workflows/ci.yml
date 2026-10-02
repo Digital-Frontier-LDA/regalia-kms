@@ -27,6 +27,32 @@ jobs:
         run: |
           "$RUNNER_TEMP/image-verification/bin/python" -m unittest discover -s tests -p 'test_image_*.py' -v
           "$RUNNER_TEMP/image-verification/bin/python" deploy/images/inventory.py
+      - name: Authenticate the pinned scanner publishers
+        run: |
+          mkdir -p "$RUNNER_TEMP/regalia-tools" deploy/images/.artifacts
+          sh deploy/images/bootstrap-cosign.sh "$RUNNER_TEMP/regalia-tools/cosign"
+          export PATH="$RUNNER_TEMP/regalia-tools:$PATH"
+          python3 -m deploy.images.tools deploy/images/.artifacts/scanners
+
+  binary-repeatability:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Compare exact executable bytes from independent source paths and compiler caches
+        run: |
+          python3 -m deploy.images.rebuild --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/rebuild"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-repeatability-evidence
+          path: ${{ runner.temp }}/rebuild/rebuild-report.json
+          if-no-files-found: error
+          retention-days: 14
 
   bootstrap-harness-audit:
     runs-on: ubuntu-latest

@@ -101,3 +101,81 @@ trusted. Image verification does not qualify DL360 firmware or hardware devices.
 
 Use this gate for new appliance inputs. Preserve the distinction between development
 fixtures and production approval until every image input has authenticated provenance.
+
+## Authenticated tools, filesystem scanning and release consumption
+
+The prototype pipeline in `lab/appliance/` starts with our GPG-verified Debian
+installer. It does not inherit Debian Docker Official Image publisher trust.
+The scanner policy pins Syft 1.54.0 and Grype 0.119.0, their archive SHA-256
+values, exact Anchore release-workflow identities and the GitHub OIDC issuer.
+The local Cosign installation is a trusted verifier prerequisite. CI bootstraps
+Cosign 3.0.6 from a separately reviewed binary hash in `bootstrap-cosign.sh`.
+That initial pin, repository policy and build machine are trust anchors.
+
+```sh
+python3 -m deploy.images.tools deploy/images/.artifacts/scanners
+python3 -m deploy.images.scan FINAL_ROOTFS.tar.gz \
+  --tools deploy/images/.artifacts/scanners --output SCAN_OUTPUT
+```
+
+The scan catalogs regular files from the **final** root filesystem, generating
+Syft JSON, SPDX JSON and CycloneDX JSON. A private projection skips archive links
+and special files; no image executable or archive link is executed. This limits
+link-only metadata coverage. Traversal, duplicate regular files and oversized
+archives fail. Grype validates database freshness (maximum 120 hours); database
+metadata/downloads remain dependent on Anchore's HTTPS distribution. Scanner
+configuration and environment are isolated from local ignore policies. High and
+Critical findings block release even when a scanner erroneously returns success.
+Tool errors, empty SBOMs, wrong distro and invalid/stale databases also block.
+`wont-fix` findings are retained. There is no automatic waiver or exception path.
+
+A release consists of `release.json`, its signatures/attestations, and a flat
+`payload/` with the exact artifacts named in the manifest. Preparation requires
+passing boot and scan evidence bound to the disk, filesystem and executable.
+The verifier checks signatures before parsing release claims or reading artifact
+contents for consumption; it never executes the artifact to discover its version.
+Expected repository, workflow, issuer, source ref and commit are caller policy.
+
+```sh
+python3 -m deploy.images.release verify RELEASE/payload \
+  --manifest RELEASE/release.json --bundle RELEASE/release.sigstore.json \
+  --commit FULL_APPROVED_COMMIT --ref refs/heads/main \
+  --identity 'https://github.com/Digital-Frontier-LDA/regalia-kms/.github/workflows/appliance.yml@refs/heads/main' \
+  --issuer https://token.actions.githubusercontent.com
+python3 -m deploy.images.release verify-attestation RELEASE/release.json \
+  --bundle RELEASE/provenance.jsonl --commit FULL_APPROVED_COMMIT --ref refs/heads/main
+```
+
+Offline approval can use an independently provisioned GPG release signer. On
+its offline signing workstation, create a SHA-512 checksum of `release.json`
+and detach-sign that checksum file. Production private keys are never imported
+into GitHub Actions. Consumers obtain the public key and full fingerprint through
+an independent trusted channel, then run:
+
+```sh
+python3 -m deploy.images.release verify-offline RELEASE/payload \
+  --manifest RELEASE/release.json --checksums SHA512SUMS --signature SHA512SUMS.sign \
+  --key OFFLINE_RELEASE_PUBLIC_KEY --fingerprint FULL_APPROVED_FINGERPRINT \
+  --commit FULL_APPROVED_COMMIT --ref refs/heads/main
+```
+
+CI identity and offline approval are separate authorities. A keyless CI signature
+does not establish physical recovery authority or production approval. The manual
+`Debian appliance prototype` workflow builds only from `main`; signing defaults
+to off. **Before enabling signing**, configure the `appliance-signing` GitHub
+environment with required reviewers and a `main` deployment restriction. The
+workflow uploads signed prototype artifacts; it does not publish a production
+registry image or GitHub Release. Configure protected branches separately.
+
+## Repeatability
+
+```sh
+python3 -m deploy.images.rebuild --commit FULL_COMMIT --output REBUILD_OUTPUT
+python3 -m deploy.images.release compare FIRST_ARTIFACT_DIRECTORY SECOND_ARTIFACT_DIRECTORY
+```
+
+The executable check uses two source directories and independent compiler caches
+on the same host/toolchain, then requires every artifact name and byte to match.
+It establishes repeatability within that environment. It does not claim independent
+builder verification or disk-image reproducibility: package snapshots, filesystem
+UUIDs, firmware variable stores and boot/install timestamps still need a design.
