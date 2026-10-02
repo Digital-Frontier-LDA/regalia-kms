@@ -139,26 +139,30 @@ func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 		}
 	}
 	alternating := len(failures)
-	var mu sync.Mutex
+	// Simultaneous: each worker reports on a channel, so nothing is shared between them.
+	const workers, perWorker = 4, 3
+	results := make(chan error, workers*perWorker)
 	var wg sync.WaitGroup
-	for worker := 0; worker < 4; worker++ {
+	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
 		go func(worker int) {
 			defer wg.Done()
-			for index := 0; index < 3; index++ {
+			for index := 0; index < perWorker; index++ {
 				route := ed25519Route
 				if (worker+index)%2 == 0 {
 					route = p256Route
 				}
-				if err := sign(route, 100*worker+index); err != nil {
-					mu.Lock()
-					failures = append(failures, err.Error())
-					mu.Unlock()
-				}
+				results <- sign(route, 100*worker+index)
 			}
 		}(worker)
 	}
 	wg.Wait()
+	close(results)
+	for err := range results {
+		if err != nil {
+			failures = append(failures, err.Error())
+		}
+	}
 	t.Logf("alternating: 12 signatures, %d failed; concurrent: 12 signatures, %d failed", alternating, len(failures)-alternating)
 	if len(failures) > 0 {
 		t.Fatalf("%d of 24 signatures failed: %v", len(failures), failures)
