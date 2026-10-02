@@ -123,3 +123,14 @@ short paths because macOS limits Unix socket path lengths.
 ## Rebuild status
 
 The final recipe includes fixes discovered by live installation and scanning: masked serial getty, explicit disposable Go cache paths, and removal of obsolete installer kernels. The recorded prototype was repaired and then boot/scan validated; see `VALIDATION.md`. A fresh uninterrupted run of this complete recipe remains a main-branch workflow check. No production approval is implied by a successful boot.
+
+### Package update and minimization policy
+
+Before compiling, the recipe refreshes authenticated APT metadata and upgrades the
+complete installed package set. This covers base packages copied from older
+installer media, including fixes subsequently published in `trixie-security`.
+Signature, hash and expiry checks stay enabled. Installed versions are recorded;
+there is no claim of immutable repository snapshots. The recipe removes the
+build compiler and interactive editors (`vim-tiny`, `vim-common`, `nano`) and
+acceptance refuses images retaining them. These changes address an observed PCRE2
+update gap and unnecessary parser packages; a new scan still decides release status.

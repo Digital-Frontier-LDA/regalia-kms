@@ -3,6 +3,12 @@ set -eu
 umask 077
 exec >>/var/log/regalia-image-build.log 2>&1
 echo REGALIA_BUILD_BEGIN >/dev/ttyS0
+# Installer media can contain older packages than the authenticated security
+# repository. Upgrade the complete installed set before compiling or cleanup.
+# APT retains its Release signature/package hash and expiry verification.
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get --no-install-recommends dist-upgrade -y
 mkdir -p /tmp/regalia-source
 tar -xf /tmp/regalia-source.tar -C /tmp/regalia-source
 cd /tmp/regalia-source
@@ -71,6 +77,13 @@ EOF
 # No credentials or private configuration are generated in this reusable disk.
 # Remove build-time tools, source, toolchain caches and installer SSH host keys.
 apt-get purge -y golang-go gcc libc6-dev
+# The reusable appliance has no interactive administration account. Editors
+# belong on recovery media; remove their parser attack surface from this disk.
+for package in vim-tiny vim-common nano; do
+  if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -q '^installed$'; then
+    apt-get purge -y "$package"
+  fi
+done
 apt-get autoremove --purge -y
 # A fresh baseline carries one current kernel. CURRENT/NEXT overlap belongs to
 # the controlled update procedure, rather than an unreviewed installer fallback.
