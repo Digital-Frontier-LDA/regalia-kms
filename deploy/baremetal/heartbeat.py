@@ -19,7 +19,11 @@ no heartbeats.
 
 A heartbeat is accepted (Freshness.accept) and later relied on (Freshness.check) only if:
   * it is for the current manifest: the same epoch AND the same digest;
-  * it lives at most 24 hours (expires_at - issued_at), whatever the signer wrote;
+  * it lives no longer (expires_at - issued_at) than THE CURRENT MANIFEST ALLOWS, whatever the signer
+    wrote (max_lifetime). A v2 manifest states the bound itself, heartbeat_max_lifetime_s, from one hour
+    to seven days; only the root key can set it, so the revocation key that signs heartbeats cannot
+    lengthen its own. A v1 manifest has no such field and keeps the fixed 24 hours. Seven days is also a
+    constant here that no manifest raises;
   * TIME IS AUTHENTICATED. The clock is injected and reports (seconds, authenticated). Without
     authenticated time nothing is accepted and nothing is authorized: a peer that cannot tell the time
     cannot tell an expired heartbeat from a live one. Fail closed; a total outage is A3's manual recovery;
@@ -39,6 +43,12 @@ other order would leave the counter above the disk and the peer refusing until t
 
 authorize(manifest, peer, requester, freshness) is the whole decision: the peer is ACTIVE, the requester
 may be unlocked, and the peer's heartbeat is live.
+
+WHAT THE BOUND TRADES. It is how long a peer cut off from the revocation authority goes on authorizing a
+node that was revoked meanwhile, and equally how long the authority may be down before every peer stops.
+Once it has run out, each reboot needs the recovery key until a heartbeat arrives. A longer bound buys
+tolerance of a signer outage with a longer window for a stolen node at a partitioned peer.
+heartbeat_watch.py says how much is left, and warns while it runs out.
 
 NOT HERE: the authenticated time source itself. NTS-authenticated chrony on the hosts, and how its
 "synchronised and authenticated" state is read, belong to the hardware half of #69; this module takes a
@@ -63,7 +73,8 @@ Refused, require = membership.Refused, membership.require
 SCHEMA = "regalia.heartbeat/v1"
 DOMAIN = b"regalia-heartbeat/v1\0"
 HEARTBEAT_KEYS = ("schema", "epoch", "sequence", "issued_at", "expires_at", "manifest_digest")
-MAX_LIFETIME = 24 * 3600   # the freshness bound: a revocation reaches every peer within this, or the peer stops
+MAX_LIFETIME = 24 * 3600   # the freshness bound under a v1 manifest, which states none of its own
+HARD_MAX_LIFETIME = membership.HEARTBEAT_HARD_MAX_S   # seven days: no manifest allows a longer heartbeat
 FUTURE_SKEW = 300
 STEP_BACK = 5              # an authenticated clock may be corrected backwards by this much, no more
 # The TPM clock is allowed to run within 15% of real time (TPM 2.0 Part 1, "Clock"), so only 85% of
@@ -82,8 +93,17 @@ def parse_time(text, label):
         raise Refused("%s is not a real date" % label)
 
 
+def max_lifetime(manifest):
+    """The longest a heartbeat for `manifest` may live, in seconds: a revocation reaches every peer within
+    this, or the peer stops. A v2 manifest says (root-signed, validated by membership as 1 hour to 7 days);
+    a v1 manifest says nothing and gets 24 hours."""
+    if manifest["schema"] == membership.SCHEMA:
+        return MAX_LIFETIME
+    return min(manifest["heartbeat_max_lifetime_s"], HARD_MAX_LIFETIME)
+
+
 def validate(heartbeat):
-    """Schema only. Returns (issued, expires) in seconds."""
+    """Schema only, with the bound no manifest can raise. Returns (issued, expires) in seconds."""
     membership.exact(heartbeat, HEARTBEAT_KEYS, "heartbeat")
     require(heartbeat["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
     for k in ("epoch", "sequence"):
@@ -92,7 +112,8 @@ def validate(heartbeat):
     membership.hex_field(heartbeat["manifest_digest"], 64, "manifest_digest")
     issued, expires = parse_time(heartbeat["issued_at"], "issued_at"), parse_time(heartbeat["expires_at"], "expires_at")
     require(issued < expires, "expires_at must be after issued_at")
-    require(expires - issued <= MAX_LIFETIME, "a heartbeat lives at most 24 hours (this one: %d s)" % (expires - issued))
+    require(expires - issued <= HARD_MAX_LIFETIME, "a heartbeat lives at most %d s under any manifest (this one: %d s)"
+            % (HARD_MAX_LIFETIME, expires - issued))
     return issued, expires
 
 
@@ -105,7 +126,7 @@ def verify(envelope, manifest):
     membership.hex_field(sig["key"], 64, "signature.key")
     membership.hex_field(sig["sig"], 128, "signature.sig")
     heartbeat = envelope["heartbeat"]
-    validate(heartbeat)
+    issued, expires = validate(heartbeat)
     membership.validate(manifest)
     require(sig["key"] in manifest["revocation_keys"], "the signing key is not a revocation key named by the current manifest")
     try:
@@ -116,6 +137,8 @@ def verify(envelope, manifest):
     require(heartbeat["epoch"] == manifest["epoch"], "the heartbeat is for epoch %d, the current manifest is epoch %d"
             % (heartbeat["epoch"], manifest["epoch"]))
     require(heartbeat["manifest_digest"] == membership.digest(manifest), "the heartbeat is for another manifest (digest mismatch)")
+    require(expires - issued <= max_lifetime(manifest), "a heartbeat lives at most %d s under the current manifest "
+            "(this one: %d s)" % (max_lifetime(manifest), expires - issued))
     return heartbeat
 
 
@@ -266,7 +289,19 @@ class Freshness:
         with membership._exclusive(self.lock_path):
             return self._live_until(manifest)
 
+    def window(self, manifest):
+        """check(), returning (now, issued, expires, sequence) of the heartbeat relied on: what a monitor
+        needs to say how much of its life is left."""
+        with membership._exclusive(self.lock_path):
+            now, heartbeat = self._checked(manifest)
+        issued, expires = validate(heartbeat)
+        return now, issued, expires, heartbeat["sequence"]
+
     def _live_until(self, manifest):
+        now, heartbeat = self._checked(manifest)
+        return now, validate(heartbeat)[1]
+
+    def _checked(self, manifest):
         state = self._read()
         now = self._now(state)
         self._write(state)   # the floor moves whatever follows
@@ -275,13 +310,13 @@ class Freshness:
         held = self.counter.value()
         require(heartbeat["sequence"] >= held, "ROLLBACK: the heartbeat on disk is sequence %d but the TPM counter is %d; "
                 "wait for a newer heartbeat" % (heartbeat["sequence"], held))
-        left = self._live(heartbeat, now)
+        self._live(heartbeat, now)
         # accept() was interrupted between the disk and the counter. Only a heartbeat that has just passed
         # every check above (signature, a key of the current manifest, lifetime, expiry) moves the counter:
         # a file planted on the disk cannot push it forward and strand the node.
         if heartbeat["sequence"] > held:
             self.counter.advance(heartbeat["sequence"])
-        return now, now + left
+        return now, heartbeat
 
 
 def authorize(manifest, peer_id, requester_id, freshness):
