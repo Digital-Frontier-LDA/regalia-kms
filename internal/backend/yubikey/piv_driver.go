@@ -310,6 +310,9 @@ func algorithmMatches(value piv.Algorithm, algorithm string) bool {
 		(value == piv.AlgorithmEd25519 && algorithm == "ed25519")
 }
 
+// maxEd25519MessageBytes is the longest message an Ed25519 key signs through this API.
+const maxEd25519MessageBytes = 1024
+
 func signingHash(algorithm string, size int) (crypto.Hash, bool) {
 	switch algorithm {
 	case "p256", "rsa2048":
@@ -317,11 +320,13 @@ func signingHash(algorithm string, size int) (crypto.Hash, bool) {
 	case "p384":
 		return crypto.SHA384, size == crypto.SHA384.Size()
 	case "ed25519":
-		// Ed25519 hashes what it is given itself, so there is no hash to name: the card signs the
-		// bytes as the message (pure Ed25519; firmware 5.7 and later). What this API sends it is a
-		// SHA-256 digest, the payload an OpenPGP EdDSA signature is made over (regalia#530), and
-		// the size gate holds it to that as it holds the other algorithms to theirs.
-		return crypto.Hash(0), size == crypto.SHA256.Size()
+		// Ed25519 hashes what it is given itself, so there is no hash to name and no digest size
+		// to hold it to: the card signs the bytes as the message (pure Ed25519; firmware 5.7 and
+		// later). regalia-sign sends a 32-byte digest (regalia#530); OpenBao Transit sends the
+		// message itself. The bound is the one the contract already states for Ed25519
+		// (OPENBAO-COMPATIBILITY.md), and the card was measured well past it (3000 bytes signed,
+		// 4096 refused). The purpose policy's max_payload_bytes is what narrows it per key.
+		return crypto.Hash(0), size >= 1 && size <= maxEd25519MessageBytes
 	default:
 		return 0, false
 	}

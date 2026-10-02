@@ -74,10 +74,18 @@ func TestPIVPhysicalEd25519Signing(t *testing.T) {
 		t.Fatal("the signature verified over different bytes")
 	}
 
-	// The gates that apply to every algorithm apply to this one: a payload of another length is
-	// not a SHA-256 digest, and the key is not another kind of key.
-	if _, err := session.Sign(ctx, slot, "ed25519", digest[:31]); err == nil {
-		t.Fatal("a 31-byte payload was signed")
+	// A message at the bound signs, as OpenBao Transit sends one; one byte past it does not, and
+	// the key is not another kind of key.
+	message := make([]byte, maxEd25519MessageBytes)
+	for index := range message {
+		message[index] = byte(index)
+	}
+	longSignature, err := session.Sign(ctx, slot, "ed25519", message)
+	if err != nil || !ed25519.Verify(public, message, longSignature) {
+		t.Fatalf("a %d-byte message: err=%v, verifies=%v", len(message), err, err == nil && ed25519.Verify(public, message, longSignature))
+	}
+	if _, err := session.Sign(ctx, slot, "ed25519", append(message, 0)); err == nil {
+		t.Fatalf("a %d-byte message was signed", len(message)+1)
 	}
 	if _, err := session.Sign(ctx, slot, "p256", digest[:]); err == nil {
 		t.Fatal("an Ed25519 key signed as though it were a P-256 key")

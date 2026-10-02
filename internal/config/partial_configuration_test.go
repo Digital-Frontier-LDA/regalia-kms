@@ -124,6 +124,46 @@ func TestYubiKeyHardwareConfigurationDoesNotRequirePKCS11ChannelEvidence(t *test
 	}
 }
 
+// THE HSM AND A PIV YUBIKEY IN ONE DAEMON. The priority configuration is a Nitrokey HSM 2 plus one
+// YubiKey for what the HSM cannot do (CONFIGURATIONS.md). The two used to be refused together, so
+// the daemon could not be configured for it at all.
+func TestTheHSMAndPIVYubiKeysMayBeConfiguredTogether(t *testing.T) {
+	complete := func() Config {
+		cfg := baseConfig()
+		cfg.PKCS11ModulePath = "/usr/lib/opensc-pkcs11.so"
+		cfg.SecureChannelEvidence = "/etc/regalia/secure-channel.json"
+		cfg.YubiKeyDevices = map[string]string{"yubi-a": "25923905"}
+		cfg.PINPaths = map[string]string{"hsm-a": "/run/credentials/kms/hsm-a.pin", "yubi-a": "/run/credentials/kms/yubi-a.pin"}
+		cfg.AuditJournalPath = "/var/lib/regalia/audit.jsonl"
+		cfg.RegistryPath, cfg.Site = "/etc/regalia/registry.json", "sitea"
+		cfg.PolicyPath, cfg.PolicyStatePath = "/etc/regalia/policy.json", "/var/lib/regalia/policy-state.jsonl"
+		cfg.RBACPolicyPath = "/etc/regalia/rbac.json"
+		return cfg
+	}
+	cfg := complete()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the HSM with a PIV YubiKey beside it was refused: %v", err)
+	}
+	// Adding the YubiKey does not excuse the PKCS#11 backend from its own companions...
+	for name, remove := range map[string]func(*Config){
+		"secure-channel evidence": func(c *Config) { c.SecureChannelEvidence = "" },
+		"the audit journal":       func(c *Config) { c.AuditJournalPath = "" },
+		"PIN credentials":         func(c *Config) { c.PINPaths = nil },
+	} {
+		cfg := complete()
+		remove(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("the combined configuration was accepted without %s", name)
+		}
+	}
+	// ...nor a YubiKey from having its PIN credential.
+	cfg = complete()
+	cfg.PINPaths = map[string]string{"hsm-a": "/run/credentials/kms/hsm-a.pin"}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("the combined configuration was accepted with no PIN credential for the YubiKey")
+	}
+}
+
 // A lease without its public key would be trusted unsigned; a lease without its epoch journal
 // would let a revoked active site present an old lease and sign again. Half a fence is a gate.
 func TestPartialFencingConfigurationIsRefused(t *testing.T) {

@@ -116,6 +116,9 @@ func TestTheDriverRefusesEveryAlgorithmTheMatrixWithholdsFromYubiKey(t *testing.
 // gate is what stops a SHA-256 digest being signed as though it were SHA-384.
 func TestSigningRefusesADigestOfTheWrongLength(t *testing.T) {
 	for algorithm, size := range digestSizes {
+		if algorithm == "ed25519" {
+			continue // it signs a message, not a digest of one size: see the test below
+		}
 		if _, ok := signingHash(algorithm, size); !ok {
 			t.Fatalf("signingHash(%q, %d) refused the correct digest size, so the case below proves nothing", algorithm, size)
 		}
@@ -125,5 +128,27 @@ func TestSigningRefusesADigestOfTheWrongLength(t *testing.T) {
 		if _, ok := signingHash(algorithm, size+1); ok {
 			t.Errorf("signingHash(%q, %d) accepted a digest one byte long", algorithm, size+1)
 		}
+	}
+}
+
+// ED25519 IS SIGNED WITH NO HASH NAMED, AND WITHIN ITS BOUND.
+//
+// piv-go refuses an Ed25519 signature requested with any hash ("ed25519ph not supported"), so a
+// hash value here that is not zero would turn every signature into a failure that only a card
+// would show. The bound is the contract's (OPENBAO-COMPATIBILITY.md), not the card's.
+func TestEd25519IsSignedAsAMessageOfBoundedLength(t *testing.T) {
+	for _, size := range []int{1, crypto.SHA256.Size(), 200, maxEd25519MessageBytes} {
+		hash, ok := signingHash("ed25519", size)
+		if !ok || hash != crypto.Hash(0) {
+			t.Errorf("signingHash(ed25519, %d) = (%v, %v), want (0, true)", size, hash, ok)
+		}
+	}
+	for _, size := range []int{0, maxEd25519MessageBytes + 1, 4096} {
+		if _, ok := signingHash("ed25519", size); ok {
+			t.Errorf("signingHash(ed25519, %d) accepted a message outside the bound", size)
+		}
+	}
+	if maxEd25519MessageBytes != 1024 {
+		t.Fatalf("the Ed25519 bound is %d; OPENBAO-COMPATIBILITY.md states 1024, and the two must move together", maxEd25519MessageBytes)
 	}
 }

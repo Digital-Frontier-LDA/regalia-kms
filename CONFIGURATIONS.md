@@ -7,8 +7,8 @@ Regalia KMS supports three token configurations:
 | # | Configuration | Key-holding HSM | YubiKey |
 |---|---|---|---|
 | 1 | **Pico HSM alone** | Pico HSM | none |
-| 2 | **Pico HSM + YubiKey** | Pico HSM | PIV and OpenPGP applets |
-| 3 | **Nitrokey HSM 2 + YubiKey** | Nitrokey HSM 2 | PIV and OpenPGP applets |
+| 2 | **Pico HSM + YubiKey** | Pico HSM | PIV, for P-256, P-384 and Ed25519 |
+| 3 | **Nitrokey HSM 2 + YubiKey** | Nitrokey HSM 2 | PIV, for P-256, P-384 and Ed25519 |
 
 **Configuration 3 comes first** (owner, 2026-10-02): it is the one Digital Frontier runs, and work
 that serves it is done before work that serves only the Pico.
@@ -35,11 +35,11 @@ that has been independently validated counts as more secure than code written he
 
 - **Tokens are reached through standard interfaces and reviewed open-source middleware.** That is
   PKCS#11 through OpenSC for the HSM, and PIV (NIST SP 800-73) for the YubiKey.
-- **The same rule gives Ed25519 a standard home.** OpenSC's own OpenPGP card driver presents the
-  YubiKey's OpenPGP applet as a PKCS#11 token that signs with `CKM_EDDSA`, and the daemon serves it
-  with the driver it already uses for the HSM, for signing only
-  ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)). The hand-written driver in
-  `internal/backend/openpgp` is the part this rule argues against, not the applet; it stays unserved.
+- **Ed25519, which neither HSM offers, lives in the YubiKey's PIV slots.** PIV is the applet and
+  the middleware the KMS already serves, so one YubiKey does everything the HSM cannot. The
+  YubiKey's OpenPGP applet is also served, through OpenSC's own OpenPGP card driver over PKCS#11
+  ([`OPENPGP-COMPATIBILITY.md`](OPENPGP-COMPATIBILITY.md)), but that path and PIV cannot share a
+  host's YubiKeys (below). The hand-written driver in `internal/backend/openpgp` stays unserved.
 - **Signature formats come from maintained open-source libraries**, not from encoders written here.
   One recorded exception: for an Ed25519 OpenPGP signature, `regalia-sign` has the library build the
   packet and then replaces the two signature integers itself, because the library accepts no
@@ -86,8 +86,8 @@ Neither HSM can hold an Ed25519 key through this backend, so in configurations 2
 the YubiKey, and configuration 1 has none. The YubiKey offers two homes. **PIV** is the one to
 prefer for a card that also holds PIV keys: it is the applet and middleware the KMS already uses, it
 has twenty-four slots where the OpenPGP applet has one signing slot, and the card reports each
-slot's PIN and touch policy. The **OpenPGP applet** through OpenSC is served too, but not on the same
-card: see below.
+slot's PIN and touch policy. The **OpenPGP applet** through OpenSC is served too, but not on a host
+whose YubiKeys are served through PIV: see below.
 
 ### One YubiKey: PIV, with OpenSC told to leave it alone
 
@@ -102,12 +102,18 @@ Measured on one YubiKey 5 NFC (firmware 5.7.4) and a Nitrokey HSM 2 in one daemo
   ignores the YubiKey's reader and still serves the HSM. With it, one YubiKey served a P-256 key
   (slot 9c) and an Ed25519 key (a retired slot) through PIV: 12 alternating and 12 simultaneous
   signatures, all verified, while the HSM answered through PKCS#11 in the same process.
-- **So one card serves PIV or the OpenPGP applet, not both.** The applet path needs OpenSC to drive
-  the YubiKey; the PIV path needs it not to. A deployment that wants one YubiKey uses PIV for
-  everything, Ed25519 included. The applet path is for a card dedicated to it.
-- **Requests for one card are queued.** The card takes one connection at a time; simultaneous
-  requests used to fail as unavailable (nine of twelve on the bench) and now wait their turn. Ubuntu, Apple and Microsoft do not
-require Ed25519; OpenPGP, SSH and git users commonly expect it.
+- **So a host's YubiKeys serve PIV or the OpenPGP applet, not both.** The applet path needs OpenSC
+  to drive the YubiKey; the PIV path needs it not to, and `ignored_readers = "Yubico"` matches every
+  YubiKey reader. A deployment that wants one YubiKey uses PIV for everything, Ed25519 included.
+- **PIV requests are queued.** A card takes one connection at a time, and finding a card means
+  opening each reader in turn, so simultaneous requests used to fail as unavailable (nine of twelve
+  on the bench). They now wait their turn, one PIV operation at a time across all YubiKeys.
+- **The daemon's configuration allows it.** `pkcs11_module_path` and `yubikey_devices` used to be
+  refused together; they are now accepted, each with its own companions.
+
+Ubuntu, Apple and Microsoft do not require Ed25519; OpenPGP, SSH and git users commonly expect it.
+Through PIV an Ed25519 key signs a message of up to 1024 bytes; `regalia-sign` sends a 32-byte
+digest.
 
 ## Signing software for a platform
 
@@ -142,11 +148,11 @@ rule and works in every configuration once a `signtool` adapter exists.
    the tokens it could not ask. A token that is absent then is not a refusal, so the provider also
    asks before every private operation and refuses before the PIN is fetched. In that case the
    caller still sees a retryable "unavailable" that names nothing.
-2. **Ed25519 is served from the YubiKey only, and that stack is not qualified.** The daemon signs
-   Ed25519 on the OpenPGP applet through OpenSC, and `regalia-sign` frames it as an OpenPGP
-   signature GnuPG accepts. Removal of the card, recovery onto a replacement and the daemon under
-   its systemd unit are not recorded, so it is not in `config/qualified-stack.json`. Configuration 1
-   has no Ed25519.
+2. **Ed25519 is served from the YubiKey only, and not yet qualified.** In PIV slots it signs through
+   the backend and beside the HSM in one daemon (measured), and `regalia-sign` frames such a
+   signature as OpenPGP. Removal of the card, recovery onto a replacement, a ceremony-imported key
+   and the daemon under its systemd unit are not recorded, so `config/qualified-stack.json` lists
+   the PIV stack for P-256 only. Configuration 1 has no Ed25519.
 3. **The served applet is checked less than the hand-written adapter would check it.** PKCS#11
    does not expose the card's PIN-status byte or its touch flags, so a key that requires touch is
    found out when a signature fails, not when the daemon starts. The path has not run under the

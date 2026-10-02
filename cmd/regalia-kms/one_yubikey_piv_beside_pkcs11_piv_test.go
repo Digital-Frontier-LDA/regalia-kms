@@ -111,6 +111,9 @@ func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 		t.Fatalf("PIV slot %s does not hold an Ed25519 key", ed25519Slot)
 	}
 
+	// Which ECDSA encoding the PIV backend returns is recorded, not assumed: the PKCS#11 backend
+	// returns r||s, and callers that expect one form do not accept the other.
+	var encodings sync.Map
 	sign := func(route registry.Route, index int) error {
 		digest := sha256.Sum256([]byte(fmt.Sprintf("%s %d", route.Algorithm, index)))
 		signature, _, err := manager.Execute(ctx, route, "sign", "", "application/vnd.regalia.digest", digest[:], nil)
@@ -122,6 +125,7 @@ func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 			verified = ed25519.Verify(ed25519Key, digest[:], signature)
 		} else {
 			verified = verifyECDSA(p256Key, digest[:], signature)
+			encodings.Store(ecdsa.VerifyASN1(p256Key, digest[:], signature), true)
 		}
 		if !verified {
 			return fmt.Errorf("%s sign %d: the signature does not verify", route.Algorithm, index)
@@ -164,6 +168,10 @@ func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 		}
 	}
 	t.Logf("alternating: 12 signatures, %d failed; concurrent: 12 signatures, %d failed", alternating, len(failures)-alternating)
+	encodings.Range(func(asn1DER, _ any) bool {
+		t.Logf("the PIV backend returned P-256 signatures as ASN.1 DER: %v", asn1DER)
+		return true
+	})
 	if len(failures) > 0 {
 		t.Fatalf("%d of 24 signatures failed: %v", len(failures), failures)
 	}

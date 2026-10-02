@@ -6,7 +6,12 @@ Everything below this section describes the hand-written adapter in `internal/ba
 which the daemon still does not serve. This section is the one use of the applet the daemon does
 serve, and it does not go through that adapter.
 
-**Decision.** A YubiKey's OpenPGP applet is the home of Ed25519 signing keys. Neither SmartCard-HSM
+**Superseded as the default, 2026-10-02.** Ed25519 keys now live in the YubiKey's PIV slots
+([`CONFIGURATIONS.md`](CONFIGURATIONS.md)): one card, twenty-four slots, the middleware the KMS
+already uses. What follows remains served, for a host whose YubiKeys are given to it, and is the
+record of what was decided and measured first.
+
+**Decision (as first taken).** A YubiKey's OpenPGP applet is a home for Ed25519 signing keys. Neither SmartCard-HSM
 offers Ed25519 through OpenSC, and OpenSC's own OpenPGP card driver presents the applet as a PKCS#11
 token that signs with `CKM_EDDSA`. The owner's rule is the most standard interface and reviewed
 open-source middleware over code written here, so the daemon reaches the applet with the PKCS#11
@@ -44,10 +49,10 @@ not a qualification: removal and recovery are not recorded.
 User Interaction Flags, and refuses a binding the card contradicts. PKCS#11 exposes neither. A key
 that requires touch does not sign unattended here; it fails, and the operation is refused.
 
-**Not on a card that also serves PIV.** The PIV backend opens the YubiKey for exclusive use and
-needs OpenSC to ignore it; this path needs OpenSC to drive it. One daemon cannot do both for one
-card (measured, [`CONFIGURATIONS.md`](CONFIGURATIONS.md)). Ed25519 is also available in PIV slots,
-which is the path for a YubiKey that does everything; this one is for a card dedicated to it.
+**Not on a host that also serves PIV.** The PIV backend opens a YubiKey for exclusive use and
+needs OpenSC to ignore YubiKey readers; this path needs OpenSC to drive one. The ignore rule
+matches every YubiKey reader, so one daemon serves its YubiKeys through PIV or through this path,
+not both (measured, [`CONFIGURATIONS.md`](CONFIGURATIONS.md)).
 
 **Open.**
 - How a production key gets onto the card. A recoverable key is imported from ceremony-controlled
