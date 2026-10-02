@@ -89,7 +89,7 @@ def _load_capabilities() -> dict[str, dict[str, set[str]]]:
         raw = json.loads(_CAPABILITIES_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         # `go -C <module>` rather than a bare `go test`: this validator is normally run from the
-        # repository root (`python3 -m tools.custody_manifest ...`), so a command that assumes
+        # repository root (`python3 -Es -m tools.custody_manifest ...`), so a command that assumes
         # kms/ is the working directory would fail for the person reading the message.
         module = _CAPABILITIES_PATH.parents[1]
         raise SystemExit(

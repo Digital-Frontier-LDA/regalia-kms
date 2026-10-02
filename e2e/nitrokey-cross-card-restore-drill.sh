@@ -70,7 +70,7 @@ reader(){ reader_of "$1"; echo "$READER"; }
 # (e2e/lib/sc-hsm-pty.py) and never appear in the process list. (`env:NAME` would do it too.)
 schsm(){ local card="$1"; shift
   SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$DKEK_PW" \
-    "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
+    python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 # Resolved in the MAIN shell, so a card PKCS#11 cannot see stops the drill instead of reading as empty.
 slot_of(){ local s; s="$(hsm_slot_id_for "$1" 2>/dev/null || true)"; [ -n "$s" ] || die "PKCS#11 cannot see $1 (OPENSC_CONF=$OPENSC_CONF)"; SLOT="$s"; }
 for s in "$SRC" "$DST"; do slot_of "$s"; done

@@ -84,7 +84,7 @@ jobs:
         # The rendered default-deny ruleset is loaded only inside a throwaway namespace; the zones probe
         # it with network_probe.py, and outbound is checked against the declared sinks.
         run: |
-          sudo apt-get install -y -qq --no-install-recommends nftables iproute2
+          sudo apt-get install -y -qq --no-install-recommends nftables iproute2 wireguard-tools
           sudo bash e2e/baremetal-firewall-netns.sh
 
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
@@ -482,6 +482,28 @@ jobs:
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: A guest boots through a peer (QEMU, swtpm, dracut, LUKS2, WireGuard before root)
         run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/unlock-boot-qemu.sh
+
+  # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
+  # servers and a client on the loopback, none allowed to touch the runner's clock. The clock counts
+  # as authenticated only while chrony is synchronised to two agreeing NTS sources; one server
+  # stopping, a plain NTP source in the configuration, and a check that has stopped each end it.
+  authtime-chrony-nts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install chrony
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends chrony python3-cryptography
+      - name: The clock is authenticated only under two agreeing NTS sources (live chronyd)
+        run: |
+          set -o pipefail
+          python3 e2e/authtime-chrony-nts.py | tee "$RUNNER_TEMP/authtime.log"
+          grep -q '^authtime-chrony-nts: 18 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
+            echo "::error::the authenticated-time test did not run all 18 checks" >&2; exit 1; }
 
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
