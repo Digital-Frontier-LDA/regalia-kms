@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Authenticated time, against live chrony daemons with NTS (#69, #80).
 
-    python3 e2e/authtime-chrony-nts.py        (CHRONYD= and CHRONYC= name the binaries if not on the path)
+    python3 -Es e2e/authtime-chrony-nts.py        (CHRONYD= and CHRONYC= name the binaries if not on the path)
 
 Private daemons only, on the loopback, on ports of their own, none of them allowed to touch the machine's
 clock (-x): two NTS servers (each with its own certificate, as two independent operators would have) and
