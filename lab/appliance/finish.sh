@@ -113,7 +113,6 @@ for package in vim-tiny vim-common nano; do
 done
 # Retain built-in C.UTF-8; generated locales and installer-only partition/media
 # tools are unnecessary on the running appliance. APT must not expand this list.
-printf '%s\n' 'LANG=C.UTF-8' >/etc/default/locale
 python3 -I /tmp/regalia-source/lab/appliance/minimize.py --apply >/var/log/regalia-minimization.json
 apt-get autoremove --purge -y
 # A fresh baseline carries one current kernel. CURRENT/NEXT overlap belongs to
@@ -123,6 +122,9 @@ case "$keep_kernel" in linux-image-[0-9]*-amd64) ;; *) exit 1 ;; esac
 for package in $(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'linux-image-[0-9]*' | awk '$2 == "installed" {print $1}'); do
   if [ "$package" != "$keep_kernel" ]; then apt-get purge -y "$package"; fi
 done
+# locales post-removal deletes its old config; write the builtin locale after
+# all package cleanup has finished. C.UTF-8 is supplied by libc, without locales.
+printf '%s\n' 'LANG=C.UTF-8' >/etc/default/locale
 apt-get clean
 rm -rf /root/go /root/.cache /tmp/regalia-build /tmp/regalia-source /tmp/regalia-source.tar
 rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed
