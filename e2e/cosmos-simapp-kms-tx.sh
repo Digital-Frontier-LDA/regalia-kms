@@ -16,8 +16,9 @@
 # said, a policy that allows what this one refuses. It exists to show what the NODE does when only the
 # node is left to refuse.
 #    1. KMS-signed MsgSend            -> committed with code 0; the balances move by exactly amount + fee
-#    2. the same TxRaw replayed       -> rejected by the node; no balance moves
-#    3. another chain id              -> another KMS signs it; the node rejects the signature
+#    2. the same TxRaw replayed       -> rejected by the node (code 19); no balance moves
+#    3. another chain id              -> refused by the KMS (rule cosmos); signed by another KMS, the
+#                                        node rejects the signature (code 4)
 #    4. a destination outside policy  -> refused by the KMS (rule cosmos) before the token
 #    5. account sequence              -> a skipped and a reused sequence are refused by the KMS (rule
 #                                        sequence); signed by another KMS, the node rejects it (code 32)
@@ -185,14 +186,14 @@ kms_refuses() {
   negatives=$((negatives + 1))
   say "  refused by the KMS ($refusal): $what"
 }
-# node_rejects <what> <dir> [code] — the node must reject the signed transaction (with that ABCI code,
-# when one is given) and no balance may move.
+# node_rejects <what> <dir> <code> — the node must reject the signed transaction with exactly that ABCI
+# code, and no balance may move.
 node_rejects() {
-  local what="$1" dir="$2" want="${3:-}" r code
+  local what="$1" dir="$2" want="${3:?node_rejects needs the expected ABCI code}" r code
   r="$(broadcast "$dir")"
   code="$(jq -r .code <<< "$r")"
   [ "$(jq -r .committed <<< "$r")" != true ] && [ "$code" != 0 ] || fail "$what: the node ACCEPTED it: $r"
-  [ -z "$want" ] || [ "$code" = "$want" ] || fail "$what: the node rejected it with code $code, expected $want: $r"
+  [ "$code" = "$want" ] || fail "$what: the node rejected it with code $code, expected $want: $r"
   [ "$(balance "$KMS_ADDR")" -eq "$kms_balance" ] || fail "$what: a rejected transaction moved the balance"
   negatives=$((negatives + 1))
   say "  rejected by the node (code $code: $(jq -r .log <<< "$r" | cut -c1-70)): $what"
@@ -224,14 +225,14 @@ n1="$(balance "$NODE0")"
 say "ARM 1 PASS: a KMS-signed MsgSend is committed and moves exactly the amount and the fee"
 
 # ---- arm 2: replaying the committed transaction is rejected -------------------------------------
-node_rejects "the committed TxRaw, broadcast again" "$STATE/tx1"
+node_rejects "the committed TxRaw, broadcast again" "$STATE/tx1" 19
 say "ARM 2 PASS: replay rejected"
 
 # ---- arm 3: a valid KMS signature over the wrong chain id is rejected by the node ---------------
 CHAIN_ID="not-$CHAIN_ID" build --to "$NODE0" --amount "$AMOUNT" --out "$STATE/tx3" >/dev/null
 kms_refuses "a SignDoc for chain 'not-$CHAIN_ID'" "$STATE/tx3" cosmos
 other_kms "$STATE/tx3" CHAIN_ID="not-$CHAIN_ID" || fail "another KMS, whose policy allows that chain, did not sign"
-node_rejects "a signature over chain 'not-$CHAIN_ID'" "$STATE/tx3"
+node_rejects "a signature over chain 'not-$CHAIN_ID'" "$STATE/tx3" 4
 say "ARM 3 PASS: another chain id is refused by the KMS, and rejected by the node when signed anyway"
 
 # ---- arm 4: the policy refuses a destination it does not allow, before the token ---------------

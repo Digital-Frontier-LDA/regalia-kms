@@ -60,8 +60,8 @@ balances by exactly the amount and fee, and that each of these fails for its own
 
 | Case | Refused by the KMS | Rejected by the node when another KMS signs it anyway |
 |---|---|---|
-| the committed `TxRaw` replayed | | yes |
-| another chain id | rule `cosmos` | yes |
+| the committed `TxRaw` replayed | | code 19 |
+| another chain id | rule `cosmos` | code 4 |
 | a destination outside the policy | rule `cosmos` | |
 | a skipped or reused account sequence | rule `sequence` | code 32 |
 | another account number | rule `cosmos` | code 4 |
