@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
@@ -864,9 +865,14 @@ func requireReauthorization(manager *backend.Manager, gate *admission.Gate, proc
 	}
 	sort.Strings(names)
 	// One provider may answer for two backend names (the PKCS#11 provider serves the OpenPGP applet
-	// too): it is told once, because being told again would forget what it has seen.
+	// too): it is told once, because being told again would forget what it has seen. "The same
+	// provider" is asked of a map, so a provider must be something a map can hold as a key: a pointer,
+	// as both are today. A type that is not comparable would panic there; it is refused here instead.
 	told := make(map[reauth.Provider]bool)
 	for _, name := range names {
+		if !reflect.TypeOf(providers[name]).Comparable() {
+			return fmt.Errorf("token reauthorization: the %s backend's provider cannot be told apart from another (it must be a pointer)", name)
+		}
 		provider, gated := providers[name].(reauth.Provider)
 		if !gated {
 			reason, named := awaitingReauthorization[name]

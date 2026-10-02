@@ -301,6 +301,16 @@ func (ungatedProvider) Execute(context.Context, registry.Route, string, string, 
 func (ungatedProvider) Healthy(context.Context, registry.Binding) bool { return true }
 func (ungatedProvider) Ready(context.Context) bool                     { return true }
 
+// sliceProvider is a provider passed by value whose type cannot be a map key.
+type sliceProvider struct {
+	ungatedProvider
+	devices []string
+}
+
+func (sliceProvider) RequireReauthorization(reauth.Gate, func() (int64, error), int64) error {
+	return nil
+}
+
 // countingProvider records how often it is told.
 type countingProvider struct {
 	ungatedProvider
@@ -350,6 +360,11 @@ func TestEveryProviderThatServesKeysIsGatedOrTheDaemonDoesNotStart(t *testing.T)
 	err = requireReauthorization(managing(t, "nitrokey-pkcs11", failing), gate, start)
 	if err == nil || !strings.Contains(err.Error(), "nitrokey-pkcs11") || !strings.Contains(err.Error(), "no clock") {
 		t.Fatalf("a failing hook: %v", err)
+	}
+	// a provider that a map cannot hold as a key is refused, not left to panic when "told once" is asked
+	err = requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "some-new-token", sliceProvider{}), gate, start)
+	if err == nil || !strings.Contains(err.Error(), "must be a pointer") {
+		t.Fatalf("a provider that is not comparable: %v", err)
 	}
 	// with no admission required nobody is told, gated or not
 	quiet := &countingProvider{}

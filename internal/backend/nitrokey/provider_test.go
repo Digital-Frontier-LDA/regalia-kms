@@ -65,6 +65,9 @@ type fakeSession struct {
 	pulled      bool
 	pullOnSign  bool
 	panicOnSign bool
+	// endOnSign ends the REQUEST's context during the signature and fails it, as a caller that hangs
+	// up, or a deadline that passes, does.
+	endOnSign context.CancelFunc
 	// mechanismErr is what OffersMechanism answers; nil means the token offers it.
 	mechanismErr   error
 	mechanismAsked []string
@@ -97,8 +100,12 @@ type fakeSession struct {
 	signErr error
 }
 
-func (session *fakeSession) Identity(context.Context) (string, string, error) {
+func (session *fakeSession) Identity(ctx context.Context) (string, string, error) {
 	session.order = append(session.order, "Identity")
+	// as the PKCS#11 driver: every call refuses a context that has ended
+	if ctx.Err() != nil {
+		return "", "", ctx.Err()
+	}
 	if session.pulled {
 		return "", "", errors.New("token not present")
 	}
@@ -147,7 +154,14 @@ func (session *fakeSession) Sign(context.Context, string, string, []byte) ([]byt
 	}
 	if session.pullOnSign {
 		session.pulled = true
+		if session.endOnSign != nil {
+			session.endOnSign()
+		}
 		return nil, errors.New("PKCS#11 signing unavailable")
+	}
+	if session.endOnSign != nil {
+		session.endOnSign()
+		return nil, context.Canceled
 	}
 	if session.signErr != nil {
 		return []byte("signature"), session.signErr

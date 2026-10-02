@@ -401,6 +401,10 @@ func TestATokenPulledWhileItsSessionIsOpenWaitsForAFreshLease(t *testing.T) {
 func TestAFailedOperationOnATokenThatStillAnswersChangesNothing(t *testing.T) {
 	w := newReauthWorld(t)
 	w.gate.requestedMs = 1_001
+	// The clock is past the lease's request time: an absence wrongly recorded now would be dated after
+	// the lease, and the token would wait. (With the clock still before it, a wrong mark would be
+	// invisible: the token would "serve" anyway.)
+	w.now = 5_000
 	w.driver.session.signErr = errors.New("CKR_DATA_LEN_RANGE")
 	for range 3 {
 		if err := w.execute("sign"); !errors.Is(err, ErrUnavailable) {
@@ -530,5 +534,45 @@ func TestAnOpenPGPAppletTokenWaitsLikeAnyOther(t *testing.T) {
 	w.gate.requestedMs = 5_001
 	if err := sign(); err != nil {
 		t.Fatalf("a lease asked for after the return did not restore the applet: %v", err)
+	}
+}
+
+// A CALLER THAT HANGS UP DOES NOT TAKE THE TOKEN OUT OF SERVICE (found by the read of this change).
+// Every driver call refuses an ended context. Asked under the request's context, a token whose
+// caller disconnected mid-signature, or whose request passed its deadline, would look gone, and every
+// key on it would wait for the next renewal: the stall the second identity read exists to exclude.
+func TestARequestThatIsCancelledOrTimesOutDoesNotMarkTheTokenGone(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	w.now = 5_000 // past the lease's request time: a wrong mark would make the token wait
+	sign := func(ctx context.Context) error {
+		_, _, err := w.provider.Execute(ctx, registry.Route{Algorithm: "rsa2048", Binding: binding()}, "sign",
+			"", "application/vnd.regalia.digest", []byte("digest"), nil)
+		return err
+	}
+	for range 3 {
+		ctx, cancel := context.WithCancel(context.Background())
+		w.driver.session.endOnSign = cancel // the caller hangs up during the signature
+		if err := sign(ctx); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("a cancelled signature: %v", err)
+		}
+		cancel()
+	}
+	w.driver.session.endOnSign = nil
+	if len(w.waiting()) != 0 {
+		t.Fatalf("waiting = %v: a caller that hung up took the token out of service", w.waiting())
+	}
+	if err := sign(context.Background()); err != nil {
+		t.Fatalf("the token does not serve the next caller: %v", err)
+	}
+	// the converse: the caller hung up AND the token really went
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.driver.session.endOnSign, w.driver.session.pullOnSign = cancel, true
+	if err := sign(ctx); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	if !reflect.DeepEqual(w.waiting(), map[string]int64{"hsm-sitea": -1}) {
+		t.Fatalf("waiting = %v: a token that left during a cancelled request was not marked gone", w.waiting())
 	}
 }

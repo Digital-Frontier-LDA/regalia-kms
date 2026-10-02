@@ -147,7 +147,9 @@ Commissioning has two halves:
   binding is unavailable and the daemon is not ready. The lease service sees the daemon's start and asks
   at once; a token's return it does not see, and that waits for the next scheduled renewal. A token
   pulled while an operation is in flight is seen too (it stops answering for its identity); a request the
-  token merely refuses is not an absence. This holds for the HSM's keys and for a YubiKey's OpenPGP applet.
+  token merely refuses, or one whose caller hung up, is not an absence. A token pulled during the PIN
+  login also leaves the PIN latch set: after its return it needs the fresh lease **and** an operator's
+  PIN-block reset, as any failed login does. This holds for the HSM's keys and for a YubiKey's OpenPGP applet.
   interim: until the PIV provider has the hook, a YubiKey PIV key pulled and put back serves on the lease
   already held; the daemon says so at startup, and refuses to start with any other provider that lacks it. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).

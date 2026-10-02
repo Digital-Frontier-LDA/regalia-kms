@@ -148,12 +148,21 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 // must not be in the future: a start time ahead of the clock would be a lease nobody can ask for.
 //
 // WHAT COUNTS AS SEEN GONE. A token that cannot be opened. And a token that stopped answering while
-// it was open: when a call on an open session fails, the token is asked for its identity again on
-// that same session, and if it does not answer (a pulled card cannot, on its old handle), or the
-// session will not close, it is marked gone. A token that still answers was not gone: the failure
-// was about the request (a payload the key refuses, a malformed blob). That distinction matters,
-// because marking on any failure would let a caller who may sign take a token out of service at
-// will, for up to a third of a lease each time.
+// it was open: when a call on an open session fails, the token is asked for its identity again, and
+// if it does not answer (the driver looks for the token by serial among the slots and reads it
+// afresh: a pulled card is not found), or the session will not close, it is marked gone. A token
+// that still answers was not gone: the failure was about the request (a payload the key refuses, a
+// malformed blob) or about the caller (it hung up, or its deadline passed). That distinction
+// matters, because marking on any failure would let a caller who may sign take a token out of
+// service at will, for up to a third of a lease each time.
+//
+// The question is asked under a context of ITS OWN, not the request's. Every driver call refuses an
+// ended context, so under the request's context a caller that disconnects mid-signature, or a
+// request that reaches its deadline, would make the token look gone.
+//
+// Two limits of the question. The driver refuses to pick a slot while ANOTHER slot's token answers
+// with an error, so a refused request that coincides with a second token misbehaving costs this one
+// a renewal. And a token pulled and put back within the one failed call answers, and is not seen.
 //
 // WHAT IT CANNOT SEE: an absence nobody looked during. Every routing decision and every readiness
 // probe opens the token, so the window is the gap between two of those.
@@ -183,15 +192,23 @@ func (provider *Provider) gates() bool {
 	return provider.reauthorizer != nil
 }
 
-// stillAnswers asks an open session's token for its identity again. A token that was pulled cannot
-// answer on its old handle. A session that panics is not answering either.
+// stillAnswersWithin bounds the question stillAnswers asks: long enough for a token that is there,
+// short enough that a failed request does not hold its caller.
+const stillAnswersWithin = 5 * time.Second
+
+// stillAnswers asks the token for its identity again after a call on it failed. A token that was
+// pulled is not found. A driver that panics is not answering either. The context is the question's
+// own: the request's may already be cancelled or past its deadline, and that says nothing about the
+// token.
 func stillAnswers(ctx context.Context, session Session) (answers bool) {
 	defer func() {
 		if recover() != nil {
 			answers = false
 		}
 	}()
-	_, _, err := session.Identity(ctx)
+	own, cancel := context.WithTimeout(context.WithoutCancel(ctx), stillAnswersWithin)
+	defer cancel()
+	_, _, err := session.Identity(own)
 	return err == nil
 }
 
