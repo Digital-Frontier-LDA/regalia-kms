@@ -77,11 +77,27 @@ func qualifiedName(ekName, akName []byte) []byte {
 	return h(append(h(append(binary.BigEndian.AppendUint32(nil, uint32(tpm2.TPMRHEndorsement)), ekName...)), akName...))
 }
 
-// parseAttest reads a TPMS_ATTEST for a quote: who signed it, and over what.
+// parseAttest reads a TPMS_ATTEST for a quote: who signed it, and over what. It accepts what
+// attest.parse_quote accepts and nothing else. go-tpm parses the structure; three things it does not
+// check are checked here:
+//   - the magic. TPM_GENERATED is what makes a signature by a restricted key mean "the TPM built this":
+//     such a key signs caller-supplied data too, as long as it does NOT begin with that value. go-tpm's
+//     Unmarshal reads the field and does not compare it (v0.9.8).
+//   - the length. Unmarshal accepts bytes after the structure and a structure cut short at a sized
+//     field, so the parsed value is marshalled again and must give the same bytes.
+//   - one PCR selection, of the SHA-256 bank.
 func parseAttest(attest []byte) (qualifiedSigner, extraData []byte, err error) {
+	notAQuote := errors.New("the signed structure is not a TPM quote")
 	parsed, err := tpm2.Unmarshal[tpm2.TPMSAttest](attest)
-	if err != nil || parsed.Type != tpm2.TPMSTAttestQuote {
-		return nil, nil, errors.New("the signed structure is not a TPM quote")
+	if err != nil || parsed.Magic != tpm2.TPMGeneratedValue || parsed.Type != tpm2.TPMSTAttestQuote {
+		return nil, nil, notAQuote
+	}
+	quote, err := parsed.Attested.Quote()
+	if err != nil || len(quote.PCRSelect.PCRSelections) != 1 || quote.PCRSelect.PCRSelections[0].Hash != tpm2.TPMAlgSHA256 {
+		return nil, nil, notAQuote
+	}
+	if !bytes.Equal(tpm2.Marshal(parsed), attest) {
+		return nil, nil, notAQuote
 	}
 	return parsed.QualifiedSigner.Buffer, parsed.ExtraData.Buffer, nil
 }
