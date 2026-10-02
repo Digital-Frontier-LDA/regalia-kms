@@ -336,13 +336,14 @@ class Issue(Case):
         swapped = self.evidence(b["attester"], self.m1, signed_by="c")
         real = b["attester"].verify
 
-        def enroll_then_verify(*args):
+        def enroll_then_verify(*args, **kw):
             with open(b["attester"].state_path) as f:
                 state = json.load(f)
             state["nodes"]["a"]["ak_public"] = self.keys["c"].ak_public.hex()
             with open(b["attester"].state_path, "w") as f:
                 json.dump(state, f)
-            return real(*args)
+            self.assertEqual(kw, {"phase": "system"})   # a lease is asked for by a booted node
+            return real(*args, **kw)
         b["attester"].verify = enroll_then_verify
         self.refused("the attested AK is not the AK the manifest names for a", self.issue, evidence=swapped)
         b["attester"].verify = real
@@ -368,9 +369,9 @@ class Issue(Case):
         b = self.peers["b"]
         real = b["attester"].verify
 
-        def slow(*args):
+        def slow(*args, **kw):
             self.later(50)                               # the attestation takes 50 s
-            return real(*args)
+            return real(*args, **kw)
         b["attester"].verify = slow
         envelope = self.issue()
         self.assertEqual(envelope["lease"]["expires_at"], hbt.stamp(heartbeat_expiry))

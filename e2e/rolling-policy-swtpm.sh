@@ -6,10 +6,13 @@
 #
 # Each TPM is a node that boots an image (PCR 7 and PCR 11 extended at each restart) and a peer that
 # judges the other two: its own membership store anchored in its TPM's NV counter, its own heartbeat
-# counter, its own attestation verifier, and leases signed by its TPM.
+# counter, its own attestation verifier, and leases signed by its TPM. PCR 11 moves with the boot as it
+# does on a UKI host: the image, then "enter-initrd" (the node asks for its disk), then "leave-initrd",
+# "sysinit", "ready" (the node asks for leases). One image, two PCR 11 values.
 #
 #   15.1  CURRENT: every node is enrolled with both peers and unlocked on image-1; a node that boots
 #         image-2 before the root approved it is refused, and comes back on image-1
+#         a node still in its initrd is refused a lease; a booted node is refused a disk key (#156)
 #   15.3  the root approves CURRENT and NEXT in one manifest (the document it commits to lists both)
 #   15.4  one node at a time, in order: asked at the same moment, only a may reboot; b and c wait
 #   15.5  a, on image-2, is unlocked by its peers and vouches for them while they are still on image-1
@@ -23,7 +26,8 @@
 # This is tests/test_baremetal_rollout.py's OnSwtpm class, run where the TPM tools must be present: a
 # skip here is a failure. The rules that need no TPM run with the Python guards.
 #
-# NOT HERE: real UKIs and their PCR 11, systemd-boot's boot counting and automatic fallback, the reboot
+# NOT HERE: real UKIs (the PCR 11 values here are extended by hand, in the order systemd uses; that a
+# real image measures what its build record predicts is #57), systemd-boot's boot counting and automatic fallback, the reboot
 # itself, a TPM firmware update, and the local seal (e2e/pcr-signed-policy-swtpm.sh shows that the PIN
 # sealed once opens on both images, and that the TPM alone never retires one).
 set -uo pipefail

@@ -2,130 +2,91 @@ package main
 
 import (
 	"encoding/asn1"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
-	"net"
-	"os"
 	"strings"
-	"syscall"
+
+	"github.com/google/go-tpm/tpm2"
+	tpmtransport "github.com/google/go-tpm/tpm2/transport"
+	"github.com/google/go-tpm/tpm2/transport/linuxtpm"
+	"github.com/google/go-tpm/tpm2/transport/linuxudstpm"
 )
 
-// One TPM command, written out by hand: TPM2_Quote by the persistent attestation key. The pre-root
-// client needs nothing else from the TPM, and a TPM library would be the largest piece of code in it.
-// TCG TPM 2.0 Library, Part 3, section 18.4 (TPM2_Quote); Part 1, section 18 (command structure).
-const (
-	stSessions = 0x8002
-	ccQuote    = 0x00000158
-	rsPassword = 0x40000009
-	akHandle   = 0x81010002 // attest.AK_HANDLE: where node-init makes the AK persistent
-)
+// The TPM is spoken to through go-tpm, the standard Go library for it: its transport (which waits for
+// the kernel's TPM device to have a response before reading it), its TPM2_Quote, and its parsing of
+// what comes back. Nothing here writes or reads a TPM structure by hand.
 
-// openTPM opens the TPM: the kernel's resource-manager device, or (for tests against swtpm) a UNIX
-// socket given as unix:PATH.
-func openTPM(path string) (io.ReadWriteCloser, error) {
+// akHandle is attest.AK_HANDLE: where node-init makes the attestation key persistent.
+const akHandle = tpm2.TPMHandle(0x81010002)
+
+// openTPM opens the TPM: the kernel's resource-manager device, or (for tests against a software TPM) a
+// UNIX socket given as unix:PATH.
+func openTPM(path string) (tpmtransport.TPMCloser, error) {
 	if socket, ok := strings.CutPrefix(path, "unix:"); ok {
-		return net.Dial("unix", socket)
+		return linuxudstpm.Open(socket)
 	}
-	// A BLOCKING descriptor, opened by hand. os.OpenFile puts a pollable character device in
-	// non-blocking mode, and the kernel's TPM device then only queues the command on write and returns
-	// 0 bytes to a read made before the response is ready: every quote would look truncated. In blocking
-	// mode the write runs the command and the read that follows returns the whole response.
-	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, err
-	}
-	return os.NewFile(uintptr(fd), path), nil
+	return linuxtpm.Open(path)
 }
 
-// quoteCommand is the TPM2_Quote command: the AK's empty password authorization, the qualifying data,
-// the key's own signing scheme (TPM_ALG_NULL), and one selection of SHA-256 PCRs.
-func quoteCommand(handle uint32, qualifying []byte, pcrs []int) ([]byte, error) {
+// quoteCommand is TPM2_Quote by the attestation key, with its empty password authorization: over
+// 32 bytes of qualifying data, under the key's own signing scheme, for one selection of SHA-256 PCRs.
+func quoteCommand(name tpm2.TPM2BName, qualifying []byte, pcrs []int) (*tpm2.Quote, error) {
 	if len(qualifying) != 32 || len(pcrs) == 0 {
 		return nil, errors.New("a quote needs 32 bytes of qualifying data and at least one PCR")
 	}
-	var selection [3]byte
+	selected := make([]uint, 0, len(pcrs))
 	for _, pcr := range pcrs {
 		if pcr < 0 || pcr > 23 {
 			return nil, errors.New("PCRs must be 0-23")
 		}
-		selection[pcr/8] |= 1 << (pcr % 8)
+		selected = append(selected, uint(pcr))
 	}
-	body := binary.BigEndian.AppendUint32(nil, handle)
-	body = binary.BigEndian.AppendUint32(body, 9)          // authorization area size
-	body = binary.BigEndian.AppendUint32(body, rsPassword) // a password session
-	body = append(body, 0, 0, 0, 0, 0)                     // empty nonce, no attributes, empty password
-	body = binary.BigEndian.AppendUint16(body, uint16(len(qualifying)))
-	body = append(body, qualifying...)
-	body = binary.BigEndian.AppendUint16(body, algNull) // inScheme: the key's own
-	body = binary.BigEndian.AppendUint32(body, 1)       // one PCR selection
-	body = binary.BigEndian.AppendUint16(body, algSHA256)
-	body = append(body, 3)
-	body = append(body, selection[:]...)
-	command := binary.BigEndian.AppendUint16(nil, stSessions)
-	command = binary.BigEndian.AppendUint32(command, uint32(10+len(body)))
-	command = binary.BigEndian.AppendUint32(command, ccQuote)
-	return append(command, body...), nil
+	return &tpm2.Quote{
+		SignHandle:     tpm2.AuthHandle{Handle: akHandle, Name: name, Auth: tpm2.PasswordAuth(nil)},
+		QualifyingData: tpm2.TPM2BData{Buffer: qualifying},
+		InScheme:       tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgNull},
+		PCRSelect: tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{
+			{Hash: tpm2.TPMAlgSHA256, PCRSelect: tpm2.PCClientCompatible.PCRs(selected...)}}},
+	}, nil
 }
 
-// transact sends one command and reads one response. The kernel device returns the whole response to
-// one read; a socket may return it in pieces.
-func transact(device io.ReadWriter, command []byte) ([]byte, error) {
-	if _, err := device.Write(command); err != nil {
-		return nil, errors.New("the TPM did not take the command")
+// quoted returns the two values deploy/baremetal/attest.py's verifier takes from a quote: the signed
+// TPMS_ATTEST, exactly as the TPM returned it, and its ECDSA signature in DER.
+func quoted(response *tpm2.QuoteResponse) (attest, signature []byte, err error) {
+	if response.Signature.SigAlg != tpm2.TPMAlgECDSA {
+		return nil, nil, errors.New("the quote is not signed with ECDSA")
 	}
-	buffer := make([]byte, 4096)
-	have := 0
-	for have < 10 || have < int(binary.BigEndian.Uint32(buffer[2:6])) {
-		if have >= 10 && binary.BigEndian.Uint32(buffer[2:6]) > uint32(len(buffer)) {
-			return nil, errors.New("the TPM's response is too long")
-		}
-		n, err := device.Read(buffer[have:])
-		have += n
-		if err != nil || n == 0 {
-			return nil, errors.New("the TPM's response is truncated")
-		}
-	}
-	return buffer[:binary.BigEndian.Uint32(buffer[2:6])], nil
-}
-
-// tpmQuote asks the TPM for a quote and returns the signed TPMS_ATTEST and its ECDSA signature in DER,
-// the two values deploy/baremetal/attest.py's verifier takes.
-func tpmQuote(device io.ReadWriter, qualifying []byte, pcrs []int) (attest, signature []byte, err error) {
-	command, err := quoteCommand(akHandle, qualifying, pcrs)
-	if err != nil {
-		return nil, nil, err
-	}
-	reply, err := transact(device, command)
-	if err != nil {
-		return nil, nil, err
-	}
-	r := &reader{data: reply}
-	tag, _, code := r.u16(), r.u32(), r.u32()
-	if r.bad {
-		return nil, nil, errors.New("the TPM's response is truncated")
-	}
-	if code != 0 {
-		// 0x921 is dictionary-attack lockout (deploy/baremetal/tpm-lockout.sh); 0x18b a missing AK
-		return nil, nil, fmt.Errorf("the TPM refused the quote (response code 0x%03x)", code)
-	}
-	if tag != stSessions {
-		return nil, nil, errors.New("the TPM's response has no session area")
-	}
-	r.u32() // parameter size
-	attest = r.sized()
-	if r.u16() != algECDSA || r.u16() != algSHA256 {
+	ecc, err := response.Signature.Signature.ECDSA()
+	if err != nil || ecc.Hash != tpm2.TPMAlgSHA256 {
 		return nil, nil, errors.New("the quote is not signed with ECDSA and SHA-256")
 	}
-	sigR, sigS := r.sized(), r.sized()
-	if r.bad || len(attest) == 0 || len(sigR) == 0 || len(sigS) == 0 {
+	attest = response.Quoted.Bytes()
+	if len(attest) == 0 || len(ecc.SignatureR.Buffer) == 0 || len(ecc.SignatureS.Buffer) == 0 {
 		return nil, nil, errors.New("the TPM's quote is malformed")
 	}
-	signature, err = asn1.Marshal(struct{ R, S *big.Int }{new(big.Int).SetBytes(sigR), new(big.Int).SetBytes(sigS)})
+	signature, err = asn1.Marshal(struct{ R, S *big.Int }{new(big.Int).SetBytes(ecc.SignatureR.Buffer), new(big.Int).SetBytes(ecc.SignatureS.Buffer)})
 	if err != nil {
 		return nil, nil, err
 	}
 	return attest, signature, nil
+}
+
+// tpmQuote asks the TPM for a quote by its attestation key.
+func tpmQuote(device tpmtransport.TPM, qualifying []byte, pcrs []int) (attest, signature []byte, err error) {
+	public, err := tpm2.ReadPublic{ObjectHandle: akHandle}.Execute(device)
+	if err != nil {
+		// e.g. TPM_RC_HANDLE: no attestation key at that handle (node-init was not run on this TPM)
+		return nil, nil, fmt.Errorf("the TPM has no usable attestation key (%v)", err)
+	}
+	command, err := quoteCommand(public.Name, qualifying, pcrs)
+	if err != nil {
+		return nil, nil, err
+	}
+	response, err := command.Execute(device)
+	if err != nil {
+		// e.g. TPM_RC_LOCKOUT: dictionary-attack lockout (deploy/baremetal/tpm-lockout.sh)
+		return nil, nil, fmt.Errorf("the TPM refused the quote (%v)", err)
+	}
+	return quoted(response)
 }
