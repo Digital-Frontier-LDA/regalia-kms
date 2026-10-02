@@ -474,6 +474,18 @@ class Hold(Case):
         self.assertEqual(self.holder.install(short, self.m1), 300)
         self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
 
+    def test_a_preferred_lease_is_held_whatever_its_life_and_is_verified_like_any_other(self):
+        self.holder.install(self.issue("c"), self.m1)
+        body = dict(self.issue("b")["lease"], expires_at=hbt.stamp(self.now + 100))
+        short = sign(body, self.keys["b"])
+        self.assertEqual(self.holder.install(short, self.m1, prefer=True), 100)
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "b")
+        self.refused("answers no request this node has outstanding", self.holder.install, short, self.m1, prefer=True)   # a replay, preferred or not
+        forged = sign(dict(self.issue("b")["lease"], node_id="c"), self.keys["b"])
+        with self.assertRaises(m.Refused):
+            self.holder.install(forged, self.m1, prefer=True)
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "b")
+
     def test_a_late_answer_to_an_older_request_never_displaces_the_lease_held(self):
         """Found by an independent read of #160. r1 is asked, then r2; r2's lease is installed; r1's answer
         arrives afterwards with the same expiry (the common case when both are cut at the issuer's heartbeat

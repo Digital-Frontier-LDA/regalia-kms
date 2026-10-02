@@ -232,6 +232,34 @@ class DaemonStart(Case):
         self.ticks += 5000
         self.assertEqual(self.service.step()["requested_boottime_ms"], renewed["requested_boottime_ms"])
 
+    def test_a_renewal_for_the_daemon_is_held_even_if_it_has_less_life_than_the_lease_held(self):
+        """Found by an independent read. The issuer dates a lease by ITS clock and cuts it at ITS heartbeat's
+        expiry, so the lease asked for after the daemon started can end before the one held. Keeping the
+        longer one left the daemon refusing every token, and the service asking again every round."""
+        first = self.service.step()
+
+        def shorter(request):
+            body = dict(self.issue("c", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + lease.MAX_LIFETIME - 5))
+            return lt.sign(body, self.keys["c"])
+        self.service.renew = shorter
+        self.later(1)
+        self.started = self.ticks - 500
+        renewed = self.service.step()
+        self.assertEqual(renewed["requested_boottime_ms"], self.ticks)                        # the new lease is the one held
+        self.assertEqual(renewed["serve_until_boottime_ms"] - first["serve_until_boottime_ms"], -5000 + 1000)   # 5 s shorter, read 1 s later
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
+        self.later(5)
+        self.assertEqual(self.service.step()["requested_boottime_ms"], renewed["requested_boottime_ms"])   # and it is not asked for again
+        # on the schedule, with no daemon waiting, the longer lease is still the one kept
+        self.later(lease.MAX_LIFETIME // 3 + 5)
+
+        def much_shorter(request):
+            body = dict(self.issue("b", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + 20))
+            return lt.sign(body, self.keys["b"])
+        self.service.renew = much_shorter
+        kept = self.service.step()
+        self.assertEqual((kept["requested_boottime_ms"], self.holder.held()["lease"]["issuer"]), (renewed["requested_boottime_ms"], "c"))
+
     def test_a_lease_asked_for_at_the_very_tick_the_daemon_started_is_not_after_it(self):
         first = self.service.step()
         self.started = first["requested_boottime_ms"]

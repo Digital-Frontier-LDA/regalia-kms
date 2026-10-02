@@ -297,12 +297,16 @@ class Holder:
             self._write(state)
         return {"node_id": self.node_id, "session_id": self.session_id, "nonce": nonce}
 
-    def install(self, envelope, manifest):
-        """Take a lease a peer returned. Returns the seconds the held lease has left."""
+    def install(self, envelope, manifest, prefer=False):
+        """Take a lease a peer returned. Returns the seconds the held lease has left. Of the lease held and
+        the one returned, the longer-lived is kept, and on a tie the one returned. With `prefer`, the one
+        returned is held whatever its life: the caller needs a lease asked for NOW (the daemon started
+        after the held one was asked for, admission.py), and a shorter one that the daemon serves on is
+        worth more than a longer one it refuses."""
         with membership._exclusive(self.lock_path):
-            return self._install(envelope, manifest)
+            return self._install(envelope, manifest, prefer)
 
-    def _install(self, envelope, manifest):
+    def _install(self, envelope, manifest, prefer=False):
         state = self._read()
         now = self._now(state)
         left = verify(envelope, manifest, now, self.run)
@@ -324,7 +328,7 @@ class Holder:
             try:
                 held_left = verify(held, manifest, now, self.run)
                 self._mine(held["lease"])
-                keep = held_left > left
+                keep = held_left > left and not prefer
             except Refused:
                 pass
         if keep:

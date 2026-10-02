@@ -185,11 +185,14 @@ class Service:
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
-            if self.holder.due(manifest) or self._daemon_waits():
+            waits = self._daemon_waits()
+            if waits or self.holder.due(manifest):
                 request = self.holder.request()
                 self._remember(request["nonce"], self.boottime())
                 try:
-                    self.holder.install(self.renew(request), manifest)
+                    # asked for the daemon's sake: this lease is the one to hold, even if a peer whose clock
+                    # runs behind, or whose heartbeat ends sooner, gave it less life than the one held
+                    self.holder.install(self.renew(request), manifest, prefer=waits)
                 except Exception as failure:      # a peer is down, or refused: what the node still holds decides
                     reason = "renewal failed: %s" % failure
             before = self.boottime()              # read BEFORE the check: the bound can only come out earlier
