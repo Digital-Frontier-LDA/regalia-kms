@@ -11,6 +11,11 @@ Commissioning has two halves:
   signed by the commissioning evidence key, which is trusted only by its recorded SHA-256). It exits 1
   unless every measured control is true AND the evidence is valid and agrees (section 5).
 
+> **Every Python command in this document is written `python3 -Es …`, and is meant to be typed that
+> way.** `-E` ignores the `PYTHON*` variables of the shell it is typed in and `-s` ignores the user's
+> own site-packages, so nothing left in root's environment or under `~/.local` runs inside a tool that
+> signs commissioning evidence or renders the firewall. Run them from the checkout's top directory.
+
 ## 1. Intake of a used server (before trusting it)
 
 1. Update the **System ROM** and **iLO 4** firmware from HPE's signed packages (the Service Pack for
@@ -149,7 +154,7 @@ Commissioning has two halves:
   (`deploy/baremetal/admission.py`) reports that this node holds a runtime lease: without one,
   `/v1/health/ready` is 503 and every key operation is a 503 `DEPENDENCY_UNAVAILABLE`, audited as
   `not-admitted`. `/run/regalia` must be root's, mode 0755, and the two files in it root's, mode 0644.
-  `python3 -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
+  `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
   it asked for after the token was back (after the daemon's own start, for a restart): until then that
@@ -161,6 +166,23 @@ Commissioning has two halves:
   PIN-block reset, as any failed login does. This holds for every key the daemon serves: the HSM's, a
   YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
+- **Authenticated time (`authtime.py`; the unit is NOT BUILT yet, #80).** Every expiry here (a
+  heartbeat's, a lease's) is judged against the clock, so the clock itself must be vouched for. It counts
+  as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
+  (declare servers of independent operators, so that no single operator can move the clock; with
+  exactly two, one operator's outage stops the nodes, so declare **three**), with no source that was not
+  declared or is not NTS, an update within the last hour, and no correction pending. `authtime.conf()`
+  renders the **whole** `chrony.conf`: no `pool`, no `sourcedir` (the distribution's default takes
+  servers from DHCP that way), no `refclock`; and chronyd must be the only thing on the host that sets
+  the clock (no systemd-timesyncd beside it). A host whose RTC is far off never authenticates, because
+  NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
+  service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
+  services believe it for 60 s.
+  **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
+  node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
+  intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
+  for the time itself; an outage of the NTS servers, or of that path, longer than those bounds stops the
+  nodes. Proven against live chrony daemons in `e2e/authtime-chrony-nts.py`.
 
 ### OpenSC leaves the YubiKey to the PIV backend
 
@@ -213,7 +235,7 @@ install -d -m 0755 /etc/nftables.d
 # Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
 # a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
 tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
-if python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
+if python3 -Es deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
   chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
 else
   rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
@@ -237,7 +259,7 @@ Measured: `firewall_default_deny` (the table is loaded, with input, output and f
 drop). Checked by behaviour from each zone after commissioning:
 
 ```sh
-python3 deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
+python3 -Es deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
 ```
 
 (`monitoring`, `admin`, `unauthorized` likewise). `e2e/baremetal-firewall-netns.sh` runs the whole
@@ -276,7 +298,7 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
-4. **Attestation key (three-site, #65):** `python3 deploy/baremetal/attest.py node-init --out DIR`
+4. **Attestation key (three-site, #65):** `python3 -Es deploy/baremetal/attest.py node-init --out DIR`
    creates the EK and a restricted AK and exports their public areas; a peer enrolls the AK with
    `challenge` / `node-activate` / `enroll` and then verifies quotes with `nonce` / `node-quote` /
    `verify`. Proven on a software TPM (`e2e/tpm-attest-swtpm.sh`); the PCRs to expect and the EK
@@ -369,7 +391,7 @@ Sign the evidence with the commissioning evidence key (`openssl dgst -sha256 -si
 E.json.sig E.json`), then:
 
 ```sh
-sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
   --evidence-key commissioning-p256.pem --evidence-key-sha256 <recorded fingerprint>
 ```
 

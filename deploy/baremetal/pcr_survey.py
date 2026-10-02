@@ -2,9 +2,9 @@
 """Survey a KMS host's PCRs across boots and classify them (#65, PoC 5.2 and 5.3), so the PCR policy the
 disk, the PIN and the WG-BOOT key are sealed to is chosen from real DL360 evidence, not assumed.
 
-    sudo python3 deploy/baremetal/pcr_survey.py snapshot --label same      --out survey/   # once per boot
-    sudo python3 deploy/baremetal/pcr_survey.py snapshot --label kernel    --out survey/   # after changing only the kernel
-    python3 deploy/baremetal/pcr_survey.py classify survey/                                # the table
+    sudo python3 -Es deploy/baremetal/pcr_survey.py snapshot --label same      --out survey/   # once per boot
+    sudo python3 -Es deploy/baremetal/pcr_survey.py snapshot --label kernel    --out survey/   # after changing only the kernel
+    python3 -Es deploy/baremetal/pcr_survey.py classify survey/                                # the table
 
 Labels say what changed since the PREVIOUS boot: `same` (nothing; a plain reboot), `kernel`,
 `initramfs`, `cmdline`, `bootloader`, `firmware`, `secureboot` (keys or state). The first snapshot

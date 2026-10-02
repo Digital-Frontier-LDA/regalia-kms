@@ -52,7 +52,7 @@ reader(){ reader_of "$1"; echo "$READER"; }
 # Secrets go into sc-hsm-tool's own prompts over a pty, never on argv (e2e/lib/sc-hsm-pty.py).
 schsm(){ local card="$1" pw="$2"; shift 2
   SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$pw" \
-    "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
+    python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 # Also main-shell: a slot that does not resolve stops the drill here, not as an empty --slot later.
 slot_of(){ SLOT="$(hsm_slot_id_for "$1" 2>/dev/null || true)"; [ -n "$SLOT" ] || die "PKCS#11 cannot see $1"; }
 slot_of "$A"; SLOT_A="$SLOT"; slot_of "$B"; SLOT_B="$SLOT"

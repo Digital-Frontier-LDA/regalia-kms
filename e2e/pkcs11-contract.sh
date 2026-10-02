@@ -44,7 +44,7 @@ W="$(mktemp -d)"; ID_EC=""; ID_RSA=""; CREATED=()
 # selected, so a concurrent OpenPGP login by another process lands on PIV and spends PIV PIN tries (three
 # were spent that way on 2026-10-02). Unless the caller set OPENSC_CONF, the YubiKey's reader is ignored.
 if [ -z "${OPENSC_CONF:-}" ]; then
-  IGN="$(python3 -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()) or "\"__none__\"")' "${HSM_IGNORE_READERS:-Yubico}")"
+  IGN="$(python3 -I -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()) or "\"__none__\"")' "${HSM_IGNORE_READERS:-Yubico}")"
   printf 'app default {\n  ignored_readers = %s;\n}\n' "$IGN" > "$W/opensc.conf"
   export OPENSC_CONF="$W/opensc.conf"; OWN_OPENSC_CONF=1
 fi
@@ -55,13 +55,13 @@ trap 'cleanup_keys; rm -rf "$W"' EXIT
 pass=0; fail=0
 # Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
 # program would carry it in argv) and never interpreted as regex syntax.
-log(){ printf '%s\n' "$*" | python3 -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
+log(){ printf '%s\n' "$*" | python3 -I -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 
 # The slot holding the token with this serial; exactly one, or refuse.
-slot_of(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+slot_of(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 serial = sys.argv[1]; slot = None; hits = []
 for line in sys.stdin:
@@ -73,7 +73,7 @@ SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL (p
 # ONE READER ONLY from here on (e2e/lib/opensc_isolate.py): another token can no longer take this
 # token's slot ID when its reader disappears, and OpenSC stops probing the other cards.
 if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
-  HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
+  HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 -Es "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
     || die "cannot isolate this token's reader in OpenSC"
   SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
   [ "$(timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
@@ -83,7 +83,7 @@ fi
 # be the ONLY slot. During a removal the check fails and no PIN is sent; a reader that arrived later and
 # took this slot ID fails it too. Residual: the token removed AND another arriving in the milliseconds
 # between this check and pkcs11-tool's own login. Every call is bounded (timeout 60 s).
-target_ok(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+target_ok(){ timeout 30 pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -I -c '
 import re, sys
 slot, serial, isolated = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
 cur, slots, hits = None, 0, []
@@ -124,7 +124,7 @@ out="$(p11l --keypairgen --key-type rsa:2048 --id "$ID_RSA" --label "q62-rsa-$UT
 hdr "3  private halves: sensitive, never extractable, local; reading one fails"
 objs="$(p11l --list-objects --type privkey 2>&1)"; log "$objs"
 for id in "$ID_EC" "$ID_RSA"; do
-  acc="$(python3 -c '
+  acc="$(python3 -I -c '
 import re, sys
 id_, text = sys.argv[1], sys.stdin.read()
 for b in text.split("Private Key Object")[1:]:
@@ -134,8 +134,8 @@ for b in text.split("Private Key Object")[1:]:
     P "$id: pkcs11-tool reports Access = $acc"
   else F "$id: Access = ${acc:-not reported}"; fi
   # pkcs11-tool will not read a private key at all, so ask the TOKEN directly (C_GetAttributeValue).
-  out="$(python3 "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"; rc=$?; log "extract probe $id: $out"
-  [ "$rc" = 0 ] && P "$id: the token refuses its secret attributes ($(python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); print("CKA_VALUE "+d["CKA_VALUE"]["rv"]+", PRIVATE_EXPONENT "+d["CKA_PRIVATE_EXPONENT"]["rv"])' <<< "$out" 2>/dev/null))" \
+  out="$(python3 -Es "$HERE/lib/p11_extract_probe.py" "$MODULE" "$SERIAL" "$id" 2>&1)"; rc=$?; log "extract probe $id: $out"
+  [ "$rc" = 0 ] && P "$id: the token refuses its secret attributes ($(python3 -I -c 'import json,sys; d=json.loads(sys.stdin.read()); print("CKA_VALUE "+d["CKA_VALUE"]["rv"]+", PRIVATE_EXPONENT "+d["CKA_PRIVATE_EXPONENT"]["rv"])' <<< "$out" 2>/dev/null))" \
     || F "$id: extraction probe: $out"
 done
 

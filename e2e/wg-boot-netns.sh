@@ -81,7 +81,7 @@ wg genkey > "$T/outsider.key"; wg genkey > "$T/wrong.key"
 # The manifests (epoch 1: all ACTIVE; epoch 2: lisbon REVOKED_STOLEN), the three site configs, and
 # everything rendered from them. The manifest is built here as a fixture; on a host it is the verified
 # one from membership.Store.
-python3 - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
+PYTHONPATH="$HERE" python3 -Ps - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
 import base64, json, sys
 from deploy.baremetal import bootnet, firewall, sitecfg
 from deploy.baremetal import membership as m
@@ -123,7 +123,7 @@ PY
 # WireGuard. The running peers: wg-unlock, WG-SERVICE key. The booting node: wg-boot, WG-BOOT key.
 # apply <namespace> <interface> <rendered configuration> <private key file>: the key is added in memory
 # and the whole thing piped to wg (bootnet.with_key): a configuration applied WITHOUT its key unsets it.
-apply(){ python3 -c '
+apply(){ PYTHONPATH="$HERE" python3 -Ps -c '
 import sys
 from deploy.baremetal import bootnet
 sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
@@ -167,9 +167,9 @@ for other in (8443, 22, 9999):
 cfg, manifest = json.load(open("%s/%s.site.json" % (T, name))), json.load(open(T + "/m1.json"))
 unlock.serve(StandIn(), socket.create_server(("0.0.0.0", port)), caller=bootnet.caller_of(cfg, manifest))
 PY
-for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
+for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 -s "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
 for h in outsider:443 lisbon:22; do
-  x "${h%%:*}" python3 -c "
+  x "${h%%:*}" python3 -I -c "
 import socket
 s = socket.create_server(('0.0.0.0', ${h##*:}))
 while True:
@@ -179,7 +179,7 @@ sleep 1
 
 # asked <namespace> <address> [timeout] [node]: an unlock request in `node`'s name (lisbon's) is answered
 # by the peer with a nonce. Exit 3 when the peer answers with a refusal instead.
-asked(){ x "$1" env PYTHONPATH="$HERE" python3 -c "
+asked(){ x "$1" env PYTHONPATH="$HERE" python3 -Ps -c "
 import json, sys
 from deploy.baremetal import unlock
 unlock.IO_TIMEOUT = float(sys.argv[2])
@@ -188,7 +188,7 @@ try:
 except (OSError, ValueError):
     sys.exit(1)
 sys.exit(0 if reply.get('nonce') else 3 if reply == {'v': 1, 'error': 'DENIED'} else 1)" "$2" "${3:-3}" "${4:-lisbon}"; }
-tcpok(){ x "$1" python3 -c "
+tcpok(){ x "$1" python3 -I -c "
 import socket, sys
 try:
     socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2).close()
@@ -196,7 +196,7 @@ except OSError:
     sys.exit(1)" "$2" "$3"; }
 # stray <namespace> <address> <port>: a lone ACK segment, belonging to no connection, sent to that port.
 # Exit 0 when the host's TCP answered it (a RST): the segment reached the stack. Exit 1 when nothing came.
-stray(){ x "$1" python3 -c "
+stray(){ x "$1" python3 -I -c "
 import os, socket, struct, sys, time
 there, port = sys.argv[1], int(sys.argv[2])
 probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect((there, port)); here = probe.getsockname()[0]; probe.close()
@@ -245,7 +245,7 @@ for h in porto faro; do
   x "$h" nft -c -f "$T/$h.nft" && x "$h" nft -f "$T/$h.nft" && P "$h: the host firewall with the boot mesh loads" || F "$h: the host firewall does not load"
 done
 x lisbon nft -c -f "$T/lisbon.boot.nft" && x lisbon nft -f "$T/lisbon.boot.nft" && P "lisbon: the initrd ruleset loads" || F "lisbon: the initrd ruleset does not load"
-pol="$(x lisbon nft -j list table inet regalia_boot | python3 -c '
+pol="$(x lisbon nft -j list table inet regalia_boot | python3 -I -c '
 import json, sys
 d = json.load(sys.stdin)["nftables"]
 print(" ".join(sorted("%s=%s" % (c["chain"]["name"], c["chain"].get("policy")) for c in d if "chain" in c)))')"

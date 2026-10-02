@@ -23,7 +23,7 @@ An administrator does not learn host keys from the first connection. `ssh_trust.
 `known_hosts` file from the manifest:
 
 ```sh
-python3 -m deploy.baremetal.ssh_trust --chain chain.json --root-key "$ROOT_KEY_HEX" --at-least-epoch 7 \
+python3 -Es -m deploy.baremetal.ssh_trust --chain chain.json --root-key "$ROOT_KEY_HEX" --at-least-epoch 7 \
     --known-hosts ~/.ssh/regalia_known_hosts --addresses addresses.json --ssh-config ~/.ssh/regalia_config
 ssh -F ~/.ssh/regalia_config a
 ```

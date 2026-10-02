@@ -68,7 +68,7 @@ hdr "3  wrong or altered blobs are refused before any card is looked at"
 enc "$W/B.pem" "$W/b.blob"
 out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/b.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "a blob for TPM B is refused on A, before the card check (exit $rc)" || F "B's blob: $out"
-python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/a.blob" "$W/bad.blob"
+python3 -I -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/a.blob" "$W/bad.blob"
 out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "an altered blob is refused before the card check (exit $rc)" || F "altered blob: $out"
 

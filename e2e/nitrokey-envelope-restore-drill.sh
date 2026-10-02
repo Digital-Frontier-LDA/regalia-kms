@@ -55,7 +55,7 @@ phase(){ REGALIA_ENVDRILL_PHASE="$1" REGALIA_ENVDRILL_MODULE="$MODULE" REGALIA_E
 passed(){ grep -q -- "--- PASS: TestEnvelopeSurvivesTokenWipeAndDKEKRestore" <(tail -40 "$LOG"); }
 # PINs and the DKEK password are typed into sc-hsm-tool's prompts over a pty, never put on argv
 # (`env:NAME` would do it too). See e2e/lib/sc-hsm-pty.py.
-schsm(){ SCHSM_SO_PIN="$HSM_SO_PIN" SCHSM_USER_PIN="$HSM_USER_PIN" SCHSM_DKEK_PW="$DKEK_PW" "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
+schsm(){ SCHSM_SO_PIN="$HSM_SO_PIN" SCHSM_USER_PIN="$HSM_USER_PIN" SCHSM_DKEK_PW="$DKEK_PW" python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 initialise(){
   schsm --reader "$READER" --initialize \
     --dkek-shares 1 --label regalia-drill >>"$LOG" 2>&1 || die "initialise failed"
