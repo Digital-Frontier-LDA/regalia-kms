@@ -11,11 +11,31 @@
 # the transaction bytes come from cosmpy's GENERATED bindings (e2e/cosmos_kms_tx.py), never from an
 # encoder in this repository. The node's verdict is the evidence.
 #
-# ARMS, in order, each against the same live chain:
-#   1. KMS-signed MsgSend       -> committed with code 0, and the balances move by exactly the amount
-#   2. the same TxRaw replayed  -> rejected, and no balance moves
-#   3. a KMS signature over a SignDoc for ANOTHER chain id -> rejected by the node's signature check
-#   4. a destination the policy does not allow -> refused by the KMS BEFORE the token; nothing to send
+# ARMS, in order, each against the same live chain. "The KMS" keeps ONE durable policy journal for
+# the whole run, as the daemon does; "another KMS" is the same code with an empty journal and, where
+# said, a policy that allows what this one refuses. It exists to show what the NODE does when only the
+# node is left to refuse.
+#    1. KMS-signed MsgSend            -> committed with code 0; the balances move by exactly amount + fee
+#    2. the same TxRaw replayed       -> rejected by the node (code 19); no balance moves
+#    3. another chain id              -> refused by the KMS (rule cosmos); signed by another KMS, the
+#                                        node rejects the signature (code 4)
+#    4. a destination outside policy  -> refused by the KMS (rule cosmos) before the token
+#    5. account sequence              -> a skipped and a reused sequence are refused by the KMS (rule
+#                                        sequence); signed by another KMS, the node rejects it (code 32)
+#    6. account number                -> another account's number is refused by the KMS (rule cosmos);
+#                                        signed by another KMS, the node rejects the signature (code 4)
+#    7. fee and gas                   -> a fee or gas limit over the cap is refused by the KMS (rule
+#                                        cosmos); a gas limit the KMS allows but the chain cannot run
+#                                        in is rejected by the node (code 11)
+#    8. several messages              -> two allowed MsgSends commit and move the sum; one disallowed
+#                                        destination, or a sum over the per-transaction cap, is refused
+#    9. malformed sign bytes          -> a memo and a truncated SignDoc are refused by the parser
+#   10. daily quota                   -> the send that would cross the cap is refused (rule quota); a
+#                                        smaller one at the SAME sequence then commits
+#   11. promotion                     -> the promoted epoch signs the next sequence and it commits; the
+#                                        superseded epoch is then refused (rule epoch)
+# The run ends by checking the chain's own sequence and the KMS balance against the sum of what was
+# committed, so a refused arm that moved anything fails there even if its own check missed it.
 #
 # EVIDENCE CLASS: emulated by default (SoftHSM); PHYSICAL with REGALIA_COSMOS_TOKEN_SERIAL (see below).
 # The chain, the encoding and the KMS path are real either way; the final line names the class.
@@ -123,53 +143,176 @@ until [ "$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "
 done
 say "funded: $("$PY" "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$KMS_ADDR" --denom stake) stake"
 
-# kms_sign <dir> <chain-id-the-policy-allows> <allowed-destination> [expect-deny]
+# ---- the policy the KMS enforces, fixed by the operator, never read from a SignDoc ----------------
+MAX_GAS=300000 MAX_FEE=1000 MAX_PER_TX=20000 MAX_PER_DAY=30000
+EPOCH_HELD=7 EPOCH_PROMOTED=8
+NOW="$(date +%s)"
+ACCT=""   # the KMS account's number on this chain; read from the chain before arm 1
+
+# kms_sign <dir> [NAME=value ...] — one request to the KMS. NAME overrides REGALIA_COSMOS_NODE_NAME
+# for that request only (the policy another KMS would hold, or the refusal an arm expects).
 kms_sign() {
-  local out
-  out="$(REGALIA_COSMOS_NODE_SIGNDOC="$1/signdoc.bin" REGALIA_COSMOS_NODE_SIGNATURE_OUT="$1/sig.bin" \
+  local dir="$1" out kv; shift
+  local -a over=()
+  for kv in "$@"; do over+=("REGALIA_COSMOS_NODE_$kv"); done
+  rm -f -- "$dir/sig.bin"
+  out="$(env REGALIA_COSMOS_NODE_SIGNDOC="$dir/signdoc.bin" REGALIA_COSMOS_NODE_SIGNATURE_OUT="$dir/sig.bin" \
      REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$SERIAL" REGALIA_PKCS11_E2E_PIN="$PIN" \
-     REGALIA_COSMOS_NODE_OBJECT_ID="$OBJECT_ID" REGALIA_COSMOS_NODE_CHAIN_ID="$2" REGALIA_COSMOS_NODE_ALLOWED_DESTINATION="$3" \
-     REGALIA_COSMOS_NODE_EXPECT_DENY="${4:-0}" \
+     REGALIA_COSMOS_NODE_OBJECT_ID="$OBJECT_ID" REGALIA_COSMOS_NODE_CHAIN_ID="$CHAIN_ID" \
+     REGALIA_COSMOS_NODE_ACCOUNT_NUMBER="$ACCT" REGALIA_COSMOS_NODE_SOURCE="$KMS_ADDR" \
+     REGALIA_COSMOS_NODE_ALLOWED_DESTINATION="$NODE0" REGALIA_COSMOS_NODE_POLICY_STATE="$STATE/policy-state.jsonl" \
+     REGALIA_COSMOS_NODE_MAX_GAS="$MAX_GAS" REGALIA_COSMOS_NODE_MAX_FEE="$MAX_FEE" \
+     REGALIA_COSMOS_NODE_MAX_PER_TX="$MAX_PER_TX" REGALIA_COSMOS_NODE_MAX_PER_DAY="$MAX_PER_DAY" \
+     REGALIA_COSMOS_NODE_EPOCH="$EPOCH_HELD" REGALIA_COSMOS_NODE_NOW="$NOW" "${over[@]}" \
      go -C "$ROOT" test -count=1 -v -run '^TestCosmosKMSSignsASignDocForALiveNode$' ./internal/integration 2>&1)" \
      || { printf '%s\n' "$out" >&2; return 1; }
   # A SKIP IS NOT A SIGNATURE. The test skips when its environment is incomplete; that must fail here.
   grep -q -- '--- PASS: TestCosmosKMSSignsASignDocForALiveNode' <<< "$out" || { printf '%s\n' "$out" >&2; return 1; }
 }
-build() { "$PY" "$ROOT/e2e/cosmos_kms_tx.py" build --rest "$REST" --from "$KMS_ADDR" --denom stake --fee 1 --gas 200000 \
-            --pubkey-der "$STATE/pub.der" "$@"; }
+# build [cosmpy build flags] — FEE and GAS may be set for one call.
+build() { "$PY" "$ROOT/e2e/cosmos_kms_tx.py" build --rest "$REST" --from "$KMS_ADDR" --denom stake --fee "${FEE:-1}" --gas "${GAS:-200000}" \
+            --chain-id "$CHAIN_ID" --pubkey-der "$STATE/pub.der" "$@"; }
 balance() { "$PY" "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$1" --denom stake; }
+broadcast() { "$PY" "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$1" --signature "$1/sig.bin"; }
+
+negatives=0
+kms_balance=""   # what the KMS account must hold; only a committed transaction changes it
+# kms_refuses <what> <dir> <refusal> [NAME=value ...] — the KMS must refuse for exactly that reason,
+# and leave no signature behind.
+kms_refuses() {
+  local what="$1" dir="$2" refusal="$3"; shift 3
+  kms_sign "$dir" EXPECT_REFUSAL="$refusal" "$@" || fail "$what: the KMS did not refuse with '$refusal'"
+  [ ! -e "$dir/sig.bin" ] || fail "$what: a refused request still produced a signature"
+  negatives=$((negatives + 1))
+  say "  refused by the KMS ($refusal): $what"
+}
+# node_rejects <what> <dir> <code> — the node must reject the signed transaction with exactly that ABCI
+# code, and no balance may move.
+node_rejects() {
+  local what="$1" dir="$2" want="${3:?node_rejects needs the expected ABCI code}" r code
+  r="$(broadcast "$dir")"
+  code="$(jq -r .code <<< "$r")"
+  [ "$(jq -r .committed <<< "$r")" != true ] && [ "$code" != 0 ] || fail "$what: the node ACCEPTED it: $r"
+  [ "$code" = "$want" ] || fail "$what: the node rejected it with code $code, expected $want: $r"
+  [ "$(balance "$KMS_ADDR")" -eq "$kms_balance" ] || fail "$what: a rejected transaction moved the balance"
+  negatives=$((negatives + 1))
+  say "  rejected by the node (code $code: $(jq -r .log <<< "$r" | cut -c1-70)): $what"
+}
+# node_commits <what> <dir> <total-amount> — the node must commit it and the KMS account must pay
+# exactly the amount and the fee.
+commits=0
+node_commits() {
+  local what="$1" dir="$2" amount="$3" r
+  r="$(broadcast "$dir")"
+  [ "$(jq -r .committed <<< "$r")" = true ] || fail "$what: the node did not commit the KMS-signed tx: $r"
+  kms_balance=$(( kms_balance - amount - 1 ))
+  [ "$(balance "$KMS_ADDR")" -eq "$kms_balance" ] || fail "$what: the KMS balance is $(balance "$KMS_ADDR"), expected $kms_balance"
+  commits=$((commits + 1))
+  say "  committed (tx $(jq -r .txhash <<< "$r" | cut -c1-16)…, height $(jq -r .height <<< "$r")): $what"
+}
+# Another KMS: an empty journal of its own, so nothing this run reserved constrains it.
+other_kms() { local dir="$1"; shift; kms_sign "$dir" POLICY_STATE="$dir/other-kms-state.jsonl" "$@"; }
 AMOUNT=12345
 
 # ---- arm 1: the KMS signs, the node commits -----------------------------------------------------
-kms0="$(balance "$KMS_ADDR")"; n0="$(balance "$NODE0")"
-read -r ACCT SEQ < <(build --chain-id "$CHAIN_ID" --to "$NODE0" --amount "$AMOUNT" --out "$STATE/tx1")
-kms_sign "$STATE/tx1" "$CHAIN_ID" "$NODE0" || fail "the KMS did not sign the cosmpy SignDoc"
-r1="$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$STATE/tx1" --signature "$STATE/tx1/sig.bin")"
-[ "$(jq -r .committed <<< "$r1")" = true ] || fail "node did not commit the KMS-signed tx: $r1"
-kms1="$(balance "$KMS_ADDR")"; n1="$(balance "$NODE0")"
-[ $(( kms0 - kms1 )) -eq $(( AMOUNT + 1 )) ] || fail "KMS balance moved by $(( kms0 - kms1 )), expected $(( AMOUNT + 1 ))"
+kms_balance="$(balance "$KMS_ADDR")"; n0="$(balance "$NODE0")"
+read -r ACCT SEQ < <(build --to "$NODE0" --amount "$AMOUNT" --out "$STATE/tx1")
+kms_sign "$STATE/tx1" || fail "the KMS did not sign the cosmpy SignDoc"
+node_commits "MsgSend of $AMOUNT (account $ACCT, sequence $SEQ)" "$STATE/tx1" "$AMOUNT"
+n1="$(balance "$NODE0")"
 # node0 is also the validator and collects fees, so it gains the amount plus, at most, the fee.
 { [ $(( n1 - n0 )) -ge "$AMOUNT" ] && [ $(( n1 - n0 )) -le $(( AMOUNT + 1 )) ]; } || fail "node0 balance moved by $(( n1 - n0 ))"
-say "ARM 1 PASS: KMS-signed MsgSend committed (account $ACCT, sequence $SEQ, tx $(jq -r .txhash <<< "$r1"), height $(jq -r .height <<< "$r1"))"
+say "ARM 1 PASS: a KMS-signed MsgSend is committed and moves exactly the amount and the fee"
 
 # ---- arm 2: replaying the committed transaction is rejected -------------------------------------
-r2="$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$STATE/tx1" --signature "$STATE/tx1/sig.bin")"
-[ "$(jq -r .code <<< "$r2")" != 0 ] || fail "the node ACCEPTED a replayed transaction: $r2"
-[ "$(balance "$KMS_ADDR")" -eq "$kms1" ] || fail "a replay moved the balance"
-say "ARM 2 PASS: replay rejected (code $(jq -r .code <<< "$r2"): $(jq -r .log <<< "$r2" | cut -c1-80))"
+node_rejects "the committed TxRaw, broadcast again" "$STATE/tx1" 19
+say "ARM 2 PASS: replay rejected"
 
 # ---- arm 3: a valid KMS signature over the wrong chain id is rejected by the node ---------------
-read -r _ _ < <(build --chain-id "not-$CHAIN_ID" --to "$NODE0" --amount "$AMOUNT" --out "$STATE/tx3")
-kms_sign "$STATE/tx3" "not-$CHAIN_ID" "$NODE0" || fail "the KMS did not sign the wrong-chain SignDoc (the policy allowed that chain)"
-r3="$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$STATE/tx3" --signature "$STATE/tx3/sig.bin")"
-[ "$(jq -r .committed <<< "$r3")" != true ] && [ "$(jq -r .code <<< "$r3")" != 0 ] || fail "the node accepted a signature over another chain id: $r3"
-[ "$(balance "$KMS_ADDR")" -eq "$kms1" ] || fail "a wrong-chain tx moved the balance"
-say "ARM 3 PASS: signature over chain 'not-$CHAIN_ID' rejected (code $(jq -r .code <<< "$r3"))"
+CHAIN_ID="not-$CHAIN_ID" build --to "$NODE0" --amount "$AMOUNT" --out "$STATE/tx3" >/dev/null
+kms_refuses "a SignDoc for chain 'not-$CHAIN_ID'" "$STATE/tx3" cosmos
+other_kms "$STATE/tx3" CHAIN_ID="not-$CHAIN_ID" || fail "another KMS, whose policy allows that chain, did not sign"
+node_rejects "a signature over chain 'not-$CHAIN_ID'" "$STATE/tx3" 4
+say "ARM 3 PASS: another chain id is refused by the KMS, and rejected by the node when signed anyway"
 
 # ---- arm 4: the policy refuses a destination it does not allow, before the token ---------------
-read -r _ _ < <(build --chain-id "$CHAIN_ID" --to "$KMS_ADDR" --amount "$AMOUNT" --out "$STATE/tx4")
-kms_sign "$STATE/tx4" "$CHAIN_ID" "$NODE0" 1 || fail "the policy did not refuse a disallowed destination"
-[ ! -e "$STATE/tx4/sig.bin" ] || fail "a refused request still produced a signature"
-say "ARM 4 PASS: MsgSend to a disallowed destination refused by policy; no signature exists"
+build --to "$KMS_ADDR" --amount "$AMOUNT" --out "$STATE/tx4" >/dev/null
+kms_refuses "MsgSend to a destination outside the policy" "$STATE/tx4" cosmos
+say "ARM 4 PASS: a disallowed destination never reaches the token"
 
-echo "Cosmos KMS-signed transaction accepted by a live node, and 3 negative arms held (chain=$CHAIN_ID evidence=$EVIDENCE)"
+# ---- arm 5: the account sequence ---------------------------------------------------------------
+NEXT=$((SEQ + 1))   # the sequence the chain expects now
+build --to "$NODE0" --amount 100 --sequence $((NEXT + 1)) --out "$STATE/tx5a" >/dev/null
+kms_refuses "sequence $((NEXT + 1)), skipping $NEXT" "$STATE/tx5a" sequence
+build --to "$NODE0" --amount 100 --sequence "$SEQ" --out "$STATE/tx5b" >/dev/null
+kms_refuses "sequence $SEQ, already signed" "$STATE/tx5b" sequence
+other_kms "$STATE/tx5a" || fail "another KMS, with no journal, did not sign the skipped sequence"
+node_rejects "sequence $((NEXT + 1)) while the chain expects $NEXT" "$STATE/tx5a" 32
+say "ARM 5 PASS: an out-of-order sequence is refused by the KMS, and rejected by the node when signed anyway"
+
+# ---- arm 6: the account number -----------------------------------------------------------------
+build --to "$NODE0" --amount 100 --account-number $((ACCT + 1)) --out "$STATE/tx6" >/dev/null
+kms_refuses "account number $((ACCT + 1)), not the policy's $ACCT" "$STATE/tx6" cosmos
+other_kms "$STATE/tx6" ACCOUNT_NUMBER=$((ACCT + 1)) || fail "another KMS, whose policy names that account, did not sign"
+node_rejects "a signature over account number $((ACCT + 1))" "$STATE/tx6" 4
+say "ARM 6 PASS: another account number is refused by the KMS, and rejected by the node when signed anyway"
+
+# ---- arm 7: fee and gas ------------------------------------------------------------------------
+FEE=$((MAX_FEE + 1)) build --to "$NODE0" --amount 100 --out "$STATE/tx7a" >/dev/null
+kms_refuses "a fee of $((MAX_FEE + 1)), over the cap of $MAX_FEE" "$STATE/tx7a" cosmos
+GAS=$((MAX_GAS + 1)) build --to "$NODE0" --amount 100 --out "$STATE/tx7b" >/dev/null
+kms_refuses "a gas limit of $((MAX_GAS + 1)), over the cap of $MAX_GAS" "$STATE/tx7b" cosmos
+GAS=1 build --to "$NODE0" --amount 100 --out "$STATE/tx7c" >/dev/null
+other_kms "$STATE/tx7c" || fail "another KMS did not sign a gas limit of 1, which the policy allows"
+node_rejects "a gas limit of 1" "$STATE/tx7c" 11
+say "ARM 7 PASS: a fee or gas limit over the cap is refused by the KMS; the node rejects a gas limit it cannot run in"
+
+# ---- arm 8: several messages in one transaction ------------------------------------------------
+build --to "$NODE0" --amount 1000 --to "$NODE0" --amount 2000 --out "$STATE/tx8a" >/dev/null
+kms_sign "$STATE/tx8a" || fail "the KMS did not sign two allowed MsgSends"
+node_commits "two MsgSends, 1000 + 2000 (sequence $NEXT)" "$STATE/tx8a" 3000
+NEXT=$((NEXT + 1))
+build --to "$NODE0" --amount 1000 --to "$KMS_ADDR" --amount 1000 --out "$STATE/tx8b" >/dev/null
+kms_refuses "two MsgSends, the second to a destination outside the policy" "$STATE/tx8b" cosmos
+half=$(( MAX_PER_TX / 2 + 1 ))
+build --to "$NODE0" --amount "$half" --to "$NODE0" --amount "$half" --out "$STATE/tx8c" >/dev/null
+kms_refuses "two MsgSends of $half each, together over the per-transaction cap of $MAX_PER_TX" "$STATE/tx8c" cosmos
+say "ARM 8 PASS: every message is checked, and their sum is what the per-transaction cap bounds"
+
+# ---- arm 9: sign bytes the parser must refuse --------------------------------------------------
+build --to "$NODE0" --amount 100 --memo "exchange deposit 42" --out "$STATE/tx9a" >/dev/null
+kms_refuses "a SignDoc carrying a memo" "$STATE/tx9a" signdoc
+build --to "$NODE0" --amount 100 --out "$STATE/tx9b" >/dev/null
+head -c "$(( $(wc -c < "$STATE/tx9b/signdoc.bin") - 1 ))" "$STATE/tx9b/signdoc.bin" > "$STATE/tx9b/truncated.bin"
+mv "$STATE/tx9b/truncated.bin" "$STATE/tx9b/signdoc.bin"
+kms_refuses "a SignDoc truncated by one byte" "$STATE/tx9b" signdoc
+say "ARM 9 PASS: a memo and a truncated SignDoc are refused by the parser, before policy"
+
+# ---- arm 10: the daily quota -------------------------------------------------------------------
+spent=$(( AMOUNT + 3000 ))                 # what the KMS has signed for today: arms 1 and 8
+excess=$(( MAX_PER_DAY - spent + 1 ))      # one more than what is left
+[ "$excess" -le "$MAX_PER_TX" ] || fail "harness: the over-quota send would trip the per-transaction cap instead"
+build --to "$NODE0" --amount "$excess" --out "$STATE/tx10a" >/dev/null
+kms_refuses "a send of $excess with $((MAX_PER_DAY - spent)) left of the daily $MAX_PER_DAY" "$STATE/tx10a" quota
+fits=$(( excess - 1000 ))
+build --to "$NODE0" --amount "$fits" --out "$STATE/tx10b" >/dev/null
+kms_sign "$STATE/tx10b" || fail "the KMS did not sign a send that fits the daily quota (the refusal burned the sequence?)"
+node_commits "a send of $fits at the same sequence $NEXT" "$STATE/tx10b" "$fits"
+NEXT=$((NEXT + 1)); spent=$(( spent + fits ))
+say "ARM 10 PASS: the daily quota refuses the send that would cross it, and the refusal costs no sequence"
+
+# ---- arm 11: active/passive promotion ----------------------------------------------------------
+build --to "$NODE0" --amount 100 --out "$STATE/tx11a" >/dev/null
+kms_sign "$STATE/tx11a" EPOCH="$EPOCH_PROMOTED" || fail "the promoted site (epoch $EPOCH_PROMOTED) did not sign"
+node_commits "the promoted site's send at sequence $NEXT" "$STATE/tx11a" 100
+NEXT=$((NEXT + 1))
+build --to "$NODE0" --amount 100 --out "$STATE/tx11b" >/dev/null
+kms_refuses "sequence $NEXT at the superseded epoch $EPOCH_HELD" "$STATE/tx11b" epoch
+say "ARM 11 PASS: after a promotion the new epoch signs the next sequence, and the superseded site is refused"
+
+# ---- the chain's own account of the run --------------------------------------------------------
+read -r _ chain_seq < <(build --to "$NODE0" --amount 1 --out "$STATE/final")
+[ "$chain_seq" -eq "$NEXT" ] || fail "the chain's sequence is $chain_seq, expected $NEXT: something a refusal should have stopped was committed"
+[ "$(balance "$KMS_ADDR")" -eq "$kms_balance" ] || fail "the KMS balance is $(balance "$KMS_ADDR"), expected $kms_balance"
+
+echo "Cosmos: $commits KMS-signed transactions committed by a live node, and $negatives negative checks held (chain=$CHAIN_ID evidence=$EVIDENCE)"

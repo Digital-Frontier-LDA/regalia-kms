@@ -221,9 +221,10 @@ jobs:
       - name: Fuzz envelope parsing (refusal class and round-trip stability)
         run: go test ./internal/envelope -run='^$' -fuzz=FuzzParseAcceptsOnlyWhatItCanReproduce -fuzztime=20s
 
-  # regalia#439 ACCEPTANCE CRITERION 1, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts a
-  # transaction the KMS signed, and rejects a replay, a wrong-chain signature and a policy-refused
-  # destination (e2e/cosmos-simapp-kms-tx.sh). ADR-0002 D7: simd is built HERE from a pinned Cosmos
+  # regalia#439, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts the transactions the KMS
+  # signed, and every negative case fails for its own reason — replay, chain id, destination,
+  # sequence, account number, fee and gas, several messages, malformed sign bytes, the daily quota
+  # and a superseded epoch (e2e/cosmos-simapp-kms-tx.sh; the table is in e2e/README.md). ADR-0002 D7: simd is built HERE from a pinned Cosmos
   # SDK commit — no binary is downloaded, so the node under test is exactly what the tag's source
   # says. The build is cached by that commit; a cache miss costs one build, never a different binary.
   cosmos-node:
@@ -263,10 +264,35 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/cosmpy"
           "$RUNNER_TEMP/cosmpy/bin/pip" install --quiet cosmpy==0.12.2 cryptography==50.0.1
 
-      - name: A live node accepts a KMS-signed transaction, and 3 negative arms hold
+      - name: A live node accepts KMS-signed transactions, and every negative case fails for its own reason
         env:
           REGALIA_COSMOS_SIMD_BIN: ${{ runner.temp }}/simd
           REGALIA_COSMOS_PYTHON: ${{ runner.temp }}/cosmpy/bin/python
         run: |
           "$REGALIA_COSMOS_SIMD_BIN" version
           e2e/cosmos-simapp-kms-tx.sh
+
+  # regalia-kms#65 PoC 5.1/5.4/5.5: a peer verifies a node's TPM quote. Two software TPMs (swtpm):
+  # the AK is bound to the recorded EK by MakeCredential/ActivateCredential, a fresh quote over the
+  # boot-session transcript is accepted, and a replay, each substituted transcript field, changed
+  # PCRs, another TPM's AK, a session carried across a reboot and rolled-back TPM state are refused.
+  # The script exits nonzero on any FAIL; the count guards against it passing by running nothing.
+  tpm-attest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: TPM attestation against swtpm (enrollment, fresh quote, replay, reboots)
+        run: |
+          status=0
+          bash e2e/tpm-attest-swtpm.sh > "$RUNNER_TEMP/attest.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/attest.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^tpm-attest-swtpm: 31 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
+            echo "::error::the attestation battery did not run all 31 checks" >&2; exit 1; }
