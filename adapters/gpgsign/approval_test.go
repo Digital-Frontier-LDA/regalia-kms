@@ -24,7 +24,9 @@ import (
 func TestTheBindingIsTheBytesAPIMdPublishes(t *testing.T) {
 	payload := sha256.Sum256([]byte("the bytes being signed"))
 	pending := Pending{Version: 1, Mode: ModeDetach, ObjectID: "signing-key-1", Purpose: "release-signing", Environment: "production",
-		Nonce: "nonce-aaaa-bbbb-cccc", ExpiresAt: "2026-01-02T15:04:05Z", Created: "2026-01-02T15:00:00Z", PayloadSHA256: hex.EncodeToString(payload[:])}
+		Nonce: "nonce-aaaa-bbbb-cccc", ExpiresAt: "2026-01-02T15:04:05Z", Created: "2026-01-02T15:00:00Z", PayloadSHA256: hex.EncodeToString(payload[:]),
+		// Not part of the binding: the record's own statement of which file it is for.
+		DocumentSHA256: documentHash([]byte("the file"))}
 	binding, err := pending.Binding()
 	if err != nil {
 		t.Fatal(err)
@@ -288,6 +290,14 @@ func TestApproveAndPrepareRefuseWhatCannotCount(t *testing.T) {
 	tampered.ExpiresAt = "2026-10-01T12:05:00+00:00" // not the canonical form the KMS will rebuild
 	if _, err := Approve(tampered, releaseApprover, approver, fixedNow); err == nil {
 		t.Error("a record with a non-canonical expiry was approved; its approval could never count")
+	}
+	exported, err := key.Prepare(context.Background(), ModeExportKey, nil, fixedNow, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported.DocumentSHA256 = pending.DocumentSHA256
+	if _, err := Approve(exported, releaseApprover, approver, fixedNow); err == nil {
+		t.Error("a key export that names a file was approved")
 	}
 	for _, window := range []time.Duration{30 * time.Second, 2 * time.Hour} {
 		if _, err := key.Prepare(context.Background(), ModeDetach, strings.NewReader("document"), fixedNow, window); err == nil {

@@ -90,11 +90,17 @@ func parse(args []string) (invocation, error) {
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		name, inline, hasInline := strings.Cut(argument, "=")
+		// An empty value is refused, never read as "option absent": `--prepare= --detach FILE`, from
+		// an unset variable in a script, would otherwise be the one-step command and reach the KMS.
 		take := func() (string, error) {
-			if hasInline {
-				return inline, nil
+			taken, err := inline, error(nil)
+			if !hasInline {
+				taken, err = value(&index, name)
 			}
-			return value(&index, name)
+			if err == nil && taken == "" {
+				err = fmt.Errorf("%s needs a value that is not empty", name)
+			}
+			return taken, err
 		}
 		var err error
 		switch {
@@ -292,6 +298,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 	return 0
 }
 
+// maxRecordBytes bounds a pending record or an approval: each is a few hundred bytes of JSON.
+const maxRecordBytes = 64 << 10
+
 // mode says what the command line asks to be signed, and where it comes from and goes by default.
 func (request invocation) mode() (mode gpgsign.Mode, source, destination string) {
 	switch {
@@ -349,9 +358,6 @@ func prepare(ctx context.Context, key *gpgsign.Key, request invocation, stdin io
 	if err != nil {
 		return err
 	}
-	if source != "" {
-		pending.SetDocument(contents)
-	}
 	encoded, err := json.MarshalIndent(pending, "", "  ")
 	if err != nil {
 		return err
@@ -359,8 +365,8 @@ func prepare(ctx context.Context, key *gpgsign.Key, request invocation, stdin io
 	if err := installNew(request.prepare, string(encoded)+"\n"); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "prepared, not signed. To be approved before %s:\n  key          %s\n  object       %s (%s, %s)\n  what         %s\n",
-		pending.ExpiresAt, pending.Fingerprint, pending.ObjectID, pending.Purpose, pending.Environment, pending.Mode)
+	fmt.Fprintf(stdout, "prepared, not signed. To be approved before %s:\n  key          %s\n  object       %s (%s, %s)\n  what         %s, dated %s\n",
+		pending.ExpiresAt, pending.Fingerprint, pending.ObjectID, pending.Purpose, pending.Environment, pending.Mode, pending.Created)
 	if pending.DocumentSHA256 != "" {
 		fmt.Fprintf(stdout, "  file sha256  %s\n", pending.DocumentSHA256)
 	}
@@ -370,9 +376,9 @@ func prepare(ctx context.Context, key *gpgsign.Key, request invocation, stdin io
 
 // complete reads the pending record and the approvals, and finishes the signature.
 func complete(ctx context.Context, key *gpgsign.Key, request invocation, stdin io.Reader, stdout io.Writer, at time.Time) error {
-	record, err := os.ReadFile(request.complete)
+	record, err := protected.ReadBounded(request.complete, maxRecordBytes)
 	if err != nil {
-		return errors.New("open the pending-signature file")
+		return errors.New("the pending-signature file is unreadable or too large")
 	}
 	pending, err := gpgsign.ReadPending(record)
 	if err != nil {
@@ -384,9 +390,9 @@ func complete(ctx context.Context, key *gpgsign.Key, request invocation, stdin i
 	}
 	var approvals []gpgsign.Approval
 	for _, file := range request.approvals {
-		contents, err := os.ReadFile(file)
+		contents, err := protected.ReadBounded(file, maxRecordBytes)
 		if err != nil {
-			return errors.New("open the approval file")
+			return errors.New("the approval file is unreadable or too large")
 		}
 		approval, err := gpgsign.ReadApproval(contents)
 		if err != nil {

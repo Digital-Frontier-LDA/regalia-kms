@@ -638,6 +638,8 @@ func TestTheCommandLineIsStrict(t *testing.T) {
 		{"--complete", "p", "--detach", "f"}, {"--approval", "a", "--detach", "f"}, {"--valid-for", "5m", "--detach", "f"},
 		{"--prepare", "p", "--detach", "f", "--output", "o"}, {"--prepare", "p", "--status-fd=2", "-bsau", "KEY"},
 		{"--complete", "p", "--approval", "a"}, {"--export-key", "--output", "o"},
+		// An empty value is not an absent option: these would otherwise be the one-step command.
+		{"--prepare=", "--detach", "f"}, {"--prepare", "", "--detach", "f"}, {"--complete=", "--detach", "f"}, {"--detach="}, {"--detach", "f", "--output="},
 	}
 	for _, args := range bad {
 		if _, err := parse(args); err == nil {
@@ -881,5 +883,58 @@ func TestPrepareThenCompleteSignsUnderAnApprovalPolicy(t *testing.T) {
 				t.Fatalf("gpg --verify of the approved signature: %v\n%s", err, output)
 			}
 		})
+	}
+}
+
+// --prepare= (an unset variable in a release script) must not turn into the one-step command.
+func TestAnEmptyPrepareValueNeverReachesTheKMS(t *testing.T) {
+	d := newDeployment(t)
+	sums := d.write("SHA256SUMS", []byte("x\n"), 0o644)
+	for _, args := range [][]string{{"--prepare=", "--detach", sums}, {"--prepare", "", "--detach", sums}, {"--complete=", "--approval", "a", "--detach", sums}} {
+		if code, _, stderr := d.invoke("", args...); code != 2 || !strings.Contains(stderr, "not empty") {
+			t.Errorf("%v: exit %d, stderr %q", args, code, stderr)
+		}
+	}
+	if _, err := os.Stat(sums + ".asc"); !os.IsNotExist(err) || d.seen() != 0 {
+		t.Fatalf("an empty option value signed: %d KMS requests", d.seen())
+	}
+}
+
+// A cleartext signature verifies over any file with the same canonical text. --complete emits the
+// file it is given, so it must be given the exact file that was prepared and approved.
+func TestCompleteEmitsOnlyTheExactFileThatWasApproved(t *testing.T) {
+	d := newDeployment(t)
+	_, approverPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.approver = approverPrivate.Public().(ed25519.PublicKey)
+	release := d.write("Release", []byte("Origin: Regalia\nSuite: stable\n"), 0o644)
+	variant := d.write("Release.variant", []byte("Origin: Regalia   \nSuite: stable\n"), 0o644)
+	pendingPath := filepath.Join(d.directory, "Release.pending")
+	if code, _, stderr := d.invoke("", "--prepare", pendingPath, "--clearsign", release); code != 0 {
+		t.Fatalf("--prepare: exit %d, stderr %q", code, stderr)
+	}
+	record, _ := os.ReadFile(pendingPath)
+	pending, err := gpgsign.ReadPending(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := gpgsign.Approve(pending, releaseApprover, approverPrivate, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(approval)
+	approvalPath := d.write("Release.approval", encoded, 0o644)
+	before := d.seen()
+	out := filepath.Join(d.directory, "InRelease")
+	if code, _, stderr := d.invoke("", "--complete", pendingPath, "--approval", approvalPath, "--clearsign", variant, "--output", out); code != 1 || !strings.Contains(stderr, "its SHA-256 is not the record's") {
+		t.Fatalf("a file with the same canonical text and other bytes: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) || d.seen() != before {
+		t.Fatal("the variant was signed or the KMS was asked")
+	}
+	if code, _, stderr := d.invoke("", "--complete", pendingPath, "--approval", approvalPath, "--clearsign", release, "--output", out); code != 0 {
+		t.Fatalf("the exact file: exit %d, stderr %q", code, stderr)
 	}
 }

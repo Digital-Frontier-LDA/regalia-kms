@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -69,10 +70,15 @@ type config struct {
 }
 
 type pkcs11Config struct {
-	Tool       string `json:"tool"`        // absolute path of pkcs11-tool
-	Module     string `json:"module"`      // absolute path of the PKCS#11 module
-	TokenLabel string `json:"token_label"` // e.g. "OpenPGP card (User PIN (sig))"
-	KeyID      string `json:"key_id"`      // CKA_ID, hex
+	Tool   string `json:"tool"`   // absolute path of pkcs11-tool
+	Module string `json:"module"` // absolute path of the PKCS#11 module
+	// The token is named by serial AND label, and exactly one attached token must match. A label
+	// alone is not an identity: every OpenPGP card presents "OpenPGP card (User PIN (sig))", and
+	// with two attached the PIN would be offered to whichever came first. The serial alone is not
+	// enough either: one YubiKey presents two tokens under one serial.
+	TokenSerial string `json:"token_serial"`
+	TokenLabel  string `json:"token_label"` // e.g. "OpenPGP card (User PIN (sig))"
+	KeyID       string `json:"key_id"`      // CKA_ID, hex
 }
 
 func loadConfig(path string) (config, error) {
@@ -105,8 +111,8 @@ func loadConfig(path string) (config, error) {
 	}
 	if device := result.PKCS11; device != nil {
 		id, err := hex.DecodeString(device.KeyID)
-		if !absolute(device.Tool) || !absolute(device.Module) || device.TokenLabel == "" || err != nil || len(id) == 0 {
-			return config{}, errors.New("pkcs11 needs absolute tool and module paths, a token_label and a hex key_id")
+		if !absolute(device.Tool) || !absolute(device.Module) || strings.TrimSpace(device.TokenSerial) == "" || device.TokenLabel == "" || err != nil || len(id) == 0 {
+			return config{}, errors.New("pkcs11 needs absolute tool and module paths, a token_serial, a token_label and a hex key_id")
 		}
 	}
 	return result, nil
@@ -199,7 +205,12 @@ func (signer *tokenSigner) Sign(_ io.Reader, message []byte, _ crypto.SignerOpts
 	if err != nil {
 		return nil, fmt.Errorf("pkcs11 module: %w", err)
 	}
-	arguments := []string{"--module", module, "--token-label", signer.device.TokenLabel, "--login",
+	// Which slot, before any PIN is asked for.
+	slot, err := signer.slot(tool, module)
+	if err != nil {
+		return nil, err
+	}
+	arguments := []string{"--module", module, "--slot", slot, "--login",
 		"--sign", "--mechanism", "EDDSA", "--id", signer.device.KeyID, "--input-file", input, "--output-file", output}
 	if signer.pinInEnvironment {
 		arguments = append(arguments, "--pin", "env:"+pinVariable)
@@ -219,6 +230,48 @@ func (signer *tokenSigner) Sign(_ io.Reader, message []byte, _ crypto.SignerOpts
 	return signature, nil
 }
 
+var (
+	slotLine  = regexp.MustCompile(`^Slot \d+ \((0x[0-9a-fA-F]+)\):`)
+	fieldLine = regexp.MustCompile(`^\s+(token label|serial num)\s*:\s?(.*)$`)
+)
+
+// slot lists the attached tokens (no login, no PIN) and returns the ID of the one slot whose token
+// has the configured serial and label. None, or more than one, is a refusal.
+func (signer *tokenSigner) slot(tool, module string) (string, error) {
+	listing, err := exec.CommandContext(signer.ctx, tool, "--module", module, "--list-token-slots").Output()
+	if err != nil {
+		return "", errors.New("the tokens could not be listed")
+	}
+	var matches []string
+	var id, label, serial string
+	flush := func() {
+		if id != "" && label == signer.device.TokenLabel && serial == signer.device.TokenSerial {
+			matches = append(matches, id)
+		}
+		id, label, serial = "", "", ""
+	}
+	for _, line := range strings.Split(string(listing), "\n") {
+		if found := slotLine.FindStringSubmatch(line); found != nil {
+			flush()
+			id = found[1]
+		} else if found := fieldLine.FindStringSubmatch(line); found != nil {
+			if found[1] == "token label" {
+				label = strings.TrimSpace(found[2])
+			} else {
+				serial = strings.TrimSpace(found[2])
+			}
+		}
+	}
+	flush()
+	if len(matches) != 1 {
+		return "", fmt.Errorf("%d attached tokens have the configured serial and label; exactly one must", len(matches))
+	}
+	return matches[0], nil
+}
+
+// maxRecordBytes bounds the pending record. It is written by the preparer, who is not trusted.
+const maxRecordBytes = 64 << 10
+
 type invocation struct {
 	configPath, pending, file, output string
 	unseen                            bool
@@ -229,14 +282,18 @@ func parse(args []string) (invocation, error) {
 	for index := 0; index < len(args); index++ {
 		name, inline, hasInline := strings.Cut(args[index], "=")
 		take := func() (string, error) {
-			if hasInline {
-				return inline, nil
+			taken := inline
+			if !hasInline {
+				if index+1 >= len(args) {
+					return "", fmt.Errorf("%s needs a value", name)
+				}
+				index++
+				taken = args[index]
 			}
-			if index+1 >= len(args) {
-				return "", fmt.Errorf("%s needs a value", name)
+			if taken == "" {
+				return "", fmt.Errorf("%s needs a value that is not empty", name)
 			}
-			index++
-			return args[index], nil
+			return taken, nil
 		}
 		var err error
 		switch {
@@ -293,9 +350,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 }
 
 func approve(cfg config, request invocation, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, at time.Time) error {
-	record, err := os.ReadFile(request.pending)
+	record, err := protected.ReadBounded(request.pending, maxRecordBytes)
 	if err != nil {
-		return errors.New("open the pending-signature file")
+		return errors.New("the pending-signature file is unreadable or too large")
 	}
 	pending, err := gpgsign.ReadPending(record)
 	if err != nil {
@@ -329,14 +386,14 @@ func approve(cfg config, request invocation, stdin io.Reader, stdout, stderr io.
 		return errors.New("pass --file with your own copy of what is being signed, or --unseen to approve without checking it")
 	}
 	if pending.Mode == gpgsign.ModeExportKey || request.file != "" {
-		if err := key.Covers(ctx, pending, bytes.NewReader(document)); err != nil {
+		if err := key.Covers(ctx, pending, document); err != nil {
 			return err
 		}
 	} else if pending.Fingerprint != key.Fingerprint() || pending.ObjectID != cfg.ObjectID || pending.Purpose != cfg.Purpose || pending.Environment != cfg.Environment {
 		return errors.New("the pending signature is for another key or target than the one this approver approves for")
 	}
-	fmt.Fprintf(stdout, "approving as %s, valid until %s:\n  key          %s\n  object       %s (%s, %s)\n  what         %s\n  file         %s\n",
-		cfg.ApproverID, pending.ExpiresAt, pending.Fingerprint, pending.ObjectID, pending.Purpose, pending.Environment, pending.Mode, seen)
+	fmt.Fprintf(stdout, "approving as %s, valid until %s:\n  key          %s\n  object       %s (%s, %s)\n  what         %s, dated %s\n  file         %s\n",
+		cfg.ApproverID, pending.ExpiresAt, pending.Fingerprint, pending.ObjectID, pending.Purpose, pending.Environment, pending.Mode, pending.Created, seen)
 
 	signer, err := cfg.approver(ctx, stdin, stderr, getenv)
 	if err != nil {

@@ -142,23 +142,31 @@ self-certification), so it needs its own approval, once.
 What each step checks:
 
 - **Prepare** fixes the signature's creation time, the request's nonce and its expiry, and records
-  the SHA-256 of the payload. Nothing in the pending record is secret.
+  the SHA-256 of the file and of the payload. Nothing in the pending record is secret.
 - **Approve** does not sign an opaque digest. `regalia-approve` pins the release public key, object,
   purpose and environment in its own configuration ([approve.example.json](approve.example.json)),
   recomputes the payload from the approver's copy of the file, and refuses unless it is the payload
-  in the record. A record for another key or target, or an expired one, is refused. `--unseen`
-  approves without the file; the output then says `NOT CHECKED`, and the file hash shown is only
-  what the preparer wrote.
+  in the record. It also requires the record's file hash to be that of the approver's copy, byte for
+  byte: a cleartext signature's payload ignores trailing whitespace and the form of line endings
+  (RFC 4880, 7.1), so the payload alone would not tell two such files apart. A record for another
+  key or target, or an expired one, is refused. `--unseen` approves without the file; the output
+  then says `NOT CHECKED`, and the file hash shown is only what the preparer wrote.
+- **The signature cannot be backdated.** Its creation time is part of what is signed, and it is the
+  preparer's claim. A record whose creation time is not within one window (at most an hour) before
+  its expiry is refused by `regalia-approve` and by `--complete`, and the approver is shown the date.
 - **The approver key** is Ed25519, on a token reached through OpenSC's `pkcs11-tool`
-  (`CKM_EDDSA`). The PIN is typed into `pkcs11-tool`, not into `regalia-approve`. The tool and the
-  module are named by absolute path and are refused unless they are owned by root or the approver
-  and writable by nobody else. What the token
+  (`CKM_EDDSA`). The PIN is typed into `pkcs11-tool`, not into `regalia-approve`. The token is
+  named by serial and label together, and exactly one attached token must match before any PIN is
+  asked for: every OpenPGP card has the same label, and one YubiKey presents two tokens under one
+  serial. The tool and the module are named by absolute path and are refused unless they are owned
+  by root or the approver and writable by nobody else, in directories where nobody else can replace
+  them. What the token
   returns is verified against the pinned approver public key before an approval is written, so a
   device that cannot make a plain Ed25519 signature is refused here and not found out as a denial
   at the KMS. `key_file` instead of `pkcs11` is a software approver, for tests and staging.
-- **Complete** rebuilds the signature and refuses, without contacting the KMS, if its payload is not
-  the prepared one (the file or the key changed), if the record expired, or if an approval is for
-  another request. The KMS then verifies the approval against its own approver keys; evidence it
+- **Complete** rebuilds the signature and refuses, without contacting the KMS, if the file is not
+  byte for byte the prepared one, if the payload differs (the key changed), if the record expired,
+  or if an approval is for another request. The KMS then verifies the approval against its own approver keys; evidence it
   does not count is a plain `DENIED`.
 - **An approval is spent with its request.** The nonce is the idempotency key, so completing the
   same record twice signs once.
@@ -172,9 +180,9 @@ within it.
 - **The KMS signs a digest it cannot interpret.** It knows who asked, for which key and purpose, and
   when. It does not see the file. What may be signed is decided by who holds the release identity.
 - **No approval in one step.** `--detach`, `--clearsign`, `--export-key` and git's form send no
-  approval evidence, so a policy with `required_approvals` denies them. Under such a policy use the
-  two-step form below. Signing a commit or tag from git cannot be approved this way: git runs one
-  command and expects the signature back.
+  approval evidence, so a policy with `required_approvals` denies them. Under such a policy use
+  [prepare, approve, complete](#signing-under-a-policy-that-requires-approval). Signing a commit or
+  tag from git cannot be approved this way: git runs one command and expects the signature back.
 - **No encryption, no inline (binary) signed messages, no subkeys, no expiry.** The key is a single
   version-4 signing key.
 

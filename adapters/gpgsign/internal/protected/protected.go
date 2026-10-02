@@ -73,10 +73,46 @@ func Program(path string) (string, error) {
 	if err := unix.Lstat(resolved, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return "", errors.New("program is not a regular file")
 	}
-	if (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) || stat.Mode&0o022 != 0 {
+	if !ownedByRootOrUs(stat) || stat.Mode&0o022 != 0 {
 		return "", errors.New("unsafe program: it must be owned by root or this user and writable by nobody else")
 	}
+	// The path is used again after this check, by exec and by the tool that loads the module. So the
+	// check has to hold for the NAME, not only for the file found under it now: every directory from
+	// the file up to the root must be one in which nobody else can replace an entry. That is a
+	// directory owned by root or this user and writable by nobody else, or a sticky one (/tmp), where
+	// an entry can be replaced only by its owner, and the entry is itself checked.
+	for directory := filepath.Dir(resolved); ; directory = filepath.Dir(directory) {
+		var parent unix.Stat_t
+		if err := unix.Lstat(directory, &parent); err != nil || parent.Mode&unix.S_IFMT != unix.S_IFDIR {
+			return "", errors.New("unsafe program: its path is not made of directories")
+		}
+		if !ownedByRootOrUs(parent) || (parent.Mode&0o022 != 0 && parent.Mode&unix.S_ISVTX == 0) {
+			return "", fmt.Errorf("unsafe program: %s lets someone else replace it", directory)
+		}
+		if directory == filepath.Dir(directory) {
+			break
+		}
+	}
 	return resolved, nil
+}
+
+func ownedByRootOrUs(stat unix.Stat_t) bool {
+	return stat.Uid == 0 || stat.Uid == uint32(os.Geteuid())
+}
+
+// ReadBounded reads a small file another party wrote (a pending record, an approval). It is trusted
+// for nothing; the bound is there so that a file of any size cannot be made this process's memory.
+func ReadBounded(path string, maximum int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("open")
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, maximum+1))
+	if err != nil || int64(len(contents)) > maximum {
+		return nil, errors.New("too large")
+	}
+	return contents, nil
 }
 
 // PublicKey reads exactly one PEM "PUBLIC KEY" from a protected file. what and field name it in the

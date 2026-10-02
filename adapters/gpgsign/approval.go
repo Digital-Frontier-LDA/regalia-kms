@@ -59,9 +59,12 @@ type Pending struct {
 	Nonce     string `json:"nonce"`
 	RequestID string `json:"request_id"`
 	ExpiresAt string `json:"expires_at"`
-	// DocumentSHA256 is the SHA-256 of the file being signed (empty for a key export): what a
-	// human approver compares with the artifact. PayloadSHA256 is the SHA-256 of the bytes the KMS
-	// will be sent, which is what the approval binding carries.
+	// DocumentSHA256 is the SHA-256 of the file being signed, byte for byte (empty for a key
+	// export). PayloadSHA256 is the SHA-256 of the bytes the KMS will be sent, which is what the
+	// approval binding carries. The two are checked separately because they are not the same
+	// statement: a cleartext signature's payload is computed over the text with line endings
+	// canonicalized and trailing whitespace dropped (RFC 4880, 7.1), so two different files can
+	// have one payload. The approver and the completing step each hold the file and check both.
 	DocumentSHA256 string `json:"document_sha256,omitempty"`
 	PayloadSHA256  string `json:"payload_sha256"`
 }
@@ -132,7 +135,14 @@ func (key *Key) Prepare(ctx context.Context, mode Mode, message io.Reader, now t
 		return Pending{}, errors.New("an approval window is between 1 minute and 1 hour")
 	}
 	now = now.UTC().Truncate(time.Second)
-	payload, err := key.Payload(ctx, mode, message, now)
+	if message == nil { // a key export signs no document
+		message = bytes.NewReader(nil)
+	}
+	document, err := io.ReadAll(message)
+	if err != nil {
+		return Pending{}, errors.New("read what is to be signed")
+	}
+	payload, err := key.Payload(ctx, mode, bytes.NewReader(document), now)
 	if err != nil {
 		return Pending{}, err
 	}
@@ -145,12 +155,68 @@ func (key *Key) Prepare(ctx context.Context, mode Mode, message io.Reader, now t
 	if mode == ModeExportKey {
 		created = key.created
 	}
-	return Pending{
+	pending := Pending{
 		Version: 1, Mode: mode, Fingerprint: key.Fingerprint(),
 		ObjectID: key.signer.target.ObjectID, Purpose: key.signer.target.Purpose, Environment: key.signer.target.Environment,
 		Created: created.Format(time.RFC3339), Nonce: fixed.Nonce, RequestID: fixed.RequestID,
 		ExpiresAt: fixed.ExpiresAt.Format(time.RFC3339Nano), PayloadSHA256: hex.EncodeToString(payloadHash[:]),
-	}, nil
+	}
+	if mode != ModeExportKey {
+		pending.DocumentSHA256 = documentHash(document)
+	}
+	// What Prepare writes is what every later step accepts; if the two clocks it used disagree by
+	// more than a window, say so here and not at the approver's desk.
+	if err := pending.consistent(); err != nil {
+		return Pending{}, err
+	}
+	return pending, nil
+}
+
+func documentHash(document []byte) string {
+	sum := sha256.Sum256(document)
+	return hex.EncodeToString(sum[:])
+}
+
+// maxWindow is the longest a prepared request may stay valid, and so the furthest a signature's
+// creation time may lie before its request's expiry.
+const maxWindow = time.Hour
+
+// consistent checks the parts of the record the binding does not carry against the parts it does.
+//
+// THE CREATION TIME IS THE PREPARER'S CLAIM, AND IT IS SIGNED. The approval binding carries the
+// payload digest, and the payload covers the OpenPGP creation time, so a preparer could compute the
+// payload for the right file with a creation time of last year, have it approved, and obtain a
+// backdated signature. The record's expiry IS in the binding and is checked against the approver's
+// clock and the KMS's. So the creation time must lie within one window before the expiry: a
+// signature can then be dated no earlier than about an hour before it was approved. A key export is
+// the exception: its time is the key's own, which the approver pins.
+func (pending Pending) consistent() error {
+	created, expires, err := pending.times()
+	if err != nil {
+		return err
+	}
+	switch pending.Mode {
+	case ModeExportKey:
+		if pending.DocumentSHA256 != "" {
+			return errors.New("a key export signs no file")
+		}
+		return nil
+	case ModeDetach, ModeDetachBinary, ModeClearSign:
+	default:
+		return errors.New("unknown signing mode")
+	}
+	if decoded, err := hex.DecodeString(pending.DocumentSHA256); err != nil || len(decoded) != sha256.Size {
+		return errors.New("the pending signature does not carry the SHA-256 of its file")
+	}
+	if created.After(expires) || created.Before(expires.Add(-maxWindow-time.Minute)) {
+		return errors.New("the pending signature's creation time is outside its approval window")
+	}
+	return nil
+}
+
+// covers says whether document is, byte for byte, the file the record was prepared for.
+func (pending Pending) covers(document []byte) bool {
+	return pending.Mode == ModeExportKey || documentHash(document) == pending.DocumentSHA256
 }
 
 // Covers says whether the pending signature is this key's signature over message: the approver's
@@ -158,8 +224,14 @@ func (key *Key) Prepare(ctx context.Context, mode Mode, message io.Reader, now t
 // not merely a file hash the preparer wrote into the record. key may be offline.
 //
 // It recomputes the payload from the approver's copy of the file, this key and the record's
-// creation time, and compares its SHA-256 with the one the approval binding carries.
-func (key *Key) Covers(ctx context.Context, pending Pending, message io.Reader) error {
+// creation time, and compares its SHA-256 with the one the approval binding carries. It also
+// requires the record's file hash to be this file's, so that for a cleartext signature, whose
+// payload ignores trailing whitespace and the form of line endings, the approver's copy is still
+// the exact file the record names.
+func (key *Key) Covers(ctx context.Context, pending Pending, document []byte) error {
+	if err := pending.consistent(); err != nil {
+		return err
+	}
 	created, _, err := pending.times()
 	if err != nil {
 		return err
@@ -169,7 +241,10 @@ func (key *Key) Covers(ctx context.Context, pending Pending, message io.Reader) 
 		pending.Purpose != target.Purpose || pending.Environment != target.Environment {
 		return errors.New("the pending signature is for another key or target than the one this approver approves for")
 	}
-	payload, err := key.Payload(ctx, pending.Mode, message, created)
+	if !pending.covers(document) {
+		return errors.New("the pending signature is not a signature over this file: the record names another file's SHA-256")
+	}
+	payload, err := key.Payload(ctx, pending.Mode, bytes.NewReader(document), created)
 	if err != nil {
 		return err
 	}
@@ -178,12 +253,6 @@ func (key *Key) Covers(ctx context.Context, pending Pending, message io.Reader) 
 		return errors.New("the pending signature is not a signature over this file")
 	}
 	return nil
-}
-
-// SetDocument records the SHA-256 of the file being signed, for the approver to compare.
-func (pending *Pending) SetDocument(document []byte) {
-	sum := sha256.Sum256(document)
-	pending.DocumentSHA256 = hex.EncodeToString(sum[:])
 }
 
 // times parses the record's two times, refusing a record that is not exactly what Prepare writes.
@@ -228,6 +297,9 @@ func (pending Pending) Binding() ([]byte, error) {
 // KMS verifies approvals with Ed25519 and nothing else. now is the approver's clock; an expired
 // record is refused, because its approval could never count.
 func Approve(pending Pending, approverID string, signer crypto.Signer, now time.Time) (Approval, error) {
+	if err := pending.consistent(); err != nil {
+		return Approval{}, err
+	}
 	_, expires, err := pending.times()
 	if err != nil {
 		return Approval{}, err
@@ -262,9 +334,19 @@ func Approve(pending Pending, approverID string, signer crypto.Signer, now time.
 // rebuilds is not the one that was prepared — the file changed, or the key did — nothing is sent:
 // an approval is for the bytes the approver was shown.
 func (key *Key) Complete(ctx context.Context, w io.Writer, message io.Reader, pending Pending, approvals []Approval, now time.Time) (Signed, error) {
+	if err := pending.consistent(); err != nil {
+		return Signed{}, err
+	}
 	created, expires, err := pending.times()
 	if err != nil {
 		return Signed{}, err
+	}
+	if message == nil { // a key export signs no document
+		message = bytes.NewReader(nil)
+	}
+	document, err := io.ReadAll(message)
+	if err != nil {
+		return Signed{}, errors.New("read what is to be signed")
 	}
 	target := key.signer.target
 	if key.signer.client == nil || pending.Fingerprint != key.Fingerprint() || pending.ObjectID != target.ObjectID ||
@@ -282,6 +364,11 @@ func (key *Key) Complete(ctx context.Context, w io.Writer, message io.Reader, pe
 			return Signed{}, fmt.Errorf("the approval from %s is for another request", approval.ApproverID)
 		}
 	}
+	// Byte for byte, before the payload: a cleartext signature would also verify over a file that
+	// differs only in trailing whitespace or line endings, and that is not the file that was approved.
+	if !pending.covers(document) {
+		return Signed{}, errors.New("this file is not what was prepared and approved: its SHA-256 is not the record's")
+	}
 	fixed := Fixed{Nonce: pending.Nonce, RequestID: pending.RequestID, ExpiresAt: expires}
 	calls := 0
 	sender := key.withCall(func(ctx context.Context, payload []byte, subject string) ([]byte, error) {
@@ -293,7 +380,7 @@ func (key *Key) Complete(ctx context.Context, w io.Writer, message io.Reader, pe
 		return key.signer.client.SignFixed(ctx, target, payload, subject, fixed, approvals)
 	})
 	var out bytes.Buffer
-	signed, err := sender.run(ctx, pending.Mode, &out, message, created)
+	signed, err := sender.run(ctx, pending.Mode, &out, bytes.NewReader(document), created)
 	if err != nil {
 		return Signed{}, err
 	}
@@ -309,7 +396,7 @@ func ReadPending(contents []byte) (Pending, error) {
 	if err := decodeOne(contents, &pending); err != nil {
 		return Pending{}, errors.New("the pending-signature file is not the expected JSON document")
 	}
-	if _, _, err := pending.times(); err != nil {
+	if err := pending.consistent(); err != nil {
 		return Pending{}, err
 	}
 	return pending, nil

@@ -91,7 +91,7 @@ func TestAReleaseSignatureNeedsAHardwareKeyApprovalAtTheRealDaemon(t *testing.T)
 		return write(approverHome, name+".json", encoded, 0o600)
 	}
 	onToken := approverConfig("token", map[string]any{"pkcs11": map[string]string{
-		"tool": pkcs11Tool, "module": modulePath, "token_label": "regalia-kms-e2e", "key_id": "10"}}, approverPEM)
+		"tool": pkcs11Tool, "module": modulePath, "token_serial": serial, "token_label": "regalia-kms-e2e", "key_id": "10"}}, approverPEM)
 
 	run := func(binary string, environment []string, args ...string) (string, error) {
 		command := exec.Command(binary, args...)

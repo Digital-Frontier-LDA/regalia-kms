@@ -4,6 +4,7 @@
   "pkcs11": {
     "tool": "/usr/bin/pkcs11-tool",
     "module": "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so",
+    "token_serial": "000f12345678",
     "token_label": "OpenPGP card (User PIN (sig))",
     "key_id": "01"
   },
