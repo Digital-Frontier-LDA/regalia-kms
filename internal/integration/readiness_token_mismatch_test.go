@@ -14,15 +14,16 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
 
-// regalia#48 ACCEPTANCE CRITERION 2, in software against a real PKCS#11 module: "a guest cannot
-// become ready with a missing, wrong, or policy-mismatched token even if Proxmox boots it
-// successfully." Proxmox only decides whether the GUEST boots; whether the daemon reports READY is
-// registry.Ready over the backend's Healthy — so this drives exactly that path, with the production
+// THE RULE regalia#48 SET, in software against a real PKCS#11 module: a KMS that boots cannot become
+// ready with a missing, wrong or policy-mismatched token. It was written for a Proxmox guest
+// ("Guest" in this test's name is that history); bare metal keeps the rule unchanged, and its
+// real-host half is carried by regalia#46. Booting only decides whether the daemon STARTS; whether
+// it reports READY is registry.Ready over the backend's Healthy — so this drives exactly that path, with the production
 // driver constructor and the real identity probes, from a manifest, and asks Ready.
 //
-// What it cannot show is the Proxmox half (a re-enumerated device, a changed bus number, a host
-// reboot); those are #48's hardware drills. What it does show is that no combination of token
-// the host might hand the guest makes the daemon claim readiness it does not have.
+// What it cannot show is the hardware half (a re-enumerated device, a changed bus number, a host
+// reboot); those are drills on a real host (regalia#46). What it does show is that no token the
+// daemon might find attached makes it claim readiness it does not have.
 func TestAGuestIsNotReadyWithAMissingWrongOrMismatchedToken(t *testing.T) {
 	modulePath, serial := os.Getenv("REGALIA_PKCS11_E2E_MODULE"), os.Getenv("REGALIA_PKCS11_E2E_SERIAL")
 	if modulePath == "" || serial == "" {

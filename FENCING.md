@@ -13,8 +13,8 @@ the public lease file, not a daemon restart.
 
 The local hash-chained epoch journal detects accidental alteration and ordinary rollback. It does
 not defeat a storage administrator who can restore both disk and time; production therefore couples
-the lease to off-host authority state, authenticated time, the no-snapshot Proxmox gate and off-host
-audit. Promotion waits for the previous lease to expire or obtains independently evidenced hard
+the lease to off-host authority state, authenticated time, a host that is never imaged or restored
+from an image (`deploy/baremetal/README.md`, Backups) and off-host audit. Promotion waits for the previous lease to expire or obtains independently evidenced hard
 fencing of the previous site, then issues a higher epoch for the standby. Recovery from Shamir
 shares does not itself grant an activation lease.
 

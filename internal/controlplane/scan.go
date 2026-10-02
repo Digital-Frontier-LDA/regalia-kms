@@ -23,7 +23,7 @@ import (
 // digits inside an otherwise valid, correctly chained record — is not detectable by shape.
 // The journal's own write-time validation is the control for that; this scan is the second
 // net, not the only one. The restore drill's tree scan adds filename shapes on top, because a
-// restored guest must not carry a credentials file at all, whatever its content looks like.
+// restored host must not carry a credentials file at all, whatever its content looks like.
 
 // markerShapes are the byte strings whose presence in exported or restored state is a refusal.
 // Each is stored split so the scanner's own source does not carry the assembled marker as a
@@ -147,7 +147,7 @@ func sortStrings(values []string) {
 	}
 }
 
-// secretFileNames are basenames a restored guest must not carry at all, regardless of content:
+// secretFileNames are basenames a restored host must not carry at all, regardless of content:
 // these are the shapes the deployment uses for credentials (token PIN files, the TLS server
 // key, TPM-wrapped credential blobs), and their presence in a rebuilt tree means the custody
 // procedure leaked operational authority into state that is about to be restored.
@@ -158,7 +158,7 @@ var secretFileNamePatterns = []string{
 	"credentials", // the systemd LoadCredential directory name
 }
 
-// maxTreeFileBytes caps what ScanTree will read into memory for one file. A restored guest's
+// maxTreeFileBytes caps what ScanTree will read into memory for one file. A restored host's
 // configuration and state tree is journals and small files; anything past this bound is flagged
 // rather than read, so a tree that cannot be honestly content-scanned cannot be certified
 // clean either — and the peak memory of a scan is one bounded file, not the sum of the tree.

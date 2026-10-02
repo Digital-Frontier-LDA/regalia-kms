@@ -2,7 +2,8 @@
 
 Non-health KMS requests require a verified client certificate and an exact deny-by-default RBAC
 grant. Workload identity is the certificate's single URI SAN under `spiffe://regalia/`. Common Name,
-DNS SAN, source address, Proxmox VM identity, and forwarded headers never establish a principal.
+DNS SAN, source address, the machine a request comes from, and forwarded headers never establish a
+principal.
 
 The TLS layer uses TLS 1.3 and verifies any presented client chain. Health endpoints may complete a
 server-authenticated TLS handshake without a client certificate; authentication middleware rejects

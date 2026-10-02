@@ -47,11 +47,12 @@ preferred. A persistent plaintext PEM key is prohibited. It must not use ambient
 verification, or follow redirects. The HTTP client has bounded connect,
 handshake, response-header, and whole-operation timeouts.
 
-At the Proxmox boundary, expose only the main KMS HTTPS port to approved source
+At the KMS host's boundary, expose only the main KMS HTTPS port to approved source
 networks. Do not expose the sidecar socket through a shared mount, forwarded
-Unix socket, TCP proxy, or container boundary. Host firewall and guest firewall
-rules are both required; their concrete deployment remains part of issues #25
-and #46.
+Unix socket, TCP proxy, or container boundary. The host's own firewall is
+required: `deploy/baremetal/firewall.py` renders it default-deny from the site
+configuration and `deploy/baremetal/network_probe.py` measures it from each
+zone. Commissioning a real host is regalia#46.
 
 Current tests prove that missing client transport inputs are rejected, the
 sidecar uses a private Unix socket, malformed/wrong-environment/wrong-key

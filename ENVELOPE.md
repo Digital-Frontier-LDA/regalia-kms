@@ -120,8 +120,8 @@ that: `release-secret` accepts an envelope of at most 64 KiB, so the largest sec
 carry is roughly 48 KiB once base64 and the envelope's own metadata are counted. Unwrap exposes the
 plaintext only inside a callback and zeroes that buffer and the DEK immediately afterward, including
 error returns. This is best effort: Go, kernels, TLS stacks and
-hardware middleware may copy memory. The KMS VM therefore disables swap/hibernation/snapshots and
-must apply short request deadlines, response `no-store`, bounded concurrency and process isolation.
+hardware middleware may copy memory. The KMS host therefore has swap off or encrypted and
+hibernation disabled, is never snapshotted or imaged, and must apply short request deadlines, response `no-store`, bounded concurrency and process isolation.
 
 `Rewrap` first authenticates the existing ciphertext, unwraps the DEK through the old hardware key,
 and wraps it under a new hardware KEK without changing content ciphertext. Sealing is now served:

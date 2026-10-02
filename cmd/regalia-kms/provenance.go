@@ -8,7 +8,7 @@ package main
 // at exactly the moment an operator rebuilding under pressure needed the ambiguity named.
 //
 // The record cannot come from the daemon: a wiped host's daemon would simply write a new one,
-// which is self-attestation. It comes from the PROVISIONING layer — the guest role writes it
+// which is self-attestation. It comes from the PROVISIONING layer — the host role writes it
 // when it commissions the site, before the first start — so its absence on a configured host
 // means one of two things, both refused:
 //

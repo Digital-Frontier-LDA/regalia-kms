@@ -32,7 +32,7 @@ const (
 	shippedSuffix   = ".shipped"
 )
 
-// Sources names every guest path the control plane consists of. It is assembled from the
+// Sources names every host path the control plane consists of. It is assembled from the
 // daemon's own configuration so the export can never drift from what the site actually runs.
 // What is deliberately ABSENT is the point: no /run path (PINs, TLS key, lease — runtime
 // credentials, excluded by the export contract), no token state (never leaves the HSM), no
@@ -82,13 +82,13 @@ type Export struct {
 	SiteVersion    Entry     `json:"site_version"`
 }
 
-// validateEntryPath is the shape every entry path must have: guest-absolute, clean, and
+// validateEntryPath is the shape every entry path must have: host-absolute, clean, and
 // carrying no control characters — the direct sibling of the Site fix, found one review round
 // later because the sweep stopped at the field that had been named. Entry paths are
 // payload-controlled in a forged export and reach the operator report.
 func validateEntryPath(path string) error {
 	if path == "" || path[0] != '/' || path != filepath.Clean(path) || len(path) > 512 {
-		return fmt.Errorf("path %q is not a clean guest-absolute path", path)
+		return fmt.Errorf("path %q is not a clean host-absolute path", path)
 	}
 	for _, r := range path {
 		if r < 0x20 || r == 0x7f {

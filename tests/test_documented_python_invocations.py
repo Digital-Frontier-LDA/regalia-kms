@@ -1,6 +1,6 @@
 """A documented `python3 …` command for a script in this repository must run as written.
 
-deploy/proxmox/README.md taught `python3 deploy/proxmox/verify.py …` and
+deploy/proxmox/README.md (since removed, #55) taught `python3 deploy/proxmox/verify.py …` and
 `sudo python3 deploy/proxmox/install_policy_guard.py …`, and both failed with
 `ModuleNotFoundError: No module named 'kms'` on a pristine checkout (#453). Running a file by path
 puts the FILE'S OWN DIRECTORY on sys.path[0], not the repository root, so a script that imports a

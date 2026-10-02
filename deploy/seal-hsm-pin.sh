@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# seal-hsm-pin.sh — seal ONE Nitrokey's user PIN to this KMS guest's TPM2, as the systemd encrypted
-# credential regalia-kms loads (ADR-0002 D2; PIN-CUSTODY.md). Run ONCE per site, as root, on the guest,
+# seal-hsm-pin.sh — seal ONE Nitrokey's user PIN to this KMS host's TPM2, as the systemd encrypted
+# credential regalia-kms loads (ADR-0002 D2; PIN-CUSTODY.md). Run ONCE per site, as root, on the host,
 # with the card attached, typing the PIN from the sealed paper PIN card.
 #
 #   sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7 [--retries 10] [--replace]
@@ -15,7 +15,7 @@
 #      the name defaulted to the file name and the service died with 243/CREDENTIALS (measured,
 #      systemd 257, 2026-09-29);
 #   2. TPM2 only, bound to the PCR set you name. There is no default: the set is chosen at
-#      commissioning and recorded as guest.credential_tpm2_pcrs in the Proxmox evidence;
+#      commissioning and recorded as host.credential_tpm2_pcrs in the commissioning evidence;
 #   3. the card must be attached, be the serial you name, and have its FULL user-PIN counter left:
 #      --retries, default 10, the production posture (a 10-digit PIN with a 10-try counter,
 #      regalia PLAN.md 1.3). A lower count means PINs were tried; find out why before sealing;
@@ -55,7 +55,7 @@
 #       --tpm2-public-key silently and binds PCR 7 alone (measured, systemd 257, 2026-10-01); the key
 #       type that honours it is tpm2-with-public-key.
 #
-# BENCH ONLY: --bench-host-key seals with systemd's host key instead of the TPM (a guest without a
+# BENCH ONLY: --bench-host-key seals with systemd's host key instead of the TPM (a host without a
 # TPM cannot be production). The record then says BENCH. REGALIA_CREDSTORE overrides the credstore
 # directory, for tests. REGALIA_TPM2_DEVICE names another TPM for systemd-creds (a private swtpm, e.g.
 # swtpm:path=/…/tpm.sock), also for tests: the record then says so, and it is not production.
@@ -190,7 +190,7 @@ fi
 if [ "$BENCH" = 0 ]; then
   if [ -n "${REGALIA_TPM2_DEVICE:-}" ]; then
     TPMDEV=("--tpm2-device=$REGALIA_TPM2_DEVICE"); say "TEST: sealing to the TPM named in REGALIA_TPM2_DEVICE ($REGALIA_TPM2_DEVICE), NOT this host's. This credential is not production."
-  else systemd-creds has-tpm2 >/dev/null 2>&1 || fail "no usable TPM2 on this guest (systemd-creds has-tpm2)"; fi
+  else systemd-creds has-tpm2 >/dev/null 2>&1 || fail "no usable TPM2 on this host (systemd-creds has-tpm2)"; fi
 fi
 # ---- a signed policy is tried on the TPM FIRST, with a value that is not the PIN ----------------------
 # The fingerprint checks above say who signed the file, not that it covers the PCR 11 of THIS boot
