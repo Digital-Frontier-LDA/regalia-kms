@@ -15,8 +15,8 @@ the deprecated deploy/proxmox/guest_probe.py. Each probe reads the host and retu
 and pcscd_clients(): every process connected to pcscd runs the KMS binary (matched by socket inode,
 identified by /proc/<pid>/exe, never by the name a process gives itself).
 
-The KMS unit's sandbox (#61), SANDBOX_MEASURED. Not yet in MEASURED: the signed evidence requires every
-MEASURED name, and its schema gains these three in the change that follows #82.
+The KMS unit's sandbox (#61), SANDBOX_MEASURED. Kept apart from MEASURED because the deprecated Proxmox
+guest probe reads MEASURED and is frozen; host_probe.py measures both and the signed evidence requires both.
 
   kms_service_sandboxed       the unit's effective ProtectSystem=strict, ProtectHome, PrivateTmp,
                               ProtectKernelTunables/Modules/Logs, ProtectControlGroups,

@@ -118,8 +118,10 @@ sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7 \
 `systemd-measure`, a stub card). **Not done yet (#57):** the PCR-signing key's custody (its private
 half offline or in the HSM under the ceremony roots, ADR-0002 D19), signing the real UKIs, the same
 policy for the root disk (`systemd-cryptenroll --tpm2-public-key=… --tpm2-public-key-pcrs=11`), and
-the evidence schema and `host_probe` recording the signed PCRs and the key's fingerprint. Until those
-land, production binds PCR 7 alone.
+measuring that policy on the disk. Until those land, production binds PCR 7 alone. The evidence
+schema records the signed PCRs and the key's `pkfp` beside the directly bound PCRs, and
+`host_probe.py` checks every installed PIN blob against that record
+(`pin_credentials_sealed_as_recorded`).
 
 ## Delivering the PIN to the host's TPM without typing it (TPM import)
 
@@ -270,7 +272,7 @@ results are not physical evidence.
 | credential drop-in sources under `/etc/credstore.encrypted/regalia-kms-` | host (`hsm-host-role/files/verify-deployment.py`) |
 | no snapshots/backups/live migration/hibernation; credentials excluded from backup; no other token client | evidence (signed JSON, not the VM) |
 | PCR set chosen and recorded | evidence (schema v4) |
-| **blob actually sealed to the recorded PCR set** | **none** |
+| blob actually sealed to the recorded PCR set, signed policy and key; TPM alone | bare metal: host (`host_probe.py`, `pin_credentials_sealed_as_recorded`, read from each blob's header). **Proxmox guest: none** |
 | signed PCR 11 policy: opens across a signed kernel update, refused otherwise | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`); **no real host yet** |
 | whole-guest rollback refused at next start | unit — **only with an audit sink configured** |
 | **vTPM-only rollback** | **none** (mitigated, not detected) |
