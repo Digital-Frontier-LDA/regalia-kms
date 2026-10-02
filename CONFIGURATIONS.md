@@ -39,8 +39,8 @@ that has been independently validated counts as more secure than code written he
   YubiKey's OpenPGP applet as a PKCS#11 token, and that token lists `EDDSA` (255 bits, in hardware).
   The driver the KMS already uses for the HSM could serve it, with no card protocol written here.
   The hand-written driver in `internal/backend/openpgp` is the part this rule argues against, not the
-  applet. Proven on a card: an Ed25519 key generated on the applet signs through `CKM_EDDSA` and the
-  signature verifies. **Proposed, not decided**: the KMS does not serve it yet (gap 3).
+  applet. Proven on a card, with the KMS's own driver and provider: an Ed25519 key generated on the applet
+  signs through `CKM_EDDSA` and the signature verifies. **Proposed, not decided**: the KMS does not serve it yet (gap 3).
 - **Signature formats come from maintained open-source libraries**, not from encoders written here.
 
 ### Relation to the three-site device profiles
@@ -114,13 +114,13 @@ rule and works in every configuration once a `signtool` adapter exists.
 2. **Ed25519 has no served home yet.** It is not reachable on either HSM, the OpenPGP applet is not
    wired, the PIV backend does not offer it, and `regalia-sign` refuses Ed25519 keys.
 3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4),
-   and the only driver for it is hand-written. Serving it through OpenSC and PKCS#11 instead needs:
-   token selection that copes with OpenSC presenting the
-   applet as two tokens with one serial (`User PIN` and `User PIN (sig)`), where the driver today
-   requires a serial to match exactly one; a recorded change to the legacy-only rule; and an explanation for two logins that failed straight
-   after another tool had used the card. The driver
-   choice itself is settled: a `card_atr` block in `opensc.conf` naming `driver = "openpgp"` for the
-   YubiKey's ATR leaves the Nitrokey on its own driver in the same module (measured 2026-10-02).
+   and the only driver wired for it is hand-written. Through OpenSC and PKCS#11 the driver, its
+   probes and the provider already sign Ed25519 on the applet (regalia-kms#119: OpenSC presents the
+   applet as two tokens under one serial, so the binding names the token by `token_label`). What is
+   left before the daemon serves it: which backend name it runs under, what stands in for
+   SmartCard-HSM secure messaging on this token, and a recorded change to the legacy-only rule. The
+   OpenSC driver choice is a `card_atr` block in `opensc.conf` naming `driver = "openpgp"` for the
+   YubiKey's ATR; it leaves the Nitrokey on its own driver in the same module.
 4. **The Pico is not a recognised token.** `config/qualified-stack.json`, `tools/qualified_stack.py`
    and `deploy/seal-hsm-pin.sh` treat it as staging hardware. The attached Pico also reports the
    token serial `ESPICOHSMTR`, not a per-device one, and the driver selects a token by serial.
