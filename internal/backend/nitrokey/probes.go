@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/miekg/pkcs11"
 )
@@ -26,27 +25,6 @@ func NewTokenProbes(module cryptoki) (*TokenProbes, error) {
 	return &TokenProbes{module: module}, nil
 }
 
-// slotFor resolves a commissioned serial to exactly one slot, refusing when zero or several match.
-// Two tokens reporting the same serial is not something to disambiguate by position.
-func (probes *TokenProbes) slotFor(serial string) (uint, error) {
-	slots, err := probes.module.GetSlotList(true)
-	if err != nil {
-		return 0, errors.New("PKCS#11 enumeration failed")
-	}
-	var selected uint
-	matches := 0
-	for _, slot := range slots {
-		info, infoErr := probes.module.GetTokenInfo(slot)
-		if infoErr == nil && strings.TrimSpace(info.SerialNumber) == serial {
-			selected, matches = slot, matches+1
-		}
-	}
-	if matches != 1 {
-		return 0, errors.New("commissioned PKCS#11 device is unavailable")
-	}
-	return selected, nil
-}
-
 // Remaining reports the user-PIN attempts left, derived from the token flags.
 //
 // PKCS#11 does not expose an exact counter — only three coarse states — so this DELIBERATELY
@@ -54,14 +32,14 @@ func (probes *TokenProbes) slotFor(serial string) (uint, error) {
 // Under-reporting is the safe direction here, because the provider refuses to attempt a login when
 // the remaining count is low, so an error can only ever stop work early, never spend a retry the
 // caller thought it had.
-func (probes *TokenProbes) Remaining(ctx context.Context, _, serial string) (int, error) {
+func (probes *TokenProbes) Remaining(ctx context.Context, _, serial, tokenLabel string) (int, error) {
 	if probes == nil || probes.module == nil {
 		return 0, errors.New("PKCS#11 module is unavailable")
 	}
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	slot, err := probes.slotFor(serial)
+	slot, err := resolveSlot(probes.module, serial, tokenLabel)
 	if err != nil {
 		return 0, err
 	}
@@ -85,14 +63,14 @@ func (probes *TokenProbes) Remaining(ctx context.Context, _, serial string) (int
 //
 // It reads the certificate object rather than trusting a label: the value hashed is the one the
 // card actually presents.
-func (probes *TokenProbes) Fingerprint(ctx context.Context, _, serial string) (string, error) {
+func (probes *TokenProbes) Fingerprint(ctx context.Context, _, serial, tokenLabel string) (string, error) {
 	if probes == nil || probes.module == nil {
 		return "", errors.New("PKCS#11 module is unavailable")
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	slot, err := probes.slotFor(serial)
+	slot, err := resolveSlot(probes.module, serial, tokenLabel)
 	if err != nil {
 		return "", err
 	}

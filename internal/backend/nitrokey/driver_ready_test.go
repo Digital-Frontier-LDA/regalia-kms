@@ -113,12 +113,12 @@ func (secureChannelStub) Establish(context.Context, string, string) error { retu
 
 type retryProbeStub int
 
-func (probe retryProbeStub) Remaining(context.Context, string, string) (int, error) {
+func (probe retryProbeStub) Remaining(context.Context, string, string, string) (int, error) {
 	return int(probe), nil
 }
 
 type devAuthProbe string
 
-func (probe devAuthProbe) Fingerprint(context.Context, string, string) (string, error) {
+func (probe devAuthProbe) Fingerprint(context.Context, string, string, string) (string, error) {
 	return string(probe), nil
 }

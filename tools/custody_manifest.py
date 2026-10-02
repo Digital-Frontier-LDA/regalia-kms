@@ -23,7 +23,7 @@ OBJECT_FIELDS = {
 BINDING_FIELDS = {
     "site", "backend", "device_id", "object_id", "public_fingerprint", "key_check", "state",
     "pin_policy", "touch_policy", "device_serial", "devaut_fingerprint", "public_key_sha256", "kek_algorithm",
-    "kek_version",
+    "kek_version", "token_label",
 }
 RECOVERY_FIELDS = {"mode", "authority_id", "minimum_replicas", "status", "last_drill"}
 # envelope_max_age_days is optional: absent means an envelope of this object never ages out.
@@ -144,6 +144,7 @@ PRIVATE_PATTERNS = (
 )
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,62}$")
 FINGERPRINT_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+TOKEN_LABEL_PATTERN = re.compile(r"[!-~]([ -~]{0,30}[!-~])?")
 
 
 def fail(path: str, message: str) -> NoReturn:
@@ -253,6 +254,15 @@ def validate_binding(binding: Any, path: str) -> dict[str, Any]:
                 value = require_string(item[pin], f"{path}.{pin}")
                 if not FINGERPRINT_PATTERN.fullmatch(value):
                     fail(f"{path}.{pin}", "must be sha256 followed by 64 lowercase hex digits")
+
+    if "token_label" in item:
+        # Mirrors validateBinding in internal/registry/registry.go: the label that tells apart two
+        # PKCS#11 tokens reporting one serial, read by the PKCS#11 backend alone.
+        label = require_string(item["token_label"], f"{path}.token_label")
+        if backend != "nitrokey-pkcs11":
+            fail(f"{path}.token_label", "is only valid for the PKCS#11 backend")
+        if not TOKEN_LABEL_PATTERN.fullmatch(label):
+            fail(f"{path}.token_label", "must be 1 to 32 printable ASCII characters with no space at either end")
 
     if backend in {"yubikey-piv", "yubikey-openpgp"}:
         if item["state"] in COMMISSIONED_STATES and not item.get("device_serial"):

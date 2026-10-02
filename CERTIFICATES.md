@@ -4,11 +4,10 @@ Decision (#104): **the KMS does not manage public TLS certificates.** Issuing, r
 reloading a public certificate is the job of the host that serves it. The KMS protects the few
 long-lived secrets around that work when a consumer asks it to, through operations it already has.
 
-The decision was prompted by two certificate incidents in the fleet. In one, a certificate was
-renewed on disk and the services holding it were never reloaded. In the other, a certificate was
-uploaded by hand and its renewal was never scheduled. Neither exposed a key. Both are lifecycle
-failures: ownership, renewal, reload, and a check of what each endpoint actually serves. Custody
-does not address them, so the fix is not in this repository.
+Cryptographic custody does not replace certificate lifecycle automation. Certificate consumers
+must define ownership, renewal, persistence, reload, and served-certificate checks separately.
+Deployment-specific incident analysis, credential findings, inventories, and recovery procedures
+belong in restricted operational records.
 
 The fleet inventory (owner, environment, SANs, every consumer port, reload behaviour, probes) is
 kept with the fleet monitoring that checks it, not here. An entry may name a KMS object ID when a
@@ -87,15 +86,16 @@ still served, renewal-blocked alert raised.
 
 | Option | Outcome | Reason |
 |---|---|---|
-| Better local automation (renew, reload, probe every consumer) | **Chosen** | It is what the incidents needed, and it adds no shared dependency |
+| Better local automation (renew, reload, probe every consumer) | **Chosen** | Covers the certificate lifecycle without adding a shared dependency |
 | Per-name scoped DNS delegation | Chosen where a broad token is the exposure | Removes cross-name authority at the source; DNS-side work |
-| Shared DNS validation broker | Rejected for now | A new privileged service with authority across names, and no failure it would have prevented |
+| Shared DNS validation broker | Rejected for now | Adds cross-name authority and a shared renewal dependency; needs a demonstrated consumer benefit |
 | Central issuer backed by the KMS | Rejected | Every public endpoint would depend on the KMS for renewal; leaf keys gain nothing from hardware custody |
 
 ### Compromise and failure, per option
 
-"Scoped local" is local automation with a per-name credential. "Broad local" is the starting point:
-one provider token covering whole zones, present on every host that renews.
+The following is a comparison of hypothetical deployment patterns, not an inventory of any
+operator's infrastructure. "Scoped local" uses per-name validation credentials. "Broad local"
+assumes a zone-wide credential distributed to certificate-renewing hosts.
 
 | Scenario | Broad local | Scoped local | Validation broker | Central issuer |
 |---|---|---|---|---|
@@ -139,7 +139,7 @@ services' public certificates.
 
 ## Deferred
 
-- **ACME account key custody.** The account key is long-lived and a fair candidate. No consumer has
-  asked, and no incident points at it.
+- **ACME account key custody.** The account key is long-lived and a fair candidate. Adoption needs
+  a concrete consumer requirement and a reviewed integration contract.
 - **An internal ACME server.** If the fleet wants automatic internal certificates, that belongs to a
   PKI service in front of the KMS, with the CA key held here, not in the daemon.

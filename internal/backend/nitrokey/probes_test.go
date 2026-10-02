@@ -137,7 +137,7 @@ func TestRetryProbeMapsTokenFlagsConservatively(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got, err := probes.Remaining(context.Background(), "hsm", "serial-1")
+			got, err := probes.Remaining(context.Background(), "hsm", "serial-1", "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -151,7 +151,7 @@ func TestRetryProbeMapsTokenFlagsConservatively(t *testing.T) {
 // An unknown or duplicated serial is not resolved by position.
 func TestProbesRefuseAnAmbiguousOrAbsentDevice(t *testing.T) {
 	probes, _ := NewTokenProbes(moduleWithToken("serial-1", 0))
-	if _, err := probes.Remaining(context.Background(), "hsm", "serial-2"); err == nil {
+	if _, err := probes.Remaining(context.Background(), "hsm", "serial-2", ""); err == nil {
 		t.Fatal("an absent device reported a retry count")
 	}
 
@@ -159,7 +159,7 @@ func TestProbesRefuseAnAmbiguousOrAbsentDevice(t *testing.T) {
 		1: {SerialNumber: "same"}, 2: {SerialNumber: "same"},
 	}}
 	probes, _ = NewTokenProbes(duplicate)
-	if _, err := probes.Remaining(context.Background(), "hsm", "same"); err == nil {
+	if _, err := probes.Remaining(context.Background(), "hsm", "same", ""); err == nil {
 		t.Fatal("two devices with one serial were resolved by position")
 	}
 }
@@ -171,7 +171,7 @@ func TestFingerprintHashesThePresentedCertificate(t *testing.T) {
 	module.certs = [][]byte{certificate}
 
 	probes, _ := NewTokenProbes(module)
-	got, err := probes.Fingerprint(context.Background(), "hsm", "serial-1")
+	got, err := probes.Fingerprint(context.Background(), "hsm", "serial-1", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,12 +189,12 @@ func TestFingerprintRefusesAmbiguousOrMissingCertificates(t *testing.T) {
 	module := moduleWithToken("serial-1", 0)
 	module.certs = [][]byte{[]byte("one"), []byte("two")}
 	probes, _ := NewTokenProbes(module)
-	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1"); err == nil {
+	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1", ""); err == nil {
 		t.Fatal("two device certificates produced a fingerprint")
 	}
 
 	module.certs = nil
-	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1"); err == nil {
+	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1", ""); err == nil {
 		t.Fatal("a token with no device certificate produced a fingerprint")
 	}
 }
@@ -279,7 +279,7 @@ func TestRemainingPropagatesGetSlotListError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := probes.Remaining(context.Background(), "hsm", "serial-1")
+	got, err := probes.Remaining(context.Background(), "hsm", "serial-1", "")
 	if err == nil {
 		t.Fatalf("GetSlotList error was swallowed: got retries=%d", got)
 	}
@@ -295,7 +295,7 @@ func TestRemainingPropagatesContextCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got, err := probes.Remaining(ctx, "hsm", "serial-1"); err == nil {
+	if got, err := probes.Remaining(ctx, "hsm", "serial-1", ""); err == nil {
 		t.Fatalf("cancelled context was ignored: got retries=%d", got)
 	}
 }
@@ -308,7 +308,7 @@ func TestRemainingPropagatesTokenInfoError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := probes.Remaining(context.Background(), "hsm", "serial-1"); err == nil {
+	if got, err := probes.Remaining(context.Background(), "hsm", "serial-1", ""); err == nil {
 		t.Fatalf("GetTokenInfo error was swallowed: got retries=%d", got)
 	}
 }
@@ -322,7 +322,7 @@ func TestFingerprintPropagatesContextCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := probes.Fingerprint(ctx, "hsm", "serial-1"); err == nil {
+	if _, err := probes.Fingerprint(ctx, "hsm", "serial-1", ""); err == nil {
 		t.Fatal("cancelled context was ignored")
 	}
 }
@@ -335,7 +335,7 @@ func TestFingerprintPropagatesOpenSessionError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1"); err == nil {
+	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1", ""); err == nil {
 		t.Fatal("OpenSession error was swallowed")
 	}
 }
@@ -350,7 +350,7 @@ func TestFingerprintPropagatesFindObjectsInitError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1"); err == nil {
+	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1", ""); err == nil {
 		t.Fatal("FindObjectsInit error was swallowed")
 	}
 }
@@ -363,7 +363,7 @@ func TestFingerprintPropagatesAttributeValueError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1"); err == nil {
+	if _, err := probes.Fingerprint(context.Background(), "hsm", "serial-1", ""); err == nil {
 		t.Fatal("GetAttributeValue error was swallowed")
 	}
 }
@@ -379,7 +379,7 @@ func TestFingerprintMissingCertificateReportsNotPresent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := probes.Fingerprint(context.Background(), "hsm", "serial-1")
+	got, err := probes.Fingerprint(context.Background(), "hsm", "serial-1", "")
 	if err == nil {
 		t.Fatalf("empty certificate list produced a fingerprint: %q", got)
 	}

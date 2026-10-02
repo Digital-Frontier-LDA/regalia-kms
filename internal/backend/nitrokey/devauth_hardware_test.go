@@ -54,7 +54,7 @@ func TestIdentityProbeAgainstRealToken(t *testing.T) {
 		t.Fatalf("NewTokenProbes: %v", err)
 	}
 
-	fingerprint, err := probes.Fingerprint(context.Background(), "bench", serial)
+	fingerprint, err := probes.Fingerprint(context.Background(), "bench", serial, "")
 	t.Logf("Fingerprint() = %q, err = %v", fingerprint, err)
 
 	switch {
@@ -75,7 +75,7 @@ func TestIdentityProbeAgainstRealToken(t *testing.T) {
 
 	// Whatever the identity answer, a commissioned card must still report its retry counter:
 	// #448's control showed the rest of the provider works on SC-HSM hardware.
-	remaining, err := probes.Remaining(context.Background(), "bench", serial)
+	remaining, err := probes.Remaining(context.Background(), "bench", serial, "")
 	if err != nil {
 		t.Fatalf("Remaining: %v", err)
 	}

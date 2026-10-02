@@ -80,7 +80,7 @@ func (*fakeCryptoki) GetAttributeValue(pkcs11.SessionHandle, pkcs11.ObjectHandle
 
 type fixedDevAuth string
 
-func (value fixedDevAuth) Fingerprint(context.Context, string, string) (string, error) {
+func (value fixedDevAuth) Fingerprint(context.Context, string, string, string) (string, error) {
 	return string(value), nil
 }
 
@@ -93,7 +93,7 @@ func (channel *recordingSecureChannel) Establish(context.Context, string, string
 
 type fixedRetries int
 
-func (retries fixedRetries) Remaining(context.Context, string, string) (int, error) {
+func (retries fixedRetries) Remaining(context.Context, string, string, string) (int, error) {
 	return int(retries), nil
 }
 
