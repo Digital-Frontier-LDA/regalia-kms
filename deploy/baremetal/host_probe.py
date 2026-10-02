@@ -50,6 +50,8 @@ PLATFORM AND TPM, measured:
                             and --unlock-peer (this node, and exactly the peers that hold a path), each
                             path's local share sealed to the TPM alone under the binding RECORDED for the
                             PIN credentials (PCR 7, and the signed PCR 11 policy when the PINs have it).
+                            Its crypttab entry takes the key from the unlock client's socket
+                            (/run/regalia-unlock/key.sock) and asks for no other way in.
                             On the root volume only: the unlock client opens no other. A second volume
                             that holds a secret needs an NV-backed token of its own. root_disk_tpm_unlocked
                             accepts the same shape, with no tpm2-device in crypttab. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY
@@ -271,6 +273,11 @@ def token_keyslots(token, meta):
 
 
 PEER_TOKEN = "regalia-peer-unlock"      # deploy/baremetal/unlock.py: one token per peer path
+# The socket the unlock client gives the volume key on: the key-file field of the root volume's crypttab
+# entry (unlock.KEY_SOCKET, and the ListenStream of initrd/regalia-unlock.socket; a test holds the two equal).
+PEER_KEY_SOCKET = "/run/regalia-unlock/key.sock"
+# crypttab options that make systemd-cryptsetup open the volume by another route than that socket
+OTHER_UNLOCKS = ("tpm2-device", "fido2-device", "pkcs11-uri")
 
 
 def peer_paths(meta, where, unlock_record, binding=None):
@@ -317,11 +324,12 @@ def root_unlock(host, unlock_record=None, binding=None):
     crypts, why = root_crypt_devices(host)
     if crypts is None:
         return False, why
-    entries = {}
+    entries, key_files = {}, {}
     for line in (host.read("/etc/crypttab") or "").splitlines():
         f = line.split()
         if f and not f[0].startswith("#"):
             entries[f[0]] = f[3] if len(f) > 3 else ""
+            key_files[f[0]] = f[2] if len(f) > 2 else ""
     how = []
     for name in crypts:
         dev, meta = luks_header(host, name)
@@ -329,12 +337,20 @@ def root_unlock(host, unlock_record=None, binding=None):
             return False, meta
         tokens = meta["tokens"]
         opts = dict((o.split("=", 1) + [""])[:2] for o in entries.get(name, "").split(",") if o)
-        # The peer-assisted shape (#67): the TPM AND a peer, never the TPM alone. systemd is not asked to
-        # unlock it (no tpm2-device in crypttab: the unlock client does), and there is no systemd-tpm2 token.
+        # The peer-assisted shape (#67): the TPM AND a peer, never the TPM alone. There is no systemd-tpm2
+        # token, and systemd-cryptsetup takes the volume key from the unlock client's socket and from nowhere
+        # else: the crypttab entry names that socket as its key file and asks for no other way in.
         if any(t.get("type") == PEER_TOKEN for t in tokens.values()):
-            if opts.get("tpm2-device"):
-                return False, "%s (%s) carries %s tokens, but crypttab still asks systemd to unlock it with the TPM alone " \
-                    "(tpm2-device=%s)" % (name, dev, PEER_TOKEN, opts["tpm2-device"])
+            if name not in entries:
+                return False, "%s (%s) carries %s tokens, but it is not listed in /etc/crypttab: nothing asks the unlock " \
+                    "client for its key at boot (key file %s)" % (name, dev, PEER_TOKEN, PEER_KEY_SOCKET)
+            other = sorted(o for o in OTHER_UNLOCKS if o in opts)
+            if other:
+                return False, "%s (%s) carries %s tokens, but crypttab still asks systemd to unlock it another way (%s)" % (
+                    name, dev, PEER_TOKEN, ", ".join("%s=%s" % (o, opts[o]) for o in other))
+            if key_files[name] != PEER_KEY_SOCKET:
+                return False, "%s (%s) carries %s tokens, but its crypttab key file is %r, not the unlock client's socket %s" % (
+                    name, dev, PEER_TOKEN, key_files[name] or "none", PEER_KEY_SOCKET)
             ok, why = peer_paths(meta, "%s (%s)" % (name, dev), unlock_record, binding)
             if not ok:
                 return False, why

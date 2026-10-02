@@ -46,7 +46,9 @@ Commissioning has two halves:
     an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
     passes only when the unlock can retire an image: a peer's contribution (#67: `regalia-peer-unlock`
     tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
-    peer that holds a path; the enrolment exists in `deploy/baremetal/unlock.py`, its boot-time client
+    peer that holds a path, and a crypttab entry whose key file is the unlock client's socket,
+    `/run/regalia-unlock/key.sock`, with no `tpm2-device`, `fido2-device` or `pkcs11-uri` option; the enrolment exists in
+    `deploy/baremetal/unlock.py`, its boot-time client
     does not yet), or an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
     `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
