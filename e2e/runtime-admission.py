@@ -4,7 +4,7 @@ runtime lease (regalia-kms#74). The token is SoftHSM; the lease is real: node a 
 software TPMs, b's TPM signs the lease, and deploy/baremetal/admission.py turns it into the admission file
 the daemon reads. No hardware.
 
-    python3 e2e/runtime-admission.py
+    python3 -Es e2e/runtime-admission.py
 
   1  no admission file yet: the daemon is up, NOT ready, and a sign request is a 503
   2  the lease service's first round: the node is admitted, the daemon is ready, and it returns a

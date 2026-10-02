@@ -21,7 +21,7 @@ for t in ssh ssh-keygen python3; do
   command -v "$t" >/dev/null || { echo "ssh-trust-sshd: $t is required (openssh-client, python3)"; exit 2; }
 done
 [ -n "${REGALIA_SSHD:-}" ] || command -v sshd >/dev/null || [ -x /usr/sbin/sshd ] || { echo "ssh-trust-sshd: sshd is required (openssh-server)"; exit 2; }
-out="$(REGALIA_EXPECT_SSHD=1 python3 -m unittest -v tests.test_baremetal_ssh_trust.OnSshd 2>&1)"; rc=$?
+out="$(REGALIA_EXPECT_SSHD=1 python3 -Es -m unittest -v tests.test_baremetal_ssh_trust.OnSshd 2>&1)"; rc=$?
 printf '%s\n' "$out"
 [ "$rc" = 0 ] || { echo "ssh-trust-sshd: FAILED"; exit 1; }
 grep -q '^Ran 11 tests' <<< "$out" && ! grep -qi 'skipped' <<< "$out" || { echo "ssh-trust-sshd: the sshd tests did not all run"; exit 1; }

@@ -6,7 +6,7 @@ A v2 manifest pins each node's SSH host key (`ssh_host_pub`, membership.py). Tru
 comes from the offline membership root, not from the first connection, and it is revoked the way every
 other node identity is: by the manifest that retires the node.
 
-    python3 -m deploy.baremetal.ssh_trust --chain chain.json --root-key <64 hex> --at-least-epoch 7 \\
+    python3 -Es -m deploy.baremetal.ssh_trust --chain chain.json --root-key <64 hex> --at-least-epoch 7 \\
         --known-hosts ~/.ssh/regalia_known_hosts [--addresses addresses.json --ssh-config ~/.ssh/regalia_config]
 
 known_hosts(manifest) gives:
