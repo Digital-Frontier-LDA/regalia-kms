@@ -234,3 +234,30 @@ its credentials back through the witnessed custody procedure, never from the exp
 (`runtime_credentials_excluded_from_backup`); nothing measures it. The export, wipe, restore and
 serve sequence passed on the bench with the real daemon and a real Nitrokey (2026-09-24). Carrying
 an export out of a real site and restoring it on a rebuilt host has not been done (regalia#46).
+
+## 7. Peer-assisted disk unlock (three-site, #67): not commissioned yet
+
+Section 3's TPM-only disk unlock is the single-site baseline. It cannot retire a boot image: the TPM
+releases the disk key to every image its policy ever accepted (#135). The three-site design replaces
+it: the disk needs the host's TPM **and** one peer, and a peer helps only a node its current manifest
+lets be unlocked, on an image the manifest's measurements still list.
+
+`deploy/baremetal/unlock.py` holds the decisions and the formats, proven on software TPMs and a real
+dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
+
+- **The credential** of each peer path is derived from two halves: one sealed in this host's TPM, one
+  kept on the peer's encrypted disk. Each peer has a LUKS2 keyslot and a `regalia-peer-unlock` token of
+  its own, so either peer restores the host and each path is rotated alone.
+- **The exchange:** the host sends a fresh TPM quote for this boot; the peer decides with
+  `replacement.may_unlock`, and answers with its half encrypted to this boot's one-time key and signed
+  by its own TPM. A captured exchange is useless in another boot.
+- **Enrolment** is an operator step between two running hosts; the recovery key (section 3) authorizes
+  adding the keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer
+  unlock the disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
+- **`unlock.judge_tokens`** judges the LUKS2 header for the probe: one path per expected peer, each with
+  a keyslot of its own, and no `systemd-tpm2` token left.
+
+Not there yet, so **nothing here is to be run on a KMS host**: the transport (WireGuard before root,
+#66), the pre-root client (a small native program; the Python client in `unlock.py` is the reference
+the tests use and is not shipped in an initramfs), the operator commands, and every run on a physical
+TPM or a DL360 (#65).
