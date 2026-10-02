@@ -129,6 +129,55 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  independent-binary-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [first, second]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build once with private source, module and compiler caches
+        run: python3 -m deploy.images.independent build --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/independent"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: independent-${{ matrix.builder }}
+          path: ${{ runner.temp }}/independent/
+          if-no-files-found: error
+          retention-days: 7
+
+  independent-binary-compare:
+    needs: independent-binary-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: independent-*
+          path: ${{ runner.temp }}/independent-downloads
+      - name: Require distinct runner boots, identical inputs and exact executable bytes
+        run: |
+          python3 -m deploy.images.independent verify \
+            "$RUNNER_TEMP/independent-downloads/independent-first" \
+            "$RUNNER_TEMP/independent-downloads/independent-second" \
+            --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/independent-comparison.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: independent-comparison
+          path: ${{ runner.temp }}/independent-comparison.json
+          if-no-files-found: error
+          retention-days: 14
+
   bootstrap-harness-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 5
