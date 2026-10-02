@@ -480,7 +480,7 @@ class HighWaterOnSwtpm(_Swtpm):
                 ("a counter", (("nvdefine", index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite"),
                                ("nvincrement", index, "-C", "o")), "record index %s is not an ordinary index" % index),
                 ("too short", (("nvdefine", index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite"),
-                               ("nvwrite", index, "-C", "o", "-i", "-")), "cannot read 48 bytes from the record index %s" % index),
+                               ("nvwrite", index, "-C", "o", "-i", "-")), "record index %s is 8 bytes, not 48" % index),
             )
             for label, commands, reason in cases:
                 with self.subTest(index=index, case=label):
@@ -518,16 +518,27 @@ class HighWaterOnSwtpm(_Swtpm):
         self.assertEqual((self.hw.slots(), self.hw.value()), ([None, None], 2))
         self.assertRegex(self.hw.unusable(), "NO RECORD")
 
-    def test_redefine_gives_a_new_anchor_at_epoch_0_above_every_old_counter_value(self):
+    def test_redefine_gives_a_new_anchor_at_the_epoch_asked_for_above_every_old_counter_value(self):
         digest_of = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
         self.hw.anchor(3, digest_of)
         old_counter = int.from_bytes(self.nv("nvread", "0x1500016", "-C", "o", "-s", "8").stdout, "big")
         self.nv("nvundefine", "0x150001b", "-C", "o")                    # one index already gone: the rest is still replaced
-        base = self.hw.redefine()
-        self.assertGreater(base, old_counter)
-        zero = (0, "00" * 32)
-        self.assertEqual((self.hw.value(), self.hw.slots(), self.hw.unusable()), (0, [zero, zero], None))
-        self.assertEqual(self.hw.anchor(1, digest_of), 1)
+        base = self.hw.redefine(7, "07" * 32)
+        counter = int.from_bytes(self.nv("nvread", "0x1500016", "-C", "o", "-s", "8").stdout, "big")
+        self.assertGreater(counter, old_counter)                         # a new counter, and the old epochs cannot be read back as new ones
+        self.assertEqual(counter - base, 7)
+        self.assertEqual((self.hw.value(), self.hw.slots(), self.hw.pinned(), self.hw.unusable()), (7, [(7, "07" * 32)] * 2, True, None))
+        self.assertEqual(self.hw.anchor(8, lambda epoch: "%02x" % epoch * 32), 8)
+        with self.assertRaisesRegex(m.Refused, "a manifest digest must be 64 lowercase hex"):
+            self.hw.redefine(9, "nope")
+        self.assertEqual(self.hw.value(), 8)                             # refused before anything was deleted
+
+    def test_a_tpm_that_is_not_there_is_a_refusal_not_an_unusable_anchor(self):
+        gone = m.HighWater("0x1500016", tcti="swtpm:path=%s/absent.sock" % self.d, lock_path=self.d + "/x.lock")
+        for call in (gone.unusable, gone.remains, gone.value, gone.record):
+            with self.assertRaisesRegex(m.Refused, "the TPM does not answer .* \\(fail closed\\)") as caught:
+                call()
+            self.assertNotIsInstance(caught.exception, m.Unusable)
 
 
 class RecordWrites(unittest.TestCase):
@@ -565,10 +576,66 @@ class RecordWrites(unittest.TestCase):
         hw = self.defined()
         hw.anchor(2, lambda epoch: "%02x" % epoch * 32)
         self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvundefine", "0x150001a"] else None
+        del self.calls[:]
         with self.assertRaisesRegex(m.Refused, "cannot delete NV index 0x150001a"):
-            hw.redefine()
+            hw.redefine(2, "02" * 32)
+        # the counter and its base go first, the record slots last: what a slot held still binds the next attempt
+        self.assertEqual([index for tool, index in self.calls if tool == "nvundefine"], ["0x1500016", "0x1500017", "0x150001a"])
+        self.assertEqual(hw.remains(), (None, [(1, "01" * 32), (2, "02" * 32)]))
         self.fault = lambda argv: None
-        self.assertEqual(hw.redefine() > 0 and (hw.value(), hw.slots()), (0, [(0, "00" * 32), (0, "00" * 32)]))
+        hw.redefine(2, "02" * 32)
+        self.assertEqual((hw.value(), hw.slots()), (2, [(2, "02" * 32)] * 2))
+
+    def test_redefine_refuses_a_digest_that_is_not_one_before_deleting_anything(self):
+        hw = self.defined()
+        hw.anchor(2, lambda epoch: "%02x" % epoch * 32)
+        del self.calls[:]
+        for bad in ("nope", "AB" * 32, None):
+            with self.subTest(digest=bad), self.assertRaisesRegex(m.Refused, "a manifest digest must be 64 lowercase hex"):
+                hw.redefine(3, bad)
+        self.assertEqual([tool for tool, _ in self.calls if tool in ("nvundefine", "nvdefine")], [])
+        self.assertEqual((hw.value(), hw.record()), (2, (2, "02" * 32)))
+
+    def test_remains_does_not_mistake_a_failing_read_for_a_missing_index(self):
+        """What remains of an anchor is a floor for re-anchoring. A read that FAILS must not shrink it."""
+        hw = self.defined()
+        hw.anchor(3, lambda epoch: "%02x" % epoch * 32)
+        self.assertEqual(hw.remains(), (3, [(3, "03" * 32), (2, "02" * 32)]))
+        for label, fault in (("the counter", lambda argv: 1 if argv[:2] == ["tpm2_nvread", "0x1500016"] else None),
+                             ("the base", lambda argv: 1 if argv[:2] == ["tpm2_nvreadpublic", "0x1500017"] else None),
+                             ("a slot", lambda argv: 1 if argv[:2] == ["tpm2_nvread", "0x150001b"] else None),
+                             ("a slot's public area", lambda argv: 1 if argv[:2] == ["tpm2_nvreadpublic", "0x150001a"] else None)):
+            with self.subTest(label):
+                self.fault = fault
+                with self.assertRaises(m.Refused) as caught:
+                    hw.remains()
+                self.assertNotIsInstance(caught.exception, m.Unusable)
+        self.fault = lambda argv: None
+        self.tpm(["tpm2_nvundefine", "0x1500016", "-C", "o"])                 # the TPM SAYS the counter is gone: that is a remains without it
+        self.tpm(["tpm2_nvundefine", "0x150001b", "-C", "o"])
+        self.assertEqual(hw.remains(), (None, [(3, "03" * 32)]))
+
+    def test_what_is_wrong_with_the_anchor_is_told_apart_from_a_tpm_that_fails(self):
+        """Unusable is what re-anchoring repairs; a plain Refused is a TPM or a tool that did not answer."""
+        hw = self.defined()
+        for label, fault, kind, reason in (
+                ("the TPM answers nothing", lambda argv: 1, m.Refused, "the TPM does not answer"),
+                ("the counter does not read though the TPM lists it", lambda argv: 1 if argv[:2] == ["tpm2_nvreadpublic", "0x1500016"] else None,
+                 m.Refused, "the TPM lists it and did not give it"),
+                ("a read of the counter fails", lambda argv: 1 if argv[:2] == ["tpm2_nvread", "0x1500016"] else None, m.Refused, "cannot read 8 bytes"),
+                ("a read of a slot fails", lambda argv: 1 if argv[:2] == ["tpm2_nvread", "0x150001b"] else None, m.Refused, "cannot read 48 bytes")):
+            with self.subTest(label):
+                self.fault = fault
+                with self.assertRaises(m.Refused) as caught:
+                    hw.unusable()
+                self.assertIn(reason, str(caught.exception))
+                self.assertIs(type(caught.exception), kind)
+        self.fault = lambda argv: None
+        self.tpm(["tpm2_nvundefine", "0x1500017", "-C", "o"])
+        self.assertEqual(hw.unusable(), "cannot read NV index 0x1500017: the high-water anchor is unavailable (fail closed): the index is not defined")
+        with self.assertRaises(m.Unusable):
+            hw.value()
+        self.assertEqual(hw.remains(), (None, [(0, "00" * 32), (0, "00" * 32)]))
 
     def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
         hw = self.defined()

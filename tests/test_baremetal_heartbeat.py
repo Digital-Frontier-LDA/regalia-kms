@@ -75,6 +75,8 @@ class FakeTpm:
         no = subprocess.CompletedProcess(argv, 1, b"", b"the TPM said no")
         if self.broken:
             return no
+        if tool == "getcap":                                 # tpm2_getcap handles-nv-index: what the TPM says it holds
+            return ok("".join("- %s\n" % name for name in sorted(self.nv)).encode()) if index == "handles-nv-index" else no
         if tool == "nvdefine":
             if index in self.nv:
                 return no

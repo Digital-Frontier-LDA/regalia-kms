@@ -14,15 +14,26 @@ so it is the one an attacker would want, and it is fenced accordingly:
 
   * AN OPERATOR, ON THE HOST. It is this command, run by hand. Nothing calls reanchor() from a service, and
     the code that talks to peers (convergence.py) has no re-anchor in it.
-  * THE AUTHORITY AND A PEER. Whole chains from at least two sources that agree at every epoch, and one of
-    them must be the revocation authority (convergence.AUTHORITY): two peers alone cannot re-anchor a
-    node. Every source must be one the newest manifest trusts.
+  * THE AUTHORITY AND A PEER. Whole chains from at least two sources that agree at every epoch they share.
+    One of them must be the revocation authority (convergence.AUTHORITY), and the chain anchored is the
+    AUTHORITY'S: two peers alone cannot re-anchor a node, and a peer that is ahead of the authority is
+    refused (its newest epochs would rest on that peer alone). Every source must be one the newest
+    manifest trusts, and none may be the node being re-anchored.
   * A USABLE ANCHOR IS NEVER RESET. If the counter reads and the record is valid and in step, this refuses.
-  * NOT A WAY BACK. While the old counter still reads, the chain must reach its epoch.
-  * VERIFIED FIRST. All of the above is checked before the TPM is touched; a refusal changes nothing.
-  * TYPED. The operator types a phrase naming the node, the epoch and the manifest digest being anchored.
-  * RECORDED. One audit event, ALLOW or DENY with the reason, appended to the audit log before the result
-    is reported.
+  * A TPM THAT DOES NOT ANSWER IS NOT RE-ANCHORED. "The index is not defined", said by the TPM, is an
+    unusable anchor. A TPM or a tool that fails says nothing about the anchor, and this refuses.
+  * NOTHING THE TPM STILL HOLDS IS FORGOTTEN. The chain must reach the old counter's epoch while it reads,
+    reach the epoch of every record slot that still holds a valid record, and carry that slot's manifest.
+  * NEVER AN EMPTY ANCHOR. The new anchor is defined AT the chain's epoch with its manifest recorded. If the
+    operation is interrupted, the node holds either the old remains, or no usable anchor, or the finished
+    one: never an anchor that would accept another chain.
+  * VERIFIED FIRST. All of the above is checked before anything is changed; a refusal changes nothing.
+  * TYPED, AT A TERMINAL. The operator types a phrase naming the node, the epoch and the manifest digest
+    being anchored. It is a deliberate act, not a secret: what authorizes the change is the TPM's owner
+    authorization.
+  * RECORDED. The request, naming the epoch and manifest, is appended to the audit log before anything is
+    asked or changed (without a writable log nothing is done); then the outcome: ALLOW, DENY (nothing
+    changed), or INCOMPLETE (the anchor was being replaced and it did not finish: run it again).
 
     python3 -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key HEX \\
         --tpm-index 0x1500016 --node-id b --authority authority-chain.json --peer c=c-chain.json \\
@@ -42,23 +53,42 @@ from deploy.baremetal import convergence, membership
 Refused, require = membership.Refused, membership.require
 
 
-def plan(store, sources):
-    """What a re-anchor would do, having verified everything that can be verified without touching the TPM:
-    {"reason": why the anchor is unusable, "old_epoch": the counter's epoch or None, "epoch", "manifest_digest"
-    and "manifest": the newest manifest of the agreed chain, "chain": that chain, "sources": who gave one}."""
+class Incomplete(Exception):
+    """The anchor was being replaced and the operation did not finish. Not a refusal: something changed.
+    Run the command again."""
+
+
+class Unrecorded(Exception):
+    """The re-anchor is done and its outcome could not be written to the audit log."""
+
+    def __init__(self, summary, failure):
+        super().__init__(str(failure))
+        self.summary = summary
+
+
+def plan(store, sources, node_id):
+    """What a re-anchor would do, having verified everything that can be verified without changing anything:
+    {"reason": why the anchor is unusable, "counter": the old counter's epoch or None, "records": the record
+    slots that still hold a valid record, "epoch", "manifest_digest" and "manifest": the newest manifest of
+    the chain to anchor, "chain": that chain (the AUTHORITY's), "sources": who gave one}."""
+    require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None, "node_id must be a node ID")
     require(isinstance(sources, dict), "sources must map each source to the chain it gave")
     require(convergence.AUTHORITY in sources, "re-anchoring needs the revocation authority's chain: peers alone cannot re-anchor a node")
     require(len(sources) >= 2, "re-anchoring needs the authority's chain and at least one peer's (%d source given)" % len(sources))
-    reason = store.hw.unusable()
+    require(node_id not in sources, "%s cannot be a source for its own re-anchor: the peer's chain comes from another node" % node_id)
+    reason = store.hw.unusable()             # Refused, not a reason, when the TPM does not answer
     require(reason is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or substituted is "
             "restored under the anchor it has (convergence.recover)")
-    try:
-        old = store.hw.value()
-    except Refused:
-        old = None
-    chain, newest = convergence.agreed(store.root_key, sources, 2, old or 0)
-    return {"reason": reason, "old_epoch": old, "epoch": newest["epoch"], "manifest_digest": membership.digest(newest),
-            "manifest": newest, "chain": chain, "sources": sorted(sources)}
+    counter, records = store.hw.remains()
+    floor = max([counter or 0] + [epoch for epoch, _ in records])
+    longest, newest = convergence.agreed(store.root_key, sources, 2, floor)
+    # The chain anchored is the authority's. A peer may be behind it; a peer AHEAD of it would have its
+    # newest epochs vouched for by that peer alone.
+    require(len(sources[convergence.AUTHORITY]) == len(longest), "a peer's chain ends at epoch %d and the authority's at epoch %d: the chain "
+            "anchored must be the authority's; fetch the authority's current chain" % (len(longest), len(sources[convergence.AUTHORITY])))
+    require(node_id in membership.validate(newest), "%s is not a node of the chain being anchored" % node_id)
+    return {"reason": reason, "counter": counter, "records": records, "epoch": newest["epoch"], "manifest_digest": membership.digest(newest),
+            "manifest": newest, "chain": sources[convergence.AUTHORITY], "sources": sorted(sources)}
 
 
 def phrase(node_id, planned):
@@ -66,23 +96,42 @@ def phrase(node_id, planned):
 
 
 def reanchor(store, sources, node_id, typed, sink):
-    """Verify, check what the operator typed, re-anchor, and hand `sink` one audit event (ALLOW, or DENY with
-    the reason). Returns the summary afterwards. `typed` is a callable given the plan and returning what
-    the operator typed, so nothing is asked before the plan exists."""
-    require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None, "node_id must be a node ID")
-    planned = {}
+    """Plan, record the request, check what the operator typed, re-anchor, record the outcome. Returns
+    {"epoch", "manifest_digest"} of what the node now holds.
 
-    def decide():
-        planned.update(plan(store, sources))
-        require(node_id in membership.validate(planned["manifest"]), "%s is not a node of the chain being anchored" % node_id)
+    `sink` gets: one DENY if the plan is refused; otherwise a `reanchor-requested` event naming the epoch
+    and manifest BEFORE anything is asked or changed (if that cannot be written, nothing is done), then the
+    outcome: ALLOW; DENY (refused, nothing changed); or INCOMPLETE (the anchor was being replaced and it
+    did not finish: Incomplete is raised, and the command is run again). `typed` is a callable given the
+    plan and returning what the operator typed, so nothing is asked before the plan exists."""
+    def event(kind, planned, **more):
+        return dict({"event": kind, "subject": convergence._printable(node_id), "peer": "operator",
+                     "epoch": planned.get("epoch", 0), "manifest_digest": planned.get("manifest_digest", ""),
+                     "sources": planned.get("sources", sorted(map(str, sources)) if isinstance(sources, dict) else []),
+                     "anchor_was": convergence._printable(planned.get("reason", ""))}, **more)
+
+    try:
+        planned = plan(store, sources, node_id)
+    except Refused as refusal:
+        sink(event("reanchor", {}, outcome="DENY", reason=convergence._printable(refusal)))
+        raise
+    sink(event("reanchor-requested", planned))
+    store.reanchor_began = False
+    try:
         require(typed(dict(planned)) == phrase(node_id, planned), "not confirmed: the phrase typed is not %r" % phrase(node_id, planned))
         store.reanchor(planned["chain"])
-        return convergence.summary(store)
-
-    return convergence.audited(lambda event: sink(dict(event, epoch=planned.get("epoch", 0), manifest_digest=planned.get("manifest_digest", ""),
-                                                       sources=planned.get("sources", sorted(sources) if isinstance(sources, dict) else []),
-                                                       anchor_was=planned.get("reason", ""))),
-                               "reanchor", None, node_id, "operator", decide)
+    except BaseException as failure:
+        began = store.reanchor_began
+        sink(event("reanchor", planned, outcome="INCOMPLETE" if began else "DENY", reason=convergence._printable(failure) or type(failure).__name__))
+        if began:
+            raise Incomplete(str(failure) or type(failure).__name__) from failure
+        raise
+    summary = {"epoch": planned["epoch"], "manifest_digest": planned["manifest_digest"]}
+    try:
+        sink(event("reanchor", planned, outcome="ALLOW", reason=""))
+    except OSError as failure:
+        raise Unrecorded(summary, failure) from failure
+    return summary
 
 
 def _chain(path):
@@ -90,15 +139,17 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def main(argv=None, ask=input, highwater=membership.HighWater):
+def main(argv=None, ask=None, highwater=membership.HighWater, tty=None):
+    """Exit status: 0 done; 1 refused, nothing changed; 2 usage; 3 INCOMPLETE, the anchor was being replaced:
+    run it again; 4 done, but the outcome could not be written to the audit log."""
     ap = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.reanchor", description=__doc__.splitlines()[0])
     ap.add_argument("--membership", required=True, help="this node's membership file")
     ap.add_argument("--root-key", required=True, help="the pinned membership root key, 64 hex")
     ap.add_argument("--tpm-index", required=True, help="the NV index of this node's epoch counter (0x1500016)")
     ap.add_argument("--node-id", required=True, help="this node's ID")
     ap.add_argument("--authority", required=True, metavar="CHAIN.json", help="the whole chain, as the revocation authority gave it")
-    ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain a peer gave; at least one, repeat for more")
-    ap.add_argument("--audit-log", required=True, help="the file the audit event is appended to (one JSON object a line)")
+    ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain ANOTHER node gave; at least one, repeat for more")
+    ap.add_argument("--audit-log", required=True, help="the file the audit events are appended to (one JSON object a line)")
     args = ap.parse_args(argv)
 
     def record(event):
@@ -112,18 +163,26 @@ def main(argv=None, ask=input, highwater=membership.HighWater):
 
     def typed(planned):
         print("This node's TPM anchor is unusable: %s" % planned["reason"])
-        print("The old epoch counter %s." % ("cannot be read" if planned["old_epoch"] is None else "reads epoch %d" % planned["old_epoch"]))
+        print("The old epoch counter %s." % ("cannot be read" if planned["counter"] is None else "reads epoch %d" % planned["counter"]))
+        for epoch, held in planned["records"]:
+            print("A record slot still holds epoch %d, manifest %s: the chain carries that manifest at that epoch." % (epoch, held))
         print("Sources that agree: %s." % ", ".join(planned["sources"]))
-        print("The chain they agree on ends at epoch %d, manifest %s:" % (planned["epoch"], planned["manifest_digest"]))
+        print("The authority's chain ends at epoch %d, manifest %s:" % (planned["epoch"], planned["manifest_digest"]))
         for node in planned["manifest"]["nodes"]:
             print("    %-32s %s" % (node["node_id"], node["state"]))
         print("Re-anchoring DELETES this node's membership anchor and defines a new one on this chain.")
         print("Before you type anything: MEMBERSHIP-RECOVERY.md, \"Deciding that the sources are right\".")
-        return ask("Type exactly: %s\n> " % phrase(args.node_id, planned))
+        try:
+            return (ask or input)("Type exactly: %s\n> " % phrase(args.node_id, planned))
+        except EOFError:
+            return None
 
     try:
         require(re.fullmatch(r"0x[0-9a-fA-F]{1,8}", args.tpm_index) is not None, "--tpm-index must be 0x and up to 8 hex digits")
         membership.hex_field(args.root_key, 64, "--root-key")
+        # The phrase is a deliberate act at this host's terminal, not a line in a script or a pipe. (It is not a
+        # secret: what authorizes the change is the TPM's owner authorization.)
+        require(ask is not None or (tty or sys.stdin.isatty)(), "the phrase must be typed at a terminal: standard input is not one")
         sources = {convergence.AUTHORITY: _chain(args.authority)}
         for item in args.peer:
             node_id, sep, path = item.partition("=")
@@ -131,11 +190,17 @@ def main(argv=None, ask=input, highwater=membership.HighWater):
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
         store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index))
-        # first, and before the TPM is touched: an attempt leaves a trace, and a log that cannot be written stops it here
-        record({"event": "reanchor-requested", "subject": args.node_id, "sources": sorted(sources)})
         now_at = reanchor(store, sources, args.node_id, typed, record)
+    except Incomplete as failure:
+        print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
+              "chains. Until it completes, this node's membership does not load." % failure, file=sys.stderr)
+        return 3
+    except Unrecorded as failure:
+        print("reanchor: DONE, but the outcome could not be written to the audit log (%s). %s now holds epoch %d, manifest %s. "
+              "Record it by hand." % (failure, args.node_id, failure.summary["epoch"], failure.summary["manifest_digest"]), file=sys.stderr)
+        return 4
     except (OSError, Refused) as failure:
-        print("reanchor: NOT DONE: %s" % failure, file=sys.stderr)
+        print("reanchor: NOT DONE, nothing was changed: %s" % failure, file=sys.stderr)
         return 1
     print("reanchor: done. %s now holds epoch %d, manifest %s, under a new anchor." % (args.node_id, now_at["epoch"], now_at["manifest_digest"]))
     return 0

@@ -104,6 +104,12 @@ class Refused(Exception):
     pass
 
 
+class Unusable(Refused):
+    """The TPM answered, and what it holds cannot serve as this node's anchor: an index that is not
+    defined or is not of the right kind, no valid record, a counter and a record that are out of step.
+    Distinct from a TPM that did not answer (a plain Refused): only this is what re-anchoring repairs."""
+
+
 @contextlib.contextmanager
 def _exclusive(lock_path):
     """An exclusive flock held for the block: every read-modify-write of the anchor or the stored
@@ -120,6 +126,11 @@ def _exclusive(lock_path):
 def require(cond, message):
     if not cond:
         raise Refused(message)
+
+
+def require_anchor(cond, message):
+    if not cond:
+        raise Unusable(message)
 
 
 def _pairs(pairs):
@@ -394,13 +405,29 @@ class HighWater:
         env = dict(os.environ, **self.env) if self.env else None
         return self.run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=env, **kw)
 
-    def _attributes(self, index):
-        """The index's TPMA_NV mask; Refused if the index cannot be read (missing, or no TPM)."""
+    def _defined(self):
+        """The NV indices the TPM says it holds. Refused when the TPM does not answer: then nothing is known
+        about the anchor, and that is neither "usable" nor "unusable"."""
+        r = self._tpm("getcap", "handles-nv-index")
+        require(r.returncode == 0, "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is "
+                "unavailable (fail closed)")
+        return {int(found, 16) for found in re.findall(rb"0x[0-9A-Fa-f]+", r.stdout)}
+
+    def _public(self, index):
+        """(TPMA_NV mask, size) of an index. Unusable if the TPM says the index is not defined; Refused if it
+        could not be read for any other reason (no TPM, a tool that failed)."""
         r = self._tpm("nvreadpublic", index)
-        require(r.returncode == 0, "cannot read NV index %s: the high-water anchor is unavailable (fail closed)" % index)
+        if r.returncode != 0:
+            missing = int(index, 16) not in self._defined()
+            raise (Unusable if missing else Refused)("cannot read NV index %s: the high-water anchor is unavailable (fail closed): %s"
+                                                     % (index, "the index is not defined" if missing else "the TPM lists it and did not give it"))
         found = re.search(rb"attributes:\s*\n\s*friendly:[^\n]*\n\s*value:\s*0x([0-9A-Fa-f]+)", r.stdout)
-        require(found is not None, "unparseable nvreadpublic output for %s" % index)
-        return int(found.group(1), 16)
+        size = re.search(rb"(?m)^\s*size:\s*([0-9]+)\s*$", r.stdout)
+        require(found is not None and size is not None, "unparseable nvreadpublic output for %s" % index)
+        return int(found.group(1), 16), int(size.group(1))
+
+    def _attributes(self, index):
+        return self._public(index)[0]
 
     def _read8(self, index):
         r = self._tpm("nvread", index, "-C", "o", "-s", "8")
@@ -409,18 +436,25 @@ class HighWater:
 
     def define(self):
         with _exclusive(self.lock_path):
-            return self._define()
+            return self._define(0, self.ZERO)
 
     def _indices(self):
         return (self.index, self.base_index) + self.record_indices
 
-    def _define(self):
+    def _define(self, epoch, manifest_digest):
+        """Defines the anchor AT `epoch`, recording `manifest_digest`. The base is written as (where the
+        counter landed) - epoch, so the counter reads `epoch` from the moment the base exists, and the record
+        is written for that epoch at once: there is never a defined anchor that reads lower than `epoch`."""
         for index in self._indices():
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
         r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
         require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
-        base = self._read8(self.index)
+        landed = self._read8(self.index)
+        while landed < epoch:                    # a TPM that never held a counter this high: the base cannot be negative
+            require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+            landed = self._read8(self.index)
+        base = landed - epoch
         r = self._tpm("nvdefine", self.base_index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite|writedefine")
         require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
         r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
@@ -430,32 +464,38 @@ class HighWater:
             r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
             require(r.returncode == 0, "cannot define the record index %s" % index)
         for _ in self.record_indices:            # each write takes the slot that is not valid yet
-            self._write_record(0, self.ZERO)
+            self._write_record(epoch, manifest_digest)
         return base
 
-    def redefine(self):
-        """Delete this anchor's indices and define them anew, at epoch 0 with an empty record: the TPM half
-        of a re-anchor. It needs owner authorization and forgets what this TPM knew, so nothing calls it
-        but Store.reanchor(), after the chain to restore was verified. A new counter starts above every
-        value a counter on this TPM ever held, so the old epochs cannot be read back as the new ones."""
+    def redefine(self, epoch, manifest_digest):
+        """Delete this anchor's indices and define them anew AT `epoch`, recording `manifest_digest`: the TPM
+        half of a re-anchor. It needs owner authorization and forgets what this TPM knew, so nothing calls
+        it but Store.reanchor(), after the chain was verified and written.
+
+        No state in between is a usable anchor for anything but that chain. Until the counter and its base
+        exist, the anchor is not defined; from then on the counter reads `epoch`; until a record is written,
+        there is NO RECORD; and the record written is the one for `epoch`. The record slots are deleted last,
+        so that if this is interrupted early, what they held still binds the next attempt."""
+        hex_field(manifest_digest, 64, "a manifest digest")
         with _exclusive(self.lock_path):
+            defined = self._defined()
             for index in self._indices():
-                if self._tpm("nvreadpublic", index).returncode == 0:
+                if int(index, 16) in defined:
                     require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
-            return self._define()
+            return self._define(epoch, manifest_digest)
 
     def _base(self):
         """Checks both indices' attributes and returns the base (one call per value/advance/check)."""
         a = self._attributes(self.index)
-        require(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
+        require_anchor(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
         b = self._attributes(self.base_index)
-        require(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
-                "base index %s is not written and write-locked" % self.base_index)
+        require_anchor(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
+                 "base index %s is not written and write-locked" % self.base_index)
         return self._read8(self.base_index)
 
     def _epoch(self, base):
         counter = self._read8(self.index)
-        require(counter >= base, "the NV counter %d is below its base %d" % (counter, base))
+        require_anchor(counter >= base, "the NV counter %d is below its base %d" % (counter, base))
         return counter - base
 
     def value(self):
@@ -489,10 +529,12 @@ class HighWater:
 
     def _slot(self, index):
         """(epoch, digest) held by one record slot, or None when what it holds is not a record (never
-        written, or a write that was cut: the tag does not match). An index that is missing, is not an
-        ordinary index or cannot be read is refused: that is not what a power cut leaves."""
-        a = self._attributes(index)
-        require(a & self.NT_MASK == self.NT_ORDINARY, "record index %s is not an ordinary index" % index)
+        written, or a write that was cut: the tag does not match). An index that is not defined, is not an
+        ordinary index or is not exactly RECORD_BYTES long is Unusable: that is not what a power cut leaves.
+        One that is as it should be and still cannot be read is Refused: the TPM, not the anchor."""
+        a, size = self._public(index)
+        require_anchor(a & self.NT_MASK == self.NT_ORDINARY, "record index %s is not an ordinary index" % index)
+        require_anchor(size == self.RECORD_BYTES, "record index %s is %d bytes, not %d" % (index, size, self.RECORD_BYTES))
         if not a & self.WRITTEN:
             return None
         r = self._tpm("nvread", index, "-C", "o", "-s", str(self.RECORD_BYTES))
@@ -507,11 +549,11 @@ class HighWater:
 
     def _record(self):
         valid = [slot for slot in self._slots() if slot is not None]
-        require(valid, "NO RECORD: neither record slot (%s) holds a valid record: the anchor cannot tell which chain this node "
-                "accepted (fail closed); re-anchor it (MEMBERSHIP-RECOVERY.md)" % ", ".join(self.record_indices))
+        require_anchor(valid, "NO RECORD: neither record slot (%s) holds a valid record: the anchor cannot tell which chain this node "
+                 "accepted (fail closed); re-anchor it (MEMBERSHIP-RECOVERY.md)" % ", ".join(self.record_indices))
         newest = max(valid)
-        require(all(slot == newest for slot in valid if slot[0] == newest[0]), "the two record slots name different manifests at "
-                "epoch %d: the anchor is inconsistent (fail closed)" % newest[0])
+        require_anchor(all(slot == newest for slot in valid if slot[0] == newest[0]), "the two record slots name different manifests at "
+                 "epoch %d: the anchor is inconsistent (fail closed)" % newest[0])
         return newest
 
     def _write_record(self, epoch, manifest_digest):
@@ -525,11 +567,16 @@ class HighWater:
         require(r.returncode == 0, "cannot write the record index %s" % index)
         require(self._slot(index) == (epoch, manifest_digest), "the record index %s did not take the write" % index)
 
+    def _in_step(self, hw):
+        """The record, which must be for the counter's epoch or the one below."""
+        epoch, held = self._record()
+        require_anchor(epoch in (hw, hw - 1), "the TPM record is for epoch %d but the TPM high-water is %d: the anchor is inconsistent "
+                 "(fail closed)" % (epoch, hw))
+        return epoch, held
+
     def _verify(self, hw, digest_of, repair):
         """The record against a chain (`digest_of(epoch)` is its manifest digest there, ZERO at epoch 0)."""
-        epoch, held = self._record()
-        require(epoch in (hw, hw - 1), "the TPM record is for epoch %d but the TPM high-water is %d: the anchor is inconsistent "
-                "(fail closed)" % (epoch, hw))
+        epoch, held = self._in_step(hw)
         require(held == digest_of(epoch), "CONFLICT: the manifest at epoch %d is not the one this node's TPM recorded: a substituted "
                 "chain is never anchored; record an incident" % epoch)
         if epoch != hw and repair:           # a crash after the counter moved and before the record was written
@@ -537,16 +584,34 @@ class HighWater:
 
     def unusable(self):
         """None while the anchor can do its work: the counter reads, and the record is valid and at the
-        counter's epoch or one below. Otherwise the reason, as text: what Store.reanchor() is for."""
+        counter's epoch or one below. Otherwise the reason, as text, when the ANCHOR is what is wrong (an
+        index not defined or not of the right kind, no valid record, counter and record out of step): what
+        Store.reanchor() is for. A TPM that does not answer, or a read that fails on an index that is as it
+        should be, is neither: that raises Refused, and re-anchoring is not the remedy."""
         with _exclusive(self.lock_path):
             try:
-                hw = self._epoch(self._base())
-                epoch, _ = self._record()
-                require(epoch in (hw, hw - 1), "the TPM record is for epoch %d but the TPM high-water is %d: the anchor is inconsistent "
-                        "(fail closed)" % (epoch, hw))
-            except Refused as reason:
+                self._in_step(self._epoch(self._base()))
+            except Unusable as reason:
                 return str(reason)
             return None
+
+    def remains(self):
+        """What can still be read of an anchor, each part by itself: (the counter's epoch or None, the valid
+        record slots). A re-anchor may forget none of it. Refused if the TPM does not answer."""
+        with _exclusive(self.lock_path):
+            try:
+                epoch = self._epoch(self._base())
+            except Unusable:
+                epoch = None
+            records = []
+            for index in self.record_indices:
+                try:
+                    slot = self._slot(index)
+                except Unusable:
+                    continue
+                if slot is not None:
+                    records.append(slot)
+            return epoch, records
 
     def record(self):
         """(epoch, manifest digest) as last written: the valid slot with the higher epoch."""
@@ -714,19 +779,21 @@ class Store:
 
     def reanchor(self, envelopes):
         """Give this node a NEW anchor and install a chain under it: the recovery when the anchor itself is
-        unusable (NO RECORD, an index deleted, an inconsistent anchor, a replaced TPM), which no chain from
-        a peer can repair. It forgets what this TPM knew, so the caller must have established the chain
-        from more than this node's word: reanchor.py takes it from the authority and a peer that agree.
+        unusable (no valid record, an index not defined, counter and record out of step), which no chain
+        from a peer can repair. It forgets what this TPM knew, so the caller must have established the
+        chain from more than this node's word: reanchor.py takes it from the authority and a peer that agree.
 
-        A usable anchor is never reset: while the counter reads and the record is valid and in step with
-        it, this refuses, whatever the chain (that case is restore()'s, under the anchor as it is). And what
-        can still be read is honoured: while the counter reads, the chain must reach its epoch, so this is
-        not a way back. The valid chain still on disk must agree, as for restore().
+        A usable anchor is never reset. A TPM that does not answer is not re-anchored either: nothing is
+        known about its anchor then. And NOTHING THE TPM STILL HOLDS IS FORGOTTEN: the chain must reach the
+        counter's epoch while the counter reads, must reach the epoch of every record slot that still holds
+        a valid record, and must carry that slot's manifest at that epoch. The valid chain still on disk
+        must agree, as for restore().
 
-        Order: everything is verified; the chain is written durably; the anchor is redefined (epoch 0, an
-        empty record); the chain is anchored epoch by epoch. A crash after the write leaves the old anchor
-        to judge the new file; a crash after the redefinition leaves a verified chain on disk under an
-        empty anchor, which load() anchors, or reanchor() run again."""
+        Order: everything is verified; the chain is written durably; the anchor is redefined AT the chain's
+        epoch with its manifest recorded (HighWater.redefine: no state in between is a usable anchor for any
+        other chain). `reanchor_began` is set before the file is written: a failure before it has changed
+        nothing; a failure after it is an operation to run again, and is reported as such."""
+        self.reanchor_began = False
         with _exclusive(self.lock_path):
             require(isinstance(envelopes, list) and envelopes, "a chain to re-anchor on is a non-empty list of envelopes")
             require(len(canonical(envelopes)) <= MAX_CHAIN_BYTES, "the chain to re-anchor on is oversized")
@@ -739,19 +806,17 @@ class Store:
             digest_of = self._digests(manifests)
             require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
                     "substituted is restored under the anchor it has (restore)")
-            try:
-                old = self.hw.value()
-            except Refused:
-                old = None                      # the counter cannot be read: there is no epoch to hold the chain to
-            if old is not None:
-                require(current["epoch"] >= old, "the fetched chain ends at epoch %d, below the TPM high-water %d, which still reads: "
-                        "re-anchoring does not go back" % (current["epoch"], old))
+            counter, records = self.hw.remains()
+            for held, what in [(counter, "its counter")] * (counter is not None) + [(epoch, "a record slot") for epoch, _ in records]:
+                require(current["epoch"] >= held, "the fetched chain ends at epoch %d, below epoch %d, which this node's TPM still holds "
+                        "(%s): re-anchoring does not go back" % (current["epoch"], held, what))
+            for epoch, recorded in records:
+                require(digest_of(epoch) == recorded, "CONFLICT: a record slot that still reads names another manifest at epoch %d than "
+                        "the fetched chain: nothing is re-anchored; record an incident" % epoch)
             self._continues_disk(envelopes)
+            self.reanchor_began = True
             self._write(copy.deepcopy(envelopes))
-            self.hw.redefine()
-            epoch = 0
-            while epoch < current["epoch"]:     # the jump bound is per step; the operator has authorized the whole way
-                epoch = self.hw.anchor(min(current["epoch"], epoch + self.hw.MAX_JUMP), digest_of)
+            self.hw.redefine(current["epoch"], digest_of(current["epoch"]))
             self.hw.check(current["epoch"])
             self.chain, self.manifests = copy.deepcopy(envelopes), manifests
             return current
