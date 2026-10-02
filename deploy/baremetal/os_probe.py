@@ -34,18 +34,28 @@ and that the daemon needs a runtime lease to serve (#74):
                               admission file, this node's ID and the boot session file. "disabled-for-lab"
                               is a lab setting: a host carrying it is not commissioned
 
+and that the daemon's two token backends do not lock each other out (regalia#541):
+
+  kms_opensc_leaves_piv_cards  when that same configuration names both a PKCS#11 module and YubiKey PIV
+                              devices, the unit's Environment carries OPENSC_CONF and the file it names
+                              has an ignored_readers entry that matches a YubiKey's reader. The PIV
+                              backend needs the card to itself and OpenSC connects to every card it is
+                              not told to ignore. With one backend or none there is nothing to check
+
 Standard library only.
 """
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 
 SERVICE = "regalia-kms.service"
 MEASURED = ("core_dumps_disabled", "hibernation_disabled", "swap_disabled_or_encrypted", "kms_service_unprivileged",
-            "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required")
+            "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced", "kms_runtime_admission_required",
+            "kms_opensc_leaves_piv_cards")
 # property -> the values that count as hardened (systemd 257: ProtectHome=tmpfs also hides the home
 # directories, PrivateTmp=disconnected and ProtectControlGroups=strict are stricter than yes).
 SANDBOX_PROPERTIES = {
@@ -265,27 +275,37 @@ def apparmor(host):
     return True, f"pid {pid} is confined by {profile!r} in enforce mode"
 
 
-def runtime_admission(host):
-    """The daemon is started with a configuration that REQUIRES a runtime lease. Read from the unit's own
-    ExecStart, not from a path assumed here: what matters is the file the running service was given."""
+def daemon_config(host):
+    """The configuration the unit starts the daemon with: (config, path, "") or (None, None, why). Read
+    from the unit's own ExecStart, not from a path assumed here: what matters is the file the running
+    service was given."""
     rc, props = unit_properties(host, "ExecStart", "LoadState")
     if props.get("LoadState") != "loaded":
-        return False, f"{SERVICE} is not loaded"
+        return None, None, f"{SERVICE} is not loaded"
     found = re.search(r"argv\[\]=(.*?) ;", props.get("ExecStart", ""))
     argv = found.group(1).split() if found else []
     paths = [argv[i + 1] for i, a in enumerate(argv[:-1]) if a in ("-config", "--config")]
     paths += [a.split("=", 1)[1] for a in argv if a.startswith(("-config=", "--config="))]
     if len(paths) != 1 or not paths[0].startswith("/"):
-        return False, f"{SERVICE} is not started with exactly one absolute -config file (ExecStart: {' '.join(argv) or 'unreadable'})"
+        return None, None, f"{SERVICE} is not started with exactly one absolute -config file (ExecStart: {' '.join(argv) or 'unreadable'})"
     text = host.read(paths[0])
     if text is None:
-        return False, f"cannot read the daemon's configuration {paths[0]}"
+        return None, None, f"cannot read the daemon's configuration {paths[0]}"
     try:
         config = json.loads(text)
     except ValueError:
-        return False, f"{paths[0]} is not valid JSON"
+        return None, None, f"{paths[0]} is not valid JSON"
     if not isinstance(config, dict):
-        return False, f"{paths[0]} is not a JSON object"
+        return None, None, f"{paths[0]} is not a JSON object"
+    return config, paths[0], ""
+
+
+def runtime_admission(host):
+    """The daemon is started with a configuration that REQUIRES a runtime lease."""
+    config, path, why = daemon_config(host)
+    if config is None:
+        return False, why
+    paths = [path]
     stated = config.get("runtime_admission")
     if stated == "disabled-for-lab":
         return False, f"{paths[0]} says runtime_admission \"disabled-for-lab\": this daemon serves with no runtime lease"
@@ -297,6 +317,173 @@ def runtime_admission(host):
         return False, f"{paths[0]} requires runtime admission but lacks {', '.join(missing)}"
     return True, (f"{paths[0]}: runtime_admission required, node {config['node_id']}, "
                   f"admission file {config['runtime_admission_path']}")
+
+
+# What a YubiKey's CCID reader is called by pcscd ("Yubico YubiKey OTP+FIDO+CCID 00 00", "Yubico YubiKey
+# CCID 00 00", ...): every model's name starts with this.
+YUBIKEY_READER = "Yubico YubiKey"
+# The application blocks opensc-pkcs11.so reads, in the order it prefers them.
+OPENSC_APPS = ("opensc-pkcs11", "default")
+
+
+def opensc_tokens(text):
+    """An OpenSC configuration as tokens: quoted strings ("s", text), bare words ("w", text) and the
+    punctuation { } = , ; ("p", char). `#` starts a comment except inside a string. Raises ValueError
+    on a string that never ends."""
+    tokens, at, size = [], 0, len(text)
+    while at < size:
+        c = text[at]
+        if c in " \t\r\n":
+            at += 1
+        elif c == "#":
+            while at < size and text[at] != "\n":
+                at += 1
+        elif c == '"':
+            end, value = at + 1, []
+            while end < size and text[end] != '"':
+                if text[end] == "\\" and end + 1 < size and text[end + 1] in '"\\':
+                    end += 1          # \" and \\ are the character itself; any other backslash is kept
+                value.append(text[end])
+                end += 1
+            if end >= size:
+                raise ValueError("a string is not closed")
+            tokens.append(("s", "".join(value)))
+            at = end + 1
+        elif c in "{}=,;":
+            tokens.append(("p", c))
+            at += 1
+        else:
+            end = at
+            while end < size and text[end] not in ' \t\r\n#"{}=,;':
+                end += 1
+            tokens.append(("w", text[at:end]))
+            at = end
+    return tokens
+
+
+def ignored_readers(text):
+    """The ignored_readers list opensc-pkcs11.so applies, or [] when it applies none. Raises ValueError
+    for a file that is not well formed.
+
+    READ AS OPENSC READS IT, not as a line of text, and STRICTLY. OpenSC takes the list from the
+    application block it selected: `app opensc-pkcs11 { }` if the file has one, else `app default { }`;
+    from the first such block at the top level, its first ignored_readers statement, as a direct item
+    of the block. A line inside another application's block, inside a nested block, or at the top level
+    is not applied, and neither is one in `app default` when an `app opensc-pkcs11` block exists: some
+    OpenSC versions consult only the first block they selected, so only that one is counted here.
+
+    A file OpenSC might not parse proves nothing about what it applies, so one is refused rather than
+    guessed at: braces that do not balance, and an ignored_readers statement that is not `= value, value
+    ... ;` (a missing semicolon would otherwise swallow the next statement's words into the list)."""
+    tokens = opensc_tokens(text or "")
+    depth = 0
+    for kind, value in tokens:
+        if (kind, value) == ("p", "{"):
+            depth += 1
+        elif (kind, value) == ("p", "}"):
+            depth -= 1
+            if depth < 0:
+                raise ValueError("a } closes nothing")
+    if depth != 0:
+        raise ValueError("a block is not closed")
+
+    def statement(at):
+        """The values of `ignored_readers = v, v, ... ;` starting at tokens[at], and where it ends."""
+        if at + 1 >= len(tokens) or tokens[at + 1] != ("p", "="):
+            raise ValueError("ignored_readers is not followed by =")
+        values, at, want_value = [], at + 2, True
+        while at < len(tokens) and tokens[at] != ("p", ";"):
+            kind, value = tokens[at]
+            if want_value and kind in "ws":
+                values.append(value)
+            elif not want_value and (kind, value) == ("p", ","):
+                pass
+            else:
+                raise ValueError("the ignored_readers list is not values separated by commas and ended by ;")
+            want_value, at = not want_value, at + 1
+        if at >= len(tokens) or (want_value and values):
+            raise ValueError("the ignored_readers list is not ended by ;")
+        return values, at + 1
+
+    blocks, at, depth = {}, 0, 0   # app name -> the ignored_readers lists of its first top-level block
+    while at < len(tokens):
+        if tokens[at] == ("p", "{"):
+            depth += 1
+        elif tokens[at] == ("p", "}"):
+            depth -= 1
+        elif (depth == 0 and tokens[at] == ("w", "app") and at + 2 < len(tokens) and tokens[at + 1][0] in "ws"
+              and tokens[at + 2] == ("p", "{")):
+            name, inner, at = tokens[at + 1][1], 1, at + 3
+            lists = []
+            while inner:
+                if tokens[at] == ("p", "{"):
+                    inner += 1
+                elif tokens[at] == ("p", "}"):
+                    inner -= 1
+                elif inner == 1 and tokens[at] == ("w", "ignored_readers") and tokens[at - 1] in (("p", "{"), ("p", "}"), ("p", ";")):
+                    values, at = statement(at)
+                    lists.append(values)
+                    continue
+                at += 1
+            blocks.setdefault(name, lists)   # a second block of the same name is not the one selected
+            continue
+        at += 1
+    for app in OPENSC_APPS:
+        if app in blocks:
+            return blocks[app][0] if blocks[app] else []
+    return []
+
+
+def unit_environment(host):
+    """The unit's Environment as a dict, or (None, why). A unit with an EnvironmentFile is refused: what
+    such a file sets is not in the Environment property, and it overrides it."""
+    rc, props = unit_properties(host, "Environment", "EnvironmentFiles")
+    if props.get("EnvironmentFiles", "").strip():
+        return None, f"{SERVICE} has an EnvironmentFile, which can set or override OPENSC_CONF and is not read here: set it with Environment="
+    environment = {}
+    try:
+        for item in shlex.split(props.get("Environment", "")):
+            key, sep, value = item.partition("=")
+            if sep:
+                environment[key] = value   # a variable set twice: the last one counts, as for systemd
+    except ValueError:
+        return None, f"cannot read the Environment of {SERVICE}"
+    return environment, ""
+
+
+def opensc_leaves_piv_cards(host):
+    """A daemon that holds both a PKCS#11 module and YubiKey PIV devices is started with an OpenSC
+    configuration that ignores the YubiKey's reader. Without it the daemon's own PKCS#11 module holds the
+    card the PIV backend must open exclusively. The daemon refuses to start when it sees that with the
+    card attached; this says so before it is started, and with the card unplugged."""
+    config, path, why = daemon_config(host)
+    if config is None:
+        return False, why
+    module, devices = config.get("pkcs11_module_path"), config.get("yubikey_devices")
+    if not (isinstance(module, str) and module.strip()) or not (isinstance(devices, dict) and devices):
+        return True, f"{path}: not both a PKCS#11 module and YubiKey PIV devices, nothing to keep apart"
+    environment, why = unit_environment(host)
+    if environment is None:
+        return False, why
+    conf = environment.get("OPENSC_CONF", "")
+    if not conf.startswith("/"):
+        return False, (f"{path} names a PKCS#11 module and YubiKey PIV devices, and {SERVICE} does not set "
+                       "OPENSC_CONF in its Environment: OpenSC's defaults connect to the YubiKey and lock the PIV backend out")
+    text = host.read(conf)
+    if text is None:
+        return False, f"cannot read the OpenSC configuration {conf} named by OPENSC_CONF"
+    try:
+        entries = ignored_readers(text)
+    except ValueError as problem:
+        return False, f"{conf} cannot be read as an OpenSC configuration: {problem}"
+    # OpenSC ignores a reader whose name CONTAINS an entry. An entry counts when it is a piece of what
+    # every YubiKey reader is called AND names the YubiKey: "Yubico", "YubiKey", "Yubico YubiKey". A piece
+    # such as " " or "i" would ignore the YubiKey too, and the HSM's reader with it.
+    matching = [entry for entry in entries if "Yubi" in entry and entry in YUBIKEY_READER]
+    if not matching:
+        return False, (f"{conf}: the block opensc-pkcs11.so reads (app opensc-pkcs11, else app default) has no "
+                       f"ignored_readers entry that names a YubiKey's reader (a piece of {YUBIKEY_READER!r} containing \"Yubi\")")
+    return True, f"{conf}: ignored_readers {matching[0]!r} keeps OpenSC off the YubiKey"
 
 
 def pcscd_clients(host):
@@ -335,4 +522,5 @@ def pcscd_clients(host):
 PROBES = {"core_dumps_disabled": core_dumps, "hibernation_disabled": hibernation,
           "swap_disabled_or_encrypted": swap, "kms_service_unprivileged": unprivileged,
           "kms_service_sandboxed": sandboxed, "kms_capabilities_minimal": capabilities,
-          "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission}
+          "kms_apparmor_enforced": apparmor, "kms_runtime_admission_required": runtime_admission,
+          "kms_opensc_leaves_piv_cards": opensc_leaves_piv_cards}
