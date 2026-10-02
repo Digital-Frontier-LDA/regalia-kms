@@ -3,7 +3,8 @@
 # of every peer (#77, Phase 17). Run as root, at the console, on the device that holds the root volume.
 #
 #   sudo deploy/baremetal/recovery-key.sh --status  DEVICE   the keyslots by kind; exit 1 unless exactly one
-#                                                            recovery keyslot and no unlabelled passphrase
+#                                                            recovery keyslot that a boot prompt will try,
+#                                                            no unlabelled passphrase and no empty token
 #   sudo deploy/baremetal/recovery-key.sh --enrol   DEVICE   add the recovery key as a keyslot of its own
 #   sudo deploy/baremetal/recovery-key.sh --check   DEVICE   prove a typed key opens THAT keyslot; unlocks nothing
 #   sudo deploy/baremetal/recovery-key.sh --replace DEVICE   after any use: a new key in, the used one out
@@ -28,15 +29,22 @@
 #   3. only then wipe the installer's passphrase: systemd-cryptenroll --wipe-slot=password DEVICE.
 #
 # --replace is what follows ANY use of the key, a rehearsal included: whoever typed it at a console
-# has seen it. It asks for the used key once and the new one twice (from a new ceremony escrow),
-# adds the new keyslot, proves the new key opens it, and only then destroys the used keyslot.
+# has seen it. It asks for the used key once and the new one twice, adds the new keyslot, proves the
+# new key opens it, and only then destroys the used keyslot. THE NEW KEY is printed by the ceremony
+# disc's `pin-escrow.sh --new-recovery-key` and written on a new card; it is never invented by hand
+# (the keyslot is protected on the assumption of 256 random bits). It is ESCROWED ONLY AFTER
+# --replace and --check have succeeded here: an escrow written first would hold a key that opens nothing.
 # If it stops between those two steps (a failure, a kill), BOTH keys open the disk and --status says
-# so: run --replace again with the same two keys, and it destroys the used keyslot.
+# so: run --replace again with the same two keys, in the same order, and it destroys the used keyslot.
+# Which of the two is the new one is recorded in the header when it is added (a generation number in
+# its token), so keys typed in the wrong order are refused and the new key is never the one destroyed.
 #
 # WHEN A RUN FAILS it says "nothing was changed" only after reading the header again. If a keyslot
 # it added could not be taken back, it says that the key just typed opens the disk and prints the
 # commands that remove it. A signal takes an unproven keyslot back; a kill cannot, and the next
 # --enrol refuses to work beside a keyslot that no token names and the typed passphrase does not open.
+#
+# Python is run isolated (-I): a json.py in root's working directory is not what parses the header.
 #
 # Every secret is typed hidden, or read one per line from standard input when that is not a terminal
 # (order: the current passphrase or used key, then the new key). None reaches a command line or the
@@ -64,7 +72,7 @@ KEY_FORMAT='^([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}$'
 KDF=(--pbkdf pbkdf2 --pbkdf-force-iterations 1000 --hash sha512)
 
 # slots: "<recovery keyslots, space-separated>|<keyslots no token names>|<all keyslots>" from the header.
-slots(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -c '
+slots(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -I -c '
 import json, sys
 try:
     meta = json.load(sys.stdin)
@@ -78,7 +86,7 @@ recovery = sorted({str(s) for t in tokens if t.get("type") == "systemd-recovery"
 print("%s|%s|%s" % (" ".join(recovery), " ".join(s for s in all_slots if s not in named), " ".join(all_slots)))
 ' || fail "cannot read the LUKS2 header of $DEV"; }
 # kinds: one line per keyslot, "<slot> <kind>", the kind being its token's type or "passphrase".
-kinds(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -c '
+kinds(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -I -c '
 import json, sys
 meta = json.load(sys.stdin)
 kind = {}
@@ -89,7 +97,7 @@ for s in sorted(meta.get("keyslots") or {}, key=lambda s: (len(s), s)):
     print("  keyslot %-3s %s" % (s, " + ".join(kind[s]) if s in kind else "passphrase (no token names it)"))
 '; }
 # token_of <slot>: the id of the systemd-recovery token that names it.
-token_of(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -c '
+token_of(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -I -c '
 import json, sys
 meta = json.load(sys.stdin)
 print(next(i for i, t in (meta.get("tokens") or {}).items() if t.get("type") == "systemd-recovery" and sys.argv[1] in [str(s) for s in t.get("keyslots") or []]))
@@ -116,43 +124,86 @@ opens(){ if [ -n "${2:-}" ]; then cryptsetup open --test-passphrase --key-slot "
 kill_slot(){ cryptsetup luksKillSlot --batch-mode "$DEV" "$1" </dev/null >/dev/null 2>&1; }
 # orphans: the ids of systemd-recovery tokens that name no keyslot. cryptsetup unassigns a token when
 # its keyslot is destroyed but does not delete it; such a token opens nothing and marks nothing.
-orphans(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -c '
+orphans(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -I -c '
 import json, sys
 meta = json.load(sys.stdin)
 print(" ".join(i for i, t in sorted((meta.get("tokens") or {}).items()) if isinstance(t, dict) and t.get("type") == "systemd-recovery" and not t.get("keyslots")))
 '; }
 sweep(){ local t; for t in $(orphans); do cryptsetup token remove --token-id "$t" "$DEV" </dev/null >/dev/null 2>&1; done; }
+# generation_of <slot>: the generation recorded in the recovery token that names it (0 if none).
+# --enrol writes 1; each --replace writes the used key's generation plus one in the NEW keyslot's
+# token. With two recovery keyslots in the header, the higher generation is the new key.
+generation_of(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -I -c '
+import json, sys
+meta = json.load(sys.stdin)
+for t in (meta.get("tokens") or {}).values():
+    if isinstance(t, dict) and t.get("type") == "systemd-recovery" and sys.argv[1] in [str(s) for s in t.get("keyslots") or []]:
+        g = t.get("regalia_generation")
+        print(g if isinstance(g, int) and not isinstance(g, bool) and g >= 0 else 0)
+        break
+else:
+    sys.exit(1)
+' "$1"; }
+# ignored <slot>: is that keyslot marked "ignore" (priority 0)? Such a keyslot is skipped whenever no
+# keyslot is named, which is how a boot prompt tries a passphrase.
+ignored(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null | python3 -I -c '
+import json, sys
+sys.exit(0 if (json.load(sys.stdin).get("keyslots") or {}).get(sys.argv[1], {}).get("priority") == 0 else 1)
+' "$1"; }
 # has_slot <slot>: is that keyslot in the header now? Fails (2) when the header cannot be read.
 has_slot(){ local now; now="$(slots)" || return 2; case " ${now##*|} " in *" $1 "*) return 0;; esac; return 1; }
-# undo <slot>: take back a keyslot this run added, and the token that names it. IT DOES NOT TRUST
-# ITSELF: after the attempt the header is read again, and it succeeds only if that keyslot is gone.
-# If it is not, the key just typed still opens the disk, and the caller must say so instead of
-# "nothing was changed"; the commands that finish the job by hand are printed here.
+# label <slot> <generation>: mark a keyslot as the recovery key.
+label(){ printf '{"type":"systemd-recovery","keyslots":["%s"],"regalia_generation":%d}' "$1" "$2" | cryptsetup token import --json-file - "$DEV" >/dev/null 2>&1; }
+# undo <slot>: take back a keyslot this run added, and the token that named it. IT DOES NOT TRUST
+# ITSELF: after the attempt the header is read again.
+#   0  the keyslot is gone and no empty recovery token is left: nothing was changed
+#   2  the keyslot is gone, but an empty token could not be removed (it opens nothing; reported)
+#   1  the keyslot is STILL THERE: the key just typed opens the disk. Said here, with the commands.
 undo(){
-  local token; token="$(token_of "$1" 2>/dev/null)"
+  local token left; token="$(token_of "$1" 2>/dev/null)"
   kill_slot "$1"
   has_slot "$1"; case $? in
     1) ;;
     *) say "keyslot $1 of $DEV COULD NOT BE REMOVED and holds the key just typed: that key opens the disk."
        say "remove it by hand: cryptsetup luksKillSlot $DEV $1${token:+ ; cryptsetup token remove --token-id $token $DEV}"
        return 1;; esac
-  if [ -n "$token" ] && ! cryptsetup token remove --token-id "$token" "$DEV" </dev/null >/dev/null 2>&1; then
-    say "keyslot $1 is removed, but its token $token remains (it names no keyslot now): cryptsetup token remove --token-id $token $DEV"
-  fi
+  # Whatever token named it is empty now. Found by looking, not by the id read before the kill: that
+  # read can fail, and a second undo (after a signal) would not find it by keyslot any more.
+  sweep; left="$(orphans)"
+  [ -z "$left" ] || { say "keyslot $1 is removed, but an empty recovery token remains (it names no keyslot): cryptsetup token remove --token-id ${left%% *} $DEV"; return 2; }
   return 0; }
-# PENDING is the keyslot this run has added and not yet proven. A signal that arrives in that state
-# takes it back (bash runs the trap once the cryptsetup call in progress has returned). A kill that
-# cannot be caught leaves it behind; --enrol finds such a keyslot on the next run (below).
-PENDING=""
-interrupted(){ trap - INT TERM HUP
-  if [ -n "$PENDING" ]; then say "interrupted: taking back keyslot $PENDING"; undo "$PENDING" && say "keyslot $PENDING removed; nothing was changed"; fi
+# take_back <slot> <what went wrong>: undo, then fail with a sentence that is true.
+take_back(){
+  undo "$1"; case $? in
+    0) PENDING=""; fail "$2, and the keyslot was removed again. Nothing was changed";;
+    2) PENDING=""; fail "$2, and the keyslot was removed again; the empty token named above is all that is left";;
+    *) PENDING=""; exit 1;; esac; }
+# PENDING is the keyslot this run has added and not yet proven. A signal in that state takes it back
+# (bash runs the trap once the cryptsetup call in progress has returned). While it does so, further
+# signals are IGNORED, a closed standard error included: an undo must not be cut short by a second
+# Ctrl-C, or by the reader of `… 2>&1 | tee` having gone away. A kill cannot be caught; --enrol and
+# --replace find what it leaves behind on the next run (below).
+PENDING=""; STAGE=""
+interrupted(){
+  trap '' INT TERM HUP PIPE
+  local msg=""
+  if [ -n "$PENDING" ]; then
+    has_slot "$PENDING"; case $? in
+      1) msg="interrupted before a keyslot was added; nothing was changed";;
+      *) undo "$PENDING"; case $? in
+           0) msg="interrupted: keyslot $PENDING, added by this run, was taken back; nothing was changed";;
+           2) msg="interrupted: keyslot $PENDING, added by this run, was taken back";;
+           *) msg="interrupted, and keyslot $PENDING could not be taken back (see above)";; esac;; esac
+  elif [ "$STAGE" = retiring ]; then
+    msg="interrupted while the USED keyslot was being destroyed: the new key is enrolled. Run --status; if it shows two recovery keyslots, run --replace again with the same two keys"
+  fi
+  [ -z "$msg" ] || say "$msg"
   exit 130; }
 trap interrupted INT TERM HUP
-# add <secret that opens the volume> <new key>: a new keyslot for the key with its systemd-recovery
-# token; the keyslot is left in ADDED (and in PENDING until the caller has proven it). The keyslot
-# NUMBER is chosen here, from a header that was read successfully, and given to cryptsetup: so every
-# later failure knows exactly which keyslot to take back, and a key never stays behind as an
-# unlabelled passphrase without the operator being told.
+# add <secret that opens the volume> <new key> <generation>: a new keyslot for the key with its
+# systemd-recovery token; the keyslot is left in ADDED (and in PENDING until the caller has proven
+# it). The keyslot NUMBER is chosen here, from a header that was read successfully, and given to
+# cryptsetup: so every later failure knows exactly which keyslot to take back.
 ADDED=""
 add(){
   local snapshot used slot="" n
@@ -163,25 +214,23 @@ add(){
   PENDING="$slot"
   if ! cryptsetup luksAddKey --batch-mode "${KDF[@]}" --new-key-slot "$slot" --key-file <(printf '%s' "$1") "$DEV" <(printf '%s' "$2") >/dev/null 2>&1; then
     # Refused, normally before anything was written. "Normally" is checked, not assumed.
-    has_slot "$slot"; [ $? = 1 ] || { undo "$slot" || exit 1; }
+    has_slot "$slot"; [ $? = 1 ] || take_back "$slot" "cryptsetup reported a failure after writing the keyslot"
     PENDING=""
-    fail "cryptsetup refused to add the keyslot (is the first value one that opens this volume?). Nothing was changed"
+    fail "cryptsetup refused to add the keyslot (does the first value open this volume with no keyslot named?). Nothing was changed"
   fi
-  if ! printf '{"type":"systemd-recovery","keyslots":["%s"]}' "$slot" | cryptsetup token import --json-file - "$DEV" >/dev/null 2>&1; then
-    undo "$slot" || exit 1
-    PENDING=""
-    fail "the keyslot could not be marked as the recovery key, and was removed again. Nothing was changed"
-  fi
+  label "$slot" "$3" || take_back "$slot" "the keyslot could not be marked as the recovery key"
   ADDED="$slot"; }
 # proven <key> <slot>: the key opens that keyslot, AND opens the volume when no keyslot is named, which
 # is how a boot prompt tries it (a keyslot whose priority is "ignore" passes the first test only).
-proven(){ opens "$1" "$2" && opens "$1"; }
+proven(){ opens "$1" "$2" && ! ignored "$2" && opens "$1"; }
 # retire <keyslot> <its token> <a key that opens another keyslot>: destroy a used recovery keyslot.
 retire(){
+  STAGE=retiring
   cryptsetup luksKillSlot --key-file <(printf '%s' "$3") "$DEV" "$1" </dev/null >/dev/null 2>&1
   has_slot "$1"; [ $? = 1 ] || fail "the USED keyslot $1 could not be destroyed: the used key still opens the disk. Run --replace again with the same two keys to finish, or by hand: cryptsetup luksKillSlot $DEV $1 ; cryptsetup token remove --token-id $2 $DEV"
-  cryptsetup token remove --token-id "$2" "$DEV" </dev/null >/dev/null 2>&1 \
-    || fail "the used keyslot is destroyed but its token $2 remains (it names no keyslot now): cryptsetup token remove --token-id $2 $DEV"; }
+  sweep; local left; left="$(orphans)"
+  STAGE=""
+  [ -z "$left" ] || fail "the used keyslot is destroyed but an empty recovery token remains (it names no keyslot): cryptsetup token remove --token-id ${left%% *} $DEV"; }
 
 SNAPSHOT="$(slots)" || exit 1
 IFS='|' read -r RECOVERY STRAY _ <<< "$SNAPSHOT"
@@ -189,9 +238,10 @@ COUNT="$(wc -w <<< "$RECOVERY")"
 case "$MODE" in
 status)
   echo "KEYSLOTS OF $DEV"; kinds
-  [ "$COUNT" -ne 2 ] || { say "2 recovery keyslots: a --replace that did not finish? Run --replace again with the used key and the new key; it destroys the used one"; exit 1; }
+  [ "$COUNT" -ne 2 ] || { say "2 recovery keyslots: a --replace that did not finish? Run --replace again with the used key and the new key, in that order; it destroys the used one"; exit 1; }
   [ "$COUNT" -eq 1 ] || { say "$COUNT recovery keyslots: a commissioned host has exactly one"; exit 1; }
-  [ -z "$STRAY" ] || { say "keyslot $STRAY is a passphrase no token names (the installer's?): once the TPM and the recovery key are proven, systemd-cryptenroll --wipe-slot=password $DEV"; exit 1; }
+  ! ignored "$RECOVERY" || { say "recovery keyslot $RECOVERY has priority 'ignore': a boot prompt would not try it. cryptsetup config --priority normal --key-slot $RECOVERY $DEV"; exit 1; }
+  [ -z "$STRAY" ] || { say "keyslot $STRAY is a passphrase no token names (the installer's? a key left by an interrupted run?): once the TPM and the recovery key are proven, systemd-cryptenroll --wipe-slot=password $DEV"; exit 1; }
   left="$(orphans)"; [ -z "$left" ] || { say "token $left is a recovery token that names no keyslot (left by a keyslot removed by hand): cryptsetup token remove --token-id ${left%% *} $DEV"; exit 1; }
   ;;
 enrol)
@@ -202,31 +252,29 @@ enrol)
   if [ -t 0 ]; then C="$(ask "The recovery key again: ")"; [ "$B" = "$C" ] || fail "the two entries differ; nothing was changed"; fi
   well_formed "$B" "that value"
   [ "$A" != "$B" ] || fail "the passphrase and the recovery key are the same value; nothing was changed"
-  # A KEYSLOT NO TOKEN NAMES MUST BE THE ONE JUST TYPED. An --enrol that was killed between adding
-  # its keyslot and marking it leaves the recovery key it was given as an unlabelled passphrase,
-  # which still opens the disk. Enrolling another key beside it would hide that.
   opens "$A" || fail "that passphrase does not open $DEV; nothing was changed"
+  # EVERY KEYSLOT NO TOKEN NAMES MUST BE OPENED BY WHAT WAS JUST TYPED. An --enrol that was killed
+  # between adding its keyslot and marking it leaves the recovery key it was given as an unlabelled
+  # passphrase, which still opens the disk; enrolling another key beside it would hide that. A second
+  # passphrase somebody set on purpose looks the same from here, and is refused the same way.
   for s in $STRAY; do
-    opens "$A" "$s" || fail "keyslot $s is a passphrase no token names and it is NOT the one you typed (an --enrol that was interrupted may have left a recovery key there). Remove it first: cryptsetup luksKillSlot $DEV $s. Nothing was changed"
+    opens "$A" "$s" || fail "keyslot $s is a passphrase no token names, and it is not the one you typed. If it is a second passphrase you know, enrol with that volume reduced to one passphrase. If you do not know it, an --enrol that was interrupted may have left a recovery key there: cryptsetup luksKillSlot $DEV $s. Nothing was changed"
   done
-  sweep
-  add "$A" "$B"
-  if ! proven "$B" "$ADDED"; then
-    undo "$ADDED" || exit 1
-    PENDING=""
-    fail "the new keyslot did not open with the key just typed, and was removed again. Nothing was changed"
-  fi
+  add "$A" "$B" 1
+  proven "$B" "$ADDED" || take_back "$ADDED" "the new keyslot did not open with the key just typed"
   PENDING=""
+  sweep
   say "ENROLLED: the recovery key is keyslot $ADDED of $DEV. Now run --check with the key read from the CARD."
   kinds >&2
   ;;
 check)
   [ "$COUNT" -ne 2 ] || fail "$DEV has 2 recovery keyslots: a --replace that did not finish. Run --replace again with the used key and the new key"
   [ "$COUNT" -eq 1 ] || fail "$DEV has $COUNT recovery keyslots, not one; see --status"
+  ! ignored "$RECOVERY" || fail "recovery keyslot $RECOVERY has priority 'ignore': a boot prompt would not try it, whatever key it holds. cryptsetup config --priority normal --key-slot $RECOVERY $DEV"
   B="$(ask "The recovery key, read from the card (hidden): ")"
   well_formed "$B" "that value"
   opens "$B" "$RECOVERY" || fail "that key does NOT open the recovery keyslot ($RECOVERY) of $DEV. The card, or the escrow it was copied from, does not hold this host's key"
-  opens "$B" || fail "that key opens keyslot $RECOVERY when it is named, but NOT the volume as a boot prompt tries it (is the keyslot's priority 'ignore'? cryptsetup config --priority normal --key-slot $RECOVERY $DEV)"
+  opens "$B" || fail "that key opens keyslot $RECOVERY when it is named, but NOT the volume as a boot prompt tries it"
   say "OK: that key opens the recovery keyslot ($RECOVERY) of $DEV. Nothing was unlocked."
   say "It has now been typed at a console: after a REAL use, or a rehearsal with witnesses, --replace it."
   ;;
@@ -238,36 +286,51 @@ replace)
   if [ -t 0 ]; then C="$(ask "The new recovery key again: ")"; [ "$B" = "$C" ] || fail "the two entries differ; nothing was changed"; fi
   well_formed "$B" "the new key"
   [ "$A" != "$B" ] || fail "the new key is the used key; nothing was changed"
+  LEFT=""
   if [ "$COUNT" -eq 2 ]; then
     # FINISHING A --replace THAT STOPPED between adding the new keyslot and destroying the used one
-    # (a failure there, or a kill). Both keys open the disk in that state, and nothing else in this
-    # script will touch it. It is recognised by the two keys themselves: the used key opens one of
-    # the two recovery keyslots and the new key opens the other.
+    # (a failure there, or a kill). Both keys open the disk in that state. WHICH KEYSLOT IS THE NEW ONE
+    # is read from the header (the higher generation), never inferred from the order the keys were
+    # typed in: typed the wrong way round, the new key would be destroyed and the seen one kept.
     read -r s1 s2 <<< "$RECOVERY"
-    if opens "$A" "$s1" && proven "$B" "$s2"; then old="$s1"; new="$s2"
-    elif opens "$A" "$s2" && proven "$B" "$s1"; then old="$s2"; new="$s1"
-    else fail "$DEV has 2 recovery keyslots, and these are not the used key of one and the new key of the other; nothing was changed. See --status"; fi
+    t1="$(token_of "$s1")" && t2="$(token_of "$s2")" || fail "cannot read the two recovery tokens; nothing was changed"
+    [ "$t1" != "$t2" ] || fail "one recovery token names both keyslots $s1 and $s2: this is not a --replace that stopped, and this script will not guess. See cryptsetup luksDump $DEV. Nothing was changed"
+    g1="$(generation_of "$s1")" && g2="$(generation_of "$s2")" || fail "cannot read the two recovery tokens; nothing was changed"
+    if [ "$g1" -gt "$g2" ]; then new="$s1"; old="$s2"; elif [ "$g2" -gt "$g1" ]; then new="$s2"; old="$s1"
+    else fail "the two recovery keyslots ($s1, $s2) do not say which is the newer (they were not made by --replace): this script will not guess. Decide by hand: cryptsetup luksKillSlot $DEV <the used keyslot>, then cryptsetup token remove. Nothing was changed"; fi
+    if opens "$B" "$old" && opens "$A" "$new"; then
+      fail "the key typed as USED opens the NEW keyslot ($new) and the key typed as new opens the used one ($old): they were typed in the wrong order. Nothing was changed"
+    fi
+    opens "$A" "$old" && proven "$B" "$new" \
+      || fail "$DEV has 2 recovery keyslots, and these are not the used key of keyslot $old and the new key of keyslot $new; nothing was changed. See --status"
     old_token="$(token_of "$old")" || fail "cannot find the used keyslot's token; nothing was changed"
     retire "$old" "$old_token" "$B"
-    slot="$new"; say "an unfinished --replace was completed"
+    slot="$new"; say "an unfinished --replace was completed: the used keyslot $old is destroyed"
   else
+    ! ignored "$RECOVERY" || fail "recovery keyslot $RECOVERY has priority 'ignore', so the used key cannot authorise a new keyslot: cryptsetup config --priority normal --key-slot $RECOVERY $DEV. Nothing was changed"
     opens "$A" "$RECOVERY" || fail "that key does not open the recovery keyslot ($RECOVERY); nothing was changed"
     old_token="$(token_of "$RECOVERY")" || fail "cannot find the used keyslot's token; nothing was changed"
-    sweep
-    add "$A" "$B"
+    generation="$(generation_of "$RECOVERY")" || fail "cannot read the used keyslot's token; nothing was changed"
+    # A --replace that was KILLED between adding its keyslot and marking it left the new key in a
+    # keyslot no token names. Given the same new key again, that keyslot is the one to mark: adding a
+    # second would put the key in two keyslots and leave one unlabelled.
+    for s in $STRAY; do
+      if [ -z "$ADDED" ] && opens "$B" "$s"; then
+        label "$s" "$((generation + 1))" || fail "keyslot $s holds the new key (left by a --replace that was interrupted) but could not be marked as the recovery key; nothing was changed"
+        ADDED="$s"; PENDING="$s"; say "keyslot $s already holds the new key (left by a --replace that was interrupted): using it"
+      else LEFT="$LEFT $s"; fi
+    done
+    [ -n "$ADDED" ] || add "$A" "$B" "$((generation + 1))"
     # The new key is proven BEFORE the used one is destroyed: at no moment is the host without a
     # recovery key that is known to open it.
-    if ! proven "$B" "$ADDED"; then
-      undo "$ADDED" || exit 1
-      PENDING=""
-      fail "the new keyslot did not open with the new key and was removed; the used key is still enrolled"
-    fi
+    proven "$B" "$ADDED" || take_back "$ADDED" "the new keyslot did not open with the new key (the used key is still enrolled)"
     PENDING=""
     slot="$ADDED"
     retire "$RECOVERY" "$old_token" "$B"
   fi
   opens "$A" && fail "the used key STILL opens $DEV through another keyslot; look at cryptsetup luksDump $DEV"
   say "REPLACED: the new recovery key is keyslot $slot of $DEV; the used key opens nothing."
+  [ -z "$LEFT" ] || say "WARNING: keyslot$LEFT is a passphrase no token names, and neither key typed here opens it (the installer's? a key from an abandoned --replace?). It still opens the disk: --status fails until it is removed"
   kinds >&2
   ;;
 esac
