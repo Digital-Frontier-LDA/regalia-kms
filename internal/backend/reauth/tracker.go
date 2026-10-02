@@ -38,7 +38,9 @@ type Tracker struct {
 	mu       sync.Mutex
 	gate     Gate
 	boottime func() (int64, error)
-	// absences is keyed by device id. The entry "" is the baseline for a device never seen.
+	// since is when every token is taken to have arrived: the baseline for a device never seen.
+	since int64
+	// absences is keyed by device id.
 	absences map[string]absence
 }
 
@@ -58,9 +60,17 @@ func (tracker *Tracker) Require(gate Gate, boottime func() (int64, error), since
 	}
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
-	tracker.gate, tracker.boottime = gate, boottime
-	tracker.absences = map[string]absence{"": {returned: true, returnedAtMs: sinceMs}}
+	tracker.gate, tracker.boottime, tracker.since = gate, boottime, sinceMs
+	tracker.absences = map[string]absence{}
 	return nil
+}
+
+// Required reports whether the rule is on. A provider need not find out whether a token has gone
+// when nothing will be made of the answer.
+func (tracker *Tracker) Required() bool {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	return tracker.gate != nil
 }
 
 // Gone records that a token did not answer. Whatever lease the node holds now was asked for
@@ -68,7 +78,7 @@ func (tracker *Tracker) Require(gate Gate, boottime func() (int64, error), since
 func (tracker *Tracker) Gone(deviceID string) {
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
-	if tracker.gate != nil {
+	if tracker.gate != nil && deviceID != "" {
 		tracker.absences[deviceID] = absence{}
 	}
 }
@@ -83,9 +93,13 @@ func (tracker *Tracker) Serves(ctx context.Context, deviceID string) bool {
 		tracker.mu.Unlock()
 		return true
 	}
+	if deviceID == "" {
+		tracker.mu.Unlock()
+		return false // no device is nameless: nothing is recorded for one, and nothing is served
+	}
 	current, known := tracker.absences[deviceID]
 	if !known {
-		current = tracker.absences[""]
+		current = absence{returned: true, returnedAtMs: tracker.since}
 	}
 	if !current.returned {
 		now, err := tracker.boottime()
@@ -118,7 +132,6 @@ func (tracker *Tracker) Awaiting() map[string]int64 {
 	waiting := map[string]int64{}
 	for device, current := range tracker.absences {
 		switch {
-		case device == "":
 		case !current.returned:
 			waiting[device] = -1
 		case current.returnedAtMs != served:

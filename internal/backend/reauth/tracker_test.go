@@ -117,6 +117,28 @@ func TestATokenThatWasGoneWaitsForALeaseAskedForAfterItWasSeenBack(t *testing.T)
 	}
 }
 
+// No device is nameless. The baseline for a device never seen must not be reachable as a device:
+// serving "" once would otherwise mark every device seen later as already vouched for.
+func TestTheNamelessDeviceIsNeitherServedNorRecorded(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.gate.requestedMs = 1_500
+	if w.tracker.Serves(ctx, "") {
+		t.Fatal("a device with no name was served")
+	}
+	w.tracker.Gone("")
+	if len(w.tracker.Awaiting()) != 0 {
+		t.Fatalf("a device with no name was recorded: %v", w.tracker.Awaiting())
+	}
+	w.gate.requestedMs = 900 // before the start: a device never seen must still wait
+	if w.tracker.Serves(ctx, "card") {
+		t.Fatal("after the nameless device was asked about, a device never seen served on a lease from before the start")
+	}
+	if !w.tracker.Required() || (&Tracker{}).Required() {
+		t.Fatal("Required must be true once Require succeeded and false for the zero tracker")
+	}
+}
+
 func TestANodeThatIsNotAdmittedServesNothing(t *testing.T) {
 	w := newWorld(t)
 	w.gate.requestedMs, w.gate.admitted = 9_999, false

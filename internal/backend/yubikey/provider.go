@@ -84,6 +84,25 @@ func (provider *Provider) AwaitingReauthorization() map[string]int64 {
 	return provider.returned.Awaiting()
 }
 
+// notOpened records a card that could not be opened as gone, unless the request's own context has
+// ended. The driver opens nothing under a context that has ended, so a caller who hung up before
+// the card was reached, or whose time ran out waiting, would otherwise take a card that is there
+// out of service. A card that really is gone is recorded by the next look made under a live
+// context: the health check of the next routing decision.
+func (provider *Provider) notOpened(ctx context.Context, deviceID string) {
+	if ctx.Err() == nil {
+		provider.returned.Gone(deviceID)
+	}
+}
+
+// goneUnlessItAnswers records the card as gone if, on this open session, it does not answer for
+// the bound serial. Where nothing waits on the answer the card is not asked.
+func (provider *Provider) goneUnlessItAnswers(ctx context.Context, session Session, binding registry.Binding) {
+	if provider.returned.Required() && !answers(ctx, session, binding.DeviceSerial) {
+		provider.returned.Gone(binding.DeviceID)
+	}
+}
+
 // answers reports whether the card behind an open session still answers as the bound card. Asked
 // after a call on it failed, to tell a card that has gone from one that refused the request.
 //
@@ -215,7 +234,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	session, err := provider.driver.Open(ctx, binding.DeviceID)
 	if err != nil || session == nil {
-		provider.returned.Gone(binding.DeviceID)
+		provider.notOpened(ctx, binding.DeviceID)
 		return nil, "", ErrUnavailable
 	}
 	defer func() {
@@ -227,10 +246,10 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 			provider.returned.Gone(binding.DeviceID)
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
-		case err != nil && !answers(ctx, session, binding.DeviceSerial):
+		case err != nil:
 			// A request that failed on an open card: gone, or refused? Asked before the session
 			// is closed, on the connection the failure happened on. A success needs no question.
-			provider.returned.Gone(binding.DeviceID)
+			provider.goneUnlessItAnswers(ctx, session, binding)
 		}
 		if session.Close() != nil {
 			// The card did not let go of the connection: what state it is in is not known.
@@ -350,21 +369,21 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	session, err := provider.driver.Open(ctx, binding.DeviceID)
 	if err != nil || session == nil {
-		provider.returned.Gone(binding.DeviceID)
+		provider.notOpened(ctx, binding.DeviceID)
 		return false
 	}
 	defer session.Close()
 	serial, err := session.Identity(ctx)
 	if err != nil || serial != binding.DeviceSerial {
-		if err != nil {
-			provider.returned.Gone(binding.DeviceID) // opened, and it does not answer for its serial
-		}
+		// It does not answer for the bound serial: the bound card is not there, whether nothing
+		// answers or another card does. Execute records the same fact the same way.
+		provider.goneUnlessItAnswers(ctx, session, binding)
 		return false
 	}
 	pinPolicy, touchPolicy, err := session.Policies(ctx, binding.ObjectID)
 	if err != nil || pinPolicy != binding.PINPolicy || touchPolicy != "never" {
-		if err != nil && !answers(ctx, session, binding.DeviceSerial) {
-			provider.returned.Gone(binding.DeviceID)
+		if err != nil {
+			provider.goneUnlessItAnswers(ctx, session, binding)
 		}
 		return false
 	}

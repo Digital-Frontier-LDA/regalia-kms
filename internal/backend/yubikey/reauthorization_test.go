@@ -20,6 +20,8 @@ type removableCard struct {
 	identityRead int
 	// leaves pulls the card when the named call is made on an open session.
 	leaves string
+	// other is the serial of another card that sits where the bound one was.
+	other string
 }
 
 func (card *removableCard) Policies(ctx context.Context, slot string) (string, string, error) {
@@ -37,7 +39,11 @@ func (card *removableCard) PINRetries(ctx context.Context) (int, error) {
 	return card.fakeSession.PINRetries(ctx)
 }
 
-func (card *removableCard) Open(context.Context, string) (Session, error) {
+func (card *removableCard) Open(ctx context.Context, _ string) (Session, error) {
+	// as the PIV driver does: nothing is opened under a context that has ended
+	if ctx.Err() != nil {
+		return nil, ErrUnavailable
+	}
 	if card.gone {
 		return nil, errors.New("no card with that serial")
 	}
@@ -55,6 +61,9 @@ func (card *removableCard) Identity(ctx context.Context) (string, error) {
 	}
 	if card.gone {
 		return "", errors.New("the card was removed")
+	}
+	if card.other != "" {
+		return card.other, nil
 	}
 	return card.serial, nil
 }
@@ -277,6 +286,41 @@ func TestACancelledRequestDoesNotTakeTheCardOutOfService(t *testing.T) {
 	w.card.cancelOnSign, w.card.gone = nil, false
 	w.now = 3_000
 	w.requireWaiting("back after leaving during a cancelled request", 3_000)
+}
+
+// The same, one step earlier: the caller is gone before the card is reached, or its time ran out
+// waiting for its turn. The driver opens nothing under a context that has ended.
+func TestARequestThatHadAlreadyEndedDoesNotTakeTheCardOutOfService(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("before")
+	w.now = 2_000
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := w.provider.Execute(ended, route(), "sign", "", "application/octet-stream", []byte("payload"), nil); err == nil {
+		t.Fatal("setup: a request whose context has ended should fail")
+	}
+	if w.provider.Healthy(ended, route().Binding) {
+		t.Fatal("setup: a health check whose context has ended should fail")
+	}
+	if waiting := w.provider.AwaitingReauthorization(); len(waiting) != 0 {
+		t.Fatalf("a request that had already ended marked the card: %v", waiting)
+	}
+	w.requireServing("after requests that had already ended")
+}
+
+// PoC 12.4's own sequence, seen only by the health check: the bound card out, another in its
+// place, the bound card back. Routing and readiness look far more often than operations do.
+func TestAnotherCardInItsPlaceSeenByTheHealthCheckIsAnAbsence(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("before the swap")
+	w.card.other = "87654321"
+	w.now = 2_000
+	if w.healthy() {
+		t.Fatal("another card in the bound card's place reports healthy")
+	}
+	w.card.other = ""
+	w.now = 3_000
+	w.requireWaiting("the bound card back after another sat in its place", 3_000)
 }
 
 func TestARefusedPINDoesNotCountAsAnAbsence(t *testing.T) {
