@@ -14,13 +14,15 @@ check() {
 }
 
 depends() {
-    # kernel-network-modules: the network card's driver. Nothing else here asks for the network, and
-    # without it the initrd has no interface to put the boot mesh on.
-    echo systemd systemd-cryptsetup tpm2-tss kernel-network-modules
+    echo systemd systemd-cryptsetup tpm2-tss
 }
 
 installkernel() {
     hostonly='' instmods wireguard nf_tables nft_ct nf_conntrack tpm_tis tpm_crb
+    # The network card's driver. Nothing else in the initrd asks for the network, so nothing else brings
+    # it; dracut's own kernel-network-modules is in a separate package (dracut-network) on Debian.
+    hostonly='' instmods virtio_net '=drivers/net/ethernet' '=drivers/net/phy' '=drivers/net/mdio'
+
 }
 
 install() {
