@@ -34,11 +34,15 @@ def admin(node, *args):
     return command("exec", "-T", "--user", "0:0", node.lower(), *args)
 
 
-def probe(node, host, port, payload, raw=False):
+def probe(node, host, port, payload, raw=False, content_length=None):
     code = '''import http.client,json,sys
 c=http.client.HTTPConnection(sys.argv[1],int(sys.argv[2]),timeout=1)
 try:
- c.request("POST","/bootstrap",body=sys.argv[3],headers={"Content-Type":"application/json"})
+ if sys.argv[4]:
+  c.putrequest("POST","/bootstrap")
+  c.putheader("Content-Length",sys.argv[4]); c.endheaders()
+ else:
+  c.request("POST","/bootstrap",body=sys.argv[3],headers={"Content-Type":"application/json"})
  r=c.getresponse(); raw=r.read(65537)
  print(json.dumps({"reachable":True,"response":json.loads(raw)}))
 except OSError:
@@ -47,7 +51,8 @@ finally:
  c.close()
 '''
     return json.loads(command("exec", "-T", "--user", "10000:10000", node.lower(),
-                              "python3", "-c", code, host, str(port), payload if raw else json.dumps(payload)).stdout)
+                              "python3", "-c", code, host, str(port), payload if raw else json.dumps(payload),
+                              "" if content_length is None else str(content_length)).stdout)
 
 
 def main():
@@ -180,9 +185,19 @@ def main():
         control("B", "drop_response")
         check("lost grant leaves target locked", not control("A", "bootstrap", peers=["B"])["active"])
         check("fresh challenge recovers after a lost grant", control("A", "bootstrap", peers=["B"])["active"])
-        check("network endpoint bounds oversized bodies", probe("A", "10.77.91.2", 8443,
-              {"op": "challenge", "node_id": "A", "padding": "x" * 65536})["response"]
+        # Reject from headers before a body is sent. Sending unread oversized
+        # bytes while the server closes can reset TCP and hide its error reply.
+        check("network endpoint rejects oversized length before reading a body", probe("A", "10.77.91.2", 8443,
+              {}, content_length=65537).get("response")
               == {"error": {"code": "INVALID_REQUEST"}})
+        boundary = json.dumps({"op": "challenge", "node_id": "A"})
+        padded = boundary + " " * (65536 - len(boundary))
+        response = probe("A", "10.77.91.2", 8443, padded, raw=True).get("response", {})
+        challenge = response.get("result", {})
+        check("network endpoint accepts a valid body at the exact input limit",
+              set(response) == {"result"} and set(challenge) == {
+                  "peer_id", "peer_nonce", "manifest_epoch", "challenge_id"}
+              and challenge["peer_id"] == "B")
         check("network endpoint refuses duplicate JSON fields", probe("A", "10.77.91.2", 8443,
               '{"op":"challenge","node_id":"A","node_id":"C"}', raw=True)["response"]
               == {"error": {"code": "INVALID_REQUEST"}})

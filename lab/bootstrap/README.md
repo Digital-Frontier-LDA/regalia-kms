@@ -109,7 +109,7 @@ falling back. See [swtpm's documented seccomp option](https://github.com/stefanb
 ## Additional software labs
 
 The [three-container WireGuard experiment](NETWORK.md) now extends these IPC
-checks with 66 assertions covering actual encrypted cross-container transport,
+checks with 67 assertions covering actual encrypted cross-container transport,
 all six recovery paths,
 simultaneous recovery, total-outage/manual recovery, and network-failure tests.
 

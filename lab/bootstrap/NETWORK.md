@@ -63,10 +63,15 @@ behavior instead of counting it as successful theft protection.
 
 ## Checks Performed
 
-The network runner exercises 66 assertions, including actual handshakes, all six
+The network runner exercises 67 assertions, including actual handshakes, all six
 recovery directions, simultaneous two-node recovery, manual seeding of each
 possible survivor, request/source binding, bounded parsing, partitions, routing
 failure, lost grants, known policy/epoch mismatches, and genuine TPM policy refusal.
+Input-limit tests reject an oversized declared length before sending a body and
+accept a valid JSON request padded to exactly 64 KiB. The former avoids a client
+write/close race when a server rejects headers while oversized bytes are still
+in transit; a missing error response fails the assertion rather than raising a
+harness `KeyError`.
 The existing IPC and repository tests remain separate regression checks.
 
 ## Residual Risk
