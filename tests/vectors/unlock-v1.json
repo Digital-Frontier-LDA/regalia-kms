@@ -1,0 +1,93 @@
+{
+ "about": "Fixed inputs and the values both unlock clients and the peer must compute from them (regalia-kms#67). Nothing here is a real secret.",
+ "transcript": {
+  "node_id": "lisbon",
+  "epoch": 7,
+  "session_id": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+  "ephemeral_public": "616e20657068656d6572616c207075626c6963206b65792c206173206279746573",
+  "nonce": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+  "bytes": "00000015726567616c69612d6b6d732f6174746573742f7631000000066c6973626f6e000000080000000000000007000000205e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e00000021616e20657068656d6572616c207075626c6963206b65792c20617320627974657300000020a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+  "sha256": "7b151467975bcac160e9a9d503aa547624281695edacea0f47642479f9ce5c69"
+ },
+ "response": {
+  "response": {
+   "schema": "regalia.unlock-response/v1",
+   "peer_id": "porto",
+   "node_id": "lisbon",
+   "epoch": 7,
+   "manifest_digest": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+   "session_id": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+   "transcript_sha256": "7b151467975bcac160e9a9d503aa547624281695edacea0f47642479f9ce5c69",
+   "path_epoch": 7,
+   "ciphertext": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3"
+  },
+  "canonical": "{\"ciphertext\":\"c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3\",\"epoch\":7,\"manifest_digest\":\"d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1\",\"node_id\":\"lisbon\",\"path_epoch\":7,\"peer_id\":\"porto\",\"schema\":\"regalia.unlock-response/v1\",\"session_id\":\"5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e\",\"transcript_sha256\":\"7b151467975bcac160e9a9d503aa547624281695edacea0f47642479f9ce5c69\"}",
+  "signed_digest": "7a8588e09774ea119edab251ddadfdea610f58187469c086b346a14d28cdcf42"
+ },
+ "qualified_name": {
+  "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+  "ak_name": "000b2222222222222222222222222222222222222222222222222222222222222222",
+  "qualified_name": "000bf1cf993ee3a996cb4c35c6fcaf537d9c83388ef9875e32e8a014730d318a35e8"
+ },
+ "credential": {
+  "local": "0101010101010101010101010101010101010101010101010101010101010101",
+  "contribution": "0202020202020202020202020202020202020202020202020202020202020202",
+  "target": "lisbon",
+  "peer": "porto",
+  "path_epoch": 7,
+  "info": "regalia/luks/v1/lisbon/porto/7",
+  "passphrase": "4R+KYGg/mf5TSGYtE00MHN5cwRvMCG7223HsgEuzRew="
+ },
+ "oaep_label": "726567616c69612d756e6c6f636b2f76312f636f6e747269627574696f6e007b151467975bcac160e9a9d503aa547624281695edacea0f47642479f9ce5c69",
+ "response_domain": "726567616c69612d756e6c6f636b2f76312f726573706f6e736500",
+ "transcripts_a_peer_must_refuse": {
+  "about": "The transcript above with one field changed. A quote over the first transcript does not answer any of these: a peer verifying one of them against it refuses (wrong epoch, tampered nonce, another node, session or key).",
+  "variants": [
+   {
+    "node_id": "lisbon",
+    "epoch": 8,
+    "session_id": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "ephemeral_public": "616e20657068656d6572616c207075626c6963206b65792c206173206279746573",
+    "nonce": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+    "changed": "epoch",
+    "sha256": "a3887626a46d965e34551d5ec046164f7b10f11984c12c933dd439ecea5523ce"
+   },
+   {
+    "node_id": "lisbon",
+    "epoch": 7,
+    "session_id": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "ephemeral_public": "616e20657068656d6572616c207075626c6963206b65792c206173206279746573",
+    "nonce": "a8a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+    "changed": "nonce",
+    "sha256": "a6dcaa8eee55344c74709c403026705eaaa7d2bd879b7206c24457617391c9a1"
+   },
+   {
+    "node_id": "porto",
+    "epoch": 7,
+    "session_id": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "ephemeral_public": "616e20657068656d6572616c207075626c6963206b65792c206173206279746573",
+    "nonce": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+    "changed": "node_id",
+    "sha256": "3e66ba6f24f3fb908bcf9f481835bd37eda3242dc0d30220154de459a3e84a3c"
+   },
+   {
+    "node_id": "lisbon",
+    "epoch": 7,
+    "session_id": "5f5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "ephemeral_public": "616e20657068656d6572616c207075626c6963206b65792c206173206279746573",
+    "nonce": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+    "changed": "session_id",
+    "sha256": "bb87f9ee9dde3b33a79ab5ffdbc20047c2d06e2801ef34ad868804be292e798d"
+   },
+   {
+    "node_id": "lisbon",
+    "epoch": 7,
+    "session_id": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    "ephemeral_public": "616e6f7468657220657068656d6572616c207075626c6963206b6579",
+    "nonce": "a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
+    "changed": "ephemeral_public",
+    "sha256": "e6a312f1baf755ae6aaf4a6e5ed4c59135d450df152ea3acec6f10939508950f"
+   }
+  ]
+ }
+}
