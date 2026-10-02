@@ -45,9 +45,13 @@ User Interaction Flags, and refuses a binding the card contradicts. PKCS#11 expo
 that requires touch does not sign unattended here; it fails, and the operation is refused.
 
 **Open.**
-- Key provenance is not proven to the daemon. The applet has no device certificate, and Yubico's
-  OpenPGP attestation of an on-card key is not verified at commissioning yet. The pinned public key
-  says this is still that key; it does not say the key was generated on the card.
+- How a production key gets onto the card. A recoverable key is imported from ceremony-controlled
+  material onto the primary and standby cards, so that a replacement holds the same identity; it is
+  not generated on the card. That import path for an Ed25519 OpenPGP key is neither built nor
+  measured. The key used in the recorded run was generated on the card, for the test.
+- No channel protection. As with PIV, whoever controls the USB path or the host while the PIN is in
+  use can obtain signatures from the key outside the daemon's policy. That is accepted for this
+  backend and is the reason not every key belongs on it.
 - One card serves one backend. The PIV and OpenPGP applets of the same YubiKey, driven by two
   middleware stacks at once, have not been measured together.
 
