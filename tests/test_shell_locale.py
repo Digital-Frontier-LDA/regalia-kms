@@ -82,15 +82,44 @@ class ShellLocale(unittest.TestCase):
         self.assertNotRegex(last, r"must be|--pcrs is required|--retries is")
 
     def test_every_script_that_validates_with_a_range_pins_its_locale(self):
+        """Either the whole locale (LC_ALL=C), or the collation alone with LC_ALL moved out of the way:
+        LC_ALL overrides LC_COLLATE, so LC_COLLATE=C on its own changes nothing for an operator whose
+        shell sets LC_ALL."""
         for name in VALIDATING:
             with self.subTest(name):
                 text = (ROOT / name).read_text(encoding="utf-8")
-                self.assertRegex(text, r"(?m)^export LC_ALL=C$", f"{name} validates input with bracket ranges and must pin LC_ALL=C")
-                # ...and before the first range it relies on.
-                pinned = text.index("\nexport LC_ALL=C\n")
-                first = re.search(r"=~|case .* in \*\[", text[pinned:])
-                self.assertIsNotNone(first, f"{name}: no range check after the locale is pinned")
-                self.assertNotRegex(text[:pinned].split("\nset -", 1)[-1], r"=~", f"{name} matches a pattern before pinning the locale")
+                whole = re.search(r"(?m)^export LC_ALL=C$", text)
+                collation = re.search(r"(?m)^if \[ -n \"\$\{LC_ALL:-\}\" \]; then export LANG=\"\$LC_ALL\"; unset LC_ALL; fi\nexport LC_COLLATE=C$", text)
+                pin = whole or collation
+                self.assertIsNotNone(pin, f"{name} validates input with bracket ranges and must pin LC_ALL=C, or LC_COLLATE=C with LC_ALL unset")
+                # ...and before the first pattern it relies on.
+                self.assertIsNotNone(re.search(r"=~|case .* in \*\[", text[pin.end():]), f"{name}: no range check after the locale is pinned")
+                self.assertNotRegex(text[:pin.start()].split("\nset -", 1)[-1], r"=~", f"{name} matches a pattern before pinning the locale")
+
+    def test_the_cosmos_script_keeps_counting_pin_characters_and_refuses_look_alikes(self):
+        """Its checks run before it needs a token: a slot in full-width digits and a non-ASCII object id
+        are refused, and a PIN of three two-byte letters is still shorter than six CHARACTERS (under
+        LC_ALL=C bash would count six bytes and let it through)."""
+        script = ROOT / "e2e" / "cosmos-hardware-sign-verify.sh"
+
+        def run(**values):
+            env = dict(os.environ, LC_ALL=LOCALE, LANG=LOCALE, REGALIA_COSMOS_PKCS11_MODULE=str(script),
+                       REGALIA_COSMOS_PKCS11_SLOT="0", REGALIA_COSMOS_PKCS11_PIN="123456", REGALIA_COSMOS_PKCS11_OBJECT_ID="01")
+            env.update({"REGALIA_COSMOS_PKCS11_" + k: v for k, v in values.items()})
+            done = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env, errors="replace")
+            return done.returncode, (done.stderr.strip().splitlines() or [""])[-1]
+        cases = {"a full-width slot": (dict(SLOT="７"), "slot must be a decimal number"),
+                 "a full-width object id": (dict(OBJECT_ID="０１"), "must be hexadecimal"),
+                 "an accented object id": (dict(OBJECT_ID="é1"), "must be hexadecimal"),
+                 "a three-character PIN of two-byte letters": (dict(PIN="ééé"), "shorter than six characters")}
+        for label, (values, refusal) in cases.items():
+            with self.subTest(label):
+                rc, last = run(**values)
+                self.assertEqual(rc, 2, last)
+                self.assertIn(refusal, last)
+        # The control: plain ASCII values get past all of them, to the first thing that needs a tool or a token.
+        rc, last = run()
+        self.assertNotRegex(last, r"decimal number|hexadecimal|shorter than six")
 
 
 if __name__ == "__main__":
