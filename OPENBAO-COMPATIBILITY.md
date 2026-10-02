@@ -305,10 +305,9 @@ the server today, for a decision on #120 rather than a silent change:
 2. **No served public-key operation.** `PublicKeyResult` is in `api/openapi.json` with no path. The
    plugin pins the public key in the key mapping instead, which is also the stronger check. A served
    operation would only remove a manual step.
-3. **Assembling an envelope from outside the module.** `seal-envelope` expects a ciphertext whose
-   AEAD binds what `internal/envelope` binds, and the plugin is its own Go module. Either that
-   construction is published byte-exactly in `ENVELOPE.md` with a test vector, as the approval
-   binding is in `API.md`, or it moves to an importable package. #121 needs one of the two.
+3. **Fixed:** the construction a client needs to assemble an envelope is published byte-exactly in
+   [`ENVELOPE.md`](ENVELOPE.md), with a test vector that the standard library alone reproduces. The
+   plugin, a separate Go module, implements it from that text.
 4. **Fixed:** `api/openapi.json` now lists `application/vnd.regalia.digest` for
    `SignRequest.content_type`, which the plugin depends on.
 5. **Fixed:** `API.md`'s error table and the OpenAPI responses now carry every code and status the
