@@ -32,7 +32,8 @@ is accepted in argv or the environment, written to disk, or included in reports.
 The sequence is: normalize only the selected kept slot's priority if needed;
 label it if unlabelled; prove a generic boot unlock; retire only explicitly
 selected and proven slots; remove empty **recovery** tokens; read the header
-again and prove the kept card. Other slots' identities/metadata are checked after
+again and prove the kept card. A retired card that still opens an unselected
+copy causes refusal; that copy is preserved for a further explicit custody choice. Other slots' identities/metadata are checked after
 every mutation and left unchanged. An unselected passphrase remains visible as
 `needs-review` and causes exit 1 even when the selected repair finished.
 

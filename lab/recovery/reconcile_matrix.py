@@ -99,8 +99,21 @@ def run(script, output):
             subprocess.run([executable,'token','add','--key-description','regalia-fixture-reference','--key-slot','2',str(image)],capture_output=True,check=True,timeout=30)
             before=observer.header(executable,image);invoke()
             if observer.header(executable,image)!=before:raise ValueError('non-recovery-owned slot was changed')
+            # A seen card can also survive in an unselected copy. Refuse global
+            # retirement success, while retaining that slot for the custodian.
+            shutil.copyfile(base,image)
+            with tempfile.TemporaryFile() as existing, tempfile.TemporaryFile() as replacement:
+                existing.write(keys['unknown'].encode());existing.seek(0)
+                replacement.write(keys['old'].encode());replacement.seek(0)
+                subprocess.run([executable,'luksChangeKey','--batch-mode','--pbkdf','pbkdf2','--pbkdf-force-iterations','1000',
+                    '--key-slot','3','--key-file',f'/proc/self/fd/{existing.fileno()}',str(image),f'/proc/self/fd/{replacement.fileno()}'],
+                    pass_fds=(existing.fileno(),replacement.fileno()),capture_output=True,check=True,timeout=30)
+            preserved=observer.header(executable,image)['keyslots']['3']
+            code,_=invoke()
+            if code == 0 or observer.header(executable,image)['keyslots'].get('3')!=preserved or not observer.opens(executable,image,keys['old']):
+                raise ValueError('an unselected copy was erased or its surviving card was not refused')
             report.update(status='passed',cases_executed=len(report['cases']),fault_points_reached=len(report['cases']),
-                          negative_controls=3,unknown_keys_retained=True,scope='Command boundaries and explicit same-card retries, not internal sector writes')
+                          negative_controls=4,unknown_keys_retained=True,scope='Command boundaries and explicit same-card retries, not internal sector writes')
     finally:
         report['elapsed_seconds']=round(time.monotonic()-started,3)
         output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(report,indent=2)+'\n')

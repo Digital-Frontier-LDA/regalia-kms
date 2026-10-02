@@ -171,6 +171,8 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     final = header(device)
     if any(s in final['keyslots'] for s in retire) or not proves(device, kept_key, keep) or not proves(device, kept_key):
         raise Refused('selected reconciliation did not finish')
+    if any(value != kept_key and proves(device, value) for value in retired_keys):
+        raise Refused('a retired card still opens an unselected slot; review it without deleting unknown slots')
     return describe(final)
 
 
