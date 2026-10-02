@@ -601,5 +601,5 @@ jobs:
           python3 e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
           cat "$RUNNER_TEMP/admission.log"
           [ "$status" -eq 0 ] || exit "$status"
-          grep -q '^runtime-admission: 26 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
-            echo "::error::the admission test did not run all 26 checks" >&2; exit 1; }
+          grep -q '^runtime-admission: 32 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
+            echo "::error::the admission test did not run all 32 checks" >&2; exit 1; }

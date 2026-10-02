@@ -367,7 +367,7 @@ func run() error {
 		tokenObserver = observer
 		// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (regalia-kms#72 PoC 12.4). Only where runtime
 		// admission is required: without a lease service there is no lease to wait for.
-		if err := requireReauthorization(observer, admissionGate); err != nil {
+		if err := requireReauthorization(observer, admissionGate, admission.ProcessStart); err != nil {
 			return err
 		}
 
@@ -817,11 +817,23 @@ func admitRunner(settings config.Config, base operations.Runner, onTransition fu
 // requireReauthorization makes the token provider wait, after a token's absence and after a start
 // of this daemon, for a runtime lease asked for since. A nil gate (admission not required) or a nil
 // provider (no PKCS#11 token: a YubiKey-only host) changes nothing.
-func requireReauthorization(provider *nitrokey.Provider, gate *admission.Gate) error {
+//
+// The lease must have been asked for after THIS PROCESS STARTED, as the kernel dates it: the lease
+// service reads that same time for the daemon's PID and asks at once, so a restart of the daemon
+// costs one renewal and not the wait for the next scheduled one. If the start time cannot be read,
+// "now" stands in: later, so never weaker, and the cost is that wait.
+func requireReauthorization(provider *nitrokey.Provider, gate *admission.Gate, processStart func() (int64, error)) error {
 	if provider == nil || gate == nil {
 		return nil
 	}
-	if err := provider.RequireReauthorization(gate, admission.Boottime); err != nil {
+	since, err := processStart()
+	if err != nil {
+		slog.Warn("KMS process start time unavailable; token reauthorization dates from now, and waits for the lease service's next scheduled renewal", "error", err)
+		if since, err = admission.Boottime(); err != nil {
+			return fmt.Errorf("token reauthorization: %w", err)
+		}
+	}
+	if err := provider.RequireReauthorization(gate, admission.Boottime, since); err != nil {
 		return fmt.Errorf("token reauthorization: %w", err)
 	}
 	slog.Info("KMS token reauthorization required: a token that was absent serves again only under a runtime lease asked for after its return")

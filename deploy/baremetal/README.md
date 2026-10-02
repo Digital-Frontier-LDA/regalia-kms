@@ -138,8 +138,9 @@ Commissioning has two halves:
   `python3 -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
-  it asked for after the token was back: until the lease service's next renewal that binding is
-  unavailable and the daemon is not ready. Measured: `kms_runtime_admission_required` (the
+  it asked for after the token was back (after the daemon's own start, for a restart): until then that
+  binding is unavailable and the daemon is not ready. The lease service sees the daemon's start and asks
+  at once; a token's return it does not see, and that waits for the next scheduled renewal. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
 
 ### Host firewall (default deny, both directions)

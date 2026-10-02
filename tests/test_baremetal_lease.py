@@ -451,6 +451,27 @@ class Hold(Case):
         self.refused("EXPIRED", lease.verify, from_b, self.m1, self.now)
         self.assertEqual(self.holder.check(self.m1), 9)
 
+    def test_on_a_tie_the_lease_just_asked_for_is_held_and_it_must_still_answer_an_outstanding_request(self):
+        """Two leases that expire at the same instant. The later-installed one wins: the daemon serves a token
+        only under a lease asked for after its own start, so a renewal asked for that reason must not be
+        dropped for an older lease of the same length. Winning a tie is no way around the nonce."""
+        first = self.issue("b")
+        self.assertEqual(self.holder.install(first, self.m1), 300)
+        second = self.issue("c")                                         # the same second: the same expiry
+        self.assertEqual(second["lease"]["expires_at"], first["lease"]["expires_at"])
+        self.assertEqual(self.holder.install(second, self.m1), 300)
+        self.assertEqual(self.holder.held()["lease"]["nonce"], second["lease"]["nonce"])
+        self.refused("answers no request this node has outstanding", self.holder.install, first, self.m1)    # the first one again: a replay
+        self.refused("answers no request this node has outstanding", self.holder.install, second, self.m1)
+        self.assertEqual(self.holder.held()["lease"]["nonce"], second["lease"]["nonce"])
+        # a strictly shorter one is still not taken over a longer one held
+        to_b = self.holder.request()
+        early = self.issue("b", request=to_b)
+        self.later(10)
+        self.holder.install(self.issue("c"), self.m1)
+        self.assertEqual(self.holder.install(early, self.m1), 300)
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
+
     def test_poc_14_3_a_revoked_running_node_is_refused_renewal_and_stops_within_the_lease_bound(self):
         self.holder.install(self.issue("b"), self.m1)
         revoked = self.manifest(2, m.digest(self.m1), a="REVOKED_STOLEN")
