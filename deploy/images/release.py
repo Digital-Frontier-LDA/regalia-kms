@@ -15,7 +15,7 @@ REPOSITORY = "Digital-Frontier-LDA/regalia-kms"
 WORKFLOW = REPOSITORY + "/.github/workflows/appliance.yml"
 REQUIRED = {"regalia-debian13-amd64.qcow2", "rootfs.tar.gz", "regalia-kms", "build-report.json",
             "scan-report.json", "sbom.syft.json", "sbom.spdx.json", "sbom.cdx.json", "vulnerabilities.json"}
-REQUIRED.add("sbom.attestation.spdx.json")
+REQUIRED.update({"sbom.attestation.spdx.json", "acceptance.log", "normal-boot.log"})
 
 
 def artifact_set(directory: Path) -> dict:
@@ -41,6 +41,30 @@ def source(commit: str, ref: str):
             and ".." not in ref, "explicit source branch or tag required")
 
 
+def validate_boot_evidence(directory: Path, build: dict, files: dict) -> None:
+    # A generic passing legacy report does not establish actual daemon
+    # confinement or a normal boot after the acceptance flag was removed.
+    acceptance = read_regular(directory / "acceptance.log", 16 * 1024 ** 2).decode("utf-8", errors="replace")
+    lines = acceptance.splitlines()
+    markers = ["REGALIA_ACCEPTANCE_BEGIN", "REGALIA_ENFORCED_DAEMON_PASS", "REGALIA_ACCEPTANCE_PASS"]
+    require(all(lines.count(marker) == 1 for marker in markers)
+            and [lines.index(marker) for marker in markers] == sorted(lines.index(marker) for marker in markers)
+            and "REGALIA_FAIL:" not in acceptance, "enforcing-daemon acceptance evidence is missing or failed")
+    boot = build.get("normal_boot", {})
+    require(isinstance(boot, dict) and boot.get("status") == "passed"
+            and boot.get("mode") == "UEFI disk boot in disposable overlay"
+            and boot.get("verification_reran") is False
+            and boot.get("log_sha256") == files["normal-boot.log"]["sha256"],
+            "normal UEFI boot evidence is missing or differs")
+    normal = read_regular(directory / "normal-boot.log", 16 * 1024 ** 2).decode("utf-8", errors="replace")
+    normal = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", normal)
+    kernel_lines = [line for line in normal.splitlines() if "Kernel command line:" in line]
+    require(bool(kernel_lines) and all("regalia.image_verify=1" not in line for line in kernel_lines)
+            and re.search(r"Reached target .*multi-user.target", normal) is not None
+            and "REGALIA_ACCEPTANCE_BEGIN" not in normal,
+            "normal boot log does not prove verification ended")
+
+
 def prepare(directory: Path, commit: str, ref: str) -> dict:
     source(commit, ref)
     files = artifact_set(directory)
@@ -49,6 +73,7 @@ def prepare(directory: Path, commit: str, ref: str) -> dict:
     scan = json.loads(read_regular(directory / "scan-report.json"))
     require(build.get("schema") == "regalia.appliance-build/v1" and build.get("status") == "passed"
             and build.get("source_commit") == commit, "appliance build did not pass for this source")
+    validate_boot_evidence(directory, build, files)
     require(scan.get("schema") == "regalia.image-scan/v1" and scan.get("status") == "passed"
             and scan.get("fail_on") in {"Medium", "High"}, "vulnerability gate did not pass")
     require(build.get("disk_sha256") == files["regalia-debian13-amd64.qcow2"]["sha256"], "build evidence does not bind this disk")

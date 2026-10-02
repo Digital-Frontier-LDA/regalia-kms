@@ -132,6 +132,11 @@ Tool errors, empty SBOMs, wrong distro and invalid/stale databases also block.
 A release consists of `release.json`, its signatures/attestations, and a flat
 `payload/` with the exact artifacts named in the manifest. Preparation requires
 passing boot and scan evidence bound to the disk, filesystem and executable.
+`acceptance.log` must include the ordered acceptance and enforcing-daemon success
+markers, with no failure marker. `normal-boot.log` must match the build report's
+hash and prove UEFI multi-user startup without rerunning verification. Both logs
+are required release artifacts covered by the signed manifest; a generic legacy
+`status: passed` report is insufficient.
 The verifier checks signatures before parsing release claims or reading artifact
 contents for consumption; it never executes the artifact to discover its version.
 Expected repository, workflow, issuer, source ref and commit are caller policy.

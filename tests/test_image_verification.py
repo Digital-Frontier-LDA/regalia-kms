@@ -136,7 +136,9 @@ class GPGImageTests(unittest.TestCase):
         expired_home = self.root / "expired-home"
         expired_home.mkdir(mode=0o700)
         command = ["gpg", "--no-options", "--homedir", str(expired_home), "--batch",
-                   "--pinentry-mode", "loopback", "--passphrase", "", "--faked-system-time", "1577836800"]
+                   "--pinentry-mode", "loopback", "--passphrase", "", # Freeze time across separate GPG processes: key creation must
+                   # not tick beyond the next signing process's reset clock.
+                   "--faked-system-time", "1577836800!"]
         try:
             subprocess.run(command + ["--quick-generate-key", "expired@example.invalid", "ed25519", "sign", "1d"],
                            check=True, capture_output=True)

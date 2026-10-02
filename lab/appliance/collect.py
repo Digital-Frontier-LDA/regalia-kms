@@ -20,7 +20,8 @@ def collect(build: Path, scan: Path, destination: Path, commit: str, ref: str):
         payload = staging / "payload"
         payload.mkdir()
         for source in [build / "regalia-debian13-amd64.qcow2", build / "build-report.json",
-                       build / "export/rootfs.tar.gz", build / "export/regalia-kms", *scan.iterdir()]:
+                       build / "export/rootfs.tar.gz", build / "export/regalia-kms",
+                       build / "acceptance.log", build / "normal-boot.log", *scan.iterdir()]:
             require(source.is_file() and not source.is_symlink(), "release input must be a regular file")
             require(not (payload / source.name).exists(), "duplicate release artifact basename")
             shutil.copyfile(source, payload / source.name)

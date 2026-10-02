@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from deploy.images import release, scan, tools
 from deploy.images.verify import VerificationError
+from lab.appliance.collect import collect
 
 
 COMMIT = "1" * 40
@@ -25,10 +26,14 @@ def payload(root):
     directory.mkdir()
     for name in release.REQUIRED:
         (directory / name).write_bytes(b"public fixture\n")
+    (directory / "acceptance.log").write_text("REGALIA_ACCEPTANCE_BEGIN\nREGALIA_ENFORCED_DAEMON_PASS\nREGALIA_ACCEPTANCE_PASS\n")
+    (directory / "normal-boot.log").write_text("Kernel command line: quiet\nReached target multi-user.target\n")
     files = release.artifact_set(directory)
     build = {"schema": "regalia.appliance-build/v1", "status": "passed", "source_commit": COMMIT,
              "disk_sha256": files["regalia-debian13-amd64.qcow2"]["sha256"],
-             "export": {name: files[name]["sha256"] for name in ("rootfs.tar.gz", "regalia-kms")}}
+             "export": {name: files[name]["sha256"] for name in ("rootfs.tar.gz", "regalia-kms")},
+             "normal_boot": {"status": "passed", "mode": "UEFI disk boot in disposable overlay",
+                             "verification_reran": False, "log_sha256": files["normal-boot.log"]["sha256"]}}
     scanner = {"schema": "regalia.image-scan/v1", "status": "passed", "fail_on": "High",
                "rootfs_sha256": files["rootfs.tar.gz"]["sha256"], "evidence": {
                    name: files[name]["sha256"] for name in ("sbom.syft.json", "sbom.spdx.json", "sbom.attestation.spdx.json", "sbom.cdx.json", "vulnerabilities.json")}}
@@ -71,6 +76,45 @@ class ReleaseTests(unittest.TestCase):
         path.write_text(json.dumps(result))
         with self.assertRaises(VerificationError):
             release.prepare(self.payload, COMMIT, REF)
+
+    def test_generic_pass_without_boot_evidence_is_refused(self):
+        path = self.payload / "build-report.json"
+        result = json.loads(path.read_text())
+        del result["normal_boot"]
+        path.write_text(json.dumps(result))
+        with self.assertRaisesRegex(VerificationError, "normal UEFI boot"):
+            release.prepare(self.payload, COMMIT, REF)
+
+    def test_incomplete_failed_or_embedded_acceptance_markers_are_refused(self):
+        path = self.payload / "acceptance.log"
+        original = path.read_text()
+        for log in [original.replace("REGALIA_ENFORCED_DAEMON_PASS\n", ""),
+                    original + "REGALIA_FAIL: unsafe\n", original + "REGALIA_ACCEPTANCE_PASS\n",
+                    original.replace("REGALIA_ENFORCED_DAEMON_PASS", "echo REGALIA_ENFORCED_DAEMON_PASS"),
+                    "\n".join(reversed(original.splitlines())) + "\n"]:
+            with self.subTest(log=log):
+                path.write_text(log)
+                with self.assertRaisesRegex(VerificationError, "enforcing-daemon acceptance"):
+                    release.prepare(self.payload, COMMIT, REF)
+
+    def test_changed_or_repeated_verification_boot_is_refused(self):
+        path = self.payload / "normal-boot.log"
+        original = path.read_text()
+        path.write_text(original + "changed\n")
+        with self.assertRaisesRegex(VerificationError, "boot evidence"):
+            release.prepare(self.payload, COMMIT, REF)
+        # Binding the modified log is insufficient if its content contradicts
+        # the normal-boot claim. Simulate such a report without signing it.
+        for log in [original + "REGALIA_ACCEPTANCE_BEGIN\n", original.replace("quiet", "regalia.image_verify=1"),
+                    "Kernel command line: quiet\n"]:
+            with self.subTest(log=log):
+                path.write_text(log)
+                build_path = self.payload / "build-report.json"
+                result = json.loads(build_path.read_text())
+                result["normal_boot"]["log_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                build_path.write_text(json.dumps(result))
+                with self.assertRaisesRegex(VerificationError, "verification ended"):
+                    release.prepare(self.payload, COMMIT, REF)
 
     def test_scan_for_another_filesystem_is_rejected(self):
         path = self.payload / "scan-report.json"
@@ -145,6 +189,37 @@ class ReleaseTests(unittest.TestCase):
         sbom.write_text(json.dumps(document))
         with self.assertRaisesRegex(VerificationError, "SBOM differs"):
             release.verify_attestation(artifact, COMMIT, REF, sbom=sbom)
+
+
+class CollectionTests(unittest.TestCase):
+    def test_public_boot_logs_are_collected_and_bound(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = payload(root)
+            build, scanner = root / "build", root / "scan"
+            (build / "export").mkdir(parents=True)
+            scanner.mkdir()
+            for name in release.REQUIRED:
+                if name in {"rootfs.tar.gz", "regalia-kms"}:
+                    destination = build / "export" / name
+                elif name in {"regalia-debian13-amd64.qcow2", "build-report.json", "acceptance.log", "normal-boot.log"}:
+                    destination = build / name
+                else:
+                    destination = scanner / name
+                shutil.copyfile(fixture / name, destination)
+            output = root / "release"
+            collect(build, scanner, output, COMMIT, REF)
+            manifest = (output / "release.json").read_bytes()
+            self.assertEqual(release.validate(manifest, output / "payload", COMMIT, REF)["status"], "verified")
+            for name in ["acceptance.log", "normal-boot.log"]:
+                self.assertEqual((output / "payload" / name).read_bytes(), (build / name).read_bytes())
+            # If a later collection lacks its required log, cleanup must not
+            # leave a promotable output or private staging directory.
+            (build / "acceptance.log").unlink()
+            with self.assertRaises(VerificationError):
+                collect(build, scanner, root / "incomplete", COMMIT, REF)
+            self.assertFalse((root / "incomplete").exists())
+            self.assertEqual(list(root.glob(".regalia-release-*")), [])
 
 
 class OfflineSigningTests(unittest.TestCase):
