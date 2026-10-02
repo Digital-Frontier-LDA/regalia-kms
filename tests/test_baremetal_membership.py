@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deploy.baremetal import membership as m
+from deploy.baremetal import replacement
 from tests.test_baremetal_heartbeat import FakeTpm
 
 
@@ -134,6 +135,199 @@ class Manifests(unittest.TestCase):
     def test_first_manifest_must_be_root_epoch_1(self):
         with self.assertRaises(m.Refused):
             m.accept(None, sign(manifest(1, "", three()), REVOKE, "revocation"), ROOT_PUB)
+
+
+def ssh(n):
+    return ("%02x" % (0xd0 + n)) * 32
+
+
+def v2(nodes, bare=()):
+    """The same nodes under schema v2: each with its SSH host key, except those named in `bare`."""
+    return [entry if entry["node_id"] in bare else dict(entry, ssh_host_pub=ssh(i)) for i, entry in enumerate(nodes)]
+
+
+def manifest2(epoch, prev, nodes, life=86400, **kw):
+    return dict(manifest(epoch, prev, nodes, **kw), schema=m.SCHEMA_V2, heartbeat_max_lifetime_s=life)
+
+
+class SchemaV2(unittest.TestCase):
+    """#143: regalia.membership/v2 adds the required node field ssh_host_pub, an identity like the others.
+    The chain moves from v1 to v2 in a root-signed manifest only, and never back."""
+
+    def setUp(self):
+        self.m1 = m.accept(None, sign(manifest(1, "", three()), ROOT), ROOT_PUB)                       # v1
+        self.e2 = sign(manifest2(2, m.digest(self.m1), v2(three())), ROOT)                             # the switch
+        self.m2 = m.accept(self.m1, self.e2, ROOT_PUB)
+
+    def refused(self, reason, current, man, key=ROOT, signer="root"):
+        with self.assertRaises(m.Refused) as caught:
+            m.accept(current, sign(man, key, signer), ROOT_PUB)
+        self.assertIn(reason, str(caught.exception))
+
+    def next2(self, nodes, **kw):
+        return manifest2(3, m.digest(self.m2), nodes, **kw)
+
+    def test_a_chain_moves_from_v1_to_v2_and_verifies_from_epoch_1(self):
+        self.assertEqual((self.m1["schema"], self.m2["schema"]), ("regalia.membership/v1", "regalia.membership/v2"))
+        self.assertEqual(self.m2["nodes"][0]["ssh_host_pub"], ssh(0))
+        e1 = sign(manifest(1, "", three()), ROOT)
+        e3 = sign(self.next2(v2(three(a="MAINTENANCE"))), REVOKE, "revocation")                        # v2 goes on under v2
+        tip = m.accept_chain(None, [e1, self.e2, e3], ROOT_PUB)
+        self.assertEqual((tip["epoch"], tip["schema"], m.may(tip, "a", "serve"), m.may(tip, "b", "serve")), (3, m.SCHEMA_V2, False, True))
+
+    def test_a_first_manifest_may_be_v2(self):
+        first = m.accept(None, sign(manifest2(1, "", v2(three())), ROOT), ROOT_PUB)
+        self.assertEqual((first["epoch"], first["schema"]), (1, m.SCHEMA_V2))
+
+    def test_only_the_root_changes_the_schema(self):
+        self.refused("only the root can change the schema (regalia.membership/v1 to regalia.membership/v2)",
+                     self.m1, manifest2(2, m.digest(self.m1), v2(three())), REVOKE, "revocation")
+
+    def test_the_schema_never_goes_back(self):
+        back = manifest(3, m.digest(self.m2), three())
+        self.refused("schema regalia.membership/v1 cannot follow regalia.membership/v2: the schema only moves forward", self.m2, back)
+        self.refused("the schema only moves forward", self.m2, back, REVOKE, "revocation")
+        self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three())), ROOT), ROOT_PUB)["schema"], m.SCHEMA_V2)
+
+    def test_an_unknown_schema_is_refused(self):
+        for bad in ("regalia.membership/v3", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
+            with self.subTest(schema=bad):
+                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, dict(self.next2(v2(three())), schema=bad))
+        missing = self.next2(v2(three()))
+        del missing["schema"]
+        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, missing)
+        with self.assertRaisesRegex(m.Refused, "manifest must be an object"):
+            m.validate([missing])
+
+    def test_the_heartbeat_lifetime_is_a_required_field_of_v2_within_the_hard_limits(self):
+        self.assertEqual((m.HEARTBEAT_MIN_S, m.HEARTBEAT_HARD_MAX_S), (3600, 604800))
+        for good in (3600, 86400, 172800, 604800):
+            with self.subTest(life=good):
+                self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three()), life=good), ROOT), ROOT_PUB)["heartbeat_max_lifetime_s"], good)
+        for bad in (3599, 604801, 0, -86400, 86400.0, "86400", True, None, [86400]):
+            with self.subTest(life=bad):
+                self.refused("heartbeat_max_lifetime_s must be an integer from 3600 to 604800", self.m2, self.next2(v2(three()), life=bad))
+        absent = self.next2(v2(three()))
+        del absent["heartbeat_max_lifetime_s"]
+        self.refused("manifest fields mismatch: missing=['heartbeat_max_lifetime_s']", self.m2, absent)              # no default
+        self.refused("manifest fields mismatch: missing=[] unknown=['heartbeat_max_lifetime_s']", self.m1,
+                     dict(manifest(2, m.digest(self.m1), three()), heartbeat_max_lifetime_s=86400))                  # and not a v1 field
+
+    def test_only_the_root_changes_the_heartbeat_lifetime(self):
+        for life in (172800, 3600):                                              # longer or shorter: neither is a restriction a revocation key may make
+            with self.subTest(life=life):
+                self.refused("a revocation key cannot change heartbeat_max_lifetime_s", self.m2, self.next2(v2(three(a="QUARANTINED")), life=life), REVOKE, "revocation")
+                self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three()), life=life), ROOT), ROOT_PUB)["heartbeat_max_lifetime_s"], life)
+        kept = m.accept(self.m2, sign(self.next2(v2(three(a="QUARANTINED"))), REVOKE, "revocation"), ROOT_PUB)
+        self.assertEqual((kept["heartbeat_max_lifetime_s"], m.may(kept, "a", "serve")), (86400, False))
+
+    def test_each_manifest_is_validated_under_the_schema_it_names(self):
+        self.refused("nodes[0] fields mismatch: missing=['ssh_host_pub']", self.m2, self.next2(three()))                 # v2 without the field
+        self.refused("nodes[1] fields mismatch: missing=['ssh_host_pub']", self.m2, self.next2(v2(three())[:1] + three()[1:]))
+        self.refused("nodes[0] fields mismatch: missing=[] unknown=['ssh_host_pub']", self.m1, manifest(2, m.digest(self.m1), v2(three())))   # v1 with it
+        for bad in ("a", None, ["node_id"]):
+            with self.subTest(node=bad):
+                self.refused("nodes[2] must be an object", self.m2, self.next2(v2(three())[:2] + [bad]))
+        for bad in ("d0" * 31, "D0" * 32, "d0" * 33, "ssh-ed25519 AAAA", None, 7):
+            with self.subTest(ssh_host_pub=bad):
+                nodes = v2(three())
+                nodes[2]["ssh_host_pub"] = bad
+                self.refused("nodes[2].ssh_host_pub must be 64 lowercase hex", self.m2, self.next2(nodes))
+
+    def test_an_ssh_host_key_is_unique_across_every_node_and_role(self):
+        for label, reason, change in (
+                ("another node's SSH key", "ssh_host_pub of b is already used (ssh_host_pub of a)", lambda n: n[1].update(ssh_host_pub=n[0]["ssh_host_pub"])),
+                ("another node's WireGuard key", "ssh_host_pub of b is already used (wg_boot_pub of a)", lambda n: n[1].update(ssh_host_pub=n[0]["wg_boot_pub"])),
+                ("its own WireGuard key", "ssh_host_pub of a is already used (wg_service_pub of a)", lambda n: n[0].update(ssh_host_pub=n[0]["wg_service_pub"])),
+                ("a WireGuard key that is an earlier node's SSH key", "wg_boot_pub of c is already used (ssh_host_pub of a)", lambda n: n[2].update(wg_boot_pub=n[0]["ssh_host_pub"]))):
+            with self.subTest(label):
+                nodes = v2(three())
+                change(nodes)
+                self.refused(reason, self.m2, self.next2(nodes))
+
+    def test_a_revocation_key_cannot_change_an_ssh_host_key(self):
+        nodes = v2(three(a="QUARANTINED"))
+        nodes[1]["ssh_host_pub"] = "ee" * 32
+        self.refused("a revocation key cannot change ssh_host_pub of b", self.m2, self.next2(nodes), REVOKE, "revocation")
+        self.assertEqual(m.accept(self.m2, sign(self.next2(nodes), ROOT), ROOT_PUB)["nodes"][1]["ssh_host_pub"], "ee" * 32)   # the root rotates a live node's
+
+    def test_a_tombstone_keeps_its_ssh_host_key_and_it_is_never_enrolled_again(self):
+        retiring = v2(three(c="RETIRED"))
+        retiring[2]["ssh_host_pub"] = "ee" * 32
+        self.refused("tombstone: c becomes RETIRED and its ssh_host_pub cannot change in the same manifest", self.m2, self.next2(retiring))
+        m3 = m.accept(self.m2, sign(self.next2(v2(three(c="RETIRED"))), ROOT), ROOT_PUB)
+        after = lambda nodes: manifest2(4, m.digest(m3), nodes)
+        changed = v2(three(c="RETIRED"))
+        changed[2]["ssh_host_pub"] = "ee" * 32
+        self.refused("tombstone: c is RETIRED and its ssh_host_pub cannot change", m3, after(changed))
+        reuse = v2(three(c="RETIRED")) + [dict(node("d", n=3), ssh_host_pub=ssh(2))]                   # new hardware, c's old SSH key
+        self.refused("ssh_host_pub of d is already used (ssh_host_pub of c)", m3, after(reuse))
+        fresh = v2(three(c="RETIRED")) + [dict(node("d", n=3), ssh_host_pub=ssh(3))]
+        self.assertEqual(len(m.accept(m3, sign(after(fresh), ROOT), ROOT_PUB)["nodes"]), 4)
+
+    def test_a_node_retired_under_v1_is_never_given_an_ssh_host_key(self):
+        """Its hardware may be gone, and a key invented for it would be a fabricated identity in the chain:
+        its tombstone keeps exactly the fields it had, at the switch and for ever after."""
+        m2 = m.accept(self.m1, sign(manifest(2, m.digest(self.m1), three(c="RETIRED")), REVOKE, "revocation"), ROOT_PUB)      # retired under v1
+        switch = lambda nodes: manifest2(3, m.digest(m2), nodes)
+        self.refused("tombstone: c is RETIRED and its fields cannot change (ssh_host_pub is neither added nor dropped)", m2, switch(v2(three(c="RETIRED"))))
+        m3 = m.accept(m2, sign(switch(v2(three(c="RETIRED"), bare="c")), ROOT), ROOT_PUB)              # the switch, c as it was
+        self.assertEqual((m3["schema"], m3["nodes"][2], "ssh_host_pub" in m3["nodes"][0]), (m.SCHEMA_V2, three(c="RETIRED")[2], True))
+        moved = v2(three(c="RETIRED"), bare="c")
+        moved[2] = dict(moved[2], wg_boot_pub="ee" * 32)
+        self.refused("tombstone: c is RETIRED and its wg_boot_pub cannot change", m2, switch(moved))   # the switch changes nothing else of it
+        after = lambda nodes: manifest2(4, m.digest(m3), nodes)
+        for key, signer in ((ROOT, "root"), (REVOKE, "revocation")):
+            with self.subTest(signer=signer):                                                          # nor later, by anyone
+                self.refused("tombstone: c is RETIRED and its fields cannot change", m3, after(v2(three(c="RETIRED"))), key, signer)
+        m4 = m.accept(m3, sign(after(v2(three(c="REVOKED_STOLEN"), bare="c")), REVOKE, "revocation"), ROOT_PUB)   # still only RETIRED -> REVOKED_STOLEN
+        self.assertEqual((m4["nodes"][2]["state"], "ssh_host_pub" in m4["nodes"][2]), ("REVOKED_STOLEN", False))
+        self.assertEqual(replacement.identities(m4["nodes"][2]), replacement.identities(three()[2]))  # its v1 identities stay counted
+
+    def test_only_a_tombstone_may_lack_an_ssh_host_key_under_v2(self):
+        for state in ("ACTIVE", "MAINTENANCE", "DRAINING", "QUARANTINED"):
+            with self.subTest(state=state):
+                self.refused("nodes[2] fields mismatch: missing=['ssh_host_pub']", self.m2, self.next2(v2(three(c=state), bare="c")))
+        # a live v2 node cannot shed its key by being retired: the retiring manifest records it as it was
+        for state in ("RETIRED", "REVOKED_STOLEN"):
+            for key, signer in ((ROOT, "root"), (REVOKE, "revocation")):
+                with self.subTest(state=state, signer=signer):
+                    self.refused("tombstone: c becomes %s and its fields cannot change in the same manifest" % state,
+                                 self.m2, self.next2(v2(three(c=state), bare="c")), key, signer)
+        # and once retired with its key, it does not lose it
+        m3 = m.accept(self.m2, sign(self.next2(v2(three(c="RETIRED"))), ROOT), ROOT_PUB)
+        self.refused("tombstone: c is RETIRED and its fields cannot change", m3, manifest2(4, m.digest(m3), v2(three(c="RETIRED"), bare="c")))
+        # a v1 node retired IN the switching manifest is recorded as it was too: no key
+        self.refused("tombstone: c becomes RETIRED and its fields cannot change in the same manifest",
+                     self.m1, manifest2(2, m.digest(self.m1), v2(three(c="RETIRED"))))
+        retired_at_switch = m.accept(self.m1, sign(manifest2(2, m.digest(self.m1), v2(three(c="RETIRED"), bare="c")), ROOT), ROOT_PUB)
+        self.assertNotIn("ssh_host_pub", retired_at_switch["nodes"][2])
+        # a malformed key on a tombstone is still refused, and a keyless tombstone under v1 rules gains no v2 field
+        nodes = v2(three(c="RETIRED"))
+        nodes[2]["ssh_host_pub"] = "zz" * 32
+        self.refused("nodes[2].ssh_host_pub must be 64 lowercase hex", self.m2, self.next2(nodes))
+
+    def test_a_store_holds_a_chain_that_changes_schema(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        hw = m.HighWater("0x1500016", lock_path=d + "/hw.lock", run=FakeTpm())
+        hw.define()
+        store = m.Store(d + "/membership.json", ROOT_PUB, hw)
+        store.commit(sign(manifest(1, "", three()), ROOT))
+        store.commit(self.e2)
+        again = m.Store(d + "/membership.json", ROOT_PUB, hw)
+        self.assertEqual((again.load()["schema"], hw.record()), (m.SCHEMA_V2, (2, m.digest(self.m2))))
+        self.assertEqual([e["manifest"]["schema"] for e in again.envelopes()], [m.SCHEMA, m.SCHEMA_V2])
+        with self.assertRaisesRegex(m.Refused, "the schema only moves forward"):
+            again.commit(sign(manifest(3, m.digest(self.m2), three()), ROOT))
+        self.assertEqual(again.load()["epoch"], 2)
+
+    def test_identity_keys_follow_the_node_entry(self):
+        one, two = three()[0], v2(three())[0]
+        self.assertEqual((m.identity_keys(one), m.identity_keys(two)),
+                         (("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub"), ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub", "ssh_host_pub")))
+        self.assertEqual(replacement.identities(two) - replacement.identities(one), {ssh(0)})          # node replacement counts it too
+        self.assertEqual(len(replacement.identities(one)), 5)
 
 
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_nvdefine"), "needs swtpm and tpm2-tools")
