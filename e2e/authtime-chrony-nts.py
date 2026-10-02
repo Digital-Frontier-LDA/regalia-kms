@@ -78,6 +78,12 @@ def main():
 
 
 def scenario(work, daemons, stop):
+    # The daemons run from a COPY of chronyd. A distribution confines /usr/sbin/chronyd by its path (AppArmor)
+    # to its own directories, and a confined chronyd cannot read a configuration in a scratch directory. The
+    # copy is the same program, unconfined, and it is never given the right to set the clock (-x).
+    chronyd = os.path.join(work, "chronyd")
+    shutil.copy(CHRONYD, chronyd)
+    os.chmod(chronyd, 0o700)
     base = random.randrange(20000, 40000, 10)
     servers = {"one": ("127.0.0.1", base + 1, base + 2), "two": ("127.0.0.2", base + 3, base + 4)}
     user = subprocess.run(["id", "-un"], capture_output=True, text=True, check=True).stdout.strip()
@@ -86,7 +92,7 @@ def scenario(work, daemons, stop):
         path = os.path.join(work, name + ".conf")
         with open(path, "w") as f:
             f.write(text + "cmdport 0\nbindcmdaddress %s/%s.sock\npidfile %s/%s.pid\n" % (work, name, work, name))
-        daemons[name] = subprocess.Popen([CHRONYD, "-x", "-U", "-u", user, "-n", "-f", path], cwd=work,
+        daemons[name] = subprocess.Popen([chronyd, "-x", "-U", "-u", user, "-n", "-f", path], cwd=work,
                                          stdout=open(os.path.join(work, name + ".log"), "w"), stderr=subprocess.STDOUT)
 
     for name, (address, port, ke) in servers.items():
