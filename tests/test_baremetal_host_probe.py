@@ -1167,7 +1167,7 @@ class SignedEvidence(unittest.TestCase):
         host.update(pin_import_key_sha256=FP, hsm_usb_path="1-1.4", credential_tpm2_pcrs="7",
                     credential_tpm2_signed_pcrs="", credential_tpm2_pcr_key_pkfp="",
                     system_rom_version="P89 v3.40 (2024-03-22)", ilo_firmware_version="2.82",
-                    tpm_ek_certificate_present=True)
+                    tpm_ek_certificate_present=True, node_id="a", unlock_peers=["b", "c"])
         host.update(host_overrides)
         return {"schema": evidence.SCHEMA, "site": "site-a", "host_serial": "CZJ1234567",
                 "captured_at": self.now, "host": host}
@@ -1179,13 +1179,36 @@ class SignedEvidence(unittest.TestCase):
         subprocess.run(["openssl", "dgst", "-sha256", "-sign", self.key, "-out", path + ".sig", path], check=True)
         return path, path + ".sig"
 
-    def run_probe(self, path, sig, measured=None, key_sha=None):
+    def run_probe(self, path, sig, measured=None, key_sha=None, extra=()):
         args = ["--evidence", path, "--signature", sig, "--evidence-key", self.pub,
-                "--evidence-key-sha256", key_sha or self.key_sha]
-        with mock.patch.object(host_probe, "measure", return_value=measured or self.everything), \
+                "--evidence-key-sha256", key_sha or self.key_sha, *extra]
+        with mock.patch.object(host_probe, "measure", return_value=measured or self.everything) as measure, \
                 redirect_stdout(io.StringIO()) as out:
             rc = host_probe.main(args, host=FakeHost())
+        self.judged_against = measure.call_args.args[3]
         return rc, json.loads(out.getvalue())
+
+    def test_the_root_disk_is_judged_against_the_signed_unlock_record(self):
+        """#67: which node this is and who its peers are come from the signed evidence. Arguments may repeat
+        them, in any order; arguments that differ are a failing problem, and never replace the record."""
+        rc, report = self.run_probe(*self.write(self.doc()))
+        self.assertEqual((rc, self.judged_against), (0, ("a", ("b", "c"))), report.get("evidence_problems"))
+        rc, report = self.run_probe(*self.write(self.doc()), extra=["--node-id", "a", "--unlock-peer", "c", "--unlock-peer", "b"])
+        self.assertEqual((rc, self.judged_against), (0, ("a", ("b", "c"))), report.get("evidence_problems"))
+        for extra in (["--node-id", "b", "--unlock-peer", "a", "--unlock-peer", "c"], ["--node-id", "a", "--unlock-peer", "b"],
+                      ["--node-id", "a", "--unlock-peer", "b", "--unlock-peer", "c", "--unlock-peer", "d"]):
+            with self.subTest(extra):
+                rc, report = self.run_probe(*self.write(self.doc()), extra=extra)
+                self.assertEqual(rc, 1)
+                self.assertTrue(any("they disagree, and the root disk is judged against the evidence" in p for p in report["evidence_problems"]),
+                                report["evidence_problems"])
+                self.assertEqual(self.judged_against, ("a", ("b", "c")))
+        # a host not enrolled for peer unlock records no peers: the record is still there, and a disk WITH
+        # peer tokens is then refused by unlock.judge_tokens for peers nobody recorded
+        rc, report = self.run_probe(*self.write(self.doc(unlock_peers=[])))
+        self.assertEqual((rc, self.judged_against), (0, ("a", ())), report.get("evidence_problems"))
+        self.assertIn("node_id", report["attested_not_measured"])
+        self.assertIn("unlock_peers", report["attested_not_measured"])
 
     def test_complete_signed_agreeing_evidence_passes(self):
         rc, report = self.run_probe(*self.write(self.doc()))
@@ -1234,6 +1257,12 @@ class SignedEvidence(unittest.TestCase):
             "no PSU attestation": (dict(full, host={k: v for k, v in full["host"].items()
                                                     if k != "redundant_power_supplies"}), "missing"),
             "no ROM version recorded": (self.doc(system_rom_version=""), "version string"),
+            "no node ID": (dict(full, host={k: v for k, v in full["host"].items() if k != "node_id"}), "missing"),
+            "no unlock peers record": (dict(full, host={k: v for k, v in full["host"].items() if k != "unlock_peers"}), "missing"),
+            "a node ID that is not one": (self.doc(node_id="Site A"), "node_id must be a node ID"),
+            "the node as its own peer": (self.doc(unlock_peers=["b", "a"]), "never the node itself"),
+            "a peer twice": (self.doc(unlock_peers=["b", "b"]), "each peer once"),
+            "peers as a string": (self.doc(unlock_peers="b,c"), "must be a list"),
             "evidence older than 24 hours": (dict(full, captured_at="2026-01-01T00:00:00Z"), "older than 24 hours"),
         }
         for label, (doc, why) in cases.items():
