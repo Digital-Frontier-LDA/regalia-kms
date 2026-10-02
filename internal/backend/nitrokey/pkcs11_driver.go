@@ -301,12 +301,21 @@ func (session *pkcs11Session) PINRetries(ctx context.Context) (int, error) {
 }
 
 func (session *pkcs11Session) Login(ctx context.Context, pin []byte) error {
-	if err := session.usable(ctx); err != nil || len(pin) < 6 || len(pin) > 64 || containsZero(pin) {
+	// Refused before the PIN goes anywhere near the token: said with its own error, so the provider
+	// does not count it against the PIN (regalia-kms#178). The request's context is not looked at
+	// again after this point: once C_Login is called, the PIN has been presented.
+	if err := session.usable(ctx); err != nil {
+		return ErrPINNotPresented
+	}
+	if len(pin) < 6 || len(pin) > 64 || containsZero(pin) {
 		return errors.New("PKCS#11 login unavailable")
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if session.loggedIn || session.closed {
+	if session.closed {
+		return ErrPINNotPresented
+	}
+	if session.loggedIn {
 		return errors.New("PKCS#11 login unavailable")
 	}
 	pinText := string(pin)
