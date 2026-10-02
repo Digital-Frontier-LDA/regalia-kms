@@ -84,7 +84,7 @@ jobs:
         # The rendered default-deny ruleset is loaded only inside a throwaway namespace; the zones probe
         # it with network_probe.py, and outbound is checked against the declared sinks.
         run: |
-          sudo apt-get install -y -qq --no-install-recommends nftables iproute2
+          sudo apt-get install -y -qq --no-install-recommends nftables iproute2 wireguard-tools
           sudo bash e2e/baremetal-firewall-netns.sh
 
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
