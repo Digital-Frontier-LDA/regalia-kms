@@ -45,12 +45,6 @@ chmod 0644 /etc/regalia-kms/config.json
 touch /etc/regalia-kms/commissioned
 check systemctl start regalia-kms.service
 check systemctl is-active regalia-kms.service
-pid=$(systemctl show regalia-kms.service -p MainPID --value)
-check test "$pid" -gt 1
-check sh -c "grep -qx 'regalia-kms (enforce)' /proc/$pid/attr/current"
-check sh -c "grep -Eq '^CapEff:[[:space:]]+0000000000000000$' /proc/$pid/status"
-check sh -c "grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/$pid/status"
-check sh -c "grep -Eq '^Seccomp:[[:space:]]+2$' /proc/$pid/status"
 check python3 - <<'PY'
 import time
 import urllib.error
@@ -73,6 +67,17 @@ else:
     raise SystemExit('daemon did not become live')
 assert status('/v1/health/ready') == 503, 'credential-free daemon declared ready'
 PY
+# Type=simple returns after fork, before systemd has applied every restriction
+# and exec'd the daemon. Inspect the process only after its HTTP liveness passes.
+pid=$(systemctl show regalia-kms.service -p MainPID --value)
+check test "$pid" -gt 1
+echo REGALIA_PROCESS_ENFORCEMENT_BEGIN
+cat "/proc/$pid/attr/current"
+grep -E '^(CapEff|NoNewPrivs|Seccomp):' "/proc/$pid/status"
+check sh -c "grep -qx 'regalia-kms (enforce)' /proc/$pid/attr/current"
+check sh -c "grep -Eq '^CapEff:[[:space:]]+0000000000000000$' /proc/$pid/status"
+check sh -c "grep -Eq '^NoNewPrivs:[[:space:]]+1$' /proc/$pid/status"
+check sh -c "grep -Eq '^Seccomp:[[:space:]]+2$' /proc/$pid/status"
 check systemctl stop regalia-kms.service
 # The same config check is valid at the allowed path, and permission denied at a
 # DAC-readable path outside AppArmor policy. Check the specific error, not any
