@@ -27,7 +27,8 @@
 #      another node's name is refused by the peer
 #   4  the booting node's own ruleset: nothing but WireGuard to the peers and the unlock port
 #   5  the PEER's firewall, asked from inside the tunnel by a node that ignores its own ruleset: no
-#      SSH, no KMS port, nothing but the unlock port
+#      SSH, no KMS port, nothing but the unlock port, and on that port nothing but the beginning of a
+#      connection (a lone ACK, which connection tracking would call new, does not reach the peer's TCP)
 #   6  the outsider reaches the unlock port neither at the peer's address nor at its tunnel address
 #   7  a revoked node leaves the WireGuard list of the peer that took the manifest, and is still
 #      answered by the peer that has not (the window #69 bounds)
@@ -80,7 +81,7 @@ wg genkey > "$T/outsider.key"; wg genkey > "$T/wrong.key"
 # The manifests (epoch 1: all ACTIVE; epoch 2: lisbon REVOKED_STOLEN), the three site configs, and
 # everything rendered from them. The manifest is built here as a fixture; on a host it is the verified
 # one from membership.Store.
-python3 - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
+PYTHONPATH="$HERE" python3 -Ps - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
 import base64, json, sys
 from deploy.baremetal import bootnet, firewall, sitecfg
 from deploy.baremetal import membership as m
@@ -101,7 +102,8 @@ def site(node):
                              "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514},
                                           {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
                              "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUN[node], "unlock_port": 7443,
-                                           "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]}})
+                                           "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]},
+                             "service_mesh": None})
 m1 = manifest(1, "")
 m2 = manifest(2, m.digest(m1), lisbon="REVOKED_STOLEN")
 def write(name, text):
@@ -121,7 +123,7 @@ PY
 # WireGuard. The running peers: wg-unlock, WG-SERVICE key. The booting node: wg-boot, WG-BOOT key.
 # apply <namespace> <interface> <rendered configuration> <private key file>: the key is added in memory
 # and the whole thing piped to wg (bootnet.with_key): a configuration applied WITHOUT its key unsets it.
-apply(){ python3 -c '
+apply(){ PYTHONPATH="$HERE" python3 -Ps -c '
 import sys
 from deploy.baremetal import bootnet
 sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
@@ -165,9 +167,9 @@ for other in (8443, 22, 9999):
 cfg, manifest = json.load(open("%s/%s.site.json" % (T, name))), json.load(open(T + "/m1.json"))
 unlock.serve(StandIn(), socket.create_server(("0.0.0.0", port)), caller=bootnet.caller_of(cfg, manifest))
 PY
-for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
+for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 -s "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
 for h in outsider:443 lisbon:22; do
-  x "${h%%:*}" python3 -c "
+  x "${h%%:*}" python3 -I -c "
 import socket
 s = socket.create_server(('0.0.0.0', ${h##*:}))
 while True:
@@ -177,7 +179,7 @@ sleep 1
 
 # asked <namespace> <address> [timeout] [node]: an unlock request in `node`'s name (lisbon's) is answered
 # by the peer with a nonce. Exit 3 when the peer answers with a refusal instead.
-asked(){ x "$1" env PYTHONPATH="$HERE" python3 -c "
+asked(){ x "$1" env PYTHONPATH="$HERE" python3 -Ps -c "
 import json, sys
 from deploy.baremetal import unlock
 unlock.IO_TIMEOUT = float(sys.argv[2])
@@ -186,12 +188,41 @@ try:
 except (OSError, ValueError):
     sys.exit(1)
 sys.exit(0 if reply.get('nonce') else 3 if reply == {'v': 1, 'error': 'DENIED'} else 1)" "$2" "${3:-3}" "${4:-lisbon}"; }
-tcpok(){ x "$1" python3 -c "
+tcpok(){ x "$1" python3 -I -c "
 import socket, sys
 try:
     socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2).close()
 except OSError:
     sys.exit(1)" "$2" "$3"; }
+# stray <namespace> <address> <port>: a lone ACK segment, belonging to no connection, sent to that port.
+# Exit 0 when the host's TCP answered it (a RST): the segment reached the stack. Exit 1 when nothing came.
+stray(){ x "$1" python3 -I -c "
+import os, socket, struct, sys, time
+there, port = sys.argv[1], int(sys.argv[2])
+probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect((there, port)); here = probe.getsockname()[0]; probe.close()
+raw = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+mine = 20000 + os.getpid() % 20000
+def total(data):
+    data += b'\\0' * (len(data) % 2)
+    s = sum(struct.unpack('!%dH' % (len(data) // 2), data))
+    while s >> 16:
+        s = (s & 0xffff) + (s >> 16)
+    return ~s & 0xffff
+def segment(checksum):
+    return struct.pack('!HHIIBBHHH', mine, port, 1000, 2000, 5 << 4, 0x10, 1024, checksum, 0)
+pseudo = socket.inet_aton(here) + socket.inet_aton(there) + struct.pack('!BBH', 0, socket.IPPROTO_TCP, 20)
+raw.sendto(segment(total(pseudo + segment(0))), (there, 0))
+end = time.monotonic() + 2
+while time.monotonic() < end:
+    raw.settimeout(max(0.05, end - time.monotonic()))
+    try:
+        packet, sender = raw.recvfrom(4096)
+    except OSError:
+        break
+    tcp = packet[(packet[0] & 15) * 4:]
+    if sender[0] == there and struct.unpack('!HH', tcp[:4]) == (port, mine) and tcp[13] & 0x04:
+        sys.exit(0)
+sys.exit(1)" "$2" "$3"; }
 shook(){ # shook <peer> <public key file>: the peer has completed a handshake with that key
   x "$1" wg show wg-unlock latest-handshakes | awk -v k="$(cat "$2")" '$1 == k && $2 > 0 { found = 1 } END { exit !found }'; }
 
@@ -199,6 +230,8 @@ hdr "0  controls, before any ruleset: everything a later check finds closed is o
 asked lisbon "${TUN[porto]}" && asked lisbon "${TUN[faro]}" && P "control: lisbon reaches both peers' unlock port through the tunnel" || F "control: the tunnel does not work at all"
 tcpok lisbon "${TUN[porto]}" 22 && tcpok lisbon "${TUN[porto]}" 8443 && tcpok lisbon "${TUN[porto]}" 9999 \
   && P "control: inside the tunnel, SSH, the KMS port and port 9999 of a peer answer" || F "control: the listeners inside the tunnel do not answer"
+stray lisbon "${TUN[porto]}" "$UNLOCK" && P "control: a lone ACK to the unlock port, inside the tunnel, reaches the peer's TCP and is answered with a reset" \
+  || F "control: the lone ACK got no reset even without a firewall"
 tcpok lisbon "${IP[porto]}" "$UNLOCK" && tcpok lisbon "${IP[porto]}" 22 && P "control: at the peer's own address, the unlock port and SSH answer" || F "control: the peer's own address does not answer"
 tcpok lisbon "${IP[outsider]}" 443 && P "control: lisbon reaches an undeclared host" || F "control: lisbon has no path to the outsider"
 tcpok outsider "${IP[lisbon]}" 22 && P "control: a listener on the booting node answers the outsider" || F "control: nothing listens on the booting node"
@@ -212,7 +245,7 @@ for h in porto faro; do
   x "$h" nft -c -f "$T/$h.nft" && x "$h" nft -f "$T/$h.nft" && P "$h: the host firewall with the boot mesh loads" || F "$h: the host firewall does not load"
 done
 x lisbon nft -c -f "$T/lisbon.boot.nft" && x lisbon nft -f "$T/lisbon.boot.nft" && P "lisbon: the initrd ruleset loads" || F "lisbon: the initrd ruleset does not load"
-pol="$(x lisbon nft -j list table inet regalia_boot | python3 -c '
+pol="$(x lisbon nft -j list table inet regalia_boot | python3 -I -c '
 import json, sys
 d = json.load(sys.stdin)["nftables"]
 print(" ".join(sorted("%s=%s" % (c["chain"]["name"], c["chain"].get("policy")) for c in d if "chain" in c)))')"
@@ -290,6 +323,11 @@ asked lisbon "${TUN[porto]}" && P "inside the tunnel, the unlock port answers" |
 for port in 22 8443 9999; do
   tcpok lisbon "${TUN[porto]}" "$port" && F "inside the tunnel, port $port of the peer answered" || P "inside the tunnel, port $port of the peer does not answer"
 done
+# The unlock rule admits the beginning of a connection, a SYN, and nothing else that conntrack would call new.
+[ "$(x porto sysctl -n net.netfilter.nf_conntrack_tcp_loose)" = 1 ] && P "control: porto's connection tracking would take a mid-stream segment for a new connection" \
+  || F "control: nf_conntrack_tcp_loose is not 1 on porto, so the next check shows nothing"
+stray lisbon "${TUN[porto]}" "$UNLOCK" && F "a lone ACK to the unlock port reached the peer's TCP" || P "a lone ACK to the unlock port, inside the tunnel, does not reach the peer's TCP"
+asked lisbon "${TUN[porto]}" && P "... and a real request is still answered" || F "the unlock port stopped answering"
 for port in "$UNLOCK" 22 8443; do
   tcpok lisbon "${IP[porto]}" "$port" && F "at the peer's own address, port $port answered lisbon" || P "at the peer's own address, port $port does not answer lisbon"
 done

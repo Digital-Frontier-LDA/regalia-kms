@@ -9,8 +9,8 @@ probes (core dumps, hibernation, swap, an unprivileged service) are deploy/barem
 Token clients are checked by token_clients_root_only (below): on bare metal the host itself seals and
 re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 
-    sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
-    sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+    sudo python3 -Es deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
+    sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
         --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX      # the commissioning pass criterion
 
 PLATFORM AND TPM, measured:
@@ -606,7 +606,10 @@ def recovery_keyslots(meta):
     for token in tokens:
         for slot in token.get("keyslots") or []:
             named.setdefault(str(slot), []).append(token.get("type"))
-    recovery = [t for t in tokens if t.get("type") == "systemd-recovery"]
+    # A recovery token that names no keyslot is not a recovery key: cryptsetup unassigns a token when
+    # its keyslot is destroyed and leaves the empty token behind. It opens nothing, so it is not
+    # counted (recovery-key.sh --status reports it, and --enrol / --replace remove it).
+    recovery = [t for t in tokens if t.get("type") == "systemd-recovery" and t.get("keyslots")]
     if not recovery:
         return False, "no recovery keyslot (no systemd-recovery token): enrol the host's recovery key with " \
             "deploy/baremetal/recovery-key.sh --enrol"
@@ -617,6 +620,11 @@ def recovery_keyslots(meta):
     slot = str(recovery[0]["keyslots"][0])
     if slot not in keyslots:
         return False, "the systemd-recovery token names keyslot %s, which does not exist" % slot
+    # A keyslot whose priority is "ignore" (0) is skipped whenever no keyslot is named, which is how a
+    # boot prompt tries a passphrase: the key would pass --check by keyslot and fail at the console.
+    if (meta.get("keyslots") or {}).get(slot, {}).get("priority") == 0:
+        return False, "recovery keyslot %s has priority 'ignore': a boot prompt would not try it " \
+            "(cryptsetup config --priority normal --key-slot %s)" % (slot, slot)
     # Its OWN keyslot: one that the TPM token (or any other) also names would be opened by that
     # credential too, and wiping either would take the other with it.
     if len(named[slot]) != 1:

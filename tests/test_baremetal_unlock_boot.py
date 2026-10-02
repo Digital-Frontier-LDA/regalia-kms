@@ -69,7 +69,8 @@ class OnQemu(tub.OnSwtpm):
             "client_cidrs": ["198.18.0.0/24"], "monitoring_cidrs": ["198.18.1.1/32"], "admin_cidrs": ["198.18.2.0/28"],
             "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514}, {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
             "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUNNEL[node], "unlock_port": 7443,
-                          "peers": [{"node_id": p, "underlay": UNDERLAY[p], "address": TUNNEL[p]} for p in "abc" if p != node]}})
+                          "peers": [{"node_id": p, "underlay": UNDERLAY[p], "address": TUNNEL[p]} for p in "abc" if p != node]},
+            "service_mesh": None})
 
     # -- the network: a bridge and QEMU's tap in one namespace, each peer in its own --
     def ip(self, *argv, ns=None, stdin=None):

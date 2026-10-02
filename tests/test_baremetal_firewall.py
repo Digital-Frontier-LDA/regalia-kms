@@ -3,6 +3,7 @@ nftables ruleset rendered from it. Behaviour is proven separately in network nam
 (e2e/baremetal-firewall-netns.sh); these pin the config contract and the rendered text."""
 import copy
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -111,10 +112,147 @@ class Render(unittest.TestCase):
         self.assertIn('ip daddr 203.0.113.192/32 tcp dport 6514 accept comment "audit"', self.text)
         self.assertIn('ip daddr 203.0.113.193/32 udp dport 123 accept comment "ntp"', self.text)
         self.assertEqual(self.text.count(" dport "), 4)    # kms, ssh, audit, ntp: nothing else opens
+        self.assertNotIn("ip6", self.text)                 # a single-site host carries no IPv6 at all
+        self.assertEqual(self.text.count("meta nfproto ipv6 drop"), 2)
 
     @unittest.skipUnless(shutil.which("nft"), "nft not installed")
     def test_nft_accepts_the_syntax(self):
         r = subprocess.run(["nft", "-c", "-f", "-"], input=self.text, capture_output=True, text=True)
+        if "Operation not permitted" in r.stderr:
+            self.skipTest("nft -c needs CAP_NET_ADMIN here")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
+def meshed(authority=None, **service):
+    """The example site as node a of a three-site cluster, with the boot mesh and the service mesh."""
+    doc = json.loads(EXAMPLE.read_text())
+    doc["host_ipv4"] = "192.0.2.10"
+    doc["boot_mesh"] = {"node_id": "a", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443,
+                        "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
+                                  {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]}
+    doc["service_mesh"] = dict({"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": authority}, **service)
+    return doc
+
+
+AUTHORITY = {"key": "5e" * 32, "underlay": "192.0.2.50", "port": 51821}
+
+
+class ServiceMesh(unittest.TestCase):
+    """The tunnel regalia-sync uses (#80): the one place this host carries IPv6, and only the sync port."""
+
+    def test_the_service_mesh_is_null_or_exact(self):
+        self.assertIsNone(sitecfg.validate(json.loads(EXAMPLE.read_text()))["service_mesh"])
+        self.assertEqual(sitecfg.validate(meshed())["service_mesh"], {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": None})
+        self.assertEqual(sitecfg.validate(meshed(AUTHORITY))["service_mesh"]["authority"], AUTHORITY)
+        cases = {
+            "absent": (lambda d: d.pop("service_mesh"), "fields mismatch"),
+            "without a boot mesh": (lambda d: d.__setitem__("boot_mesh", None), "service_mesh needs a boot_mesh"),
+            "not an object": (lambda d: d.__setitem__("service_mesh", []), "service_mesh must be null or hold exactly"),
+            "unknown field": (lambda d: d["service_mesh"].__setitem__("psk", "x"), "service_mesh must be null or hold exactly"),
+            "missing field": (lambda d: d["service_mesh"].pop("authority"), "service_mesh must be null or hold exactly"),
+            "a physical interface": (lambda d: d["service_mesh"].__setitem__("interface", "eth0"), "a WireGuard interface of its own"),
+            "the loopback": (lambda d: d["service_mesh"].__setitem__("interface", "lo"), "a WireGuard interface of its own"),
+            "the initrd's interface": (lambda d: d["service_mesh"].__setitem__("interface", "wg-boot"), "a WireGuard interface of its own"),
+            "the boot mesh's interface": (lambda d: d["service_mesh"].__setitem__("interface", "wg-unlock"), "a WireGuard interface of its own"),
+            "an interface with a quote": (lambda d: d["service_mesh"].__setitem__("interface", 'wg-" accept'), "a WireGuard interface of its own"),
+            "an interface too long": (lambda d: d["service_mesh"].__setitem__("interface", "wg-service-tunnel"), "a WireGuard interface of its own"),
+            "an interface that is no text": (lambda d: d["service_mesh"].__setitem__("interface", 7), "a WireGuard interface of its own"),
+            "the boot mesh's UDP port": (lambda d: d["service_mesh"].__setitem__("listen_port", 51820), "must differ from boot_mesh.listen_port"),
+            "port 0": (lambda d: d["service_mesh"].__setitem__("listen_port", 0), "service_mesh.listen_port must be a port number"),
+            "a port as true": (lambda d: d["service_mesh"].__setitem__("sync_port", True), "service_mesh.sync_port must be a port number"),
+            "sync on the KMS port": (lambda d: d["service_mesh"].__setitem__("sync_port", 8443), "one number, one service"),
+            "sync on the SSH port": (lambda d: d["service_mesh"].__setitem__("sync_port", 22), "one number, one service"),
+            "sync on the unlock port": (lambda d: d["service_mesh"].__setitem__("sync_port", 7443), "one number, one service"),
+            "an authority that is a list": (lambda d: d["service_mesh"].__setitem__("authority", []), "authority must be null or hold exactly"),
+            "an authority with more": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, psk="x")), "authority must be null or hold exactly"),
+            "an authority key in capitals": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key="5E" * 32)), "a WireGuard public key"),
+            "an authority key too short": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key="5e" * 31)), "a WireGuard public key"),
+            "an authority key in base64": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key="A" * 43 + "=")), "a WireGuard public key"),
+            "an authority key that is no text": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, key=None)), "a WireGuard public key"),
+            "an authority at a host name": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="authority.example")), "authority.underlay must be an IPv4 address"),
+            "an authority at this host": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="192.0.2.10")), "is a node's address"),
+            "an authority at a peer": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="192.0.2.20")), "is a node's address"),
+            "an authority at a tunnel address": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="10.89.0.2")), "is a node's address"),
+            "an authority among the clients": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="198.51.100.9")), "is inside client_cidrs"),
+            "an authority among the admins": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.4")), "is inside admin_cidrs"),
+            "an authority that is the monitor": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.128")), "is inside monitoring_cidrs"),
+            "an authority that is the audit sink": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, underlay="203.0.113.192")), "is inside outbound"),
+            "an authority port 0": (lambda d: d["service_mesh"].__setitem__("authority", dict(AUTHORITY, port=0)), "authority.port must be a port number"),
+        }
+        for label, (breakit, why) in cases.items():
+            with self.subTest(label):
+                d = meshed(dict(AUTHORITY))
+                breakit(d)
+                with self.assertRaises(sitecfg.InvalidSite) as ctx:
+                    sitecfg.validate(d)
+                self.assertIn(why, str(ctx.exception))
+
+    def rules(self, authority=None):
+        text = firewall.render(sitecfg.validate(meshed(authority)))
+        chains = {name: body for name, body in re.findall(r"chain (\w+) \{\n(.*?)\n  \}", text, re.S)}
+        return text, [line.strip() for line in chains["input"].splitlines()], [line.strip() for line in chains["output"].splitlines()]
+
+    def test_ipv6_is_carried_only_on_the_service_interface_only_within_its_prefix_only_for_the_sync_port(self):
+        text, incoming, outgoing = self.rules()
+        prefix = "fd72:6567:6c61::/48"
+        syn = "tcp flags & (fin | syn | rst | ack) == syn ct state new accept"
+        between = "ip6 saddr %s ip6 daddr %s" % (prefix, prefix)
+        wanted_in = ['iifname "wg-svc" %s tcp dport 7444 %s comment "service mesh: a new sync request, inside the tunnel"' % (between, syn),
+                     'iifname "wg-svc" %s tcp dport 7444 ct state established accept comment "service mesh: the rest of a sync request"' % between,
+                     'iifname "wg-svc" %s tcp sport 7444 ct state established accept comment "service mesh: answers to this host\'s requests"' % between,
+                     'iifname "wg-svc" drop comment "service mesh: nothing else inside the tunnel"']
+        wanted_out = ['oifname "wg-svc" %s tcp dport 7444 %s comment "service mesh: a new sync request of this host\'s"' % (between, syn),
+                      'oifname "wg-svc" %s tcp dport 7444 ct state established accept comment "service mesh: the rest of it"' % between,
+                      'oifname "wg-svc" %s tcp sport 7444 ct state established accept comment "service mesh: this host\'s answers"' % between,
+                      'oifname "wg-svc" drop comment "service mesh: nothing else leaves by the tunnel"']
+        # straight after loopback, in this order, and BEFORE the drop of all other IPv6
+        self.assertEqual(incoming[1:6], ["iif \"lo\" accept"] + wanted_in)
+        self.assertEqual(incoming[6], "meta nfproto ipv6 drop")
+        self.assertEqual(outgoing[1:6], ["oif \"lo\" accept"] + wanted_out)
+        self.assertEqual(outgoing[6], "meta nfproto ipv6 drop")
+        # a connection is new only with a SYN and nothing else: exactly one rule per direction takes "new" here,
+        # the boot mesh's unlock rule is the third, and every rule that takes "new" asks for the lone SYN
+        self.assertEqual(text.count("ct state new"), 3)
+        self.assertEqual([line for line in text.splitlines() if "ct state new" in line and syn not in line], [])
+        # nothing else in the ruleset speaks IPv6, and nothing else names the interface
+        self.assertEqual(text.count("ip6 "), 12)
+        self.assertEqual(text.count('"wg-svc"'), 8)
+        self.assertEqual(text.count("meta nfproto ipv6 drop"), 2)
+        # every chain still defaults to drop, and the zone rules are as they were
+        for hook in ("input", "forward", "output"):
+            self.assertIn("type filter hook %s priority filter; policy drop;" % hook, text)
+        self.assertIn("tcp dport 8443 ip saddr { 198.51.100.0/24, 203.0.113.128/32 } accept", text)
+
+    def test_wireguard_itself_only_with_the_peers_declared_addresses_and_the_authority_s(self):
+        text, incoming, outgoing = self.rules()
+        self.assertIn('ip daddr 192.0.2.10 udp dport 51821 ip saddr { 192.0.2.20/32, 192.0.2.30/32 } accept comment "service mesh: WireGuard, from the peers\' declared addresses"', incoming)
+        self.assertIn('ip daddr { 192.0.2.20/32, 192.0.2.30/32 } udp dport 51821 accept comment "service mesh: WireGuard, to the peers"', outgoing)
+        self.assertNotIn("192.0.2.50", text)                                    # no authority configured: no rule for one
+        text, incoming, outgoing = self.rules(dict(AUTHORITY, port=51900))
+        self.assertIn('ip daddr 192.0.2.10 udp dport 51821 ip saddr 192.0.2.50 accept comment "service mesh: WireGuard, from the authority"', incoming)
+        self.assertIn('ip daddr 192.0.2.50 udp dport 51900 accept comment "service mesh: WireGuard, to the authority"', outgoing)
+        self.assertEqual(text.count("192.0.2.50"), 2)
+
+    def test_the_prefix_is_the_tunnel_s(self):
+        """sitecfg names the prefix because firewall.py renders from the site config alone; wgsvc derives the
+        addresses. They must be the same network."""
+        try:
+            from deploy.baremetal import wgsvc
+        except ImportError:
+            self.skipTest("wgsvc.py is not on this branch yet (#80 step 2)")
+        self.assertEqual(str(wgsvc.PREFIX), sitecfg.SERVICE_PREFIX)
+
+    def test_a_boot_mesh_without_a_service_mesh_renders_as_before(self):
+        doc = meshed()
+        doc["service_mesh"] = None
+        text = firewall.render(sitecfg.validate(doc))
+        self.assertNotIn("ip6 ", text)
+        self.assertNotIn("51821", text)
+        self.assertIn('iifname "wg-unlock" drop', text)
+
+    @unittest.skipUnless(shutil.which("nft"), "nft not installed")
+    def test_nft_accepts_the_syntax_with_both_meshes(self):
+        r = subprocess.run(["nft", "-c", "-f", "-"], input=firewall.render(sitecfg.validate(meshed(AUTHORITY))), capture_output=True, text=True)
         if "Operation not permitted" in r.stderr:
             self.skipTest("nft -c needs CAP_NET_ADMIN here")
         self.assertEqual(r.returncode, 0, r.stderr)

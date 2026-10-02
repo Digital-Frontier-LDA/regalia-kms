@@ -72,17 +72,17 @@ signs, writes state, reboots or talks to a peer; the only file one may create is
 file under /run/lock. One of them, `propose`, prints an UNSIGNED manifest for the root's operator to
 check and sign.
 
-    python3 -m deploy.baremetal.rollout version   --measurements NEW.json
-    python3 -m deploy.baremetal.rollout transition --old OLD.json --new NEW.json [--emergency] [--dropped NODE]...
-    python3 -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016]
-    python3 -m deploy.baremetal.rollout propose   --membership CHAIN.json --root-key HEX --old OLD.json --new NEW.json
+    python3 -Es -m deploy.baremetal.rollout version   --measurements NEW.json
+    python3 -Es -m deploy.baremetal.rollout transition --old OLD.json --new NEW.json [--emergency] [--dropped NODE]...
+    python3 -Es -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016]
+    python3 -Es -m deploy.baremetal.rollout propose   --membership CHAIN.json --root-key HEX --old OLD.json --new NEW.json
                                                   [--emergency] [--dropped NODE]... [--issued-at YYYY-MM-DDTHH:MM:SSZ]
-    python3 -m deploy.baremetal.rollout may-reboot --membership CHAIN.json --root-key HEX --measurements DOC.json
+    python3 -Es -m deploy.baremetal.rollout may-reboot --membership CHAIN.json --root-key HEX --measurements DOC.json
                                                   --node-id ID --running LABEL --session-id HEX
                                                   --attest-state STATE.json --lease LEASE.json... [--now SECONDS]
-    python3 -m deploy.baremetal.rollout retire-ready --membership CHAIN.json --root-key HEX --measurements DOC.json
+    python3 -Es -m deploy.baremetal.rollout retire-ready --membership CHAIN.json --root-key HEX --measurements DOC.json
                                                   --state NODE=STATE.json...
-    python3 -m deploy.baremetal.rollout check-replacement --membership CHAIN.json --root-key HEX --candidate MANIFEST.json
+    python3 -Es -m deploy.baremetal.rollout check-replacement --membership CHAIN.json --root-key HEX --candidate MANIFEST.json
                                                   --old OLD.json --new NEW.json --old-id ID --new-id ID
 
 CHAIN.json is the node's membership file (the signed chain membership.Store keeps); it is verified from
@@ -412,7 +412,7 @@ def _cmd_check_replacement(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.rollout",
+    parser = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.rollout",
                                      description="The checks of a rolling boot-image update (KERNEL-UPDATE.md). Reads; never signs.")
     parser.add_argument("--json", action="store_true", help="print one JSON object instead of text")
     sub = parser.add_subparsers(dest="command", required=True)
