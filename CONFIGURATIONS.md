@@ -113,8 +113,11 @@ rule and works in every configuration once a `signtool` adapter exists.
    wired, the PIV backend does not offer it, and `regalia-sign` refuses Ed25519 keys.
 3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4),
    and the only driver for it is hand-written. Serving it through OpenSC and PKCS#11 instead needs:
-   an Ed25519 signature measured on a card, a per-card OpenSC driver choice (OpenSC presents a
-   YubiKey as PIV by default), and a recorded change to the legacy-only rule.
+   an Ed25519 signature measured on a card; token selection that copes with OpenSC presenting the
+   applet as two tokens with one serial (`User PIN` and `User PIN (sig)`), where the driver today
+   requires a serial to match exactly one; and a recorded change to the legacy-only rule. The driver
+   choice itself is settled: a `card_atr` block in `opensc.conf` naming `driver = "openpgp"` for the
+   YubiKey's ATR leaves the Nitrokey on its own driver in the same module (measured 2026-10-02).
 4. **The Pico is not a recognised token.** `config/qualified-stack.json`, `tools/qualified_stack.py`
    and `deploy/seal-hsm-pin.sh` treat it as staging hardware. The attached Pico also reports the
    token serial `ESPICOHSMTR`, not a per-device one, and the driver selects a token by serial.
