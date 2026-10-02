@@ -50,6 +50,10 @@ type Session interface {
 	Identity(context.Context) (deviceSerial, devAuthFingerprint string, err error)
 	EstablishSecureChannel(context.Context) error
 	PINRetries(context.Context) (int, error)
+	// OffersMechanism reports whether the token lists the mechanism an operation on a key of this
+	// algorithm needs: nil, ErrMechanismNotOffered, or another error when it could not be asked. On
+	// the interface, like the KEK assertions below, so that a session cannot silently skip it.
+	OffersMechanism(ctx context.Context, operation, algorithm string) error
 	Login(context.Context, []byte) error
 	Sign(context.Context, string, string, []byte) ([]byte, error)
 	// Wrap is the inverse of Unwrap. It exists for symmetry so an end-to-end round trip can be
@@ -112,7 +116,14 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 
 func (provider *Provider) Execute(ctx context.Context, route registry.Route, operation, format, contentType string, data, aad []byte) (output []byte, outputType string, err error) {
 	binding := route.Binding
-	if binding.Backend != "nitrokey-pkcs11" || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
+	if !servedBackend(binding.Backend) || binding.DeviceID == "" || binding.ObjectID == "" || !identifiable(binding) {
+		return nil, "", ErrUnavailable
+	}
+	// THE OPENPGP APPLET SIGNS WITH ED25519, AND DOES NOTHING ELSE HERE. Its capability row also
+	// lists unwrap, which belongs to the legacy sops-pgp path this driver does not implement, and
+	// RSA keys, which belong on an HSM: the applet is served for the one algorithm no HSM offers.
+	// Refused before the token is opened, so no PIN is presented for what cannot be served.
+	if binding.Backend == OpenPGPAppletBackend && (route.Algorithm != "ed25519" || (operation != "sign" && operation != "public-key")) {
 		return nil, "", ErrUnavailable
 	}
 	if provider.pinBlocked(binding.DeviceID) {
@@ -191,6 +202,17 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 			return nil, "", ErrUnavailable
 		}
 		return output, "application/vnd.regalia.wrapped-key", nil
+	}
+	// A TOKEN THAT DOES NOT OFFER THE MECHANISM IS NOT GIVEN THE PIN. The answer is permanent for
+	// this object on this token, so nothing is gained by logging in to be told so again, and an
+	// answer that could not be read is refused the same way. The device is NOT latched: the fault is
+	// in one object's binding, and latching would let whoever may call that object take every other
+	// key on the token out of service. The daemon names the object at startup when the token is
+	// attached then (requireTokensOfferBoundMechanisms). When it is not, this refusal is all there
+	// is: the caller sees the same retryable "unavailable" as before, and nothing names the cause.
+	// What changed for that case is that the PIN is no longer presented for it.
+	if session.OffersMechanism(ctx, operation, route.Algorithm) != nil {
+		return nil, "", ErrUnavailable
 	}
 	retries, retryErr := session.PINRetries(ctx)
 	if retryErr == nil {
@@ -289,8 +311,15 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	return output, outputType, nil
 }
 
+// servedBackend reports the backend names this provider answers for. Whether the OpenPGP applet is
+// actually served is the driver's decision (ServeLocalTokens): the provider only declines names
+// that are not PKCS#11 tokens at all.
+func servedBackend(name string) bool {
+	return name == smartCardHSMBackend || name == OpenPGPAppletBackend
+}
+
 func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding) (healthy bool) {
-	if binding.Backend != "nitrokey-pkcs11" || !identifiable(binding) {
+	if !servedBackend(binding.Backend) || !identifiable(binding) {
 		return false
 	}
 	if provider.pinBlocked(binding.DeviceID) {

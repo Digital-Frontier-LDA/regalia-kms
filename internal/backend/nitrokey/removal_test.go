@@ -169,3 +169,5 @@ func TestRemovedTokenIsNotSubstitutedAndReadinessIsFalse(t *testing.T) {
 		}
 	}
 }
+
+func (*removingSession) OffersMechanism(context.Context, string, string) error { return nil }

@@ -64,13 +64,19 @@ NFT_JSON = json.dumps({"nftables": [
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "input", "type": "filter", "hook": "input", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "forward", "type": "filter", "hook": "forward", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "output", "type": "filter", "hook": "output", "prio": 0, "policy": "drop"}}]})
-# cryptsetup luksDump --dump-json-metadata, trimmed: a passphrase slot 0 and the TPM2 slot 1 with the
-# token systemd-cryptenroll --tpm2-device writes
-LUKS_JSON = json.dumps({"keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
-                        "tokens": {"0": {"type": "systemd-tpm2", "keyslots": ["1"], "tpm2-pcrs": [7]}}})
+# cryptsetup luksDump --dump-json-metadata, trimmed: the TPM2 slot 1 with the token
+# systemd-cryptenroll --tpm2-device writes, and the recovery key's slot 2 with the systemd-recovery
+# token recovery-key.sh --enrol writes. The installer's passphrase (slot 0) has been wiped.
+LUKS_META = {"keyslots": {"1": {"type": "luks2"}, "2": {"type": "luks2"}},
+             "tokens": {"0": {"type": "systemd-tpm2", "keyslots": ["1"], "tpm2-pcrs": [7]},
+                        "1": {"type": "systemd-recovery", "keyslots": ["2"]}}}
+LUKS_JSON = json.dumps(LUKS_META)
 # Real systemd encrypted credentials (systemd 257.7, a throwaway swtpm, the test PIN): one per key
 # type, and the PCR-signing public key the signed one embeds.
 CREDS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "credentials")
+
+
+LUKS_DUMP = ("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sda3")
 
 
 def cred(name):
@@ -82,6 +88,8 @@ PKFP = "dcef0dc2e16a41f9d72045af7b7e04e813c83fd8da97fd295b3bf5b8c75ad3b0"   # op
 PIN_FILE = host_probe.CREDSTORE + "/regalia-kms-hsm-site-a.pin"
 # How the probe asks systemd to open a blob: by the name the unit loads it under, the secret to /dev/null.
 OPEN_PIN = ("systemd-creds", "decrypt", "--name=hsm-site-a.pin", PIN_FILE, "/dev/null")
+HOST_KEY_STAT = ("stat", "-c", "%f|%u", host_probe.HOST_KEY)   # raw mode in hex: not the translated %F
+HOST_KEY_MOUNT = ("findmnt", "-n", "-o", "SOURCE", "-T", host_probe.HOST_KEY)
 PCR7 = ([7], [], "")
 SIGNED = ([7], [11], PKFP)
 
@@ -112,7 +120,7 @@ class FakeHost:
             host_probe.IMA_LOG: "10 ab ima-ng sha256:cd /usr/bin/bash\n10 ef ima-ng sha256:%s %s\n" % (KMS_SHA256, host_probe.KMS_BINARY),
             USB + "/1-1.4/idVendor": "20a0\n", USB + "/1-1.4/idProduct": "4230\n",
             USB + "/1-1/idVendor": "1d6b\n", USB + "/1-1/idProduct": "0002\n",
-            PIN_FILE: cred("tpm2-7.cred"),
+            PIN_FILE: cred("host-tpm2-7.cred"),
         }
         self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON, host_probe.KMS_BINARY: KMS_BYTES}
         self.dirs = {"/sys/class/tpm/tpm0/pcr-sha256": [str(i) for i in range(24)], USB: ["1-1", "1-1.4", "usb1"],
@@ -133,6 +141,9 @@ class FakeHost:
             ("nft", "-j", "list", "table", "inet", "regalia_kms"): (0, NFT_JSON),
             GETCAP_CMD: (0, GETCAP),
             OPEN_PIN: (0, ""),
+            # the host key: root's, 0400, on the LUKS root
+            HOST_KEY_STAT: (0, "8100|0\n"),
+            HOST_KEY_MOUNT: (0, "/dev/mapper/vg-root\n"),
         }
 
     def read(self, path): return self.files.get(path)
@@ -169,9 +180,10 @@ class HostProbe(unittest.TestCase):
             "tpm2_present": (lambda h: h.files.__setitem__("/sys/class/tpm/tpm0/tpm_version_major", "1\n"), "no TPM 2.0"),
             "tpm_sha256_bank": (lambda h: h.dirs.pop("/sys/class/tpm/tpm0/pcr-sha256"), "SHA-256 bank"),
             "root_disk_tpm_unlocked": (lambda h: h.files.__setitem__("/etc/crypttab", "root_crypt UUID=abcd none luks\n"), "not TPM-unlocked"),
+            "root_disk_recovery_keyslot": (lambda h: h.runs.__setitem__(LUKS_DUMP, (0, json.dumps(dict(LUKS_META, tokens={"0": LUKS_META["tokens"]["0"]}, keyslots={"1": {}})))), "no recovery keyslot"),
             "ima_policy_loaded": (lambda h: h.files.pop("/sys/kernel/security/ima/policy"), "no IMA policy"),
             "pin_import_key_present": (lambda h: h.runs.pop(("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)), "--init-import-key"),
-            "pin_credentials_sealed_as_recorded": (lambda h: h.files.__setitem__(PIN_FILE, cred("host.cred")), "the host key (bench only)"),
+            "pin_credentials_sealed_as_recorded": (lambda h: h.files.__setitem__(PIN_FILE, cred("host.cred")), "the host key alone (bench only)"),
             "hsm_token_attached": (lambda h: h.files.__setitem__(USB + "/1-1.4/idProduct", "4108\n"), "no Nitrokey HSM"),
             "token_clients_root_only": (lambda h: h.stats.__setitem__("/usr/bin/opensc-tool", (0, 0, 0o100755)), "others can run or change"),
             "firewall_default_deny": (lambda h: h.runs.pop(("nft", "-j", "list", "table", "inet", "regalia_kms")), "not loaded"),
@@ -186,6 +198,39 @@ class HostProbe(unittest.TestCase):
                 self.assertIn(reason, why)
                 others = {n: v for n, (v, _) in platform(h).items() if n != name}
                 self.assertTrue(all(others.values()), "breaking %s broke %s" % (name, others))
+
+    def test_the_recovery_keyslot_is_one_keyslot_of_its_own_and_nothing_is_left_unlabelled(self):
+        tpm, recovery = LUKS_META["tokens"]["0"], LUKS_META["tokens"]["1"]
+        slots = lambda *names: {n: {"type": "luks2"} for n in names}
+        cases = {
+            "no systemd-recovery token": ({"keyslots": slots("1"), "tokens": {"0": tpm}}, "no recovery keyslot"),
+            "a recovery token naming no keyslot": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=[])}}, "ONE recovery key"),
+            "two recovery keys": ({"keyslots": slots("1", "2", "3"), "tokens": {"0": tpm, "1": recovery, "2": dict(recovery, keyslots=["3"])}}, "ONE recovery key"),
+            "one recovery token naming two keyslots": ({"keyslots": slots("1", "2", "3"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=["2", "3"])}}, "ONE recovery key"),
+            "a token naming a keyslot that is gone": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": recovery}}, "does not exist"),
+            "the recovery token on the TPM's keyslot": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=["1"])}}, "a keyslot of its own"),
+            "the installer's passphrase still there": ({"keyslots": slots("0", "1", "2"), "tokens": {"0": tpm, "1": recovery}}, "keyslot 0 is named by no token"),
+            # A passphrase volume with a recovery key and no TPM: this check is about the recovery
+            # keyslot only (root_disk_tpm_unlocked is the one that fails), so it passes.
+        }
+        for name, (meta, reason) in cases.items():
+            with self.subTest(name=name):
+                value, why = host_probe.recovery_keyslots(meta)
+                self.assertFalse(value, "%s passed: %s" % (name, why))
+                self.assertIn(reason, why)
+        value, why = host_probe.recovery_keyslots(LUKS_META)
+        self.assertTrue(value, why)
+        self.assertIn("recovery keyslot 2", why)
+        self.assertIn("systemd-tpm2 in keyslot 1", why)
+        # The probe reads the header and nothing else: it never runs a command that could take a key.
+        h = FakeHost()
+        seen = []
+        real = h.run
+        h.run = lambda argv: (seen.append(tuple(argv)), real(argv))[1]
+        self.assertTrue(host_probe.recovery_keyslot(h)[0])
+        self.assertEqual({c[:2] for c in seen}, {("findmnt", "-n"), ("lsblk", "-s"), ("cryptsetup", "status"), ("cryptsetup", "luksDump")})
+        h.runs.pop(LUKS_DUMP)
+        self.assertIn("cannot read the LUKS2 header", host_probe.recovery_keyslot(h)[1])
 
     def test_raw_tpm0_without_the_resource_manager_fails(self):
         h = FakeHost()
@@ -385,35 +430,38 @@ class HostProbe(unittest.TestCase):
                 self.assertFalse(host_probe.import_key(h, FP[:16])[0])
 
     def test_a_real_credential_header_says_what_the_blob_is_sealed_to(self):
-        self.assertEqual(host_probe.credential_header(cred("tpm2-7.cred")), PCR7)
-        self.assertEqual(host_probe.credential_header(cred("tpm2-7-14.cred")), ([7, 14], [], ""))
-        self.assertEqual(host_probe.credential_header(cred("pk-7-11.cred")), SIGNED)
+        self.assertEqual(host_probe.credential_header(cred("host-tpm2-7.cred")), PCR7)
+        self.assertEqual(host_probe.credential_header(cred("host-tpm2-7-14.cred")), ([7, 14], [], ""))
+        self.assertEqual(host_probe.credential_header(cred("host-pk-7-11.cred")), SIGNED)
         self.assertEqual(host_probe.rsa_pkfp(cred("pcr.pub")), PKFP)
 
     def test_pin_credentials_must_be_sealed_exactly_as_recorded(self):
-        signed = cred("pk-7-11.cred")
+        signed = cred("host-pk-7-11.cred")
         cases = {
             # (the blob on the host, the record) -> the reason
-            "PCR 7 recorded, PCR 7+14 sealed": (cred("tpm2-7-14.cred"), PCR7, "sealed to PCRs 7+14, no signed policy; the record says PCRs 7, no signed policy"),
-            "a signed policy recorded, none sealed": (cred("tpm2-7.cred"), SIGNED, "the record says PCRs 7, signed PCRs 11 by key pkfp " + PKFP),
+            "PCR 7 recorded, PCR 7+14 sealed": (cred("host-tpm2-7-14.cred"), PCR7, "sealed to PCRs 7+14, no signed policy; the record says PCRs 7, no signed policy"),
+            "a signed policy recorded, none sealed": (cred("host-tpm2-7.cred"), SIGNED, "the record says PCRs 7, signed PCRs 11 by key pkfp " + PKFP),
             "no signed policy recorded, one sealed": (signed, PCR7, "signed PCRs 11 by key pkfp " + PKFP),
             "signed by another key than the recorded one": (signed, ([7], [11], "0" * 64), "the record says PCRs 7, signed PCRs 11 by key pkfp " + "0" * 64),
-            "the host key": (cred("host.cred"), PCR7, "the host key (bench only), not the TPM alone"),
-            "the host key and the TPM": (retyped(signed, "93a894094874449090caf2fc93cab553"), PCR7, "the host key and the TPM"),
+            "the host key alone": (cred("host.cred"), PCR7, "the host key alone (bench only)"),
+            # what seal-hsm-pin.sh made before #75: any image the PCR key ever signed opens these without the disk
+            "the TPM alone": (cred("tpm2-7.cred"), PCR7, "the TPM alone, with no host key"),
+            "the TPM alone, under a signed policy": (cred("pk-7-11.cred"), SIGNED, "the TPM alone, with no host key"),
+            "the TPM alone says how to fix it": (cred("pk-7-11.cred"), SIGNED, "Reseal it from the PIN card with seal-hsm-pin.sh --replace"),
             "a null key": (retyped(cred("host.cred"), "058469daf6f54324800549da0f8ea2fb"), PCR7, "a null key"),
             "an unknown type": (retyped(signed, "00" * 16), SIGNED, "an unknown credential type"),
             # cut inside the signed-policy header, and inside the TPM header
             "a blob cut in its signing key": (base64.b64encode(base64.b64decode(signed)[:360]).decode(), SIGNED, "truncated"),
             "a blob cut in its TPM header": (base64.b64encode(base64.b64decode(signed)[:56]).decode(), SIGNED, "truncated"),
             # whole headers, but not enough left for the encrypted metadata and the tag
-            "a blob cut after its headers": (base64.b64encode(base64.b64decode(cred("tpm2-7.cred"))[:-40]).decode(), PCR7, "truncated"),
+            "a blob cut after its headers": (base64.b64encode(base64.b64decode(cred("host-tpm2-7.cred"))[:-40]).decode(), PCR7, "truncated"),
             # the same PCR number in another bank is another PCR (bank u16 at offset 56: SHA-1 is 0x0004)
-            "PCR 7 of the SHA-1 bank": (rebanked(cred("tpm2-7.cred"), 0x0004), PCR7, "bound to PCR bank 0x0004, not SHA-256"),
+            "PCR 7 of the SHA-1 bank": (rebanked(cred("host-tpm2-7.cred"), 0x0004), PCR7, "bound to PCR bank 0x0004, not SHA-256"),
             "a signed blob in the SHA-1 bank": (rebanked(signed, 0x0004), SIGNED, "bound to PCR bank 0x0004, not SHA-256"),
             "a PIN in clear": ("7310048261\n", PCR7, "not base64"),
             "too short to be a credential": ("QUJD\n", PCR7, "too short"),
             "an unreadable file": (None, PCR7, "too short"),
-            "nothing recorded to compare with": (cred("tpm2-7.cred"), None, "no recorded binding to compare"),
+            "nothing recorded to compare with": (cred("host-tpm2-7.cred"), None, "no recorded binding to compare"),
         }
         for label, (blob, record, reason) in cases.items():
             with self.subTest(label):
@@ -428,11 +476,39 @@ class HostProbe(unittest.TestCase):
         self.assertTrue(value, why)
         self.assertIn("signed PCRs 11 by key pkfp " + PKFP, why)
 
+    def test_the_host_key_must_be_roots_alone_and_on_the_encrypted_disk(self):
+        """The credential's other half. On a clear disk it is one more file an old image can read."""
+        value, why = host_probe.pin_credentials(FakeHost(), PCR7)
+        self.assertTrue(value, why)
+        self.assertIn("sealed to the host key and the TPM", why)
+        self.assertIn("the host key is root's, 0400, on root_crypt", why)
+        cases = {
+            "no host key file": ({HOST_KEY_STAT: (1, "")}, "cannot be read"),
+            "group-readable (0440)": ({HOST_KEY_STAT: (0, "8120|0\n")}, "mode 0x8120, owner 0"),
+            "writable by root (0600)": ({HOST_KEY_STAT: (0, "8180|0\n")}, "must be a regular file, root's, mode 0400"),
+            "owned by another user": ({HOST_KEY_STAT: (0, "8100|1000\n")}, "mode 0x8100, owner 1000"),
+            "a symbolic link": ({HOST_KEY_STAT: (0, "a1ff|0\n")}, "must be a regular file"),
+            "a directory": ({HOST_KEY_STAT: (0, "4100|0\n")}, "must be a regular file"),
+            "an answer that is not a mode": ({HOST_KEY_STAT: (0, "\n")}, "must be a regular file"),
+            "no filesystem found": ({HOST_KEY_MOUNT: (1, "")}, "cannot find the filesystem"),
+            "on a clear disk": ({HOST_KEY_MOUNT: (0, "/dev/sdb1\n"),
+                                 ("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/sdb1"): (0, "sdb1 part\nsdb disk\n")},
+                                "is not on dm-crypt"),
+            "on a tmpfs": ({HOST_KEY_MOUNT: (0, "tmpfs\n")}, "is not on dm-crypt"),
+        }
+        for label, (runs, reason) in cases.items():
+            with self.subTest(label):
+                h = FakeHost()
+                h.runs.update(runs)
+                value, why = host_probe.pin_credentials(h, PCR7)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
+
     def test_a_blob_sealed_as_recorded_must_also_open_on_this_boot(self):
         """A blob cut by a few bytes keeps a whole header (measured: systemd says 'Encrypted file too
         short'); so does one sealed by another TPM, or under a name the unit does not load it by."""
         h = FakeHost()
-        h.files[PIN_FILE] = base64.b64encode(base64.b64decode(cred("tpm2-7.cred"))[:-20]).decode()
+        h.files[PIN_FILE] = base64.b64encode(base64.b64decode(cred("host-tpm2-7.cred"))[:-20]).decode()
         self.assertEqual(host_probe.credential_header(h.files[PIN_FILE]), PCR7)
         h.runs[OPEN_PIN] = (1, "")
         value, why = host_probe.pin_credentials(h, PCR7)
@@ -454,7 +530,7 @@ class HostProbe(unittest.TestCase):
         value, why = host_probe.pin_credentials(h, PCR7)
         self.assertFalse(value)
         self.assertIn("regalia-kms-yubikey-site-a.pin is sealed with the host key", why)
-        h.files[host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin"] = cred("tpm2-7.cred")
+        h.files[host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin"] = cred("host-tpm2-7.cred")
         value, why = host_probe.pin_credentials(h, PCR7)
         self.assertTrue(value, why)
         self.assertIn("2 PIN credential(s)", why)
@@ -579,15 +655,15 @@ class SignedEvidence(unittest.TestCase):
                 host_probe.main(args, host=host)
             return json.loads(out.getvalue())["measured"]["pin_credentials_sealed_as_recorded"]
         signed_doc = self.doc(credential_tpm2_signed_pcrs="11", credential_tpm2_pcr_key_pkfp=PKFP)
-        self.assertTrue(run(self.doc(), cred("tpm2-7.cred"))["value"])
-        self.assertTrue(run(signed_doc, cred("pk-7-11.cred"))["value"])
-        for doc, blob in ((self.doc(), cred("pk-7-11.cred")), (signed_doc, cred("tpm2-7.cred"))):
+        self.assertTrue(run(self.doc(), cred("host-tpm2-7.cred"))["value"])
+        self.assertTrue(run(signed_doc, cred("host-pk-7-11.cred"))["value"])
+        for doc, blob in ((self.doc(), cred("host-pk-7-11.cred")), (signed_doc, cred("host-tpm2-7.cred"))):
             result = run(doc, blob)
             self.assertFalse(result["value"])
             self.assertIn("the record says", result["why"])
 
     def test_without_evidence_the_binding_comes_from_the_command_line(self):
-        def run(*args, blob="tpm2-7.cred"):
+        def run(*args, blob="host-tpm2-7.cred"):
             host = FakeHost()
             host.files[PIN_FILE] = cred(blob)
             with redirect_stdout(io.StringIO()) as out:
@@ -595,9 +671,9 @@ class SignedEvidence(unittest.TestCase):
             return json.loads(out.getvalue())["measured"]["pin_credentials_sealed_as_recorded"]
         self.assertTrue(run("--credential-pcrs", "7")["value"])
         self.assertTrue(run("--credential-pcrs", "7", "--credential-signed-pcrs", "11", "--credential-pcr-key-pkfp", PKFP,
-                            blob="pk-7-11.cred")["value"])
+                            blob="host-pk-7-11.cred")["value"])
         self.assertIn("no recorded binding to compare", run()["why"])
-        self.assertFalse(run("--credential-pcrs", "7", blob="pk-7-11.cred")["value"])
+        self.assertFalse(run("--credential-pcrs", "7", blob="host-pk-7-11.cred")["value"])
         # The arguments are held to the evidence's rules: PCR 11 is never a directly bound PCR.
         with self.assertRaises(SystemExit), mock.patch("sys.stderr", io.StringIO()):
             run("--credential-pcrs", "7+11")

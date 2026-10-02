@@ -159,3 +159,5 @@ func TestHealthDetectsASwapWithoutAnOperation(t *testing.T) {
 		t.Fatalf("health did not latch the swapped device: %q/%v", reason, latched)
 	}
 }
+
+func (*swappableSession) OffersMechanism(context.Context, string, string) error { return nil }

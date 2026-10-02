@@ -420,3 +420,125 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
       - name: Runtime leases against swtpm (issue, hold, revoke, reboot)
         run: bash e2e/runtime-lease-swtpm.sh
+
+  # regalia-kms#77: the disk recovery key, on a real dm-crypt volume (a loop device). With every other
+  # keyslot destroyed, the recovery key alone opens and mounts it; a wrong key, one wrong letter, no
+  # dashes, other grouping and capitals do not; a used key is replaced and then opens nothing. The
+  # script fails if the six file-backed tests of recovery-key.sh do not all run.
+  luks-recovery-key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin
+      - name: The recovery key alone opens the volume (loop device, LUKS2)
+        run: sudo bash e2e/luks-recovery-key.sh
+
+  # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
+  # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
+  # restores the node, no peer leaves it locked, and a retired boot image, another machine and a
+  # revoked node get nothing. The script fails if any of its tests is skipped.
+  peer-unlock-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM, tpm2-tools and cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools cryptsetup-bin
+      - name: TPM plus one peer opens the volume (swtpm, loop device, LUKS2)
+        run: sudo bash e2e/peer-unlock-swtpm.sh
+
+  # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
+  # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
+  # holds a lease; the old hardware is refused by every decision; its identities cannot be enrolled
+  # again. The script fails if its test is skipped.
+  node-replacement-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Node replacement against swtpm (enroll the new node, refuse the old hardware)
+        run: bash e2e/node-replacement-swtpm.sh
+
+  # regalia-kms#135 (found under #75): a MEASUREMENT, not a control. Can an NV-backed TPM policy
+  # (systemd-pcrlock) retire a boot image for a LUKS2 volume, with no peer? A software TPM, a LUKS2 volume
+  # in a file, systemd's own tools: approve a second image, boot it, retire the first, and try each,
+  # including the retired image with the old policy file restored. Debian 13, because that is what the
+  # KMS hosts run (systemd 257). Privileged, with the runner's /dev: the unlock needs device-mapper.
+  pcrlock-luks-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: debian:13
+      options: --privileged -v /dev:/dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install systemd's TPM and LUKS tools, the software TPM and tpm2-tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends systemd systemd-cryptsetup cryptsetup-bin swtpm swtpm-tools tpm2-tools python3 util-linux
+      - name: NV-backed (pcrlock) policy on a LUKS2 volume against swtpm (approve, update, retire, refuse the old image)
+        run: bash e2e/pcrlock-luks-swtpm.sh
+
+  # regalia-kms#69: convergence, on two software TPMs. A revoked node's manifests reach one peer in a
+  # bundle; the partitioned peer helps only until its heartbeat expires, catches up through the chain
+  # in one exchange (its TPM epoch counter follows), and its disk rolled back is refused. The script
+  # fails if its test is skipped.
+  convergence-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Manifest convergence against swtpm (bundle, partition, catch-up, rollback)
+        run: bash e2e/convergence-swtpm.sh
+
+
+  # regalia-kms#74: the real daemon serves key operations only while the node holds a runtime lease.
+  # SoftHSM for the token; the lease is real (node and peer on software TPMs) and reaches the daemon
+  # through the admission file. Not ready and 503 without a lease; a verified signature with one;
+  # stops by itself when renewal stops; refuses at once when the node is revoked.
+  runtime-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the PKCS#11 emulator, the software TPM and their tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc swtpm swtpm-tools tpm2-tools libpcsclite-dev
+      - name: The daemon serves only while admitted (SoftHSM, leases on swtpm)
+        run: |
+          status=0
+          python3 e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/admission.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^runtime-admission: 26 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
+            echo "::error::the admission test did not run all 26 checks" >&2; exit 1; }

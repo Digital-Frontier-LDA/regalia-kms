@@ -66,8 +66,8 @@ done
 # passes `--reader ""`, which OpenSC reads as reader 0, i.e. ANOTHER card (review of #37).
 reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER" ] || die "cannot resolve $1 to a PC/SC reader"; }
 reader(){ reader_of "$1"; echo "$READER"; }
-# sc-hsm-tool has no env: form, so its PINs and DKEK password are typed into its own prompts over a
-# pty (e2e/lib/sc-hsm-pty.py) and never appear in the process list.
+# sc-hsm-tool's PINs and DKEK password are typed into its own prompts over a pty
+# (e2e/lib/sc-hsm-pty.py) and never appear in the process list. (`env:NAME` would do it too.)
 schsm(){ local card="$1"; shift
   SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$DKEK_PW" \
     "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }

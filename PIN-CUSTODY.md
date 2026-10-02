@@ -36,7 +36,8 @@ comes from the library's surface, not from the PIV specification or a card.
 
 ## Decision
 
-The KMS host uses systemd encrypted service credentials sealed to its TPM 2.0. The encrypted
+The KMS host uses systemd encrypted service credentials sealed to its TPM 2.0 **and** to systemd's
+host key on the encrypted root disk, together (see "Why the host key is in the seal" below). The encrypted
 credential blobs live outside the repository under `/etc/credstore.encrypted/`; systemd decrypts
 them only while starting `regalia-kms` and exposes them to that service under its private
 `/run/credentials/regalia-kms.service/` directory. The daemon accepts only absolute credential
@@ -72,7 +73,7 @@ card, tests it on the card before sealing, reports the counter the card actually
 decrypts the blob back before installing it, and keeps a replaced credential. Underneath it runs:
 
 ```sh
-systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs="$KMS_CREDENTIAL_PCRS" --name=hsm-site-a.pin \
+systemd-creds encrypt --with-key=host+tpm2 --tpm2-pcrs="$KMS_CREDENTIAL_PCRS" --name=hsm-site-a.pin \
   - /etc/credstore.encrypted/regalia-kms-hsm-site-a.pin
 ```
 
@@ -112,11 +113,64 @@ sudo deploy/seal-hsm-pin.sh --id hsm-site-a --serial DENK0404144 --pcrs 7 \
   changed PCR 7, or a boot phase the signature does not cover (the initrd, shutdown) does not.
 - The key is RSA: the TPM policy systemd builds takes nothing else. The record prints its `pkfp`
   (SHA-256 of the PKCS#1 DER public key), the same fingerprint each signature file carries.
-- Underneath, the key type is **`--with-key=tpm2-with-public-key`**. `--with-key=tpm2` accepts
-  `--tpm2-public-key` and `--tpm2-public-key-pcrs`, says nothing, and binds PCR 7 alone (measured,
-  systemd 257, 2026-10-01). So the script proves the binding by behaviour before it installs
-  anything: the blob must open with the running boot's signature and must **not** open with a
-  signature file that holds none.
+- Underneath, the key type is **`--with-key=host+tpm2-with-public-key`**. `--with-key=tpm2` and
+  `--with-key=host+tpm2` accept `--tpm2-public-key` and `--tpm2-public-key-pcrs`, say nothing, and
+  bind PCR 7 alone (measured, systemd 257, 2026-10-01 and 2026-10-02). So the script proves the
+  binding by behaviour before it installs anything: the blob must open with the running boot's
+  signature and must **not** open with a signature file that holds none.
+
+### Why the host key is in the seal (#75)
+
+A signed PCR policy has **no counter and no expiry**. The TPM checks that the current PCR 11 value
+carries a signature by the PCR-signing key, and nothing else: every image that key ever signed
+satisfies it for ever, including an old one with a known hole. systemd documents no revocation for
+it; `systemd-creds` cannot use an NV-backed (`systemd-pcrlock`) policy at all, and where pcrlock can
+be used (the LUKS token) it cannot be combined with a signed policy (systemd 257; sources read at
+v255, v257, v258 and main). So a PIN sealed to the TPM alone can be opened on a stolen server booted
+into any image that was ever signed.
+
+The PIN is therefore sealed to the TPM **and** to systemd's host key
+(`/var/lib/systemd/credential.secret`), which lives on the encrypted root disk. To open the PIN an
+image must satisfy the TPM policy and also unlock the root disk. Retiring an image is then the root
+disk's to enforce, in one place.
+
+- A kernel update still needs no reseal: the host key does not change.
+- The credential file copied onto another disk, in front of the same TPM, does not open.
+- `seal-hsm-pin.sh` tries the sealed blob with the host key out of reach and installs nothing if it
+  opens. `host_probe.py` fails a credential sealed to the TPM alone, and fails a host key that is not
+  root's, mode 0400, on a filesystem with dm-crypt beneath it.
+- **Losing the root disk loses the host key.** The PIN is then resealed from the PIN card, like after
+  a TPM reset or a replaced board. The card is kept for this.
+- The host key is a runtime credential: it is never in a backup or an export
+  (`runtime_credentials_excluded_from_backup`).
+
+*Verified by:* `e2e/pcr-signed-policy-swtpm.sh` section 8 (software TPM): the same blob opens on the
+image it was sealed on and on an updated one; with another disk's host key, or none, it does not
+open on either; and a TPM-only credential opens with no host key at all.
+
+**BLOCKING FOR PRODUCTION, not done:** this moves the question to the root disk, and today the root
+disk is unlocked by the local TPM alone, bound to PCR 7 (`root_disk_tpm_unlocked`). An old signed
+image with the same Secure Boot state unlocks it, reaches the host key, and opens the PIN. The seal
+is only as revocable as the disk unlock. The disk must need something a retired image cannot get: a
+peer's contribution, given only to an image the membership manifest currently accepts (#66, #67), or
+an NV-backed local policy. Until then a retired image is retired in name only.
+
+### Migrating a credential sealed before this change
+
+Every credential made by an earlier `seal-hsm-pin.sh` is sealed to the TPM alone, and
+`pin_credentials_sealed_as_recorded` now reports it as a failure. There is no conversion: reseal.
+
+1. Who: the operator who holds the sealed PIN card for that site, at the host's console, as root.
+2. When: at commissioning (ceremony day, the step that seals each site's PIN), or, for a host already
+   commissioned, at the next attended visit and before the host is counted as production.
+3. How: `sudo deploy/seal-hsm-pin.sh --id <id> --serial <serial> --pcrs 7 [signed-policy options]
+   --replace`, typing the PIN from the card (or `--from-blob`, if the ceremony's import blob for that
+   host's TPM was kept). The script tests the PIN on the card first, keeps the old credential as
+   `<file>.prev-<UTC time>`, and installs the new one in a single rename.
+4. Then: `host_probe.py` must report `pin_credentials_sealed_as_recorded` true. Remove the `.prev-`
+   file once it does: it is a TPM-only credential and opens without the host key.
+
+The recorded binding (`host.credential_tpm2_pcrs` and the signed policy's two fields) does not change.
 
 *Verified by:* `e2e/pcr-signed-policy-swtpm.sh` in CI (a software TPM, real `systemd-creds` and
 `systemd-measure`, a stub card). **Not done yet (#57):** the PCR-signing key's custody (its private
@@ -177,6 +231,48 @@ an unseal, healing, and the PIN refused at swtpm's default limit of 3); `host_pr
 (`tpm_lockout_policy`, `pin_import_key_present`) on the host. **Not verified: any physical TPM.** The
 DL360's defaults, and whether its firmware counts a real power cut the same way, are a PoC still to
 run (#57).
+
+## The disk recovery key
+
+Each KMS host's encrypted root has one keyslot that needs neither its TPM nor a peer: the **recovery
+key** (#77, Phase 17). It exists for the cases the unattended paths cannot cover: a total outage of
+all three sites (threat model A3), a host whose TPM or measured-boot policy no longer releases the
+disk, or a node with no healthy peer.
+
+Decisions (#77, 2026-10-02; regalia-kms-24 under the owner's delegation):
+
+- **It adds a disk-only recovery secret. It does not change the 4-of-6 ceremony recovery.** The k-of-n
+  shares still guard the HSM keys and the payload; the recovery key opens one host's disk and nothing
+  else. A 2-of-3 scheme is a later experiment that needs its own approval (17.4).
+- **What it opens, and what it does not.** With the disk open the host can boot. The HSM keys are
+  still in the HSM, the HSM PIN is still sealed to the TPM (or typed from the PIN card), membership
+  still decides whether peers accept the node, and serving still needs a lease. The recovery key
+  restores a disk; it is not signing authority, membership authority or an HSM credential.
+- **One per host**, so one envelope reaches one host. It is generated at the ceremony (step 0), in
+  systemd's recovery-key format: 256 bits as 8 groups of 8 letters from `cbdefghijklnrtuv`, with a
+  dash between groups. Those letters sit on the same keys of the common keyboard layouts, which
+  matters at a boot prompt. The dashes are part of the key and it is lower case.
+- **Custody.** On paper, on the KMS host recovery card, in its own sealed tamper-evident envelope
+  in the Owner's safe: apart from every site and apart from the servers, because unlike everything
+  else on a host this one secret is enough for its disk. It is also in the tier-0 payload and in
+  every PIN escrow, so a lost card is recovered through k shares. It is never stored on a host and
+  never typed anywhere but that host's console.
+- **When it is used.** By the Owner, at the host's console, when no unattended path can unlock it.
+  Every use is recorded as an incident (who, when, which host, why).
+- **Using it spends it.** A key that was typed at a console has been seen. After any use, a
+  rehearsal included, a new key is generated and escrowed, and `recovery-key.sh --replace` enrols it
+  and destroys the used keyslot. A broken envelope seal is treated the same way.
+- **Nothing weaker stays beside it.** Commissioning wipes the installer's passphrase once the TPM
+  and the recovery key are proven; `root_disk_recovery_keyslot` fails while a keyslot that no token
+  names remains.
+
+*Verified by:* `tests/test_baremetal_recovery_key.py` (a real LUKS2 header in a file: enrolment, the
+refusals, replacement, no secret on a command line) and `e2e/luks-recovery-key.sh` in CI (a real
+dm-crypt volume on a loop device: every other keyslot destroyed, the recovery key alone opens and
+mounts it; a wrong key, one wrong letter, no dashes, other grouping and capitals do not);
+`host_probe.py` (`root_disk_recovery_keyslot`) on the host. **Not verified: any KMS host, a real boot
+prompt, or the physical custody procedure.** The rehearsal with the envelope, the safe and a
+witness (PoC 17.1 proper) is the Owner's to run.
 
 ## Retry circuit breaker
 
@@ -315,7 +411,9 @@ results are not physical evidence.
 | no hibernation, no core dumps, swap off or encrypted | host (`deploy/baremetal/os_probe.py`) |
 | the KMS is the only PIN presenter | host, in part (`token_clients_root_only`): token client tools are root-only and pcscd's clients are the KMS **at measurement time**; root is not excluded, and nothing watches between measurements |
 | PCR set chosen and recorded | evidence (`host.credential_tpm2_pcrs` and the signed policy's two fields) |
-| blob actually sealed to the recorded PCR set, signed policy and key; TPM alone | host (`host_probe.py`, `pin_credentials_sealed_as_recorded`, read from each blob's header) |
+| blob actually sealed to the recorded PCR set, signed policy and key; to the host key AND the TPM, never either alone; the host key root's, 0400, on dm-crypt | host (`host_probe.py`, `pin_credentials_sealed_as_recorded`, read from each blob's header) |
+| the PIN does not open without the host key (another disk, or none), on the sealed image or an updated one | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`, section 8); **no real host yet** |
+| a retired image cannot unlock the root disk, so cannot reach the host key | **none** (not built; blocking for production, #75) |
 | signed PCR 11 policy: opens across a signed kernel update, refused otherwise | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`); **no real host yet** |
 | whole-disk rollback refused at next start | unit — **only with an audit sink configured** |
 | rollback counters in the TPM (fencing epoch, audit checkpoints; ADR-0002 D21) | **none** (not built) |

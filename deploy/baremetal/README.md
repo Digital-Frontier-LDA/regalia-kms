@@ -40,8 +40,22 @@ Commissioning has two halves:
 
 - **Full-disk encryption** (LUKS2), enrolled to the TPM:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
-  `tpm2-device=auto` in `/etc/crypttab`. Keep a recovery passphrase in the escrow. Measured:
-  `root_disk_tpm_unlocked`.
+  `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
+- **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this
+  host's disk by itself after a total outage (#77; PIN-CUSTODY.md, "The disk recovery key"). It is a
+  ceremony secret, one per host, written on the KMS host recovery card and carried in every escrow;
+  it is never stored on a host. In this order:
+  1. `sudo deploy/baremetal/recovery-key.sh --enrol <root partition>`: asks for the installer's
+     passphrase, then for the recovery key twice. Then `--check`, with the key read from the **card**.
+  2. Enrol the TPM (above) and reboot once to see the disk unlock unattended.
+  3. Only then wipe the installer's passphrase: `systemd-cryptenroll --wipe-slot=password <root partition>`.
+
+  The key is 8 groups of 8 lower-case letters with a dash between groups. **The dashes are part of
+  the key**; typed without them, or in capitals, it does not open the disk. Measured:
+  `root_disk_recovery_keyslot` (exactly one recovery keyslot, of its own, and no keyslot left that no
+  token names, such as the installer's passphrase). The probe reads the LUKS2 header only and never
+  asks for the key. After **any** use of the key, a rehearsal included: `recovery-key.sh --replace`
+  with a new key from a new escrow.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
@@ -50,6 +64,10 @@ Commissioning has two halves:
 - **The PIN and the disk are sealed to PCR 7** (Secure Boot state and the keys it trusts), as
   `systemd-cryptenroll` does by default. A kernel or KMS update does not change PCR 7, so nothing is
   stranded; turning Secure Boot off, or enrolling other keys, does change it.
+  - **The PIN is sealed to the host key as well** (`/var/lib/systemd/credential.secret`, on the
+    encrypted root disk): key type `host+tpm2`. A TPM policy alone cannot retire an image, so the PIN
+    must also need the unlocked root disk (PIN-CUSTODY.md, "Why the host key is in the seal"). Losing
+    the root disk therefore means resealing the PIN from the PIN card.
   - **Not PCR 10 (IMA).** systemd decrypts `LoadCredentialEncrypted` before it executes regalia-kms, so
     a policy expecting that binary's measurement could never unseal at an unattended start; PCR 10
     also depends on the order everything else ran in.
@@ -88,6 +106,15 @@ Commissioning has two halves:
   sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms      # enforce, once the log is clean
   ```
   Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
+- **Runtime admission.** A production configuration states `"runtime_admission": "required"` with
+  `runtime_admission_path`, `node_id` and `boot_session_path` (`config/daemon.example.json`); with a
+  token configured the daemon refuses to start if the setting is left out, and `"disabled-for-lab"` is
+  for lab and CI hosts only. The daemon then serves key operations only while the root lease service
+  (`deploy/baremetal/admission.py`) reports that this node holds a runtime lease: without one,
+  `/v1/health/ready` is 503 and every key operation is a 503 `DEPENDENCY_UNAVAILABLE`, audited as
+  `not-admitted`. `/run/regalia` must be root's, mode 0755, and the two files in it root's, mode 0644.
+  `python3 -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
+  lease service to a peer is not shipped yet (#80).
 
 ### Host firewall (default deny, both directions)
 
@@ -155,9 +182,11 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card. Record the binding in the
    evidence (`host.credential_tpm2_pcrs`, and the signed policy's two fields). Measured:
    `pin_credentials_sealed_as_recorded` reads the header of every
-   `/etc/credstore.encrypted/regalia-kms-*.pin` and fails unless each is sealed to the TPM alone (not
-   the host key) with exactly the recorded PCRs (of the SHA-256 bank) and signing key, and opens on
-   this boot under the name the unit loads it by. Without evidence, give the record on
+   `/etc/credstore.encrypted/regalia-kms-*.pin` and fails unless each is sealed to the host key and
+   the TPM together (not the TPM alone, which is what `seal-hsm-pin.sh` made before #75: reseal those
+   with `--replace`; not the host key alone) with exactly the recorded PCRs (of the SHA-256 bank) and
+   signing key, and opens on this boot under the name the unit loads it by; and unless the host key
+   is root's, mode 0400, on a filesystem with dm-crypt beneath it. Without evidence, give the record on
    the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
@@ -181,7 +210,8 @@ It must exit 0: every measured control true; the evidence at most 24 hours old (
 are not re-measured, so sign fresh evidence for each run), complete, signed by the recorded key,
 attesting every firmware setting, and agreeing with every measurement (including the import key's
 fingerprint). Then an unattended
-**reboot** brings the KMS back with no one present (the disk and the PIN both unseal from the TPM).
+**reboot** brings the KMS back with no one present (the disk unseals from the TPM; the PIN from the
+TPM and the host key on that disk).
 
 ## 6. Backups: the control-plane export, never an image
 
@@ -204,3 +234,30 @@ its credentials back through the witnessed custody procedure, never from the exp
 (`runtime_credentials_excluded_from_backup`); nothing measures it. The export, wipe, restore and
 serve sequence passed on the bench with the real daemon and a real Nitrokey (2026-09-24). Carrying
 an export out of a real site and restoring it on a rebuilt host has not been done (regalia#46).
+
+## 7. Peer-assisted disk unlock (three-site, #67): not commissioned yet
+
+Section 3's TPM-only disk unlock is the single-site baseline. It cannot retire a boot image: the TPM
+releases the disk key to every image its policy ever accepted (#135). The three-site design replaces
+it: the disk needs the host's TPM **and** one peer, and a peer helps only a node its current manifest
+lets be unlocked, on an image the manifest's measurements still list.
+
+`deploy/baremetal/unlock.py` holds the decisions and the formats, proven on software TPMs and a real
+dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
+
+- **The credential** of each peer path is derived from two halves: one sealed in this host's TPM, one
+  kept on the peer's encrypted disk. Each peer has a LUKS2 keyslot and a `regalia-peer-unlock` token of
+  its own, so either peer restores the host and each path is rotated alone.
+- **The exchange:** the host sends a fresh TPM quote for this boot; the peer decides with
+  `replacement.may_unlock`, and answers with its half encrypted to this boot's one-time key and signed
+  by its own TPM. A captured exchange is useless in another boot.
+- **Enrolment** is an operator step between two running hosts; the recovery key (section 3) authorizes
+  adding the keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer
+  unlock the disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
+- **`unlock.judge_tokens`** judges the LUKS2 header for the probe: one path per expected peer, each with
+  a keyslot of its own, and no `systemd-tpm2` token left.
+
+Not there yet, so **nothing here is to be run on a KMS host**: the transport (WireGuard before root,
+#66), the pre-root client (a small native program; the Python client in `unlock.py` is the reference
+the tests use and is not shipped in an initramfs), the operator commands, and every run on a physical
+TPM or a DL360 (#65).

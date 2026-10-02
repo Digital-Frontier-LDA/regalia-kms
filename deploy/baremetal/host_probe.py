@@ -27,6 +27,14 @@ PLATFORM AND TPM, measured:
   root_disk_tpm_unlocked    a dm-crypt device is among the root filesystem's block-device ancestors
                             (lsblk -s: LUKS directly or under LVM), and its crypttab entry unlocks with
                             the TPM (a tpm2-device=<value> option, parsed exactly)
+  root_disk_recovery_keyslot
+                            the same LUKS2 header carries the per-host RECOVERY keyslot (#77): exactly
+                            one systemd-recovery token, naming one keyslot that no other token names,
+                            and no keyslot that no token names (a leftover installer passphrase). Read
+                            from the header alone: the recovery key itself is never asked for or read.
+                            It is a ceremony secret on paper and in the escrow, enrolled by
+                            deploy/baremetal/recovery-key.sh; whether the paper copy OPENS that keyslot
+                            is recovery-key.sh --check, a rehearsal step, not a probe
   ima_policy_loaded         the IMA policy has an executable-measurement rule (measure func=BPRM_CHECK,
                             or MMAP_CHECK with MAY_EXEC), AND the newest IMA log entry for the
                             regalia-kms binary carries the digest of the bytes at that path NOW (a
@@ -38,15 +46,21 @@ PLATFORM AND TPM, measured:
                             is RSA-3072 with EXACTLY the attributes --init-import-key sets:
                             fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda
   pin_credentials_sealed_as_recorded
-                            every /etc/credstore.encrypted/regalia-kms-*.pin is sealed to the TPM alone
-                            (not the host key, not a null key), and its header carries exactly the
+                            every /etc/credstore.encrypted/regalia-kms-*.pin is sealed to the TPM AND the
+                            host key together (not the TPM alone, not the host key alone, not a null key:
+                            #75, below), and its header carries exactly the
                             recorded binding: the PCRs bound directly, the PCRs bound through a signed
                             policy, and that policy's signing key (--credential-pcrs,
                             --credential-signed-pcrs, --credential-pcr-key-pkfp, or the evidence's
                             host.credential_tpm2_*), in the SHA-256 PCR bank. The header is authenticated
                             with the secret and names the PCRs systemd asks the TPM for, so it is the
                             binding the blob has. Each blob must also OPEN on this boot, under the name
-                            the unit loads it by (systemd-creds decrypt, the secret to /dev/null)
+                            the unit loads it by (systemd-creds decrypt, the secret to /dev/null). And the
+                            host key (/var/lib/systemd/credential.secret) is root's, mode 0400, on a
+                            filesystem with a dm-crypt device beneath it.
+                            WHY NOT THE TPM ALONE: a signed PCR 11 policy has no counter, so every image
+                            the PCR-signing key ever signed opens a TPM-only credential for ever. With
+                            the host key in the seal, an image must also unlock the root disk
   hsm_token_attached        a Nitrokey HSM 2 (USB 20a0:4230) is on the bus (sysfs; no token client
                             needed); its USB path is reported so the evidence can pin the INTERNAL port
   firewall_default_deny     the table `inet regalia_kms` (deploy/baremetal/firewall.py) is loaded, with its
@@ -99,16 +113,19 @@ LOCKOUT_POLICY = {"TPM2_PT_MAX_AUTH_FAIL": 32, "TPM2_PT_LOCKOUT_INTERVAL": 600, 
 CREDSTORE = "/etc/credstore.encrypted"
 PIN_CREDENTIAL = re.compile(r"regalia-kms-[a-z0-9]+(-[a-z0-9]+)*\.pin")   # what seal-hsm-pin.sh installs
 # The 16-byte key-type id that opens a systemd encrypted credential (measured, systemd 257, one blob of
-# each type made against swtpm). Only the two TPM-alone types are a commissioned PIN.
-CRED_TPM2, CRED_TPM2_PK = "0c7cc07b117645919c4b0bea08bc20fe", "faf7eb9341e3412ca1a436f95a29362f"
-CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key (bench only)",
-                "93a894094874449090caf2fc93cab553": "the host key and the TPM",
-                "af4950a849134eb1a73846304ff30c05": "the host key and the TPM, with a signed policy",
+# each type made against swtpm). Only the two host-key-AND-TPM types are a commissioned PIN (#75).
+CRED_HOST_TPM2, CRED_HOST_TPM2_PK = "93a894094874449090caf2fc93cab553", "af4950a849134eb1a73846304ff30c05"
+TPM_ALONE = "the TPM alone, with no host key: every image the PCR-signing key ever signed opens it without the " \
+    "root disk (#75). Reseal it from the PIN card with seal-hsm-pin.sh --replace"
+CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key alone (bench only)",
+                "0c7cc07b117645919c4b0bea08bc20fe": TPM_ALONE,
+                "faf7eb9341e3412ca1a436f95a29362f": TPM_ALONE,
                 "058469daf6f54324800549da0f8ea2fb": "a null key (no protection at all)"}
+HOST_KEY = "/var/lib/systemd/credential.secret"
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
-            "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present",
+            "root_disk_tpm_unlocked", "root_disk_recovery_keyslot", "ima_policy_loaded", "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
             "token_clients_root_only", "firewall_default_deny")
 MEASURED = PLATFORM + os_probe.MEASURED
@@ -174,16 +191,40 @@ def sha256_bank(host):
         (False, "no /sys/class/tpm/tpm0/pcr-sha256: enable the SHA-256 bank in the firmware (RBSU)")
 
 
-def root_unlock(host):
+def root_crypt_devices(host):
+    """The dm-crypt names under the root filesystem (LUKS directly, or LVM on LUKS), or (None, why)."""
     rc, out = host.run(["findmnt", "-n", "-o", "SOURCE", "/"])
     src = re.sub(r"\[.*\]$", "", out.strip())          # btrfs: /dev/mapper/x[/@]
     if rc != 0 or not src:
-        return False, "cannot find the root filesystem's device"
+        return None, "cannot find the root filesystem's device"
     # The device and its ancestors (inverse tree): LUKS directly, or LVM on LUKS, both resolve here.
     rc, out = host.run(["lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", src])
     crypts = [f[0] for f in (l.split() for l in out.splitlines()) if len(f) == 2 and f[1] == "crypt"]
     if rc != 0 or not crypts:
-        return False, "the root filesystem (%s) is not on dm-crypt" % src
+        return None, "the root filesystem (%s) is not on dm-crypt" % src
+    return crypts, ""
+
+
+def luks_header(host, name):
+    """(device, LUKS2 JSON metadata) of the volume under dm-crypt name, or (None, why)."""
+    rc, status = host.run(["cryptsetup", "status", name])
+    dev = next((l.split(":", 1)[1].strip() for l in status.splitlines() if l.strip().startswith("device:")), "")
+    if rc != 0 or not dev:
+        return None, "cannot find the LUKS device under %s (cryptsetup status)" % name
+    rc, meta = host.run(["cryptsetup", "luksDump", "--dump-json-metadata", dev])
+    try:
+        parsed = json.loads(meta) if rc == 0 else None
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        return None, "cannot read the LUKS2 header of %s (cryptsetup luksDump --dump-json-metadata)" % dev
+    return dev, parsed
+
+
+def root_unlock(host):
+    crypts, why = root_crypt_devices(host)
+    if crypts is None:
+        return False, why
     entries = {}
     for line in (host.read("/etc/crypttab") or "").splitlines():
         f = line.split()
@@ -197,17 +238,10 @@ def root_unlock(host):
             return False, "%s is in crypttab but not TPM-unlocked (options: %s)" % (name, entries[name] or "none")
         # crypttab only ASKS for the TPM; the LUKS2 header must actually carry a TPM2 token (what
         # systemd-cryptenroll --tpm2-device writes), or a passphrase-only volume would pass here.
-        rc, status = host.run(["cryptsetup", "status", name])
-        dev = next((l.split(":", 1)[1].strip() for l in status.splitlines() if l.strip().startswith("device:")), "")
-        if rc != 0 or not dev:
-            return False, "cannot find the LUKS device under %s (cryptsetup status)" % name
-        rc, meta = host.run(["cryptsetup", "luksDump", "--dump-json-metadata", dev])
-        try:
-            tokens = json.loads(meta).get("tokens", {}) if rc == 0 else None
-        except ValueError:
-            tokens = None
-        if tokens is None:
-            return False, "cannot read the LUKS2 header of %s (cryptsetup luksDump --dump-json-metadata)" % dev
+        dev, meta = luks_header(host, name)
+        if dev is None:
+            return False, meta
+        tokens = meta.get("tokens", {})
         tpm = [t for t in tokens.values() if t.get("type") == "systemd-tpm2" and t.get("keyslots")]
         if not tpm:
             return False, "%s (%s) has no systemd-tpm2 token in its LUKS2 header: enrol it with " \
@@ -220,6 +254,57 @@ def root_unlock(host):
                 "systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7" % (name, dev, wrong)
     return True, "%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (
         ", ".join(crypts), "; ".join(entries[n] for n in crypts))
+
+
+def recovery_keyslots(meta):
+    """Judge one LUKS2 header (the JSON of cryptsetup luksDump --dump-json-metadata) for the recovery
+    keyslot. Pure: it is given metadata, which holds no key, and returns (ok, why)."""
+    keyslots = set(meta.get("keyslots") or {})
+    tokens = [t for t in (meta.get("tokens") or {}).values() if isinstance(t, dict)]
+    named = {}
+    for token in tokens:
+        for slot in token.get("keyslots") or []:
+            named.setdefault(str(slot), []).append(token.get("type"))
+    recovery = [t for t in tokens if t.get("type") == "systemd-recovery"]
+    if not recovery:
+        return False, "no recovery keyslot (no systemd-recovery token): enrol the host's recovery key with " \
+            "deploy/baremetal/recovery-key.sh --enrol"
+    if len(recovery) != 1 or len(recovery[0].get("keyslots") or []) != 1:
+        return False, "%d systemd-recovery tokens naming %s keyslots: one host has ONE recovery key in one keyslot " \
+            "(a second is a second secret to keep, and an old one that still opens the disk)" % (
+                len(recovery), [len(t.get("keyslots") or []) for t in recovery])
+    slot = str(recovery[0]["keyslots"][0])
+    if slot not in keyslots:
+        return False, "the systemd-recovery token names keyslot %s, which does not exist" % slot
+    # Its OWN keyslot: one that the TPM token (or any other) also names would be opened by that
+    # credential too, and wiping either would take the other with it.
+    if len(named[slot]) != 1:
+        return False, "keyslot %s is named by %s: the recovery key must have a keyslot of its own" % (
+            slot, " and ".join(sorted(str(t) for t in named[slot])))
+    # A keyslot that no token names is a plain passphrase: the installer's, typically. Left in place it
+    # is the weakest way into the disk, beside a TPM policy and a 256-bit recovery key.
+    stray = sorted(keyslots - set(named), key=lambda s: (len(s), s))
+    if stray:
+        return False, "keyslot %s is named by no token (a leftover passphrase?): once the TPM and the recovery " \
+            "key are proven, wipe it with systemd-cryptenroll --wipe-slot=password" % ", ".join(stray)
+    return True, "recovery keyslot %s (systemd-recovery token), separate from %s" % (
+        slot, ", ".join(sorted("%s in keyslot %s" % (kinds[0], s) for s, kinds in named.items() if s != slot)) or "nothing else")
+
+
+def recovery_keyslot(host):
+    crypts, why = root_crypt_devices(host)
+    if crypts is None:
+        return False, why
+    found = []
+    for name in crypts:
+        dev, meta = luks_header(host, name)
+        if dev is None:
+            return False, meta
+        ok, why = recovery_keyslots(meta)
+        if not ok:
+            return False, "%s (%s): %s" % (name, dev, why)
+        found.append("%s (%s): %s" % (name, dev, why))
+    return True, "; ".join(found)
 
 
 def ima(host):
@@ -368,7 +453,7 @@ def pcr_list(mask):
 def credential_header(text):
     """What a systemd encrypted credential is sealed to, read from its header:
     (PCRs bound directly, PCRs bound through a signed policy, the signing key's pkfp or "").
-    ValueError, with the reason, for anything that is not a TPM-alone credential.
+    ValueError, with the reason, for anything that is not sealed to the host key and the TPM together.
 
     Layout (little-endian; measured on systemd 257): id[16], key size, block size, IV size, tag size
     (u32 each), the IV; then, aligned to 8: PCR mask u64, PCR bank u16, primary algorithm u16, blob
@@ -382,8 +467,8 @@ def credential_header(text):
         raise ValueError("too short to be an encrypted credential")
     kind = raw[:16].hex()
     if kind in CRED_REFUSED:
-        raise ValueError("sealed with %s, not the TPM alone" % CRED_REFUSED[kind])
-    if kind not in (CRED_TPM2, CRED_TPM2_PK):
+        raise ValueError("sealed with %s" % CRED_REFUSED[kind])
+    if kind not in (CRED_HOST_TPM2, CRED_HOST_TPM2_PK):
         raise ValueError("an unknown credential type (id %s)" % kind)
     try:
         tag_size = struct.unpack_from("<I", raw, 28)[0]
@@ -391,7 +476,7 @@ def credential_header(text):
         mask, bank, _alg, blob, policy = struct.unpack_from("<QHHII", raw, at)
         at = (at + 20 + blob + policy + 7) & ~7
         signed_mask, key = 0, b""
-        if kind == CRED_TPM2_PK:
+        if kind == CRED_HOST_TPM2_PK:
             signed_mask, size = struct.unpack_from("<QI", raw, at)
             key = raw[at + 12:at + 12 + size]
             if len(key) != size:
@@ -408,7 +493,7 @@ def credential_header(text):
     # binding, whatever its mask says: tpm_sha256_bank measures the bank the record means.
     if bank != TPM2_ALG_SHA256:
         raise ValueError("bound to PCR bank 0x%04x, not SHA-256 (0x000b)" % bank)
-    if kind == CRED_TPM2:
+    if kind == CRED_HOST_TPM2:
         return pcr_list(mask), [], ""
     try:
         return pcr_list(mask), pcr_list(signed_mask), rsa_pkfp(key)
@@ -419,6 +504,30 @@ def credential_header(text):
 def binding_text(direct, signed, pkfp):
     out = "PCRs %s" % ("+".join(map(str, direct)) or "none")
     return out + (", signed PCRs %s by key pkfp %s" % ("+".join(map(str, signed)), pkfp) if signed or pkfp else ", no signed policy")
+
+
+def host_key_protected(host):
+    """The other half of every PIN credential: systemd's host key. It must be root's alone and on a
+    filesystem with a dm-crypt device beneath it. On a clear disk it is one more file an old image can
+    read, and the credential is then worth no more than the TPM half alone."""
+    # %f is the raw st_mode in hex: 8100 is a regular file (0100000) with mode 0400. Not %F, the file
+    # type in words, which coreutils translates to the operator's language.
+    rc, out = host.run(["stat", "-c", "%f|%u", HOST_KEY])
+    if rc != 0:
+        return False, "the host key %s cannot be read (stat): seal-hsm-pin.sh creates it" % HOST_KEY
+    if out.strip() != "8100|0":
+        return False, "the host key %s must be a regular file, root's, mode 0400 (stat says mode 0x%s, owner %s)" % (
+            (HOST_KEY,) + tuple((out.strip().split("|") + ["?", "?"])[:2]))
+    rc, out = host.run(["findmnt", "-n", "-o", "SOURCE", "-T", HOST_KEY])
+    src = re.sub(r"\[.*\]$", "", out.strip())
+    if rc != 0 or not src:
+        return False, "cannot find the filesystem holding the host key %s" % HOST_KEY
+    rc, out = host.run(["lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", src])
+    crypts = [f[0] for f in (line.split() for line in out.splitlines()) if len(f) == 2 and f[1] == "crypt"]
+    if rc != 0 or not crypts:
+        return False, "the host key %s is on %s, which is not on dm-crypt: an image that boots without unlocking " \
+            "the root disk can read it, and the PIN is then guarded by the TPM alone" % (HOST_KEY, src)
+    return True, "the host key is root's, 0400, on %s" % ", ".join(crypts)
 
 
 def pin_credentials(host, expected=None):
@@ -451,8 +560,11 @@ def pin_credentials(host, expected=None):
             return False, "%s/%s is sealed as recorded but does NOT open on this boot (systemd-creds decrypt): it is cut or " \
                 "altered, sealed by another TPM or under another name, or this boot's PCRs or PCR signature do " \
                 "not satisfy its policy. regalia-kms cannot load it" % (CREDSTORE, name)
-    return True, "%d PIN credential(s) open on this boot, sealed to the TPM alone under %s, as recorded (%s)" % (
-        len(names), binding_text(*expected), ", ".join(names))
+    ok, detail = host_key_protected(host)
+    if not ok:
+        return False, detail
+    return True, "%d PIN credential(s) open on this boot, sealed to the host key and the TPM under %s, as recorded (%s); %s" % (
+        len(names), binding_text(*expected), ", ".join(names), detail)
 
 
 def hsm_ports(host):
@@ -506,7 +618,8 @@ def firewall(host):
 
 
 PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
-              tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock, ima_policy_loaded=ima,
+              tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock,
+              root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 

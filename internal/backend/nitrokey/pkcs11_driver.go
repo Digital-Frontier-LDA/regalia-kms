@@ -53,6 +53,7 @@ type PINRetryProbe interface {
 type cryptoki interface {
 	GetSlotList(bool) ([]uint, error)
 	GetTokenInfo(uint) (pkcs11.TokenInfo, error)
+	GetMechanismList(uint) ([]*pkcs11.Mechanism, error)
 	OpenSession(uint, uint) (pkcs11.SessionHandle, error)
 	CloseSession(pkcs11.SessionHandle) error
 	Login(pkcs11.SessionHandle, uint, string) error
@@ -76,8 +77,48 @@ type PKCS11Driver struct {
 	module  cryptoki
 	devAuth DevAuthProbe
 	secure  SecureChannel
+	// local is the attestation for tokens that have no secure messaging. While it is nil (the
+	// daemon was given no such evidence) the OpenPGP applet backend is not served at all.
+	local   SecureChannel
 	retries PINRetryProbe
 	close   func() error
+}
+
+// The two backends this driver serves. Both are PKCS#11 tokens behind one OpenSC module.
+//
+// OpenPGPAppletBackend is a YubiKey's OpenPGP applet as OpenSC's own OpenPGP card driver presents
+// it (regalia#541): the home of Ed25519 signing keys, which neither SmartCard-HSM offers. It is
+// served for signing only, and only over an attestation of its own (ServeLocalTokens). The
+// hand-written card driver in internal/backend/openpgp is a different thing and is not served.
+const (
+	smartCardHSMBackend  = "nitrokey-pkcs11"
+	OpenPGPAppletBackend = "yubikey-openpgp"
+)
+
+// ServeLocalTokens lets the driver open OpenPGPAppletBackend bindings, establishing each one
+// against local, the attestation that the token has no secure messaging. Call it before the driver
+// is used. Without it every such binding is refused: the SmartCard-HSM evidence is never accepted
+// for a token it does not describe.
+func (driver *PKCS11Driver) ServeLocalTokens(local SecureChannel) error {
+	if driver == nil || local == nil {
+		return errors.New("a local-token attestation is required")
+	}
+	driver.local = local
+	return nil
+}
+
+// channelFor names the attestation a binding is opened under, by its backend.
+func (driver *PKCS11Driver) channelFor(binding registry.Binding) (SecureChannel, error) {
+	switch binding.Backend {
+	case smartCardHSMBackend:
+		return driver.secure, nil
+	case OpenPGPAppletBackend:
+		if driver.local == nil {
+			return nil, errors.New("PKCS#11 device is not configured")
+		}
+		return driver.local, nil
+	}
+	return nil, errors.New("PKCS#11 device is not configured")
 }
 
 // NewPKCS11Driver loads one PKCS#11 module. Every Open receives a server-owned
@@ -117,8 +158,12 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if binding.Backend != "nitrokey-pkcs11" || strings.TrimSpace(binding.DeviceID) == "" || strings.TrimSpace(binding.DeviceSerial) == "" {
+	if strings.TrimSpace(binding.DeviceID) == "" || strings.TrimSpace(binding.DeviceSerial) == "" {
 		return nil, errors.New("PKCS#11 device is not configured")
+	}
+	secure, err := driver.channelFor(binding)
+	if err != nil {
+		return nil, err
 	}
 	deviceID, expectedSerial := binding.DeviceID, binding.DeviceSerial
 	selected, err := resolveSlot(driver.module, expectedSerial, string(binding.TokenLabel))
@@ -129,7 +174,7 @@ func (driver *PKCS11Driver) Open(ctx context.Context, binding registry.Binding) 
 	if err != nil {
 		return nil, errors.New("PKCS#11 session unavailable")
 	}
-	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: string(binding.TokenLabel), devAuth: driver.devAuth, secure: driver.secure, retries: driver.retries}, nil
+	return &pkcs11Session{module: driver.module, handle: handle, slot: selected, deviceID: deviceID, serial: expectedSerial, tokenLabel: string(binding.TokenLabel), devAuth: driver.devAuth, secure: secure, retries: driver.retries}, nil
 }
 
 // resolveSlot finds the one slot holding the commissioned token, on every call: a slot id is never
@@ -272,6 +317,67 @@ func (session *pkcs11Session) Login(ctx context.Context, pin []byte) error {
 	}
 	session.loggedIn = true
 	return nil
+}
+
+// ErrMechanismNotOffered means the token's own mechanism list lacks what an operation needs. It is
+// a definite answer about the token, not a failure to ask it.
+var ErrMechanismNotOffered = errors.New("the token does not offer the mechanism this operation needs")
+
+// requiredMechanism names the PKCS#11 mechanism an operation on a key of this algorithm is sent to
+// the token with, exactly as Sign, Unwrap and Derive below build it. Operations that never reach the
+// token with a mechanism (the public-key read, an RSA wrap done with the public key) need none.
+func requiredMechanism(operation, algorithm string) (uint, bool) {
+	switch operation {
+	case "sign":
+		if mechanism, err := signingMechanism(algorithm); err == nil {
+			return mechanism.Mechanism, true
+		}
+	case "unwrap":
+		switch algorithm {
+		case "aes-256":
+			return pkcs11.CKM_AES_KEY_WRAP_PAD, true
+		case "rsa2048", "rsa3072", "rsa4096":
+			return pkcs11.CKM_RSA_PKCS_OAEP, true
+		}
+	case "key-agreement":
+		if agreementAlgorithm(algorithm) {
+			return pkcs11.CKM_ECDH1_DERIVE, true
+		}
+	}
+	return 0, false
+}
+
+// OffersMechanism asks the token whether it lists the mechanism this operation needs.
+//
+// THE CAPABILITY MATRIX IS ONE ANSWER PER BACKEND, AND A BACKEND IS MORE THAN ONE TOKEN. It
+// advertises ed25519/sign and aes-256/unwrap for the PKCS#11 backend, and neither SmartCard-HSM on
+// the bench lists an EdDSA or AES mechanism (measured through OpenSC 0.26.1 on a Nitrokey HSM 2 and
+// a Pico HSM, regalia#541). A manifest binding such a key validated, the daemon started, and every
+// operation failed as a retryable "unavailable" after the PIN had been presented for nothing. The
+// token knows what it can do: C_GetMechanismList needs no login and says so.
+//
+// An algorithm or operation this driver has no mechanism for is not this check's to refuse; the
+// operation's own path does that.
+func (session *pkcs11Session) OffersMechanism(ctx context.Context, operation, algorithm string) error {
+	if err := session.usable(ctx); err != nil {
+		return err
+	}
+	required, needed := requiredMechanism(operation, algorithm)
+	if !needed {
+		return nil
+	}
+	offered, err := session.module.GetMechanismList(session.slot)
+	// A list with nothing in it is not a token that can do nothing: it is a list that was not
+	// read. Calling it a definite "no" would refuse every object on the token at startup.
+	if err != nil || len(offered) == 0 {
+		return errors.New("PKCS#11 mechanism list unavailable")
+	}
+	for _, mechanism := range offered {
+		if mechanism != nil && mechanism.Mechanism == required {
+			return nil
+		}
+	}
+	return ErrMechanismNotOffered
 }
 
 func (session *pkcs11Session) Sign(ctx context.Context, objectID, algorithm string, data []byte) ([]byte, error) {

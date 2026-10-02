@@ -604,7 +604,7 @@ class OnSwtpm(unittest.TestCase):
         # peer b: its heartbeat counter and clock on its own TPM, and its attestation verifier for a (intake + enrollment)
         counter = hb.Counter("0x1500018", tcti=self.tcti["b"], lock_path=self.d + "/lock")
         counter.define()
-        self.freshness = hb.Freshness(counter, self.clock, hb.TpmClock(tcti=self.tcti["b"]), self.d + "/freshness.json")
+        self.freshness = hb.Freshness(counter, self.clock, hbt.simulated_ticks(self, self.tcti["b"]), self.d + "/freshness.json")
         self.freshness.accept(hbt.beat(self.m1, 1), self.m1)
         probe = self.quote("a", "00" * 32, "00" * 32)[0]
         policy = {"schema": attest.POLICY_SCHEMA, "nodes": {"a": {"ek_name": names["a"]["ek"], "pcrs": {"7": "00" * 32},
@@ -659,7 +659,7 @@ class OnSwtpm(unittest.TestCase):
         self.assertIn(reason, str(caught.exception))
 
     def test_issue_hold_revoke_and_reboot_on_real_tpm_quotes(self):
-        holder = lease.Holder("a", SESSION, self.clock, hb.TpmClock(tcti=self.tcti["a"]), self.d + "/lease.json")
+        holder = lease.Holder("a", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease.json")
         # 14.1: b's TPM signs a lease for the re-attested a; a holds it
         envelope = self.issue(holder, self.m1, SESSION)
         self.assertEqual(holder.install(envelope, self.m1), 300)
@@ -684,11 +684,11 @@ class OnSwtpm(unittest.TestCase):
         self.refused("EXPIRED: the runtime lease expired", holder.check, self.m1)
 
     def test_a_reboot_of_the_subject_needs_a_new_attested_session(self):
-        holder = lease.Holder("a", SESSION, self.clock, hb.TpmClock(tcti=self.tcti["a"]), self.d + "/lease.json")
+        holder = lease.Holder("a", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease.json")
         old_request = holder.request()
         holder.install(self.issue(holder, self.m1, SESSION), self.m1)
         self.tcti["a"] = self.boot("a")                  # a reboots: /run is gone, the TPM's resetCount moves on
-        rebooted = lease.Holder("a", OTHER_SESSION, self.clock, hb.TpmClock(tcti=self.tcti["a"]), self.d + "/lease-after-reboot.json")
+        rebooted = lease.Holder("a", OTHER_SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/lease-after-reboot.json")
         self.refused("no runtime lease is held", rebooted.check, self.m1)
         # the old boot session cannot be re-attested after the reboot, so a request from the old boot gets nothing
         self.refused("attestation is refused: a boot session or ephemeral key from an earlier boot", lease.issue, self.m1, "b",
