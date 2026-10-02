@@ -132,6 +132,17 @@ class Rendering(Case):
         self.refused("the authority's is given", wgsvc.reconcile, self.m1, wgsvc.AUTHORITY, {}, PRIVATE, run=Reconciling.Host())
         self.refused("a node's key is the manifest's", wgsvc.reconcile, self.m1, "a", {}, PRIVATE, run=Reconciling.Host(), own_key=AUTHORITY)
 
+    def test_two_keys_that_derive_one_address_are_refused(self):
+        from unittest import mock
+        real = wgsvc.address
+        collide = lambda key: real(KEY["b"]) if key in (KEY["b"], KEY["c"]) else real(key)        # noqa: E731
+        with mock.patch.object(wgsvc, "address", collide):
+            self.refused("two keys derive the same tunnel address", wgsvc.conf, self.m1, "a", {})
+            self.refused("two keys derive the same tunnel address", wgsvc.conf, hbt.manifest(c="REVOKED_STOLEN"), "a", {})   # a terminal node's too
+        authority = {"key": AUTHORITY, "underlay": "203.0.113.50", "port": 51900}
+        with mock.patch.object(wgsvc, "address", lambda key: real(KEY["a"]) if key == AUTHORITY else real(key)):
+            self.refused("two keys derive the same tunnel address", wgsvc.conf, self.m1, "b", {}, authority)
+
     def test_what_cannot_be_rendered_is_refused(self):
         self.refused("x is not in the manifest", wgsvc.conf, self.m1, "x", {})
         self.refused("underlays maps node IDs to addresses", wgsvc.conf, self.m1, "a", None)

@@ -120,6 +120,14 @@ def conf(manifest, node_id, underlays, authority=None, listen_port=LISTEN_PORT):
         require(key not in seen and key not in {n["wg_service_pub"] for n in manifest["nodes"]}, "the authority's key is a node's key")
         text += "\n[Peer]\n# %s\nPublicKey = %s\nAllowedIPs = %s/128\nEndpoint = %s:%d\n" % (
             "authority", wg_key(key), address(key), _underlay(authority["underlay"], "authority.underlay"), _port(authority["port"], "authority.port"))
+    # ONE ADDRESS, ONE KEY. Two keys whose hashes share 80 bits would share an address, and the caller of
+    # a connection from it could not be told apart. Finding such a pair takes about 2^40 work, but only a
+    # key the root signer pins is ever a peer, so it would take the signer's help; still, it is refused
+    # here rather than assumed: every node of the manifest (this one and terminal ones included) and the
+    # authority must derive addresses of their own.
+    keys = [n["wg_service_pub"] for n in manifest["nodes"]] + ([authority["key"]] if authority is not None else [])
+    derived = [address(k) for k in keys]
+    require(len(set(derived)) == len(derived), "two keys derive the same tunnel address: they could not be told apart")
     return text
 
 
