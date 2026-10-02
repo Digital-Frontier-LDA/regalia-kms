@@ -222,8 +222,13 @@ Each node has one accepted set, or two while an update is under way. An update i
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
    unlock it holds the new manifest and has vouched for it, in its current boot, in the last five
-   minutes (a runtime lease for this boot session). Never more than one node can pass at a time: the
-   first, in order, that is not on NEXT, and only once its peers have seen its current boot. A node that is down
+   minutes (a runtime lease for this boot session). With every record current, one node can pass at
+   a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
+   back" from its own last re-attestation of that node, which it repeats only at the next lease
+   renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
+   to the lease lifetime (five minutes), and two nodes can then be down together. Three cannot. So
+   wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
+   as the interlock. A node that is down
    and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
    unsigned way to skip it.
 4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
