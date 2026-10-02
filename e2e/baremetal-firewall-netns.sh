@@ -44,6 +44,18 @@ for h in "${NS[@]}"; do
 done
 x(){ local h="$1"; shift; ip netns exec "$(n "$h")" "$@"; }
 
+# IPv6 on the bridge (ULA, no duplicate-address wait): the KMS host and the client, to prove IPv6 is dropped.
+x kms ip addr add fd00:5:7::10/64 dev eth0 nodad; x client ip addr add fd00:5:7::20/64 dev eth0 nodad
+# A routed segment BEHIND the KMS host: the "inside" host is reachable only by forwarding through it, so
+# the forward chain carries real traffic. The unauthorized host routes to it via the KMS host.
+ip netns add "$(n inside)"; NS+=(inside)
+ip link add "vin$SFX" type veth peer name eth0 netns "$(n inside)"; ip link set "vin$SFX" netns "$(n kms)"
+x kms ip addr add 10.99.0.1/24 dev "vin$SFX"; x kms ip link set "vin$SFX" up
+x inside ip link set lo up; x inside ip link set eth0 up; x inside ip addr add 10.99.0.2/24 dev eth0
+x inside ip route add default via 10.99.0.1
+x kms sysctl -qw net.ipv4.ip_forward=1
+x unauth ip route add 10.99.0.0/24 via "${IP[kms]}" dev eth0 onlink
+
 cat > "$T/site.json" <<EOF
 {"schema": "regalia.baremetal-site/v1", "site": "lab", "host_ipv4": "${IP[kms]}", "kms_port": 8443, "ssh_port": 22,
  "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["${IP[mon]}/32"], "admin_cidrs": ["203.0.113.0/28"],
@@ -58,15 +70,21 @@ def tcp(p):
     s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("0.0.0.0", p)); s.listen()
     while True:
         c, _ = s.accept(); c.close()
+def tcp6(p):
+    s = socket.socket(socket.AF_INET6); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1); s.bind(("::", p)); s.listen()
+    while True:
+        c, _ = s.accept(); c.close()
 def udp(p):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("0.0.0.0", p))
     while True:
         d, a = s.recvfrom(64); s.sendto(d, a)
 for spec in sys.argv[1:]:
-    proto, port = spec.split(":"); threading.Thread(target=tcp if proto == "tcp" else udp, args=(int(port),), daemon=True).start()
+    proto, port = spec.split(":"); threading.Thread(target={"tcp": tcp, "tcp6": tcp6, "udp": udp}[proto], args=(int(port),), daemon=True).start()
 threading.Event().wait()
 PY
-x kms python3 "$T/listen.py" tcp:8443 tcp:22 tcp:9999 &
+x kms python3 "$T/listen.py" tcp:8443 tcp:22 tcp:9999 tcp6:8443 &
+x inside python3 "$T/listen.py" tcp:80 &
 x audit python3 "$T/listen.py" tcp:6514 tcp:7000 &
 x ntp python3 "$T/listen.py" udp:123 udp:124 &
 x unauth python3 "$T/listen.py" tcp:6514 tcp:443 &
@@ -74,9 +92,8 @@ sleep 1
 
 tcpok(){ local h="$1" dst="$2" port="$3"; x "$h" python3 -c "
 import socket, sys
-s = socket.socket(); s.settimeout(1)
 try:
-    s.connect(('$dst', $port)); sys.exit(0)
+    socket.create_connection(('$dst', $port), timeout=1).close(); sys.exit(0)
 except OSError:
     sys.exit(1)"; }
 udpok(){ x kms python3 -c "
@@ -87,6 +104,8 @@ try:
 except OSError:
     sys.exit(1)"; }
 hdr "0  control: before the ruleset, the lab really connects (so a later refusal is the firewall's)"
+tcpok client fd00:5:7::10 8443 && P "control: the client reaches the KMS port over IPv6 before the ruleset" || F "control: no IPv6 path: the IPv6 check below would prove nothing"
+tcpok unauth 10.99.0.2 80 && P "control: traffic is FORWARDED through the KMS host before the ruleset" || F "control: no routed path through the KMS host: the forward check below would prove nothing"
 tcpok unauth "${IP[kms]}" 9999 && P "port 9999 on the KMS host is reachable before the ruleset" || F "the lab cannot connect at all: every refusal below would prove nothing"
 tcpok kms "${IP[unauth]}" 443 && P "the KMS host reaches an undeclared host before the ruleset" || F "outbound control failed"
 # Every listener a negative check below relies on must answer now; a listener that failed to bind would
@@ -118,6 +137,10 @@ hdr "2  an undeclared port on the KMS host is reachable from nowhere"
 for h in client mon admin unauth; do
   tcpok "$h" "${IP[kms]}" 9999 && F "$h reached port 9999" || P "$h cannot reach port 9999"
 done
+
+hdr "2b  IPv6 and forwarding are denied by behaviour, not only by policy"
+tcpok client fd00:5:7::10 8443 && F "the KMS port was reachable over IPv6" || P "the KMS port is not reachable over IPv6 (dropped)"
+tcpok unauth 10.99.0.2 80 && F "traffic was forwarded through the KMS host" || P "nothing is forwarded through the KMS host (forward chain drops)"
 
 hdr "3  outbound: only the declared sinks"
 tcpok kms "${IP[audit]}" 6514 && P "audit sink 6514/tcp reachable" || F "audit sink unreachable"

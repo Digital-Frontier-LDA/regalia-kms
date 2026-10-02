@@ -60,6 +60,37 @@ class DuplicateKeys(unittest.TestCase):
             Path(f.name).unlink()
 
 
+class ProbeErrors(unittest.TestCase):
+    """A probe-host failure must never read as 'the port is closed'."""
+
+    def test_no_route_is_a_refusal_not_a_closed_port(self):
+        import errno
+        from unittest import mock
+        from deploy.baremetal import network_probe
+        err = OSError(errno.ENETUNREACH, "Network is unreachable")
+        with mock.patch.object(network_probe.socket, "create_connection", side_effect=err):
+            with self.assertRaises(network_probe.ProbeFailure):
+                network_probe.connect("203.0.113.66", "192.0.2.10", 8443, 1)
+        for e in (OSError(errno.ECONNREFUSED, "refused"), OSError(errno.EHOSTUNREACH, "unreachable"),
+                  network_probe.socket.timeout()):
+            with self.subTest(e=e), mock.patch.object(network_probe.socket, "create_connection", side_effect=e):
+                self.assertEqual(network_probe.connect("203.0.113.66", "192.0.2.10", 8443, 1)[0], False)
+
+    def test_main_exits_2_when_the_probe_host_has_no_route(self):
+        import errno
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+        from unittest import mock
+        from deploy.baremetal import network_probe
+        err = OSError(errno.ENETUNREACH, "Network is unreachable")
+        with mock.patch.object(network_probe.socket, "create_connection", side_effect=err), \
+                mock.patch.object(network_probe.socket.socket, "bind", return_value=None), \
+                redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as e:
+            rc = network_probe.main([str(EXAMPLE), "--role", "unauthorized", "--source-ip", "203.0.113.66"])
+        self.assertEqual(rc, 2, out.getvalue() + e.getvalue())
+        self.assertIn("not a firewall answer", e.getvalue())
+
+
 class Render(unittest.TestCase):
     def setUp(self):
         self.cfg = sitecfg.validate(json.loads(EXAMPLE.read_text()))
