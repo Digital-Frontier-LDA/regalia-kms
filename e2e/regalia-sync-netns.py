@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """regalia-sync over real WireGuard, in network namespaces (#80, step 2).
 
-    sudo python3 e2e/regalia-sync-netns.py
+    sudo python3 -Es e2e/regalia-sync-netns.py
 
 Four throwaway namespaces on one bridge: the nodes a, b and c, and the revocation authority. Each has a real
 WireGuard interface `wg-svc`, configured by wgsvc.reconcile from the manifest it holds, with real keys and

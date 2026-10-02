@@ -526,7 +526,7 @@ jobs:
       - name: regalia-sync between three namespaces and the authority (real WireGuard)
         run: |
           set -o pipefail
-          sudo python3 e2e/regalia-sync-netns.py | tee "$RUNNER_TEMP/sync.log"
+          sudo python3 -Es e2e/regalia-sync-netns.py | tee "$RUNNER_TEMP/sync.log"
           grep -q '^regalia-sync-netns: 32 passed, 0 failed$' "$RUNNER_TEMP/sync.log" || {
             echo "::error::the sync test did not run all 32 checks" >&2; exit 1; }
 
