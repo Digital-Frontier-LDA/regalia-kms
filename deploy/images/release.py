@@ -15,6 +15,7 @@ REPOSITORY = "Digital-Frontier-LDA/regalia-kms"
 WORKFLOW = REPOSITORY + "/.github/workflows/appliance.yml"
 REQUIRED = {"regalia-debian13-amd64.qcow2", "rootfs.tar.gz", "regalia-kms", "build-report.json",
             "scan-report.json", "sbom.syft.json", "sbom.spdx.json", "sbom.cdx.json", "vulnerabilities.json"}
+REQUIRED.add("sbom.attestation.spdx.json")
 
 
 def artifact_set(directory: Path) -> dict:
@@ -56,7 +57,7 @@ def prepare(directory: Path, commit: str, ref: str) -> dict:
         "build evidence does not bind this filesystem and executable")
     require(scan.get("rootfs_sha256") == files["rootfs.tar.gz"]["sha256"], "scan evidence does not bind this filesystem")
     require(isinstance(scan.get("evidence"), dict) and
-            {"sbom.syft.json", "sbom.spdx.json", "sbom.cdx.json", "vulnerabilities.json"} <= scan["evidence"].keys(),
+            {"sbom.syft.json", "sbom.spdx.json", "sbom.attestation.spdx.json", "sbom.cdx.json", "vulnerabilities.json"} <= scan["evidence"].keys(),
             "scan evidence is incomplete")
     for name, digest in scan["evidence"].items():
         require(name in files and files[name]["sha256"] == digest, "scan evidence artifact differs")
@@ -108,25 +109,33 @@ def verify_offline(manifest: Path, checksums: Path, signature: Path, key: Path,
     return result
 
 
-def verify_attestation(artifact: Path, commit: str, ref: str, bundle: Path | None = None) -> dict:
+def verify_attestation(artifact: Path, commit: str, ref: str, bundle: Path | None = None,
+                       sbom: Path | None = None) -> dict:
     source(commit, ref)
+    predicate_type = "https://spdx.dev/Document/v2.3" if sbom is not None else "https://slsa.dev/provenance/v1"
     command = ["gh", "attestation", "verify", str(artifact), "--repo", REPOSITORY,
                "--signer-workflow", WORKFLOW, "--cert-identity", f"https://github.com/{WORKFLOW}@{ref}",
                "--cert-oidc-issuer", "https://token.actions.githubusercontent.com",
                "--source-digest", commit, "--source-ref", ref, "--deny-self-hosted-runners",
-               "--predicate-type", "https://slsa.dev/provenance/v1", "--format", "json"]
+               "--predicate-type", predicate_type, "--format", "json"]
     if bundle is not None:
         command += ["--bundle", str(bundle)]
     results = json.loads(run(command, timeout=180))
     require(isinstance(results, list) and bool(results), "no verified provenance returned")
+    expected_sbom = json.loads(read_regular(sbom, 16 * 1024 ** 2)) if sbom is not None else None
+    if expected_sbom is not None:
+        require(expected_sbom.get("spdxVersion") == "SPDX-2.3", "unsupported SBOM attestation format")
     digest, _ = hash_regular(artifact, "sha256")
     for result in results:
         statement = result.get("verificationResult", {}).get("statement", {})
-        require(statement.get("predicateType") == "https://slsa.dev/provenance/v1"
+        require(statement.get("predicateType") == predicate_type
                 and any(subject.get("digest", {}).get("sha256") == digest for subject in statement.get("subject", [])),
                 "verified provenance does not bind this artifact")
+        if expected_sbom is not None:
+            require(statement.get("predicate") == expected_sbom, "attested SBOM differs from released SBOM")
     return {"schema": "regalia.attestation-verification/v1", "status": "verified", "sha256": digest,
-            "source_commit": commit, "source_ref": ref, "verified_attestations": len(results)}
+            "source_commit": commit, "source_ref": ref, "predicate_type": predicate_type,
+            "verified_attestations": len(results)}
 
 
 def main():
@@ -152,6 +161,7 @@ def main():
     attest = modes.add_parser("verify-attestation")
     attest.add_argument("artifact", type=Path)
     attest.add_argument("--bundle", type=Path)
+    attest.add_argument("--sbom", type=Path, help="verify an SPDX 2.3 attestation and its exact released SBOM")
     for mode in (prep, verify, offline, attest):
         mode.add_argument("--commit", required=True)
         mode.add_argument("--ref", required=True)
@@ -170,7 +180,7 @@ def main():
             result = verify_offline(args.manifest, args.checksums, args.signature, args.key, args.fingerprint,
                                     args.artifacts, args.commit, args.ref)
         else:
-            result = verify_attestation(args.artifact, args.commit, args.ref, args.bundle)
+            result = verify_attestation(args.artifact, args.commit, args.ref, args.bundle, args.sbom)
         print(json.dumps(result, sort_keys=True, indent=2))
     except (VerificationError, OSError, ValueError, subprocess.SubprocessError) as error:
         parser.exit(1, f"REFUSED: {error}\n")

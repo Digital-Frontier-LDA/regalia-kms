@@ -31,7 +31,7 @@ def payload(root):
              "export": {name: files[name]["sha256"] for name in ("rootfs.tar.gz", "regalia-kms")}}
     scanner = {"schema": "regalia.image-scan/v1", "status": "passed", "fail_on": "High",
                "rootfs_sha256": files["rootfs.tar.gz"]["sha256"], "evidence": {
-                   name: files[name]["sha256"] for name in ("sbom.syft.json", "sbom.spdx.json", "sbom.cdx.json", "vulnerabilities.json")}}
+                   name: files[name]["sha256"] for name in ("sbom.syft.json", "sbom.spdx.json", "sbom.attestation.spdx.json", "sbom.cdx.json", "vulnerabilities.json")}}
     (directory / "build-report.json").write_text(json.dumps(build))
     (directory / "scan-report.json").write_text(json.dumps(scanner))
     return directory
@@ -131,6 +131,22 @@ class ReleaseTests(unittest.TestCase):
             release.verify_attestation(artifact, COMMIT, REF)
 
 
+    @patch("deploy.images.release.run")
+    def test_verified_sbom_is_bound_to_disk_and_released_document(self, verifier):
+        artifact = self.payload / "regalia-kms"
+        sbom = self.root / "sbom.json"
+        document = {"spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT"}
+        sbom.write_text(json.dumps(document))
+        statement = {"predicateType": "https://spdx.dev/Document/v2.3", "predicate": document,
+                     "subject": [{"digest": {"sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}}]}
+        verifier.return_value = json.dumps([{"verificationResult": {"statement": statement}}])
+        self.assertEqual(release.verify_attestation(artifact, COMMIT, REF, sbom=sbom)["status"], "verified")
+        document["SPDXID"] = "SPDXRef-DIFFERENT"
+        sbom.write_text(json.dumps(document))
+        with self.assertRaisesRegex(VerificationError, "SBOM differs"):
+            release.verify_attestation(artifact, COMMIT, REF, sbom=sbom)
+
+
 class OfflineSigningTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -167,6 +183,21 @@ class OfflineSigningTests(unittest.TestCase):
 
 
 class ScannerTests(unittest.TestCase):
+    def test_compact_sbom_retains_every_package_and_package_relationship(self):
+        document = {"spdxVersion": "SPDX-2.3", "SPDXID": "SPDXRef-DOCUMENT",
+                    "packages": [{"SPDXID": "SPDXRef-A", "filesAnalyzed": True,
+                                  "packageVerificationCode": {"packageVerificationCodeValue": "1" * 40}},
+                                 {"SPDXID": "SPDXRef-B", "filesAnalyzed": True}],
+                    "files": [{"SPDXID": "SPDXRef-FILE"}], "relationships": [
+                        {"spdxElementId": "SPDXRef-A", "relatedSpdxElement": "SPDXRef-B", "relationshipType": "DEPENDS_ON"},
+                        {"spdxElementId": "SPDXRef-A", "relatedSpdxElement": "SPDXRef-FILE", "relationshipType": "CONTAINS"}]}
+        compact = scan.compact_spdx(document)
+        self.assertEqual([p["SPDXID"] for p in compact["packages"]], ["SPDXRef-A", "SPDXRef-B"])
+        self.assertEqual(compact["relationships"], document["relationships"][:1])
+        self.assertNotIn("files", compact)
+        self.assertNotIn("packageVerificationCode", compact["packages"][0])
+        self.assertTrue(document["packages"][0]["filesAnalyzed"], "original full inventory changed")
+
     def test_findings_and_tool_errors_fail_closed(self):
         result = {"matches": [], "descriptor": {"db": {"status": {
             "valid": True, "built": datetime.now(timezone.utc).isoformat()}}}}

@@ -18,6 +18,25 @@ from .verify import VerificationError, hash_regular, read_regular, require
 SEVERITIES = {"Unknown": 0, "Negligible": 0, "Low": 1, "Medium": 2, "High": 3, "Critical": 4}
 
 
+def compact_spdx(document: dict) -> dict:
+    """Retain every package while leaving file inventory in the full SBOM."""
+    require(document.get("spdxVersion") == "SPDX-2.3" and isinstance(document.get("packages"), list),
+            "invalid SPDX document")
+    result = json.loads(json.dumps(document))
+    identifiers = {package["SPDXID"] for package in result["packages"]}
+    require(len(identifiers) == len(result["packages"]), "duplicate SPDX package identifiers")
+    identifiers.update({result["SPDXID"], "NONE", "NOASSERTION"})
+    for package in result["packages"]:
+        package["filesAnalyzed"] = False
+        package["licenseConcluded"] = "NOASSERTION"
+        for key in ("licenseInfoFromFiles", "packageVerificationCode", "hasFiles"):
+            package.pop(key, None)
+    result.pop("files", None)
+    result["relationships"] = [relation for relation in result.get("relationships", [])
+        if relation["spdxElementId"] in identifiers and relation["relatedSpdxElement"] in identifiers]
+    return result
+
+
 def project_rootfs(archive_path: Path, destination: Path, *, limit: int = 4 * 1024 ** 3) -> dict:
     """Project regular files for cataloging, without materializing archive links."""
     size = count = 0
@@ -81,9 +100,20 @@ def scan(rootfs: Path, tools: Path, output: Path, threshold: str = "High") -> di
     try:
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("GRYPE_", "SYFT_"))}
+        environment["SYFT_CHECK_FOR_APP_UPDATE"] = "false"
         config = output / "scanner-config.json"
         config.write_text('{"ignore": [], "exclude": [], "only-fixed": false}\n')
         with tempfile.TemporaryDirectory(prefix="regalia-rootfs-projection-") as temporary:
+            probe = Path(temporary) / ".case-probe"
+            probe.mkdir()
+            try:
+                (probe / "lower").write_text("")
+                with (probe / "LOWER").open("x"):
+                    pass
+            except FileExistsError as error:
+                raise VerificationError("Linux scanning needs a case-sensitive filesystem; use lab.appliance.scan_docker") from error
+            finally:
+                shutil.rmtree(probe)
             report["projection"] = project_rootfs(rootfs, Path(temporary))
             # No code from the image is executed; package databases and regular
             # ELF/Go binaries are cataloged from a link-free private projection.
@@ -97,8 +127,14 @@ def scan(rootfs: Path, tools: Path, output: Path, threshold: str = "High") -> di
         require(sbom.get("distro", {}).get("id") == "debian" and str(sbom["distro"].get("version", "")).startswith("13"),
                 "SBOM did not identify Debian 13")
         report["packages"] = len(sbom["artifacts"])
+        full_spdx = json.loads(read_regular(output / "sbom.spdx.json", 128 * 1024 ** 2))
+        package_spdx = json.dumps(compact_spdx(full_spdx), sort_keys=True, separators=(",", ":")).encode()
+        require(len(package_spdx) <= 16 * 1024 ** 2, "package SBOM exceeds GitHub attestation size limit")
+        (output / "sbom.attestation.spdx.json").write_bytes(package_spdx + b"\n")
         environment.update(GRYPE_DB_VALIDATE_AGE="true", GRYPE_DB_MAX_ALLOWED_BUILT_AGE="120h",
                            GRYPE_CHECK_FOR_APP_UPDATE="false")
+        if os.environ.get("REGALIA_SCANNER_CACHE"):
+            environment["GRYPE_DB_CACHE_DIR"] = os.environ["REGALIA_SCANNER_CACHE"]
         with (output / "vulnerabilities.json").open("w") as results:
             completed = subprocess.run([str(grype), "--config", str(config), "sbom:" + str(output / "sbom.syft.json"),
                                         "--fail-on", threshold.lower(), "--output", "json"],

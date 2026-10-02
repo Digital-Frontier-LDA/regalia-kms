@@ -1,0 +1,125 @@
+# Debian appliance prototype and release pipeline
+
+## Objective
+
+Build an uncommissioned Debian 13 amd64 disk using the authenticated installer,
+boot it under QEMU, inventory and scan its contents, and produce verifiable release
+artifacts. Reuse the signing/attestation/SBOM patterns from
+`redoubt-cysec/provenance-template` at commit
+`90544029e6c4793c3bc7046aa50a47b18853731b`, with exact signer identities,
+authenticated tools, fail-closed scans and exact artifact rebuild comparisons.
+
+## Ordered slices
+
+1. Verified installer -> unattended UEFI Debian installation -> hardened OS and
+   KMS executable -> QEMU acceptance evidence. The image is uncommissioned: no
+   node identity, PIN, disk key, recovery secret or service configuration.
+2. Authenticated, version-pinned Syft/Grype -> final filesystem SBOM and scan ->
+   hash-bound provenance and release manifest. Tool or scanner failures block
+   release. Findings require explicit review, never an implicit pass.
+3. Exact signer verification for blobs and GitHub attestations, signed release
+   workflow, tampering drills and deterministic artifact rebuild checks.
+
+## Boundaries
+
+QEMU receives only a disposable image file and verified installer. No host block
+devices, hardware credentials, Docker socket or management ports are exposed.
+Use an operator-owned artifact directory. The installer/build guest can reach
+Debian and Go repositories; the resulting uncommissioned image has default-deny
+networking, locked accounts and a gated KMS service.
+
+The reusable template disk is unencrypted and contains no commissioned secrets.
+Per-node LUKS2/TPM+peer provisioning is a separate ceremony. Never deploy this
+prototype before disk commissioning, signed boot measurements, hardware tests and
+release approval. A CI signature identifies our builder; Debian publisher trust
+comes from the verified installer and authenticated APT metadata/package hashes.
+The QEMU binary, build host and repository policy are trusted build infrastructure.
+
+## Commands and structure
+
+From the repository root:
+
+```sh
+python3 -m lab.appliance.build --media deploy/images/.artifacts/debian-13.7.0-amd64
+```
+
+The builder requires QEMU x86, xorriso, cpio, gzip, GnuPG and Python 3.11+.
+`preseed.cfg`, `finish.sh` and `acceptance.sh` are the guest build/verification
+inputs; `build.py` is the host orchestrator. Artifacts go under ignored `.artifacts/`.
+Python verification uses unittest and real external signing tools where available.
+Build inputs are frozen before guest launch. Package repositories
+are authenticated but not snapshot-pinned; disk reproducibility is not yet claimed.
+
+## Security Findings
+
+The appliance is a prototype until independently authenticated provenance,
+vulnerability review, release signer custody and hardware commissioning are complete.
+
+## Checks Performed
+
+Build and boot evidence records source hashes, installer verification, packages,
+toolchain, service/network restrictions and absence of commissioned configuration.
+
+## Residual Risk
+
+Emulation does not qualify physical TPM measurements, firmware, HSM adapters,
+secret zeroization or theft resistance. Build provenance does not prove a benign build.
+
+## Recommendation
+
+Keep release consumption fail-closed. Use disposable signing keys only for negative
+tests; production trusts an explicitly approved workflow or offline release signer.
+
+### Linux and macOS builders
+
+The default firmware paths select Debian/Ubuntu OVMF on Linux or Homebrew EDK2
+on macOS. Explicit `--firmware` and `--variables` overrides must refer to a
+compatible reviewed pair. `--acceleration kvm` is selected only when `/dev/kvm`
+is accessible; otherwise the builder uses TCG. The x86 guest is slower on Apple
+Silicon. Linux CI allows 150 minutes for installation/build; acceptance has its
+own ten-minute timeout. A failed guest leaves diagnostic files and a failed
+report under `.artifacts/.appliance-build-*`, never a passing output directory.
+Build inputs are copied into private staging before QEMU starts and their exact
+hashes appear in the report.
+
+```sh
+python3 -m deploy.images.scan lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
+  --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan
+python3 -m lab.appliance.collect --build lab/appliance/.artifacts/debian13-prototype \
+  --scan lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/release \
+  --commit FULL_SOURCE_COMMIT --ref refs/heads/main
+```
+
+The collection step refuses failed scans and copies only regular files into a
+flat payload. See `deploy/images/README.md` for signer setup, consumption checks
+and the distinction between repeatable binaries and reproducible disks.
+
+### Case-sensitive scans on macOS
+
+Linux kernel packages contain filenames differing only by case. macOS's default
+filesystem cannot faithfully project these names. On this development machine use:
+
+```sh
+python3 -m lab.appliance.scan_docker lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
+  --tools deploy/images/.artifacts/scanners-linux --output lab/appliance/.artifacts/docker-scan
+```
+
+The helper authenticates Linux scanner archives on the host before running them
+in a case-sensitive Docker overlay. It pins the local development runner by its
+image ID, uses `--pull=never`, drops capabilities, enables `no-new-privileges`,
+runs as the host UID, and mounts only scanner code/binaries, the input archive and
+one output directory. No Docker socket or hardware devices are mounted. HTTPS
+uses the trusted **host** root CA store, never certificates from the scanned
+image. TLS verification remains enabled. Runner metadata records the image ID
+and CA-store hash. The existing runner has no publisher authentication and remains
+development-only; production CI scans natively on its trusted Linux builder.
+
+`lab.appliance.probe` checks a normal UEFI boot in a disposable disk overlay,
+without mutating the reusable base image. It requires `multi-user.target`, verifies
+that the export test does not rerun, and requests a clean ACPI shutdown. This
+check also runs at the end of new builds. Private temporary monitor sockets use
+short paths because macOS limits Unix socket path lengths.
+
+## Rebuild status
+
+The final recipe includes fixes discovered by live installation and scanning: masked serial getty, explicit disposable Go cache paths, and removal of obsolete installer kernels. The recorded prototype was repaired and then boot/scan validated; see `VALIDATION.md`. A fresh uninterrupted run of this complete recipe remains a main-branch workflow check. No production approval is implied by a successful boot.

@@ -1,0 +1,138 @@
+name: Debian appliance prototype
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: Sign passing prototype artifacts (requires configured appliance-signing environment)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appliance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Install build infrastructure and pinned verifier
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso cpio gnupg
+          mkdir -p "$RUNNER_TEMP/regalia-tools" deploy/images/.artifacts
+          sh deploy/images/bootstrap-cosign.sh "$RUNNER_TEMP/regalia-tools/cosign"
+          echo "$RUNNER_TEMP/regalia-tools" >> "$GITHUB_PATH"
+      - name: Authenticate installer and scanner publishers
+        run: |
+          python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+          python3 -m deploy.images.tools deploy/images/.artifacts/scanners
+      - name: Install and boot the hardened prototype
+        run: python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000
+      - name: Scan final image contents and prepare exact release manifest
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          python3 -m deploy.images.scan lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
+            --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan
+          python3 -m lab.appliance.collect --build lab/appliance/.artifacts/debian13-prototype \
+            --scan lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/release \
+            --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
+      - name: Retain passing prototype artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: appliance-unsigned
+          path: lab/appliance/.artifacts/release/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain diagnostics, including blocked scans
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: appliance-evidence
+          path: |
+            lab/appliance/.artifacts/**/build-report.json
+            lab/appliance/.artifacts/**/install.log
+            lab/appliance/.artifacts/**/acceptance.log
+            lab/appliance/.artifacts/scan/*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  sign:
+    needs: build
+    if: inputs.sign && github.ref == 'refs/heads/main'
+    environment: appliance-signing
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: appliance-unsigned
+          path: release
+      - name: Recheck content bindings and bootstrap the pinned verifier
+        env:
+          SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
+        run: |
+          python3 -m deploy.images.release prepare release/payload --output "$RUNNER_TEMP/release.json" \
+            --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
+          cmp release/release.json "$RUNNER_TEMP/release.json"
+          mkdir -p "$RUNNER_TEMP/regalia-tools"
+          sh deploy/images/bootstrap-cosign.sh "$RUNNER_TEMP/regalia-tools/cosign"
+          echo "$RUNNER_TEMP/regalia-tools" >> "$GITHUB_PATH"
+      - name: Sign the release manifest using GitHub OIDC
+        run: cosign sign-blob --yes --bundle release/release.sigstore.json release/release.json
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: provenance
+        with:
+          subject-path: |
+            release/release.json
+            release/payload/*
+      - uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        id: sbom
+        with:
+          subject-path: release/payload/regalia-debian13-amd64.qcow2
+          sbom-path: release/payload/sbom.attestation.spdx.json
+      - name: Verify signature and provenance before distribution
+        env:
+          SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM_BUNDLE: ${{ steps.sbom.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "$PROVENANCE_BUNDLE" release/provenance.jsonl
+          cp "$SBOM_BUNDLE" release/sbom-attestation.jsonl
+          python3 -m deploy.images.release verify release/payload --manifest release/release.json \
+            --bundle release/release.sigstore.json --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF" \
+            --identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/appliance.yml@$GITHUB_REF" \
+            --issuer https://token.actions.githubusercontent.com
+          python3 -m deploy.images.release verify-attestation release/release.json \
+            --bundle release/provenance.jsonl --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
+          python3 -m deploy.images.release verify-attestation release/payload/regalia-debian13-amd64.qcow2 \
+            --bundle release/sbom-attestation.jsonl --sbom release/payload/sbom.attestation.spdx.json \
+            --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: appliance-signed-prototype
+          path: release/
+          if-no-files-found: error
+          retention-days: 14

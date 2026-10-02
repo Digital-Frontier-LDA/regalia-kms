@@ -144,6 +144,9 @@ python3 -m deploy.images.release verify RELEASE/payload \
   --issuer https://token.actions.githubusercontent.com
 python3 -m deploy.images.release verify-attestation RELEASE/release.json \
   --bundle RELEASE/provenance.jsonl --commit FULL_APPROVED_COMMIT --ref refs/heads/main
+python3 -m deploy.images.release verify-attestation RELEASE/payload/regalia-debian13-amd64.qcow2 \
+  --bundle RELEASE/sbom-attestation.jsonl --sbom RELEASE/payload/sbom.attestation.spdx.json \
+  --commit FULL_APPROVED_COMMIT --ref refs/heads/main
 ```
 
 Offline approval can use an independently provisioned GPG release signer. On
@@ -179,3 +182,5 @@ on the same host/toolchain, then requires every artifact name and byte to match.
 It establishes repeatability within that environment. It does not claim independent
 builder verification or disk-image reproducibility: package snapshots, filesystem
 UUIDs, firmware variable stores and boot/install timestamps still need a design.
+
+The full SBOMs retain file inventory. `sbom.attestation.spdx.json` retains every package and package relationship, removes file nodes/edges and marks `filesAnalyzed: false`. This package inventory fits the pinned GitHub action's 16 MiB SBOM limit. Both documents are hash-bound in the release manifest; consumers compare the attested predicate against the exact released package document.

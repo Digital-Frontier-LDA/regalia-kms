@@ -68,3 +68,24 @@ Keep the Docker lab restricted to development. Review the retained findings
 against Debian's authoritative tracker before proposing narrow, justified policy
 exceptions. Do not suppress `wont-fix` globally. Keep signing disabled until the
 image scan passes and the repository's signing environment is protected.
+
+### Initial authoritative triage (no waivers)
+
+Three sampled findings were checked against Debian's security tracker:
+
+- [CVE-2026-19931](https://security-tracker.debian.org/tracker/CVE-2026-19931):
+  the installed curl source version is listed vulnerable in trixie; Debian labels
+  its stable handling `no-dsa` with a minor-issue note. The scanner's severity and
+  `wont-fix` label should not be treated as Debian's deployment risk assessment.
+- [CVE-2026-7210](https://security-tracker.debian.org/tracker/CVE-2026-7210):
+  trixie's Python 3.13 package is listed vulnerable, with a `no-dsa` minor-issue
+  note. This concerns XML processing; reachability in each lab/appliance role
+  still needs assessment. No automated exception was introduced.
+- [CVE-2026-85091](https://security-tracker.debian.org/tracker/CVE-2026-85091):
+  the tracker lists trixie's zlib source as vulnerable and no packaged fixed
+  version. Upstream fix references are present; consuming an unauthenticated
+  arbitrary patched binary is not an acceptable remediation.
+
+Keep the complete scanner findings and package inventory while deciding whether
+to remove unnecessary packages, consume authenticated Debian fixes when available,
+or seek a reviewed, time-limited exception for a specific unreachable issue.
