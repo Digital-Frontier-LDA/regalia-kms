@@ -27,7 +27,9 @@
 #
 # --set changes nothing, and asks for nothing, when the TPM already has the policy and an
 # authorization. If the settings drifted and an authorization is set, it asks for it ONCE: a wrong one
-# costs a day (above), so read it from the escrow, do not guess.
+# costs a day (above), so read it from the escrow, do not guess. What this script can catch itself it
+# catches before the TPM hears anything: the value is typed twice and compared, and one with a space
+# or a non-printable character (a value copied in groups) is refused without an attempt.
 #
 # The TPM is the kernel resource manager's (/dev/tpmrm0, the tpm2-tools default). TPM2TOOLS_TCTI may
 # name a private simulator, for tests; the raw /dev/tpm0 is refused.
@@ -70,8 +72,16 @@ ask_current(){
   if [ -t 0 ]; then
     say "the lockout authorization is asked for ONCE. A wrong one blocks the lockout hierarchy for $(prop TPM2_PT_LOCKOUT_RECOVERY) s."
     IFS= read -r -s -p "Lockout authorization, from the escrow (hidden): " AUTH; echo >&2
+    # Twice, compared here: a slip of the finger is caught by this script, where it costs nothing,
+    # and not by the TPM, where it costs the recovery time.
+    IFS= read -r -s -p "Again: " AUTH2; echo >&2
+    [ "$AUTH" = "$AUTH2" ] || fail "the two entries differ; nothing was tried on the TPM"
   else IFS= read -r AUTH || true; fi
-  [ -n "$AUTH" ] || fail "no authorization given; nothing was tried on the TPM"; }
+  [ -n "$AUTH" ] || fail "no authorization given; nothing was tried on the TPM"
+  # A value that cannot be a lockout authorization is refused HERE too, before the TPM hears it. On
+  # paper it is natural to copy a long value in groups; typed with the spaces it is another value.
+  local printable='^[[:graph:]]+$'
+  [[ "$AUTH" =~ $printable ]] || fail "that value has a space, a tab or a character that is not printable ASCII, and a lockout authorization has none (copied in groups from the paper? type it without the spaces). Nothing was tried on the TPM"; }
 
 read_props
 case "$MODE" in

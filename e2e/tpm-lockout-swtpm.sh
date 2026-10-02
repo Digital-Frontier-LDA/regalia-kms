@@ -79,8 +79,14 @@ hdr "3  drift, and the authorization"
 printf '%s' "$AUTH" | tpm2_dictionarylockout -Q -s -n 5 -t 600 -l 86400 -p file:- >/dev/null 2>&1 || F "could not make the settings drift"
 IFS=$'\t' read -r value why < <(probe)
 [ "$value" = false ] && grep -q 'TPM2_PT_MAX_AUTH_FAIL is 5, not 32' <<< "$why" && P "one drifted setting: false ($why)" || F "drift: $value: $why"
+# The right value copied in groups, as one does from paper: a different value to the TPM, and there a
+# wrong attempt. The script refuses it itself; that it spent no attempt is shown by the next step,
+# where the right value is accepted at once.
+out="$(printf '%s\n' "${AUTH:0:8} ${AUTH:8:8} ${AUTH:16}" | lockout --set)"; rc=$?
+[ "$rc" != 0 ] && grep -q 'Nothing was tried on the TPM' <<< "$out" && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 5 ] \
+  && P "the authorization typed in groups (with spaces) is refused by the script, before the TPM hears it (exit $rc)" || F "spaced authorization (exit $rc): $out"
 out="$(printf '%s\n' "$AUTH" | lockout --set)"; rc=$?
-[ "$rc" = 0 ] && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 32 ] && P "--set with the authorization repairs it" || F "repair (exit $rc): $out"
+[ "$rc" = 0 ] && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 32 ] && P "--set with the authorization repairs it (so the refusal above cost no attempt)" || F "repair (exit $rc): $out"
 printf '%s' "$AUTH" | tpm2_dictionarylockout -Q -s -n 5 -t 600 -l 86400 -p file:- >/dev/null 2>&1
 out="$(printf 'not-the-authorization-0000\n' | lockout --set)"; rc=$?
 [ "$rc" != 0 ] && grep -q 'the TPM refused' <<< "$out" && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 5 ] && P "a wrong authorization changes nothing (exit $rc)" || F "wrong authorization (exit $rc): $out"
