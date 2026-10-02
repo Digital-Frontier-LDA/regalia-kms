@@ -28,8 +28,31 @@ completed explicit custodian repair across **622/622** legacy interruption state
 retaining all unlock paths. Its inner legacy report still had 172 finding cases;
 no release admission was granted. Summary is retained at
 `/tmp/regalia-recovery-evidence/legacy-operator-reviewed-operator-summary.json`.
-The final stricter version is undergoing the same full CI experiment; earlier
-source hashes are not substituted for final-source verification.
+The final stricter version also passed the full CI experiment, as recorded below;
+earlier source hashes are not substituted for final-source verification.
+
+## Final-source Linux CI evidence
+
+[Run 37071509470](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37071509470)
+passed with real cryptsetup 2.7.0 on Ubuntu 24.04. The downloaded
+`explicit-recovery-reconciliation-evidence` artifact was checked against the
+current utility SHA-256 above and against its own full legacy report hash:
+
+| Report | SHA-256 | Result |
+| --- | --- | --- |
+| `matrix.json` | `5a4d103c0b51055e33d32266c6703714d4c1ac6e1198fd480e685b572ef05116` | 110/110 cuts reached and passed; four negative controls; unknown keys retained |
+| `legacy.json` | `dcf0105dd3421719f3e0c8c859e47e78f3c564a74dc6b3cda9e47394321127e6` | 622/622 legacy cuts reached; 172 findings remain |
+| `legacy-operator-summary.json` | `9fd2c84a2bebbaf347b7fd0f80328078bdad352e998b803a520d08d7ce622fe9` | All 622 explicit repairs clean; all unlock paths preserved |
+
+The legacy script SHA-256 was
+`47e08272c808863fff8b524faa5146620e3375db7af5810ffa20aacb6e77afab`.
+The laboratory custodian has all fixture cards and makes explicit slot choices;
+this does not qualify automatic production custody decisions. Every report keeps
+`production_approved=false`; both legacy reports keep `release_admissible=false`.
+The unchanged final code passed again in
+[run 37072093025](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37072093025).
+Artifact retention is 14 days; this checkpoint retains the verified digests and
+results, not a substitute for the complete reports.
 
 A first prototype tried to lock the device inode; real cryptsetup also locks it,
 so that prototype timed out. It was rejected. The tested revision uses a separate
