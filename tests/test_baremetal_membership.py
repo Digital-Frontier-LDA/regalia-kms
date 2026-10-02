@@ -6,7 +6,6 @@ import fcntl
 import json
 import os
 import shutil
-import socket
 import subprocess
 import tempfile
 import time
@@ -137,12 +136,6 @@ class Manifests(unittest.TestCase):
             m.accept(None, sign(manifest(1, "", three()), REVOKE, "revocation"), ROOT_PUB)
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_nvdefine"), "needs swtpm and tpm2-tools")
 class _Swtpm(unittest.TestCase):
     """A fresh swtpm per test, with the HighWater defined on it."""
@@ -150,20 +143,18 @@ class _Swtpm(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
-        for _ in range(5):                                   # a port taken between free_port() and bind: retry
-            port = free_port()
-            r = subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.d, "--server", "type=tcp,port=%d" % port,
-                                "--ctrl", "type=tcp,port=%d" % (port + 1), "--flags", "not-need-init,startup-clear", "--daemon",
-                                "--pid", "file=%s/pid" % self.d], capture_output=True)
-            if r.returncode == 0:
-                break
-        else:
-            self.fail("swtpm did not start: %s" % r.stderr.decode(errors="replace"))
+        # Unix sockets in the test's own directory. With TCP the control port was the server's + 1, which
+        # nothing reserved: on a busy runner five tries in a row found it taken (CI on #146).
+        sock = self.d + "/swtpm.sock"
+        r = subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.d, "--server", "type=unixio,path=" + sock,
+                            "--ctrl", "type=unixio,path=" + sock + ".ctrl", "--flags", "not-need-init,startup-clear", "--daemon",
+                            "--pid", "file=%s/pid" % self.d], capture_output=True)
+        self.assertEqual(r.returncode, 0, "swtpm did not start: %s" % r.stderr.decode(errors="replace"))
         with open(self.d + "/pid") as f:
             pid = int(f.read())
         self.addCleanup(os.kill, pid, 15)
         time.sleep(0.5)
-        self.tcti = "swtpm:port=%d" % port
+        self.tcti = "swtpm:path=" + sock
         self.env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
         self.hw = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock")
         self.hw.define()
