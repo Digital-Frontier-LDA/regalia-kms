@@ -138,3 +138,15 @@ The enforcing test covers daemon startup, health, configuration and process
 restrictions. PKCS#11 access under this profile still needs physical-device
 qualification. The image remains unencrypted, uncommissioned and development
 only; blocking scan findings, signing custody and real measured boot remain gates.
+
+### Updated filesystem scan
+
+The repaired enforcing build's final filesystem rescan reports **38 Critical,
+258 High, 438 Medium, 41 Low and 711 Negligible matches**. PCRE2's authenticated
+update and editor removal eliminated 49 High matches relative to the earlier
+cleaned image; no finding was suppressed. The scan still returns `blocked` and
+release collection refuses it before creating any output. The full 307.6 MiB
+filesystem archive, inventories and scan hashes are retained under
+`.artifacts/docker-scan-enforced/evidence/`. The export contains no temporary
+acceptance configuration, custody manifest or commissioning marker. No image was
+signed or published.
