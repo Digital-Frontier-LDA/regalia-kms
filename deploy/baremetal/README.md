@@ -47,7 +47,15 @@ Commissioning has two halves:
     passes only when the unlock can retire an image: a peer's contribution (#67, being built), or an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
     `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
-    A host that is otherwise commissioned shows this as its only failing control.
+    A host that is otherwise commissioned shows this as its only failing control. Signed evidence
+    (section 5) records every measured control as true, so no evidence can be signed for such a host:
+    with `--evidence` the run says the evidence is refused; run it without, to see the one control.
+  - The probe judges every dm-crypt volume under `/`, under the host key and under the credstore, and
+    every token that names a keyslot on them: a second volume, a `clevis` token or a stale token fails
+    it. For an NV-backed token it also requires `/var/lib/systemd/pcrlock.json` to cover PCR 7 and a PCR
+    that tells boot images apart (11 or 4): `systemd-pcrlock` leaves out a PCR it cannot predict. It
+    does not measure that the NV index holds that policy, nor that a retired image is refused on the
+    host; that is the #65 checklist, section D.
 - **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this
   host's disk by itself after a total outage (#77; PIN-CUSTODY.md, "The disk recovery key"). It is a
   ceremony secret, one per host, written on the KMS host recovery card and carried in every escrow;
