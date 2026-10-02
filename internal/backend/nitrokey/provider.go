@@ -18,6 +18,11 @@ import (
 
 var ErrUnavailable = errors.New("Nitrokey backend unavailable")
 
+// ErrPINNotPresented is what Session.Login returns when it refused BEFORE the PIN reached the token:
+// the request's context had ended, or the session was closed. No try was spent, so the provider sets
+// no PIN latch for it. A Login error that is not this one means the PIN may have been presented.
+var ErrPINNotPresented = errors.New("the PIN was not presented to the token")
+
 // kekReason names the latch truthfully.
 //
 // BOTH OUTCOMES STILL REFUSE AND STILL LATCH -- "cannot prove this KEK is hardware-rooted" is not
@@ -340,17 +345,17 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	// out of service until an operator clears it. An unreadable identity latches too: "cannot prove
 	// which device this is" is not a safer state than "provably the wrong one".
 	if reason := verifyIdentity(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return nil, "", ErrUnavailable
 	}
 	if err := session.EstablishSecureChannel(ctx); err != nil {
 		// A channel that will not establish is a downgrade: everything after this would travel
 		// unprotected, so the key is latched rather than used over it.
-		provider.quarantine(binding.DeviceID, "secure-channel-failed")
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, "secure-channel-failed")
 		return nil, "", ErrUnavailable
 	}
 	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return nil, "", ErrUnavailable
 	}
 	// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (#72 PoC 12.4). Checked after the identity and
@@ -387,7 +392,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		// runtime check, which is all it has.
 		if _, pinned := pinnedPublicKey(binding); !pinned {
 			if err := session.AssertKEKGeneratedOnToken(ctx, binding.ObjectID); err != nil {
-				provider.quarantine(binding.DeviceID, kekReason(err, ErrKEKNotTokenGenerated, "kek-not-token-generated"))
+				provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, kekReason(err, ErrKEKNotTokenGenerated, "kek-not-token-generated"))
 				return nil, "", ErrUnavailable
 			}
 		}
@@ -438,7 +443,14 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		zero(pin)
 	}()
 	if err := session.Login(ctx, pin); err != nil {
-		provider.blockPIN(binding.DeviceID)
+		// THE PIN LATCH PROTECTS THE RETRY BUDGET, so it is skipped only when it is CERTAIN the PIN
+		// never reached the token: the driver says so itself (ErrPINNotPresented), before the call
+		// that would present it. "The context has ended by now" is not that certainty: it can end
+		// while the PIN is on the wire, the token refuses it, and without the latch the next
+		// request would present the same wrong PIN again (regalia-kms#178).
+		if !errors.Is(err, ErrPINNotPresented) {
+			provider.blockPIN(binding.DeviceID)
+		}
 		return nil, "", ErrUnavailable
 	}
 	switch operation {
@@ -490,7 +502,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		// Asked here and not at wrap because the private object is invisible to a logged-out
 		// session, and this path has already logged in.
 		if assertErr := session.AssertKEKNonExportable(ctx, binding.ObjectID); assertErr != nil {
-			provider.quarantine(binding.DeviceID, kekReason(assertErr, ErrKEKExportable, "kek-exportable"))
+			provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, kekReason(assertErr, ErrKEKExportable, "kek-exportable"))
 			return nil, "", ErrUnavailable
 		}
 		var frame []byte
@@ -554,15 +566,15 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 		}
 	}()
 	if reason := verifyIdentity(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return false
 	}
 	if session.EstablishSecureChannel(ctx) != nil {
-		provider.quarantine(binding.DeviceID, "secure-channel-failed")
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, "secure-channel-failed")
 		return false
 	}
 	if reason := verifyPinnedPublicKey(ctx, session, binding); reason != "" {
-		provider.quarantine(binding.DeviceID, reason)
+		provider.quarantineUnlessTheRequestEnded(ctx, binding.DeviceID, reason)
 		return false
 	}
 	// Present, the right token, and not yet vouched for again: not healthy, so routing and
@@ -610,6 +622,24 @@ func (provider *Provider) blockPIN(deviceID string) {
 // A latch is deliberately sticky. The conditions that set it — a spent PIN budget, a device
 // answering with the wrong identity, a secure channel that would not establish — are not states to
 // retry into, so returning the device to service is an explicit operator act.
+// quarantineUnlessTheRequestEnded is what a failed latching check means (regalia-kms#178).
+//
+// A CONTEXT THAT HAS ENDED IS NEVER EVIDENCE ABOUT THE TOKEN. Every driver call refuses an ended
+// context, so a request cancelled or past its deadline between Open and a check fails that check
+// with the token in place and in order. Latching on that would let any caller allowed one key on
+// the token take ALL of them out of service until an operator resets it, by hanging up at the right
+// moment (it can try until it lands); an executor timeout does it with nobody attacking. So the
+// latch is set only when the request's own context is still live when the check comes back failed:
+// only then was the check completed against the token. The request itself fails either way.
+//
+// A genuine mismatch that coincides with a request ending is not latched by that request. These
+// checks spend nothing, so the cost is that the next look, under a live context, sets the latch.
+func (provider *Provider) quarantineUnlessTheRequestEnded(ctx context.Context, deviceID, reason string) {
+	if ctx.Err() == nil {
+		provider.quarantine(deviceID, reason)
+	}
+}
+
 func (provider *Provider) quarantine(deviceID, reason string) {
 	provider.mu.Lock()
 	if _, exists := provider.blocked[deviceID]; !exists {
