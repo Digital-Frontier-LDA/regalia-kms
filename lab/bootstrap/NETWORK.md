@@ -86,3 +86,12 @@ not establish secure zeroization, hardware custody, or resistance to root access
 Use this runner for disposable software validation. Keep production bootstrap
 blocked on signed policy freshness, physical measured boot, actual encrypted-root
 boot, hardware device qualification, and the other gates in the architecture.
+
+## Signed runtime experiment
+
+The separate [cluster runner](CLUSTER.md) reuses this transport with distinct
+bootstrap/runtime WireGuard keys and a bounded administrative route for signed
+membership, freshness and access leases. It tests denial after old signed
+freshness expires, including partitioned stale peers. This original network
+runner intentionally retains the stale unsigned-policy drill; neither mode
+qualifies hardware epoch protection or instantaneous global revocation.

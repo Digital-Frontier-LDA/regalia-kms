@@ -10,6 +10,31 @@ permissions:
   contents: read
 
 jobs:
+  bootstrap-cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [20261002, 20261003]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Signed policy, peer leases, PKCS11 service and seeded faults
+        env:
+          REGALIA_CHAOS_SEED: ${{ matrix.seed }}
+          REGALIA_CHAOS_STEPS: "36"
+        run: bash lab/bootstrap/run-cluster.sh
+      - name: Retain sanitized assertion and fault evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bootstrap-cluster-${{ matrix.seed }}
+          path: lab/bootstrap/.artifacts/cluster-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
   bootstrap-vm:
     runs-on: ubuntu-latest
     timeout-minutes: 15

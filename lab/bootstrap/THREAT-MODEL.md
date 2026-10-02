@@ -5,6 +5,9 @@ model or completion of its secret-lifecycle gate. It authorizes disposable
 software experiments only. Production design remains gated by the architecture
 decisions recorded in #59 and #60.
 
+The original IPC model below is extended by the network, guest and signed
+cluster runners in the final sections. Each report identifies its evidence class.
+
 ## Boundaries
 
 The developer, Docker host/VM, image, and single Python harness are trusted.
@@ -114,3 +117,38 @@ initramfs. Software TPM permanent state survives backend restarts but remains
 cloneable/rollbackable by the trusted host. Neither extension supplies hardware
 custody, secure zeroization, signed membership freshness, or qualified early-code
 measurements. Their limitation scenarios are observations, not production passes.
+
+## Signed cluster extension
+
+The [cluster runner](CLUSTER.md) commissions the existing membership roles on
+three separate nodes and exchanges signed updates through the runtime WireGuard
+plane. The trusted controller still owns all identities and can alter every
+software device. The membership API accepts signed updates, ordered public
+history and signed freshness references; it does not expose recovery, signing
+keys, clock reset, PIN delivery or device manipulation. Those fault controls are
+loopback-only and reached with disposable Docker exec access.
+
+| Additional material | Generation and storage | Rotation / revocation / recovery |
+|---|---|---|
+| Runtime WireGuard private keys | Per-node `wg genkey`, separate from sealed boot identities; disposable kernel configuration and tmpfs | New per run; runtime firewall and signed policy gate operations; no production rollover implementation |
+| Online freshness signing key | Disposable Ed25519 key in trusted host harness RAM; separate public pin on every node and client | Signed current-policy references expire within 30 seconds; signer outage eventually closes operations; production custody/time/availability undecided |
+| Offline recovery credentials | Independent high-entropy LUKS keyslot credential per node, generated in lab and held by controller RAM | One manual credential restores a seed node in total-outage drills; never carried by a mesh endpoint; all discarded on teardown |
+| SoftHSM service keys | RSA-2048 generated through PKCS#11; sensitive, non-extractable token object in private tmpfs | Lease invalidation logs out; directory withdrawal models removal; restored token needs fresh authorization; host can inspect/clone software storage |
+| SoftHSM operational PIN | Random per-run per-device value retained by local adapter RAM | Never sent to peers; used after verified lease only; teardown discards it; Python cannot guarantee zeroization |
+| SoftHSM SO PIN | Random local commissioning value; not retained by adapter | Never included in bootstrap or lease messages; no production custody claim |
+| Access leases / challenges | Ed25519 signatures from disposable peer identity, single-use challenge, current epoch/digest and service-key fingerprint; local memory | Short UTC lifetime clipped to freshness expiry; generation changes invalidate cached leases; challenge limits and locks enforce concurrent consumption |
+
+The independent client validates its own signed policy and freshness pin, lease
+issuer/subject/key/message/request binding and expiry. A fault fixture bypasses
+local lease enforcement and makes a genuine SoftHSM signature; that signature
+is rejected by the client. A host administrator could also replace the client's
+code or pinned trust, which lies outside this shared-host model.
+
+The wall/monotonic guard latches jumps exceeding two seconds. It does not supply
+authenticated time, detect all slow clock drift, survive hostile restart, or
+replace hardware rollback protection. Valid old freshness references retain a
+bounded stale authorization window. Catch-up retains only 64 public updates;
+an older node needs a trusted resynchronization procedure before production.
+Authority loss trades availability for a closed authorization state. Access
+leases never grant simultaneous blockchain signing authority: production fencing
+and custody remain independent gates.

@@ -34,15 +34,15 @@ def admin(node, *args):
     return command("exec", "-T", "--user", "0:0", node.lower(), *args)
 
 
-def probe(node, host, port, payload, raw=False, content_length=None):
+def probe(node, host, port, payload, raw=False, content_length=None, route="/bootstrap"):
     code = '''import http.client,json,sys
 c=http.client.HTTPConnection(sys.argv[1],int(sys.argv[2]),timeout=1)
 try:
  if sys.argv[4]:
-  c.putrequest("POST","/bootstrap")
+  c.putrequest("POST",sys.argv[5])
   c.putheader("Content-Length",sys.argv[4]); c.endheaders()
  else:
-  c.request("POST","/bootstrap",body=sys.argv[3],headers={"Content-Type":"application/json"})
+  c.request("POST",sys.argv[5],body=sys.argv[3],headers={"Content-Type":"application/json"})
  r=c.getresponse(); raw=r.read(65537)
  print(json.dumps({"reachable":True,"response":json.loads(raw)}))
 except OSError:
@@ -52,7 +52,7 @@ finally:
 '''
     return json.loads(command("exec", "-T", "--user", "10000:10000", node.lower(),
                               "python3", "-c", code, host, str(port), payload if raw else json.dumps(payload),
-                              "" if content_length is None else str(content_length)).stdout)
+                              "" if content_length is None else str(content_length), route).stdout)
 
 
 def main():

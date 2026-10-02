@@ -94,12 +94,17 @@ class Cluster:
         apply_manifest({"op": "apply_manifest", "envelope": envelope}, self.client_policy,
                        Path(self.client_directory.name) / "policy.json")
         for node in nodes:
-            self.relay(source, node, "apply_manifest", envelope=envelope)
+            result = self.relay(source, node, "apply_manifest", envelope=envelope)
+            expected = {"epoch": envelope["manifest"]["epoch"],
+                        "manifest_digest": hashlib.sha256(canonical(envelope["manifest"])).hexdigest()}
+            if result != expected:
+                raise RuntimeError("signed policy delivery was not acknowledged")
 
     def fresh(self, nodes=NODES, ttl=20000):
         envelope = self.authority.fresh(ttl)
         for node in nodes:
-            self.relay("C", node, "install_freshness", envelope=envelope)
+            if self.relay("C", node, "install_freshness", envelope=envelope) != {"epoch": self.authority.manifest["epoch"]}:
+                raise RuntimeError("freshness delivery was not acknowledged")
 
     def sync(self, node, source="C"):
         for _ in range(16):
@@ -111,10 +116,10 @@ class Cluster:
                 self.relay(source, node, "apply_manifest", envelope=envelope)
         raise RuntimeError("bounded policy catch-up exhausted")
 
-    def sign(self, node, message=None, request_id=None):
+    def sign(self, node, message=None, request_id=None, source="C"):
         message = message or os.urandom(32)
         request_id = request_id or os.urandom(16).hex()
-        reply = self.rpc("C", "service_request", peer=node,
+        reply = self.rpc(source, "service_request", peer=node,
                          command={"op": "sign", "message": message.hex(), "request_id": request_id})
         return reply, request_id, message
 
@@ -171,13 +176,18 @@ class Cluster:
 
 
 def main():
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    def interrupted(*_):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM, interrupted)
     report = {"schema_version": 1, "evidence_class": "emulated-cluster", "status": "failed", "checks": [],
               "timestamp": datetime.now(timezone.utc).isoformat(), "source_commit": os.environ["REGALIA_LAB_COMMIT"],
               "image_id": os.environ["REGALIA_LAB_IMAGE_ID"], "platform": os.environ["REGALIA_LAB_PLATFORM"],
               "sources_sha256": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in [
                   "cluster.py", "cluster_mesh.py", "tokens.py", "leases.py", "device.py", "policy_cases.py",
-                  "runtime_cases.py", "device_cases.py", "peer.py", "network.py", "Dockerfile"]}}
+                  "runtime_cases.py", "device_cases.py", "chaos_cases.py", "peer.py", "network.py", "lab.py", "mesh.py",
+                  "Dockerfile", "compose.network.yaml", "run-cluster.sh", "run-network.sh", "harness-requirements.txt"]},
+              "docker_daemon_platform": os.environ["REGALIA_LAB_DAEMON_PLATFORM"],
+              "swtpm_seccomp": os.environ["REGALIA_LAB_SWTPM_SECCOMP"]}
     cluster = Cluster(report)
     try:
         cluster.start()
@@ -187,6 +197,8 @@ def main():
         runtime_cases(cluster)
         from device_cases import device_cases
         device_cases(cluster)
+        from chaos_cases import chaos_cases
+        chaos_cases(cluster)
         report["packages"] = command("exec", "-T", "a", "cat", "/opt/packages.tsv").stdout.decode().splitlines()
         report["status"] = "passed"
     finally:
@@ -194,6 +206,7 @@ def main():
         report["cleanup"] = "passed" if cleanup.returncode == 0 else "failed"
         if cleanup.returncode:
             report["status"] = "failed"
+        cluster.client_directory.cleanup()
         (ROOT / ".artifacts/cluster-report.json").write_text(json.dumps(report, indent=2) + "\n")
     if report["status"] != "passed":
         raise RuntimeError("cluster run failed")

@@ -1,19 +1,17 @@
 """Disposable signed-policy cluster; local fixture controls never cross the mesh."""
 
 import argparse
-import hashlib
 import http.client
 import json
 import os
 import threading
 import time
-from pathlib import Path
 
 from network import BoundedServer, Node, address, configure, exchange
 from peer import Refusal, canonical, fields, hex_bytes
 from tokens import Clock, freshness
 from device import Device
-from leases import LEASE_DOMAIN, LEASE_FIELDS, REQUEST_DOMAIN, REQUEST_FIELDS, SERVICE_DOMAIN, service_statement, verify_lease
+from leases import LEASE_DOMAIN, REQUEST_DOMAIN, REQUEST_FIELDS, SERVICE_DOMAIN, service_statement, verify_lease
 from tokens import signed_token, verified_token
 from cryptography.hazmat.primitives.asymmetric import ed25519
 

@@ -111,3 +111,11 @@ def runtime_cases(c):
             admin("B", "ip", "link", "set", "wg-service", "up")
     finally:
         c.rpc("A", "stop_lease_agent")
+    c.publish(c.authority.update({"C": "QUARANTINED"}, authority="revocation"))
+    c.fresh()
+    c.rpc("A", "renew", peers=["B"])
+    c.denied("quarantined runtime caller cannot request KMS operations", lambda: c.sign("A"))
+    c.check("ACTIVE caller retains service access while another caller is quarantined", c.verify("A", *c.sign("A", source="B")))
+    c.publish(c.authority.update({"C": "ACTIVE"}))
+    c.fresh()
+    c.rpc("C", "bootstrap", peers=["B"])

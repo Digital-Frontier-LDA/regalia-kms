@@ -57,7 +57,8 @@ WireGuard. Original scenarios use unsigned fixture policy; the additional
 and apply those policies in the actual verifier. Neither mode proves global
 policy freshness, rollback-resistant storage, or production revocation. The
 state-file restore drill records `membership_state_rollback_is_possible` in
-`limitations_observed`. Runtime leases, HSMs, and physical-node recovery remain separate work.
+`limitations_observed`. Runtime leases and software HSM service gating are exercised by the separate
+cluster runner below. Physical-node recovery remains separate work.
 Read the [local peer contract](PROTOCOL.md) for the request/response and challenge
 lifecycle. Verifier signing keys are software test fixtures, not KMS service keys.
 
@@ -132,26 +133,48 @@ than qualifying PCR 7 as a production policy.
 bash lab/bootstrap/run-vm.sh
 ```
 
-## Next slices
+## Signed policy, runtime leases, PKCS#11 and chaos
 
-Additional experiments can run on the development machine:
+The [cluster experiment](CLUSTER.md) implements all four software follow-ups on
+three isolated nodes with separate kernel WireGuard identities for bootstrap and
+runtime. It generates disposable keys using the real SoftHSM PKCS#11 module.
 
-| Experiment | Software validation to add |
+```sh
+bash lab/bootstrap/run-cluster.sh
+# Reproduce another fault schedule; defaults are seed 20261002 and 36 actions.
+REGALIA_CHAOS_SEED=20261003 REGALIA_CHAOS_STEPS=36 bash lab/bootstrap/run-cluster.sh
+```
+
+The wrapper installs pinned host dependencies into an isolated ignored venv.
+It writes `lab/bootstrap/.artifacts/cluster-report.json` with source hashes,
+package versions, platform, image ID, every assertion, fault seed/actions and
+cleanup status. CI runs both seeds and retains sanitized reports for 14 days.
+Each schedule covers all 13 fault families before adding random repetitions;
+cryptographic keys and nonces always use operating-system randomness.
+Do not run the network, guest and cluster runners concurrently on one Docker
+daemon: they reserve the same disposable laboratory subnet.
+
+| Experiment | Software evidence |
 |---|---|
-| Signed network policy | Commission authority pins on all three peers; deliver signed updates over a separate administrative contract; test interrupted/conflicting delivery and explicit freshness/partition policy |
-| Runtime leases | Expiry, renewal through either peer, running-node revocation, clock faults and external client rejection; preserve independent service-signing fencing |
-| Software service gate | Reuse the existing [SoftHSM battery](../../e2e/README.md) to connect bootstrap authorization to PKCS#11 service readiness, token removal and reauthentication; native vendor PKA remains a hardware gate |
-| Randomized faults | Seeded partition, response-loss, reboot, policy-conflict and parser-corruption schedules; retain the seed and assert recovery or an explicit closed state |
+| Signed network policy | Six recovery paths under signed policy; interrupted/idempotent delivery; chained catch-up; state restrictions; stale-peer denial after signed freshness expires |
+| Runtime leases | Automatic renewal through either peer; expiry and running-node revocation; signed request/response binding; concurrent/replayed challenges; clock faults; independent client rejection, including a genuine unauthorized signature |
+| Software service gate | Actual RSA key generation/signing through PKCS#11; non-extractable/sensitive attributes; real logout/wrong-PIN errors; token removal/reinsertion; fresh authorization before reauthentication |
+| Randomized faults | Seeded partitions, lost responses, one/two/three-node authorization loss, revocation, policy forks, malformed requests, clock faults, token removal, freshness expiry and actual software-TPM PCR changes |
 
-These are follow-up experiments, not completed acceptance criteria.
+The online freshness signer is a lab design experiment that adds an independent
+availability dependency and trusted-time assumption. It bounds stale-policy
+acceptance; it does not make revocation instantaneous. Local policy/generation
+files and software tokens remain cloneable. The runtime leases authorize this
+test service and preserve the independent single-signer contract in
+[`FENCING.md`](../../FENCING.md).
 
 Production qualification still requires:
 
 1. Qualify complete Debian boot packaging and the DL360 measurement chain. The
    small emulated BusyBox root is software-path evidence, not an appliance build.
-2. Extend signed membership into network/guest commissioning and design
-   revocation freshness before claiming safe unattended bootstrap. Qualify a
-   rollback-resistant high-water store; keep service signing fencing independent.
+2. Transfer signed cluster policy into the actual encrypted-root guest path and
+   choose production freshness/time/partition policy. Qualify a rollback-resistant
+   high-water store; keep service signing fencing independent.
 3. Qualify native/cross-vendor PKA and wrapped-key recovery on designated physical
    lab HSMs. This container does not initialize or touch attached tokens.
 

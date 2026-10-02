@@ -12,7 +12,10 @@ cross-container WireGuard and recovery-matrix tests, run
 `bash lab/bootstrap/run-network.sh`; namespace setup uses only the documented
 network/user capabilities before dropping service privileges. For emulated
 initramfs networking, dm-crypt mapping and encrypted-root boot, run
-`bash lab/bootstrap/run-vm.sh`. All three produce emulated evidence. Read the
+`bash lab/bootstrap/run-vm.sh`. For signed mesh membership, runtime peer leases,
+real SoftHSM service gating and reproducible chaos, run
+`bash lab/bootstrap/run-cluster.sh` and read the [cluster contract](../lab/bootstrap/CLUSTER.md).
+All four produce emulated evidence. Read the
 [guest measurement limits](../lab/bootstrap/VM.md) before interpreting boot
 success. Physical measured boot, policy freshness, and HSM authentication remain
 separate qualification gates.

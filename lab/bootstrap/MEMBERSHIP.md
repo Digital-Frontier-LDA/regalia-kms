@@ -95,3 +95,13 @@ unimplemented. Python does not provide reliable secret zeroization.
 
 Use this as software evidence for the membership PoC; keep production acceptance
 gated on the remaining storage, freshness, transport and hardware work.
+
+## Signed mesh extension
+
+The separate [cluster runner](CLUSTER.md) commissions these pins on three nodes,
+delivers signed updates over the runtime WireGuard administrative route, and
+adds expiring signed policy references plus access leases. The original network
+and guest runners retain their unsigned measurement/freshness limitation drills.
+Cluster policy files remain software state and provide no hardware rollback
+resistance. The freshness experiment adds online authority and trusted-time
+dependencies; it is not a production revocation decision.
