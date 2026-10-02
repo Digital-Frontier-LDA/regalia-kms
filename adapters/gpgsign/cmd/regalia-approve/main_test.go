@@ -148,8 +148,20 @@ func (b *bench) useToken(behaviour string) {
 	if err != nil {
 		b.t.Fatal(err)
 	}
+	// A copy with exact permissions: the toolchain builds the test binary group-writable under a
+	// permissive umask, and a tool others can write is (rightly) not run.
+	contents, err := os.ReadFile(executable)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	executable = b.write("pkcs11-tool", contents, 0o755)
+	if err := os.Chmod(executable, 0o755); err != nil {
+		b.t.Fatal(err)
+	}
 	delete(b.config, "key_file")
-	b.config["pkcs11"] = map[string]string{"tool": executable, "module": "/usr/lib/opensc-pkcs11.so", "token_label": "OpenPGP card (User PIN (sig))", "key_id": "01"}
+	// The module is only named to the stub, never loaded; any file that passes the same ownership
+	// check as the tool will do.
+	b.config["pkcs11"] = map[string]string{"tool": executable, "module": b.write("module.so", []byte("not a module"), 0o644), "token_label": "OpenPGP card (User PIN (sig))", "key_id": "01"}
 	b.t.Setenv(stubVariable, behaviour)
 }
 
@@ -422,5 +434,60 @@ func TestTheConfigurationAndCommandLineAreStrict(t *testing.T) {
 		if code, _, stderr := b.invoke(nil, args...); code != 2 || !strings.Contains(stderr, "usage:") {
 			t.Errorf("%v: exit %d, stderr %q", args, code, stderr)
 		}
+	}
+}
+
+// THE TOOL THAT IS RUN SEES THE PIN AND DRIVES THE KEY. A tool or module that someone other than root
+// or the approver could have replaced is not run at all.
+func TestAToolOrModuleOthersCanReplaceIsNotRun(t *testing.T) {
+	for name, loosen := range map[string]func(b *bench, device map[string]string){
+		"a group-writable tool": func(b *bench, device map[string]string) {
+			contents, err := os.ReadFile(device["tool"])
+			if err != nil {
+				b.t.Fatal(err)
+			}
+			device["tool"] = b.write("loose-tool", contents, 0o755)
+			if err := os.Chmod(device["tool"], 0o775); err != nil {
+				b.t.Fatal(err)
+			}
+		},
+		"a world-writable module": func(b *bench, device map[string]string) {
+			if err := os.Chmod(device["module"], 0o666); err != nil {
+				b.t.Fatal(err)
+			}
+		},
+		"a tool that is a directory":   func(b *bench, device map[string]string) { device["tool"] = b.directory },
+		"a module that does not exist": func(b *bench, device map[string]string) { device["module"] = filepath.Join(b.directory, "absent.so") },
+		"a link to a tool others can write": func(b *bench, device map[string]string) {
+			contents, _ := os.ReadFile(device["tool"])
+			target := b.write("loose-target", contents, 0o755)
+			if err := os.Chmod(target, 0o777); err != nil {
+				b.t.Fatal(err)
+			}
+			device["tool"] = filepath.Join(b.directory, "tool-link")
+			if err := os.Symlink(target, device["tool"]); err != nil {
+				b.t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.useToken("honest")
+			sumsPath := b.write("SHA256SUMS", sums, 0o644)
+			path, _ := b.prepare("pending", gpgsign.ModeDetach, sums)
+			argv := filepath.Join(b.directory, "argv")
+			t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+			loosen(b, b.config["pkcs11"].(map[string]string))
+			code, _, stderr := b.invoke(map[string]string{}, "--pending", path, "--file", sumsPath)
+			if code != 1 || !(strings.Contains(stderr, "pkcs11 tool:") || strings.Contains(stderr, "pkcs11 module:")) {
+				t.Fatalf("exit %d, stderr %q", code, stderr)
+			}
+			if _, err := os.Stat(argv); !os.IsNotExist(err) {
+				t.Fatal("the tool was run")
+			}
+			if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+				t.Fatal("an approval was written")
+			}
+		})
 	}
 }

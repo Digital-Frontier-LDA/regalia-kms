@@ -150,7 +150,9 @@ What each step checks:
   approves without the file; the output then says `NOT CHECKED`, and the file hash shown is only
   what the preparer wrote.
 - **The approver key** is Ed25519, on a token reached through OpenSC's `pkcs11-tool`
-  (`CKM_EDDSA`). The PIN is typed into `pkcs11-tool`, not into `regalia-approve`. What the token
+  (`CKM_EDDSA`). The PIN is typed into `pkcs11-tool`, not into `regalia-approve`. The tool and the
+  module are named by absolute path and are refused unless they are owned by root or the approver
+  and writable by nobody else. What the token
   returns is verified against the pinned approver public key before an approval is written, so a
   device that cannot make a plain Ed25519 signature is refused here and not found out as a denial
   at the KMS. `key_file` instead of `pkcs11` is a software approver, for tests and staging.

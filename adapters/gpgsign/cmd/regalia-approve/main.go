@@ -189,15 +189,25 @@ func (signer *tokenSigner) Sign(_ io.Reader, message []byte, _ crypto.SignerOpts
 	if err := os.WriteFile(input, message, 0o600); err != nil {
 		return nil, errors.New("write the binding")
 	}
-	arguments := []string{"--module", signer.device.Module, "--token-label", signer.device.TokenLabel, "--login",
+	// What is run, and the module it loads, are the approver's own files: named by absolute path in
+	// the protected configuration, and refused if anyone else could have replaced them.
+	tool, err := protected.Program(signer.device.Tool)
+	if err != nil {
+		return nil, fmt.Errorf("pkcs11 tool: %w", err)
+	}
+	module, err := protected.Program(signer.device.Module)
+	if err != nil {
+		return nil, fmt.Errorf("pkcs11 module: %w", err)
+	}
+	arguments := []string{"--module", module, "--token-label", signer.device.TokenLabel, "--login",
 		"--sign", "--mechanism", "EDDSA", "--id", signer.device.KeyID, "--input-file", input, "--output-file", output}
 	if signer.pinInEnvironment {
 		arguments = append(arguments, "--pin", "env:"+pinVariable)
 	}
 	fmt.Fprintln(signer.stderr, "regalia-approve: signing on the token; enter the PIN if asked, and touch the key if it blinks")
-	// The program and module are absolute paths from the approver's own protected configuration, and
-	// the arguments are a vector: no shell, and nothing from the pending record reaches them.
-	command := exec.CommandContext(signer.ctx, signer.device.Tool, arguments...)
+	// The arguments are a vector: no shell, and nothing from the pending record reaches them. The
+	// only bytes that come from the record are the binding, which is a file's contents.
+	command := exec.CommandContext(signer.ctx, tool, arguments...)
 	command.Stdin, command.Stdout, command.Stderr = signer.stdin, signer.stderr, signer.stderr
 	if err := command.Run(); err != nil {
 		return nil, errors.New("the token did not sign")

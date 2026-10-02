@@ -57,6 +57,28 @@ func Zero(value []byte) {
 	}
 }
 
+// Program checks a file this process is about to run or have loaded: after symbolic links are
+// resolved it must be a regular file, owned by root or by this user, that nobody else can write.
+// Whoever can rewrite it decides what runs with the approver's PIN and key in reach. It returns the
+// resolved path, which is what should be run.
+func Program(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", errors.New("invalid program path")
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", errors.New("program not found")
+	}
+	var stat unix.Stat_t
+	if err := unix.Lstat(resolved, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG {
+		return "", errors.New("program is not a regular file")
+	}
+	if (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) || stat.Mode&0o022 != 0 {
+		return "", errors.New("unsafe program: it must be owned by root or this user and writable by nobody else")
+	}
+	return resolved, nil
+}
+
 // PublicKey reads exactly one PEM "PUBLIC KEY" from a protected file. what and field name it in the
 // two error texts.
 func PublicKey(path, what, field string) (crypto.PublicKey, error) {
