@@ -1,8 +1,8 @@
 # PKCS#11 throughput benchmark
 
-`hsm-bench.py` measures per-key-type throughput on a PKCS#11 token: RSA sign and decrypt, and ECDSA
-sign, on whatever private keys the token already holds. It reports mean, median and nearest-rank p90
-over `BENCH_N` samples.
+`hsm-bench.py` measures per-key-type throughput on a PKCS#11 token: RSA sign and decrypt, ECDSA sign,
+and ECDH key agreement, on whatever private keys the token already holds. It reports mean, median
+and nearest-rank p90 over `BENCH_N` samples.
 
 ```sh
 pip install --require-hashes -r tools/bench/requirements.txt
@@ -33,3 +33,29 @@ measure on native USB before using them for capacity planning.
 Measured on a Nitrokey HSM 2 (fw 4.1) over USB/IP, 2026-09-17, `BENCH_N=25`, for shape only:
 RSA-2048 sign 1184.7 ms, RSA-2048 decrypt 2366.4 ms, secp256k1 ECDSA sign 318.9 ms, P-256 ECDSA sign
 319.0 ms.
+
+## ECDH
+
+An EC key gets an `ECDH derive (+read, destroy)` row only if the token says it may derive
+(`CKA_DERIVE`). A key that may not is never asked: a refused derive is a failed operation, and a
+failed operation costs a session reopen and a PIN verification. When no key allows it, the output
+ends with `ECDH    : not measured (…)`, so a missing figure is stated, not inferred.
+
+Each sample is one key agreement as the daemon performs it (`internal/backend/nitrokey`, `Derive`):
+`CKM_ECDH1_DERIVE` with `CKD_NULL` into a session object, read its value, destroy it. All three are
+timed; only the derive reaches the card. The peer public key is generated on the host with
+`cryptography`, once, before the timed loop.
+
+This is the figure ADR-0002 D20 needs to choose the class KEK for software-executed keys
+(regalia#532): with an RSA KEK, `software-per-operation` costs one RSA decrypt per use, about 0.4/s
+on a Nitrokey HSM 2 over USB/IP. To measure the ECDH alternative, the token needs a P-256 key with
+derive usage, for example:
+
+```sh
+pkcs11-tool --module "$PKCS11_MODULE" --login --keypairgen --key-type EC:prime256v1 \
+  --usage-derive --label bench-ecdh --id 7e
+```
+
+Not yet measured on a Nitrokey. Checked against SoftHSM 2.6 (2026-10-02), where it derives on
+P-256 and P-384 and gives a sign-only key no ECDH row; those timings are a software token's and say
+nothing about a card.

@@ -2,7 +2,10 @@ package operations
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -324,5 +327,77 @@ func TestPolicyDenialRecordsWhichRuleFired(t *testing.T) {
 		if !strings.Contains(draft.Outcome, string(policy.CodeDenied)) {
 			t.Fatalf("the audit outcome %q dropped the decision code, which is the stable value clients match on", draft.Outcome)
 		}
+	}
+}
+
+// THE REAL ENGINE, NOT A FAKE DECISION. The test above proves the coordinator copies whatever rule
+// it is handed; this one proves the engine hands it the DIMENSION, end to end from sign bytes to
+// audit outcome: a transfer to a destination the policy does not list is recorded as
+// policy-DENIED:cosmos-destination, one over the fee cap as policy-DENIED:cosmos-fee.
+//
+// The sign bytes are the cosmpy-generated reference SignDoc (internal/policy/testdata), never an
+// encoder written here; each arm changes the POLICY around the same transaction.
+func TestACosmosDenialIsAuditedUnderTheDimensionThatRefusedIt(t *testing.T) {
+	encoded, err := os.ReadFile(filepath.Join("..", "policy", "testdata", "signdoc-akashnet2-msgsend.hex"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signDoc, err := hex.DecodeString(strings.TrimSpace(string(encoded)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := policy.ParseCosmosSignDoc(signDoc)
+	if err != nil || len(transaction.Messages) != 1 || len(transaction.Messages[0].Amounts) != 1 || len(transaction.Fee) != 1 {
+		t.Fatalf("the reference SignDoc is not one MsgSend of one coin with one fee coin: %#v %v", transaction, err)
+	}
+	message, fee := transaction.Messages[0], transaction.Fee[0]
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	// The policy that admits exactly this transaction; each arm then breaks one dimension of it.
+	admitting := func() *policy.CosmosPolicy {
+		return &policy.CosmosPolicy{ChainIDs: []string{transaction.ChainID}, AccountNumbers: []uint64{transaction.AccountNumber},
+			MessageTypes: []string{message.Type}, Sources: []string{message.Source}, Destinations: []string{message.Destination},
+			MaxGasLimit: transaction.GasLimit, MaxFee: map[string]uint64{fee.Denom: fee.Amount},
+			MaxPerTransaction: map[string]uint64{message.Amounts[0].Denom: message.Amounts[0].Amount},
+			MaxPerDay:         map[string]uint64{message.Amounts[0].Denom: message.Amounts[0].Amount}}
+	}
+	for name, test := range map[string]struct {
+		breakIt func(*policy.CosmosPolicy)
+		outcome string
+		signed  bool
+	}{
+		"the policy admits it":             {func(*policy.CosmosPolicy) {}, "success", true},
+		"a destination outside the policy": {func(p *policy.CosmosPolicy) { p.Destinations = []string{"akash1someoneelse"} }, "policy-DENIED:" + policy.RuleCosmosDestination, false},
+		"a fee over the cap":               {func(p *policy.CosmosPolicy) { p.MaxFee[fee.Denom] = fee.Amount - 1 }, "policy-DENIED:" + policy.RuleCosmosFee, false},
+		"a gas limit over the cap":         {func(p *policy.CosmosPolicy) { p.MaxGasLimit = transaction.GasLimit - 1 }, "policy-DENIED:" + policy.RuleCosmosGas, false},
+		"another chain":                    {func(p *policy.CosmosPolicy) { p.ChainIDs = []string{"cosmoshub-4"} }, "policy-DENIED:" + policy.RuleCosmosChain, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cosmos := admitting()
+			test.breakIt(cosmos)
+			engine, err := policy.New([]policy.Policy{{
+				ID: "wallet", ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
+				Operation: "sign", Algorithm: "secp256k1", ContentTypes: []string{"application/vnd.cosmos.tx+protobuf"},
+				MaxPayloadBytes: 10000, MaxFuture: time.Minute, Cosmos: cosmos,
+			}}, bridgeReservationState{}, func() time.Time { return now })
+			if err != nil {
+				t.Fatal(err)
+			}
+			router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production", Algorithm: "secp256k1", PolicyID: "wallet", Binding: registry.Binding{DeviceID: "hsm-1"}}}
+			recorder, hardware := &fakeAudit{}, &fakeHardware{output: []byte("signature")}
+			coordinator, err := New(fakeAuthorizer{allowed: true, digest: "sha256:rbac"}, router, engine, recorder, directRunner{}, hardware, "sha256:policy", nil, func() time.Time { return now })
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := operationRequest()
+			request.Operation, request.Format, request.ContentType, request.Data = "sign", "", "application/vnd.cosmos.tx+protobuf", signDoc
+			request.Context.ExpiresAt = now.Add(30 * time.Second)
+			_, err = coordinator.Execute(context.Background(), request)
+			if signed := err == nil; signed != test.signed || (hardware.calls != 0) != test.signed {
+				t.Fatalf("signed=%v (token calls %d), want signed=%v: %v", signed, hardware.calls, test.signed, err)
+			}
+			if len(recorder.drafts) == 0 || recorder.drafts[len(recorder.drafts)-1].Outcome != test.outcome {
+				t.Fatalf("audit drafts = %#v, want the last outcome to be %q", recorder.drafts, test.outcome)
+			}
+		})
 	}
 }
