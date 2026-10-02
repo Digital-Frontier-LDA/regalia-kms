@@ -308,8 +308,13 @@ class Holder:
         left = verify(envelope, manifest, now, self.run)
         lease = envelope["lease"]
         self._mine(lease)
-        require(lease["nonce"] in state["nonces"], "the lease answers no request this node has outstanding (replayed, or asked for by another)")
-        state["nonces"].remove(lease["nonce"])
+        require(lease["nonce"] in state["nonces"], "the lease answers no request this node has outstanding (replayed, asked for by "
+                "another, or older than a request already answered)")
+        # REQUESTS ARE ANSWERED IN ORDER, OR NOT AT ALL. The nonces are kept in the order they were asked
+        # for; taking this one retires every request made before it. A late answer to an OLDER request
+        # would otherwise displace, on a longer life or a tie, the lease asked for after the daemon started
+        # (admission.py), and the daemon would stop serving until the next round asked again.
+        state["nonces"] = state["nonces"][state["nonces"].index(lease["nonce"]) + 1:]
         held, keep = state["envelope"], False
         if held is not None:
             # The other peer answered first and its lease runs longer: keep it. On a tie the one just

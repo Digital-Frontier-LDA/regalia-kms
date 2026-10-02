@@ -154,7 +154,9 @@ func Boottime() (int64, error) {
 // in /proc/self/stat. The lease service reads the same number for the daemon's PID
 // (deploy/baremetal/admission.py, daemon_started), so "a lease asked for after the daemon started"
 // means the same moment on both sides, and the service can ask for one at once instead of at its
-// next renewal. The kernel counts it in clock ticks, so it is up to 10 ms before the true start.
+// next renewal. The kernel counts it in clock ticks, rounded down; this returns the tick AFTER, so it
+// is never before the true start (and up to 10 ms after it): a lease asked for inside the tick the
+// process started in, before the process existed, does not count as asked for since.
 func ProcessStart() (int64, error) {
 	contents, err := os.ReadFile(processStatPath)
 	if err != nil {
@@ -185,7 +187,7 @@ func parseProcessStart(stat string) (int64, error) {
 	if err != nil || ticks <= 0 || ticks > math.MaxInt64/1000 {
 		return 0, errors.New("the process start time is not a positive number of ticks")
 	}
-	return ticks * 1000 / userHZ, nil
+	return (ticks + 1) * 1000 / userHZ, nil
 }
 
 // KernelBootID reads /proc/sys/kernel/random/boot_id.

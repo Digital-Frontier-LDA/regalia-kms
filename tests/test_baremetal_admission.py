@@ -270,9 +270,9 @@ class DaemonStart(Case):
         for name in ("(regalia-kms)", "(a b)", "(evil) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 20)"):
             with open(os.path.join(proc, "4242", "stat"), "w") as f:
                 f.write("4242 " + name + tail)
-            self.assertEqual(admission.unit_started(run=systemctl(), proc=proc)(), 1234560)
+            self.assertEqual(admission.unit_started(run=systemctl(), proc=proc)(), 1234570)
         self.assertEqual(calls[0], ["systemctl", "show", "--property=MainPID", "--value", "regalia-kms.service"])
-        self.assertEqual(admission.process_started_ms(4242, proc), 1234560)
+        self.assertEqual(admission.process_started_ms(4242, proc), 1234570)
         # nothing to read is "unknown", never an error that stops the lease service and never a time
         for label, run in (("the unit has no main process", systemctl(b"0\n")), ("systemctl failed", systemctl(code=1)),
                            ("not a PID", systemctl(b"4242; rm\n")), ("the process is gone", systemctl(b"4243\n"))):
