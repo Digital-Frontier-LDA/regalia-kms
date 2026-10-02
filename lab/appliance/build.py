@@ -114,7 +114,8 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
         print("Booting the installed disk and checking appliance restrictions...", flush=True)
         command(acceptance, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         log = (staging / "acceptance.log").read_text(errors="replace")
-        require("REGALIA_ACCEPTANCE_PASS" in log and "REGALIA_FAIL:" not in log,
+        require("REGALIA_ENFORCED_DAEMON_PASS" in log and
+                "REGALIA_ACCEPTANCE_PASS" in log and "REGALIA_FAIL:" not in log,
                 "appliance acceptance failed")
         print("Checking normal UEFI boot without the verification flag...", flush=True)
         report["normal_boot"] = normal_boot(disk, firmware, staging / "uefi-vars.fd",

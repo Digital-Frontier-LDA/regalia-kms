@@ -122,7 +122,12 @@ short paths because macOS limits Unix socket path lengths.
 
 ## Rebuild status
 
-The final recipe includes fixes discovered by live installation and scanning: masked serial getty, explicit disposable Go cache paths, and removal of obsolete installer kernels. The recorded prototype was repaired and then boot/scan validated; see `VALIDATION.md`. A fresh uninterrupted run of this complete recipe remains a main-branch workflow check. No production approval is implied by a successful boot.
+The recipe includes fixes discovered by live installation and scanning: masked
+serial getty, explicit disposable Go cache paths, and removal of obsolete installer
+kernels. The earlier baseline passed a fresh uninterrupted build; the updated
+AppArmor recipe has separate repaired evidence and a continuous fresh-build gate.
+See `VALIDATION.md` for exact source versions and limits. A successful boot does
+not issue production approval.
 
 ### Package update and minimization policy
 
@@ -139,7 +144,8 @@ update gap and unnecessary parser packages; a new scan still decides release sta
 
 The recipe installs the bare-metal AppArmor profile and hardening drop-in already
 shipped in this repository. Guest acceptance temporarily starts the real daemon
-with the shipped public custody fixture and no credentials, then measures the running process: enforcing profile,
+with the shipped public custody fixture and no credentials, then measures the
+running process: enforcing profile,
 zero effective capabilities, no-new-privileges and seccomp filtering. Liveness
 must succeed while readiness remains 503 without credentials. The daemon's
 configuration check must accept the permitted path and specifically report
@@ -151,7 +157,8 @@ startup and OS confinement; it does not qualify token operations or a physical H
 ### Continuous recipe validation
 
 The `appliance-build` CI job runs the authenticated installation, acceptance and
-normal UEFI boot when appliance/image recipes or their workflows change. It
+normal UEFI boot when recipes, daemon code, dependencies, configuration, service
+units, AppArmor policy or their workflows change. It
 retains only public build/boot diagnostics, including failed private staging
 directories. This job checks boot behavior and does not issue release approval,
 signatures or image publication. The separate manual appliance workflow retains

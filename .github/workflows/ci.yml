@@ -29,8 +29,10 @@ jobs:
           if base:
               assert re.fullmatch('[a-f0-9]{40}', base)
               files = subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines()
-              changed = any(path.startswith(('lab/appliance/', 'deploy/images/')) or path in
-                            ('.github/workflows/appliance.yml', '.github/workflows/ci.yml') for path in files)
+              changed = any(path.startswith(('lab/appliance/', 'deploy/images/', 'cmd/', 'internal/',
+                                             'config/', 'deploy/systemd/', 'deploy/baremetal/')) or path in
+                            ('go.mod', 'go.sum', '.github/workflows/appliance.yml',
+                             '.github/workflows/ci.yml') for path in files)
           else:
               changed = True
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:

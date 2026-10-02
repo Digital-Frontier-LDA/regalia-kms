@@ -87,3 +87,54 @@ Keep the image as a development prototype and the PR draft. Review all blocking
 findings before release approval. Run the final automated recipe after review;
 configure the protected signing environment before exercising GitHub OIDC
 signatures and attestations. No production authority private key belongs in CI.
+
+## Follow-up: fresh baseline and enforcing daemon
+
+This section supersedes the earlier AppArmor and fresh-execution limitations for
+these specifically identified builds; it does not qualify production hardware.
+
+- A fresh, uninterrupted build of recipe/application commit
+  `f73f6dda6159f6d25823ca41e1df58a8b5a7c975` passed installation, guest acceptance,
+  export, normal UEFI boot and disk integrity checks in 1,835 seconds. Disk
+  SHA-256 `629d8b6f221b441194cb38737e95a2a1541cbb4a5a43e680f552a97df983c2cf`;
+  filesystem SHA-256 `f888b22728ce465dfba03c70187b8ead127352f62f0060b00722d34dda797b94`.
+  Evidence: `.artifacts/debian13-fresh-f73f6dd/`. This predates the new enforcing
+  daemon test and package updates.
+- The updated recipe upgrades authenticated Debian packages before compiling,
+  removes unnecessary editors, disables the installer-only CD APT entry, and
+  explicitly sets public executable/unit permissions and private configuration
+  group access. Setup errors retain bounded public diagnostics and terminate the
+  exact installer child instead of waiting on an interactive prompt.
+- The updated installed guest was repaired using retained, hash-recorded hooks.
+  Its real daemon passed AppArmor `regalia-kms (enforce)`, zero effective
+  capabilities, `NoNewPrivs: 1` and `Seccomp: 2` checks. Liveness returned 200;
+  readiness remained 503 without credentials. A valid public custody fixture
+  passed configuration preflight under the profile; the same daemon was refused
+  access to a DAC-readable file outside the permitted configuration directory.
+  Temporary configuration, manifest and commissioning marker were removed before
+  export, and the unit again stayed inactive without commissioning.
+- This repaired build has application source
+  `538d86dc88b96f12579370a8b7315e7956a94bf6`, 274 installed packages, and PCRE2
+  `10.46-1~deb13u3`. Its normal UEFI boot reached multi-user in 79.51 seconds
+  while scanning ran concurrently, without rerunning acceptance or changing the
+  base disk. Disk SHA-256
+  `b2e2d35999a63ed7e83bcda8bfc30028c6bb71f1045b3cd0f247b59b23d357d0`;
+  filesystem SHA-256
+  `79d586efc2effe57a52183d319f06e578bc7508a9b014aa966c67cf039bb23cb`.
+  Evidence: `.artifacts/.appliance-enforce-retry-public-fixture/`. This is
+  explicitly repaired evidence, not a fresh run of the latest recipe.
+- PR CI now builds the complete authenticated appliance on Linux, requires both
+  enforcing-daemon and acceptance markers, and probes normal UEFI disk boot.
+  Recipe, application, configuration, dependencies, systemd and AppArmor changes
+  trigger this gate. Failed build/boot diagnostics are retained, including hidden
+  staging directories. This gate neither signs images nor bypasses scanning.
+- All 54 image verification tests pass locally; shell syntax, Actionlint, diff
+  checks and new-commit secret scans pass. A merged macOS stat-mode-width compile
+  regression was fixed; command-package tests and public-fixture preflight pass
+  there. Linux-specific PIN ACL tests still require Linux and fail on this macOS
+  filesystem; no macOS hardware-credential runtime qualification is claimed.
+
+The enforcing test covers daemon startup, health, configuration and process
+restrictions. PKCS#11 access under this profile still needs physical-device
+qualification. The image remains unencrypted, uncommissioned and development
+only; blocking scan findings, signing custody and real measured boot remain gates.
