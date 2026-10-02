@@ -79,7 +79,7 @@ LIMITS, stated:
 THE TARGET'S SIDE HERE IS A REFERENCE (BootSession, ask, unlock). It is what the tests drive; it is not what
 an initramfs ships. The pre-root client is cmd/regalia-unlock, a small native program (Clevis and systemd's
 token plugins are the mainstream shape; an interpreter is too much code for the most exposed stage of
-boot). It runs no other program and writes no file: systemd unseals the local half and passes it as the
+boot). It runs no other program and writes no secret anywhere: systemd unseals the local half and passes it as the
 unit's credential (LoadCredentialEncrypted=, from the copy of the token's `local` kept beside the boot
 configuration), the client reads the LUKS2 header itself, and it gives the derived credential to
 systemd-cryptsetup over the socket crypttab names as the key file. Both clients are held to

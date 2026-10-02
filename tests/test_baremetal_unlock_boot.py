@@ -6,6 +6,7 @@ in REGALIA_BOOT_DIR. Nowhere else: it needs root, QEMU, and network namespaces.
 The peers are those of tests/test_baremetal_unlock.py's OnSwtpm (real EKs and AKs, responses signed by
 their software TPMs), here each in a network namespace of its own with the host firewall and the boot
 mesh of e2e/wg-boot-netns.sh. The guest's TPM is the software TPM `a`, handed to QEMU."""
+import hashlib
 import json
 import os
 import re
@@ -280,10 +281,21 @@ class OnQemu(tub.OnSwtpm):
         since = len(self.events)
         said = self.boot("2-unattended", initrd)
         self.assertNotRegex(said, PROMPT.pattern.decode())
-        self.assertRegex(said, r"regalia-unlock: gave the key of /dev/vda for keyslot [12], through [bc]")
+        gave = re.search(r"regalia-unlock: gave the key of /dev/vda for keyslot ([12]), through ([bc])", said)
+        self.assertIsNotNone(gave, "the client did not give the key")
+        slot, through = gave.group(1), gave.group(2)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         allowed = [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:] if e["event"] == "unlock"]
         self.assertEqual(allowed, [("unlock", "a", "ALLOW")])
+        # after switch-root the running system finds the session the peer recorded, in a directory only root writes
+        left = re.search(r"REGALIA-E2E-SESSION dir=(\S+) id=([0-9a-f]{64}) through=(\S+) (\d+)", said)
+        self.assertIsNotNone(left, "the booted guest did not report the boot session")
+        self.assertEqual((left.group(1), left.group(3), left.group(4)), ("root:root:755", through, slot))
+        self.assertEqual(hashlib.sha256(bytes.fromhex(left.group(2))).hexdigest(), self.recorded_session(through)[0])
+        # the long-running client did not outlive the initrd: systemd stopped it (the unit's Conflicts=), before the socket closed
+        self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
+        stopped, closed = said.find("Stopped regalia-unlock.service"), said.find("Closed regalia-unlock.socket")
+        self.assertTrue(0 <= stopped < closed, "the client was not stopped before the root filesystem took over")
 
         # boot 3, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
         for peer in ("b", "c"):
