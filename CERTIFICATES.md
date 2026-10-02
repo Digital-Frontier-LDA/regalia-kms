@@ -4,11 +4,10 @@ Decision (#104): **the KMS does not manage public TLS certificates.** Issuing, r
 reloading a public certificate is the job of the host that serves it. The KMS protects the few
 long-lived secrets around that work when a consumer asks it to, through operations it already has.
 
-The decision was prompted by two certificate incidents in the fleet. In one, a certificate was
-renewed on disk and the services holding it were never reloaded. In the other, a certificate was
-uploaded by hand and its renewal was never scheduled. Neither exposed a key. Both are lifecycle
-failures: ownership, renewal, reload, and a check of what each endpoint actually serves. Custody
-does not address them, so the fix is not in this repository.
+Cryptographic custody does not replace certificate lifecycle automation. Certificate consumers
+must define ownership, renewal, persistence, reload, and served-certificate checks separately.
+Deployment-specific incident analysis, credential findings, inventories, and recovery procedures
+belong in restricted operational records.
 
 The fleet inventory (owner, environment, SANs, every consumer port, reload behaviour, probes) is
 kept with the fleet monitoring that checks it, not here. An entry may name a KMS object ID when a
@@ -94,8 +93,9 @@ still served, renewal-blocked alert raised.
 
 ### Compromise and failure, per option
 
-"Scoped local" is local automation with a per-name credential. "Broad local" is the starting point:
-one provider token covering whole zones, present on every host that renews.
+The following is a comparison of hypothetical deployment patterns, not an inventory of any
+operator's infrastructure. "Scoped local" uses per-name validation credentials. "Broad local"
+assumes a zone-wide credential distributed to certificate-renewing hosts.
 
 | Scenario | Broad local | Scoped local | Validation broker | Central issuer |
 |---|---|---|---|---|
