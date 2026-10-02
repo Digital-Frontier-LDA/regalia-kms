@@ -43,11 +43,12 @@ import (
 // verify those facts at unit-test speed; the sweep itself remains the
 // distinct, slow, and separately scheduled run.
 //
-// THE 41 + 11 = 52 POPULATION BREAKDOWN (53 since 2026-09-23: see :88 below).
+// THE 41 + 11 = 52 POPULATION BREAKDOWN (53 since 2026-09-23: see :88 below; 55 since
+// 2026-10-02: the two contract guards in Sign, :178 and :186, regalia-kms#162).
 //
 // 41 both-direction survivors (the audit's population) plus 11 one-direction-
 // killed operands equals the 52 total leaves guardenum enumerates in lines
-// 43-238. The ledger lists every operand in scope; entries marked closedByTest
+// 43-248. The ledger lists every operand in scope; entries marked closedByTest
 // or recordedMasked correspond to the 41 both-direction survivors, and the
 // remaining 11 are not present here because a one-direction kill is not the
 // kind of finding the audit tracks. A future PR that introduces a new operand
@@ -71,7 +72,7 @@ import (
 // The count check below totals ALL three; the original 41 was a claim about
 // closedByTest alone, and the peer caught that the seam tests had been
 // promoted to closedByTest when only the FALSE direction was falsified.
-const expectedOperandPopulation = 53
+const expectedOperandPopulation = 55
 
 type survivorStatus int
 
@@ -92,7 +93,7 @@ type survivorEntry struct {
 }
 
 // PIV_DRIVER_GO_OPERANDS is the operand population across piv_driver.go lines
-// 43-238 — 52 leaves on the sites guardenum enumerates there, plus the :88 guard
+// 43-248 — 52 leaves on the sites guardenum enumerates there, plus the :88 guard
 // recorded on 2026-09-23 without a re-sweep (53). The 2026-09-06
 // sweep classified 41 of these as both-direction survivors and 11 as killed in
 // one direction; both kinds are listed below because the audit's 41 is a
@@ -194,51 +195,57 @@ var pivDriverGoOperands = []survivorEntry{
 	{line: 172, operand: 0, status: recordedMasked, closure: "signingHash and algorithmMatches both run only after :164 and :168 have admitted — neither is reachable without a card that signs", masked: "piv_driver.go:164,168", site: "!valid"},
 	{line: 172, operand: 1, status: recordedMasked, closure: "same as :172 op0", masked: "piv_driver.go:164,168", site: "!algorithmMatches(info.Algorithm, algorithm)"},
 
-	// piv_driver.go:176 — Sign's err + len(value)
-	{line: 176, operand: 0, status: recordedMasked, closure: "signer.Sign returns from the card; unreachable without a signing card", masked: "the card", site: "if err != nil || len(value) == 0 {"},
-	{line: 176, operand: 1, status: recordedMasked, closure: "same as :176 op0", masked: "the card", site: "if err != nil || len(value) == 0 {"},
+	// piv_driver.go:178 — Sign's !valid after cardDigest (added 2026-10-02 without a re-sweep, regalia-kms#162)
+	{line: 178, operand: 0, status: recordedMasked, closure: "reached only once :164 and :168 have admitted a card session, which this package cannot fake; the decision is cardDigest's, falsified in both directions by TestAnRSAPayloadMustBeTheDigestInfoForItsHash (sign_contract_test.go, default build)", masked: "piv_driver.go:164,168", site: "if !valid {"},
 
-	// piv_driver.go:184 — Unwrap's err + algorithm + info.Algorithm
-	{line: 184, operand: 0, status: recordedMasked, closure: "same shape as :164 op0", masked: "piv_driver.go:188[0]", site: "if err != nil || algorithm != \"rsa2048\""},
-	{line: 184, operand: 1, status: recordedMasked, closure: "needs privateKey to succeed; unreachable without a card", masked: "the card", site: "info.Algorithm != piv.AlgorithmRSA2048"},
-	{line: 184, operand: 2, status: recordedMasked, closure: "same as :184 op1", masked: "the card", site: "info.Algorithm != piv.AlgorithmRSA2048"},
+	// piv_driver.go:186 — Sign's !valid after contractSignature (added 2026-10-02 without a re-sweep, regalia-kms#162)
+	{line: 186, operand: 0, status: recordedMasked, closure: "reached only with a signature a card returned; the decision is contractSignature's, falsified in both directions by TestRawECDSAIsRAndSAtTheWidthOfTheCurve (sign_contract_test.go, default build)", masked: "piv_driver.go:164,168", site: "if !valid {"},
 
-	// piv_driver.go:188 — Unwrap's !ok decrypter
-	{line: 188, operand: 0, status: recordedMasked, closure: "same shape as :168 op0", masked: "piv_driver.go:184[0]", site: "if !ok {"},
+	// piv_driver.go:182 — Sign's err + len(value)
+	{line: 182, operand: 0, status: recordedMasked, closure: "signer.Sign returns from the card; unreachable without a signing card", masked: "the card", site: "if err != nil || len(value) == 0 {"},
+	{line: 182, operand: 1, status: recordedMasked, closure: "same as :176 op0", masked: "the card", site: "if err != nil || len(value) == 0 {"},
 
-	// piv_driver.go:192 — Unwrap's err + len(value)
-	{line: 192, operand: 0, status: recordedMasked, closure: "decrypter.Decrypt returns from the card; unreachable without an unwrapping card", masked: "the card", site: "if err != nil || len(value) == 0 {"},
-	{line: 192, operand: 1, status: recordedMasked, closure: "same as :192 op0", masked: "the card", site: "if err != nil || len(value) == 0 {"},
+	// piv_driver.go:194 — Unwrap's err + algorithm + info.Algorithm
+	{line: 194, operand: 0, status: recordedMasked, closure: "same shape as :164 op0", masked: "piv_driver.go:198[0]", site: "if err != nil || algorithm != \"rsa2048\""},
+	{line: 194, operand: 1, status: recordedMasked, closure: "needs privateKey to succeed; unreachable without a card", masked: "the card", site: "info.Algorithm != piv.AlgorithmRSA2048"},
+	{line: 194, operand: 2, status: recordedMasked, closure: "same as :184 op1", masked: "the card", site: "info.Algorithm != piv.AlgorithmRSA2048"},
 
-	// piv_driver.go:199 — PublicKey's usable check
-	{line: 199, operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/PublicKey", site: "session.usable(ctx); err != nil"},
+	// piv_driver.go:198 — Unwrap's !ok decrypter
+	{line: 198, operand: 0, status: recordedMasked, closure: "same shape as :168 op0", masked: "piv_driver.go:194[0]", site: "if !ok {"},
 
-	// piv_driver.go:203 — PublicKey's parseSlot check
-	{line: 203, operand: 0, status: closedByTest, closure: "TestAnObjectIDThatIsNotASlotNeverReachesTheCard/PublicKey", site: "if err != nil {"},
+	// piv_driver.go:202 — Unwrap's err + len(value)
+	{line: 202, operand: 0, status: recordedMasked, closure: "decrypter.Decrypt returns from the card; unreachable without an unwrapping card", masked: "the card", site: "if err != nil || len(value) == 0 {"},
+	{line: 202, operand: 1, status: recordedMasked, closure: "same as :192 op0", masked: "the card", site: "if err != nil || len(value) == 0 {"},
 
-	// piv_driver.go:207 — PublicKey's err + info.PublicKey
-	{line: 207, operand: 0, status: recordedMasked, closure: "KeyInfo() panics on a nil-handed card", masked: "the nil-handed card", site: "info.PublicKey == nil"},
-	{line: 207, operand: 1, status: recordedMasked, closure: "same as :207 op0", masked: "the nil-handed card", site: "info.PublicKey == nil"},
+	// piv_driver.go:209 — PublicKey's usable check
+	{line: 209, operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/PublicKey", site: "session.usable(ctx); err != nil"},
 
-	// piv_driver.go:211 — PublicKey's MarshalPKIX error
-	{line: 211, operand: 0, status: recordedMasked, closure: "MarshalPKIXPublicKey is only reached after :207 admits; same masking", masked: "the nil-handed card", site: "if err != nil {"},
+	// piv_driver.go:213 — PublicKey's parseSlot check
+	{line: 213, operand: 0, status: closedByTest, closure: "TestAnObjectIDThatIsNotASlotNeverReachesTheCard/PublicKey", site: "if err != nil {"},
 
-	// piv_driver.go:218 — privateKey's usable + pin check
-	{line: 218, operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/Sign", site: "session.usable(ctx); err != nil"},
-	{line: 218, operand: 1, status: closedByTest, closure: "TestNoPrivateKeyOperationHappensBeforeALogin", site: "session.pin == \"\""},
+	// piv_driver.go:217 — PublicKey's err + info.PublicKey
+	{line: 217, operand: 0, status: recordedMasked, closure: "KeyInfo() panics on a nil-handed card", masked: "the nil-handed card", site: "info.PublicKey == nil"},
+	{line: 217, operand: 1, status: recordedMasked, closure: "same as :207 op0", masked: "the nil-handed card", site: "info.PublicKey == nil"},
 
-	// piv_driver.go:222 — privateKey's parseSlot check
-	{line: 222, operand: 0, status: closedByTest, closure: "TestAnObjectIDThatIsNotASlotNeverReachesTheCard/Sign", site: "if err != nil {"},
+	// piv_driver.go:221 — PublicKey's MarshalPKIX error
+	{line: 221, operand: 0, status: recordedMasked, closure: "MarshalPKIXPublicKey is only reached after :207 admits; same masking", masked: "the nil-handed card", site: "if err != nil {"},
 
-	// piv_driver.go:226 — privateKey's err + TouchPolicy + PINPolicy + algorithmMatches
-	{line: 226, operand: 0, status: recordedMasked, closure: "KeyInfo() panics on a nil-handed card before returning", masked: "the nil-handed card", site: "info.TouchPolicy != piv.TouchPolicyNever"},
-	{line: 226, operand: 1, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyOnce"},
-	{line: 226, operand: 2, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyAlways"},
-	{line: 226, operand: 3, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "info.PINPolicy != piv.PINPolicyOnce"},
-	{line: 226, operand: 4, status: recordedMasked, closure: "the algorithm half is closed indirectly by TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested", masked: "the nil-handed card", site: "!algorithmMatches(info.Algorithm, algorithm)"},
+	// piv_driver.go:228 — privateKey's usable + pin check
+	{line: 228, operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/Sign", site: "session.usable(ctx); err != nil"},
+	{line: 228, operand: 1, status: closedByTest, closure: "TestNoPrivateKeyOperationHappensBeforeALogin", site: "session.pin == \"\""},
 
-	// piv_driver.go:230 — privateKey's PrivateKey error
-	{line: 230, operand: 0, status: recordedMasked, closure: "card.PrivateKey() panics on a nil-handed card", masked: "the nil-handed card", site: "if err != nil {"},
+	// piv_driver.go:232 — privateKey's parseSlot check
+	{line: 232, operand: 0, status: closedByTest, closure: "TestAnObjectIDThatIsNotASlotNeverReachesTheCard/Sign", site: "if err != nil {"},
+
+	// piv_driver.go:236 — privateKey's err + TouchPolicy + PINPolicy + algorithmMatches
+	{line: 236, operand: 0, status: recordedMasked, closure: "KeyInfo() panics on a nil-handed card before returning", masked: "the nil-handed card", site: "info.TouchPolicy != piv.TouchPolicyNever"},
+	{line: 236, operand: 1, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyOnce"},
+	{line: 236, operand: 2, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyAlways"},
+	{line: 236, operand: 3, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "info.PINPolicy != piv.PINPolicyOnce"},
+	{line: 236, operand: 4, status: recordedMasked, closure: "the algorithm half is closed indirectly by TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested", masked: "the nil-handed card", site: "!algorithmMatches(info.Algorithm, algorithm)"},
+
+	// piv_driver.go:240 — privateKey's PrivateKey error
+	{line: 240, operand: 0, status: recordedMasked, closure: "card.PrivateKey() panics on a nil-handed card", masked: "the nil-handed card", site: "if err != nil {"},
 }
 
 // TestPivotDriverSurvivorLedgerIsBalanced enforces the ledger's internal
@@ -246,7 +253,7 @@ var pivDriverGoOperands = []survivorEntry{
 //
 //   - Every entry's line resolves to a guard in piv_driver.go.
 //   - The total entry count equals the 2026-09-06 sweep's 52 operands in
-//     scope (43-238).
+//     scope (43-248).
 //   - Closed-by-test entries that name a test name point to a test that
 //     resolves in this package.
 //
@@ -280,8 +287,8 @@ func TestPivotDriverSurvivorLedgerIsBalanced(t *testing.T) {
 		}
 		seen[key] = true
 
-		if entry.line < 43 || entry.line > 238 {
-			t.Errorf("entry %d (%s) is outside the sweep scope (lines 43-238)", i, key)
+		if entry.line < 43 || entry.line > 248 {
+			t.Errorf("entry %d (%s) is outside the sweep scope (lines 43-248)", i, key)
 		}
 		if entry.line > lineCount {
 			t.Errorf("entry %d (%s) line %d exceeds piv_driver.go length %d", i, key, entry.line, lineCount)
