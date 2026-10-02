@@ -1,0 +1,42 @@
+name: Bounded cluster soak
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: 'Independent lab rounds (1 to 8)'
+        required: true
+        default: '2'
+      steps:
+        description: 'Fault steps per round (13 to 256)'
+        required: true
+        default: '128'
+permissions:
+  contents: read
+jobs:
+  soak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Prepare the laboratory harness
+        run: |
+          python3 -m venv "$RUNNER_TEMP/soak-venv"
+          "$RUNNER_TEMP/soak-venv/bin/pip" install --quiet -r lab/bootstrap/harness-requirements.txt
+      - name: Exercise every requested fault and preserve each round
+        env:
+          SOAK_ROUNDS: ${{ inputs.rounds }}
+          SOAK_STEPS: ${{ inputs.steps }}
+        run: |
+          "$RUNNER_TEMP/soak-venv/bin/python" -m lab.bootstrap.soak \
+            --rounds "$SOAK_ROUNDS" --steps "$SOAK_STEPS" \
+            --output lab/bootstrap/.artifacts/soak
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: cluster-soak-evidence
+          path: lab/bootstrap/.artifacts/soak
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

@@ -214,12 +214,20 @@ def main():
         chaos_cases(cluster)
         report["status"] = "passed"
     finally:
+        report["final_node_diagnostics"] = {}
+        for node in NODES:
+            try:
+                state = cluster.rpc(node, "status")
+                report["final_node_diagnostics"][node] = {key: state[key] for key in
+                    ["active", "agent_error", "epoch", "tpm_failures"] if key in state}
+            except Exception:
+                report["final_node_diagnostics"][node] = {"status": "unreachable"}
         cleanup = command("down", "--volumes", "--remove-orphans", required=False)
         report["cleanup"] = "passed" if cleanup.returncode == 0 else "failed"
         if cleanup.returncode:
             report["status"] = "failed"
         cluster.client_directory.cleanup()
-        (ROOT / ".artifacts/cluster-report.json").write_text(json.dumps(report, indent=2) + "\n")
+        Path(os.environ.get("REGALIA_CLUSTER_REPORT", str(ROOT / ".artifacts/cluster-report.json"))).write_text(json.dumps(report, indent=2) + "\n")
     if report["status"] != "passed":
         raise RuntimeError("cluster run failed")
 

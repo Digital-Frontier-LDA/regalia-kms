@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import subprocess
 import signal
 import time
@@ -13,7 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 NODES = "ABC"
-PROJECT = f"regalia-bootstrap-mesh-{os.getpid()}"
+PROJECT = os.environ.get("REGALIA_LAB_PROJECT", f"regalia-bootstrap-mesh-{os.getpid()}")
+if not re.fullmatch(r"regalia-bootstrap-(mesh-[0-9]+|soak-[a-f0-9]{16})", PROJECT):
+    raise ValueError("invalid isolated laboratory project name")
 COMPOSE = ["docker", "compose", "--project-name", PROJECT, "--file", str(ROOT / "compose.network.yaml")]
 
 

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import threading
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +42,8 @@ class TPM:
         self.root.mkdir(mode=0o700)
         self.name = name
         self.process = None
+        self.operation_lock = threading.RLock()
+        self.failures = []
         self.socket = self.root / "tpm.sock"
         self.env = dict(os.environ, TPM2TOOLS_TCTI=f"swtpm:path={self.socket}")
 
@@ -74,13 +77,23 @@ class TPM:
         self.call("tpm2_flushcontext", "-t")
 
     def restart(self):
-        self.close()
-        self.socket.unlink(missing_ok=True)
-        Path(str(self.socket) + ".ctrl").unlink(missing_ok=True)
-        self.start(provision=False)
+        with self.operation_lock:
+            self.close()
+            self.socket.unlink(missing_ok=True)
+            Path(str(self.socket) + ".ctrl").unlink(missing_ok=True)
+            self.start(provision=False)
 
     def call(self, *args, **kwargs):
-        return run(*args, env=self.env, **kwargs)
+        with self.operation_lock:
+            required = kwargs.pop("required", True)
+            result = run(*args, env=self.env, required=False, **kwargs)
+            if result.returncode:
+                self.failures.append({"tool": str(args[0]), "exit_code": result.returncode,
+                    "tpm_codes": [int(value, 16) for value in re.findall(rb"0x[0-9a-fA-F]+", result.stderr)]})
+                self.failures = self.failures[-16:]
+                if required:
+                    raise RuntimeError(f"{args[0]} failed (exit {result.returncode})")
+            return result
 
     def quote(self, challenge, prefix, selection="sha256:7"):
         paths = [self.root / f"{prefix}.{suffix}" for suffix in ["msg", "sig", "pcrs"]]

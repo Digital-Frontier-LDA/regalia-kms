@@ -42,6 +42,7 @@ def chaos_cases(c):
         label = f"chaos {index + 1}/{steps}: {kind} on {node}"
         record = dict(action, step=index + 1, status="failed")
         c.report["chaos"]["actions"].append(record)
+        started = time.monotonic()
         c.fresh()
         c.rpc(node, "renew", peers=peers)
         c.check(label + " starts with a verified live service", c.verify(node, *c.sign(node)))
@@ -137,3 +138,4 @@ def chaos_cases(c):
         c.check(label + " finishes with verified service and healthy peers", c.verify(node, *c.sign(node))
                 and all(c.rpc(target, "status")["active"] and not c.rpc(target, "status")["agent_error"] for target in "ABC"))
         record["status"] = "passed"
+        record["elapsed_seconds"] = round(time.monotonic() - started, 3)

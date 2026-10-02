@@ -313,7 +313,7 @@ class ClusterNode(Node):
                         manifest_digest=policy["manifest_digest"], nodes=policy["nodes"],
                         service_ready=ready, device_session=self.device.session is not None,
                         device_present=self.device.present, agent_enabled=self.agent_enabled,
-                        agent_error=self.agent_error, lease_issuer=None if self.lease is None else self.lease["payload"]["issuer_id"])
+                        tpm_failures=list(self.tpm.failures), agent_error=self.agent_error, lease_issuer=None if self.lease is None else self.lease["payload"]["issuer_id"])
         return super().control(command)
 
 
