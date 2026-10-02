@@ -1,0 +1,14 @@
+{
+  "kms_url": "https://kms.service.internal:8443",
+  "server_name": "kms.service.internal",
+  "ca_path": "/etc/regalia-sign/kms-ca.pem",
+  "certificate_path": "/etc/regalia-sign/workload-cert.pem",
+  "private_key_path": "/etc/regalia-sign/workload-key.pem",
+  "timeout": "15s",
+  "object_id": "release-signing-key",
+  "environment": "production",
+  "purpose": "release-artifact",
+  "public_key_path": "/etc/regalia-sign/release-signing-key.pub.pem",
+  "key_created": "2026-10-02T00:00:00Z",
+  "user_id": "Example Releases <releases@example.com>"
+}

@@ -28,25 +28,25 @@ func TestValidateEntryPathRefusesEveryMalformedShape(t *testing.T) {
 		want string // "" means accepted
 	}{
 		// ANCHOR. Without it every refusal below is compatible with "the function refuses everything".
-		{"a clean guest-absolute path", "/audit/journal.jsonl", ""},
+		{"a clean host-absolute path", "/audit/journal.jsonl", ""},
 
 		// GATE: without this operand, path[0] panics with index out of range.
-		{"an empty path", "", "not a clean guest-absolute path"},
+		{"an empty path", "", "not a clean host-absolute path"},
 
 		// GATE: the traversal case. This operand is the only thing that refuses it.
-		{"a parent-directory traversal", "/a/../../../etc/passwd", "not a clean guest-absolute path"},
+		{"a parent-directory traversal", "/a/../../../etc/passwd", "not a clean host-absolute path"},
 		// Same operand, the non-canonical form a reader is likelier to write by hand.
-		{"an uncleaned path", "/a/./b", "not a clean guest-absolute path"},
+		{"an uncleaned path", "/a/./b", "not a clean host-absolute path"},
 
 		// GATE: the length bound. A report field with no bound is its own denial of legibility.
-		{"a path one byte over the bound", "/" + strings.Repeat("x", 512), "not a clean guest-absolute path"},
+		{"a path one byte over the bound", "/" + strings.Repeat("x", 512), "not a clean host-absolute path"},
 
 		// GATE: DEL. Its sibling (r < 0x20) already had a detector; this one did not.
 		{"a path carrying DEL", "/audit/\x7fjournal", "carries a control character"},
 
 		// ANCHORS for the two operands that were already covered, kept so a future edit that
 		// removes them fails here rather than silently widening what an export may carry.
-		{"a relative path", "relative/path", "not a clean guest-absolute path"},
+		{"a relative path", "relative/path", "not a clean host-absolute path"},
 		{"a path carrying a control byte", "/audit/\x01journal", "carries a control character"},
 	}
 	for _, testCase := range cases {
@@ -99,7 +99,7 @@ func TestAForgedExportCannotCarryATraversalPath(t *testing.T) {
 	if err == nil {
 		t.Fatalf("a forged export carrying a traversal path was accepted: %#v", export.AuditJournal.Path)
 	}
-	if !strings.Contains(err.Error(), "not a clean guest-absolute path") {
+	if !strings.Contains(err.Error(), "not a clean host-absolute path") {
 		t.Fatalf("error = %q, want the path-shape refusal — another guard refusing this would "+
 			"mean the path operand is not what protects the report", err)
 	}

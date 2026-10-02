@@ -57,17 +57,78 @@ Commissioning has two halves:
     `seal-hsm-pin.sh` refuses `--pcrs` with 10 or 11. PCR 11 is bound only through a *signed* PCR
     policy: `seal-hsm-pin.sh --pcrs 7 --tpm2-public-key FILE --tpm2-public-key-pcrs 11`
     (PIN-CUSTODY.md, "Binding the kernel as well"). That is proven on a software TPM only; the
-    PCR-signing key's custody, signed UKIs, the root disk and the commissioning evidence for it are
-    not provisioned yet (#57), so production binds PCR 7 alone until they are.
+    PCR-signing key's custody, signed UKIs and the root disk are not provisioned yet (#57), so
+    production binds PCR 7 alone until they are. The evidence records the two separately:
+    `credential_tpm2_pcrs` (bound directly) and `credential_tpm2_signed_pcrs` with
+    `credential_tpm2_pcr_key_pkfp` (the signed policy and its key; both `""` without one).
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by `deploy/baremetal/os_probe.py`.
-- **Token clients root-only.** Unlike the guest, this host seals and re-seals its own PINs, so
+- **The service's sandbox.** Install `deploy/baremetal/regalia-kms-hardening.conf.example` as
+  `/etc/systemd/system/regalia-kms.service.d/hardening.conf`. Measured, with the service running:
+  `kms_service_sandboxed` (ProtectSystem=strict, ProtectHome, PrivateTmp, ProtectKernelTunables/
+  Modules/Logs, ProtectControlGroups, RestrictSUIDSGID, LockPersonality), `kms_capabilities_minimal`
+  (no capability in the unit's bounding or ambient set, nor in the running process's) and
+  `kms_apparmor_enforced` (the running process is confined by a profile in enforce mode; the
+  profile and how to load it are under **AppArmor** below). All three are required in the evidence.
+- **Token clients root-only.** This host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
   connected to pcscd must be the KMS binary. Measured: `token_clients_root_only`. A KMS user that
   brings its own client is caught by the pcscd check only while it is connected; restricting pcscd
   access with a polkit rule (root and the KMS user only) is recommended on top.
+- **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
+  `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
+  capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name
+  in `/etc/hosts`. The profile is parser-checked only, so load it in complain mode first, correct it
+  from the kernel log, and only then enforce (the full sequence is in the file's header):
+  ```sh
+  sudo install -m 0644 deploy/baremetal/apparmor/usr.local.sbin.regalia-kms /etc/apparmor.d/
+  sudo apparmor_parser -r -C /etc/apparmor.d/usr.local.sbin.regalia-kms   # complain: logs, refuses nothing
+  sudo apparmor_parser -r /etc/apparmor.d/usr.local.sbin.regalia-kms      # enforce, once the log is clean
+  ```
+  Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
+
+### Host firewall (default deny, both directions)
+
+The site config (`site.example.json`, validated by `sitecfg.py`) declares the host's address, the
+KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
+(the audit and NTP sinks at least). From it:
+
+```sh
+install -d -m 0755 /etc/nftables.d
+# Render to a name the *.nft include never matches, validate, load, and only then replace the fragment:
+# a bad config or a failed render leaves the previous, working ruleset in place at the next boot.
+tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"
+if python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp"; then
+  chmod 0644 "$tmp" && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft
+else
+  rm -f "$tmp"; echo "firewall NOT installed: the previous ruleset stays" >&2
+fi
+```
+
+It must also survive a reboot, and the KMS must never start without it:
+- **Load it at boot:** in `/etc/nftables.conf`, keep Debian's `flush ruleset` first, then add
+  `include "/etc/nftables.d/*.nft"`, and `systemctl enable nftables.service`.
+- **Order the KMS after it**, with a drop-in `/etc/systemd/system/regalia-kms.service.d/firewall.conf`:
+  ```ini
+  [Unit]
+  Requires=nftables.service
+  After=nftables.service
+  ```
+  If the ruleset fails to load, nftables.service fails and the KMS does not start.
+- **Check again after the reboot** (section 5): `firewall_default_deny` is measured on the running
+  host, so a ruleset that loaded once but not at boot fails commissioning.
+
+Measured: `firewall_default_deny` (the table is loaded, with input, output and forward on policy
+drop). Checked by behaviour from each zone after commissioning:
+
+```sh
+python3 deploy/baremetal/network_probe.py site.json --role client --source-ip <a client address>
+```
+
+(`monitoring`, `admin`, `unauthorized` likewise). `e2e/baremetal-firewall-netns.sh` runs the whole
+matrix in network namespaces in CI. Never load the ruleset on a workstation: it is default-deny.
 
 ## 4. TPM provisioning
 
@@ -78,9 +139,20 @@ Commissioning has two halves:
    fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt. Any other key at the handle fails.
 2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7 --from-blob
    pin-hsm_<x>.blob`, and `--yubikey <serial> … --from-blob pin-yubikey_<x>.blob` for the KMS YubiKey
-   (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card.
+   (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card. Record the binding in the
+   evidence (`host.credential_tpm2_pcrs`, and the signed policy's two fields). Measured:
+   `pin_credentials_sealed_as_recorded` reads the header of every
+   `/etc/credstore.encrypted/regalia-kms-*.pin` and fails unless each is sealed to the TPM alone (not
+   the host key) with exactly the recorded PCRs (of the SHA-256 bank) and signing key, and opens on
+   this boot under the name the unit loads it by. Without evidence, give the record on
+   the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
+4. **Attestation key (three-site, #65):** `python3 deploy/baremetal/attest.py node-init --out DIR`
+   creates the EK and a restricted AK and exports their public areas; a peer enrolls the AK with
+   `challenge` / `node-activate` / `enroll` and then verifies quotes with `nonce` / `node-quote` /
+   `verify`. Proven on a software TPM (`e2e/tpm-attest-swtpm.sh`); the PCRs to expect and the EK
+   certificate check are set on the DL360s (#65 PoC 5.2/5.3).
 
 ## 5. Pass criteria
 
@@ -97,3 +169,25 @@ are not re-measured, so sign fresh evidence for each run), complete, signed by t
 attesting every firmware setting, and agreeing with every measurement (including the import key's
 fingerprint). Then an unattended
 **reboot** brings the KMS back with no one present (the disk and the PIN both unseal from the TPM).
+
+## 6. Backups: the control-plane export, never an image
+
+A KMS host is never backed up, snapshotted, replicated or restored as a disk or machine image. An
+image carries memory-resident credentials and runtime state out of the custody boundary, and
+restoring one restores operational authority with it.
+
+What a rebuilt site cannot reconstruct on its own (the audit journal, the policy reservation state,
+the fencing epoch history) is exported separately, as encrypted, integrity-protected application
+data sealed to the custody authority's public key. Runtime credentials, the TPM-sealed PIN blobs,
+memory, swap, core dumps, PINs, plaintext outputs and token state are excluded. A rebuilt host gets
+its credentials back through the witnessed custody procedure, never from the export.
+
+- `regalia-kms --export-control-plane` on the host;
+- `--inspect-export` and `--scan-tree`, offline, from the ceremony checkout;
+- `--restore-export F --authority-key-pem K --expect-site S --restore-root /` on the rebuilt host:
+  verified first, all or nothing, never over existing state, each journal with its mark.
+
+`internal/controlplane` implements this contract. The evidence attests it
+(`runtime_credentials_excluded_from_backup`); nothing measures it. The export, wipe, restore and
+serve sequence passed on the bench with the real daemon and a real Nitrokey (2026-09-24). Carrying
+an export out of a real site and restoring it on a rebuilt host has not been done (regalia#46).

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """The KMS host's OS-hardening probes, measured on the running system (ADR-0002 D21/D22).
 
-Shared by deploy/baremetal/host_probe.py (the supported deployment) and, until its removal (#55),
-the deprecated deploy/proxmox/guest_probe.py. Each probe reads the host and returns (verdict, reason):
+Used by deploy/baremetal/host_probe.py. Each probe reads the host and returns (verdict, reason):
 
   core_dumps_disabled         the KMS unit's effective LimitCORE is 0, fs.suid_dumpable is 0, and a
                               core_pattern piped to systemd-coredump has Storage=none
@@ -15,8 +14,8 @@ the deprecated deploy/proxmox/guest_probe.py. Each probe reads the host and retu
 and pcscd_clients(): every process connected to pcscd runs the KMS binary (matched by socket inode,
 identified by /proc/<pid>/exe, never by the name a process gives itself).
 
-The KMS unit's sandbox (#61), SANDBOX_MEASURED. Not yet in MEASURED: the signed evidence requires every
-MEASURED name, and its schema gains these three in the change that follows #82.
+The KMS unit's sandbox (#61), SANDBOX_MEASURED: a list of its own beside MEASURED. host_probe.py
+measures both and the signed evidence requires both.
 
   kms_service_sandboxed       the unit's effective ProtectSystem=strict, ProtectHome, PrivateTmp,
                               ProtectKernelTunables/Modules/Logs, ProtectControlGroups,

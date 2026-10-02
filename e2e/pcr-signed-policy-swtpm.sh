@@ -20,7 +20,9 @@
 #   4  a kernel update signed by the same key opens the SAME blob, with no re-sealing
 #   5  a kernel nobody signed, a kernel signed by another key, a changed PCR 7, and a boot phase the
 #      signature does not cover do not
-#   6  why the script checks the binding: systemd-creds --with-key=tpm2 ignores the public key
+#   6  host_probe.py reads that binding back from the installed blob's header, and a blob whose
+#      header was edited to claim another binding does not open
+#   7  why the script checks the binding: systemd-creds --with-key=tpm2 ignores the public key
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"; SEAL="$HERE/deploy/seal-hsm-pin.sh"
 pass=0; fail=0
@@ -162,7 +164,32 @@ yes "control: the signed kernel, PCR 7 and phase as sealed, opens again" --tpm2-
 tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
   && P "the TPM's lockout counter is still 0: no refusal above was a lockout" || F "the TPM counted failed tries: the refusals above prove nothing"
 
-hdr "6  why the script checks the binding itself"
+hdr "6  host_probe reads the binding from the blob, and a header that lies does not open"
+# deploy/baremetal/host_probe.py (pin_credentials_sealed_as_recorded) reads what a blob is sealed to
+# from its header. Here on the blob the script installed, not on a fixture.
+header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -c 'import sys
+from deploy.baremetal import host_probe
+direct, signed, pkfp = host_probe.credential_header(sys.stdin.read())
+print("+".join(map(str, direct)), "+".join(map(str, signed)), pkfp)')"
+[ "$header" = "7 11 $fp" ] && P "the installed blob's header: PCR 7 direct, PCR 11 signed, by the key in the record" || F "host_probe read '$header', want '7 11 $fp'"
+# The header is only worth reading if systemd refuses a blob whose header was edited: drop PCR 7 from
+# the direct mask (offset 48), then drop PCR 11 from the signed mask, and try to open each.
+sudo cat "$BLOB" | python3 -c 'import base64, struct, sys
+raw = bytearray(base64.b64decode(sys.stdin.read()))
+at = (32 + struct.unpack_from("<I", raw, 24)[0] + 7) & ~7
+mask, _, _, blob, policy = struct.unpack_from("<QHHII", raw, at)
+pk = (at + 20 + blob + policy + 7) & ~7
+assert mask == 0x80 and struct.unpack_from("<Q", raw, pk)[0] == 0x800
+a = bytearray(raw); struct.pack_into("<Q", a, at, 0); open("no-pcr7.cred", "w").write(base64.b64encode(a).decode())
+b = bytearray(raw); struct.pack_into("<Q", b, pk, 0); open("no-pcr11.cred", "w").write(base64.b64encode(b).decode())' \
+  || F "could not edit the blob's header"
+for edited in no-pcr7 no-pcr11; do
+  o="$(sudo systemd-creds decrypt --tpm2-device="$D" --name=t.pin --tpm2-signature=sig1.json "$W/$edited.cred" - 2>/dev/null)"
+  [ $? != 0 ] && [ -z "$o" ] && P "a blob whose header was edited ($edited) does not open" || F "$edited.cred opened: the header is not what binds the blob"
+done
+yes "control: the unedited blob still opens" --tpm2-signature=sig1.json
+
+hdr "7  why the script checks the binding itself"
 printf '%s' "$PIN" | sudo systemd-creds encrypt --with-key=tpm2 --tpm2-device="$D" --tpm2-pcrs=7 \
   --tpm2-public-key=pcr.pub --tpm2-public-key-pcrs=11 --name=t.pin - "$W/plain.cred" 2>/dev/null; rc=$?
 if [ "$rc" != 0 ] || ! sudo test -s "$W/plain.cred"; then

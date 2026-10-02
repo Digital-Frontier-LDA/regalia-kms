@@ -80,10 +80,17 @@ func TestEvaluateRejectsOutOfOrderCosmosSequenceBeforeHardwareReservation(t *tes
 
 func TestEvaluateRejectsCosmosFeeAndGasOutsidePolicy(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
-	for name, mutate := range map[string]func(*CosmosTransaction){
-		"gas limit": func(tx *CosmosTransaction) { tx.GasLimit = 500_001 },
-		"fee cap":   func(tx *CosmosTransaction) { tx.Fee[0].Amount = 10_001 },
+	for name, test := range map[string]struct {
+		mutate func(*CosmosTransaction)
+		rule   string
+	}{
+		"gas limit":        {func(tx *CosmosTransaction) { tx.GasLimit = 500_001 }, RuleCosmosGas},
+		"no gas limit":     {func(tx *CosmosTransaction) { tx.GasLimit = 0 }, RuleCosmosGas},
+		"fee cap":          {func(tx *CosmosTransaction) { tx.Fee[0].Amount = 10_001 }, RuleCosmosFee},
+		"fee denomination": {func(tx *CosmosTransaction) { tx.Fee[0].Denom = "uunknown" }, RuleCosmosFee},
+		"zero fee":         {func(tx *CosmosTransaction) { tx.Fee[0].Amount = 0 }, RuleCosmosFee},
 	} {
+		mutate := test.mutate
 		t.Run(name, func(t *testing.T) {
 			engine, err := New([]Policy{basePolicy()}, &reservationState{}, func() time.Time { return now })
 			if err != nil {
@@ -92,8 +99,8 @@ func TestEvaluateRejectsCosmosFeeAndGasOutsidePolicy(t *testing.T) {
 			request := baseRequest(now)
 			mutate(request.Cosmos)
 			decision := engine.Evaluate(context.Background(), request)
-			if decision.Allowed || decision.Rule != "cosmos" {
-				t.Fatalf("DEFECT: %s outside policy produced %#v; expected Cosmos policy refusal", name, decision)
+			if decision.Allowed || decision.Code != CodeDenied || decision.Rule != test.rule {
+				t.Fatalf("DEFECT: %s outside policy produced %#v; expected a denial under rule %q", name, decision, test.rule)
 			}
 		})
 	}
@@ -280,25 +287,115 @@ func TestEvaluateRejectsMismatchesBeforeState(t *testing.T) {
 	}
 }
 
+// Every dimension a Cosmos policy controls is refused when it is wrong — and refused UNDER ITS OWN
+// RULE. The rule is what the audit record carries ("policy-DENIED:cosmos-destination"), so a denial
+// that named the wrong dimension, or the old catch-all "cosmos", would send whoever reads it to the
+// wrong line of the policy. The table must cover every rule CosmosRules lists.
 func TestCosmosPolicyRejectsEveryControlledDimension(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
-	tests := map[string]func(*CosmosTransaction){
-		"chain":             func(tx *CosmosTransaction) { tx.ChainID = "evil-1" },
-		"account":           func(tx *CosmosTransaction) { tx.AccountNumber = 43 },
-		"message":           func(tx *CosmosTransaction) { tx.Messages[0].Type = "/cosmos.staking.v1beta1.MsgDelegate" },
-		"destination":       func(tx *CosmosTransaction) { tx.Messages[0].Destination = "cosmos1attacker" },
-		"denomination":      func(tx *CosmosTransaction) { tx.Messages[0].Amounts[0].Denom = "uunknown" },
-		"transaction limit": func(tx *CosmosTransaction) { tx.Messages[0].Amounts[0].Amount = 1_000_001 },
+	tests := map[string]struct {
+		mutate func(*Request)
+		rule   string
+	}{
+		"no transaction":    {func(r *Request) { r.Cosmos = nil }, RuleCosmosTransaction},
+		"no messages":       {func(r *Request) { r.Cosmos.Messages = nil }, RuleCosmosTransaction},
+		"chain":             {func(r *Request) { r.Cosmos.ChainID = "evil-1" }, RuleCosmosChain},
+		"account":           {func(r *Request) { r.Cosmos.AccountNumber = 43 }, RuleCosmosAccount},
+		"message":           {func(r *Request) { r.Cosmos.Messages[0].Type = "/cosmos.staking.v1beta1.MsgDelegate" }, RuleCosmosMessage},
+		"destination":       {func(r *Request) { r.Cosmos.Messages[0].Destination = "cosmos1attacker" }, RuleCosmosDestination},
+		"source":            {func(r *Request) { r.Cosmos.Messages[0].Source = "cosmos1someoneelse" }, RuleCosmosSource},
+		"denomination":      {func(r *Request) { r.Cosmos.Messages[0].Amounts[0].Denom = "uunknown" }, RuleCosmosAmount},
+		"transaction limit": {func(r *Request) { r.Cosmos.Messages[0].Amounts[0].Amount = 1_000_001 }, RuleCosmosAmount},
+		"gas":               {func(r *Request) { r.Cosmos.GasLimit = 500_001 }, RuleCosmosGas},
+		"fee":               {func(r *Request) { r.Cosmos.Fee[0].Amount = 10_001 }, RuleCosmosFee},
 	}
-	for name, mutate := range tests {
+	covered := map[string]bool{}
+	for name, test := range tests {
+		covered[test.rule] = true
 		t.Run(name, func(t *testing.T) {
 			state := &reservationState{}
 			engine, _ := New([]Policy{basePolicy()}, state, func() time.Time { return now })
 			request := baseRequest(now)
-			mutate(request.Cosmos)
+			test.mutate(&request)
 			decision := engine.Evaluate(context.Background(), request)
-			if decision.Allowed || decision.Code != CodeDenied || len(state.reservations) != 0 {
-				t.Fatalf("decision/state = %#v/%#v", decision, state.reservations)
+			if decision.Allowed || decision.Code != CodeDenied || decision.Rule != test.rule || len(state.reservations) != 0 {
+				t.Fatalf("want a denial under %q with nothing reserved; decision/state = %#v/%#v", test.rule, decision, state.reservations)
+			}
+		})
+	}
+	for _, rule := range CosmosRules() {
+		if !covered[rule] {
+			t.Errorf("rule %q is never produced by this table: a rule nothing provokes is a name, not a check", rule)
+		}
+	}
+	if len(covered) != len(CosmosRules()) {
+		t.Errorf("the table produced %d rules, CosmosRules lists %d", len(covered), len(CosmosRules()))
+	}
+}
+
+// When several dimensions are wrong at once, the first in CosmosRules' order is the one reported.
+// The order is part of the contract: an operator who fixes the named dimension and retries is told
+// the next one, never an arbitrary one. Every rule is in the table, cosmos-transaction first, so
+// moving any check ahead of another fails here.
+func TestTheFirstRefusingCosmosDimensionIsTheOneReported(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	wrong := []struct {
+		rule   string
+		mutate func(*Request)
+	}{
+		{RuleCosmosTransaction, func(r *Request) { r.Cosmos.Messages = nil }},
+		{RuleCosmosChain, func(r *Request) { r.Cosmos.ChainID = "evil-1" }},
+		{RuleCosmosAccount, func(r *Request) { r.Cosmos.AccountNumber = 43 }},
+		{RuleCosmosMessage, func(r *Request) { r.Cosmos.Messages[0].Type = "/cosmos.staking.v1beta1.MsgDelegate" }},
+		{RuleCosmosDestination, func(r *Request) { r.Cosmos.Messages[0].Destination = "cosmos1attacker" }},
+		{RuleCosmosSource, func(r *Request) { r.Cosmos.Messages[0].Source = "cosmos1someoneelse" }},
+		{RuleCosmosAmount, func(r *Request) { r.Cosmos.Messages[0].Amounts[0].Amount = 1_000_001 }},
+		{RuleCosmosGas, func(r *Request) { r.Cosmos.GasLimit = 500_001 }},
+		{RuleCosmosFee, func(r *Request) { r.Cosmos.Fee[0].Amount = 10_001 }},
+	}
+	if len(wrong) != len(CosmosRules()) {
+		t.Fatalf("the table has %d rules, CosmosRules lists %d", len(wrong), len(CosmosRules()))
+	}
+	for index, rule := range CosmosRules() {
+		if wrong[index].rule != rule {
+			t.Fatalf("row %d is %q, CosmosRules has %q there: the table must follow the documented order", index, wrong[index].rule, rule)
+		}
+	}
+	for first := range wrong {
+		engine, _ := New([]Policy{basePolicy()}, &reservationState{}, func() time.Time { return now })
+		request := baseRequest(now)
+		// Applied last-to-first, so the mutation that empties the message list runs after the ones
+		// that edit a message.
+		for index := len(wrong) - 1; index >= first; index-- {
+			wrong[index].mutate(&request)
+		}
+		if decision := engine.Evaluate(context.Background(), request); decision.Rule != wrong[first].rule {
+			t.Fatalf("with %s and everything after it wrong, the refusal named %q", wrong[first].rule, decision.Rule)
+		}
+	}
+}
+
+// The order holds ACROSS messages, not only inside one. A first message that is wrong in a later
+// dimension must not hide a second message that is wrong in an earlier one.
+func TestTheCosmosRuleOrderHoldsAcrossMessages(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	second := map[string]func(*CosmosMessage){
+		RuleCosmosMessage:     func(m *CosmosMessage) { m.Type = "/cosmos.staking.v1beta1.MsgDelegate" },
+		RuleCosmosDestination: func(m *CosmosMessage) { m.Destination = "cosmos1attacker" },
+		RuleCosmosSource:      func(m *CosmosMessage) { m.Source = "cosmos1someoneelse" },
+	}
+	for rule, breakSecond := range second {
+		t.Run(rule, func(t *testing.T) {
+			engine, _ := New([]Policy{basePolicy()}, &reservationState{}, func() time.Time { return now })
+			request := baseRequest(now)
+			first := request.Cosmos.Messages[0]
+			other := CosmosMessage{Type: first.Type, Source: first.Source, Destination: first.Destination,
+				Amounts: append([]Coin(nil), first.Amounts...)}
+			breakSecond(&other)
+			request.Cosmos.Messages = append(request.Cosmos.Messages, other)
+			request.Cosmos.Messages[0].Amounts[0].Amount = 1_000_001 // the FIRST message is over the cap
+			if decision := engine.Evaluate(context.Background(), request); decision.Rule != rule {
+				t.Fatalf("the second message's %s was reported as %q: the first message's amount hid it", rule, decision.Rule)
 			}
 		})
 	}

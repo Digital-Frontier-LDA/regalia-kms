@@ -1,24 +1,23 @@
 // Package controlplane exports and inspects the durable, reconstructable KMS control-plane
-// state (#49).
+// state (regalia#49).
 //
-// WHY THIS PACKAGE EXISTS. Proxmox VM backups, snapshots and replication are forbidden for the
-// KMS guest (the policy guard quarantines the VM over them) because a machine image captures
-// memory-resident credentials and runtime state that has no business leaving the custody
-// boundary. But "no backups" cannot be the whole answer: the guest also accumulates state a
-// rebuilt site cannot reconstruct on its own — the audit journal, the policy reservation state,
-// the fencing epoch history — and a site that cannot recover that state after a loss is a site
-// that loses its own history. So the durable state is exported SEPARATELY, as an encrypted,
-// integrity-checked application artifact carried out through the custody procedure, and the
-// machine image stays forbidden. deploy/proxmox/README.md states the contract this package
-// implements: runtime credentials, vTPM state, memory, swap, core dumps, PINs, plaintext
-// outputs and token state are excluded; rebuild recovers operational authority through the
-// witnessed custody procedure, never by restoring an image.
+// WHY THIS PACKAGE EXISTS. A KMS host is never backed up, snapshotted or replicated as a machine
+// image, because an image captures memory-resident credentials and runtime state that has no
+// business leaving the custody boundary. But "no backups" cannot be the whole answer: the host
+// also accumulates state a rebuilt site cannot reconstruct on its own — the audit journal, the
+// policy reservation state, the fencing epoch history — and a site that cannot recover that state
+// after a loss is a site that loses its own history. So the durable state is exported SEPARATELY,
+// as an encrypted, integrity-checked application artifact carried out through the custody
+// procedure, and the machine image stays forbidden. deploy/baremetal/README.md ("Backups") states
+// the contract this package implements: runtime credentials, TPM-sealed blobs, memory, swap, core
+// dumps, PINs, plaintext outputs and token state are excluded; rebuild recovers operational
+// authority through the witnessed custody procedure, never by restoring an image.
 //
 // The envelope is sealed to the CUSTODY AUTHORITY's P-256 public key — the same offline-authority
-// pattern verify.py uses for commissioning evidence. The guest holds only the public half, so an
-// export file found on a compromised guest disk helps nobody read past exports. The authority
-// signs the carried-out FILE outside the guest (the guest has no signing key, by design), exactly
-// as it signs commissioning transcripts.
+// pattern deploy/baremetal/evidence.py uses for commissioning evidence. The host holds only the
+// public half, so an export file found on a compromised host's disk helps nobody read past exports.
+// The authority signs the carried-out FILE off the host (the host has no signing key, by design),
+// exactly as it signs commissioning transcripts.
 package controlplane
 
 import (
@@ -190,7 +189,7 @@ func deriveKey(shared, ephemeralPublic, recipientPublic []byte) ([]byte, error) 
 
 // Recipient is a parsed custody-authority public key: the ECDH half for sealing, plus the
 // digest an operator transcribes into the custody record — the same fingerprint discipline as
-// the commissioning evidence key in deploy/proxmox.
+// the commissioning evidence key in deploy/baremetal.
 type Recipient struct {
 	PublicKey *ecdh.PublicKey
 	// Digest is the lowercase hex SHA-256 of the key's DER encoding.
@@ -221,7 +220,7 @@ func ParseRecipient(pemBytes []byte) (*Recipient, error) {
 }
 
 // ParseAuthorityKey reads a PEM "PRIVATE KEY" (PKCS#8, P-256) — the custody authority's private
-// half, which exists only in the authority's offline custody and never on the guest.
+// half, which exists only in the authority's offline custody and never on the host.
 func ParseAuthorityKey(pemBytes []byte) (*ecdh.PrivateKey, error) {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil || block.Type != "PRIVATE KEY" {

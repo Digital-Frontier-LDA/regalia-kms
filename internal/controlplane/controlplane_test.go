@@ -929,7 +929,7 @@ func TestTheExportSiteIsShapeCheckedAndBindable(t *testing.T) {
 // and then printed: SummaryLines emits "site <value> exported <time>" as its first line, so a
 // newline-bearing site forges entry lines in the report an operator reads to decide whether to
 // trust the file they just produced. Same injection as the payload half, on the side that runs
-// on the live guest.
+// on the live host.
 func TestBuildRefusesASiteNameTheRegistryWouldNot(t *testing.T) {
 	f := newFixture(t, true)
 

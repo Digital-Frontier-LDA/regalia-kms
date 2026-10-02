@@ -118,6 +118,7 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `cmd/regalia-kms/` | Daemon entry point |
 | `internal/` | Server, operations, backends (PKCS#11 / PIV / OpenPGP), registry, policy, audit, fencing, envelope |
 | `adapters/sops/` | SOPS key-service sidecar adapter (separate Go module) |
+| `adapters/gpgsign/` | `regalia-sign`: OpenPGP release, commit and tag signatures from a KMS-held key (separate Go module) |
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
