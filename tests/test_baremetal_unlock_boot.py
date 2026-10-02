@@ -24,7 +24,8 @@ import tests.test_baremetal_unlock as tub
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
-PROMPT = re.compile(rb"Please enter passphrase for disk")
+# systemd sees the systemd-recovery token in the header and asks for the recovery key by that name
+PROMPT = re.compile(rb"Please enter (?:recovery key|passphrase) for disk root")
 CMDLINE = ("root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 "
            "rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4")
 run = tub.run
@@ -213,7 +214,7 @@ class OnQemu(tub.OnSwtpm):
         text = said.decode(errors="replace")
         print("\n----- boot %s (%s): %d lines of console; the lines that matter:" % (label, "KVM" if kvm else "TCG", text.count("\n")), file=sys.stderr)
         for line in text.splitlines():
-            if re.search(r"REGALIA-E2E|regalia-unlock|wg-boot|Please enter passphrase|Failed to|time limit", line):
+            if re.search(r"REGALIA-E2E|regalia-unlock|wg-boot|Please enter|time limit|cryptsetup\[", line):
                 print("    " + line.strip()[:300], file=sys.stderr)
         return text
 
