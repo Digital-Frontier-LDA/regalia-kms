@@ -81,10 +81,13 @@ def run(script, output):
                         and [t['keyslots'] for t in actual['tokens'].values() if t['type']=='systemd-recovery']==[['2']]
                         and actual['keyslots']['2'].get('priority',1)!=0)
             if not final_valid():raise ValueError('baseline reconciliation failed')
+            last_key_check=max(i for i,call in enumerate(baseline,1) if call[0]=='open')
             for point in range(1,len(baseline)+1):
                 for fault in observer.FAULTS:
                     shutil.copyfile(base,image);code,actual=invoke(point,fault)
                     if point>len(actual):raise ValueError('planned fault point was not reached')
+                    if point==last_key_check and fault in ('fail_before','fail_after') and 'cannot prove the retired card' not in last_public:
+                        raise ValueError('an ambiguous retirement check was accepted as proof')
                     meta=observer.header(executable,image)
                     if meta['keyslots'].get('0')!=untouched['0'] or meta['keyslots'].get('3')!=untouched['3']:
                         raise ValueError('unselected slot changed')
