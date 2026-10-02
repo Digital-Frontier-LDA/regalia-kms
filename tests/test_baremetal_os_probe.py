@@ -1,6 +1,6 @@
 """deploy/baremetal/os_probe.py: the KMS host's OS-hardening probes (core dumps, hibernation, swap, an
 unprivileged service) and the pcscd client check, against a fake host. Moved here with the probes from
-the deprecated Proxmox host probe (ADR-0002 D22, #55)."""
+the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
 import unittest
 from pathlib import Path

@@ -86,7 +86,7 @@ func run() error {
 	exportVersionFile := flag.String("export-version-file", "/etc/regalia-kms/deployment-version", "provenance file carried in the export; a missing file travels as an explicit absent marker, and an empty one is refused")
 	inspectExport := flag.String("inspect-export", "", "open and fully verify a sealed control-plane export and exit")
 	restoreExport := flag.String("restore-export", "", "verify a sealed control-plane export for -expect-site and place its journals under -restore-root, then exit")
-	restoreRoot := flag.String("restore-root", "", "the directory the export's guest paths are restored under (\"/\" on the rebuilt guest itself)")
+	restoreRoot := flag.String("restore-root", "", "the directory the export's host paths are restored under (\"/\" on the rebuilt host itself)")
 	expectSite := flag.String("expect-site", "", "bind an inspected export to the site it is being restored as; a file naming any other site is refused")
 	authorityKeyPEM := flag.String("authority-key-pem", "", "custody authority P-256 private key (PEM) that opens an export")
 	scanTree := flag.String("scan-tree", "", "scan a restored directory tree for secret shapes and exit")
@@ -118,7 +118,7 @@ func run() error {
 	}
 
 	// THE RESTORE SIDE OF #49. These run on the ceremony host, against an export file or a
-	// rebuilt guest's tree, with nothing else from the deployment — the same reachability
+	// rebuilt host's tree, with nothing else from the deployment — the same reachability
 	// rule as the journal verifiers above: a recovery control nobody can run at the point of
 	// use is a control that does not exist.
 	if *inspectExport != "" {
@@ -176,7 +176,7 @@ func run() error {
 	if *listen != "" {
 		settings.ListenAddress = *listen
 	}
-	// THE EXPORT SIDE OF #49: the durable, reconstructable control plane leaves the guest as
+	// THE EXPORT SIDE OF #49: the durable, reconstructable control plane leaves the host as
 	// a sealed envelope for the custody procedure — never as a machine image. Runs as the kms
 	// user against the live journals; every chain is verified before anything is sealed.
 	if *exportControlPlane != "" {
@@ -874,7 +874,7 @@ func exportControlPlaneState(settings config.Config, outputPath, recipientPath, 
 	}
 	fmt.Printf("sealed to custody authority key sha256:%s\n", recipient.Digest)
 	fmt.Printf("envelope: %s (%d bytes, mode 0600)\n", outputPath, len(envelope))
-	fmt.Println("The authority signs this FILE after carry-out; the guest holds no signing key.")
+	fmt.Println("The authority signs this FILE after carry-out; the host holds no signing key.")
 	return nil
 }
 

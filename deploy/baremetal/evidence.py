@@ -3,7 +3,7 @@
 host_probe.py MEASURES what the running host can show. The firmware settings it cannot read (iLO,
 AC power recovery, chassis intrusion, used-hardware intake) and the records it compares against (the
 import key's fingerprint) are ATTESTED here, in a document signed with the commissioning evidence key
-(ECDSA P-256, as for the earlier Proxmox evidence). The key is trusted only by its SHA-256 fingerprint,
+(ECDSA P-256). The key is trusted only by its SHA-256 fingerprint,
 recorded at commissioning and supplied by the operator, never by whatever key file sits beside the
 evidence.
 

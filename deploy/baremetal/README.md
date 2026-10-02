@@ -71,7 +71,7 @@ Commissioning has two halves:
   (no capability in the unit's bounding or ambient set, nor in the running process's) and
   `kms_apparmor_enforced` (the running process is confined by a profile in enforce mode; the
   profile and how to load it are under **AppArmor** below). All three are required in the evidence.
-- **Token clients root-only.** Unlike the guest, this host seals and re-seals its own PINs, so
+- **Token clients root-only.** This host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
   connected to pcscd must be the KMS binary. Measured: `token_clients_root_only`. A KMS user that
@@ -169,3 +169,25 @@ are not re-measured, so sign fresh evidence for each run), complete, signed by t
 attesting every firmware setting, and agreeing with every measurement (including the import key's
 fingerprint). Then an unattended
 **reboot** brings the KMS back with no one present (the disk and the PIN both unseal from the TPM).
+
+## 6. Backups: the control-plane export, never an image
+
+A KMS host is never backed up, snapshotted, replicated or restored as a disk or machine image. An
+image carries memory-resident credentials and runtime state out of the custody boundary, and
+restoring one restores operational authority with it.
+
+What a rebuilt site cannot reconstruct on its own (the audit journal, the policy reservation state,
+the fencing epoch history) is exported separately, as encrypted, integrity-protected application
+data sealed to the custody authority's public key. Runtime credentials, the TPM-sealed PIN blobs,
+memory, swap, core dumps, PINs, plaintext outputs and token state are excluded. A rebuilt host gets
+its credentials back through the witnessed custody procedure, never from the export.
+
+- `regalia-kms --export-control-plane` on the host;
+- `--inspect-export` and `--scan-tree`, offline, from the ceremony checkout;
+- `--restore-export F --authority-key-pem K --expect-site S --restore-root /` on the rebuilt host:
+  verified first, all or nothing, never over existing state, each journal with its mark.
+
+`internal/controlplane` implements this contract. The evidence attests it
+(`runtime_credentials_excluded_from_backup`); nothing measures it. The export, wipe, restore and
+serve sequence passed on the bench with the real daemon and a real Nitrokey (2026-09-24). Carrying
+an export out of a real site and restoring it on a rebuilt host has not been done (regalia#46).

@@ -21,8 +21,8 @@ substitute.
 Replay nonce and quota consumption are serialized into a mode-0600 append-only hash-chained journal
 and fsynced before allow. State loss, corruption, cancellation, replay, overflow and quota exhaustion
 fail closed. A nonce stays consumed if the later hardware result is indeterminate. The journal chain
-detects accidental/local alteration but must be covered by encrypted Proxmox storage, backup and
-off-host audit heads because a fully compromised root can rewrite both data and hashes.
+detects accidental/local alteration but must be covered by the host's encrypted disk, the
+control-plane export and off-host audit heads because a fully compromised root can rewrite both data and hashes.
 
 Policy decisions expose stable codes and rule identifiers suitable for the redacted audit event.
 They never include destination, amount, certificate, payload or internal state error details.

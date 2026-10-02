@@ -49,7 +49,7 @@ PLATFORM AND TPM, measured:
                             base chain of a hook, and a drop in any one is final, so no other table's
                             accept can weaken it. What the table lets through is checked by behaviour:
                             network_probe.py from each zone (e2e/baremetal-firewall-netns.sh in the lab)
-  token_clients_root_only   replaces the guest's direct_token_clients_absent: every token client tool on
+  token_clients_root_only   every token client tool on
                             PATH is root:root and not executable by group or others, so the KMS user
                             cannot run them, and every process connected to pcscd runs the KMS binary
 
