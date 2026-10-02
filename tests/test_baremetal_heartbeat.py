@@ -444,6 +444,55 @@ class State(Case):
             json.dump(state, f)
         self.refused("EXPIRED", self.f.check, self.m1)
 
+    def test_accept_and_check_wait_for_the_state_lock(self):
+        """Each reads, decides and rewrites the state file; held from outside, the lock makes both wait."""
+        import fcntl
+        import threading
+        self.f.accept(beat(self.m1, 1), self.m1)
+        with open(self.state, "rb") as f:
+            before = f.read()
+        lock = os.open(self.f.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, lock)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        results = {}
+        calls = {"accept": lambda: self.f.accept(beat(self.m1, 2), self.m1), "check": lambda: self.f.check(self.m1)}
+        workers = {name: threading.Thread(target=lambda name=name, fn=fn: results.update({name: fn()})) for name, fn in calls.items()}
+        for worker in workers.values():
+            worker.start()
+        for name, worker in workers.items():
+            worker.join(1)
+            self.assertTrue(worker.is_alive(), "%s did not wait for the lock" % name)
+        with open(self.state, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(self.counter.value(), 1)
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        for worker in workers.values():
+            worker.join(30)
+        self.assertEqual(sorted(results), ["accept", "check"])
+        self.assertEqual(self.counter.value(), 2)
+        with open(self.state) as f:
+            self.assertEqual(json.load(f)["envelope"]["heartbeat"]["sequence"], 2)
+
+    def test_live_until_gives_the_reading_and_the_absolute_expiry(self):
+        self.f.accept(beat(self.m1, 1), self.m1)
+        self.later(600)
+        self.assertEqual(self.f.live_until(self.m1), (self.now, T0 + hb.MAX_LIFETIME))
+        self.assertEqual(self.f.check(self.m1), T0 + hb.MAX_LIFETIME - self.now)
+        self.authenticated = False
+        self.refused("time is not authenticated", self.f.live_until, self.m1)
+
+    def test_a_failed_write_leaves_no_temporary_file_and_the_state_as_it_was(self):
+        self.f.accept(beat(self.m1, 1), self.m1)
+        with open(self.state, "rb") as f:
+            before = f.read()
+        with unittest.mock.patch.object(hb.os, "fsync", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.f.accept(beat(self.m1, 2), self.m1)
+        self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".freshness-")], [])
+        with open(self.state, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(self.counter.value(), 1)
+
     def test_the_state_is_durable_before_the_counter_moves(self):
         order = []
         real_fsync, real_advance = os.fsync, self.counter.advance

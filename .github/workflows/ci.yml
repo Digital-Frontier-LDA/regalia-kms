@@ -403,3 +403,20 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
       - name: Heartbeat sequence counter and TPM clock against swtpm
         run: bash e2e/heartbeat-swtpm.sh
+
+  # regalia-kms#74: runtime trust leases, on two software TPMs. Node a re-attests to peer b, b's TPM
+  # signs a 5-minute lease, a holds and renews it; a revoked a is refused renewal; a rebooted a needs
+  # a new attested session. The script fails if either of its two tests is skipped.
+  runtime-lease-swtpm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the software TPM and tpm2-tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
+      - name: Runtime leases against swtpm (issue, hold, revoke, reboot)
+        run: bash e2e/runtime-lease-swtpm.sh

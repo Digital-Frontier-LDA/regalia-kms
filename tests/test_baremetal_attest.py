@@ -278,7 +278,8 @@ class Verification(unittest.TestCase):
 
     def test_a_fresh_quote_is_accepted_and_the_state_file_is_private(self):
         verdict = self.attempt(reset=3, restart=1, clock=42)
-        self.assertEqual(verdict, {"node": "site-a", "epoch": EPOCH, "session_id": SESSION.hex(), "reset_count": 3,
+        self.assertEqual(verdict, {"node": "site-a", "epoch": EPOCH, "session_id": SESSION.hex(),
+                                   "ak_name": attest.ak_identity(self.ak_pub)[0].hex(), "reset_count": 3,
                                    "restart_count": 1, "clock": 42, "clock_safe": True, "pcrs": [0, 7]})
         self.assertEqual(os.stat(os.path.join(self.d, "state.json")).st_mode & 0o777, 0o600)
 
