@@ -16,7 +16,11 @@ check() {
     require_binaries regalia-unlock wg nft ip || return 1
     # systemd unseals the two credentials through this library, and its package only suggests it: without
     # it the image builds, and no boot can unseal anything
-    if ! ls /usr/lib/*/libtss2-tcti-device.so.0 /usr/lib64/libtss2-tcti-device.so.0 >/dev/null 2>&1; then
+    local library found=
+    for library in /usr/lib/*/libtss2-tcti-device.so.0 /usr/lib64/libtss2-tcti-device.so.0 /usr/lib/libtss2-tcti-device.so.0; do
+        [ -e "$library" ] && found=yes
+    done
+    if [ -z "$found" ]; then
         derror "regalia-unlock: libtss2-tcti-device is not installed: systemd could not unseal the boot credentials"
         return 1
     fi
