@@ -69,6 +69,9 @@ class Mesh(Case):
                          "\n[Peer]\n# c\nPublicKey = %s\nAllowedIPs = 10.89.0.3/32\n"
                          % (b64(self.keys["a"]["wg_boot_pub"]), b64(self.keys["c"]["wg_boot_pub"])))
         self.assertNotIn("Endpoint", text)                           # it answers; it never dials a booting node
+        caller = bootnet.caller_of(cfg, self.m1)
+        self.assertEqual([caller(a) for a in ("10.89.0.1", "10.89.0.3", "10.89.0.2", "198.51.100.9", "10.89.0.9")], ["a", "c", None, None, None])
+        self.assertIsNone(bootnet.caller_of(cfg, hbt.manifest(a="REVOKED_STOLEN"))("10.89.0.1"))
         self.assertNotIn(b64(self.keys["a"]["wg_service_pub"]), text)
         # a node that may no longer be unlocked leaves the list with the manifest that says so
         self.assertIn("# a", bootnet.peer_wg_conf(cfg, hbt.manifest(a="MAINTENANCE")))

@@ -96,6 +96,15 @@ def boot_wg_conf(cfg, manifest):
     return text
 
 
+def caller_of(cfg, manifest):
+    """For unlock.serve on a running peer: the function from a connection's source address (inside the
+    tunnel) to the node it belongs to, among the nodes that may be unlocked; None for any other address.
+    WireGuard delivers a packet with that source address only from the key the address was allowed for,
+    so the address names the node as surely as the key does."""
+    owners = {where["address"]: node["node_id"] for node, where in _others(cfg, manifest, "request")[1]}
+    return owners.get
+
+
 def unlock_endpoints(cfg, manifest):
     """{peer: "address:port"} inside the tunnel: what unlock.boot_config takes as `endpoints`."""
     mesh, peers = _others(cfg, manifest, "authorize")
