@@ -258,8 +258,40 @@ class Bounds(Case):
         self.assertEqual([e["reason"] for e in self.events[:2]],
                          ["RATE: 491 more address requests from %s were refused before this one" % ADDRESS["a"],
                           "RATE: 9 more any requests from a were refused before this one"])
+        self.assertEqual([e["epoch"] for e in self.events[:2]], [1, 1])              # filed under the manifest held, like any decision
         self.assertTrue(self.pull("b")["ok"])
         self.assertEqual(len(self.events), 4)                                       # said once
+
+    def test_a_flood_that_lasts_writes_one_report_a_minute_not_one_per_refill(self):
+        """Found by the last read of this change: the count was handed back on every request that PASSED, which
+        restarted the reported minute each time a token refilled, so a flood wrote an event per refill: sixty
+        a minute instead of one. The earlier flood test never moved the clock during the flood."""
+        buckets = sync.Buckets(clock=lambda: self.tick)
+        loud, quiet, passed, counted = [], 0, 0, 0
+        for _ in range(6000):                                                       # ten minutes at ten requests a second
+            self.tick += 0.1
+            try:
+                counted += buckets.take("x", "address")
+                passed += 1
+            except sync.Quiet:
+                quiet += 1
+            except m.Refused as refused:
+                loud.append(str(refused))
+        self.assertEqual((passed, len(loud) + quiet), (329, 5671))                  # thirty at once, then one every two seconds
+        self.assertEqual(len(loud), 10)                                             # one report a minute, for ten minutes
+        # and the reports carry the count: all but the last minute's quiet refusals have been said
+        said = sum(int(text.split("(")[1].split()[0]) for text in loud if "more refused since the last report" in text) + counted
+        self.assertTrue(5671 - 10 - 600 <= said <= 5671 - 10, said)
+        # through the server: an admitted node at ten requests a second for ten minutes
+        self.tick = 0.0
+        del self.events[:]
+        for _ in range(6000):
+            self.tick += 0.1
+            self.pull("b")
+        kinds = [e["event"] + ":" + e["outcome"] for e in self.events]
+        self.assertEqual(kinds.count("sync-pull:ALLOW"), 219)                       # twenty at once, then one every three seconds
+        self.assertLessEqual(len(self.events) - 219, 45)                            # the reports: about two a minute for each of the two buckets, not sixty
+
 
     def test_a_bucket_refills_at_its_rate_and_does_not_grow_past_its_size(self):
         for _ in range(20):
@@ -336,6 +368,59 @@ class Bounds(Case):
             self.tick += 61                                                         # everyone idle for a minute, a included
             self.assertTrue(self.pull("b")["ok"])                                   # a is forgotten and comes back as a newcomer: there is room
             self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])
+
+    def test_a_full_address_table_does_not_turn_a_node_away(self):
+        """Found by the last read: the address bucket is spent first and a node's address lives in the capped
+        table, so with the table full of busy strangers a pinned ACTIVE node was told "refused"."""
+        self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])   # b has read its manifest once
+        with unittest.mock.patch.object(sync, "MAX_BUCKETS", 4):
+            def strangers():
+                for i in range(4):
+                    self.pull("b", caller="2001:db8::%d" % i)
+            self.tick += 61                                                         # c's address is idle: the strangers take every place
+            strangers()
+            self.assertEqual(len(self.servers["b"].buckets.open), 4)
+            self.assertNotIn((ADDRESS["a"], "address"), self.servers["b"].buckets.open)
+            for _ in range(10):                                                     # ten minutes of it, the strangers kept busy
+                self.tick += 50
+                strangers()
+                self.assertTrue(self.pull("b")["ok"])                               # node a, never in the table, is served every time
+                self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])
+            before = len(self.events)
+            self.denied("RATE: too many callers at once", self.pull("b", caller="2001:db8::99"))   # a stranger with no place gets the one refusal
+            for _ in range(20):
+                self.assertEqual(self.pull("b", caller="2001:db8::98")["refused"], "refused")
+            self.assertEqual(len(self.events) - before, 1)
+            # a node revoked since the manifest in memory was read still gets past the door, and no further
+            self.stores["b"].commit(self.revoke(self.m1))
+            self.denied("a is REVOKED_STOLEN under epoch 2", self.pull("b"))
+            self.tick += 50
+            strangers()
+            before = len(self.events)
+            self.assertEqual(self.pull("b")["refused"], "refused")                  # and now the door knows too: it is a stranger like any other,
+            self.assertEqual([e["reason"] for e in self.events[before:] if "too many callers" not in e["reason"]], [])   # stopped there, the store not read
+        fresh = self.server("c")                                                    # a server that has read nothing yet has no manifest to ask
+        with unittest.mock.patch.object(sync, "MAX_BUCKETS", 1):
+            fresh.buckets.take("2001:db8::1", "address")                            # the one place is taken before this server ever read its store
+            self.assertEqual(json.loads(fresh.handle(b"{}", ADDRESS["a"]))["refused"], "refused")
+
+    def test_a_key_whose_refusals_are_being_counted_is_not_forgotten(self):
+        """The hole in "a hammered key is never idle": for `drop` the refill time IS the window, so a key can be
+        refused all through it. Forgotten then, its count was lost and its place given to a newcomer."""
+        buckets = sync.Buckets(clock=lambda: self.tick)
+        with unittest.mock.patch.object(sync, "MAX_BUCKETS", 1):
+            buckets.take("k", "drop")                                               # passes at t = 0
+            for _ in range(599):
+                self.tick += 0.1
+                with self.assertRaises(m.Refused):
+                    buckets.take("k", "drop")                                       # refused until t = 59.9
+            self.tick = 60.0
+            self.refused("too many callers", buckets.take, "newcomer", "drop")      # k is still being counted: its place is not free
+            self.tick = 60.1
+            self.assertEqual(buckets.take("k", "drop"), 599)                        # and its next pass hands the count back
+            self.tick = 200.0
+            buckets.take("newcomer", "drop")                                        # idle and nothing counted: now there is room
+            self.assertEqual(sorted(k[0] for k in buckets.open), ["newcomer"])
 
     def test_the_address_table_forgets_idle_keys_keeps_busy_ones_and_what_it_counted(self):
         buckets = sync.Buckets(clock=lambda: self.tick)
@@ -939,6 +1024,25 @@ class Sockets(Case):
             self.assertEqual(self.complete(port), b"")                              # no thread: closed unanswered
             self.assertIn(b'"ok"', self.answered(port, "after a thread could not be started, the next request"))   # its place was given back
         self.assertEqual(self.drops(), [("127.0.0.1", "DENY", "no thread could be started for the connection")])
+
+    def test_drops_from_more_addresses_than_are_remembered_are_still_one_event_a_minute(self):
+        """With the table full, a drop from a new address, or the listener's own failure, left no event at
+        all: the state an EMFILE storm would be in."""
+        server = self.servers["b"]
+        with unittest.mock.patch.object(sync, "MAX_BUCKETS", 2):
+            server.dropped("127.0.0.8", "over the connection limit")
+            server.dropped("127.0.0.9", "over the connection limit")
+            self.assertEqual(len(self.drops()), 2)
+            for i in range(5):
+                server.dropped("127.0.1.%d" % i, "over the connection limit")
+            server.dropped("the listener", "a connection could not be accepted (OSError)")
+            self.assertEqual(len(self.drops()), 3)                                  # one more event for all six
+            subject, outcome, reason = self.drops()[-1]
+            self.assertEqual((subject, outcome), ("*", "DENY"))
+            self.assertIn("RATE: too many callers at once; connections are being dropped: over the connection limit", reason)
+            self.tick += 61
+            server.dropped("the listener", "a connection could not be accepted (OSError)")
+            self.assertEqual(self.drops()[-1][0], "the listener")                   # the two idle keys were forgotten: there is room again
 
     def test_drops_are_reported_once_a_minute_with_the_count(self):
         server = self.servers["b"]

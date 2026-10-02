@@ -48,7 +48,9 @@ event is written per minute for it; how many more were refused is written with t
 the caller's next request that passes (sync-rate). A caller that can make this node refuse cannot
 thereby fill its trail. Buckets keyed by a source address are capped (4096); a newcomer is refused while
 they are all busy, under one key, so that is one event a minute too. Buckets keyed by a NODE are bounded
-by the manifest and kept apart: addresses cannot crowd a node out.
+by the manifest and kept apart, and a full address table does not turn a node away: an address that the
+last manifest read gives to a node goes on to that node's own bucket. (On a host the table cannot fill
+at all: the tunnel allows each key one address, wgsvc.py.)
 
 WHAT A CALLER IS TOLD. An identified, admitted node is told the reason it was refused. A caller that was
 not identified, or is in a terminal state, is told "refused" and nothing else: the reason (this node's
@@ -123,6 +125,14 @@ class Quiet(Refused):
     """A refusal already reported for this caller in this window: answered, not recorded again."""
 
 
+class Crowded(Refused):
+    """The table of address-keyed buckets is full of busy callers: there is no room to count a new one."""
+
+
+class QuietlyCrowded(Crowded, Quiet):
+    """The same, already reported in this window."""
+
+
 class SinkFailed(Exception):
     """The audit sink did not take an event. Never a Refused: a refusal is answered, this is not."""
 
@@ -151,29 +161,51 @@ class Buckets:
             if table is self.open and key not in table and len(table) >= MAX_BUCKETS:
                 self._forget_idle(now)
                 if len(table) >= MAX_BUCKETS:
-                    self._refuse((EVERYBODY, kind), now, per, "RATE: too many callers at once")
+                    self._refuse((EVERYBODY, kind), now, per, "RATE: too many callers at once", Crowded, QuietlyCrowded)
             tokens, at = table.get(key, (float(count), now))
             tokens = min(float(count), tokens + max(0.0, now - at) * count / per)
             if tokens < 1.0:      # nothing is written: the bucket is as it was at its last request that passed
                 self._refuse(key, now, per, "RATE: more than %d %s requests in %d s from %s" % (count, kind, per, caller))
             table[key] = (tokens - 1.0, now)
-            since, suppressed = self.reported.pop(key, (None, 0))
-            return suppressed + (0 if since is None else 1)
+            # What was refused is counted until the reported minute is OVER, and only then handed back. A
+            # request that passes in the middle of a flood (one does, every time a token refills) must not
+            # restart the minute: the next refusal would be a new event, and a flood would write one event
+            # per refill instead of one per minute.
+            since, suppressed = self.reported.get(key, (None, 0))
+            if since is None or 0 <= now - since < per:
+                return 0
+            del self.reported[key]
+            return suppressed + 1
 
-    def _refuse(self, key, now, per, text):
+    def has_room(self, caller, kind):
+        """Whether a request of `kind` from `caller` can be counted: it has a bucket already, or there is
+        room for one (idle ones are forgotten to find out). Nothing is spent."""
+        table = self.open if kind in OPEN else self.nodes
+        with self.lock:
+            if table is not self.open or (caller, kind) in table or len(table) < MAX_BUCKETS:
+                return True
+            self._forget_idle(self.clock())
+            return len(table) < MAX_BUCKETS
+
+    def _refuse(self, key, now, per, text, loud=Refused, quiet=Quiet):
         since, suppressed = self.reported.get(key, (None, 0))
         if since is not None and 0 <= now - since < per:
             self.reported[key] = (since, suppressed + 1)
-            raise Quiet(text)
+            raise quiet(text)
         self.reported[key] = (now, 0)
-        raise Refused(text + (" (%d more refused since the last report)" % suppressed if suppressed else ""))
+        raise loud(text + (" (%d more refused since the last report)" % suppressed if suppressed else ""))
 
     def _forget_idle(self, now):
         """Drop the address-keyed buckets that are full again (nothing of theirs passed for a whole window,
         so forgetting one gives its caller nothing it did not have), and what was being counted for them.
-        A key that is being hammered has a request pass as often as its rate allows, so it is never one
-        of these. The count for "everybody" stays."""
-        for key in [k for k, v in self.open.items() if now - v[1] >= self.rates[k[1]][1]]:
+        A key whose refusals are still being counted inside a reported minute is KEPT: for a class whose
+        refill time is the whole window ("drop"), a key can be refused all through it and look idle, and
+        forgetting it would lose its count and give its place to a newcomer. The count for "everybody"
+        stays."""
+        def counting(key):
+            since = self.reported.get(key, (None, 0))[0]
+            return since is not None and 0 <= now - since < self.rates[key[1]][1]
+        for key in [k for k, v in self.open.items() if now - v[1] >= self.rates[k[1]][1] and not counting(k)]:
             del self.open[key]                  # in place: take() is holding this very table
         for key in [k for k in self.reported if k[1] in OPEN and k not in self.open and k[0] != EVERYBODY]:
             del self.reported[key]
@@ -195,14 +227,17 @@ class _View:
 
     def envelopes(self, after_epoch=0):
         require(isinstance(after_epoch, int) and not isinstance(after_epoch, bool) and after_epoch >= 0, "after_epoch must be an integer >= 0")
+        return copy.deepcopy(self._chain()[after_epoch:])          # epochs run from 1 with no gap: the store's own rule
+
+    def _chain(self):
         if self._envelopes is None:
             self._envelopes = self._store.envelopes(0)
-        return copy.deepcopy(self._envelopes[after_epoch:])        # epochs run from 1 with no gap: the store's own rule
+        return self._envelopes
 
     def load(self):
         """The current manifest, as a copy: whatever a caller of this view does to it stays its own."""
-        chain = self.envelopes(0)
-        return chain[-1]["manifest"] if chain else None
+        chain = self._chain()
+        return copy.deepcopy(chain[-1]["manifest"]) if chain else None
 
 
 class Server:
@@ -216,6 +251,7 @@ class Server:
     def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time):
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
+        self._seen = None       # the manifest of the last request that read the store: see _is_a_node
 
     def _record(self, event):
         try:
@@ -243,7 +279,7 @@ class Server:
         # A flood that ended: what was refused and never counted is written now, with the first request
         # of that caller that got through.
         for who, kind, count in known["late"]:
-            self._report(who, kind, count)
+            self._report(who, kind, count, known["manifest"])
         # One event, written when the decision is known, under whatever was established on the way: the
         # manifest, the caller the tunnel identified, the operation. Not for a refusal already reported
         # in this window (Quiet): the flood is in the count of the next report.
@@ -255,13 +291,23 @@ class Server:
         # the reason goes to a caller this node identified and may talk to; anybody else learns nothing
         return _refusal(refusal if known["identified"] else "refused")
 
-    def _report(self, who, kind, count):
+    def _report(self, who, kind, count, manifest):
         def said():
             raise Refused("RATE: %d more %s requests from %s were refused before this one" % (count, kind, who))
         try:
-            convergence.audited(self._record, "sync-rate", None, who, self.node_id, said)
+            convergence.audited(self._record, "sync-rate", manifest, who, self.node_id, said)
         except Refused:
             pass
+
+    def _is_a_node(self, source):
+        """Whether `source` is the address of a node this server may talk to, by the manifest it read LAST
+        (in memory: no disk, no TPM). Asked only when the address table is full, so that a table full of
+        busy strangers cannot turn a node away: the node then goes on to its own bucket, which the
+        manifest bounds, and to the real check against the manifest read now."""
+        try:
+            return self._seen is not None and bool(peer_of(self._seen, self.identify(self._seen, source)))
+        except Exception:      # noqa: BLE001 - anything that is not "yes, a node" is "no"
+            return False
 
     def _spend(self, late, who, kind):
         """One request of `kind` for `who`, or Refused; a count left over from a flood is put on `late`."""
@@ -275,6 +321,10 @@ class Server:
         name = convergence._printable(source)
         try:      # the first of a window passes; the others are counted, and none of them is an event of its own
             suppressed = self.buckets.take(name, "drop")
+        except Quiet:
+            return
+        except Crowded as crowded:      # more addresses are being dropped than are remembered: one event a minute says so
+            name, reason, suppressed = EVERYBODY, "%s; connections are being dropped: %s" % (crowded, reason), 0
         except Refused:
             return
 
@@ -288,8 +338,13 @@ class Server:
     def _decide(self, raw, source, known):
         view = _View(self.store)                                           # nothing is read yet
         view.late = known["late"]
-        self._spend(view.late, convergence._printable(source), "address")  # before the disk and the TPM are touched for anybody
-        manifest = known["manifest"] = view.load()
+        name = convergence._printable(source)
+        # Before the disk and the TPM are touched for anybody. One exception: when the address table is full
+        # of busy strangers, an address the last manifest gives to a node is not counted there at all (and
+        # so is not refused there): it goes on to that node's own bucket.
+        if self.buckets.has_room(name, "address") or not self._is_a_node(source):
+            self._spend(view.late, name, "address")
+        manifest = known["manifest"] = self._seen = view.load()
         require(manifest is not None, "this node holds no manifest")
         key = self.identify(manifest, source)
         node = pinned(manifest, key)
