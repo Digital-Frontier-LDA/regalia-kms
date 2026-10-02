@@ -269,24 +269,32 @@ class HighWater:
         require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
         return base
 
-    def value(self):
+    def _base(self):
+        """Checks both indices' attributes and returns the base (one call per value/advance/check)."""
         a = self._attributes(self.index)
         require(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
         b = self._attributes(self.base_index)
         require(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
                 "base index %s is not written and write-locked" % self.base_index)
-        counter, base = self._read8(self.index), self._read8(self.base_index)
+        return self._read8(self.base_index)
+
+    def _epoch(self, base):
+        counter = self._read8(self.index)
         require(counter >= base, "the NV counter %d is below its base %d" % (counter, base))
         return counter - base
 
+    def value(self):
+        return self._epoch(self._base())
+
     def advance(self, epoch):
-        now = self.value()
+        base = self._base()
+        now = self._epoch(base)
         require(epoch >= now, "refusing to accept epoch %d below the TPM high-water %d" % (epoch, now))
         require(epoch - now <= self.MAX_JUMP, "epoch jump %d exceeds the bound %d: anomaly" % (epoch - now, self.MAX_JUMP))
         while now < epoch:
             r = self._tpm("nvincrement", self.index, "-C", "o")
             require(r.returncode == 0, "cannot increment the NV counter")
-            nxt = self.value()
+            nxt = self._epoch(base)
             require(nxt == now + 1, "the NV counter did not advance by one (%d -> %d)" % (now, nxt))
             now = nxt
         return now
