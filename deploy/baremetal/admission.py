@@ -191,7 +191,10 @@ class Service:
                 self._remember(request["nonce"], self.boottime())
                 try:
                     # asked for the daemon's sake: this lease is the one to hold, even if a peer whose clock
-                    # runs behind, or whose heartbeat ends sooner, gave it less life than the one held
+                    # runs behind, or whose heartbeat ends sooner, gave it less life than the one held.
+                    # If it has no more than MARGIN left (the peer's heartbeat is about to end), this round
+                    # writes "not admitted" where the tokens alone were waiting: no key was being served
+                    # either way, and the next round's scheduled renewal takes the longer lease.
                     self.holder.install(self.renew(request), manifest, prefer=waits)
                 except Exception as failure:      # a peer is down, or refused: what the node still holds decides
                     reason = "renewal failed: %s" % failure

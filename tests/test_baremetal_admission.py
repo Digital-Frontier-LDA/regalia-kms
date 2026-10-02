@@ -260,6 +260,24 @@ class DaemonStart(Case):
         kept = self.service.step()
         self.assertEqual((kept["requested_boottime_ms"], self.holder.held()["lease"]["issuer"]), (renewed["requested_boottime_ms"], "c"))
 
+    def test_a_preferred_lease_inside_the_margin_costs_one_round_and_heals_at_the_next(self):
+        first = self.service.step()
+
+        def nearly_over(request):
+            body = dict(self.issue("c", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + admission.MARGIN))
+            return lt.sign(body, self.keys["c"])
+        good, self.service.renew = self.service.renew, nearly_over
+        self.later(1)
+        self.started = self.ticks - 500
+        inside = self.service.step()
+        self.assertEqual(inside["serve_until_boottime_ms"], 0)
+        self.assertIn("inside the 10 s margin", inside["reason"])
+        self.service.renew = good
+        self.later(5)
+        healed = self.service.step()                                    # the schedule asks again: the held lease is nearly over
+        self.assertGreater(healed["serve_until_boottime_ms"], first["serve_until_boottime_ms"])
+        self.assertGreater(healed["requested_boottime_ms"], self.started)
+
     def test_a_lease_asked_for_at_the_very_tick_the_daemon_started_is_not_after_it(self):
         first = self.service.step()
         self.started = first["requested_boottime_ms"]
