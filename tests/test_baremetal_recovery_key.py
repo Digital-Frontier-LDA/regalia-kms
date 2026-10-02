@@ -933,5 +933,21 @@ class RecoveryKey(unittest.TestCase):
         self.assertIn("WARNING: keyslot 5 is a passphrase no token names", done.stderr)
 
 
+    def test_the_exit_codes_opens_nothing_relies_on_hold_for_this_cryptsetup(self):
+        """opens_nothing() reads cryptsetup's exit 2 ("no key available with this passphrase") as "the
+        key opens nothing". Measured on 2.7.0 and 2.7.5. If an update gave 2 for a header or device
+        it cannot read, a failed read would become "the used key opens nothing": this fails first."""
+        self.enrolled()
+        wrong = self.cs("open", "--test-passphrase", "--key-file", self.secret(THIRD_KEY), self.img, ok=False)
+        self.assertEqual(wrong.returncode, 2, wrong.stderr)
+        missing = self.cs("open", "--test-passphrase", "--key-file", self.secret(THIRD_KEY), self.img + ".absent", ok=False)
+        self.assertNotIn(missing.returncode, (0, 2), missing.stderr)
+        plain = os.path.join(self.dir, "not-luks.img")
+        with open(plain, "wb") as f:
+            f.truncate(1 << 20)
+        notluks = self.cs("open", "--test-passphrase", "--key-file", self.secret(THIRD_KEY), plain, ok=False)
+        self.assertNotIn(notluks.returncode, (0, 2), notluks.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
