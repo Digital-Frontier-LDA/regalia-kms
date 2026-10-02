@@ -1,0 +1,34 @@
+name: Recovery interruption findings
+on:
+  pull_request:
+    paths:
+      - 'lab/recovery/**'
+      - 'tests/test_recovery_matrix_observer.py'
+      - '.github/workflows/recovery-matrix.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install cryptsetup for disposable regular-file headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cryptsetup-bin
+      - name: Observe every successful and single-failure cleanup boundary
+        run: |
+          mkdir -p "$RUNNER_TEMP/recovery-evidence"
+          python3 lab/recovery/matrix.py --script deploy/baremetal/recovery-key.sh \
+            --output "$RUNNER_TEMP/recovery-evidence/matrix.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: recovery-interruption-evidence
+          path: ${{ runner.temp }}/recovery-evidence
+          if-no-files-found: error
+          retention-days: 14
