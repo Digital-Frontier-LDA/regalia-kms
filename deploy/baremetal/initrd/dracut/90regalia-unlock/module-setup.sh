@@ -40,8 +40,14 @@ installkernel() {
 }
 
 install() {
-    inst_multiple regalia-unlock wg nft ip sed cat sleep
+    inst_multiple regalia-unlock wg nft ip sed cat sleep grep
     inst_simple /usr/lib/regalia/wg-boot
+    # The client and its unit come from the host separately: a client that records the boot session, run
+    # by a unit that gives it nowhere to write, would boot with its leases refused.
+    if ! grep -q '^RuntimeDirectory=regalia$' "${systemdsystemunitdir:?}/regalia-unlock.service"; then
+        dfatal "regalia-unlock: the installed regalia-unlock.service is older than the client (no RuntimeDirectory=regalia)"
+        return 1
+    fi
     for unit in regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done

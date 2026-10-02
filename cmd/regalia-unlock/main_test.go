@@ -842,18 +842,6 @@ func TestTheKeyHandoffAndTheLocalHalf(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	asker, err := net.DialUnix("unix", nil, address) // systemd-cryptsetup, waiting for its key
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer asker.Close()
-	if err := giveKey(listener, []byte("the derived credential"), time.Second); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := io.ReadAll(asker); string(got) != "the derived credential" {
-		t.Fatalf("the asker read %q", got)
-	}
-	wantError(t, giveKey(listener, []byte("k"), 50*time.Millisecond), "nobody entitled asked for the key on the socket")
 	// a run that fails answers the waiting connection with nothing, so it is not left waiting
 	waiting, err := net.DialUnix("unix", nil, address)
 	if err != nil {
@@ -923,66 +911,214 @@ func TestTheTransportIsOneBoundedRequestPerConnection(t *testing.T) {
 	}
 }
 
-// The running system must ask for its leases under the session the peers saw. What is left for it is
-// the session's ID and public key, exactly, and never anything of the private key.
-func TestTheBootSessionIsLeftForTheRunningSystem(t *testing.T) {
-	directory := t.TempDir()
+// socketPair is the key socket and a way to ask on it, as systemd-cryptsetup does: connect, read to the end.
+func socketPair(t *testing.T) (*net.UnixListener, func() ([]byte, error)) {
+	t.Helper()
+	directory, err := os.MkdirTemp("", "ru") // a short path: a UNIX socket address holds 108 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(directory) })
+	address := &net.UnixAddr{Name: filepath.Join(directory, "key.sock"), Net: "unix"}
+	listener, err := net.ListenUnix("unix", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	return listener, func() ([]byte, error) {
+		connection, err := net.DialUnix("unix", nil, address)
+		if err != nil {
+			return nil, err
+		}
+		defer connection.Close()
+		_ = connection.SetDeadline(time.Now().Add(20 * time.Second))
+		return io.ReadAll(connection)
+	}
+}
+
+func newUnlocker(t *testing.T, directory string, log io.Writer, peers ...*fakePeer) *unlocker {
+	t.Helper()
+	paths, _ := pathsOf(t, tokensFor(peers...))
+	return &unlocker{config: configFor(peers...), o: options{rounds: 1, sessionDir: directory}, paths: paths,
+		local: bytes.Repeat([]byte{0x11}, 32), boot: testSession(t), dial: dialer(peers...), quote: noQuote,
+		sleep: func(time.Duration) {}, out: io.Discard, diagnostics: log}
+}
+
+func recordOf(t *testing.T, directory string) (id, public string) {
+	t.Helper()
 	read := func(name string) string {
 		content, err := os.ReadFile(filepath.Join(directory, name))
 		if err != nil {
-			t.Fatal(err)
+			return ""
 		}
 		if info, _ := os.Stat(filepath.Join(directory, name)); info.Mode().Perm() != 0o644 {
 			t.Fatalf("%s has mode %o", name, info.Mode().Perm())
 		}
 		return string(content)
 	}
-	first := testSession(t)
-	if err := publishSession(directory, first); err != nil {
-		t.Fatal(err)
+	return read("boot-session"), read("boot-session.pub")
+}
+
+// One boot, one process, ONE session: a peer accepts one session per boot and records it when it
+// verifies a quote. Every connection systemd-cryptsetup makes is answered under that same session.
+func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
+	directory := t.TempDir()
+	porto := newFakePeer(t, "porto")
+	var log bytes.Buffer
+	u := newUnlocker(t, directory, &log, porto)
+	listener, ask := socketPair(t)
+	// the session is on record when the FIRST quote is taken, and it is this boot's
+	onRecordAtQuote := ""
+	u.quote = func(qualifying []byte) ([]byte, []byte, error) {
+		if onRecordAtQuote == "" {
+			onRecordAtQuote, _ = recordOf(t, directory)
+		}
+		return noQuote(qualifying)
 	}
-	if read("boot-session") != hex.EncodeToString(first.id)+"\n" || len(read("boot-session")) != 65 {
-		t.Fatalf("boot-session is %q", read("boot-session"))
+	// each connection is one call of serve here (-once), on the same unlocker: the same process, the same session
+	u.o.once = true
+	connect := func() ([]byte, error) {
+		got := make(chan []byte, 1)
+		go func() { key, _ := ask(); got <- key }()
+		err := u.serve(listener)
+		return <-got, err
 	}
-	if read("boot-session.pub") != hex.EncodeToString(first.ephemeralPublic)+"\n" {
-		t.Fatal("boot-session.pub is not the hex of the key in the transcript")
+
+	// 1: the peer refuses (or its reply is lost): nothing is given, and the session is neither spent nor changed
+	porto.deny = "DENIED"
+	key, err := connect()
+	wantError(t, err, "no peer helped")
+	if len(key) != 0 || u.boot.consumed {
+		t.Fatalf("a refused attempt gave %q or spent the session", key)
 	}
-	// a later run of the same boot presents another session: the record is replaced, whole
-	second := testSession(t)
-	if err := publishSession(directory, second); err != nil || read("boot-session") != hex.EncodeToString(second.id)+"\n" ||
-		read("boot-session.pub") != hex.EncodeToString(second.ephemeralPublic)+"\n" {
-		t.Fatalf("the later session did not replace the earlier one: %v", err)
+	id, public := recordOf(t, directory)
+	if id != hex.EncodeToString(u.boot.id)+"\n" || public != hex.EncodeToString(u.boot.ephemeralPublic)+"\n" || len(id) != 65 {
+		t.Fatalf("the record is not this boot's session: %q", id)
 	}
-	// nothing of the private key, and nothing left over
-	private := x509.MarshalPKCS1PrivateKey(second.key)
+	// 2: systemd-cryptsetup asks again in the same boot: the SAME session is presented, and now answered
+	porto.deny = ""
+	want, _ := credential(u.local, porto.contribution, "lisbon", "porto", 3)
+	if key, err := connect(); err != nil || !bytes.Equal(key, want) {
+		t.Fatalf("the retry gave %q, %v", key, err)
+	}
+	sessions := map[string]bool{}
+	for _, request := range porto.requests {
+		if request["op"] == "unlock" {
+			sessions[request["session_id"].(string)] = true
+		}
+	}
+	if len(sessions) != 1 || !sessions[hex.EncodeToString(u.boot.id)] {
+		t.Fatalf("the attempts did not present one session: %v", sessions)
+	}
+	if again, _ := recordOf(t, directory); again != id || onRecordAtQuote != id {
+		t.Fatalf("the record changed within the boot, or was not there at the first quote: %q, at quote %q", again, onRecordAtQuote)
+	}
+	through, _ := os.ReadFile(filepath.Join(directory, "key-given-through"))
+	if string(through) != "porto 1\n" {
+		t.Fatalf("key-given-through is %q", through)
+	}
+	// 3: a third connection: this boot's one response is used, so nothing, and no peer is asked
+	asked := len(porto.requests)
+	key, err = connect()
+	wantError(t, err, "this boot's one response was used")
+	if len(key) != 0 || len(porto.requests) != asked {
+		t.Fatalf("a spent session gave %q or asked a peer again", key)
+	}
+	// nothing of the private key was written, and nothing else was left
 	entries, _ := os.ReadDir(directory)
 	for _, entry := range entries {
 		content, _ := os.ReadFile(filepath.Join(directory, entry.Name()))
-		if strings.Contains(string(content), hex.EncodeToString(second.key.D.Bytes())) || bytes.Contains(content, private[:64]) {
-			t.Fatalf("%s holds private key material", entry.Name())
+		for _, secret := range []string{hex.EncodeToString(u.boot.key.D.Bytes()), hex.EncodeToString(u.boot.key.Primes[0].Bytes()), "PRIVATE"} {
+			if strings.Contains(string(content), secret) {
+				t.Fatalf("%s holds private key material", entry.Name())
+			}
 		}
 	}
-	if len(entries) != 2 {
-		t.Fatalf("the directory holds %d entries, not the two files", len(entries))
+	if len(entries) != 3 {
+		t.Fatalf("the directory holds %d entries, not the three files", len(entries))
 	}
-	wantError(t, publishSession(filepath.Join(directory, "absent"), second), "cannot record boot-session.pub")
 
-	// it is on record BEFORE the first quote: a peer records the session when it verifies one
-	peer, boot := newFakePeer(t, "porto"), testSession(t)
-	paths, _ := pathsOf(t, tokensFor(peer))
-	recorded := ""
-	quote := func(qualifying []byte) ([]byte, []byte, error) {
-		recorded = read("boot-session")
-		return noQuote(qualifying)
+	// without -once it serves until it is stopped: two connections to one process, then the listener closes
+	faro := newFakePeer(t, "faro")
+	long := newUnlocker(t, t.TempDir(), io.Discard, faro)
+	faro.deny = "DENIED"
+	done := make(chan error, 1)
+	go func() { done <- long.serve(listener) }()
+	for i := 0; i < 2; i++ {
+		if key, err := ask(); err != nil || len(key) != 0 {
+			t.Fatalf("connection %d of the long-running service: %q, %v", i, key, err)
+		}
 	}
-	if err := publishSession(directory, boot); err != nil {
+	listener.Close() // the unit is stopped
+	if err := <-done; err != nil {
+		t.Fatalf("serve ended with %v", err)
+	}
+	if hellos := len(faro.requests); hellos != 2 {
+		t.Fatalf("the long-running service made %d requests for two connections", hellos)
+	}
+}
+
+// The record when it is not this process's first word: an earlier process of the same boot left one.
+func TestAnEarlierSessionOfTheBootIsKeptUntilAPeerAnswersThisOne(t *testing.T) {
+	directory := t.TempDir()
+	porto := newFakePeer(t, "porto")
+	earlier := testSession(t)
+	if err := publishSession(directory, earlier); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := deriveKey(configFor(peer), options{rounds: 1}, paths, bytes.Repeat([]byte{0x11}, 32), boot, dialer(peer), quote, func(time.Duration) {}, io.Discard); err != nil {
+	earlierID, _ := recordOf(t, directory)
+	var log bytes.Buffer
+	u := newUnlocker(t, directory, &log, porto)
+	u.o.once = true
+	// no peer answers: the earlier session stays on record (a peer may hold it, and would refuse any other)
+	porto.deny = "DENIED"
+	listener, ask := socketPair(t)
+	go func() { _, _ = ask() }()
+	wantError(t, u.serve(listener), "no peer helped")
+	if id, _ := recordOf(t, directory); id != earlierID || !strings.Contains(log.String(), "an earlier session of this boot is on record") {
+		t.Fatalf("the earlier session was replaced without an answer:\n%s", log.String())
+	}
+	// a peer answers this session with a valid response: it recorded this one, so this one is the record
+	porto.deny = ""
+	got := make(chan []byte, 1)
+	go func() { key, _ := ask(); got <- key }()
+	if err := u.serve(listener); err != nil || len(<-got) == 0 {
+		t.Fatalf("the answered attempt failed: %v", err)
+	}
+	if id, public := recordOf(t, directory); id != hex.EncodeToString(u.boot.id)+"\n" || public != hex.EncodeToString(u.boot.ephemeralPublic)+"\n" {
+		t.Fatal("the answered session did not replace the earlier one")
+	}
+
+	// a pair, or nothing: when the second file cannot be written, the first is not left beside an old ID
+	blocked := t.TempDir()
+	if err := publishSession(blocked, earlier); err != nil {
 		t.Fatal(err)
 	}
-	if recorded != hex.EncodeToString(boot.id)+"\n" {
-		t.Fatal("the session was not on record when the quote was taken")
+	_ = os.Remove(filepath.Join(blocked, "boot-session"))
+	_ = os.Mkdir(filepath.Join(blocked, "boot-session"), 0o755) // a rename onto a non-empty directory fails
+	_ = os.WriteFile(filepath.Join(blocked, "boot-session", "x"), nil, 0o644)
+	wantError(t, publishSession(blocked, testSession(t)), "cannot record boot-session")
+	if _, err := os.Stat(filepath.Join(blocked, "boot-session.pub")); err == nil {
+		t.Fatal("a public key was left on record without its session")
+	}
+
+	// a directory that cannot be written is said, and is NOT a reason to leave the disk locked
+	log.Reset()
+	lost := newUnlocker(t, filepath.Join(directory, "absent"), &log, porto)
+	lost.o.once = true
+	go func() { key, _ := ask(); got <- key }()
+	if err := lost.serve(listener); err != nil || len(<-got) == 0 {
+		t.Fatalf("the unlock failed because the session could not be recorded: %v", err)
+	}
+	if !strings.Contains(log.String(), "cannot record boot-session.pub") || !strings.Contains(log.String(), "leases may be refused until the next boot") {
+		t.Fatalf("the missing record is not said:\n%s", log.String())
+	}
+	// -once with nobody asking ends, with that reason
+	idle := newUnlocker(t, directory, &log, porto)
+	idle.o.once = true
+	_ = listener.SetDeadline(time.Now().Add(50 * time.Millisecond))
+	if err := idle.serve(listener); err == nil {
+		t.Fatal("-once did not end when nobody asked")
 	}
 }
 

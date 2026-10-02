@@ -21,14 +21,18 @@
 // library, and go-tpm (github.com/google/go-tpm), the standard Go library for talking to a TPM: the
 // transport, TPM2_Quote, and the parsing of TPM structures are go-tpm's, not written here.
 //
-// What it leaves for the running system, under /run/regalia (which survives switch-root), none of it
-// secret: boot-session and boot-session.pub, the ID and the public key of the boot session it presented
-// to the peers, and after a successful run unlocked-through, the peer and keyslot. A peer accepts ONE
-// session per boot of this TPM, so the runtime leases of this boot must be asked for under that same
-// session (deploy/baremetal/lease.py); they need its public key and never its private one.
+// It runs for as long as the initrd lasts, with ONE boot session: a peer accepts one session per boot
+// of this TPM. Each connection on the socket gets the key or nothing; systemd stops the program before
+// the root filesystem takes over, and the local half and the session's private key end with it.
 //
-// Exit status 0: the key was given. 1: the disk stays locked; each peer's reason is on standard error,
-// systemd-cryptsetup gets no key, and the console falls back to the recovery key (#77).
+// What it leaves for the running system, under /run/regalia (which survives switch-root), none of it
+// secret: boot-session and boot-session.pub, the ID and the public key of that session, and once a key
+// was given key-given-through, the peer and keyslot. The runtime leases of this boot must be asked for
+// under the same session (deploy/baremetal/lease.py); they need its public key, never its private one.
+//
+// When no peer helps, the connection is closed with nothing, each peer's reason is on standard error,
+// and the console falls back to the recovery key (#77). With -once (tests) it answers one connection
+// and exits: 0 when the key was given, 1 when not.
 package main
 
 import (
@@ -65,20 +69,21 @@ func main() {
 type options struct {
 	tpm        string
 	sessionDir string
+	once       bool
 	rounds     int
 	wait       time.Duration
 }
 
 func run(arguments []string, out, diagnostics io.Writer) error {
-	// The socket first, before anything that can fail. A run that gives no key still answers whoever
+	// The socket first, before anything that can fail. A start that cannot serve still answers whoever
 	// waits on it, with nothing: systemd-cryptsetup then asks at the console, and systemd does not start
 	// this program again for a connection left waiting. That holds for a bad flag or a bad configuration too.
 	listener, listenerError := activatedListener()
-	given := false
+	serving := false
 	if listener != nil {
 		defer listener.Close()
 		defer func() {
-			if !given {
+			if !serving {
 				giveNothing(listener)
 			}
 		}()
@@ -89,19 +94,20 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	var o options
 	flags.StringVar(&o.tpm, "tpm", "/dev/tpmrm0", "the TPM: the resource-manager device, or unix:PATH for a software TPM in tests")
 	flags.StringVar(&o.sessionDir, "session-dir", "/run/regalia", "where the boot session's ID and public key are left for the running system")
+	flags.BoolVar(&o.once, "once", false, "answer one connection and exit (tests); without it the program serves until it is stopped")
 	flags.IntVar(&o.rounds, "rounds", 5, "how many times to go round the peers before giving up")
 	flags.DurationVar(&o.wait, "wait", 5*time.Second, "pause between rounds")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 {
-		return errors.New("usage: regalia-unlock [-config FILE] [-tpm DEVICE] [-rounds N] [-wait DURATION]")
+		return errors.New("usage: regalia-unlock [-config FILE] [-tpm DEVICE] [-session-dir DIR] [-once] [-rounds N] [-wait DURATION]")
 	}
 	if listenerError != nil {
 		return listenerError
 	}
 	// Everything that can be refused without a peer is refused first: nothing is asked of a peer, and no
-	// boot session is spent, by a run that could not have used the answer.
+	// boot session is spent, by a start that could not have used the answer.
 	config, err := loadBootConfig(*configPath)
 	if err != nil {
 		return err
@@ -142,35 +148,134 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	if err != nil {
 		return errors.New("cannot make this boot's session key")
 	}
-	// Before any quote is sent: a peer records the session when it VERIFIES a quote, whether or not the
-	// unlock then succeeds, and from then on accepts no other session in this boot. So the session this
-	// run is about to present is on record here first, replacing an earlier run's.
-	if err := publishSession(o.sessionDir, boot); err != nil {
-		return err
+	serving = true
+	u := &unlocker{config: config, o: o, paths: paths, local: local, boot: boot, dial: tcpTransport, quote: quote, sleep: time.Sleep,
+		out: out, diagnostics: diagnostics}
+	return u.serve(listener)
+}
+
+// unlocker is what ONE BOOT holds, in one process, for as long as the initrd lasts: the local half, and
+// the one boot session with its key. A peer accepts one session per boot of this TPM and records it when
+// it verifies a quote, so every request of this boot, to every peer, however many times systemd-cryptsetup
+// asks, is made under the same session: a retry after a lost reply is then answered, and the running
+// system's leases can name the session every peer saw.
+type unlocker struct {
+	config      *bootConfig
+	o           options
+	paths       map[string][]pathToken
+	local       []byte
+	boot        *session
+	dial        func(string) transport
+	quote       quoter
+	sleep       func(time.Duration)
+	out         io.Writer
+	diagnostics io.Writer
+}
+
+// serve answers each connection on the key socket: with the key, or with nothing. It ends when it is
+// stopped (systemd stops the unit before the root filesystem takes over), or after one connection with -once.
+func (u *unlocker) serve(listener *net.UnixListener) error {
+	// On record before any quote is sent, because a peer may record the session without the unlock succeeding.
+	u.record(false)
+	for {
+		if u.o.once {
+			_ = listener.SetDeadline(time.Now().Add(handoffWait))
+		}
+		connection, err := listener.AcceptUnix()
+		if err != nil {
+			if u.o.once {
+				return errors.New("nobody asked for the key on the socket")
+			}
+			return nil // the listener was closed: the unit is being stopped
+		}
+		if !sameUser(connection) {
+			connection.Close() // not root's: answered with nothing, and it does not take the place of the next one
+			continue
+		}
+		err = u.answer(connection)
+		connection.Close()
+		if u.o.once {
+			return err
+		}
+		if err != nil {
+			fmt.Fprintln(u.diagnostics, "regalia-unlock: "+err.Error())
+		}
 	}
-	key, peer, slot, err := deriveKey(config, o, paths, local, boot, tcpTransport, quote, time.Sleep, diagnostics)
+}
+
+// answer makes one attempt for one connection and writes the key to it. On any error nothing is
+// written: the caller closes the connection, and systemd-cryptsetup asks at the console.
+func (u *unlocker) answer(connection *net.UnixConn) error {
+	if u.boot.consumed {
+		return errors.New("the disk stays locked: this boot's one response was used, and nothing more can be asked in this boot")
+	}
+	key, peer, slot, err := deriveKey(u.config, u.o, u.paths, u.local, u.boot, u.dial, u.quote, u.sleep, u.diagnostics)
 	if err != nil {
 		return err
 	}
 	defer wipe(key)
-	given = true // one attempt: whatever happens to it, the connection is not answered twice
-	if err := giveKey(listener, key, handoffWait); err != nil {
-		return err
+	// A valid signed response: a peer has recorded THIS session, whatever an earlier process of this boot left.
+	u.record(true)
+	_ = connection.SetDeadline(time.Now().Add(ioTimeout))
+	if _, err := connection.Write(key); err != nil {
+		return errors.New("the key could not be written to the socket")
 	}
-	fmt.Fprintf(out, "regalia-unlock: gave the key of %s for keyslot %s, through %s\n", config.Device, slot, peer)
-	// for the journal and the probe; nothing in the protocol reads it, so failing to write it fails nothing
-	_ = writeFile(o.sessionDir, "unlocked-through", fmt.Sprintf("%s %s\n", peer, slot))
+	fmt.Fprintf(u.out, "regalia-unlock: gave the key of %s for keyslot %s, through %s\n", u.config.Device, slot, peer)
+	// For the journal and the probe: whose half the key was made with. Whether it opened the volume is
+	// systemd-cryptsetup's to say. Nothing in the protocol reads it, so failing to write it fails nothing.
+	if u.o.sessionDir != "" {
+		_ = writeFile(u.o.sessionDir, "key-given-through", fmt.Sprintf("%s %s\n", peer, slot))
+	}
 	return nil
 }
 
-// publishSession leaves the boot session's ID and public key for the running system: boot-session (64
-// lowercase hex and a newline, what the KMS daemon reads) and boot-session.pub (the hex of the DER bytes
-// that go into the quote's transcript). Never the private key.
-func publishSession(directory string, boot *session) error {
-	if err := writeFile(directory, "boot-session.pub", hex.EncodeToString(boot.ephemeralPublic)+"\n"); err != nil {
-		return err
+// record leaves this boot's session for the running system (publishSession). The rule:
+//   - nothing on record: write this session, before its first quote is sent;
+//   - this session already on record: nothing to do;
+//   - ANOTHER session on record (an earlier process of this boot, e.g. after a crash): keep it, because
+//     a peer may have recorded it and would then refuse every other; replace it only once a peer has
+//     answered this session with a valid response, which proves a peer recorded this one.
+//
+// A record that cannot be written is said and is NOT a reason to leave the disk locked: the node then
+// boots, its leases may be refused until the next boot, and that can be repaired without the recovery key.
+func (u *unlocker) record(answered bool) {
+	directory := u.o.sessionDir
+	if directory == "" {
+		return
 	}
-	return writeFile(directory, "boot-session", hex.EncodeToString(boot.id)+"\n")
+	mine := hex.EncodeToString(u.boot.id) + "\n"
+	id, errID := os.ReadFile(filepath.Join(directory, "boot-session"))
+	_, errPublic := os.Stat(filepath.Join(directory, "boot-session.pub"))
+	if errID == nil && errPublic == nil {
+		if string(id) == mine {
+			return
+		}
+		if !answered {
+			fmt.Fprintln(u.diagnostics, "regalia-unlock: an earlier session of this boot is on record in "+directory+
+				": it is kept until a peer answers this one")
+			return
+		}
+	}
+	if err := publishSession(directory, u.boot); err != nil {
+		fmt.Fprintln(u.diagnostics, "regalia-unlock: "+err.Error()+
+			": the running system will not find this boot's session, and its leases may be refused until the next boot")
+	}
+}
+
+// publishSession writes the boot session's ID and public key: boot-session (64 lowercase hex and a
+// newline, what the KMS daemon reads) and boot-session.pub (the hex of the DER bytes that go into the
+// quote's transcript). Never the private key. Both, or neither: a pair that does not match is worse than
+// none, so a failure removes what is there.
+func publishSession(directory string, boot *session) error {
+	err := writeFile(directory, "boot-session.pub", hex.EncodeToString(boot.ephemeralPublic)+"\n")
+	if err == nil {
+		err = writeFile(directory, "boot-session", hex.EncodeToString(boot.id)+"\n")
+	}
+	if err != nil {
+		os.Remove(filepath.Join(directory, "boot-session"))
+		os.Remove(filepath.Join(directory, "boot-session.pub"))
+	}
+	return err
 }
 
 // writeFile replaces one file in the directory, whole or not at all, readable by everyone.
@@ -211,30 +316,6 @@ func activatedListener() (*net.UnixListener, error) {
 		return nil, errors.New("the passed descriptor is not a listening UNIX socket")
 	}
 	return unix, nil
-}
-
-// giveKey writes the key to the first connection on the socket that comes from this user (root, before
-// root exists), once, and to nobody else. A connection from another user is closed with nothing and
-// does not take the place of the one behind it.
-func giveKey(listener *net.UnixListener, key []byte, wait time.Duration) error {
-	_ = listener.SetDeadline(time.Now().Add(wait))
-	for {
-		connection, err := listener.AcceptUnix()
-		if err != nil {
-			return errors.New("nobody entitled asked for the key on the socket")
-		}
-		if !sameUser(connection) {
-			connection.Close()
-			continue
-		}
-		_ = connection.SetDeadline(time.Now().Add(ioTimeout))
-		_, err = connection.Write(key)
-		connection.Close()
-		if err != nil {
-			return errors.New("the key could not be written to the socket")
-		}
-		return nil
-	}
 }
 
 // sameUser reports whether the other end of the connection is a process of this user (SO_PEERCRED).

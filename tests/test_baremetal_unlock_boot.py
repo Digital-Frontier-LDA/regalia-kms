@@ -291,6 +291,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertIsNotNone(left, "the booted guest did not report the boot session")
         self.assertEqual((left.group(1), left.group(3), left.group(4)), ("root:root:755", through, slot))
         self.assertEqual(hashlib.sha256(bytes.fromhex(left.group(2))).hexdigest(), self.recorded_session(through)[0])
+        self.assertRegex(said, r"REGALIA-E2E-CLIENT (inactive|failed|unknown) 0")   # the long-running client did not outlive the initrd
 
         # boot 3, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
         for peer in ("b", "c"):

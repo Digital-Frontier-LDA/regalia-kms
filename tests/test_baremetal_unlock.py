@@ -1047,11 +1047,12 @@ class OnSwtpm(unittest.TestCase):
             os.dup2(listener.fileno(), 3)
             os.set_inheritable(3, True)
             os.putenv("LISTEN_PID", str(os.getpid()))
-        self.session_dir = self.d + "/run-regalia"                    # stands for /run/regalia
-        os.makedirs(self.session_dir, exist_ok=True)
+        self.session_dir = self.d + "/run-regalia"                    # stands for /run/regalia: empty at every boot
+        shutil.rmtree(self.session_dir, True)
+        os.makedirs(self.session_dir)
         try:
             with unittest.mock.patch.dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=creds):
-                done = subprocess.run([self.client, "-config", config, "-tpm", "unix:" + self.tcti[tpm][len("swtpm:path="):], "-wait", "0s",
+                done = subprocess.run([self.client, "-once", "-config", config, "-tpm", "unix:" + self.tcti[tpm][len("swtpm:path="):], "-wait", "0s",
                                        "-session-dir", self.session_dir, *flags],
                                       capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, preexec_fn=activated, close_fds=False)
             listener.close()
@@ -1144,7 +1145,7 @@ class OnSwtpm(unittest.TestCase):
                          (0, "regalia-unlock: gave the key of %s for keyslot 1, through b\n" % self.device, "", 1))
         # what it left for the running system: the session and key b's verifier recorded for this boot, and who opened the disk
         self.assertEqual(self.left_session(self.session_dir), self.recorded_session("b"))
-        with open(self.session_dir + "/unlocked-through") as f:
+        with open(self.session_dir + "/key-given-through") as f:
             self.assertEqual(f.read(), "b 1\n")
         if self.mapped:
             self.marker()
@@ -1162,8 +1163,9 @@ class OnSwtpm(unittest.TestCase):
         before = self.left_session(self.session_dir)
         code, out, err, slot = self.native({"b": self.dead, "c": self.dead}, "-rounds", "2")
         self.assertEqual((code, out, slot), (1, "", None), err)
-        # a run that got nothing still left ITS session, replacing the earlier one: it is the one a peer may have verified
+        # a boot that got nothing still left its session: it is the one a peer may have verified
         self.assertNotEqual(self.left_session(self.session_dir), before)
+        self.assertFalse(os.path.exists(self.session_dir + "/key-given-through"))
         self.assertIn("regalia-unlock: the disk stays locked: no peer helped in 2 rounds", err)
         self.assertEqual(err.count("the transport failed (no connection)"), 4)
         self.refused("the disk stays locked: no peer to ask", self.unlock, peers=())
@@ -1242,7 +1244,10 @@ class OnSwtpm(unittest.TestCase):
                 shutil.rmtree(path, True) if os.path.isdir(path) else os.path.exists(path) and os.unlink(path)
             run(["systemctl", "daemon-reload"], capture_output=True)
             run(["systemctl", "reset-failed", "regalia-unlock.service", "regalia-unlock.socket"], capture_output=True)
-        had_runtime_directory = os.path.exists("/run/regalia")        # the unit creates it and keeps it: not left on a test machine
+        # The unit writes this boot's session into /run/regalia. On a machine that HAS one (a KMS host, a bench
+        # host with the lease service) that would replace a live record: refused, before anything is installed.
+        self.assertFalse(os.path.exists("/run/regalia"), "/run/regalia exists: this test must not run on a host that uses it")
+        had_runtime_directory = False
         self.addCleanup(remove)
         shutil.copy(self.client, binary)
         os.chmod(binary, 0o700)
@@ -1252,15 +1257,18 @@ class OnSwtpm(unittest.TestCase):
         config, local = self.d + "/unlock.json", self.d + "/local"
 
         def boot(endpoints):
-            """What changes from one boot to the next: the boot configuration, and the unsealed local half."""
+            """A new boot: the client of the last one is gone with its session, /run/regalia starts empty, and
+            this boot's configuration and unsealed local half are what the next client will read."""
+            run(["systemctl", "stop", "regalia-unlock.service"], capture_output=True)
+            run(["systemctl", "reset-failed", "regalia-unlock.service"], capture_output=True)
+            for name in ("boot-session", "boot-session.pub", "key-given-through"):
+                if os.path.exists("/run/regalia/" + name):
+                    os.unlink("/run/regalia/" + name)
             with open(config, "w") as f:
                 json.dump(unlock.boot_config(self.m1, "a", self.device, [7, 11], endpoints), f)
             sealed = [t for _, t in unlock.path_tokens(unlock.luks_meta(self.device, run))][0]["local"]
             with open(os.open(local, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o400), "wb") as f:
                 f.write(unlock.unseal_local(sealed, tpm2_device=self.tcti["a"], run=run))
-            run(["systemctl", "reset-failed", "regalia-unlock.service"], capture_output=True)
-        # The unit keeps its private /tmp. The test's directory (the boot configuration, the software TPM's
-        # socket) is shown to it read-only under /run.
         with open(installed[3] + "/e2e.conf", "w") as f:
             f.write("[Service]\nExecStart=\nExecStart=%s -config %s/unlock.json -tpm unix:%s/a.sock -rounds 2 -wait 0s\n"
                     "LoadCredentialEncrypted=\nLoadCredential=%s:%s\nBindReadOnlyPaths=%s:%s\n"
@@ -1281,46 +1289,64 @@ class OnSwtpm(unittest.TestCase):
         def state(unit, what):
             return run(["systemctl", "show", unit, "-p", what, "--value"], capture_output=True, text=True).stdout.strip()
 
-        # 1  a reboots on the approved image: systemd starts the client on systemd-cryptsetup's connection,
-        #    a peer helps, and systemd-cryptsetup maps the volume with the key it read from the socket
+        # 1  a reboots on the approved image: systemd starts the client on systemd-cryptsetup's connection, a
+        #    peer helps, and systemd-cryptsetup maps the volume with the key it read from the socket
         self.reboot("a", "the approved image")
         boot(endpoints)
         code, took, err = attach()
         self.assertEqual(code, 0, err)
         self.marker()
-        self.assertEqual((state("regalia-unlock.service", "Result"), state("regalia-unlock.service", "ExecMainStatus")), ("success", "0"))
         journal = run(["journalctl", "-u", "regalia-unlock.service", "-o", "cat", "--since", "-2min", "--no-pager"], capture_output=True, text=True).stdout
         self.assertIn("gave the key of %s for keyslot 1, through b" % self.device, journal)
-        # the unit's runtime directory outlives it, is root's and nobody else's to write, and holds the session b recorded
-        self.assertEqual(state("regalia-unlock.service", "ActiveState"), "inactive")
+        # the client stays, for the rest of this boot: it holds this boot's one session
+        self.assertEqual(state("regalia-unlock.service", "ActiveState"), "active")
+        # /run/regalia is root's and nobody else's to write, and holds the session b recorded
         directory = os.stat("/run/regalia")
         self.assertEqual((directory.st_uid, directory.st_gid, stat.S_IMODE(directory.st_mode)), (0, 0, 0o755))
         self.assertEqual(self.left_session("/run/regalia"), self.recorded_session("b"))
-        with open("/run/regalia/unlocked-through") as f:
+        with open("/run/regalia/key-given-through") as f:
             self.assertEqual(f.read(), "b 1\n")
+        # the unit stopped (as at switch-root): the directory and its files remain, the process does not
+        self.assertEqual(run(["systemctl", "stop", "regalia-unlock.service"], capture_output=True).returncode, 0)
+        self.assertEqual((state("regalia-unlock.service", "ActiveState"), self.left_session("/run/regalia")), ("inactive", self.recorded_session("b")))
 
-        # 2  no peer answers: the client gives nothing, systemd-cryptsetup gets no key and maps nothing, in
-        #    a bounded time, and the socket goes on listening (it is not left waiting, nor started in a loop)
+        # 2  no peer answers: systemd-cryptsetup gets nothing, gives up within a bound, maps nothing; the client
+        #    stays, with the session it put on record before asking
         self.reboot("a", "the approved image")
         boot({"b": self.dead, "c": self.dead})
-        runs = int(state("regalia-unlock.service", "NRestarts") or 0)
         code, took, err = attach()
         self.assertNotEqual(code, 0)
         self.assertLess(took, 60)
         self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
-        time.sleep(2)                                                 # a loop of re-activations would show by now
-        self.assertEqual((state("regalia-unlock.socket", "ActiveState"), state("regalia-unlock.service", "ActiveState")), ("active", "failed"))
-        self.assertEqual((state("regalia-unlock.service", "Result"), state("regalia-unlock.service", "ExecMainStatus")), ("exit-code", "1"))
-        self.assertEqual(int(state("regalia-unlock.service", "NRestarts") or 0), runs)
+        self.assertEqual((state("regalia-unlock.socket", "ActiveState"), state("regalia-unlock.service", "ActiveState")), ("active", "active"))
+        self.assertFalse(os.path.exists("/run/regalia/key-given-through"))
         self.systemd_refusal = (code, round(took, 1), err.strip().splitlines()[-1] if err.strip() else "")
         print("\nsystemd-cryptsetup with no key from the socket: exit %d after %.1fs: %s" % self.systemd_refusal, file=sys.stderr)
 
-        # 3  the next attempt (the peers are back): the same socket starts a new run, and the volume opens
+        # 3  THE CASE ONE SESSION PER BOOT EXISTS FOR. Both peers VERIFY this boot's quote (and so record its
+        #    session) but give nothing: their contributions are out of reach for a moment. systemd-cryptsetup
+        #    gets nothing. Then they can give again, and systemd-cryptsetup asks again IN THE SAME BOOT: the same
+        #    process answers under the same session, both peers accept it, and the volume opens. A client that
+        #    made a new session for the second attempt would have been refused by both.
         self.reboot("a", "the approved image")
         boot(endpoints)
+        held = {p: self.served[p].contributions for p in ("b", "c")}
+        for peer in ("b", "c"):
+            self.served[peer].contributions = unlock.Contributions(self.d + "/none-%s.json" % peer)
+        since = len(self.events)
+        code, took, err = attach()
+        self.assertNotEqual(code, 0)
+        self.assertEqual([e["reason"] for e in self.events[since:] if e["outcome"] == "DENY"],
+                         ["this peer holds no contribution for a at path epoch 1"] * 4)        # verified, then refused: 2 rounds x 2 peers
+        recorded, pid = self.left_session("/run/regalia"), state("regalia-unlock.service", "MainPID")
+        self.assertEqual(recorded, self.recorded_session("b"))
+        self.assertEqual(recorded, self.recorded_session("c"))
+        for peer in ("b", "c"):
+            self.served[peer].contributions = held[peer]
         code, took, err = attach()
         self.assertEqual(code, 0, err)
         self.marker()
+        self.assertEqual((state("regalia-unlock.service", "MainPID"), self.left_session("/run/regalia")), (pid, recorded))
 
         # 4  a retired image: systemd-cryptsetup gets nothing, and the peers' refusal is in their audit
         self.reboot("a", "a retired image")

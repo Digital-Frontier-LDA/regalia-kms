@@ -4,9 +4,10 @@
 #   - it unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On
 #     another machine, or on a boot the TPM's policy refuses, that fails and the program never starts;
 #   - it passes the listening socket (socket activation).
-# The program runs no other program and writes no secret anywhere. One run answers one connection: with the key,
-# or with nothing. After a run that gave nothing the socket still listens, so the next attempt of
-# systemd-cryptsetup starts a new run.
+# The program runs no other program and writes no secret anywhere. It stays for as long as the initrd
+# lasts and answers each connection with the key or with nothing, always under the ONE boot session it
+# made when it started: a peer accepts one session per boot. systemd stops it before the root filesystem
+# takes over, and the local half and the session's private key end with it.
 
 [Unit]
 Description=Give the root volume's key: TPM plus one peer
@@ -20,8 +21,9 @@ After=tpm2.target systemd-pcrphase-initrd.service
 # the boot mesh, when the initrd has it (#66); without that unit this line does nothing
 Wants=regalia-wg-boot.service
 After=regalia-wg-boot.service
-Conflicts=shutdown.target
-Before=shutdown.target
+# it holds the local half and the boot session's private key: it does not outlive the initrd
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
 
 [Service]
 Type=exec
