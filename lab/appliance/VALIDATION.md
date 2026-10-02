@@ -220,3 +220,41 @@ the earlier normal-boot evidence; log SHA-256 is
 `5c9a209bb51309767e43a498c2c8c91de30a6cc4735c68b2e7cfe9902a13d0f3`.
 All 64 image verification tests pass locally. This local check is not a fresh
 latest-source installation or physical hardware qualification.
+
+
+### Complete fresh Linux build passes
+
+[CI run 37048926494](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37048926494)
+passed the complete appliance job at branch code `a18ddb7`. Its actual source is
+synthetic PR merge `bb0a2200f4fdd9f370af3763000f9af1af658644`. KVM installation,
+enforcing-daemon acceptance/export, normal UEFI boot with acknowledged ACPI
+shutdown, and disk integrity checks completed in 276 seconds. Normal multi-user
+startup took 12.03 seconds and did not rerun verification. The retrieved public
+logs also pass the stronger release boot-evidence validator and contain the
+actual AppArmor enforce, CapEff zero, NoNewPrivs 1 and Seccomp 2 process checks.
+
+Exact reported hashes:
+
+| Artifact | SHA-256 |
+|---|---|
+| Disk | `b6e6d9a3031ed10767b7071c643aacab4a0aeabfc0f13c92b8835ffaccea8672` |
+| Root filesystem export | `c984650f698c5a46eab55ce52173edceedf87494ef7027d45415eb01e5ce6e08` |
+| Executable | `30fbd76f9362b8c80e204cbd1dc07c377ee6acec8534d14c38d75484e098b9d9` |
+| Build report | `171f4961d98f80ff54f3da153ab10daf26258ec4807b1fa664a8773d1cc28264` |
+| Acceptance log | `259cab859db1b45f404d866ca35c3350801ba3cf9e801eaca6e3edea7ef57968` |
+| Normal boot log | `32d604baf8a75156cbe31a962ddaff9ed736948b239644f9328233b5c74015ad` |
+
+Retained reports/logs are under `.artifacts/ci-a18ddb7/`. The GitHub job records
+disk/rootfs/executable hashes but uploads only public diagnostics, not the image.
+Those three hashes are build claims; the downloadable report and log hashes were
+independently checked locally. This is passing fresh recipe evidence, not a signed
+release or a scan of this new image. The last local image scan remains blocked
+with 296 High/Critical matches, and release collection still requires a passing
+scan of the exact candidate filesystem. Physical hardware commissioning,
+independent disk reproducibility and protected signing remain outstanding.
+
+The same run's binary repeatability evidence compares independent source paths
+and compiler caches on one Linux host with Go 1.26.6. Both binaries are identical
+at `745d8445f3c9e5b6c3f62daccf4449eb75cf34b0d020894eef82c26096523c4f`.
+That repeatability test uses its own build parameters; this hash is not the
+appliance executable hash above. All 64 image verification tests pass locally.
