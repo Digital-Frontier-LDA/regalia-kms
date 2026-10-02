@@ -102,11 +102,13 @@ Measured on one YubiKey 5 NFC (firmware 5.7.4) and a Nitrokey HSM 2 in one daemo
   ignores the YubiKey's reader and still serves the HSM. With it, one YubiKey served a P-256 key
   (slot 9c) and an Ed25519 key (a retired slot) through PIV: 12 alternating and 12 simultaneous
   signatures, all verified, while the HSM answered through PKCS#11 in the same process.
-- **It is enforced, not only documented.** The shipped unit starts the daemon with
+- **It is checked, not only documented.** The shipped unit starts the daemon with
   `OPENSC_CONF=/etc/regalia-kms/opensc.conf`, where that file is installed. A daemon that holds
   both a PKCS#11 module and PIV cards looks at startup, after its module has looked at the readers:
-  if a PIV card cannot be opened and a reader is held by another connection, it refuses to start
-  and names the setting. A card that is simply not attached is a warning, as an unplugged HSM is.
+  if a PIV card cannot be opened and a YubiKey's reader is held by another connection, it refuses
+  to start and names the setting. A card that is simply not attached is a warning, as an unplugged
+  HSM is; if such a card is attached later to a daemon started without the setting, its requests
+  fail and the daemon logs the cause by name.
   On the host, `kms_opensc_leaves_piv_cards` (`deploy/baremetal/os_probe.py`) checks the unit and
   the file before the daemon is started.
 - **So a host's YubiKeys serve PIV or the OpenPGP applet, not both.** The applet path needs OpenSC

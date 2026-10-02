@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/go-piv/piv-go/v2/piv"
 )
 
 // Reach looks at every reader once and says which commissioned cards could not be opened, and
@@ -41,10 +43,10 @@ func (driver *PIVDriver) Reach(ctx context.Context) (missing []string, held bool
 			held = held || (heldByAnother(openErr) && yubiKeyReader(card))
 			continue
 		}
-		if serial, serialErr := candidate.Serial(); serialErr == nil {
+		if serial, serialErr := pivSerial(candidate); serialErr == nil {
 			present[strconv.FormatUint(uint64(serial), 10)] = true
 		}
-		_ = candidate.Close()
+		_ = pivClose(candidate)
 	}
 	for deviceID, serial := range driver.devices {
 		if !present[serial] {
@@ -54,6 +56,13 @@ func (driver *PIVDriver) Reach(ctx context.Context) (missing []string, held bool
 	sort.Strings(missing)
 	return missing, held, nil
 }
+
+// pivSerial and pivClose are seams beside pivCards and pivOpen (piv_driver_seam.go): a test cannot
+// make a *piv.YubiKey that answers, so the two calls Reach makes on one are replaceable.
+var (
+	pivSerial = func(card *piv.YubiKey) (uint32, error) { return card.Serial() }
+	pivClose  = func(card *piv.YubiKey) error { return card.Close() }
+)
 
 // heldByAnother recognises PC/SC's SCARD_E_SHARING_VIOLATION. The card library keeps the code in
 // a type it does not export, so the text it gives that code is what can be matched; the test

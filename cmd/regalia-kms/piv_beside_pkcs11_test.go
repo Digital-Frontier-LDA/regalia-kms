@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -58,5 +60,31 @@ func TestOnlyTheLockoutStopsTheDaemon(t *testing.T) {
 		if err := requirePIVCardsOpenBesidePKCS11(context.Background(), test.enumerate, test.cards); err != nil {
 			t.Errorf("%s: the daemon was stopped: %v", name, err)
 		}
+	}
+}
+
+// THE CHECK IS WIRED WHERE THE PROVIDERS ARE BUILT. Its own tests call it directly, and the path
+// through buildHardware needs both tokens, so no test without hardware walks it. buildHardware's
+// text is read instead: the module's enumeration is handed over where the PKCS#11 driver is made,
+// and the check is called before the PIV provider is registered.
+func TestBuildHardwareHandsTheCheckTheModulesEnumerationBeforeItRegistersPIV(t *testing.T) {
+	source, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	start := strings.Index(text, "func buildHardware(")
+	if start < 0 {
+		t.Fatal("buildHardware is not in main.go")
+	}
+	body := text[start:]
+	handed := regexp.MustCompile(`enumerate\s*=\s*driver\.Ready\b`).FindStringIndex(body)
+	called := regexp.MustCompile(`requirePIVCardsOpenBesidePKCS11\(context\.Background\(\), enumerate, cards\)`).FindStringIndex(body)
+	registered := strings.Index(body, `providers["yubikey-piv"] = provider`)
+	if handed == nil || called == nil || registered < 0 {
+		t.Fatalf("buildHardware no longer hands the enumeration over (%v), calls the check (%v) or registers the PIV provider (%d)", handed, called, registered)
+	}
+	if !(handed[0] < called[0] && called[0] < registered) {
+		t.Fatalf("order in buildHardware: enumeration handed at %d, check at %d, PIV registered at %d; want that order", handed[0], called[0], registered)
 	}
 }

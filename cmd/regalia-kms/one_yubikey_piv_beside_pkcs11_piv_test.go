@@ -3,15 +3,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +102,47 @@ func TestOneYubiKeyServesPIVKeysBesideThePKCS11Backend(t *testing.T) {
 			t.Fatal("the manager does not serve both backends")
 		}
 		t.Log("started with the YubiKey absent and the HSM attached")
-		return
+		// REGALIA_ONE_YK_USBDEV (the card's name under /sys/bus/usb/devices, off the bus now):
+		// the card is put back with the daemon running. With the ignore rule its key is served.
+		// Without it the module takes the card at its next look at the readers, the request fails,
+		// and the daemon must say why by name (yubikey.Provider.nameLockout).
+		usb := os.Getenv("REGALIA_ONE_YK_USBDEV")
+		if usb == "" {
+			return
+		}
+		vendor, err := os.ReadFile("/sys/bus/usb/devices/" + usb + "/idVendor")
+		if err != nil || strings.TrimSpace(string(vendor)) != "1050" || !regexp.MustCompile(`^[0-9]+-[0-9]+(\.[0-9]+)*$`).MatchString(usb) {
+			t.Fatalf("USB device %q is not a Yubico device: refusing to touch it", usb)
+		}
+		var logged bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+		defer slog.SetDefault(previous)
+		attach := exec.Command("sudo", "-n", "tee", "/sys/bus/usb/devices/"+usb+"/authorized")
+		attach.Stdin = strings.NewReader("1")
+		if output, err := attach.CombinedOutput(); err != nil {
+			t.Fatalf("put the YubiKey back on the bus: %v: %s", err, output)
+		}
+		hsm := registry.Route{Algorithm: "p384", Binding: registry.Binding{Backend: "nitrokey-pkcs11", DeviceID: "hsm-sitea", DeviceSerial: hsmSerial, ObjectID: "01", State: "active",
+			PublicKeySHA256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"}}
+		piv := registry.Route{Algorithm: "p256", Binding: registry.Binding{Backend: "yubikey-piv", DeviceID: "yubikey-sitea", DeviceSerial: serial, ObjectID: "9c", State: "active", PINPolicy: "once", TouchPolicy: "never"}}
+		lockedOut := os.Getenv("OPENSC_CONF") == ""
+		deadline := time.Now().Add(40 * time.Second)
+		for time.Now().Before(deadline) {
+			time.Sleep(2 * time.Second)
+			// the HSM side looks at the readers, as every routing decision does in the daemon
+			_, _, _ = manager.Execute(ctx, hsm, "public-key", "", "", nil, nil)
+			_, _, err := manager.Execute(ctx, piv, "public-key", "", "", nil, nil)
+			if lockedOut && err != nil && strings.Contains(logged.String(), "another connection holds a YubiKey's reader") {
+				t.Logf("with OpenSC's defaults the card attached later is locked out, and the daemon names it: %s", strings.TrimSpace(logged.String()))
+				return
+			}
+			if !lockedOut && err == nil {
+				t.Log("with the ignore rule the card attached later is served")
+				return
+			}
+		}
+		t.Fatalf("after the card was put back (locked out expected: %v) the expected outcome did not come within 40 s; logged: %q", lockedOut, logged.String())
 	}
 	// The PKCS#11 side is alive in this process: the HSM answers the startup question about what it
 	// offers, which is how an Ed25519 key bound to it is refused...

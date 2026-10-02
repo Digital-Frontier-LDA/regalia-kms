@@ -320,38 +320,120 @@ def runtime_admission(host):
 
 
 # What a YubiKey's CCID reader is called by pcscd ("Yubico YubiKey OTP+FIDO+CCID 00 00", "Yubico YubiKey
-# CCID 00 00", ...). OpenSC ignores a reader whose name CONTAINS an ignored_readers entry, so an entry
-# counts when it is a piece of this.
+# CCID 00 00", ...): every model's name starts with this.
 YUBIKEY_READER = "Yubico YubiKey"
+# The application blocks opensc-pkcs11.so reads, in the order it prefers them.
+OPENSC_APPS = ("opensc-pkcs11", "default")
+
+
+def opensc_tokens(text):
+    """An OpenSC configuration as tokens: quoted strings ("s", text), bare words ("w", text) and the
+    punctuation { } = , ; ("p", char). `#` starts a comment except inside a string. Raises ValueError
+    on a string that never ends."""
+    tokens, at, size = [], 0, len(text)
+    while at < size:
+        c = text[at]
+        if c in " \t\r\n":
+            at += 1
+        elif c == "#":
+            while at < size and text[at] != "\n":
+                at += 1
+        elif c == '"':
+            end, value = at + 1, []
+            while end < size and text[end] != '"':
+                if text[end] == "\\" and end + 1 < size:
+                    end += 1
+                value.append(text[end])
+                end += 1
+            if end >= size:
+                raise ValueError("a string is not closed")
+            tokens.append(("s", "".join(value)))
+            at = end + 1
+        elif c in "{}=,;":
+            tokens.append(("p", c))
+            at += 1
+        else:
+            end = at
+            while end < size and text[end] not in ' \t\r\n#"{}=,;':
+                end += 1
+            tokens.append(("w", text[at:end]))
+            at = end
+    return tokens
 
 
 def ignored_readers(text):
-    """The strings of every ignored_readers statement in an OpenSC configuration, comments left out."""
-    entries = []
-    for line in (text or "").splitlines():
-        line = line.split("#", 1)[0]
-        found = re.match(r"\s*ignored_readers\s*=\s*(.*?)\s*;", line)
-        if found:
-            entries += re.findall(r'"([^"]*)"', found.group(1))
-    return entries
+    """The ignored_readers list opensc-pkcs11.so applies, or [] when it applies none.
+
+    READ AS OPENSC READS IT, not as a line of text. OpenSC takes the list from the application block it
+    selected: `app opensc-pkcs11 { }` if the file has one, else `app default { }`; from the first such
+    block, its first ignored_readers statement, as a direct item of the block. A line inside another
+    application's block, inside a nested block, or at the top level is not applied, and neither is one
+    in `app default` when an `app opensc-pkcs11` block exists: some OpenSC versions consult only the
+    first block they selected, so only that one is counted here."""
+    tokens = opensc_tokens(text or "")
+    blocks, at = {}, 0   # app name -> the statement lists of its first block
+    while at < len(tokens):
+        # a top-level block: `app <name> {`
+        if (tokens[at] == ("w", "app") and at + 2 < len(tokens) and tokens[at + 1][0] in "ws"
+                and tokens[at + 2] == ("p", "{")):
+            name, depth, at = tokens[at + 1][1], 1, at + 3
+            lists = []
+            while at < len(tokens) and depth:
+                kind, value = tokens[at]
+                if (kind, value) == ("p", "{"):
+                    depth += 1
+                elif (kind, value) == ("p", "}"):
+                    depth -= 1
+                elif (depth == 1 and (kind, value) == ("w", "ignored_readers") and at + 1 < len(tokens)
+                      and tokens[at + 1] == ("p", "=") and (at == 0 or tokens[at - 1] in (("p", "{"), ("p", "}"), ("p", ";")))):
+                    entries, at = [], at + 2
+                    while at < len(tokens) and tokens[at] != ("p", ";") and tokens[at] != ("p", "}"):
+                        if tokens[at][0] in "ws":
+                            entries.append(tokens[at][1])
+                        at += 1
+                    lists.append(entries)
+                    continue
+                at += 1
+            blocks.setdefault(name, lists)
+            continue
+        at += 1
+    for app in OPENSC_APPS:
+        if app in blocks:
+            return blocks[app][0] if blocks[app] else []
+    return []
+
+
+def unit_environment(host):
+    """The unit's Environment as a dict, or (None, why). A unit with an EnvironmentFile is refused: what
+    such a file sets is not in the Environment property, and it overrides it."""
+    rc, props = unit_properties(host, "Environment", "EnvironmentFiles")
+    if props.get("EnvironmentFiles", "").strip():
+        return None, f"{SERVICE} has an EnvironmentFile, which can set or override OPENSC_CONF and is not read here: set it with Environment="
+    environment = {}
+    try:
+        for item in shlex.split(props.get("Environment", "")):
+            key, sep, value = item.partition("=")
+            if sep:
+                environment[key] = value   # a variable set twice: the last one counts, as for systemd
+    except ValueError:
+        return None, f"cannot read the Environment of {SERVICE}"
+    return environment, ""
 
 
 def opensc_leaves_piv_cards(host):
     """A daemon that holds both a PKCS#11 module and YubiKey PIV devices is started with an OpenSC
     configuration that ignores the YubiKey's reader. Without it the daemon's own PKCS#11 module holds the
-    card the PIV backend must open exclusively; the daemon refuses to start when it sees that, and this
-    says so before it is started."""
+    card the PIV backend must open exclusively. The daemon refuses to start when it sees that with the
+    card attached; this says so before it is started, and with the card unplugged."""
     config, path, why = daemon_config(host)
     if config is None:
         return False, why
     module, devices = config.get("pkcs11_module_path"), config.get("yubikey_devices")
-    if not (isinstance(module, str) and module) or not (isinstance(devices, dict) and devices):
+    if not (isinstance(module, str) and module.strip()) or not (isinstance(devices, dict) and devices):
         return True, f"{path}: not both a PKCS#11 module and YubiKey PIV devices, nothing to keep apart"
-    rc, props = unit_properties(host, "Environment")
-    try:
-        environment = dict(item.split("=", 1) for item in shlex.split(props.get("Environment", "")) if "=" in item)
-    except ValueError:
-        return False, f"cannot read the Environment of {SERVICE}"
+    environment, why = unit_environment(host)
+    if environment is None:
+        return False, why
     conf = environment.get("OPENSC_CONF", "")
     if not conf.startswith("/"):
         return False, (f"{path} names a PKCS#11 module and YubiKey PIV devices, and {SERVICE} does not set "
@@ -359,9 +441,17 @@ def opensc_leaves_piv_cards(host):
     text = host.read(conf)
     if text is None:
         return False, f"cannot read the OpenSC configuration {conf} named by OPENSC_CONF"
-    matching = [entry for entry in ignored_readers(text) if entry and entry in YUBIKEY_READER]
+    try:
+        entries = ignored_readers(text)
+    except ValueError as problem:
+        return False, f"{conf} cannot be read as an OpenSC configuration: {problem}"
+    # OpenSC ignores a reader whose name CONTAINS an entry. An entry counts when it is a piece of what
+    # every YubiKey reader is called AND names the YubiKey: "Yubico", "YubiKey", "Yubico YubiKey". A piece
+    # such as " " or "i" would ignore the YubiKey too, and the HSM's reader with it.
+    matching = [entry for entry in entries if "Yubi" in entry and entry in YUBIKEY_READER]
     if not matching:
-        return False, f"{conf} has no ignored_readers entry that matches a YubiKey's reader ({YUBIKEY_READER!r})"
+        return False, (f"{conf}: the block opensc-pkcs11.so reads (app opensc-pkcs11, else app default) has no "
+                       f"ignored_readers entry that names a YubiKey's reader (a piece of {YUBIKEY_READER!r} containing \"Yubi\")")
     return True, f"{conf}: ignored_readers {matching[0]!r} keeps OpenSC off the YubiKey"
 
 

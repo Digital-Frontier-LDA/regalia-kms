@@ -23,7 +23,8 @@ type pivReach interface {
 // `enumerate` makes the module look at the readers as it does when it serves, and then every
 // commissioned PIV card must still open.
 //
-// A card that is missing while a reader is held by another connection stops the daemon: that is
+// A card that is missing while a YubiKey's reader is held by another connection stops the daemon
+// (the HSM's reader, which the module holds by design, does not count): that is
 // this misconfiguration, or another process on the card, and neither heals by waiting. A card that
 // is simply not there does not: the daemon starts, as it does with an HSM unplugged, and the key
 // is unavailable until the card is.

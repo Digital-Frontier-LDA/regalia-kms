@@ -5,6 +5,7 @@ package yubikey
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +51,8 @@ type Provider struct {
 	waiting atomic.Int32
 	// returned makes a card that was gone wait for a fresh runtime lease. See RequireReauthorization.
 	returned reauth.Tracker
+	// lockoutLooked is when nameLockout last looked at the readers.
+	lockoutLooked time.Time
 }
 
 type pinRetryReading struct {
@@ -95,6 +98,7 @@ func (provider *Provider) AwaitingReauthorization() map[string]int64 {
 func (provider *Provider) notOpened(ctx context.Context, deviceID string) {
 	if ctx.Err() == nil {
 		provider.returned.Gone(deviceID)
+		provider.nameLockout(ctx, deviceID)
 	}
 }
 
@@ -462,6 +466,45 @@ func zero(value []byte) {
 	for index := range value {
 		value[index] = 0
 	}
+}
+
+// lockoutLookEvery spaces the looks nameLockout takes: a card that cannot be opened is asked for
+// on every request and every health probe, and each look opens every reader.
+const lockoutLookEvery = time.Minute
+
+// nameLockout says why, when a card cannot be opened although it is attached: a YubiKey's reader is
+// held by another connection. The daemon refuses to start in that state when the card is attached
+// then (cmd/regalia-kms, requirePIVCardsOpenBesidePKCS11); a card attached LATER to a daemon whose
+// PKCS#11 module does not ignore it meets the same lockout with the daemon running, and without
+// this it would fail as "unavailable" with nothing naming the cause. Called with the turn held.
+// It returns whether it named the device.
+func (provider *Provider) nameLockout(ctx context.Context, deviceID string) bool {
+	driver, ok := provider.driver.(reacher)
+	if !ok || ctx.Err() != nil {
+		return false
+	}
+	provider.mu.Lock()
+	due := provider.lockoutLooked.IsZero() || time.Since(provider.lockoutLooked) >= lockoutLookEvery
+	if due {
+		provider.lockoutLooked = time.Now()
+	}
+	provider.mu.Unlock()
+	if !due {
+		return false
+	}
+	missing, held, err := driver.Reach(ctx)
+	if err != nil || !held {
+		return false
+	}
+	for _, device := range missing {
+		if device == deviceID {
+			slog.Error("KMS YubiKey PIV card cannot be opened: another connection holds a YubiKey's reader. "+
+				"If this daemon also loads a PKCS#11 module, OpenSC must be told to ignore the YubiKey (OPENSC_CONF naming deploy/opensc/ignore-yubikey.conf); otherwise another process is using the card",
+				"device", deviceID)
+			return true
+		}
+	}
+	return false
 }
 
 // reacher is a driver that can say, without opening a session, which commissioned cards cannot be

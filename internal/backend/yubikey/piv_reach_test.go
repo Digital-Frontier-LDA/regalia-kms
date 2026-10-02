@@ -15,51 +15,92 @@ import (
 	"github.com/go-piv/piv-go/v2/piv"
 )
 
-func reachWith(t *testing.T, readers []string, cardsErr, openErr error) ([]string, bool, error) {
+// reader is one PC/SC reader as the seams present it: its name, and either the serial of the
+// YubiKey in it or the error opening it gives.
+type reader struct {
+	name    string
+	serial  uint32
+	openErr error
+}
+
+// reachOver runs Reach over the given readers, with the library replaced at its four seams.
+func reachOver(t *testing.T, ctx context.Context, cardsErr error, readers ...reader) ([]string, bool, error, int) {
 	t.Helper()
-	previousCards, previousOpen := pivCards, pivOpen
-	t.Cleanup(func() { pivCards, pivOpen = previousCards, previousOpen })
-	pivCards = func() ([]string, error) { return readers, cardsErr }
-	pivOpen = func(string) (*piv.YubiKey, error) { return nil, openErr }
+	previousCards, previousOpen, previousSerial, previousClose := pivCards, pivOpen, pivSerial, pivClose
+	t.Cleanup(func() {
+		pivCards, pivOpen, pivSerial, pivClose = previousCards, previousOpen, previousSerial, previousClose
+	})
+	cards := map[*piv.YubiKey]reader{}
+	closedCards := 0
+	pivCards = func() ([]string, error) {
+		names := make([]string, 0, len(readers))
+		for _, r := range readers {
+			names = append(names, r.name)
+		}
+		return names, cardsErr
+	}
+	pivOpen = func(name string) (*piv.YubiKey, error) {
+		for _, r := range readers {
+			if r.name == name {
+				if r.openErr != nil {
+					return nil, r.openErr
+				}
+				card := &piv.YubiKey{}
+				cards[card] = r
+				return card, nil
+			}
+		}
+		return nil, errors.New("no such reader")
+	}
+	pivSerial = func(card *piv.YubiKey) (uint32, error) { return cards[card].serial, nil }
+	pivClose = func(*piv.YubiKey) error { closedCards++; return nil }
 	driver, err := NewPIVDriver(map[string]string{"b-site": "22222222", "a-site": "11111111"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return driver.Reach(context.Background())
+	missing, held, err := driver.Reach(ctx)
+	return missing, held, err, closedCards
 }
 
 func TestReachSaysWhichCardsAreMissingAndWhetherAReaderIsHeld(t *testing.T) {
+	live := context.Background()
+	sharing := errors.New("connecting to smart card: " + sharingViolationText)
+	empty := errors.New("connecting to smart card: no smart card inserted")
+	yubikey, hsm, plain := "Yubico YubiKey OTP+FIDO+CCID 00 00", "Nitrokey Nitrokey HSM (DENK04041440000         ) 00 00", "ACS ACR40U ICC Reader 00 00"
 	both := []string{"a-site", "b-site"}
-	// a reader that another connection holds: the cards behind it cannot be seen
-	missing, held, err := reachWith(t, []string{"Yubico YubiKey 00 00"}, nil, errors.New("connecting to smart card: "+sharingViolationText))
-	if err != nil || !held || !reflect.DeepEqual(missing, both) {
-		t.Fatalf("held reader: missing=%v held=%v err=%v", missing, held, err)
-	}
-	// the HSM's reader is held by the PKCS#11 module by design: that says nothing about a YubiKey,
-	// and a YubiKey that is merely unplugged must not look locked out on a host with an HSM
-	missing, held, err = reachWith(t, []string{"Nitrokey Nitrokey HSM (DENK04041440000         ) 00 00"}, nil, errors.New("connecting to smart card: "+sharingViolationText))
-	if err != nil || held || !reflect.DeepEqual(missing, both) {
-		t.Fatalf("held HSM reader, no YubiKey: missing=%v held=%v err=%v", missing, held, err)
-	}
-	// a reader that refuses for another reason (no card in it) is not a held one
-	missing, held, err = reachWith(t, []string{"ACR40U 00 00"}, nil, errors.New("connecting to smart card: no smart card inserted"))
-	if err != nil || held || !reflect.DeepEqual(missing, both) {
-		t.Fatalf("empty reader: missing=%v held=%v err=%v", missing, held, err)
-	}
-	// no reader at all
-	missing, held, err = reachWith(t, nil, nil, nil)
-	if err != nil || held || !reflect.DeepEqual(missing, both) {
-		t.Fatalf("no reader: missing=%v held=%v err=%v", missing, held, err)
+	for name, test := range map[string]struct {
+		readers []reader
+		missing []string
+		held    bool
+		closed  int
+	}{
+		"both cards attached and open":                       {[]reader{{yubikey, 11111111, nil}, {"Yubico YubiKey CCID 01 00", 22222222, nil}}, nil, false, 2},
+		"one attached, the other unplugged":                  {[]reader{{yubikey, 22222222, nil}}, []string{"a-site"}, false, 1},
+		"a YubiKey reader held by another connection":        {[]reader{{yubikey, 0, sharing}}, both, true, 0},
+		"a held YubiKey reader, then an empty reader":        {[]reader{{yubikey, 0, sharing}, {plain, 0, empty}}, both, true, 0},
+		"an empty reader, then a held YubiKey reader":        {[]reader{{plain, 0, empty}, {yubikey, 0, sharing}}, both, true, 0},
+		"a reader named in capitals is a YubiKey's too":      {[]reader{{"YUBICO YUBIKEY CCID 00 00", 0, sharing}}, both, true, 0},
+		"the HSM's reader, which the module holds by design": {[]reader{{hsm, 0, sharing}}, both, false, 0},
+		"a YubiKey reader that refuses for another reason":   {[]reader{{yubikey, 0, empty}}, both, false, 0},
+		"an empty reader":                   {[]reader{{plain, 0, empty}}, both, false, 0},
+		"a YubiKey that is not one of ours": {[]reader{{yubikey, 99999999, nil}}, both, false, 1},
+		"no reader at all":                  {nil, both, false, 0},
+		"one of ours open, the other behind a held YubiKey reader": {[]reader{{yubikey, 11111111, nil}, {"Yubico YubiKey CCID 01 00", 0, sharing}}, []string{"b-site"}, true, 1},
+	} {
+		missing, held, err, closed := reachOver(t, live, nil, test.readers...)
+		if err != nil || held != test.held || !reflect.DeepEqual(missing, test.missing) || closed != test.closed {
+			t.Errorf("%s: missing=%v held=%v err=%v closed=%d; want missing=%v held=%v closed=%d", name, missing, held, err, closed, test.missing, test.held, test.closed)
+		}
 	}
 	// the readers cannot be listed: nothing is claimed about the cards
-	if _, _, err = reachWith(t, nil, errors.New("pcscd"), nil); err == nil {
+	if _, _, err, _ := reachOver(t, live, errors.New("pcscd")); err == nil {
 		t.Fatal("a reader list that could not be read was reported as an answer")
 	}
+	// nothing is looked at under a context that has ended, although the readers are there
 	ended, cancel := context.WithCancel(context.Background())
 	cancel()
-	driver, _ := NewPIVDriver(map[string]string{"a-site": "11111111"})
-	if _, _, err := driver.Reach(ended); err == nil {
-		t.Fatal("Reach answered under a context that had ended")
+	if _, _, err, closed := reachOver(t, ended, nil, reader{yubikey, 11111111, nil}); err == nil || closed != 0 {
+		t.Fatalf("Reach answered under a context that had ended: err=%v, %d cards opened", err, closed)
 	}
 }
 
