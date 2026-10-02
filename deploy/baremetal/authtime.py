@@ -8,19 +8,41 @@ whether it is AUTHENTICATED, and refuse everything when it is not. This module i
     the clock is authenticated  <=>  chrony is synchronised, to sources that are ALL authenticated by NTS,
                                      at least two of which agree, recently, with the system clock in step
 
-read from chrony itself (`chronyc -n -c tracking`, `sources`, `authdata`) and judged here (judge()):
+read from chrony itself (`chronyc -N -c tracking`, `sources`, `authdata`) and judged here (judge()):
 
   * tracking's leap status is not "Not synchronised";
-  * EVERY configured source is in NTS mode. One plain-NTP source is a way in for anyone on the path, so
-    its presence is a refusal whether or not chrony is using it. (chrony.conf says `authselectmode
-    require`, so chrony would not select it; this does not rely on that);
-  * exactly one source is selected ("*"), and it and every source combined with it ("+") holds NTS keys
-    and cookies (the key exchange completed) and has been answering (its reach register is not 0);
-  * at least TWO such sources agree. The site declares at least two NTS servers from independent
-    operators (conf()); with fewer than two in agreement one operator, or whoever holds one server's
-    key, could move the clock alone;
-  * the last clock update is not older than MAX_AGE (an hour): "synchronised" must not be a memory;
-  * the system clock is within MAX_OFFSET (one second) of chrony's estimate: no step is still pending.
+  * EVERY source chrony has is one of the DECLARED servers, by the name it was configured with, and is in
+    NTS mode. A source nobody declared (a pool, a server handed out by DHCP) or a plain-NTP one is a
+    refusal whether or not chrony is using it. (chrony.conf says `authselectmode require`, so chrony
+    would not select a plain one; this does not rely on that);
+  * exactly one source is selected ("*"). It, and every other source chrony finds acceptable (combined
+    "+", or agreeing but left out of the combination "-": the usual state of the more distant of two
+    servers), holds NTS keys and cookies (the key exchange completed) and has been answering;
+  * at least TWO such sources, of two different declared names, agree: with fewer, one operator, or
+    whoever holds one server's key, could move the clock alone. A falseticker ("x"), a source too
+    variable ("~") and an unusable one ("?") do not count;
+  * the last clock update is not older than MAX_AGE: "synchronised" must not be a memory;
+  * the system clock is within MAX_OFFSET of chrony's estimate: no step is still pending.
+
+WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves that chrony is healthy and is following authenticated
+sources that agree. It does not prove the wall clock right against the world: the age of the last update
+is measured with the very clock in question (chrony's reference time and "now" are readings of the same
+clock, so the age is relative). The TPM clock floor (heartbeat.authenticated_now) stays underneath as
+the guard against a clock that goes backwards. And it sees only chrony: ANOTHER TIME SERVICE on the host
+(systemd-timesyncd beside chrony, a hypervisor's time sync, hwclock) could step the clock unseen until
+chrony's next update. chronyd must be the only thing that sets the clock; that is a host control.
+
+THE WHOLE SOURCE CONFIGURATION IS conf()'s. No `pool`, no `sourcedir` (the distribution's default file
+takes NTP servers from DHCP that way), no `refclock`. An undeclared source is refused here, which is
+right and is also a way to stop every node on a LAN with one rogue DHCP answer if a `sourcedir` is left
+in: the configuration must not have one.
+
+HOW MANY SERVERS. Two is the least, and with exactly two the outage of ONE operator stops every node
+within the lease bound. Declare three, from three operators, to ride out one.
+
+A HOST WHOSE CLOCK IS FAR OFF AT BOOT (a dead RTC battery) never authenticates: NTS validates the
+servers' certificates against the clock. chrony's `nocerttimecheck` would accept an expired or
+not-yet-valid certificate for the first updates; it is NOT set. Such a host needs its RTC set by hand.
 
 UNAUTHENTICATED MEANS NOTHING IS SERVED. With this answer False a peer authorizes no unlock and issues no
 lease, and a node's own lease is not renewed: within the lease bound (300 s) the KMS daemon stops serving,
@@ -40,7 +62,9 @@ may use. So a small root service (Service.step, every 15 s) asks chrony and writ
 
 and clock(path) is the `clock()` an unprivileged service takes: (time.time(), True) only if that file is
 root's, of this boot, says true, and was written within MAX_STALE (60 s) of now on the boot clock. If the
-root service stops, the answer turns False by itself a minute later.
+root service stops, the answer turns False by itself a minute later. If it finds the clock unauthenticated
+and cannot write that, it removes the file (no file is "not authenticated"); if it cannot even do that,
+the last answer is believed until its minute is up, and no longer.
 
 COOPERATIVE, as the admission file is: root on the node can write the file. A node whose root is
 compromised is bounded elsewhere (peers refuse it, verifiers refuse its lease).
@@ -62,12 +86,16 @@ Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.authtime/v1"
 FIELDS = ("schema", "boot_id", "checked_boottime_ms", "authenticated", "reason")
-MINIMUM = 2            # NTS sources that must agree
+MINIMUM = 2            # NTS sources, of different declared names, that must agree
+# chrony polls a source at most every 1024 s by default (maxpoll 10): an hour tolerates about three missed polls.
 MAX_AGE = 3600         # seconds since chrony last updated the clock
+# chrony slews small errors; an offset this large exists only while a step is pending, as just after boot.
 MAX_OFFSET = 1.0       # seconds between the system clock and chrony's estimate
+# four checks fit in the time a status is believed: one or two missed do not stop a node, a dead service does.
 MAX_STALE = 60         # seconds a status file is believed, on the boot clock
 INTERVAL = 15          # seconds between two checks by the root service
-SERVER = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+"
+ACCEPTABLE = ("*", "+", "-")   # selected, combined, and agreeing but not combined
+SERVER = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+"      # a host name, or an IPv4 address
 
 
 def _printable(text):
@@ -90,16 +118,17 @@ def _number(text, what):
 
 
 def parse(tracking, sources, authdata):
-    """chronyc's three reports (`-n -c`), as one reading. Anything not understood is refused, not guessed."""
+    """chronyc's three reports (`-N -c`: sources by the names they were configured with), as one reading.
+    Anything not understood is refused, not guessed. A name that appears twice (a pool's servers all carry
+    the pool's name) is refused."""
     rows = _rows(tracking, 14, "tracking")
     require(len(rows) == 1, "chronyc tracking is not understood")
     row = rows[0]
     reading = {"leap": row[13], "reference_time": _number(row[3], "tracking"), "system_offset": _number(row[4], "tracking"), "sources": []}
     auth = {}
-    for name, mode, key_id, _type, key_length, _last, _attempts, nak, cookies, _cookie_length in _rows(authdata, 10, "authdata"):
+    for name, mode, key_id, _type, key_length, _last, _attempts, _nak, cookies, _cookie_length in _rows(authdata, 10, "authdata"):
         require(name not in auth, "chronyc authdata names a source twice")
-        auth[name] = {"mode": mode, "keyed": all(re.fullmatch(r"[0-9]+", v) is not None and int(v) > 0 for v in (key_id, key_length, cookies)),
-                      "nak": nak}
+        auth[name] = {"mode": mode, "keyed": all(re.fullmatch(r"[0-9]+", v) is not None and int(v) > 0 for v in (key_id, key_length, cookies))}
     for _mode, state, name, _stratum, _poll, reach, *_rest in _rows(sources, 10, "sources"):
         require(name in auth, "chronyc authdata does not cover the source %s" % _printable(name))
         require(re.fullmatch(r"[0-7]{1,3}", reach) is not None, "chronyc sources is not understood")
@@ -108,17 +137,21 @@ def parse(tracking, sources, authdata):
     return reading
 
 
-def judge(reading, now, minimum=MINIMUM, max_age=MAX_AGE, max_offset=MAX_OFFSET):
-    """Whether the clock is authenticated under `reading`; Refused with the reason when it is not."""
+def judge(reading, now, declared, minimum=MINIMUM, max_age=MAX_AGE, max_offset=MAX_OFFSET):
+    """Whether the clock is authenticated under `reading`; Refused with the reason when it is not.
+    `declared` are the servers the site configured (conf()): chrony must have these and no other."""
     require(isinstance(minimum, int) and not isinstance(minimum, bool) and minimum >= 2, "at least two NTS sources must agree")
+    require(isinstance(declared, (list, tuple)) and len(set(declared)) == len(declared) >= minimum, "at least %d declared NTS servers are needed" % minimum)
     require(reading["leap"] != "Not synchronised" and reading["leap"] in ("Normal", "Insert second", "Delete second"),
             "the clock is not synchronised (%s)" % _printable(reading["leap"]))
     sources = reading["sources"]
+    strangers = [s["name"] for s in sources if s["name"] not in declared]
+    require(not strangers, "a time source nobody declared is configured: %s" % _printable(", ".join(strangers)))
     plain = [s["name"] for s in sources if s["mode"] != "NTS"]
     require(not plain, "a time source without NTS is configured: %s" % _printable(", ".join(plain)))
     selected = [s for s in sources if s["state"] == "*"]
     require(len(selected) == 1, "no time source is selected")
-    used = [s for s in sources if s["state"] in ("*", "+")]
+    used = [s for s in sources if s["state"] in ACCEPTABLE]
     for source in used:
         require(source["keyed"], "the time source %s holds no NTS keys: its key exchange has not completed" % _printable(source["name"]))
         require(source["reaching"], "the time source %s has stopped answering" % _printable(source["name"]))
@@ -129,10 +162,10 @@ def judge(reading, now, minimum=MINIMUM, max_age=MAX_AGE, max_offset=MAX_OFFSET)
 
 
 def ask(run=subprocess.run, chronyc="chronyc", socket_path=None):
-    """One reading from chrony, over its command socket."""
+    """One reading from chrony, over its command socket. -N: sources by their configured names."""
     reports = []
     for report in ("tracking", "sources", "authdata"):
-        argv = [chronyc] + (["-h", socket_path] if socket_path else []) + ["-n", "-c", report]
+        argv = [chronyc] + (["-h", socket_path] if socket_path else []) + ["-N", "-c", report]
         try:
             done = run(argv, capture_output=True, timeout=10)
         except (OSError, subprocess.SubprocessError) as failure:
@@ -142,15 +175,24 @@ def ask(run=subprocess.run, chronyc="chronyc", socket_path=None):
     return parse(*reports)
 
 
-def conf(servers):
-    """The time-source part of chrony.conf: each server with NTS, nothing selectable without it, and no
-    clock update on fewer than two sources. `servers` are host names: at least two, from independent
-    operators (that they are independent is the site's claim; this checks only that they differ)."""
-    require(isinstance(servers, (list, tuple)) and len(servers) >= MINIMUM, "at least %d NTS servers are needed" % MINIMUM)
-    for name in servers:
+def servers(names):
+    """The declared NTS servers, checked: at least two host names (or addresses), none twice."""
+    require(isinstance(names, (list, tuple)) and len(names) >= MINIMUM, "at least %d NTS servers are needed" % MINIMUM)
+    for name in names:
         require(isinstance(name, str) and len(name) <= 253 and re.fullmatch(SERVER, name) is not None, "%s is not a host name" % _printable(name))
-    require(len(set(servers)) == len(servers), "an NTS server is listed twice")
-    return "".join("server %s nts iburst\n" % name for name in servers) + "authselectmode require\nminsources %d\n" % MINIMUM
+    require(len(set(names)) == len(names), "an NTS server is listed twice")
+    return tuple(names)
+
+
+def conf(names):
+    """chrony.conf, WHOLE: each declared server with NTS and nothing else that could be a source (no pool,
+    no sourcedir, no refclock); nothing selectable without authentication; no clock update on fewer than
+    two sources; no command port on the network (the Unix socket remains, for root). That the servers
+    belong to independent operators is the site's claim; this checks only that they differ."""
+    return ("# Generated by deploy/baremetal/authtime.py. The WHOLE configuration: add no pool, sourcedir or refclock.\n"
+            + "".join("server %s nts iburst\n" % name for name in servers(names))
+            + "authselectmode require\nminsources %d\n" % MINIMUM
+            + "driftfile /var/lib/chrony/chrony.drift\nntsdumpdir /var/lib/chrony\nmakestep 1 3\nrtcsync\ncmdport 0\n")
 
 
 # ---- the one fact, for the services that are not root ----
@@ -175,21 +217,29 @@ def write(path, document):
 class Service:
     """The root side: ask chrony, judge, write. `reading()` returns a reading or raises Refused."""
 
-    def __init__(self, path, reading=ask, wall=time.time, boottime=admission.boottime_ms, boot=admission.boot_id, minimum=MINIMUM):
+    def __init__(self, path, declared, reading=ask, wall=time.time, boottime=admission.boottime_ms, boot=admission.boot_id, minimum=MINIMUM):
         self.path, self.reading, self.wall, self.boottime, self.boot, self.minimum = path, reading, wall, boottime, boot(), minimum
+        self.declared = servers(declared)
 
     def step(self):
         """One check. Returns the document written. The boot clock is read BEFORE chrony is asked: the
         answer can only look older than it is."""
         checked, reason = self.boottime(), ""
         try:
-            judge(self.reading(), self.wall(), self.minimum)
+            judge(self.reading(), self.wall(), self.declared, self.minimum)
         except Refused as refusal:
             reason = _printable(refusal)
         except Exception as failure:      # noqa: BLE001 - whatever went wrong, the clock was not shown to be right
             reason = "the check failed (%s)" % type(failure).__name__
         document = {"schema": SCHEMA, "boot_id": self.boot, "checked_boottime_ms": checked, "authenticated": reason == "", "reason": reason}
-        write(self.path, document)
+        try:
+            write(self.path, document)
+        except BaseException:
+            # A verdict that cannot be written must not leave the last one standing for its minute: the
+            # status is removed, which every reader takes as "not authenticated".
+            with contextlib.suppress(OSError):
+                os.unlink(self.path)
+            raise
         return document
 
     def run(self, stop, interval=INTERVAL):

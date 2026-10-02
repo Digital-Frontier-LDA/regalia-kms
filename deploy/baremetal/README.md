@@ -155,8 +155,13 @@ Commissioning has two halves:
 - **Authenticated time (`authtime.py`; the unit is NOT BUILT yet, #80).** Every expiry here (a
   heartbeat's, a lease's) is judged against the clock, so the clock itself must be vouched for. It counts
   as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
-  (declare servers of independent operators, so that no single operator can move the clock), with no
-  source configured without NTS, an update within the last hour, and no correction pending. A small root
+  (declare servers of independent operators, so that no single operator can move the clock; with
+  exactly two, one operator's outage stops the nodes, so declare **three**), with no source that was not
+  declared or is not NTS, an update within the last hour, and no correction pending. `authtime.conf()`
+  renders the **whole** `chrony.conf`: no `pool`, no `sourcedir` (the distribution's default takes
+  servers from DHCP that way), no `refclock`; and chronyd must be the only thing on the host that sets
+  the clock (no systemd-timesyncd beside it). A host whose RTC is far off never authenticates, because
+  NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
   service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
   services believe it for 60 s.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a

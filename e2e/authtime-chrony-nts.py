@@ -11,11 +11,13 @@ exactly as the root service will on a host:
 
   1  both servers answer: chrony is synchronised to two agreeing NTS sources -> authenticated, published,
      and believed by an unprivileged reader
-  2  one server stops: one source left -> not authenticated, with that reason
-  3  a plain NTP source (a third server) is configured beside the two NTS ones -> not authenticated,
-     whatever chrony does with it
-  4  the only source is plain NTP -> not authenticated
-  5  the root service stops: a minute later (here, two seconds) the published answer is no longer believed
+  2  the second source agrees but chrony leaves it out of the combination ("-", as with two servers at
+     different distances) -> still authenticated
+  3  one server stops: one source left -> not authenticated, with that reason
+  4  a plain NTP source (a third server) is configured beside the two NTS ones -> not authenticated,
+     whatever chrony does with it; and so is a third NTS server that nobody declared
+  5  the only source is plain NTP -> not authenticated
+  6  the root service stops: a minute later (here, two seconds) the published answer is no longer believed
 """
 import os
 import random
@@ -95,9 +97,9 @@ def scenario(work, daemons, stop):
               % (port, ke, address, work, name, work, name, work))
     trust = "".join("ntstrustedcerts %s/%s.crt\n" % (work, name) for name in servers)
 
-    def client(sources):
+    def client(sources, more=""):
         stop("client")
-        start("client", sources + trust + "authselectmode require\nminsources 2\n")
+        start("client", sources + trust + "authselectmode require\nminsources 2\n" + more)
 
     def nts(name):
         address, port, ke = servers[name]
@@ -106,9 +108,11 @@ def scenario(work, daemons, stop):
     sock = os.path.join(work, "client.sock")
     ask = lambda: authtime.ask(chronyc=CHRONYC, socket_path=sock)       # noqa: E731
 
+    declared = [servers["one"][0], servers["two"][0]]
+
     def verdict():
         try:
-            authtime.judge(ask(), time.time())
+            authtime.judge(ask(), time.time(), declared)
             return ""
         except m.Refused as refused:
             return str(refused)
@@ -126,7 +130,7 @@ def scenario(work, daemons, stop):
     os.mkdir(published, 0o755)
     os.chmod(published, 0o755)
     status = os.path.join(published, "authtime.json")
-    service = authtime.Service(status, reading=ask)
+    service = authtime.Service(status, declared, reading=ask)
     believed = authtime.clock(status, owner=os.getuid())
 
     header("1  two NTS servers answer: the clock is authenticated")
@@ -145,7 +149,16 @@ def scenario(work, daemons, stop):
     ok(document["authenticated"] is True and document["reason"] == "", "the root service publishes it", document)
     ok(believed()[1] is True, "and an unprivileged reader believes it")
 
-    header("2  one server stops: one source is not enough")
+    header("2  a source that agrees and is not combined still counts")
+    client(nts("one") + nts("two"), "combinelimit 0\n")
+    said = until(lambda v: v == "", 90)
+    states = sorted(s["state"] for s in ask()["sources"])
+    ok(states == ["*", "-"], "chrony selects one source and leaves the other out of the combination (states %s)" % states, states)
+    ok(said == "", "and the clock is authenticated: two NTS sources agree", said)
+    client(nts("one") + nts("two"))
+    ok(until(lambda v: v == "", 90) == "", "(back to the usual configuration: authenticated)")
+
+    header("3  one server stops: one source is not enough")
     stop("two")
     said = until(lambda v: v != "", 120)
     ok("only 1 NTS source(s) agree" in said or "has stopped answering" in said or "holds no NTS keys" in said,
@@ -153,7 +166,7 @@ def scenario(work, daemons, stop):
     document = service.step()
     ok(document["authenticated"] is False and believed()[1] is False, "published as such, and believed as such", document)
 
-    header("3  a plain NTP source beside the two NTS ones")
+    header("4  a plain NTP source beside the two NTS ones, and an NTS source nobody declared")
     address, port, ke = servers["two"]
     start("two", "local stratum 8\nport %d\nntsport %d\nbindaddress %s\nntsserverkey %s/two.key\nntsservercert %s/two.crt\nallow 127.0.0.0/8\nntsdumpdir %s\n"
           % (port, ke, address, work, work, work))
@@ -163,16 +176,33 @@ def scenario(work, daemons, stop):
     start("three", "local stratum 8\nport %d\nbindaddress %s\nallow 127.0.0.0/8\n" % (plain[1], plain[0]))
     client(nts("one") + nts("two") + "server %s port %d iburst minpoll 0 maxpoll 1\n" % plain)
     said = until(lambda v: "without NTS" in v, 60)
-    ok("a time source without NTS is configured" in said, "a plain NTP source anywhere in the configuration refuses", said)
+    ok("a time source nobody declared is configured" in said or "a time source without NTS is configured" in said,
+       "a plain NTP source anywhere in the configuration refuses (%s)" % said[:60], said)
+    # the same third server WITH NTS, and still not one the site declared: a pool or a DHCP-supplied server would look like this
+    stop("three")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2",
+                    "-keyout", "%s/three.key" % work, "-out", "%s/three.crt" % work, "-subj", "/CN=" + plain[0],
+                    "-addext", "subjectAltName=IP:" + plain[0]], check=True, capture_output=True)
+    start("three", "local stratum 8\nport %d\nntsport %d\nbindaddress %s\nntsserverkey %s/three.key\nntsservercert %s/three.crt\nallow 127.0.0.0/8\nntsdumpdir %s\n"
+          % (plain[1], base + 6, plain[0], work, work, work))
+    client(nts("one") + nts("two") + "server %s port %d nts ntsport %d iburst minpoll 0 maxpoll 1\n" % (plain[0], plain[1], base + 6),
+           "ntstrustedcerts %s/three.crt\n" % work)
+    said = until(lambda v: "nobody declared" in v, 60)
+    ok("a time source nobody declared is configured: %s" % plain[0] in said, "an NTS source that was not declared refuses too", said)
+    undeclared = [s for s in ask()["sources"] if s["name"] == plain[0]]
+    ok(len(undeclared) == 1 and undeclared[0]["mode"] == "NTS", "(chrony itself reports that third source in NTS mode)", undeclared)
+    stop("three")
+    start("three", "local stratum 8\nport %d\nbindaddress %s\nallow 127.0.0.0/8\n" % (plain[1], plain[0]))
 
-    header("4  the only source is plain NTP")
+    header("5  the only source is plain NTP")
     client("server %s port %d iburst minpoll 0 maxpoll 1\n" % plain)
     time.sleep(8)
     said = verdict()
     ok(said != "", "not authenticated", said)
-    ok("not synchronised" in said or "without NTS" in said, "because chrony selects nothing it cannot authenticate, or the source is not NTS", said)
+    ok("not synchronised" in said or "without NTS" in said or "nobody declared" in said,
+       "because chrony selects nothing it cannot authenticate, or the source is not one of ours", said)
 
-    header("5  the root service stops")
+    header("6  the root service stops")
     client(nts("one") + nts("two"))
     ok(until(lambda v: v == "", 90) == "", "(authenticated again)")
     service.step()

@@ -502,8 +502,8 @@ jobs:
         run: |
           set -o pipefail
           python3 e2e/authtime-chrony-nts.py | tee "$RUNNER_TEMP/authtime.log"
-          grep -q '^authtime-chrony-nts: 13 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
-            echo "::error::the authenticated-time test did not run all 13 checks" >&2; exit 1; }
+          grep -q '^authtime-chrony-nts: 18 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
+            echo "::error::the authenticated-time test did not run all 18 checks" >&2; exit 1; }
 
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
