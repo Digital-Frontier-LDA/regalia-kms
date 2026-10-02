@@ -23,7 +23,7 @@ The version is in the path: `/v1/operations/...`. Within `v1`:
 
 | path | payload | returns |
 |---|---|---|
-| `POST /v1/operations/sign` | `payload_base64`, digest or message, ≤ 1 MiB, `content_type` required | signature |
+| `POST /v1/operations/sign` | `payload_base64`, digest or message, ≤ 1 MiB, `content_type` required and listed by the object's policy | signature |
 | `POST /v1/operations/wrap` | `plaintext_data_key_base64` ≤ 4 KiB, `format: regalia-envelope-v2` | wrapped data key |
 | `POST /v1/operations/unwrap` | `wrapped_data_key_base64` ≤ 48 KiB, `format: regalia-envelope-v2` or `sops-pgp` | data key |
 | `POST /v1/operations/certificate-sign` | `payload_base64`, PKCS#10 CSR in DER, ≤ 8 KiB | certificate (`application/pkix-cert`) |
@@ -189,19 +189,28 @@ the caller knows what it chose.
 | `UNAUTHENTICATED` | 401 | no | no verified client identity |
 | `DENIED` | 403 | no | RBAC, routing or purpose policy refused |
 | `NOT_FOUND` | 404 | no | no such object in the registry |
-| `INVALID_ARGUMENT` | 400 | no | malformed, oversized, or wrong fields for the operation |
+| `INVALID_ARGUMENT` | 400, 405 | no | malformed, oversized, or wrong fields for the operation; 405 for a method other than `POST` |
 | `CONFLICT` | 409 | no | replayed nonce |
 | `RESOURCE_EXHAUSTED` | 429 | yes | quota or concurrency limit |
 | `BACKEND_UNAVAILABLE` | 503 | yes | the assigned token is absent or failing |
 | `DEPENDENCY_UNAVAILABLE` | 503 | yes | policy state, audit or another required dependency |
+| `DEADLINE_EXCEEDED` | 504 | yes | the operation did not finish within the daemon's time limit |
+| `CANCELED` | 504 | no | the operation was abandoned, for example because the caller went away |
 | `INTERNAL` | 500 | no | a fault the caller cannot act on |
+| `INVALID_OPERATION` | 422 | no | reserved: in the OpenAPI document, never returned by the daemon today |
 
 `message` is a fixed string per code. It never carries payload, key material, device identity,
 policy contents or backend error text — an error is not a channel.
 
 The distinction that matters operationally: **`DENIED` and `INVALID_ARGUMENT` will never succeed on
-retry**, while `BACKEND_UNAVAILABLE`, `DEPENDENCY_UNAVAILABLE` and `RESOURCE_EXHAUSTED` may. A
-client that retries the first pair is retrying something that cannot change.
+retry**, while `BACKEND_UNAVAILABLE`, `DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED` and
+`DEADLINE_EXCEEDED` may. A client that retries the first pair is retrying something that cannot
+change.
+
+**Retry with a new nonce.** Once policy has allowed a request its nonce is consumed, and it stays
+consumed even if the hardware result was indeterminate (`POLICY.md`); the same nonce sent again is
+then answered `CONFLICT`. A retry after `BACKEND_UNAVAILABLE` or `DEADLINE_EXCEEDED` is therefore a
+new request, and may repeat an operation the token already performed.
 
 ## What a client must not build on
 

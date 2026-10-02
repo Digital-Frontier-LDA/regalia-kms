@@ -239,8 +239,8 @@ Every KMS call carries a fresh `context.nonce`, the same value as `Idempotency-K
 - **Deadline.** Each call runs under the caller's context and `timeout`. Cancellation closes the
   request. Nothing runs in the background after the caller has given up.
 - **Retry only on `retryable: true`** (`BACKEND_UNAVAILABLE`, `DEPENDENCY_UNAVAILABLE`,
-  `RESOURCE_EXHAUSTED`), with backoff, inside the same deadline. `DENIED`, `INVALID_ARGUMENT`,
-  `NOT_FOUND`, `CONFLICT` and any unknown code are never retried.
+  `RESOURCE_EXHAUSTED`, `DEADLINE_EXCEEDED`), with backoff, inside the same deadline. `DENIED`,
+  `INVALID_ARGUMENT`, `NOT_FOUND`, `CONFLICT`, `CANCELED` and any unknown code are never retried.
 - **A retry is a new request with a new nonce.** The KMS keeps a nonce consumed even when the
   hardware result was indeterminate, so resending the same nonce is answered `CONFLICT`. A retry
   therefore may repeat a hardware operation. For `seal-envelope` and `release-secret` that is
@@ -309,11 +309,11 @@ the server today, for a decision on #120 rather than a silent change:
    AEAD binds what `internal/envelope` binds, and the plugin is its own Go module. Either that
    construction is published byte-exactly in `ENVELOPE.md` with a test vector, as the approval
    binding is in `API.md`, or it moves to an importable package. #121 needs one of the two.
-4. **`api/openapi.json` omits `application/vnd.regalia.digest`** from `SignRequest.content_type`,
-   while the example policy, the hardened-serve test and `regalia-sign` use it. The plugin depends on
-   it, so the published contract should list it.
-5. **`API.md`'s error table omits `CANCELED`, `DEADLINE_EXCEEDED` and `INVALID_OPERATION`**, which
-   the OpenAPI document lists. The plugin treats them as non-retryable unless flagged otherwise.
+4. **Fixed:** `api/openapi.json` now lists `application/vnd.regalia.digest` for
+   `SignRequest.content_type`, which the plugin depends on.
+5. **Fixed:** `API.md`'s error table and the OpenAPI responses now carry every code and status the
+   daemon writes, including `DEADLINE_EXCEEDED` and `CANCELED` (504). The plugin retries
+   `DEADLINE_EXCEEDED` under the rules above and treats `CANCELED` and any unknown code as final.
 6. **No RSA-PSS, no general encrypt/decrypt, Ed25519 messages bounded by the applet.** Each is an
    explicit refusal above. Serving any of them is a new reviewed operation, not a plugin option.
 7. **Policy shape for the seal object.** It needs `seal-envelope` and `release-secret` on one object.
