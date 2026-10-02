@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 var identifier = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{2,62}$`)
 var repository = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$`)
+var generation = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$`)
 
 func (w *Wrapper) SetConfig(ctx context.Context, options ...wrapping.Option) (*wrapping.WrapperConfig, error) {
 	w.mu.Lock()
@@ -30,13 +32,17 @@ func (w *Wrapper) SetConfig(ctx context.Context, options ...wrapping.Option) (*w
 		return nil, errConfig
 	}
 	c := opts.WithConfigMap
-	allowed := map[string]bool{"kms_url": true, "server_name": true, "ca_path": true, "certificate_path": true, "private_key_path": true, "object_id": true, "repository": true, "path": true, "environment": true, "kms_purpose": true, "timeout": true}
+	allowed := map[string]bool{"kms_url": true, "server_name": true, "ca_path": true, "certificate_path": true, "private_key_path": true, "object_id": true, "repository": true, "path": true, "environment": true, "kms_purpose": true, "timeout": true, "key_version": true, "historical_key_versions": true}
 	for k, v := range c {
 		if !allowed[k] || v == "" || strings.ContainsAny(v, "\r\n\x00") {
 			return nil, errConfig
 		}
 	}
-	b := binding{c["object_id"], c["repository"], c["path"], c["environment"], c["kms_purpose"]}
+	b := binding{c["object_id"], c["repository"], c["path"], c["environment"], c["kms_purpose"], c["key_version"]}
+	historical, err := historicalVersions(b.KeyVersion, c["historical_key_versions"])
+	if err != nil {
+		return nil, errConfig
+	}
 	u, err := url.Parse(c["kms_url"])
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" ||
 		!identifier.MatchString(b.ObjectID) || !identifier.MatchString(b.Purpose) || !repository.MatchString(b.Repository) ||
@@ -78,9 +84,13 @@ func (w *Wrapper) SetConfig(ctx context.Context, options ...wrapping.Option) (*w
 		return nil, errConfig
 	}
 	w.client = sops.NewHTTPClient(c["kms_url"], httpClient, time.Now)
+	if b.KeyVersion != "" {
+		w.client = &versionedClient{base: c["kms_url"], http: httpClient, binding: b}
+	}
 	w.binding = b
+	w.historical = historical
 	w.configured = true
-	return &wrapping.WrapperConfig{Metadata: map[string]string{"mode": "development-poc", "format": "regalia-poc-v1"}}, nil
+	return &wrapping.WrapperConfig{Metadata: map[string]string{"mode": "development-poc", "format": "regalia-poc-v" + strconv.Itoa(frameVersion(b))}}, nil
 }
 
 // No environment expansion, symlinks, special files or shared private-key permissions.

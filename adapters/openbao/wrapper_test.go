@@ -48,7 +48,7 @@ func (k *testKMS) Unwrap(ctx context.Context, req sops.Request) ([]byte, error) 
 }
 func testWrapper() (*Wrapper, *testKMS) {
 	k := &testKMS{}
-	return &Wrapper{client: k, binding: binding{"poc-seal-key", "example/poc", "fixtures/seal", "development", "openbao-seal"}, configured: true}, k
+	return &Wrapper{client: k, binding: binding{"poc-seal-key", "example/poc", "fixtures/seal", "development", "openbao-seal", ""}, configured: true}, k
 }
 
 func TestEnvelopeRoundTripAndDataKeyBoundary(t *testing.T) {

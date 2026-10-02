@@ -30,6 +30,7 @@ type binding struct {
 	Path        string `json:"path"`
 	Environment string `json:"environment"`
 	Purpose     string `json:"purpose"`
+	KeyVersion  string `json:"key_version,omitempty"`
 }
 
 type frame struct {
@@ -44,6 +45,7 @@ type Wrapper struct {
 	client     sops.KMSClient
 	binding    binding
 	configured bool
+	historical map[string]bool
 }
 
 var _ wrapping.Wrapper = (*Wrapper)(nil)
@@ -62,7 +64,19 @@ func (w *Wrapper) KeyId(ctx context.Context) (string, error) {
 	return keyID(b), nil
 }
 
-func keyID(b binding) string { return "regalia-poc-v1:" + b.ObjectID }
+func keyID(b binding) string {
+	if b.KeyVersion != "" {
+		return "regalia-poc-v2:" + b.ObjectID + ":" + b.KeyVersion
+	}
+	return "regalia-poc-v1:" + b.ObjectID
+}
+
+func frameVersion(b binding) int {
+	if b.KeyVersion != "" {
+		return 2
+	}
+	return 1
+}
 
 func (w *Wrapper) snapshot(ctx context.Context) (sops.KMSClient, binding, error) {
 	if ctx.Err() != nil {
@@ -108,7 +122,7 @@ func associatedData(b binding, aad []byte) []byte {
 		Version int     `json:"version"`
 		Binding binding `json:"binding"`
 		AAD     []byte  `json:"aad"`
-	}{1, b, aad})
+	}{frameVersion(b), b, aad})
 	return data
 }
 
@@ -154,7 +168,7 @@ func (w *Wrapper) Encrypt(ctx context.Context, plaintext []byte, options ...wrap
 		return nil, errOperation
 	}
 	sealed := aead.Seal(nil, nonce, plaintext, associatedData(b, opts.WithAad))
-	encoded, err := json.Marshal(frame{1, keyID(b), wrapped, sealed})
+	encoded, err := json.Marshal(frame{frameVersion(b), keyID(b), wrapped, sealed})
 	if err != nil || ctx.Err() != nil {
 		return nil, errOperation
 	}
@@ -163,9 +177,12 @@ func (w *Wrapper) Encrypt(ctx context.Context, plaintext []byte, options ...wrap
 
 func (w *Wrapper) Decrypt(ctx context.Context, blob *wrapping.BlobInfo, options ...wrapping.Option) ([]byte, error) {
 	client, b, err := w.snapshot(ctx)
-	if err != nil || blob == nil || blob.KeyInfo == nil || blob.KeyInfo.KeyId != keyID(b) ||
+	if err != nil || blob == nil || blob.KeyInfo == nil ||
 		blob.KeyInfo.Mechanism != 0 || len(blob.KeyInfo.WrappedKey) != 0 || len(blob.Iv) != 12 ||
 		len(blob.Ciphertext) == 0 || len(blob.Ciphertext) > 2*(maxPayload+maxWrappedKey) {
+		return nil, errOperation
+	}
+	if b, err = w.decryptBinding(b, blob.KeyInfo.KeyId); err != nil {
 		return nil, errOperation
 	}
 	opts, err := operationOptions(b, options)
@@ -179,13 +196,16 @@ func (w *Wrapper) Decrypt(ctx context.Context, blob *wrapping.BlobInfo, options 
 		return nil, errOperation
 	}
 	var extra any
-	if !errors.Is(decoder.Decode(&extra), io.EOF) || f.Version != 1 || f.KeyID != keyID(b) ||
+	if !errors.Is(decoder.Decode(&extra), io.EOF) || f.Version != frameVersion(b) || f.KeyID != keyID(b) ||
 		len(f.WrappedKey) == 0 || len(f.WrappedKey) > maxWrappedKey || len(f.Payload) < 16 || len(f.Payload) > maxPayload+16 {
 		return nil, errOperation
 	}
 	canonical, _ := json.Marshal(f)
 	if !bytes.Equal(canonical, blob.Ciphertext) {
 		// Refuse duplicate keys and alternate encodings, not merely unknown fields.
+		return nil, errOperation
+	}
+	if b.KeyVersion != "" && !validInnerEnvelope(f.WrappedKey, b) {
 		return nil, errOperation
 	}
 	req, err := request(b, "unwrap", f.WrappedKey, opts.WithAad)

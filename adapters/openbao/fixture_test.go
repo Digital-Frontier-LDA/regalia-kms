@@ -28,6 +28,7 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/operations"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/secrets"
 )
 
 func wrappingConfig(c map[string]string) wrapping.Option { return wrapping.WithConfigMap(c) }
@@ -93,7 +94,7 @@ func (s *fixtureAudit) deniedUnwraps() int {
 	defer s.mu.Unlock()
 	n := 0
 	for _, e := range s.events {
-		if e.Operation == "unwrap" && e.Outcome == "rbac-denied" {
+		if (e.Operation == "unwrap" || e.Operation == "release-secret") && e.Outcome == "rbac-denied" {
 			n++
 		}
 	}
@@ -101,31 +102,54 @@ func (s *fixtureAudit) deniedUnwraps() int {
 }
 
 type kmsFixture struct {
-	server  *httptest.Server
-	handler http.Handler
-	pki     fixturePKI
-	audit   *fixtureAudit
-	address string
-	t       *testing.T
+	server   *httptest.Server
+	handler  http.Handler
+	pki      fixturePKI
+	audit    *fixtureAudit
+	address  string
+	t        *testing.T
+	router   *switchingRegistry
+	hardware *backend.Manager
 }
 
 func newKMSFixture(t *testing.T) *kmsFixture {
+	return newKMSFixtureMode(t, false)
+}
+
+func newKMSFixtureMode(t *testing.T, versioned bool) *kmsFixture {
 	t.Helper()
 	pki := newFixturePKI(t)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hardware, err := backend.New(map[string]backend.Provider{"nitrokey-pkcs11": softwareRSA{key}})
+	var provider backend.Provider = softwareRSA{key}
+	if versioned {
+		second, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		provider = generationRSA{keys: map[string]*rsa.PrivateKey{"g1": key, "g2": second}}
+		for _, c := range []map[string]string{pki.config, pki.restoreConfig, pki.strangerConfig} {
+			c["key_version"] = "g1"
+		}
+	}
+	hardware, err := backend.New(map[string]backend.Provider{"nitrokey-pkcs11": provider})
 	if err != nil {
 		t.Fatal(err)
 	}
 	manifest := `{"schema_version":1,"manifest_id":"synthetic-poc","generated_at":"2026-10-02T00:00:00Z","objects":[{"id":"poc-seal-key","name":"Synthetic seal fixture","kind":"symmetric-key","classification":"restricted","environment":"development","owner":"fixture","purpose":"openbao-seal","custody":"direct-hardware","algorithm":"rsa2048","operations":["wrap","unwrap"],"policy_id":"poc-policy","bindings":[{"site":"poc-site","backend":"nitrokey-pkcs11","device_id":"software-fixture","device_serial":"synthetic","devaut_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","object_id":"02","public_fingerprint":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","state":"active"}],"recovery":{},"rotation":{},"migration":{},"verification":{"status":"verified"}}]}`
-	router, err := registry.Load(strings.NewReader(manifest), "poc-site", hardware)
+	grants := `{"schema_version":1,"principals":[{"uri":"spiffe://regalia/workload/openbao-poc","grants":[{"objects":["poc-seal-key"],"operations":["wrap","unwrap"],"environments":["development"]}]}]}`
+	if versioned {
+		manifest = generationManifest("active", "retired")
+		grants = strings.ReplaceAll(grants, `"wrap","unwrap"`, `"seal-envelope","release-secret"`)
+	}
+	loaded, err := registry.Load(strings.NewReader(manifest), "poc-site", hardware)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rbac, err := auth.LoadPolicy(strings.NewReader(`{"schema_version":1,"principals":[{"uri":"spiffe://regalia/workload/openbao-poc","grants":[{"objects":["poc-seal-key"],"operations":["wrap","unwrap"],"environments":["development"]}]}]}`))
+	router := &switchingRegistry{registry: loaded}
+	rbac, err := auth.LoadPolicy(strings.NewReader(grants))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +162,10 @@ func newKMSFixture(t *testing.T) *kmsFixture {
 	wrap, unwrap := base, base
 	wrap.ID, wrap.Operation = "poc-wrap", "wrap"
 	unwrap.ID, unwrap.Operation = "poc-unwrap", "unwrap"
+	if versioned {
+		wrap.Algorithm, unwrap.Algorithm = "opaque", "opaque"
+		wrap.Operation, unwrap.Operation = "seal-envelope", "release-secret"
+	}
 	semantic, err := policy.New([]policy.Policy{wrap, unwrap}, state, time.Now)
 	if err != nil {
 		t.Fatal(err)
@@ -148,12 +176,19 @@ func newKMSFixture(t *testing.T) *kmsFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = recorder.Close() })
-	coordinator, err := operations.New(rbac, router, semantic, recorder, executor.New(1, 5*time.Second), hardware, "sha256:synthetic-poc", nil, time.Now)
+	var served operations.Hardware = hardware
+	if versioned {
+		served, err = secrets.NewReleaser(hardware)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	coordinator, err := operations.New(rbac, router, semantic, recorder, executor.New(1, 5*time.Second), served, "sha256:synthetic-poc", nil, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler := auth.NewAuthenticator("spiffe://regalia/", nil, time.Now, time.Minute).Middleware(api.NewHandler(coordinator))
-	f := &kmsFixture{handler: handler, pki: pki, audit: sink, t: t}
+	f := &kmsFixture{handler: handler, pki: pki, audit: sink, t: t, router: router, hardware: hardware}
 	f.start()
 	pki.config["kms_url"] = f.server.URL
 	pki.strangerConfig["kms_url"] = f.server.URL
