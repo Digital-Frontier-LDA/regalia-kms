@@ -383,7 +383,9 @@ class Verifier:
                     "the TPM firmware version %s is not the recorded %s" % (q["firmware_version"], expected["tpm_firmware_version"]))
             self.check_counters(record, q, session_id, ephemeral_public)
             save()
-        return {"node": node_id, "epoch": epoch, "session_id": session_id.hex(), "reset_count": q["reset_count"],
+        # ak_name: the AK this quote was verified under, read inside the same lock as the verification, so
+        # a caller that requires a particular AK (a runtime lease, lease.py) compares what was actually used
+        return {"node": node_id, "epoch": epoch, "session_id": session_id.hex(), "ak_name": ak_name.hex(), "reset_count": q["reset_count"],
                 "restart_count": q["restart_count"], "clock": q["clock"], "clock_safe": bool(q["safe"]), "pcrs": q["pcrs"]}
 
     @staticmethod
