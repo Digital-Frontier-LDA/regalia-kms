@@ -51,8 +51,14 @@ for t in go softhsm2-util pkcs11-tool openssl python3 curl systemctl apparmor_pa
 sudo -n true 2>/dev/null || die "needs sudo"
 MODULE=""; for c in /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so; do [ -f "$c" ] && MODULE="$c" && break; done
 [ -n "$MODULE" ] || die "libsofthsm2.so not found"
-[ ! -e /etc/systemd/system/regalia-kms.service ] && [ ! -e /etc/regalia-kms ] && [ ! -e /var/lib/regalia-kms ] \
-  || die "this machine already has a regalia-kms unit, /etc/regalia-kms or /var/lib/regalia-kms: not a throwaway host"
+# Everything the cleanup removes must not exist yet: a host that has any of it is somebody's installation.
+for existing in /etc/systemd/system/regalia-kms.service /etc/systemd/system/regalia-kms.service.d /etc/regalia-kms \
+                /var/lib/regalia-kms /usr/local/sbin/regalia-kms; do
+  [ ! -e "$existing" ] || die "this machine already has $existing: not a throwaway host, and the cleanup would delete it"
+done
+if sudo grep -q '^regalia-kms ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+  die "an AppArmor profile named regalia-kms is already loaded: not a throwaway host, and the cleanup would unload it"
+fi
 echo "kms-hardened-serve: $(systemctl --version | head -1), kernel $(uname -r), AppArmor $(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo absent)"
 
 ETC=/etc/regalia-kms; STATE=/var/lib/regalia-kms; UNITDIR=/etc/systemd/system; SVC=regalia-kms.service
