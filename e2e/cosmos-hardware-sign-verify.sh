@@ -3,6 +3,13 @@
 # against the public key returned by the same token. This is intentionally opt-in: it touches a
 # real token and therefore requires an explicit module, token selector, PIN, and object id.
 set -euo pipefail
+# [0-9] and [0-9A-Fa-f] below mean ASCII: in a UTF-8 locale bash ranges follow the locale's collation
+# and take full-width digits (deploy/seal-hsm-pin.sh has the measurement). Only the COLLATION is
+# pinned: under LC_ALL=C bash would count bytes, and the six-character PIN check below would pass a
+# three-character PIN of two-byte letters. LC_ALL overrides LC_COLLATE, so it is moved into LANG and
+# LC_CTYPE: both, because an inherited LC_CTYPE that LC_ALL was overriding would otherwise come back.
+if [ -n "${LC_ALL:-}" ]; then export LANG="$LC_ALL" LC_CTYPE="$LC_ALL"; unset LC_ALL; fi
+export LC_COLLATE=C
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODULE="${REGALIA_COSMOS_PKCS11_MODULE:-}"

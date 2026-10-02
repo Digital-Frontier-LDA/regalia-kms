@@ -13,7 +13,7 @@
 #   5  shared state: the same key (same public key) is there after every removal; then it is deleted
 set -uo pipefail
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
-SERIAL=""; VIDPID="${HSM_USB_ID:-20a0:4230}"
+SERIAL=""; VIDPID="${HSM_USB_ID:-}"
 STAGING_SERIALS="${STAGING_SERIALS:-DENK0404144 DENK0404380 DENK0404547 ESP2202E14A ESP41D722E2}"
 while [ $# -gt 0 ]; do case "$1" in
   --serial) SERIAL="${2:?}"; shift 2;; --module) MODULE="${2:?}"; shift 2;; --usb-id) VIDPID="${2:?}"; shift 2;;
@@ -26,11 +26,7 @@ sudo -n true 2>/dev/null || die "needs passwordless sudo (USB unbind/bind)"
 [ -n "${HSM_USER_PIN:-}" ] || die "no user PIN (HSM_PIN_FILE or HSM_USER_PIN)"
 export REGALIA_Q_PIN="$HSM_USER_PIN"; unset HSM_USER_PIN
 
-# The one USB device with this vendor:product (a second identical token would make removal ambiguous).
-mapfile -t devs < <(for d in /sys/bus/usb/devices/*; do
-  [ "$(cat "$d/idVendor" 2>/dev/null):$(cat "$d/idProduct" 2>/dev/null)" = "$VIDPID" ] && basename "$d"; done)
-[ "${#devs[@]}" = 1 ] || die "need exactly one USB device $VIDPID, found ${#devs[@]}"
-USBDEV="${devs[0]}"
+USBDEV=""   # resolved from the token itself below, once its slot is known
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"; EVID="${EVIDENCE_DIR:-.}/evidence-removal-$SERIAL-$UTC.log"
 W="$(mktemp -d)"
 pass=0; fail=0
@@ -44,7 +40,7 @@ hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 # hotplug sees. A driver unbind/bind does not emit an add event, so pcscd never re-detects the reader:
 # that tests pcscd, not the token.
 remove(){ echo 0 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null; log "removed $USBDEV at $(date -u +%T.%N)"; }
-restore(){ echo 1 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null 2>&1; log "restored $USBDEV at $(date -u +%T.%N)"; }
+restore(){ [ -n "$USBDEV" ] || return 0; echo 1 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null 2>&1; log "restored $USBDEV at $(date -u +%T.%N)"; }
 ID_EC=""; ID_RSA=""; CREATED=()
 # On any exit: the token back on the bus, then its test keys deleted (best effort), then the temp dir.
 cleanup_keys(){ local id; wait_back 2>/dev/null; for id in "${CREATED[@]}"; do
@@ -63,6 +59,27 @@ wait_back(){ local i; for i in $(seq 1 30); do SLOT="$(slot_of)"; [ -n "$SLOT" ]
 p11(){ pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
 p11l(){ p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL"
+# The USB device to remove is the one BEHIND THIS TOKEN: the serial pcscd puts in the slot's reader
+# name (the last parenthesised group, from the device's iSerialNumber), matched to exactly one device
+# in sysfs. A default vendor:product once removed the Nitrokey while the Pico was under test.
+USB_SERIAL="$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | python3 -c '
+import re, sys
+slot = sys.argv[1]
+for line in sys.stdin:
+    m = re.match(r"Slot \d+ \((0x[0-9a-f]+)\): (.*)$", line)
+    if m and m.group(1) == slot:
+        groups = re.findall(r"\(([^()]*)\)", m.group(2))
+        print(groups[-1].strip() if groups else "")
+        break' "$SLOT")"
+[ -n "$USB_SERIAL" ] || die "the reader of slot $SLOT names no USB serial: cannot tell which device to remove"
+mapfile -t devs < <(for d in /sys/bus/usb/devices/*; do
+  [ "$(tr -d '[:space:]' 2>/dev/null < "$d/serial")" = "$(tr -d '[:space:]' <<< "$USB_SERIAL")" ] && basename "$d"; done)
+[ "${#devs[@]}" = 1 ] || die "need exactly one USB device with serial $USB_SERIAL, found ${#devs[@]}"
+USBDEV="${devs[0]}"
+if [ -n "$VIDPID" ]; then   # optional cross-check (--usb-id / HSM_USB_ID)
+  [ "$(cat "/sys/bus/usb/devices/$USBDEV/idVendor"):$(cat "/sys/bus/usb/devices/$USBDEV/idProduct")" = "$VIDPID" ] \
+    || die "the device behind $SERIAL ($USBDEV) is not $VIDPID"
+fi
 # Fresh ids: refuse any id already on the token (PKCS#11 does not make CKA_ID unique), and remember
 # only the objects THIS run created, so cleanup can never delete a key that was there before.
 # An id counts as free only against a listing that SUCCEEDED (an absent token lists nothing).

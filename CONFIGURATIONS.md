@@ -72,7 +72,7 @@ promises more than either token delivers:
 
 | Need | 1: Pico alone | 2: Pico + YubiKey | 3: Nitrokey + YubiKey |
 |---|---|---|---|
-| ECDSA P-256 / P-384: sign, CA, key agreement | HSM | HSM; PIV for sign and CA | HSM; PIV for sign and CA |
+| ECDSA P-256 / P-384: sign, CA, key agreement | HSM | HSM; PIV for sign and CA, in a `-tags piv` build only | HSM; PIV for sign and CA, in a `-tags piv` build only |
 | RSA 2048 to 4096: sign, wrap, unwrap, CA | HSM | HSM | HSM |
 | secp256k1 sign (Cosmos) | HSM | HSM | HSM |
 | Opaque secrets under an RSA KEK | HSM | HSM | HSM |
@@ -121,7 +121,9 @@ rule and works in every configuration once a `signtool` adapter exists.
    SmartCard-HSM secure messaging on this token, and a recorded change to the legacy-only rule. The
    OpenSC driver choice is a `card_atr` block in `opensc.conf` naming `driver = "openpgp"` for the
    YubiKey's ATR; it leaves the Nitrokey on its own driver in the same module.
-4. **The Pico is not a recognised token.** `config/qualified-stack.json`, `tools/qualified_stack.py`
-   and `deploy/seal-hsm-pin.sh` treat it as staging hardware. The attached Pico also reports the
-   token serial `ESPICOHSMTR`, not a per-device one, and the driver selects a token by serial.
+4. **The Pico is not qualified, and two Picos cannot be told apart.** `config/qualified-stack.json`
+   and `tools/qualified_stack.py` do not know it, and `deploy/seal-hsm-pin.sh` accepts its serial but
+   labels it staging. Nothing refuses a Pico in a manifest. The attached Pico reports the token
+   serial `ESPICOHSMTR`, not a per-device one; if a second reports the same, the driver, which
+   requires a serial to name exactly one slot, cannot serve two of them on one host.
 5. **Apple and Microsoft have no client adapter.** Only SOPS and OpenPGP have one.

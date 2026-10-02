@@ -12,8 +12,12 @@ def measure(host):
     return {name: dict(zip(("value", "why"), os_probe.PROBES[name](host))) for name in os_probe.MEASURED}
 
 
+SANDBOX = ("kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced")
+
+
 def measure_sandbox(host):
-    return {name: dict(zip(("value", "why"), os_probe.SANDBOX_PROBES[name](host))) for name in os_probe.SANDBOX_MEASURED}
+    measured = measure(host)
+    return {name: measured[name] for name in SANDBOX}
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -181,7 +185,7 @@ class OSProbeTests(unittest.TestCase):
 
     def test_a_hardened_unit_passes_every_sandbox_control(self):
         results = measure_sandbox(FakeHost())
-        self.assertEqual({k: v["value"] for k, v in results.items()}, {k: True for k in os_probe.SANDBOX_MEASURED}, results)
+        self.assertEqual({k: v["value"] for k, v in results.items()}, {k: True for k in SANDBOX}, results)
         self.assertIn("allowed: none", results["kms_capabilities_minimal"]["why"])
         self.assertIn("'regalia-kms' in enforce mode", results["kms_apparmor_enforced"]["why"])
 
@@ -240,8 +244,8 @@ class OSProbeTests(unittest.TestCase):
                     self.assertFalse(results[control]["value"], results[control]["why"])
                     others = {k: v["value"] for k, v in results.items() if k != control}
                     self.assertTrue(all(others.values()), others)
-                    # And nothing here touches the controls the signed evidence already carries.
-                    self.assertTrue(all(v["value"] for v in measure(host).values()))
+                    # And nothing here touches the host-role controls measured beside them.
+                    self.assertTrue(all(v["value"] for k, v in measure(host).items() if k not in SANDBOX))
 
     def test_a_stopped_service_cannot_prove_its_capabilities_or_its_confinement(self):
         for pid in ("MainPID=0\n", "MainPID=\n", ""):

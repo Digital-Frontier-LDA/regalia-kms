@@ -71,6 +71,8 @@ YubiKey. What each can serve, and which are qualified, is in [`CONFIGURATIONS.md
 - ❌ Let clients choose a reader, slot, backend, or arbitrary mechanism.
 - ❌ Fall back to software cryptography or another token in production.
 - ❌ Authenticate human administrators through the cryptographic-operation API.
+- ❌ Manage public TLS certificates: no ACME client, DNS-provider API or certificate distribution
+  ([`CERTIFICATES.md`](CERTIFICATES.md)).
 - ❌ Promise transparent hot high-availability between two signing devices (see the trade below).
 - ❌ Turn rotation/revocation/destruction into unreviewed runtime verbs — those are manifest- and
   ceremony-controlled workflows ([regalia-ceremony](https://github.com/Digital-Frontier-LDA/regalia-ceremony)).
@@ -125,7 +127,11 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
+<<<<<<< HEAD
 | `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `TESTING`) |
+=======
+| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `OPENPGP-COMPATIBILITY`, `CERTIFICATES`, `TESTING`) |
+>>>>>>> origin/main
 
 ## Security
 

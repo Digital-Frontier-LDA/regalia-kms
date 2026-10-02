@@ -60,6 +60,12 @@
 # directory, for tests. REGALIA_TPM2_DEVICE names another TPM for systemd-creds (a private swtpm, e.g.
 # swtpm:path=/…/tpm.sock), also for tests: the record then says so, and it is not production.
 set -uo pipefail
+# Every check below that says [0-9], [a-z0-9] or [0-9a-fA-F] means those ASCII characters and no
+# others. In a UTF-8 locale bash matches a range by the locale's collation: [0-9] then takes
+# full-width and Arabic-Indic digits and [a-z0-9] takes accented letters, so --serial, --yubikey,
+# --pcrs (and with it the refusal of PCR 10 and 11), --id and --import-handle all accepted look-alikes
+# (measured, bash 5.2, glibc 2.41, en_US.UTF-8, which sudo passes through). In C a range is bytes.
+export LC_ALL=C
 PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=(); LOOKUP_WARN=""
 ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
@@ -105,8 +111,14 @@ if [ "$INIT_IMPORT" = 1 ]; then
     tpm2_evictcontrol -Q -C o -c "$IMPORT_HANDLE" >/dev/null || fail "cannot remove the old key at $IMPORT_HANDLE"
   fi
   flush_own
-  tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb -c "$work/primary.ctx" || fail "tpm2_createprimary failed"
-  tpm2_create -Q -C "$work/primary.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt' \
+  # noda, on the key and on its parent: neither is subject to the TPM's dictionary-attack counter.
+  # The key has no authorization value to guess (anyone on this host may ask it to decrypt; what it
+  # protects is that only THIS TPM can), so that protection guards nothing here, and it has a cost:
+  # the TPM adds a failed try at the next start whenever such a key was used and the power then went
+  # without a TPM2_Shutdown, and at the limit it refuses every key (measured on swtpm, #57).
+  tpm2_createprimary -Q -C o -g sha256 -G ecc256:aes128cfb \
+    -a 'restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth|noda' -c "$work/primary.ctx" || fail "tpm2_createprimary failed"
+  tpm2_create -Q -C "$work/primary.ctx" -G rsa3072 -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda' \
     -u "$work/k.pub" -r "$work/k.priv" || fail "tpm2_create failed"
   flush_own
   tpm2_load -Q -C "$work/primary.ctx" -u "$work/k.pub" -r "$work/k.priv" -c "$work/k.ctx" || fail "tpm2_load failed"

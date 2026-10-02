@@ -19,6 +19,11 @@ PLATFORM AND TPM, measured:
   tpm2_present              a TPM whose major version is 2, behind the kernel resource manager
                             (/dev/tpmrm0): seal-hsm-pin.sh refuses the raw /dev/tpm0
   tpm_sha256_bank           the TPM exposes an active SHA-256 PCR bank (/sys/class/tpm/tpm0/pcr-sha256)
+  tpm_lockout_policy        the TPM's dictionary-attack settings are the commissioned ones (32 failed
+                            tries, one forgiven every 600 s, lockout-hierarchy recovery 86400 s), its
+                            lockout hierarchy has an authorization value, and it is not in lockout. A
+                            power cut after the PIN was unsealed counts as a failed try (#57), so these
+                            settings decide how many cuts in a row a host survives unattended
   root_disk_tpm_unlocked    a dm-crypt device is among the root filesystem's block-device ancestors
                             (lsblk -s: LUKS directly or under LVM), and its crypttab entry unlocks with
                             the TPM (a tpm2-device=<value> option, parsed exactly)
@@ -31,7 +36,7 @@ PLATFORM AND TPM, measured:
                             recorded at --init-import-key: the sha256 of its DER public key starts with
                             --import-key-sha256 (or the evidence's host.pin_import_key_sha256), and it
                             is RSA-3072 with EXACTLY the attributes --init-import-key sets:
-                            fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt
+                            fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt|noda
   pin_credentials_sealed_as_recorded
                             every /etc/credstore.encrypted/regalia-kms-*.pin is sealed to the TPM alone
                             (not the host key, not a null key), and its header carries exactly the
@@ -59,7 +64,7 @@ ATTESTED, NOT MEASURED (what the OS cannot read; in the signed evidence, deploy/
   pin_import_key_sha256, hsm_usb_path, credential_tpm2_pcrs (never PCR 10, never PCR 11 directly),
   credential_tpm2_signed_pcrs and credential_tpm2_pcr_key_pkfp (the signed PCR 11 policy, #57).
 
-The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's SANDBOX_MEASURED.
+The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's too.
 
 NOT MEASURED YET: a signed PCR 11 policy on the ROOT DISK. root_disk_tpm_unlocked still requires a
 LUKS2 token bound to PCR 7 exactly; the signed policy covers the PIN credentials only.
@@ -86,7 +91,11 @@ IMA_LOG = "/sys/kernel/security/ima/ascii_runtime_measurements"
 KMS_BINARY = os_probe.ALLOWED_TOKEN_CLIENT_EXES[0]
 NITROKEY_HSM = ("20a0", "4230")
 SYSTEM_BIN_DIRS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin", "/opt/bin")
-IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "decrypt"}
+IMPORT_KEY_ATTRS = {"fixedtpm", "fixedparent", "sensitivedataorigin", "userwithauth", "decrypt", "noda"}
+# The TPM's dictionary-attack settings, as deploy/baremetal/tpm-lockout.sh sets them (#57): 32 failed
+# tries before lockout, one try forgiven every 600 s, and 86400 s before the lockout hierarchy can be
+# used again after ITS authorization was got wrong.
+LOCKOUT_POLICY = {"TPM2_PT_MAX_AUTH_FAIL": 32, "TPM2_PT_LOCKOUT_INTERVAL": 600, "TPM2_PT_LOCKOUT_RECOVERY": 86400}
 CREDSTORE = "/etc/credstore.encrypted"
 PIN_CREDENTIAL = re.compile(r"regalia-kms-[a-z0-9]+(-[a-z0-9]+)*\.pin")   # what seal-hsm-pin.sh installs
 # The 16-byte key-type id that opens a systemd encrypted credential (measured, systemd 257, one blob of
@@ -98,11 +107,11 @@ CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key (bench only)",
                 "058469daf6f54324800549da0f8ea2fb": "a null key (no protection at all)"}
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
-PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank",
+PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
             "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
             "token_clients_root_only", "firewall_default_deny")
-MEASURED = PLATFORM + os_probe.MEASURED + os_probe.SANDBOX_MEASURED
+MEASURED = PLATFORM + os_probe.MEASURED
 UNMEASURED = evidence_mod.ATTESTED + evidence_mod.RECORDS
 
 
@@ -253,6 +262,39 @@ def ima(host):
             "replaced after it last ran; restart regalia-kms, then re-run" % (KMS_BINARY, alg, logged[:12], now[:12])
     return True, "executables measured (%s); the running %s is in the IMA log (%s:%s…)" % (
         exec_rules[0], KMS_BINARY, alg, now[:12])
+
+
+def lockout_policy(host):
+    if not host.which("tpm2_getcap"):
+        return False, "tpm2_getcap is not installed"
+    rc, out = host.run(["tpm2_getcap", "properties-variable"])
+    if rc != 0:
+        return False, "cannot read the TPM's variable properties (tpm2_getcap properties-variable)"
+    found = {}
+    for line in out.splitlines():
+        key, sep, value = line.strip().partition(":")
+        if sep and value.strip():
+            try:
+                found[key] = int(value.strip(), 0)
+            except ValueError:
+                pass
+    names = ("lockoutAuthSet", "inLockout", "TPM2_PT_LOCKOUT_COUNTER") + tuple(LOCKOUT_POLICY)
+    missing = [n for n in names if n not in found]
+    if missing:
+        return False, "tpm2_getcap did not report %s" % ", ".join(missing)
+    drift = ["%s is %d, not %d" % (n, found[n], want) for n, want in LOCKOUT_POLICY.items() if found[n] != want]
+    if drift:
+        return False, "the TPM's dictionary-attack settings are not the commissioned ones: %s (deploy/baremetal/tpm-lockout.sh --set)" % "; ".join(drift)
+    if found["lockoutAuthSet"] != 1:
+        return False, "the TPM's lockout hierarchy has no authorization value: anyone on this host can change the " \
+            "dictionary-attack settings or clear the counter (deploy/baremetal/tpm-lockout.sh --set)"
+    if found["inLockout"] != 0:
+        return False, "the TPM is in dictionary-attack lockout (%d failed tries of %d): it releases no PIN until a try " \
+            "heals or the counter is cleared" % (found["TPM2_PT_LOCKOUT_COUNTER"], found["TPM2_PT_MAX_AUTH_FAIL"])
+    return True, "lockout after %d failed tries, one forgiven every %d s, lockout-hierarchy recovery %d s; lockout " \
+        "authorization set; %d failed tries counted now" % (
+            found["TPM2_PT_MAX_AUTH_FAIL"], found["TPM2_PT_LOCKOUT_INTERVAL"], found["TPM2_PT_LOCKOUT_RECOVERY"],
+            found["TPM2_PT_LOCKOUT_COUNTER"])
 
 
 def import_key(host, expected=None):
@@ -463,8 +505,8 @@ def firewall(host):
     return True, "inet regalia_kms loaded; input, output and forward default to drop"
 
 
-PROBES = dict(os_probe.PROBES, **os_probe.SANDBOX_PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
-              tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, root_disk_tpm_unlocked=root_unlock, ima_policy_loaded=ima,
+PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
+              tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
