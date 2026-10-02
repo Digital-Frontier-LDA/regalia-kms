@@ -75,3 +75,38 @@ func TestTokenLabelIsAcceptedOnlyWhereTheDriverCanMatchIt(t *testing.T) {
 		t.Fatalf("token_label on a PIV binding was not refused by name: %v", err)
 	}
 }
+
+// A SLOT IS (SITE, DEVICE, OBJECT ID) AND, ON A CARD THAT IS TWO TOKENS, THE TOKEN.
+//
+// The same object id under two labels of one device is two keys, so two objects may hold them. A
+// binding with no label may resolve to either token, so it shares a slot with every label.
+func TestTheTokenLabelIsPartOfTheHardwareSlot(t *testing.T) {
+	binding := func(label string) string {
+		labelField := ""
+		if label != "" {
+			labelField = `"token_label":"` + label + `",`
+		}
+		return `{"site":"sitea","backend":"nitrokey-pkcs11","device_id":"dev-1","object_id":"slot-1",` + labelField +
+			`"public_fingerprint":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","kek_algorithm":"rsa2048","kek_version":"1","state":"planned"}`
+	}
+	load := func(first, second string) error {
+		objects := r4object("alpha", "release-purpose", "release-secret", binding(first)) + "," +
+			r4object("beta", "release-purpose", "release-secret", binding(second))
+		_, err := Load(strings.NewReader(manifest(objects)), "sitea", &healthMap{states: map[string]bool{"dev-1": true}})
+		return err
+	}
+	if err := load("OpenPGP card (User PIN)", "OpenPGP card (User PIN (sig))"); err != nil {
+		t.Fatalf("one object id under two token labels was refused as a shared slot: %v", err)
+	}
+	for name, labels := range map[string][2]string{
+		"the same label twice":          {"OpenPGP card (User PIN)", "OpenPGP card (User PIN)"},
+		"no label on either":            {"", ""},
+		"a labelled then an unlabelled": {"OpenPGP card (User PIN)", ""},
+		"an unlabelled then a labelled": {"", "OpenPGP card (User PIN)"},
+	} {
+		err := load(labels[0], labels[1])
+		if err == nil || !strings.Contains(err.Error(), "also assigned to") {
+			t.Fatalf("%s: two objects in one slot loaded (err = %v)", name, err)
+		}
+	}
+}

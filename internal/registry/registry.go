@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -687,11 +688,19 @@ func validateObject(object *custodyObject, site string, occupied map[string]stri
 		if err := validateBinding(binding, object.Algorithm, object.Operations); err != nil {
 			return err
 		}
-		slot := binding.Site + "\x00" + binding.DeviceID + "\x00" + binding.ObjectID
-		if other, exists := occupied[slot]; exists && other != object.ID {
-			return fmt.Errorf("hardware slot is also assigned to %q", other)
+		// A slot is a site, a device, an object id and, on a card that is two tokens, the token's
+		// label: the same object id under two labels is two keys. A binding with no label may
+		// resolve to either token, so it shares a slot with every label of that device and object.
+		slot := binding.Site + "\x00" + binding.DeviceID + "\x00" + binding.ObjectID + "\x00"
+		for taken, other := range occupied {
+			if other == object.ID || !strings.HasPrefix(taken, slot) {
+				continue
+			}
+			if label := taken[len(slot):]; label == string(binding.TokenLabel) || label == "" || binding.TokenLabel == "" {
+				return fmt.Errorf("hardware slot is also assigned to %q", other)
+			}
 		}
-		occupied[slot] = object.ID
+		occupied[slot+string(binding.TokenLabel)] = object.ID
 	}
 	// AN OBJECT THAT DECLARES seal-envelope MUST HAVE SOMETHING THAT CAN SEAL.
 	//
