@@ -71,7 +71,8 @@ TPM_CLOCK_RATE = 0.85
 MAX_BYTES = 16 * 1024
 
 
-def _time(text, label):
+def parse_time(text, label):
+    """A UTC timestamp as unix seconds; Refused unless it is exactly YYYY-MM-DDTHH:MM:SSZ and a real date."""
     require(isinstance(text, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", text) is not None,
             "%s must be UTC, YYYY-MM-DDTHH:MM:SSZ" % label)
     try:
@@ -88,7 +89,7 @@ def validate(heartbeat):
         v = heartbeat[k]
         require(isinstance(v, int) and not isinstance(v, bool) and 1 <= v < 2 ** 63, "%s must be an integer >= 1" % k)
     membership.hex_field(heartbeat["manifest_digest"], 64, "manifest_digest")
-    issued, expires = _time(heartbeat["issued_at"], "issued_at"), _time(heartbeat["expires_at"], "expires_at")
+    issued, expires = parse_time(heartbeat["issued_at"], "issued_at"), parse_time(heartbeat["expires_at"], "expires_at")
     require(issued < expires, "expires_at must be after issued_at")
     require(expires - issued <= MAX_LIFETIME, "a heartbeat lives at most 24 hours (this one: %d s)" % (expires - issued))
     return issued, expires
@@ -143,6 +144,34 @@ class TpmClock:
         return int(found.group(1))
 
 
+def validate_floor(floor):
+    """A stored time floor: None, or the last authenticated reading with the TPM clock at that moment."""
+    if floor is not None:
+        membership.exact(floor, ("time", "tpm_clock"), "floor")
+        require(all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in floor.values()), "floor must be integers")
+
+
+def authenticated_now(clock, tpm_clock, floor):
+    """Authenticated time in seconds, not earlier than `floor`, and the floor to store for the next call.
+    `clock()` returns (unix seconds, authenticated); only True authenticates, anything else is a refusal.
+    The floor is the last reading plus the TPM time elapsed since (at TPM_CLOCK_RATE): a lower bound, so
+    it can refuse a clock that went backwards and can never show that something is still unexpired.
+    Used by Freshness here and by the runtime-lease holder (lease.py): one rule for time."""
+    seconds, authenticated = clock()
+    require(authenticated is True, "time is not authenticated: an expiry cannot be judged (fail closed)")
+    require(isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds >= 0, "the clock returned no time")
+    seconds, ticks = int(seconds), tpm_clock()
+    if floor is not None:
+        elapsed = max(0, ticks - floor["tpm_clock"]) * TPM_CLOCK_RATE / 1000
+        lowest = floor["time"] + elapsed
+        require(seconds + STEP_BACK >= lowest, "the clock went backwards: it reads %d, and it was at least %d "
+                "at an earlier check" % (seconds, lowest))
+    # never lower the floor: a small allowed step back must not become the new baseline
+    if floor is None or seconds >= floor["time"]:
+        floor = {"time": seconds, "tpm_clock": ticks}
+    return seconds, floor
+
+
 class Freshness:
     """One peer's freshness state: the heartbeat it holds and its time floor, in `state_path`; the highest
     accepted sequence in `counter`. `clock()` returns (unix seconds, authenticated); `tpm_clock()` returns
@@ -162,9 +191,7 @@ class Freshness:
         require(len(raw) <= MAX_BYTES, "the freshness state is oversized")
         state = membership.load(raw)
         membership.exact(state, ("envelope", "floor"), "freshness state")
-        if state["floor"] is not None:
-            membership.exact(state["floor"], ("time", "tpm_clock"), "floor")
-            require(all(isinstance(v, int) and not isinstance(v, bool) and v >= 0 for v in state["floor"].values()), "floor must be integers")
+        validate_floor(state["floor"])
         return state
 
     def _write(self, state):
@@ -185,19 +212,7 @@ class Freshness:
 
     def _now(self, state):
         """Authenticated time, not earlier than the floor; the floor is then moved up to it."""
-        seconds, authenticated = self.clock()
-        require(authenticated is True, "time is not authenticated: a heartbeat's expiry cannot be judged (fail closed)")
-        require(isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds >= 0, "the clock returned no time")
-        seconds, ticks = int(seconds), self.tpm_clock()
-        floor = state["floor"]
-        if floor is not None:
-            elapsed = max(0, ticks - floor["tpm_clock"]) * TPM_CLOCK_RATE / 1000
-            lowest = floor["time"] + elapsed
-            require(seconds + STEP_BACK >= lowest, "the clock went backwards: it reads %d, and it was at least %d "
-                    "at an earlier check" % (seconds, lowest))
-        # never lower the floor: a small allowed step back must not become the new baseline
-        if floor is None or seconds >= floor["time"]:
-            state["floor"] = {"time": seconds, "tpm_clock": ticks}
+        seconds, state["floor"] = authenticated_now(self.clock, self.tpm_clock, state["floor"])
         return seconds
 
     @staticmethod
