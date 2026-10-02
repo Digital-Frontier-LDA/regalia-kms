@@ -127,11 +127,7 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
-<<<<<<< HEAD
-| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `TESTING`) |
-=======
-| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `OPENPGP-COMPATIBILITY`, `CERTIFICATES`, `TESTING`) |
->>>>>>> origin/main
+| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `CERTIFICATES`, `TESTING`) |
 
 ## Security
 
