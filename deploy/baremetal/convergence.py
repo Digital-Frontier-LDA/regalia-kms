@@ -25,10 +25,12 @@ THE BOUNDS, for a node revoked as stolen:
   * a peer that holds the revoking manifest refuses it at once (unlock, lease issue, lease verify, and
     whatever it signs as an issuer);
   * peers that reach each other converge within one exchange between them (one per 1000 epochs behind);
-  * a peer cut off from everyone goes on helping until its heartbeat expires: at most 24 hours and 5
-    minutes after it accepted its last heartbeat (a heartbeat lives 24 hours from its issue time, and one
-    issued up to 5 minutes ahead of the peer's clock is accepted: heartbeat.FUTURE_SKEW), or less if the
-    authority issues shorter-lived heartbeats. exposure() is that number for a peer, now;
+  * a peer cut off from everyone goes on helping until its heartbeat expires: at most the manifest's
+    heartbeat bound and 5 minutes after it accepted its last heartbeat (heartbeat.max_lifetime: 24 hours
+    under a v1 manifest, what a v2 manifest states, never above 7 days; a heartbeat lives that long from
+    its issue time, and one issued up to 5 minutes ahead of the peer's clock is accepted:
+    heartbeat.FUTURE_SKEW), or less if the authority issues shorter-lived heartbeats. exposure() is that
+    number for a peer, now;
   * a stolen node that was running stops 300 s after its issuing peers hold the manifest (lease.py).
 
 Nothing here weakens a check: every envelope goes through Store.commit (signature, chain, tombstones, the

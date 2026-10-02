@@ -41,6 +41,25 @@ Commissioning has two halves:
 - **Full-disk encryption** (LUKS2), enrolled to the TPM:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
   `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
+  - **A disk enrolled this way FAILS `root_disk_unlock_revocable`, and `host_probe.py` exits 1. That is
+    intended (#135): it is the known blocker for production.** PCR 7 does not change with the kernel, so
+    an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
+    passes only when the unlock can retire an image: a peer's contribution (#67, being built), or an
+    NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
+    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
+    A host that is otherwise commissioned shows this as its only failing control. Signed evidence
+    (section 5) records every measured control as true, so no evidence can be signed for such a host:
+    with `--evidence` the run says the evidence is refused; run it without, to see the one control.
+  - The probe judges every dm-crypt volume under `/`, under the host key and under the credstore, and
+    every token that names a keyslot on them: a second volume, a `clevis` token or a stale token fails
+    it, and so does a keyslot that no token names (a passphrase, or a key file) on any of them. For an
+    NV-backed token it also requires `/var/lib/systemd/pcrlock.json` to bind PCR 7 and a PCR that tells
+    boot images apart, with measured values: `systemd-pcrlock` leaves out a PCR it cannot predict, and a
+    PCR nothing was measured into is all zeros for every image. PCR 11 qualifies on a UKI boot
+    (systemd-stub measures the image into it); PCR 4 qualifies when the kernel is started as an EFI
+    image, as a UKI is, and not when GRUB loads the kernel itself. It
+    does not measure that the NV index holds that policy, nor that a retired image is refused on the
+    host; that is the #65 checklist, section D.
 - **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this
   host's disk by itself after a total outage (#77; PIN-CUSTODY.md, "The disk recovery key"). It is a
   ceremony secret, one per host, written on the KMS host recovery card and carried in every escrow;
@@ -309,22 +328,35 @@ releases the disk key to every image its policy ever accepted (#135). The three-
 it: the disk needs the host's TPM **and** one peer, and a peer helps only a node its current manifest
 lets be unlocked, on an image the manifest's measurements still list.
 
-`deploy/baremetal/unlock.py` holds the decisions and the formats, proven on software TPMs and a real
-dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
+Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 
 - **The credential** of each peer path is derived from two halves: one sealed in this host's TPM, one
   kept on the peer's encrypted disk. Each peer has a LUKS2 keyslot and a `regalia-peer-unlock` token of
   its own, so either peer restores the host and each path is rotated alone.
-- **The exchange:** the host sends a fresh TPM quote for this boot; the peer decides with
-  `replacement.may_unlock`, and answers with its half encrypted to this boot's one-time key and signed
-  by its own TPM. A captured exchange is useless in another boot.
-- **Enrolment** is an operator step between two running hosts; the recovery key (section 3) authorizes
-  adding the keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer
-  unlock the disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
+- **The peer** (`deploy/baremetal/unlock.py`, on a booted host): the host sends a fresh TPM quote for
+  this boot; the peer decides with `replacement.may_unlock`, and answers with its half encrypted to
+  this boot's one-time key and signed by its own TPM. A captured exchange is useless in another boot.
+- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary; `unlock.py` also holds a
+  reference client that the tests use and that is not shipped). It holds no manifest and makes no
+  membership decision. It runs no other program and writes no file:
+  - systemd unseals the local half with the TPM and passes it as the unit's credential
+    `regalia-unlock-local` (`LoadCredentialEncrypted=`);
+  - the client reads the LUKS2 header for the peer paths, asks the peers of its boot configuration in
+    turn (`unlock.boot_config`: node ID, disk, PCRs to quote, and each peer's address and TPM key
+    names), for a bounded number of rounds;
+  - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
+    file. If no peer helps, it gives nothing and the console asks for the recovery key (section 3).
+- **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
+  keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
+  disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
 - **`unlock.judge_tokens`** judges the LUKS2 header for the probe: one path per expected peer, each with
   a keyslot of its own, and no `systemd-tpm2` token left.
 
-Not there yet, so **nothing here is to be run on a KMS host**: the transport (WireGuard before root,
-#66), the pre-root client (a small native program; the Python client in `unlock.py` is the reference
-the tests use and is not shipped in an initramfs), the operator commands, and every run on a physical
-TPM or a DL360 (#65).
+**A dependency this adds.** A peer helps only while it holds a live heartbeat from the revocation
+authority (#69). If the authority is unreachable for longer than a heartbeat lives, a host that
+reboots stays locked until someone types its recovery key. Where the authority runs and who is alerted
+when heartbeats stop are decided before commissioning.
+
+Not there yet, so **nothing here is to be run on a KMS host**: WireGuard before root under the TCP
+transport (#66), the systemd units and the initramfs that start the client, the operator commands, and
+every run on a physical TPM or a DL360 (#65).

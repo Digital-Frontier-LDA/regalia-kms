@@ -442,7 +442,8 @@ jobs:
   # regalia-kms#67 (and the software half of #135): a KMS host's disk opens with its TPM and one peer,
   # never the TPM alone. Three software TPMs and a real dm-crypt volume on a loop device: either peer
   # restores the node, no peer leaves it locked, and a retired boot image, another machine and a
-  # revoked node get nothing. The script fails if any of its tests is skipped.
+  # revoked node get nothing. Each step is made with the native pre-root client (cmd/regalia-unlock)
+  # against the Python peer over TCP. The script fails if any of its tests is skipped.
   peer-unlock-swtpm:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -450,12 +451,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: Install the software TPM, tpm2-tools and cryptsetup
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools cryptsetup-bin
-      - name: TPM plus one peer opens the volume (swtpm, loop device, LUKS2)
-        run: sudo bash e2e/peer-unlock-swtpm.sh
+      - name: Build the pre-root client (static, no cgo)
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: TPM plus one peer opens the volume (swtpm, loop device, LUKS2; the native client and the reference one)
+        run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/peer-unlock-swtpm.sh
 
   # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
   # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
