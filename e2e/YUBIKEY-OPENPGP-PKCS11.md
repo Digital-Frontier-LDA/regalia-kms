@@ -46,5 +46,6 @@ stayed at 3 throughout.
 
 Not a qualification under ADR-0001 §4. Recorded: positive operations, negative controls. Not
 recorded: removal of the card during an operation, recovery onto a replacement card, a blocked PIN,
-concurrency with the PIV backend on the same card, and the daemon binary under its systemd unit.
+a key that requires touch (it must fail), concurrency with the PIV backend on the same card, the
+key's Yubico attestation, and the daemon binary under its systemd unit.
 The `yubikey-openpgp` stack is therefore not in `config/qualified-stack.json`.

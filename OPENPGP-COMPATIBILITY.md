@@ -44,6 +44,13 @@ not a qualification: removal and recovery are not recorded.
 User Interaction Flags, and refuses a binding the card contradicts. PKCS#11 exposes neither. A key
 that requires touch does not sign unattended here; it fails, and the operation is refused.
 
+**Open.**
+- Key provenance is not proven to the daemon. The applet has no device certificate, and Yubico's
+  OpenPGP attestation of an on-card key is not verified at commissioning yet. The pinned public key
+  says this is still that key; it does not say the key was generated on the card.
+- One card serves one backend. The PIV and OpenPGP applets of the same YubiKey, driven by two
+  middleware stacks at once, have not been measured together.
+
 ## Decision
 
 ADR-0001 §4 allocates the YubiKey OpenPGP applet to **unavoidable legacy card integration** and to
