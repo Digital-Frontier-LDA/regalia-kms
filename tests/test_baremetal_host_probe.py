@@ -54,6 +54,8 @@ def cred(name):
 
 PKFP = "dcef0dc2e16a41f9d72045af7b7e04e813c83fd8da97fd295b3bf5b8c75ad3b0"   # openssl rsa -RSAPublicKey_out | sha256
 PIN_FILE = host_probe.CREDSTORE + "/regalia-kms-hsm-site-a.pin"
+# How the probe asks systemd to open a blob: by the name the unit loads it under, the secret to /dev/null.
+OPEN_PIN = ("systemd-creds", "decrypt", "--name=hsm-site-a.pin", PIN_FILE, "/dev/null")
 PCR7 = ([7], [], "")
 SIGNED = ([7], [11], PKFP)
 
@@ -62,6 +64,13 @@ def retyped(text, kind):
     """The same credential with another key-type id: what a blob of that type starts with."""
     raw = base64.b64decode(text)
     return base64.b64encode(bytes.fromhex(kind) + raw[16:]).decode()
+
+
+def rebanked(text, bank):
+    raw = bytearray(base64.b64decode(text))
+    assert raw[56:58] == b"\x0b\x00", "the fixture is bound to the SHA-256 bank"
+    raw[56:58] = bank.to_bytes(2, "little")
+    return base64.b64encode(raw).decode()
 
 
 KMS_BYTES = b"stand-in regalia-kms executable"
@@ -96,6 +105,7 @@ class FakeHost:
             ("tpm2_readpublic", "-Q", "-c", host_probe.IMPORT_HANDLE, "-f", "pem", "-o", "/dev/stdout"): (0, PEM),
             ("ss", "-xpn"): (0, ""),
             ("nft", "-j", "list", "table", "inet", "regalia_kms"): (0, NFT_JSON),
+            OPEN_PIN: (0, ""),
         }
 
     def read(self, path): return self.files.get(path)
@@ -328,6 +338,11 @@ class HostProbe(unittest.TestCase):
             # cut inside the signed-policy header, and inside the TPM header
             "a blob cut in its signing key": (base64.b64encode(base64.b64decode(signed)[:360]).decode(), SIGNED, "truncated"),
             "a blob cut in its TPM header": (base64.b64encode(base64.b64decode(signed)[:56]).decode(), SIGNED, "truncated"),
+            # whole headers, but not enough left for the encrypted metadata and the tag
+            "a blob cut after its headers": (base64.b64encode(base64.b64decode(cred("tpm2-7.cred"))[:-40]).decode(), PCR7, "truncated"),
+            # the same PCR number in another bank is another PCR (bank u16 at offset 56: SHA-1 is 0x0004)
+            "PCR 7 of the SHA-1 bank": (rebanked(cred("tpm2-7.cred"), 0x0004), PCR7, "bound to PCR bank 0x0004, not SHA-256"),
+            "a signed blob in the SHA-1 bank": (rebanked(signed, 0x0004), SIGNED, "bound to PCR bank 0x0004, not SHA-256"),
             "a PIN in clear": ("7310048261\n", PCR7, "not base64"),
             "too short to be a credential": ("QUJD\n", PCR7, "too short"),
             "an unreadable file": (None, PCR7, "too short"),
@@ -346,8 +361,27 @@ class HostProbe(unittest.TestCase):
         self.assertTrue(value, why)
         self.assertIn("signed PCRs 11 by key pkfp " + PKFP, why)
 
+    def test_a_blob_sealed_as_recorded_must_also_open_on_this_boot(self):
+        """A blob cut by a few bytes keeps a whole header (measured: systemd says 'Encrypted file too
+        short'); so does one sealed by another TPM, or under a name the unit does not load it by."""
+        h = FakeHost()
+        h.files[PIN_FILE] = base64.b64encode(base64.b64decode(cred("tpm2-7.cred"))[:-20]).decode()
+        self.assertEqual(host_probe.credential_header(h.files[PIN_FILE]), PCR7)
+        h.runs[OPEN_PIN] = (1, "")
+        value, why = host_probe.pin_credentials(h, PCR7)
+        self.assertFalse(value)
+        self.assertIn("does NOT open on this boot", why)
+        h = FakeHost()
+        h.runs.pop(OPEN_PIN)          # no systemd-creds, or it failed to run
+        self.assertFalse(host_probe.pin_credentials(h, PCR7)[0])
+        value, why = host_probe.pin_credentials(FakeHost(), PCR7)
+        self.assertTrue(value, why)
+        self.assertIn("open on this boot", why)
+
     def test_every_pin_credential_is_checked_and_only_pin_credentials(self):
         h = FakeHost()
+        h.runs[("systemd-creds", "decrypt", "--name=yubikey-site-a.pin",
+                host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin", "/dev/null")] = (0, "")
         h.dirs[host_probe.CREDSTORE].append("regalia-kms-yubikey-site-a.pin")
         h.files[host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin"] = cred("host.cred")
         value, why = host_probe.pin_credentials(h, PCR7)

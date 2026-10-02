@@ -38,8 +38,10 @@ PLATFORM AND TPM, measured:
                             recorded binding: the PCRs bound directly, the PCRs bound through a signed
                             policy, and that policy's signing key (--credential-pcrs,
                             --credential-signed-pcrs, --credential-pcr-key-pkfp, or the evidence's
-                            host.credential_tpm2_*). The header is authenticated with the secret and
-                            names the PCRs systemd asks the TPM for, so it is the binding the blob has
+                            host.credential_tpm2_*), in the SHA-256 PCR bank. The header is authenticated
+                            with the secret and names the PCRs systemd asks the TPM for, so it is the
+                            binding the blob has. Each blob must also OPEN on this boot, under the name
+                            the unit loads it by (systemd-creds decrypt, the secret to /dev/null)
   hsm_token_attached        a Nitrokey HSM 2 (USB 20a0:4230) is on the bus (sysfs; no token client
                             needed); its USB path is reported so the evidence can pin the INTERNAL port
   firewall_default_deny     the table `inet regalia_kms` (deploy/baremetal/firewall.py) is loaded, with its
@@ -94,6 +96,7 @@ CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key (bench only)",
                 "93a894094874449090caf2fc93cab553": "the host key and the TPM",
                 "af4950a849134eb1a73846304ff30c05": "the host key and the TPM, with a signed policy",
                 "058469daf6f54324800549da0f8ea2fb": "a null key (no protection at all)"}
+TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank",
             "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present",
@@ -341,19 +344,30 @@ def credential_header(text):
     if kind not in (CRED_TPM2, CRED_TPM2_PK):
         raise ValueError("an unknown credential type (id %s)" % kind)
     try:
+        tag_size = struct.unpack_from("<I", raw, 28)[0]
         at = (32 + struct.unpack_from("<I", raw, 24)[0] + 7) & ~7
-        mask, _bank, _alg, blob, policy = struct.unpack_from("<QHHII", raw, at)
+        mask, bank, _alg, blob, policy = struct.unpack_from("<QHHII", raw, at)
         at = (at + 20 + blob + policy + 7) & ~7
-        if at > len(raw):
-            raise ValueError("truncated")
-        if kind == CRED_TPM2:
-            return pcr_list(mask), [], ""
-        signed_mask, size = struct.unpack_from("<QI", raw, at)
-        key = raw[at + 12:at + 12 + size]
-        if len(key) != size:
-            raise ValueError("truncated")
+        signed_mask, key = 0, b""
+        if kind == CRED_TPM2_PK:
+            signed_mask, size = struct.unpack_from("<QI", raw, at)
+            key = raw[at + 12:at + 12 + size]
+            if len(key) != size:
+                raise ValueError("truncated")
+            at = (at + 12 + size + 7) & ~7
     except struct.error:
         raise ValueError("truncated")
+    # After the headers: the encrypted metadata (timestamp, not-after, name size: 20 bytes), the
+    # secret, and the authentication tag. Less than that cannot be a whole credential; whether what
+    # is there authenticates is for systemd to say (pin_credentials opens each blob).
+    if len(raw) - at < 20 + tag_size:
+        raise ValueError("truncated")
+    # The PCRs named are PCRs of ONE bank. A blob bound to the SHA-1 bank's PCR 7 is not the recorded
+    # binding, whatever its mask says: tpm_sha256_bank measures the bank the record means.
+    if bank != TPM2_ALG_SHA256:
+        raise ValueError("bound to PCR bank 0x%04x, not SHA-256 (0x000b)" % bank)
+    if kind == CRED_TPM2:
+        return pcr_list(mask), [], ""
     try:
         return pcr_list(mask), pcr_list(signed_mask), rsa_pkfp(key)
     except ValueError as error:
@@ -384,7 +398,18 @@ def pin_credentials(host, expected=None):
     wrong = ["%s is sealed to %s" % (n, binding_text(*b)) for n, b in found.items() if tuple(b) != expected]
     if wrong:
         return False, "%s; the record says %s" % ("; ".join(wrong), binding_text(*expected))
-    return True, "%d PIN credential(s) sealed to the TPM alone under %s, as recorded (%s)" % (
+    # The header says what a blob is bound to, not that the blob is whole or that this boot can open it.
+    # systemd says that: it authenticates and decrypts each one, as the service start will, under the
+    # name the unit loads it by (<id>.pin; a blob named otherwise dies with 243/CREDENTIALS). The
+    # secret goes to /dev/null and never enters this process.
+    for name in names:
+        rc, _ = host.run(["systemd-creds", "decrypt", "--name=" + name[len("regalia-kms-"):],
+                          "%s/%s" % (CREDSTORE, name), "/dev/null"])
+        if rc != 0:
+            return False, "%s/%s is sealed as recorded but does NOT open on this boot (systemd-creds decrypt): it is cut or " \
+                "altered, sealed by another TPM or under another name, or this boot's PCRs or PCR signature do " \
+                "not satisfy its policy. regalia-kms cannot load it" % (CREDSTORE, name)
+    return True, "%d PIN credential(s) open on this boot, sealed to the TPM alone under %s, as recorded (%s)" % (
         len(names), binding_text(*expected), ", ".join(names))
 
 

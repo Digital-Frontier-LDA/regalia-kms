@@ -143,7 +143,8 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    evidence (`host.credential_tpm2_pcrs`, and the signed policy's two fields). Measured:
    `pin_credentials_sealed_as_recorded` reads the header of every
    `/etc/credstore.encrypted/regalia-kms-*.pin` and fails unless each is sealed to the TPM alone (not
-   the host key) with exactly the recorded PCRs and signing key. Without evidence, give the record on
+   the host key) with exactly the recorded PCRs (of the SHA-256 bank) and signing key, and opens on
+   this boot under the name the unit loads it by. Without evidence, give the record on
    the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
