@@ -14,8 +14,9 @@
 #      the LoadCredentialEncrypted= ID; the command PIN-CUSTODY.md used to document named nothing, so
 #      the name defaulted to the file name and the service died with 243/CREDENTIALS (measured,
 #      systemd 257, 2026-09-29);
-#   2. TPM2 only, bound to the PCR set you name. There is no default: the set is chosen at
-#      commissioning and recorded as host.credential_tpm2_pcrs in the commissioning evidence;
+#   2. the TPM2 and the host key together (never either alone), the TPM half bound to the PCR set you
+#      name. There is no default: the set is chosen at commissioning and recorded as
+#      host.credential_tpm2_pcrs in the commissioning evidence;
 #   3. the card must be attached, be the serial you name, and have its FULL user-PIN counter left:
 #      --retries, default 10, the production posture (a 10-digit PIN with a 10-try counter,
 #      regalia PLAN.md 1.3). A lower count means PINs were tried; find out why before sealing;
@@ -53,12 +54,25 @@
 #       the TPM with a throwaway value). And, after sealing, a PIN blob that this boot's signature
 #       cannot open or that opens WITHOUT one. The last matters: `systemd-creds --with-key=tpm2` ignores
 #       --tpm2-public-key silently and binds PCR 7 alone (measured, systemd 257, 2026-10-01); the key
-#       type that honours it is tpm2-with-public-key.
+#       types that honour it are tpm2-with-public-key and host+tpm2-with-public-key (used here).
+#
+# THE HOST KEY AS WELL (#75): every production credential is sealed to the TPM AND to systemd's host
+# key (/var/lib/systemd/credential.secret, on the encrypted root disk): key type host+tpm2, or
+# host+tpm2-with-public-key under a signed policy. Why: a signed PCR 11 policy has no counter and no
+# expiry, so every image the PCR-signing key EVER signed satisfies the TPM half for ever, including an
+# old one with a known hole. With the host key in the seal, such an image opens the PIN only if it can
+# also unlock the root disk, and that unlock is what gets revoked when an image is retired. A copy of
+# the credential file alone, on another disk in front of the same TPM, does not open (measured on
+# swtpm: e2e/pcr-signed-policy-swtpm.sh). After sealing, the blob is tried WITHOUT the host key and
+# must not open. A host key that systemd reports as not on encrypted media is a warning in the
+# record: that host is not production. Losing the root disk loses the host key: reseal from the PIN
+# card (PIN-CUSTODY.md).
 #
 # BENCH ONLY: --bench-host-key seals with systemd's host key instead of the TPM (a host without a
 # TPM cannot be production). The record then says BENCH. REGALIA_CREDSTORE overrides the credstore
 # directory, for tests. REGALIA_TPM2_DEVICE names another TPM for systemd-creds (a private swtpm, e.g.
 # swtpm:path=/…/tpm.sock), also for tests: the record then says so, and it is not production.
+# SYSTEMD_CREDENTIAL_SECRET (systemd's own variable) names another host key file, for tests likewise.
 set -uo pipefail
 # Every check below that says [0-9], [a-z0-9] or [0-9a-fA-F] means those ASCII characters and no
 # others. In a UTF-8 locale bash matches a range by the locale's collation: [0-9] then takes
@@ -66,7 +80,8 @@ set -uo pipefail
 # --pcrs (and with it the refusal of PCR 10 and 11), --id and --import-handle all accepted look-alikes
 # (measured, bash 5.2, glibc 2.41, en_US.UTF-8, which sudo passes through). In C a range is bytes.
 export LC_ALL=C
-PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=(); LOOKUP_WARN=""
+PUBKEY=""; PUBKEY_PCRS=""; SIGNATURE=""; PKFP=""; TPMDEV=(); DECARGS=(); LOOKUP_WARN=""; HOSTKEY_REC=""
+HOSTKEY="${SYSTEMD_CREDENTIAL_SECRET:-/var/lib/systemd/credential.secret}"
 ID=""; SERIAL=""; YUBIKEY=""; PCRS=""; REPLACE=0; BENCH=0; RETRIES=""
 MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
 CREDSTORE="${REGALIA_CREDSTORE:-/etc/credstore.encrypted}"
@@ -166,7 +181,9 @@ else
   # runs. PCR 11 (the kernel image) changes at every kernel update and would strand the PIN; it is
   # bound only through a signed PCR policy (--tpm2-public-key, below).
   case "+$PCRS+" in *+10+*|*+11+*) fail "--pcrs must not include 10 (IMA) or 11 (kernel image): bind 7 directly, and 11 only through --tpm2-public-key FILE --tpm2-public-key-pcrs 11 (deploy/baremetal/README.md, section 3)";; esac
-  KEYARGS=(--with-key=tpm2 "--tpm2-pcrs=$PCRS")
+  # host+tpm2, never tpm2 alone: the TPM half of a signed policy is satisfied by every image the key
+  # ever signed; the host key ties the PIN to an unlocked root disk as well (#75; the header above).
+  KEYARGS=(--with-key=host+tpm2 "--tpm2-pcrs=$PCRS")
   if [ -n "$PUBKEY$PUBKEY_PCRS$SIGNATURE" ]; then
     [ -n "$PUBKEY" ] || fail "--tpm2-public-key-pcrs and --tpm2-signature need --tpm2-public-key FILE (the PCR-signing public key)"
     # No default here either, and one value: 11 is the PCR systemd-measure predicts and signs.
@@ -185,8 +202,8 @@ else
       [ -n "$sig" ] || fail "no tpm2-pcr-signature.json in /etc/systemd, /run/systemd or /usr/lib/systemd: this boot is not a UKI with a signed PCR policy (or pass --tpm2-signature FILE). No card was touched; nothing was sealed"
       grep -q "$PKFP" "$sig" || fail "$sig holds no signature by $PUBKEY (pkfp $PKFP). No card was touched; nothing was sealed"
     fi
-    # NOT --with-key=tpm2: that key type ignores the public key without a word and binds --tpm2-pcrs alone.
-    KEYARGS=(--with-key=tpm2-with-public-key "--tpm2-pcrs=$PCRS" "--tpm2-public-key=$PUBKEY" "--tpm2-public-key-pcrs=$PUBKEY_PCRS")
+    # NOT --with-key=tpm2 or host+tpm2: both ignore the public key without a word and bind --tpm2-pcrs alone (measured).
+    KEYARGS=(--with-key=host+tpm2-with-public-key "--tpm2-pcrs=$PCRS" "--tpm2-public-key=$PUBKEY" "--tpm2-public-key-pcrs=$PUBKEY_PCRS")
   fi
 fi
 [ "$(id -u)" = 0 ] || fail "run as root (sudo): systemd-creds and the credstore need it"
@@ -204,6 +221,24 @@ if [ "$BENCH" = 0 ]; then
     TPMDEV=("--tpm2-device=$REGALIA_TPM2_DEVICE"); say "TEST: sealing to the TPM named in REGALIA_TPM2_DEVICE ($REGALIA_TPM2_DEVICE), NOT this host's. This credential is not production."
   else systemd-creds has-tpm2 >/dev/null 2>&1 || fail "no usable TPM2 on this host (systemd-creds has-tpm2)"; fi
 fi
+# ---- the host key: there, root's alone, and (for production) on encrypted media -------------------------
+# no_host_key <systemd-creds decrypt arguments…>: true when the blob does NOT open with the host key out
+# of reach (a path where there is none). A blob that still opens is sealed to the TPM alone.
+no_host_key(){ local d rc; d="$(mktemp -d)" || return 1
+  SYSTEMD_CREDENTIAL_SECRET="$d/absent" systemd-creds decrypt "$@" >/dev/null 2>&1; rc=$?
+  rm -rf "$d"; [ "$rc" != 0 ]; }
+if [ "$BENCH" = 0 ]; then
+  setup_out="$(systemd-creds setup 2>&1)" || fail "systemd-creds cannot set up the host key $HOSTKEY: $setup_out"
+  [ -f "$HOSTKEY" ] && [ ! -L "$HOSTKEY" ] || fail "the host key $HOSTKEY is not a regular file"
+  [ "$(stat -c '%u:%a' "$HOSTKEY")" = "0:400" ] || fail "the host key $HOSTKEY must be root's, mode 0400 (it is $(stat -c '%U %a' "$HOSTKEY"))"
+  # systemd judges the media itself, by the block devices under the file. Its verdict is quoted, not re-derived.
+  media="$(printf 'probe' | systemd-creds encrypt --with-key=host --name=media - - 2>&1 >/dev/null)"
+  if grep -q 'not located on encrypted media' <<< "$media"; then
+    HOSTKEY_REC="$(printf '\n  WARNING       : the host key is NOT on encrypted media (systemd). An image that boots without\n                  unlocking the root disk can then open this PIN. This host is not production')"
+    say "WARNING: $HOSTKEY is not on encrypted media; this credential is not production"
+  fi
+  [ -z "${SYSTEMD_CREDENTIAL_SECRET:-}" ] || say "TEST: sealing with the host key named in SYSTEMD_CREDENTIAL_SECRET ($HOSTKEY), NOT this host's. This credential is not production."
+fi
 # ---- a signed policy is tried on the TPM FIRST, with a value that is not the PIN ----------------------
 # The fingerprint checks above say who signed the file, not that it covers the PCR 11 of THIS boot
 # (the signature of another kernel by the same key passes them). Only the TPM can say: a throwaway
@@ -220,6 +255,8 @@ if [ -n "$PUBKEY" ]; then
   if systemd-creds decrypt "${TPMDEV[@]}" "--tpm2-signature=$probe/nosig.json" --name=probe "$probe/cred" - >/dev/null 2>&1; then
     fail "a value sealed with these options opens WITHOUT a PCR 11 signature: this systemd does not bind the signed policy. No card was touched; nothing was sealed"
   fi
+  no_host_key "${TPMDEV[@]}" "${DECARGS[@]}" --name=probe "$probe/cred" - \
+    || fail "a value sealed with these options opens WITHOUT the host key: this systemd does not bind it. No card was touched; nothing was sealed"
   rm -rf "$probe"; trap - EXIT
   say "signed policy: the TPM accepts this boot's PCR 11 signature by $PKFP, and refuses none"
 fi
@@ -293,6 +330,12 @@ if [ "$back" != "$(printf '%s' "$PIN" | sha256sum)" ]; then
   [ -z "$PUBKEY" ] || fail "the sealed blob does not open with the running boot's PCR 11 signature (${SIGNATURE:-tpm2-pcr-signature.json}): the service could not load it either. Is this boot the signed UKI? Nothing was installed"
   fail "the sealed blob does not decrypt back to the PIN; nothing was installed"
 fi
+if [ "$BENCH" = 0 ]; then
+  # The host-key half, by behaviour: with the host key out of reach the blob must NOT open. One that
+  # does is sealed to the TPM alone, and an old signed image could open it without the root disk.
+  no_host_key "${TPMDEV[@]}" "${DECARGS[@]}" --name="$NAME" "$tmp" - \
+    || fail "the sealed blob opens WITHOUT the host key: it is sealed to the TPM alone; nothing was installed"
+fi
 if [ -n "$PUBKEY" ]; then
   # The binding itself, by behaviour: handed a signature file with no signature in it, a blob under
   # the signed policy must NOT open. One that does is bound to --pcrs alone.
@@ -318,7 +361,7 @@ chmod 600 "$tmp" && mv -f "$tmp" "$DEST" || fail "cannot install $DEST; the prev
 PIN=""; PIN2=""
 SIGNED_REC=""
 [ -z "$PUBKEY" ] || SIGNED_REC="$(printf '\n  signed PCRs   : %s (any value signed by the key below)\n  signing key   : %s\n  pkfp          : %s   (sha256 of the PKCS#1 DER key; "pkfp" in a signature file)' "$PUBKEY_PCRS" "$PUBKEY" "$PKFP")"
-SIGNED_REC="$SIGNED_REC$LOOKUP_WARN"
+SIGNED_REC="$SIGNED_REC$LOOKUP_WARN$HOSTKEY_REC"
 
 cat <<REC
 SEALED
@@ -326,7 +369,7 @@ SEALED
   file          : $DEST
   sha256        : $(sha256sum "$DEST" | cut -d' ' -f1)
   device        : $KIND $SERIAL
-  key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "tpm2, PCRs $PCRS")$([ "${#TPMDEV[@]}" -gt 0 ] && echo " (TEST TPM $REGALIA_TPM2_DEVICE, not production)")$SIGNED_REC
+  key           : $([ "$BENCH" = 1 ] && echo "host (BENCH, not production)" || echo "host key + tpm2, PCRs $PCRS")$([ "${#TPMDEV[@]}" -gt 0 ] && echo " (TEST TPM $REGALIA_TPM2_DEVICE, not production)")$([ "$BENCH" = 0 ] && [ -n "${SYSTEMD_CREDENTIAL_SECRET:-}" ] && echo " (TEST host key $HOSTKEY, not production)")$SIGNED_REC
   sealed at    : $(date -u +%FT%TZ)
 Service drop-in line (/etc/systemd/system/regalia-kms.service.d/credentials.conf):
   LoadCredentialEncrypted=$NAME:$DEST
