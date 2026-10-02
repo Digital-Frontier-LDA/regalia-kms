@@ -55,6 +55,7 @@ jobs:
         with:
           name: appliance-unsigned
           path: lab/appliance/.artifacts/release/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
       - name: Prepare Debian review evidence without overriding scan results
@@ -71,8 +72,10 @@ jobs:
             lab/appliance/.artifacts/**/build-report.json
             lab/appliance/.artifacts/**/install.log
             lab/appliance/.artifacts/**/acceptance.log
+            lab/appliance/.artifacts/**/normal-boot.log
             lab/appliance/.artifacts/scan/*.json
             lab/appliance/.artifacts/triage/*
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
 

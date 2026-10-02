@@ -147,3 +147,12 @@ permission denied for an otherwise readable configuration outside the profile.
 All temporary configuration/commissioning markers are removed before export;
 service startup must again be blocked and no TCP listener may remain. This checks
 startup and OS confinement; it does not qualify token operations or a physical HSM.
+
+### Continuous recipe validation
+
+The `appliance-build` CI job runs the authenticated installation, acceptance and
+normal UEFI boot when appliance/image recipes or their workflows change. It
+retains only public build/boot diagnostics, including failed private staging
+directories. This job checks boot behavior and does not issue release approval,
+signatures or image publication. The separate manual appliance workflow retains
+the complete final filesystem scan and signing gate.

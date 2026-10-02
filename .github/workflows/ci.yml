@@ -10,6 +10,58 @@ permissions:
   contents: read
 
 jobs:
+  appliance-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select appliance recipe changes
+        id: recipe
+        env:
+          BASE_COMMIT: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+          base = os.environ['BASE_COMMIT']
+          if base:
+              assert re.fullmatch('[a-f0-9]{40}', base)
+              files = subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines()
+              changed = any(path.startswith(('lab/appliance/', 'deploy/images/')) or path in
+                            ('.github/workflows/appliance.yml', '.github/workflows/ci.yml') for path in files)
+          else:
+              changed = True
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('changed=' + str(changed).lower() + '\n')
+          PY
+      - name: Install the image build infrastructure
+        if: steps.recipe.outputs.changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso cpio gnupg
+          mkdir -p deploy/images/.artifacts
+      - name: Authenticate the pinned Debian installer
+        if: steps.recipe.outputs.changed == 'true'
+        run: python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+      - name: Install and exercise the actual daemon inside the appliance
+        if: steps.recipe.outputs.changed == 'true'
+        run: python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000
+      - name: Retain public build and boot diagnostics
+        if: always() && steps.recipe.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: appliance-boot-evidence
+          path: |
+            lab/appliance/.artifacts/**/build-report.json
+            lab/appliance/.artifacts/**/install.log
+            lab/appliance/.artifacts/**/acceptance.log
+            lab/appliance/.artifacts/**/normal-boot.log
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
   image-verification:
     runs-on: ubuntu-latest
     timeout-minutes: 5
