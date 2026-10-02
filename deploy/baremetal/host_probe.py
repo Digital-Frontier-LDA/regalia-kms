@@ -55,7 +55,9 @@ PLATFORM AND TPM, measured:
                             unlock alone, and the kernel command line has no rd.luks.* setting. NOT
                             measured: the root volume is opened in the initrd, by the crypttab the
                             initrd was BUILT with; /etc/crypttab is what that was copied from, not
-                            necessarily what it holds (an edit with no initrd rebuild is invisible here).
+                            necessarily what it holds (an edit with no initrd rebuild is invisible here),
+                            and dracut in host-only mode can put rd.luks.* settings in the initrd's own
+                            /etc/cmdline.d, which /proc/cmdline does not show.
                             On the root volume only: the unlock client opens no other. A second volume
                             that holds a secret needs an NV-backed token of its own. root_disk_tpm_unlocked
                             accepts the same shape, with no tpm2-device in crypttab. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY
