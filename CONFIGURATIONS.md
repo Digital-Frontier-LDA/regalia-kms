@@ -10,6 +10,9 @@ Regalia KMS supports three token configurations:
 | 2 | **Pico HSM + YubiKey** | Pico HSM | PIV and OpenPGP applets |
 | 3 | **Nitrokey HSM 2 + YubiKey** | Nitrokey HSM 2 | PIV and OpenPGP applets |
 
+**Configuration 3 comes first** (owner, 2026-10-02): it is the one Digital Frontier runs, and work
+that serves it is done before work that serves only the Pico.
+
 A configuration names the token *types* a deployment uses, not a device count. The registry still
 requires two hardware bindings for a production object (or custody `exception`), so "Pico HSM alone"
 means at least two Picos, not one.
@@ -23,6 +26,21 @@ Whether an operator puts production keys on a Pico is that operator's trust deci
 microcontroller with no secure element and no security certification. This document does not change
 the rule Digital Frontier applies to its own fleet (requirement D1: its production keys live on
 Nitrokeys).
+
+### How an interface or an algorithm is chosen
+
+Owner, 2026-10-02: the most standard interface and the most secure method, where open-source code
+that has been independently validated counts as more secure than code written here. In practice:
+
+- **Tokens are reached through standard interfaces and reviewed open-source middleware**: PKCS#11
+  through OpenSC for the HSM, and PIV (NIST SP 800-73) for the YubiKey. OpenPGP *signatures* do not
+  need the YubiKey's OpenPGP *applet*: `regalia-sign` frames them around a key on the HSM. If the
+  applet is served at all, the principle points at OpenSC's OpenPGP card driver over PKCS#11 rather
+  than the hand-written driver in `internal/backend/openpgp`. **Open, for the owner.**
+- **Signing keys use the algorithms every verifier and every token here already implements**: ECDSA
+  P-384 or RSA 3072 and larger. None of the three platforms below needs Ed25519, so Ed25519 is not
+  pursued: no new driver is written to reach it.
+- **Signature formats come from maintained open-source libraries**, not from encoders written here.
 
 ### Relation to the three-site device profiles
 
@@ -59,9 +77,9 @@ promises more than either token delivers:
 | Ed25519 sign | **none** | OpenPGP applet only, not wired | OpenPGP applet only, not wired |
 | X25519 unwrap (legacy `sops-pgp`) | none | OpenPGP applet, not wired | OpenPGP applet, not wired |
 
-Neither HSM can hold an Ed25519 key through this backend, so the key has to live on the YubiKey, and
-configuration 1 has no Ed25519 at all. Reaching the Pico's own Ed25519 would take a driver that does
-not go through OpenSC.
+Neither HSM can hold an Ed25519 key through this backend. No signing target needs one, so the
+configurations are equal for the purposes below, and the row is a limit to know about rather than
+work to do.
 
 ## Signing software for a platform
 
@@ -91,11 +109,12 @@ rule and works in every configuration once a `signtool` adapter exists.
    are advertised for `nitrokey-pkcs11`, and neither token lists an EdDSA or AES mechanism. A
    manifest that binds such a key validates, the daemon starts, and every operation fails as
    unavailable. The token's own mechanism list should be checked against its bindings at startup.
-2. **Ed25519 has no served home.** It is not reachable on either HSM, the OpenPGP applet is not
-   wired, the PIV backend does not offer it, and `regalia-sign` refuses Ed25519 keys.
-3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4):
-   `sign` needs a recorded exception. Configurations 2 and 3 make it the home of Ed25519 keys, which
-   is a new use, so those rules need a recorded change before the backend is wired in.
+2. **Ed25519 has no served home, and none is planned.** It is not reachable on either HSM, the
+   OpenPGP applet is not wired, the PIV backend does not offer it, and `regalia-sign` refuses
+   Ed25519 keys. P-384 and RSA cover every target.
+3. **The OpenPGP applet is not served.** The admission rules treat it as legacy only (ADR-0001 §4).
+   No signing target needs it; its candidate use is the PIN bootstrap adapter (#73). Whether and how
+   to serve it is open (see the principle above).
 4. **The Pico is not a recognised token.** `config/qualified-stack.json`, `tools/qualified_stack.py`
    and `deploy/seal-hsm-pin.sh` treat it as staging hardware. The attached Pico also reports the
    token serial `ESPICOHSMTR`, not a per-device one, and the driver selects a token by serial.
