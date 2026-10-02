@@ -41,8 +41,9 @@ One key signs with one digest: `regalia-sign` refuses any other, so the policy's
 exact.
 
 **Ed25519 needs a token that has it.** Neither the Nitrokey HSM 2 nor the Pico HSM offers EdDSA
-through OpenSC. The YubiKey's OpenPGP applet does (measured through PKCS#11, regalia#541), but the
-KMS cannot open that applet yet. Today an Ed25519 release key works end to end on SoftHSM only.
+through OpenSC. A YubiKey does, in its PIV slots (firmware 5.7 and later): an Ed25519 release key on
+PIV works end to end through the KMS and is accepted by GnuPG (measured on a YubiKey 5 NFC,
+`CONFIGURATIONS.md`). So do P-256 and RSA-2048 keys on PIV since regalia-kms#162.
 
 ## Setting up a release key
 

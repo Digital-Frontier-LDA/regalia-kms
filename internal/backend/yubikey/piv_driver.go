@@ -172,21 +172,11 @@ func (session *pivSession) Sign(ctx context.Context, objectID, algorithm string,
 	if !valid || !algorithmMatches(info.Algorithm, algorithm) {
 		return nil, ErrUnavailable
 	}
-	// The payload is what every backend is sent; what the card is handed, and what comes back,
-	// are brought to the one contract in sign_contract.go.
-	cardInput, valid := cardDigest(algorithm, digest, hash)
-	if !valid {
-		return nil, ErrUnavailable
-	}
-	value, err := signer.Sign(rand.Reader, cardInput, hash)
+	value, err := contractSign(signer, algorithm, digest, hash)
 	if err != nil || len(value) == 0 {
 		return nil, ErrUnavailable
 	}
-	signature, valid := contractSignature(algorithm, value)
-	if !valid {
-		return nil, ErrUnavailable
-	}
-	return signature, nil
+	return value, nil
 }
 
 func (session *pivSession) Unwrap(ctx context.Context, objectID, algorithm string, ciphertext, _ []byte) ([]byte, error) {

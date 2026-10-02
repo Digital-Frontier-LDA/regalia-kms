@@ -56,13 +56,16 @@ func TestRawECDSAIsRAndSAtTheWidthOfTheCurve(t *testing.T) {
 	}
 	good := mustHex(t, "3006020101020102")
 	for name, der := range map[string][]byte{
-		"nothing":                   nil,
-		"bytes after the signature": append(append([]byte{}, good...), 0x00),
-		"a truncated signature":     good[:len(good)-1],
-		"r is zero":                 mustHex(t, "3006020100020102"),
-		"s is negative":             mustHex(t, "30060201010201ff"),
-		"already raw, not DER":      bytes.Repeat([]byte{0x11}, 64),
-		"one integer, not two":      mustHex(t, "3003020101"),
+		"nothing":                         nil,
+		"bytes after the signature":       append(append([]byte{}, good...), 0x00),
+		"a truncated signature":           good[:len(good)-1],
+		"r is zero":                       mustHex(t, "3006020100020102"),
+		"s is negative":                   mustHex(t, "30060201010201ff"),
+		"already raw, not DER":            bytes.Repeat([]byte{0x11}, 64),
+		"one integer, not two":            mustHex(t, "3003020101"),
+		"three integers":                  mustHex(t, "3009020101020102020103"),
+		"two integers and something else": mustHex(t, "30080201010201020500"),
+		"s is zero":                       mustHex(t, "3006020101020100"),
 	} {
 		if raw, ok := rawECDSA(der, 32); ok {
 			t.Errorf("%s was accepted as a signature: %x", name, raw)
@@ -78,6 +81,13 @@ func TestRawECDSAIsRAndSAtTheWidthOfTheCurve(t *testing.T) {
 	}
 	if _, ok := rawECDSA(wide, 48); !ok {
 		t.Error("the same r was refused for P-384, where it fits")
+	}
+	wideS, err := asn1.Marshal(struct{ R, S *big.Int }{big.NewInt(1), new(big.Int).Lsh(big.NewInt(1), 256)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rawECDSA(wideS, 32); ok {
+		t.Error("an s wider than the curve was accepted for P-256")
 	}
 }
 
@@ -122,33 +132,16 @@ func TestAnRSAPayloadMustBeTheDigestInfoForItsHash(t *testing.T) {
 	}
 }
 
-// softCard signs like piv-go does: ECDSA as ASN.1 DER, RSA from a bare digest and a hash.
-type softCard struct {
-	ecdsaKey *ecdsa.PrivateKey
-	rsaKey   *rsa.PrivateKey
-}
-
-// sign is pivSession.Sign's body with the card replaced by software keys.
-func (card softCard) sign(algorithm string, payload []byte) ([]byte, bool) {
+// signAsThePIVSessionDoes is pivSession.Sign from the size gate on, with a software key where the
+// card's key would be: ecdsa and rsa private keys are crypto.Signers that answer as piv-go's do
+// (ECDSA as ASN.1 DER; RSA from a bare digest and a hash).
+func signAsThePIVSessionDoes(key crypto.Signer, algorithm string, payload []byte) ([]byte, bool) {
 	hash, valid := signingHash(algorithm, len(payload))
 	if !valid {
 		return nil, false
 	}
-	input, valid := cardDigest(algorithm, payload, hash)
-	if !valid {
-		return nil, false
-	}
-	var value []byte
-	var err error
-	if algorithm == "rsa2048" {
-		value, err = card.rsaKey.Sign(rand.Reader, input, hash)
-	} else {
-		value, err = card.ecdsaKey.Sign(rand.Reader, input, hash)
-	}
-	if err != nil {
-		return nil, false
-	}
-	return contractSignature(algorithm, value)
+	signature, err := contractSign(key, algorithm, payload, hash)
+	return signature, err == nil
 }
 
 // THE CALLERS ACCEPT WHAT THIS BACKEND NOW RETURNS.
@@ -161,14 +154,14 @@ func TestCertificatesCanBeIssuedFromWhatTheBackendReturns(t *testing.T) {
 	p256, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	for algorithm, test := range map[string]struct {
-		card   softCard
+		key    crypto.Signer
 		public crypto.PublicKey
 	}{
-		"p256":    {softCard{ecdsaKey: p256}, &p256.PublicKey},
-		"rsa2048": {softCard{rsaKey: rsaKey}, &rsaKey.PublicKey},
+		"p256":    {p256, &p256.PublicKey},
+		"rsa2048": {rsaKey, &rsaKey.PublicKey},
 	} {
 		signer := &certs.CardSigner{PublicKey: test.public, Sign_: func(payload []byte) ([]byte, error) {
-			signature, ok := test.card.sign(algorithm, payload)
+			signature, ok := signAsThePIVSessionDoes(test.key, algorithm, payload)
 			if !ok {
 				return nil, ErrUnavailable
 			}
@@ -193,8 +186,53 @@ func TestCertificatesCanBeIssuedFromWhatTheBackendReturns(t *testing.T) {
 	}
 	// And the form regalia-sign checks: r and s as the two halves of the answer.
 	digest := sha256.Sum256([]byte("a release digest"))
-	raw, ok := softCard{ecdsaKey: p256}.sign("p256", digest[:])
+	raw, ok := signAsThePIVSessionDoes(p256, "p256", digest[:])
 	if !ok || len(raw) != 64 || !ecdsa.Verify(&p256.PublicKey, digest[:], new(big.Int).SetBytes(raw[:32]), new(big.Int).SetBytes(raw[32:])) {
 		t.Fatalf("the P-256 answer is not r||s that verifies: %d bytes, ok=%v", len(raw), ok)
+	}
+	// P-384 has its own width: 96 bytes, and the halves verify.
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	wide := sha512.Sum384([]byte("a release digest"))
+	raw, ok = signAsThePIVSessionDoes(p384, "p384", wide[:])
+	if !ok || len(raw) != 96 || !ecdsa.Verify(&p384.PublicKey, wide[:], new(big.Int).SetBytes(raw[:48]), new(big.Int).SetBytes(raw[48:])) {
+		t.Fatalf("the P-384 answer is not r||s that verifies: %d bytes, ok=%v", len(raw), ok)
+	}
+	// RSA with each hash the contract names: the signature is PKCS #1 v1.5 over the DigestInfo
+	// that was sent, which is what a verifier holding only the digest and the hash checks.
+	long := sha512.Sum512([]byte("a release digest"))
+	for hash, inner := range map[crypto.Hash][]byte{crypto.SHA256: digest[:], crypto.SHA384: wide[:], crypto.SHA512: long[:]} {
+		payload := append(append([]byte{}, digestInfoPrefixes[hash]...), inner...)
+		signature, ok := signAsThePIVSessionDoes(rsaKey, "rsa2048", payload)
+		if !ok || rsa.VerifyPKCS1v15(&rsaKey.PublicKey, hash, inner, signature) != nil {
+			t.Fatalf("RSA with hash %v: the signature is not PKCS #1 v1.5 over the DigestInfo sent (ok=%v)", hash, ok)
+		}
+	}
+	// A payload the size gate admits and the contract does not: refused, nothing signed.
+	tampered := append(append([]byte{}, digestInfoPrefixes[crypto.SHA256]...), digest[:]...)
+	tampered[0] ^= 0x01
+	if signature, ok := signAsThePIVSessionDoes(rsaKey, "rsa2048", tampered); ok {
+		t.Fatalf("a DigestInfo with a wrong header was signed: %x", signature[:8])
+	}
+}
+
+// THE PREFIX TABLE IS THE DIGESTINFO OF EACH HASH, BYTE FOR BYTE: built here from the hash's object
+// identifier (RFC 8017, appendix B.1), not copied from the table.
+func TestDigestInfoPrefixesAreTheEncodingOfEachHash(t *testing.T) {
+	for hash, oid := range map[crypto.Hash]asn1.ObjectIdentifier{
+		crypto.SHA256: {2, 16, 840, 1, 101, 3, 4, 2, 1},
+		crypto.SHA384: {2, 16, 840, 1, 101, 3, 4, 2, 2},
+		crypto.SHA512: {2, 16, 840, 1, 101, 3, 4, 2, 3},
+	} {
+		digest := bytes.Repeat([]byte{0xab}, hash.Size())
+		want, err := asn1.Marshal(struct {
+			Algorithm pkix.AlgorithmIdentifier
+			Digest    []byte
+		}{pkix.AlgorithmIdentifier{Algorithm: oid, Parameters: asn1.NullRawValue}, digest})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := append(append([]byte{}, digestInfoPrefixes[hash]...), digest...); !bytes.Equal(got, want) {
+			t.Errorf("hash %v: the prefix is not the DigestInfo header for that hash\n got %x\nwant %x", hash, got, want)
+		}
 	}
 }

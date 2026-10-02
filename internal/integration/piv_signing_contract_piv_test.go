@@ -125,8 +125,10 @@ func TestPIVKeysServeRegaliaSignAndTheCertificateSigner(t *testing.T) {
 			}
 		})
 
-		if key.algorithm == "ed25519" {
-			continue // certs.CardSigner issues from ECDSA and RSA keys; an Ed25519 key is not a CA key here
+		if key.algorithm == "ed25519" || key.algorithm == "p384" {
+			// certs.CardSigner signs certificates with SHA-256 and nothing else: an Ed25519 key is
+			// not a CA key here, and a P-384 key would need SHA-384, which it refuses.
+			continue
 		}
 		t.Run("certificate/"+key.algorithm, func(t *testing.T) {
 			signer := &certs.CardSigner{PublicKey: public.(crypto.PublicKey), Sign_: func(payload []byte) ([]byte, error) {

@@ -3,7 +3,9 @@ package yubikey
 import (
 	"bytes"
 	"crypto"
+	"crypto/rand"
 	"encoding/asn1"
+	"errors"
 	"math/big"
 )
 
@@ -63,6 +65,26 @@ func signingHash(algorithm string, size int) (crypto.Hash, bool) {
 	}
 }
 
+// contractSign signs payload with a card key under the contract: it hands the library what it
+// expects, and returns the answer in the contract's encoding. signer is piv-go's key in the daemon;
+// any crypto.Signer behaves the same way, which is what lets the default build test this path with
+// software keys in place of a card.
+func contractSign(signer crypto.Signer, algorithm string, payload []byte, hash crypto.Hash) ([]byte, error) {
+	input, valid := cardDigest(algorithm, payload, hash)
+	if !valid {
+		return nil, errors.New("the payload is not what this key type is sent")
+	}
+	value, err := signer.Sign(rand.Reader, input, hash)
+	if err != nil {
+		return nil, err
+	}
+	signature, valid := contractSignature(algorithm, value)
+	if !valid {
+		return nil, errors.New("the card's answer is not a signature of this key type")
+	}
+	return signature, nil
+}
+
 // cardDigest returns what the card library is handed for this payload. For RSA that is the digest
 // inside the DigestInfo, once the DigestInfo is shown to be exactly the one for that hash: the
 // library rebuilds the same bytes around it, so the signature is over the payload as sent.
@@ -90,12 +112,17 @@ func contractSignature(algorithm string, value []byte) ([]byte, bool) {
 }
 
 // rawECDSA re-encodes an ASN.1 DER ECDSA signature as r||s, each left-padded to width bytes. It
-// refuses anything that is not exactly one well-formed signature whose values fit the curve: a
+// refuses anything that is not exactly the DER of two positive integers that fit the curve: a
 // guess here would hand a caller bytes that parse and do not verify.
 func rawECDSA(der []byte, width int) ([]byte, bool) {
 	var signature struct{ R, S *big.Int }
 	rest, err := asn1.Unmarshal(der, &signature)
 	if err != nil || len(rest) != 0 || signature.R == nil || signature.S == nil {
+		return nil, false
+	}
+	// Unmarshal fills the two fields and ignores anything else inside the SEQUENCE. Encoding what
+	// it read must give back the bytes it was given, or they held more than a signature.
+	if canonical, err := asn1.Marshal(signature); err != nil || !bytes.Equal(canonical, der) {
 		return nil, false
 	}
 	if signature.R.Sign() <= 0 || signature.S.Sign() <= 0 || signature.R.BitLen() > 8*width || signature.S.BitLen() > 8*width {
