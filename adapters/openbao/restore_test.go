@@ -81,7 +81,11 @@ func (source baoAPI) restoreToFreshNode(t *testing.T, binary, parent string, plu
 // material. This fixture has a different RSA key, and no access to the source key.
 func (source baoAPI) rejectWrongKeyRestore(t *testing.T, binary, parent string, plugin []byte, digest string, snapshot []byte) string {
 	t.Helper()
-	f := newKMSFixture(t)
+	return source.rejectSnapshotRestore(t, binary, parent, plugin, digest, snapshot, newKMSFixture(t))
+}
+
+func (source baoAPI) rejectSnapshotRestore(t *testing.T, binary, parent string, plugin []byte, digest string, snapshot []byte, f *kmsFixture) string {
+	t.Helper()
 	dir := filepath.Join(parent, "wrong-key")
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -117,6 +121,6 @@ func (source baoAPI) rejectWrongKeyRestore(t *testing.T, binary, parent string, 
 	target.wait(t, true, false, p)
 	target.must(t, http.MethodGet, "/v1/sys/mounts", nil)
 	p.stop(t)
-	t.Log("normal restore rejected absent original RSA material despite matching logical key ID; target state and restart survived")
+	t.Log("normal restore rejected unavailable original seal material; target state and restart survived")
 	return target.token
 }

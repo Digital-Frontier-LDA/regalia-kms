@@ -2,11 +2,14 @@
 
 Tracks #120, #121 and #123. This is an isolated development experiment, not a
 supported production plugin. It uses the official OpenBao Wrapper/plugin SDK
-and the existing Regalia HTTP wrap/unwrap contract; it adds no daemon endpoint.
+and existing Regalia HTTP operations; it adds no daemon endpoint. Default frame
+1 uses raw wrap/unwrap. Opt-in frame 2 uses generation-aware seal-envelope and
+release-secret; see [the versioned seal contract](VERSIONED-SEAL.md).
 
 ## Contract
 
-Each payload gets a new random 32-byte data key and a 12-byte AES-256-GCM nonce.
+In default frame 1, each payload gets a new random 32-byte data key and a
+12-byte AES-256-GCM nonce.
 Regalia wraps only that data key. The caller's AAD digest is appended to the
 configured binding path, so Regalia's key-wrap frame authenticates the context.
 Local AEAD additionally binds the format version, object ID, repository, path,
@@ -16,8 +19,11 @@ SDK do not guarantee removal of every runtime copy.
 
 The BlobInfo ciphertext contains a strict versioned JSON frame; IV and KeyInfo
 must agree with the supported format. KeyId identifies the configured logical
-object, **not an immutable hardware generation**. Rotation, historical KEK
-routing and production ciphertext migration are deliberately unqualified.
+object, **not an immutable hardware generation**. Frame 1 has no historical KEK
+routing. Frame 2 includes the configured generation in KeyId and authenticates
+it in both envelopes; its explicit historical allowlist is also subject to the
+KMS registry's generation states. Hardware immutability and production
+ciphertext migration remain unqualified.
 The PoC permits development bindings only and rejects unsupported key IDs,
 oversized inputs, alternate formats and configuration changes after setup.
 It never discovers credentials from environment variables or retries a KMS
@@ -55,6 +61,14 @@ endpoint is used. This proves a single-version software restore with the same
 original KMS key, not historical KEK routing, key rotation, recovery shares,
 hardware recovery or multi-node disaster recovery.
 
+The separate frame-2 drill initializes under synthetic generation g1, promotes
+g2 while retaining g1, verifies OpenBao rewraps stored keys and restarts with no
+plugin access to g1, then restores a pre-promotion snapshot using g1. Revoking
+g1 leaves current storage usable but makes that old snapshot unrestorable.
+Recovery-key authorization is checked after promotion without the predecessor.
+These are single-node software fixtures, not a hardware rotation procedure or
+an automatic migration from frame 1.
+
 Initial target: OpenBao 2.7.1, wrapping SDK 2.9.0, plugin SDK 2.4.0.
 External Keys, PKI, Transit, namespace grants, upgrades and production deployment
 remain separate qualification work.
@@ -82,6 +96,7 @@ a KMS listener outage, refuses offline and unauthorized restarts, then restores
 authorized access and checks that plaintext and the root token are absent from
 Raft storage and captured logs. It also exercises fresh-node snapshot restore,
 restored-node identity enforcement and rejection with different KMS key material.
+The generation drill is also mandatory when the real-server executable is set.
 All fixture identities/state are temporary.
 `OPENBAO_POC_KEEP_FAILURE=1` optionally retains **synthetic** private debug
 artifacts on failure; remove the reported directory after inspection.

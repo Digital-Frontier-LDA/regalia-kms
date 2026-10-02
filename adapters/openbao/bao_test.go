@@ -101,7 +101,10 @@ func baoConfig(t *testing.T, dir, address, cluster, pluginDigest string, c map[s
 	fmt.Fprintf(&text, "api_addr = %q\ncluster_addr = %q\nplugin_directory = %q\nlog_level = \"warn\"\n", "http://"+address, "https://"+cluster, dir)
 	fmt.Fprintf(&text, "storage \"raft\" {\n path = %q\n node_id = %q\n}\nlistener \"tcp\" {\n address = %q\n cluster_address = %q\n tls_disable = true\n}\n", filepath.Join(dir, "storage"), filepath.Base(dir), address, cluster)
 	fmt.Fprintf(&text, "plugin \"kms\" \"regalia-poc\" {\n command = \"openbao-plugin-kms-regalia-poc\"\n version = \"v0.0.1\"\n sha256sum = %q\n}\nseal \"regalia-poc\" {\n", pluginDigest)
-	for _, key := range []string{"kms_url", "server_name", "ca_path", "certificate_path", "private_key_path", "object_id", "repository", "path", "environment", "kms_purpose", "timeout"} {
+	for _, key := range []string{"kms_url", "server_name", "ca_path", "certificate_path", "private_key_path", "object_id", "repository", "path", "environment", "kms_purpose", "timeout", "key_version", "historical_key_versions"} {
+		if c[key] == "" {
+			continue
+		}
 		fmt.Fprintf(&text, " %s = %q\n", key, c[key])
 	}
 	text.WriteString(" health_check_interval = \"1s\"\n health_check_timeout = \"2s\"\n health_check_interval_unhealthy = \"1s\"\n}\n")
@@ -134,6 +137,7 @@ func (b baoAPI) call(method, path string, input any) (int, []byte, error) {
 		if err != nil {
 			return 0, nil, err
 		}
+		defer clear(encoded)
 		body = bytes.NewReader(encoded)
 	}
 	return b.callBody(method, path, body, "application/json")
@@ -223,18 +227,20 @@ func (b baoAPI) assertValue(t *testing.T) {
 	}
 }
 
-func (b *baoAPI) initialize(t *testing.T) {
+func (b *baoAPI) initialize(t *testing.T) string {
 	t.Helper()
 	init := b.must(t, http.MethodPost, "/v1/sys/init", map[string]int{"recovery_shares": 1, "recovery_threshold": 1})
 	defer clear(init)
 	var initialized struct {
-		RootToken string `json:"root_token"`
+		RootToken    string   `json:"root_token"`
+		RecoveryKeys []string `json:"recovery_keys"`
 	}
-	if json.Unmarshal(init, &initialized) != nil || initialized.RootToken == "" {
+	if json.Unmarshal(init, &initialized) != nil || initialized.RootToken == "" || len(initialized.RecoveryKeys) != 1 {
 		t.Fatal("initialization returned no token")
 	}
 	b.token = initialized.RootToken
 	b.wait(t, true, false)
+	return initialized.RecoveryKeys[0]
 }
 
 func (b baoAPI) assertBlocked(t *testing.T, p *baoProcess) {
@@ -250,7 +256,8 @@ func (b baoAPI) assertBlocked(t *testing.T, p *baoProcess) {
 	p.stop(t)
 }
 
-func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
+func baoTestEnvironment(t *testing.T) (string, string, []byte, [32]byte) {
+	t.Helper()
 	binary := os.Getenv("OPENBAO_POC_BAO")
 	if binary == "" {
 		if os.Getenv("OPENBAO_POC_REQUIRE_E2E") == "1" {
@@ -286,7 +293,12 @@ func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(pluginBytes)
+	return binary, dir, pluginBytes, sha256.Sum256(pluginBytes)
+}
+
+func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
+	binary, dir, pluginBytes, digest := baoTestEnvironment(t)
+	pluginPath := filepath.Join(dir, "openbao-plugin-kms-regalia-poc")
 	f := newKMSFixture(t)
 	address, cluster := freeAddress(t), freeAddress(t)
 	config := baoConfig(t, dir, address, cluster, hex.EncodeToString(digest[:]), f.pki.config)
@@ -294,22 +306,7 @@ func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
 	p := startBao(t, binary, config, dir)
 	b.wait(t, false, true, p)
 	b.initialize(t)
-	b.must(t, http.MethodPost, "/v1/sys/mounts/poc", map[string]any{"type": "kv", "options": map[string]string{"version": "2"}})
-	// KV mounts start as v1 and upgrade asynchronously; poll a read-only endpoint
-	// before writing once, rather than retrying an ambiguous write.
-	kvDeadline := time.Now().Add(10 * time.Second)
-	for {
-		status, _, err := b.call(http.MethodGet, "/v1/poc/config", nil)
-		if err == nil && status == http.StatusOK {
-			break
-		}
-		if time.Now().After(kvDeadline) {
-			t.Fatal("synthetic KV mount did not finish initialization")
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	b.must(t, http.MethodPost, "/v1/poc/data/secret", map[string]any{"data": map[string]string{"value": syntheticValue}})
-	b.assertValue(t)
+	b.seedSyntheticKV(t)
 	// A successful periodic health check must perform an additional real wrap/unwrap pair.
 	beforeWrap, beforeUnwrap := f.audit.successful("wrap"), f.audit.successful("unwrap")
 	deadline := time.Now().Add(5 * time.Second)
@@ -356,7 +353,33 @@ func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
 	p.stop(t)
 	bootstrapToken := b.restoreToFreshNode(t, binary, dir, pluginBytes, hex.EncodeToString(digest[:]), snapshot, f)
 	wrongKeyToken := b.rejectWrongKeyRestore(t, binary, dir, pluginBytes, hex.EncodeToString(digest[:]), snapshot)
-	for _, sensitive := range []string{b.token, bootstrapToken, wrongKeyToken, syntheticValue} {
+	assertBaoArtifactsClean(t, dir, pluginPath, b.token, bootstrapToken, wrongKeyToken)
+	t.Logf("OpenBao 2.7.1 + separate SDK plugin + real Regalia HTTP policy stack + software RSA: lifecycle, outage/identity denials, fresh-node snapshot restore/restart and wrong-key restore rejection passed; successful source-KMS wrap=%d unwrap=%d", f.audit.successful("wrap"), f.audit.successful("unwrap"))
+}
+
+func (b baoAPI) seedSyntheticKV(t *testing.T) {
+	t.Helper()
+	b.must(t, http.MethodPost, "/v1/sys/mounts/poc", map[string]any{"type": "kv", "options": map[string]string{"version": "2"}})
+	// KV mounts start as v1 and upgrade asynchronously; poll a read-only endpoint
+	// before writing once, rather than retrying an ambiguous write.
+	kvDeadline := time.Now().Add(10 * time.Second)
+	for {
+		status, _, err := b.call(http.MethodGet, "/v1/poc/config", nil)
+		if err == nil && status == http.StatusOK {
+			break
+		}
+		if time.Now().After(kvDeadline) {
+			t.Fatal("synthetic KV mount did not finish initialization")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	b.must(t, http.MethodPost, "/v1/poc/data/secret", map[string]any{"data": map[string]string{"value": syntheticValue}})
+	b.assertValue(t)
+}
+
+func assertBaoArtifactsClean(t *testing.T, dir, pluginPath string, tokens ...string) {
+	t.Helper()
+	for _, sensitive := range append(tokens, syntheticValue) {
 		err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
@@ -377,5 +400,4 @@ func TestOpenBao271InitializeRestartOutageAndIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	t.Logf("OpenBao 2.7.1 + separate SDK plugin + real Regalia HTTP policy stack + software RSA: lifecycle, outage/identity denials, fresh-node snapshot restore/restart and wrong-key restore rejection passed; successful source-KMS wrap=%d unwrap=%d", f.audit.successful("wrap"), f.audit.successful("unwrap"))
 }
