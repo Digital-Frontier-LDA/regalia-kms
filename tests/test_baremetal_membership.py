@@ -65,6 +65,10 @@ class Manifests(unittest.TestCase):
             "duplicate node id": lambda e: e["manifest"]["nodes"][1].__setitem__("node_id", "a"),
             "shared identity": lambda e: e["manifest"]["nodes"][1].__setitem__("ak_name", e["manifest"]["nodes"][0]["ak_name"]),
             "unknown field": lambda e: e["manifest"].__setitem__("extra", 1),
+            "one WG key in two roles, two nodes": lambda e: e["manifest"]["nodes"][1].__setitem__("wg_service_pub", e["manifest"]["nodes"][0]["wg_boot_pub"]),
+            "one WG key in two roles, one node": lambda e: e["manifest"]["nodes"][0].__setitem__("wg_service_pub", e["manifest"]["nodes"][0]["wg_boot_pub"]),
+            "a malformed revocation key": lambda e: e["manifest"].__setitem__("revocation_keys", [[]]),
+            "a duplicated revocation key": lambda e: e["manifest"].__setitem__("revocation_keys", [REVOKE_PUB, REVOKE_PUB]),
         }
         for label, breakit in cases.items():
             with self.subTest(label):
@@ -137,22 +141,33 @@ def free_port():
 
 
 @unittest.skipUnless(shutil.which("swtpm") and shutil.which("tpm2_nvdefine"), "needs swtpm and tpm2-tools")
-class HighWaterOnSwtpm(unittest.TestCase):
-    """PoC 8.3: accept 50, advance to 51, restore a disk at 50: refused by the TPM high-water mark."""
+class _Swtpm(unittest.TestCase):
+    """A fresh swtpm per test, with the HighWater defined on it."""
 
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
-        port = free_port()
-        subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.d, "--server", "type=tcp,port=%d" % port,
-                        "--ctrl", "type=tcp,port=%d" % (port + 1), "--flags", "not-need-init,startup-clear", "--daemon",
-                        "--pid", "file=%s/pid" % self.d], check=True, capture_output=True)
-        self.addCleanup(lambda: os.kill(int(open(self.d + "/pid").read()), 15))
+        for _ in range(5):                                   # a port taken between free_port() and bind: retry
+            port = free_port()
+            r = subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + self.d, "--server", "type=tcp,port=%d" % port,
+                                "--ctrl", "type=tcp,port=%d" % (port + 1), "--flags", "not-need-init,startup-clear", "--daemon",
+                                "--pid", "file=%s/pid" % self.d], capture_output=True)
+            if r.returncode == 0:
+                break
+        else:
+            self.fail("swtpm did not start: %s" % r.stderr.decode(errors="replace"))
+        with open(self.d + "/pid") as f:
+            pid = int(f.read())
+        self.addCleanup(os.kill, pid, 15)
         time.sleep(0.5)
         self.tcti = "swtpm:port=%d" % port
         self.env = dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
         self.hw = m.HighWater("0x1500016", tcti=self.tcti)
         self.hw.define()
+
+
+class HighWaterOnSwtpm(_Swtpm):
+    """PoC 8.3: accept 50, advance to 51, restore a disk at 50: refused by the TPM high-water mark."""
 
     def test_rollback_of_the_disk_is_refused(self):
         self.assertEqual(self.hw.advance(50), 50)
@@ -195,9 +210,66 @@ class HighWaterOnSwtpm(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, "already exists"):
             self.hw.define()
 
+    def test_a_disk_epoch_ahead_of_the_tpm_is_not_anchored(self):
+        self.hw.advance(50)
+        with self.assertRaisesRegex(m.Refused, "not anchored"):
+            self.hw.check(51)
+
     def test_an_anomalous_jump_is_refused(self):
         with self.assertRaisesRegex(m.Refused, "anomaly"):
             self.hw.advance(m.HighWater.MAX_JUMP + 5)
+
+
+class StoreOnSwtpm(_Swtpm):
+    """The persisted-state API: the chain on disk anchored to the TPM (PoC 8.3 through Store)."""
+
+    def setUp(self):
+        super().setUp()
+        self.path = os.path.join(self.d, "membership.json")
+        self.store = m.Store(self.path, ROOT_PUB, self.hw)
+        self.envs, cur = [], None
+        for e in range(1, 5):
+            env = sign(manifest(e, m.digest(cur) if cur else "", three(a="DRAINING" if e % 2 else "ACTIVE")), ROOT)
+            cur = m.accept(cur, env, ROOT_PUB)
+            self.envs.append(env)
+
+    def test_commit_load_and_a_restored_file_is_refused(self):
+        self.assertIsNone(self.store.load())
+        for env in self.envs[:2]:
+            self.store.commit(env)
+        snapshot = open(self.path, "rb").read()                  # the disk at epoch 2
+        self.store.commit(self.envs[2])
+        self.assertEqual((m.Store(self.path, ROOT_PUB, self.hw).load()["epoch"], self.hw.value()), (3, 3))
+        self.assertIs(self.store.commit(self.envs[2])["epoch"], 3)   # re-delivery: nothing changes
+        with open(self.path, "wb") as f:
+            f.write(snapshot)
+        with self.assertRaisesRegex(m.Refused, "ROLLBACK"):
+            m.Store(self.path, ROOT_PUB, self.hw).load()
+        os.unlink(self.path)                                      # a deleted file is a rollback to nothing
+        with self.assertRaisesRegex(m.Refused, "ROLLBACK"):
+            m.Store(self.path, ROOT_PUB, self.hw).load()
+
+    def test_a_crash_after_the_disk_write_is_completed_by_load(self):
+        for env in self.envs[:2]:
+            self.store.commit(env)
+        self.store._write(self.envs[:3])                          # written, then the TPM never advanced
+        self.assertEqual(self.hw.value(), 2)
+        self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).load()["epoch"], 3)
+        self.assertEqual(self.hw.value(), 3)
+
+    def test_a_tampered_or_unsigned_chain_is_refused_and_does_not_move_the_tpm(self):
+        self.store.commit(self.envs[0])
+        forged = copy.deepcopy(self.envs[:2])
+        forged[1]["manifest"]["nodes"][0]["state"] = "QUARANTINED"
+        stranger = sign(manifest(2, m.digest(self.envs[0]["manifest"]), three()), STRANGER)
+        for label, chain in (("altered", forged), ("stranger-signed", [self.envs[0], stranger]),
+                             ("repeated", [self.envs[0], self.envs[0]]), ("not a list", {"a": 1})):
+            with self.subTest(label):
+                with open(self.path, "wb") as f:
+                    f.write(m.canonical(chain))
+                with self.assertRaises(m.Refused):
+                    m.Store(self.path, ROOT_PUB, self.hw).load()
+                self.assertEqual(self.hw.value(), 1)
 
 
 if __name__ == "__main__":
