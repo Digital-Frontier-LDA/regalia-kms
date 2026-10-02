@@ -79,8 +79,63 @@ hdr "3  drift, and the authorization"
 printf '%s' "$AUTH" | tpm2_dictionarylockout -Q -s -n 5 -t 600 -l 86400 -p file:- >/dev/null 2>&1 || F "could not make the settings drift"
 IFS=$'\t' read -r value why < <(probe)
 [ "$value" = false ] && grep -q 'TPM2_PT_MAX_AUTH_FAIL is 5, not 32' <<< "$why" && P "one drifted setting: false ($why)" || F "drift: $value: $why"
+# The right value copied in groups, as one does from paper: a different value to the TPM, and there a
+# wrong attempt. The script refuses it itself; that it spent no attempt is shown by the next step,
+# where the right value is accepted at once.
+out="$(printf '%s\n' "${AUTH:0:8} ${AUTH:8:8} ${AUTH:16}" | lockout --set)"; rc=$?
+[ "$rc" != 0 ] && grep -q 'Nothing was tried on the TPM' <<< "$out" && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 5 ] \
+  && P "the authorization typed in groups (with spaces) is refused by the script, before the TPM hears it (exit $rc)" || F "spaced authorization (exit $rc): $out"
 out="$(printf '%s\n' "$AUTH" | lockout --set)"; rc=$?
-[ "$rc" = 0 ] && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 32 ] && P "--set with the authorization repairs it" || F "repair (exit $rc): $out"
+[ "$rc" = 0 ] && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 32 ] && P "--set with the authorization repairs it (so the refusal above cost no attempt)" || F "repair (exit $rc): $out"
+# At a TERMINAL the value is typed twice and compared before the TPM hears anything.
+# tty_set <first entry> <second entry>: tpm-lockout.sh --set on a pseudo-terminal, each hidden prompt answered in turn.
+tty_set(){ python3 - "$D" "$LOCKOUT" "$1" "$2" <<'PY'
+import os, pty, select, sys, time
+tcti, script, first, second = sys.argv[1:5]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("sudo", ["sudo", "env", "TPM2TOOLS_TCTI=" + tcti, script, "--set"])
+out, pending, answers, deadline = "", "", [first, second], time.time() + 60
+while time.time() < deadline:
+    ready, _, _ = select.select([fd], [], [], 1)
+    if not ready:
+        continue
+    try:
+        chunk = os.read(fd, 4096).decode(errors="replace")
+    except OSError:
+        break
+    if not chunk:
+        break
+    out += chunk
+    pending += chunk
+    # Answer only a prompt that has just been printed: typed between two prompts, before the next
+    # read has switched echo off, a value would be echoed by the terminal itself.
+    if pending.rstrip(" ").endswith("(hidden):") and answers:
+        os.write(fd, (answers.pop(0) + "\n").encode())
+        pending = ""
+# Never wait for ever: a child still alive at the deadline (an unexpected prompt, say) is hung up on
+# by closing its terminal, which this user may do even though the child runs under sudo, and then
+# given five seconds to go.
+done, status = os.waitpid(pid, os.WNOHANG)
+if done == 0:
+    os.close(fd)
+    for _ in range(50):
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            break
+        time.sleep(0.1)
+print(out.replace("\r", ""))
+print("RC=%s" % (os.waitstatus_to_exitcode(status) if done else "TIMEOUT: the script was still running at the deadline"))
+PY
+}
+printf '%s' "$AUTH" | tpm2_dictionarylockout -Q -s -n 5 -t 600 -l 86400 -p file:- >/dev/null 2>&1 || F "could not make the settings drift again"
+out="$(tty_set "$AUTH" "${AUTH%?}X")"
+grep -q 'RC=1' <<< "$out" && grep -q 'the two entries differ; nothing was tried on the TPM' <<< "$out" && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 5 ] \
+  && P "at a terminal: two entries that differ are refused before the TPM hears anything" || F "terminal, differing entries: $out"
+grep -q 'the TPM gets ONE attempt' <<< "$out" && grep -q 'type it twice here' <<< "$out" && P "the prompt says the TPM gets one attempt and that the value is typed twice here" || F "terminal prompt: $out"
+out="$(tty_set "$AUTH" "$AUTH")"
+grep -q 'RC=0' <<< "$out" && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 32 ] && P "at a terminal: the same value twice repairs the settings (so the refusal above cost no attempt)" || F "terminal, matching entries: $out"
+grep -qF "$AUTH" <<< "$out" && F "the authorization was echoed on the terminal" || P "the authorization is never echoed on the terminal"
 printf '%s' "$AUTH" | tpm2_dictionarylockout -Q -s -n 5 -t 600 -l 86400 -p file:- >/dev/null 2>&1
 out="$(printf 'not-the-authorization-0000\n' | lockout --set)"; rc=$?
 [ "$rc" != 0 ] && grep -q 'the TPM refused' <<< "$out" && [ "$(get TPM2_PT_MAX_AUTH_FAIL)" = 5 ] && P "a wrong authorization changes nothing (exit $rc)" || F "wrong authorization (exit $rc): $out"

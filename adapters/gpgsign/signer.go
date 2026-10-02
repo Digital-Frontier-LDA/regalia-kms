@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/asn1"
@@ -36,7 +37,7 @@ type Signer struct {
 }
 
 // NewSigner binds a pinned public key to the KMS object that holds its private half. The key type
-// fixes the digest: SHA-256 for P-256 and RSA, SHA-384 for P-384. One key, one digest — the purpose
+// fixes the digest: SHA-256 for P-256, RSA and Ed25519, SHA-384 for P-384. One key, one digest — the purpose
 // policy's payload size is exact, and a caller cannot ask for a weaker hash.
 func NewSigner(public crypto.PublicKey, client *Client, target Target) (*Signer, error) {
 	if client == nil || !target.valid() {
@@ -67,8 +68,13 @@ func digestFor(public crypto.PublicKey) (crypto.Hash, error) {
 			return crypto.SHA256, nil
 		}
 		return 0, errors.New("the release key must be RSA-2048, RSA-3072 or RSA-4096")
+	case ed25519.PublicKey:
+		if len(key) == ed25519.PublicKeySize {
+			return crypto.SHA256, nil
+		}
+		return 0, errors.New("the release key is not a valid Ed25519 public key")
 	}
-	return 0, errors.New("the release key must be ECDSA (P-256, P-384) or RSA")
+	return 0, errors.New("the release key must be ECDSA (P-256, P-384), RSA or Ed25519")
 }
 
 // Public returns the pinned public key.
@@ -78,7 +84,8 @@ func (signer *Signer) Public() crypto.PublicKey { return signer.public }
 func (signer *Signer) Hash() crypto.Hash { return signer.hash }
 
 // SignDigest returns a signature over digest in the form crypto.Signer promises: ASN.1 DER for
-// ECDSA, the PKCS #1 v1.5 signature for RSA. It has already been verified against the pinned key.
+// ECDSA, the PKCS #1 v1.5 signature for RSA, the 64 bytes R||S for Ed25519. It has already been
+// verified against the pinned key.
 func (signer *Signer) SignDigest(ctx context.Context, digest []byte, hash crypto.Hash, subject string) ([]byte, error) {
 	if hash != signer.hash || len(digest) != hash.Size() {
 		return nil, errors.New("this key signs only its own digest algorithm")
@@ -106,6 +113,21 @@ func (signer *Signer) SignDigest(ctx context.Context, digest []byte, hash crypto
 			return nil, err
 		}
 		if rsa.VerifyPKCS1v15(key, hash, digest, raw) != nil {
+			return nil, errors.New("the KMS returned a signature the pinned public key does not verify")
+		}
+		return raw, nil
+	case ed25519.PublicKey:
+		// In an OpenPGP EdDSA signature the digest IS the message Ed25519 signs. The token signs
+		// the bytes it is given (CKM_EDDSA: measured on the YubiKey OpenPGP applet, regalia#541,
+		// and on SoftHSM) and returns R||S.
+		raw, err := signer.call(ctx, digest, subject)
+		if err != nil {
+			return nil, err
+		}
+		if len(raw) != ed25519.SignatureSize {
+			return nil, errors.New("the KMS returned a signature of the wrong size for this key")
+		}
+		if !ed25519.Verify(key, digest, raw) {
 			return nil, errors.New("the KMS returned a signature the pinned public key does not verify")
 		}
 		return raw, nil

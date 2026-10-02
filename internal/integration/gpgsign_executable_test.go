@@ -50,6 +50,10 @@ func TestDeployedRegaliaSignExecutableThroughMTLS(t *testing.T) {
 	for _, key := range []struct{ name, objectID, tokenID string }{
 		{"P-384", "release-signing-p384", "0b"},
 		{"RSA-3072", "release-signing-rsa", "0c"},
+		// Ed25519: neither HSM has it through OpenSC, so this run is what SoftHSM can show — the
+		// daemon's CKM_EDDSA path and regalia-sign's sign-twice path (adapters/gpgsign/eddsa.go)
+		// meeting on a real PKCS#11 module, judged by GnuPG.
+		{"Ed25519", "release-signing-ed25519", "0f"},
 	} {
 		t.Run(key.name, func(t *testing.T) {
 			deployment := t.TempDir()
@@ -82,11 +86,29 @@ func TestDeployedRegaliaSignExecutableThroughMTLS(t *testing.T) {
 				t.Fatalf("GnuPG accepted the signature over a changed file: %v\n%s", err, output)
 			}
 
-			// Two operations reached the token — the key certification and the document — and each
-			// is an authorized/success pair in the audit journal, for this object and nothing else.
+			// A cleartext signature, the form an apt repository serves as InRelease: GnuPG accepts
+			// it and gives back the text that was signed.
+			release := filepath.Join(deployment, "Release")
+			releaseText := "Origin: Regalia\nSuite: stable\nSHA256:\n e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 0 Packages\n"
+			if err := os.WriteFile(release, []byte(releaseText), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			inRelease, extracted := filepath.Join(deployment, "InRelease"), filepath.Join(deployment, "Release.extracted")
+			regaliaSign(t, binary, config, "--clearsign", release, "--output", inRelease)
+			output, err = exec.Command(gpg, "--homedir", home, "--batch", "--no-tty", "--status-fd", "1", "--output", extracted, "--decrypt", inRelease).CombinedOutput()
+			if err != nil || !strings.Contains(string(output), "[GNUPG:] VALIDSIG "+fingerprint) {
+				t.Fatalf("GnuPG does not accept the KMS-made cleartext signature: %v\n%s", err, output)
+			}
+			if text, err := os.ReadFile(extracted); err != nil || string(text) != releaseText {
+				t.Fatalf("GnuPG extracted a different text (%v): %q", err, text)
+			}
+
+			// Three operations reached the token — the key certification, the detached signature
+			// and the cleartext one — and each is an authorized/success pair in the audit journal,
+			// for this object and nothing else.
 			events := daemon.sink.snapshot()[baseline:]
-			if len(events) != 4 {
-				t.Fatalf("expected 4 audit events for 2 signatures, got %d: %#v", len(events), events)
+			if len(events) != 6 {
+				t.Fatalf("expected 6 audit events for 3 signatures, got %d: %#v", len(events), events)
 			}
 			for index, event := range events {
 				wantOutcome := []string{"authorized", "success"}[index%2]
@@ -266,6 +288,10 @@ func tokenPublicKeyPEM(t *testing.T, modulePath, id string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// pkcs11-tool writes an RSA or EC public key as DER and an Ed25519 one already as PEM.
+	if block, _ := pem.Decode(der); block != nil && block.Type == "PUBLIC KEY" {
+		der = block.Bytes
+	}
 	if _, err := x509.ParsePKIXPublicKey(der); err != nil {
 		t.Fatalf("public key %s is not PKIX: %v", id, err)
 	}
@@ -357,6 +383,7 @@ func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidec
 	}{
 		{"release-signing-p384", "p384", "0b", 48},
 		{"release-signing-rsa", "rsa3072", "0c", 51},
+		{"release-signing-ed25519", "ed25519", "0f", 32},
 		{"release-signing-p384b", "p384", "0d", 48},
 		{"release-signing-ungranted", "p384", "0e", 48},
 	}

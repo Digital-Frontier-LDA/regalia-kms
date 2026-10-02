@@ -36,7 +36,7 @@ func (source pinSource) PIN(context.Context, string) ([]byte, error) {
 
 type devAuthProbe string
 
-func (probe devAuthProbe) Fingerprint(context.Context, string, string) (string, error) {
+func (probe devAuthProbe) Fingerprint(context.Context, string, string, string) (string, error) {
 	return string(probe), nil
 }
 
@@ -46,7 +46,7 @@ func (secureChannel) Establish(context.Context, string, string) error { return n
 
 type retryProbe int
 
-func (probe retryProbe) Remaining(context.Context, string, string) (int, error) {
+func (probe retryProbe) Remaining(context.Context, string, string, string) (int, error) {
 	return int(probe), nil
 }
 

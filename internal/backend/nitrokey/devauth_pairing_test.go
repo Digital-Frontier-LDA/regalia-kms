@@ -141,7 +141,7 @@ func TestAKeyCertificateIsNotADeviceIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1")
+	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", "")
 	if err == nil {
 		t.Fatalf("a KEY certificate was accepted as the device identity (fingerprint %q); two cards "+
 			"holding the same imported key would be indistinguishable", fingerprint)
@@ -160,7 +160,7 @@ func TestAnUnpairedCertificateIsStillTheDeviceIdentity(t *testing.T) {
 		keyIDs:  [][]byte{{0x02}},
 	}
 	probes, _ := NewTokenProbes(module)
-	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1")
+	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", "")
 	if err != nil {
 		t.Fatalf("an unpaired certificate was rejected: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestAKeyCertificateBesideADeviceCertificateIsNotAmbiguous(t *testing.T) {
 		keyIDs:  [][]byte{{0x02}},
 	}
 	probes, _ := NewTokenProbes(module)
-	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1")
+	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", "")
 	if err != nil {
 		t.Fatalf("a device certificate beside a key certificate was refused: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestTwoUnpairedCertificatesRemainAmbiguous(t *testing.T) {
 		keyIDs:  [][]byte{{0x02}},
 	}
 	probes, _ := NewTokenProbes(module)
-	if _, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1"); err == nil {
+	if _, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", ""); err == nil {
 		t.Fatal("two unpaired certificates were not treated as ambiguous")
 	}
 }
@@ -211,7 +211,7 @@ func TestTwoUnpairedCertificatesRemainAmbiguous(t *testing.T) {
 func TestNoCertificateIsTypedSoACallerCanFallBack(t *testing.T) {
 	module := &pairedCardModule{certs: map[pkcs11.ObjectHandle][]byte{}}
 	probes, _ := NewTokenProbes(module)
-	_, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1")
+	_, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", "")
 	if !errors.Is(err, ErrNoDeviceCertificate) {
 		t.Fatalf("err = %v, want ErrNoDeviceCertificate", err)
 	}
@@ -223,7 +223,7 @@ func TestNoCertificateIsTypedSoACallerCanFallBack(t *testing.T) {
 func TestALookupFailureIsNotReportedAsAbsence(t *testing.T) {
 	module := &pairedCardModule{certs: map[pkcs11.ObjectHandle][]byte{}, findErr: errors.New("boom")}
 	probes, _ := NewTokenProbes(module)
-	_, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1")
+	_, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", "")
 	if err == nil {
 		t.Fatal("a failed lookup was not an error")
 	}
@@ -243,7 +243,7 @@ func TestOnlyTheCertificateLookupFailingIsStillNotAbsence(t *testing.T) {
 		certErr: errors.New("C_FindObjects failed"),
 	}
 	probes, _ := NewTokenProbes(module)
-	_, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1")
+	_, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", "")
 	if err == nil {
 		t.Fatal("a failed certificate lookup was not an error")
 	}
@@ -264,7 +264,7 @@ func TestAnUnreadableKeyIDRefusesRatherThanGuessing(t *testing.T) {
 		keyIDErr: true,
 	}
 	probes, _ := NewTokenProbes(module)
-	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1")
+	fingerprint, err := probes.Fingerprint(context.Background(), "hsm-sitea", "SERIAL-1", "")
 	if err == nil {
 		t.Fatalf("an unreadable key id let a KEY certificate through as the device identity (%q)",
 			fingerprint)

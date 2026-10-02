@@ -5,12 +5,14 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"math/big"
 	"strings"
@@ -18,7 +20,9 @@ import (
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
 	pgpecdsa "github.com/ProtonMail/go-crypto/openpgp/ecdsa"
+	pgpeddsa "github.com/ProtonMail/go-crypto/openpgp/eddsa"
 	"github.com/ProtonMail/go-crypto/openpgp/packet"
 )
 
@@ -32,6 +36,9 @@ type Key struct {
 	public  *packet.PublicKey
 	created time.Time
 	userID  string
+	// throwaway is set for an Ed25519 key only: the dummy private key go-crypto signs with before
+	// the KMS's signature replaces its own (eddsa.go). It never signs anything that is written.
+	throwaway *pgpeddsa.PrivateKey
 }
 
 // NewKey frames signer's public key as an OpenPGP key created at created, claiming userID
@@ -45,6 +52,7 @@ func NewKey(signer *Signer, created time.Time, userID string) (*Key, error) {
 	}
 	created = created.UTC().Truncate(time.Second)
 	var public *packet.PublicKey
+	var throwaway *pgpeddsa.PrivateKey
 	switch key := signer.public.(type) {
 	case *rsa.PublicKey:
 		public = packet.NewRSAPublicKey(created, key)
@@ -53,10 +61,15 @@ func NewKey(signer *Signer, created time.Time, userID string) (*Key, error) {
 		if public, err = ecdsaPublicKey(created, key); err != nil {
 			return nil, err
 		}
+	case ed25519.PublicKey:
+		var err error
+		if public, throwaway, err = eddsaPublicKey(created, key); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, errors.New("unsupported release key")
 	}
-	return &Key{signer: signer, public: public, created: created, userID: userID}, nil
+	return &Key{signer: signer, public: public, created: created, userID: userID, throwaway: throwaway}, nil
 }
 
 // ecdsaPublicKey frames a standard-library ECDSA public key as an OpenPGP one.
@@ -131,6 +144,59 @@ func (key *Key) sign(ctx context.Context, subject string, step func(*packet.Priv
 	return err
 }
 
+// begin starts a signature: the hash go-crypto will sign, and a second hash of the same input that
+// finish verifies the result against. Everything to be signed is written to the returned writer.
+func (key *Key) begin(signature *packet.Signature, config *packet.Config) (hash.Hash, hash.Hash, io.Writer, error) {
+	hasher, err := signature.PrepareSign(config)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	check := key.signer.hash.New()
+	return hasher, check, io.MultiWriter(hasher, check), nil
+}
+
+// finish signs the fed signature through the KMS and returns the serialized packet — after parsing
+// it back and verifying it against the KMS public key. NOTHING THIS ADAPTER WRITES SKIPS THIS: the
+// Signer already checks the raw signature against the pinned key, and this checks the finished
+// OpenPGP packet, hashed subpackets and all, the way a verifier will. For Ed25519 it is also what
+// guarantees the throwaway signature of eddsa.go can never leave.
+func (key *Key) finish(ctx context.Context, signature *packet.Signature, config *packet.Config, hasher, check hash.Hash, subject string) ([]byte, error) {
+	var err error
+	if key.throwaway != nil {
+		err = key.signEdDSA(ctx, signature, hasher, config, subject)
+	} else {
+		err = key.sign(ctx, subject, func(private *packet.PrivateKey) error { return signature.Sign(hasher, private, config) })
+	}
+	if err != nil {
+		return nil, err
+	}
+	var serialized bytes.Buffer
+	if err := signature.Serialize(&serialized); err != nil {
+		return nil, err
+	}
+	if err := key.verifyPacket(serialized.Bytes(), check); err != nil {
+		return nil, err
+	}
+	return serialized.Bytes(), nil
+}
+
+// verifyPacket parses one serialized signature packet and verifies it over signed, a hash that has
+// been fed exactly what the signature covers, against this key.
+func (key *Key) verifyPacket(serialized []byte, signed hash.Hash) error {
+	parsed, err := packet.Read(bytes.NewReader(serialized))
+	if err != nil {
+		return errors.New("the finished signature is not a readable OpenPGP packet")
+	}
+	signature, ok := parsed.(*packet.Signature)
+	if !ok || signature.IssuerKeyId == nil || *signature.IssuerKeyId != key.public.KeyId || !bytes.Equal(signature.IssuerFingerprint, key.public.Fingerprint) {
+		return errors.New("the finished signature does not name this key as its issuer")
+	}
+	if err := key.public.VerifySignature(signed, signature); err != nil {
+		return errors.New("the finished signature does not verify against the KMS public key")
+	}
+	return nil
+}
+
 // config is what go-crypto signs with. The salt notation it would add by default to a version-4
 // signature is switched off: the signatures here are what `gpg --detach-sign` makes, with no
 // library-specific notation for a verifier to print, and an RSA key certification is then the same
@@ -159,23 +225,25 @@ func (key *Key) DetachSign(ctx context.Context, w io.Writer, message io.Reader, 
 		Hash: key.signer.hash, CreationTime: now, IssuerKeyId: &key.public.KeyId, IssuerFingerprint: key.public.Fingerprint,
 	}
 	config := key.config(now)
-	hasher, err := signature.PrepareSign(config)
+	hasher, check, signedInput, err := key.begin(signature, config)
 	if err != nil {
 		return Signed{}, err
 	}
 	document := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(hasher, document), message); err != nil {
+	if _, err := io.Copy(io.MultiWriter(signedInput, document), message); err != nil {
 		return Signed{}, errors.New("read the document to sign")
 	}
 	documentHash := hex.EncodeToString(document.Sum(nil))
-	if err := key.sign(ctx, "openpgp-detached sha256:"+documentHash, func(private *packet.PrivateKey) error {
-		return signature.Sign(hasher, private, config)
-	}); err != nil {
+	serialized, err := key.finish(ctx, signature, config, hasher, check, "openpgp-detached sha256:"+documentHash)
+	if err != nil {
 		return Signed{}, err
 	}
 	// Serialized to memory first: w receives a whole signature or nothing.
 	var framed bytes.Buffer
-	if err := serialize(&framed, openpgp.SignatureType, armored, signature.Serialize); err != nil {
+	if err := serialize(&framed, openpgp.SignatureType, armored, func(w io.Writer) error {
+		_, err := w.Write(serialized)
+		return err
+	}); err != nil {
 		return Signed{}, err
 	}
 	if _, err := w.Write(framed.Bytes()); err != nil {
@@ -183,6 +251,165 @@ func (key *Key) DetachSign(ctx context.Context, w io.Writer, message io.Reader, 
 	}
 	hashID := hashIDs[key.signer.hash]
 	return Signed{Created: now, PubKeyAlgo: uint8(key.public.PubKeyAlgo), HashAlgo: hashID, DocumentHash: documentHash}, nil
+}
+
+// ClearSign writes message to w as a cleartext-signed document (RFC 9580 §7): the text itself,
+// readable, followed by an armored signature over its canonical form — what `gpg --clearsign` makes,
+// and what an apt repository serves as InRelease. It costs exactly one KMS operation.
+//
+// The signature covers the text with line endings canonicalised and trailing whitespace removed from
+// each line; that is the framework's rule, not a choice here. A document that must be reproduced
+// byte for byte belongs under a detached signature instead.
+func (key *Key) ClearSign(ctx context.Context, w io.Writer, message io.Reader, now time.Time) (Signed, error) {
+	now = now.UTC().Truncate(time.Second)
+	text, err := io.ReadAll(message)
+	if err != nil {
+		return Signed{}, errors.New("read the document to sign")
+	}
+	documentHash := sha256.Sum256(text)
+	subject := "openpgp-cleartext sha256:" + hex.EncodeToString(documentHash[:])
+	// The line ending before the signature armor is a separator, not part of the signed text
+	// (RFC 9580 §7.1), and the encoder writes that separator itself. So the text's own final line
+	// ending is dropped here, exactly as `gpg --clearsign` does: handing it over would sign an
+	// extra empty line, and every verifier would then extract the text with a blank line added.
+	body := text
+	if bytes.HasSuffix(body, []byte("\r\n")) {
+		body = body[:len(body)-2]
+	} else if bytes.HasSuffix(body, []byte("\n")) {
+		body = body[:len(body)-1]
+	}
+	// Framed in memory: w receives a whole signed document or nothing.
+	var framed bytes.Buffer
+	config := key.config(now)
+	frame := func(private *packet.PrivateKey) error {
+		plaintext, err := clearsign.Encode(&framed, private, config)
+		if err != nil {
+			return err
+		}
+		if _, err := plaintext.Write(body); err != nil {
+			return err
+		}
+		return plaintext.Close() // go-crypto signs here
+	}
+	var document []byte
+	if key.throwaway == nil {
+		if err := key.sign(ctx, subject, frame); err != nil {
+			return Signed{}, err
+		}
+		if document, err = withArmorChecksum(framed.Bytes()); err != nil {
+			return Signed{}, err
+		}
+	} else {
+		// Ed25519 (eddsa.go). clearsign frames the text and signs with the throwaway key; that
+		// signature block is then REPLACED by one made over the same canonical text through
+		// begin/finish, which signs via the KMS and verifies the result.
+		if err := frame(&packet.PrivateKey{PublicKey: *key.public, PrivateKey: key.throwaway}); err != nil {
+			return Signed{}, err
+		}
+		block, _ := clearsign.Decode(framed.Bytes())
+		if block == nil {
+			return Signed{}, errors.New("the cleartext-signed document could not be read back")
+		}
+		signature := &packet.Signature{
+			Version: key.public.Version, SigType: packet.SigTypeText, PubKeyAlgo: key.public.PubKeyAlgo,
+			Hash: key.signer.hash, CreationTime: now, IssuerKeyId: &key.public.KeyId, IssuerFingerprint: key.public.Fingerprint,
+		}
+		hasher, check, signedInput, err := key.begin(signature, config)
+		if err != nil {
+			return Signed{}, err
+		}
+		if _, err := signedInput.Write(block.Bytes); err != nil {
+			return Signed{}, err
+		}
+		serialized, err := key.finish(ctx, signature, config, hasher, check, subject)
+		if err != nil {
+			return Signed{}, err
+		}
+		if document, err = replaceSignatureBlock(framed.Bytes(), serialized); err != nil {
+			return Signed{}, err
+		}
+	}
+	// Whatever the path, the document that leaves is read back as a verifier reads it and checked
+	// against the KMS public key.
+	if err := key.verifyClearSigned(document); err != nil {
+		return Signed{}, err
+	}
+	if _, err := w.Write(document); err != nil {
+		return Signed{}, err
+	}
+	return Signed{Created: now, PubKeyAlgo: uint8(key.public.PubKeyAlgo), HashAlgo: hashIDs[key.signer.hash], DocumentHash: hex.EncodeToString(documentHash[:])}, nil
+}
+
+// withArmorChecksum re-armors the signature block of a cleartext-signed document WITH its CRC-24
+// line, and ends the document with a newline.
+//
+// go-crypto's clearsign leaves the checksum out, as RFC 9580 now recommends. GnuPG 2.4 (gpg and
+// gpgv, so every apt before 3.0) then cannot find the end of the armor when the base64 happens to
+// need no padding: it reports "no valid OpenPGP data found" and exits 2, although it also prints
+// "Good signature". Whether a signature needs padding depends on its length — measured here: every
+// RSA-3072 signature failed, the ECDSA ones passed. With the checksum line GnuPG reads all of them,
+// and the verifiers that ignore the checksum (Sequoia, go-crypto) are unaffected.
+//
+// Both steps use the library's own armor reader and writer; nothing is encoded by hand.
+func withArmorChecksum(document []byte) ([]byte, error) {
+	_, signature, err := signatureBlock(document)
+	if err != nil {
+		return nil, err
+	}
+	return replaceSignatureBlock(document, signature)
+}
+
+// signatureBlock finds a cleartext-signed document's signature armor and returns where it starts
+// and the packet bytes inside it.
+func signatureBlock(document []byte) (int, []byte, error) {
+	const begin = "\n-----BEGIN PGP SIGNATURE-----"
+	at := bytes.LastIndex(document, []byte(begin))
+	if at < 0 {
+		return 0, nil, errors.New("the cleartext-signed document has no signature block")
+	}
+	block, err := armor.Decode(bytes.NewReader(document[at+1:]))
+	if err != nil || block.Type != openpgp.SignatureType {
+		return 0, nil, errors.New("the cleartext-signed document's signature block is not readable")
+	}
+	signature, err := io.ReadAll(block.Body)
+	if err != nil || len(signature) == 0 {
+		return 0, nil, errors.New("the cleartext-signed document's signature block is not readable")
+	}
+	return at, signature, nil
+}
+
+// replaceSignatureBlock returns document with its signature armor replaced by signature, armored
+// with its checksum line and followed by a newline.
+func replaceSignatureBlock(document, signature []byte) ([]byte, error) {
+	at, _, err := signatureBlock(document)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	out.Write(document[:at+1])
+	if err := serialize(&out, openpgp.SignatureType, true, func(w io.Writer) error {
+		_, err := w.Write(signature)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// verifyClearSigned reads a cleartext-signed document the way a verifier does and checks its
+// signature against this key.
+func (key *Key) verifyClearSigned(document []byte) error {
+	block, rest := clearsign.Decode(document)
+	if block == nil || len(bytes.TrimSpace(rest)) != 0 {
+		return errors.New("the cleartext-signed document could not be read back")
+	}
+	_, signature, err := signatureBlock(document)
+	if err != nil {
+		return err
+	}
+	signed := key.signer.hash.New()
+	signed.Write(block.Bytes)
+	return key.verifyPacket(signature, signed)
 }
 
 // hashIDs are the OpenPGP hash algorithm numbers (RFC 9580 §9.5), for the status line only.
@@ -204,10 +431,36 @@ func (key *Key) ExportPublic(ctx context.Context, w io.Writer) error {
 	// The configured line IS the identity ("Name (comment) <address>"), so it is set whole.
 	// packet.NewUserId builds one from three parts and refuses the brackets a whole line contains.
 	userID := &packet.UserId{Id: key.userID}
-	if err := key.sign(ctx, "openpgp-key-certification "+key.Fingerprint(), func(private *packet.PrivateKey) error {
-		return selfSignature.SignUserId(userID.Id, key.public, private, key.config(key.created))
-	}); err != nil {
-		return err
+	subject, config := "openpgp-key-certification "+key.Fingerprint(), key.config(key.created)
+	if key.throwaway == nil {
+		if err := key.sign(ctx, subject, func(private *packet.PrivateKey) error {
+			return selfSignature.SignUserId(userID.Id, key.public, private, config)
+		}); err != nil {
+			return err
+		}
+	} else {
+		// Ed25519 (eddsa.go): SignUserId hashes and signs in one step, with no place to observe
+		// the digest, so the certification's input is fed here: the key as it is hashed for a
+		// signature, then 0xB4, the user ID's length and the user ID (RFC 9580 §5.2.4). The
+		// library's own VerifyUserIdSignature, below, is the check that this is the right input.
+		hasher, check, signedInput, err := key.begin(selfSignature, config)
+		if err != nil {
+			return err
+		}
+		if err := key.public.SerializeForHash(signedInput); err != nil {
+			return err
+		}
+		length := len(userID.Id)
+		if _, err := signedInput.Write(append([]byte{0xb4, byte(length >> 24), byte(length >> 16), byte(length >> 8), byte(length)}, userID.Id...)); err != nil {
+			return err
+		}
+		if _, err := key.finish(ctx, selfSignature, config, hasher, check, subject); err != nil {
+			return err
+		}
+	}
+	// For every key type: the certification must verify as the library verifies one.
+	if err := key.public.VerifyUserIdSignature(userID.Id, key.public, selfSignature); err != nil {
+		return errors.New("the key certification does not verify against the KMS public key")
 	}
 	entity := &openpgp.Entity{
 		PrimaryKey: key.public,
