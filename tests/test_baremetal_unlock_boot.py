@@ -225,6 +225,7 @@ class OnQemu(tub.OnSwtpm):
         with open(image, "wb") as f:
             f.truncate(16 * 1024 * 1024)
         os.mkdir(mnt)
+        self.addCleanup(lambda: run(["umount", mnt], capture_output=True))     # if a failure leaves it mounted
         for argv in (["mkfs.ext4", "-q", image], ["mount", "-o", "loop", image, mnt]):
             self.assertEqual(run(argv, capture_output=True).returncode, 0, argv)
         for name, content in (("local.bin", local), ("wg-boot.key", wg_private.encode() + b"\n")):
@@ -279,7 +280,7 @@ class OnQemu(tub.OnSwtpm):
         said = self.boot("2-unattended", initrd)
         self.assertNotRegex(said, PROMPT.pattern.decode())
         self.assertRegex(said, r"regalia-unlock: gave the key of /dev/vda for keyslot [12], through [bc]")
-        self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         allowed = [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:] if e["event"] == "unlock"]
         self.assertEqual(allowed, [("unlock", "a", "ALLOW")])
 
@@ -291,7 +292,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn("the disk stays locked: no peer helped in 5 rounds", said)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())
-        self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         self.assertEqual(self.events[since:], [])
 
 

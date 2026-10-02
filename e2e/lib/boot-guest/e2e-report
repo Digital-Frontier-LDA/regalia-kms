@@ -3,9 +3,10 @@
 # the boot mesh (nothing should be), and power off.
 mesh=absent; ip link show wg-boot >/dev/null 2>&1 && mesh=present
 table=absent; nft list table inet regalia_boot >/dev/null 2>&1 && table=present
-addresses="$(ip -4 -o addr show scope global | wc -l)"
+addresses="$(ip -o addr show scope global | wc -l)"       # IPv4 and IPv6
+link=down; ip -o link show eth0 | grep -q "state UP" && link=up
 mapped=no; [ -e /dev/mapper/root ] && mapped=yes
-echo "REGALIA-E2E-ROOT-UP root=$mapped wg-boot=$mesh table=$table addresses=$addresses" > /dev/console
+echo "REGALIA-E2E-ROOT-UP root=$mapped wg-boot=$mesh table=$table addresses=$addresses link=$link" > /dev/console
 # What is left, on the running host, of what opened the root volume. MEASURED: nothing that names the
 # key file. The unit the initrd generated is not loaded after switch-root (LoadState=not-found) and
 # /run/systemd/generator holds the real root's units only. A probe on the running host cannot read

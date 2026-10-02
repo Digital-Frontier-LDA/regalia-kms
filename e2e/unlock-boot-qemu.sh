@@ -38,7 +38,12 @@ cleanup(){
   for m in "${MOUNTED[@]:-}"; do [ -n "$m" ] && umount -R "$m" 2>/dev/null; done
   [ -e /dev/mapper/regalia-boot-build ] && cryptsetup close regalia-boot-build 2>/dev/null
   [ -n "${LOOP:-}" ] && losetup -d "$LOOP" 2>/dev/null
-  [ "${REGALIA_BOOT_KEEP:-0}" = 1 ] || rm -rf -- "$W"
+  # Never through a mount: the build binds this machine's /dev, /sys and /proc under $W.
+  if grep -q " $W" /proc/mounts; then
+    echo "unlock-boot-qemu: something is still mounted under $W: it is NOT removed" >&2
+  elif [ "${REGALIA_BOOT_KEEP:-0}" != 1 ]; then
+    rm -rf --one-file-system -- "$W"
+  fi
 }
 trap cleanup EXIT
 RECOVERY="cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"
@@ -81,7 +86,8 @@ chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-
   || { tail -40 "$W/dracut.log"; echo "unlock-boot-qemu: dracut failed"; exit 2; }
 grep -i "regalia" "$W/dracut.log" | head -5 || true
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
-for f in usr/bin/regalia-unlock usr/lib/regalia/wg-boot regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service usr/bin/wg nft wireguard.ko; do
+for f in 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.socket$' 'regalia-unlock\.service$' 'regalia-wg-boot\.service$' \
+         'bin/wg$' 'bin/nft$' 'bin/ip$' 'wireguard\.ko' 'nf_tables\.ko' 'nft_ct\.ko' 'virtio_net\.ko'; do
   grep -q "$f" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: the initrd lacks $f"; grep -c . "$W/lsinitrd.txt"; exit 2; }
 done
 cp "$ROOT/boot/vmlinuz-$KVER" "$W/vmlinuz"; cp "$ROOT/boot/initrd.e2e" "$W/initrd"

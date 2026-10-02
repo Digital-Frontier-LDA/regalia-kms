@@ -373,18 +373,21 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   - enrolment: with nothing enrolled the console asks "Please enter recovery key for disk root", and
     the key opens the volume; the running guest seals the two boot credentials to its own TPM;
   - unattended: systemd unseals both credentials in the initrd, the boot mesh comes up, a peer
-    verifies the guest's quote and gives its half, and the root volume is open about four seconds
-    after the kernel starts, with nobody typing anything; after switch-root the boot interface, its
-    ruleset and its address are gone;
-  - no peer: the client gives nothing after its five rounds (about two minutes), systemd-cryptsetup
-    reports that the key file failed, and the console asks for the passphrase or recovery key, which
-    opens the volume.
-  NOT shown: measured boot (the guest boots a plain kernel and initrd, so PCR 11 is zero and a changed
-  initrd is not told apart: that needs a unified kernel image), and any physical machine.
+    verifies the guest's quote and gives its half, and the root volume opens with nobody typing
+    anything (a few seconds after the kernel started, in the runs so far); after switch-root the boot
+    interface, its ruleset and its addresses are gone and the link is down;
+  - no peer: the client gives nothing after its five rounds (about two minutes in the runs so far),
+    and the console asks for the passphrase or recovery key, which opens the volume.
+  NOT shown: measured boot. The guest boots a plain kernel and initrd under SeaBIOS, so PCR 11 is zero
+  and PCR 7 holds no Secure Boot state: sealing to the TPM and the peers' check of the quote are shown
+  as mechanics, on this TPM and no other, and nothing there would refuse a changed initrd. That needs
+  a unified kernel image under UEFI. Also not shown: a network card that udev renames in the initrd
+  (the guest's is `eth0`), a host whose initrd is built with the files already under `/etc/regalia`
+  (the test appends them to the image), and any physical machine.
 - **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
-  keeps no record of it: after switch-root the unit that opened the volume is gone, and `/etc/crypttab`
-  on the root is not what the initrd used (measured in the boot test). So it is checked on the image,
-  before the image is approved:
+  keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen
+  in the boot test). `/etc/crypttab` on the root is only what the initrd was built from, if it was
+  rebuilt since the last edit. So it is checked on the image, before the image is approved:
   ```sh
   lsinitrd IMAGE | grep -E 'regalia|etc/crypttab|etc/cmdline\.d|usr/bin/(wg|nft)$'   # what it holds
   lsinitrd -f etc/crypttab IMAGE          # one entry: root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach

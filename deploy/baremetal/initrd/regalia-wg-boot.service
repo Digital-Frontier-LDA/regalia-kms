@@ -15,6 +15,9 @@
 Description=Boot mesh: WireGuard to the peers, before root
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 DefaultDependencies=no
+# the credential is unsealed with the TPM: not before its device is there
+Wants=tpm2.target
+After=tpm2.target
 Before=regalia-unlock.service cryptsetup-pre.target
 Conflicts=initrd-switch-root.target shutdown.target
 Before=initrd-switch-root.target shutdown.target
@@ -22,10 +25,13 @@ Before=initrd-switch-root.target shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-EnvironmentFile=/etc/regalia/boot.env
+# No EnvironmentFile=: /etc/regalia/boot.env is read by the script as data. A file that may come from
+# storage others can write must not be able to set this process's environment (LD_PRELOAD, PATH).
 LoadCredentialEncrypted=regalia-wg-boot-key:/etc/regalia/wg-boot.cred
 ExecStart=/usr/lib/regalia/wg-boot up
-ExecStop=/usr/lib/regalia/wg-boot down
+# ExecStopPost, not ExecStop: it also runs when the start failed or timed out. Nothing of the boot mesh,
+# least of all its default-deny ruleset, may be left for the real root to inherit.
+ExecStopPost=/usr/lib/regalia/wg-boot down
 TimeoutStartSec=60
 NoNewPrivileges=yes
 ProtectHome=yes

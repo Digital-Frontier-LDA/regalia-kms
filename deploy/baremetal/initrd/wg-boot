@@ -4,42 +4,70 @@
 # From /etc/regalia/boot.env (written with the boot configuration after each accepted manifest):
 #   BOOT_NIC       the network interface, e.g. eno1
 #   BOOT_ADDRESS   this node's declared address with its prefix, e.g. 198.51.100.4/24
-#   BOOT_GATEWAY   the gateway to the peers' declared addresses; empty when they are on the link
+#   BOOT_GATEWAY   the gateway to the peers' declared addresses; empty or absent when they are on the link
 #   BOOT_TUNNEL    this node's address inside the tunnel, e.g. 10.89.0.1
 # and beside it: boot.nft (bootnet.boot_ruleset) and wg-boot.conf (bootnet.boot_wg_conf). The private
 # key is the credential regalia-wg-boot-key, unsealed by systemd.
 #
 # The ruleset is loaded BEFORE the interface has an address: there is no moment in which the node is
-# on the network without it.
+# on the network without it. `up` either ends with the mesh up or leaves nothing behind: a ruleset
+# that outlived a failed start would follow the host into its real root and drop everything there.
+# `down` takes the link down before it removes the ruleset, for the same reason in the other order.
+#
+# The key is never an argument and never in a file; wg's own messages are not passed on, because it
+# quotes the line it could not read, and that line can be the key.
+#
+# boot.env IS READ AS DATA, never as shell and never as this process's environment. It may come from
+# storage that whoever holds the machine can write (beside the kernel image), and this script is root
+# in an image the peers trust: a file that could set LD_PRELOAD or PATH here would be code. Four names,
+# each with a value of letters, digits and . : / - _ only; everything else in the file is ignored.
 set -eu
 IF=wg-boot
-ETC="${REGALIA_ETC:-/etc/regalia}"      # another directory only in tests
+ETC="${REGALIA_ETC:-/etc/regalia}"      # another directory only in tests (from the unit, never from boot.env)
+fail() { echo "wg-boot: $*" >&2; exit 1; }
+setting() { [ -r "$ETC/boot.env" ] && sed -n "s/^$1=\([A-Za-z0-9.:/_-]*\)\$/\1/p" "$ETC/boot.env" | sed -n 1p; }
+BOOT_NIC="$(setting BOOT_NIC || true)"; BOOT_ADDRESS="$(setting BOOT_ADDRESS || true)"
+BOOT_GATEWAY="$(setting BOOT_GATEWAY || true)"; BOOT_TUNNEL="$(setting BOOT_TUNNEL || true)"
+case "$BOOT_NIC" in ""|*[!A-Za-z0-9._-]*|????????????????*) fail "boot.env: BOOT_NIC must name a network interface" ;; esac
 down() {
   ip link del "$IF" 2>/dev/null || true
   ip addr flush dev "$BOOT_NIC" 2>/dev/null || true
+  ip link set "$BOOT_NIC" down 2>/dev/null || true
   nft delete table inet regalia_boot 2>/dev/null || true
 }
 case "${1:-}" in
   up)
+    if [ -z "$BOOT_ADDRESS" ] || [ -z "$BOOT_TUNNEL" ]; then fail "boot.env: BOOT_ADDRESS and BOOT_TUNNEL are needed"; fi
+    [ -s "$ETC/boot.nft" ] || fail "$ETC/boot.nft is missing"
+    [ -s "$ETC/wg-boot.conf" ] || fail "$ETC/wg-boot.conf is missing"
+    [ "$(sed -n 1p "$ETC/wg-boot.conf")" = "[Interface]" ] || fail "$ETC/wg-boot.conf does not begin with [Interface]: it was not rendered by bootnet.py"
+    key="$(cat "$CREDENTIALS_DIRECTORY/regalia-wg-boot-key")" || fail "the credential regalia-wg-boot-key is missing"
+    case "$key" in *[!A-Za-z0-9+/=]*) fail "the credential regalia-wg-boot-key is not a WireGuard key" ;; esac
+    [ "${#key}" -eq 44 ] || fail "the credential regalia-wg-boot-key is not a WireGuard key"
     i=0
     until ip link show "$BOOT_NIC" >/dev/null 2>&1; do      # the driver may still be loading
-      i=$((i + 1)); [ "$i" -le 150 ] || { echo "wg-boot: no interface $BOOT_NIC after 30 s" >&2; exit 1; }
+      i=$((i + 1)); [ "$i" -le 150 ] || fail "no interface $BOOT_NIC after 30 s"
       sleep 0.2
     done
+    down                                  # whatever an earlier attempt of this boot left
+    trap 'down' EXIT                      # and whatever this one leaves, unless it gets to the end
     nft -f "$ETC/boot.nft"
     ip link set "$BOOT_NIC" up
     ip addr add "$BOOT_ADDRESS" dev "$BOOT_NIC"
     if [ -n "${BOOT_GATEWAY:-}" ]; then ip route add default via "$BOOT_GATEWAY" dev "$BOOT_NIC"; else ip route add default dev "$BOOT_NIC"; fi
     ip link add "$IF" type wireguard
-    # the rendered configuration with the key added after its first line ([Interface]), on a pipe: applied
-    # without its key it would unset the interface's key
-    { read -r key < "$CREDENTIALS_DIRECTORY/regalia-wg-boot-key"
-      read -r first
-      printf '%s\nPrivateKey = %s\n' "$first" "$key"
-      cat; } < "$ETC/wg-boot.conf" | wg syncconf "$IF" /dev/stdin
+    # the rendered configuration with the key added after its first line, on a pipe: applied without its
+    # key it would unset the interface's key
+    { printf '[Interface]\nPrivateKey = %s\n' "$key"; sed 1d "$ETC/wg-boot.conf"; } | wg syncconf "$IF" /dev/stdin 2>/dev/null \
+      || fail "wg refused the configuration"
+    key=
+    if [ "$(wg show "$IF" private-key 2>/dev/null)" = "(none)" ] || [ -z "$(wg show "$IF" peers 2>/dev/null)" ]; then
+      fail "the interface has no key or no peer after the configuration was applied"
+    fi
     ip addr add "$BOOT_TUNNEL/32" dev "$IF"
     ip link set "$IF" up
     sed -n 's/^AllowedIPs = //p' "$ETC/wg-boot.conf" | while read -r peer; do ip route add "$peer" dev "$IF"; done
+    trap - EXIT
     ;;
   down) down ;;
   *) echo "usage: wg-boot up|down" >&2; exit 2 ;;
