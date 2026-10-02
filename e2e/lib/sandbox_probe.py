@@ -133,7 +133,10 @@ def attempt(action):
         os._exit(code)
     _, status = os.waitpid(pid, 0)
     if os.WIFSIGNALED(status):
-        return "refused (killed by %s)" % signal.Signals(os.WTERMSIG(status)).name
+        # SIGSYS is the system-call filter's refusal. Any other signal is this probe crashing, which
+        # must never read as a refusal.
+        name = signal.Signals(os.WTERMSIG(status)).name
+        return "refused (killed by SIGSYS)" if name == "SIGSYS" else "skipped (the probe was killed by %s)" % name
     code = os.WEXITSTATUS(status)
     if code == 0:
         return "allowed"

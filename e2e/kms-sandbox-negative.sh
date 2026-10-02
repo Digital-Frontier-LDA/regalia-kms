@@ -72,10 +72,10 @@ hdr "0  both units ran the probe"
   && P "the hardened unit (${#props[@]} shipped settings) ran it" || F "hardened unit: exit $rc_hardened: $(head -c 400 "$W/hardened.json.err")"
 if [ "$fail" != 0 ]; then echo; echo "kms-sandbox-negative: $pass passed, $fail failed"; exit 1; fi
 
-# The verdicts: one line per check, "PASS|FAIL<TAB>text", sections as "HDR<TAB>title".
-while IFS=$'\t' read -r kind text; do
-  case "$kind" in HDR) hdr "$text";; PASS) P "$text";; FAIL) F "$text";; esac
-done < <(python3 - "$W/control.json" "$W/hardened.json" <<'PY'
+# The verdicts: one line per check, "PASS|FAIL<TAB>text", sections as "HDR<TAB>title", and a last line
+# "END<TAB><number of checks>". They are written to a file and counted, so an evaluator that dies part
+# way cannot leave a short list of passes behind.
+python3 - "$W/control.json" "$W/hardened.json" > "$W/verdicts" <<'PY'
 import json, sys
 control, hardened = (json.load(open(p)) for p in sys.argv[1:3])
 REFUSED = (
@@ -118,8 +118,15 @@ check(int(hs["CapBnd"], 16) == 0 and int(hs["CapEff"], 16) == 0 and int(cs["CapE
       "no capability in the sandbox (bounding %s, effective %s); control effective %s" % (hs["CapBnd"], hs["CapEff"], cs["CapEff"]))
 check(hs["NoNewPrivs"] == "1" and cs["NoNewPrivs"] == "0", "NoNewPrivs is %s in the sandbox, %s without it" % (hs["NoNewPrivs"], cs["NoNewPrivs"]))
 check(hs["Seccomp"] == "2" and cs["Seccomp"] == "0", "a system-call filter is loaded in the sandbox (Seccomp %s), none without it (%s)" % (hs["Seccomp"], cs["Seccomp"]))
+print("END\t%d" % (sum(len(actions) for _, actions in REFUSED) + len(NEEDED) + 4))
 PY
-)
+rc_verdicts=$?; expected=""; before=$((pass+fail))
+while IFS=$'\t' read -r kind text; do
+  case "$kind" in HDR) hdr "$text";; PASS) P "$text";; FAIL) F "$text";; END) expected="$text";; esac
+done < "$W/verdicts"
+if [ "$rc_verdicts" != 0 ] || [ -z "$expected" ] || [ "$((pass+fail-before))" != "$expected" ]; then
+  F "the evaluator did not finish (exit $rc_verdicts; $((pass+fail-before)) verdicts of ${expected:-an unknown number})"
+fi
 
 echo; echo "kms-sandbox-negative: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
