@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/keywrap"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
@@ -47,6 +48,8 @@ type Provider struct {
 	// turn holds the one slot PIV requests take in order. See takeTurn.
 	turn    chan struct{}
 	waiting atomic.Int32
+	// returned makes a card that was gone wait for a fresh runtime lease. See RequireReauthorization.
+	returned reauth.Tracker
 }
 
 type pinRetryReading struct {
@@ -59,6 +62,33 @@ func New(driver Driver, pins PINSource) (*Provider, error) {
 		return nil, errors.New("YubiKey driver and PIN source are required")
 	}
 	return &Provider{driver: driver, pins: pins, blocked: make(map[string]struct{}), pinReadings: make(map[string]pinRetryReading), turn: make(chan struct{}, 1)}, nil
+}
+
+// RequireReauthorization makes every card wait, after an absence and after a start of this daemon,
+// for a runtime lease asked for since (internal/backend/reauth; regalia-kms#72 PoC 12.4). Without
+// this call nothing waits, as before.
+//
+// WHEN A CARD IS TAKEN TO BE GONE. When it cannot be opened, and when a call on an open card fails
+// and the card then does not answer for its serial on that same connection (answers). A card that
+// was pulled cannot answer on a connection made before it left; a card that refused a request (a
+// payload of the wrong size, a key the slot does not hold) still does. The distinction matters:
+// counting every failed operation as an absence would let any caller who may use a key take the
+// card out of service, for every key on it, with one malformed request, and again at will.
+func (provider *Provider) RequireReauthorization(gate reauth.Gate, boottime func() (int64, error), sinceMs int64) error {
+	return provider.returned.Require(gate, boottime, sinceMs)
+}
+
+// AwaitingReauthorization lists the cards that are present and not yet serving, each with the
+// boot-clock time (ms) since which a lease must have been asked for, and those last seen gone (-1).
+func (provider *Provider) AwaitingReauthorization() map[string]int64 {
+	return provider.returned.Awaiting()
+}
+
+// answers reports whether the card behind an open session still answers as the bound card. Asked
+// after a call on it failed, to tell a card that has gone from one that refused the request.
+func answers(ctx context.Context, session Session, serial string) bool {
+	answered, err := session.Identity(ctx)
+	return err == nil && answered == serial
 }
 
 // takeTurn makes PIV requests wait for each other.
@@ -124,14 +154,23 @@ func (provider *Provider) forgetPINRetries(deviceID string) {
 // provider has logged in, the card answers it with 9000 rather than 63Cx, so the count
 // is illegible — not zero — and the last legible reading stands in for it. A failed read
 // never overwrites that reading, and a device with no reading at all is still refused.
-func (provider *Provider) pinRetries(ctx context.Context, deviceID string, session Session) (int, error) {
+//
+// AN ILLEGIBLE COUNT IS ALSO WHAT A CARD THAT HAS GONE GIVES. The earlier reading must not stand
+// in for a card that is no longer there, so when the read fails the card is asked for its serial
+// on the same connection: only a card that still answers gets the fallback. One that does not is
+// recorded as gone (RequireReauthorization) and the read fails.
+func (provider *Provider) pinRetries(ctx context.Context, binding registry.Binding, session Session) (int, error) {
 	retries, err := session.PINRetries(ctx)
 	if err == nil {
-		provider.notePINRetries(deviceID, retries)
+		provider.notePINRetries(binding.DeviceID, retries)
 		return retries, nil
 	}
+	if !answers(ctx, session, binding.DeviceSerial) {
+		provider.returned.Gone(binding.DeviceID)
+		return 0, err
+	}
 	provider.mu.RLock()
-	reading, ok := provider.pinReadings[deviceID]
+	reading, ok := provider.pinReadings[binding.DeviceID]
 	provider.mu.RUnlock()
 	if ok {
 		return reading.retries, nil
@@ -161,14 +200,26 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	session, err := provider.driver.Open(ctx, binding.DeviceID)
 	if err != nil || session == nil {
+		provider.returned.Gone(binding.DeviceID)
 		return nil, "", ErrUnavailable
 	}
 	defer func() {
-		if recover() != nil {
+		panicked := recover() != nil
+		switch {
+		case panicked:
+			// What state the card is in is not known, and it is not asked: the call that would
+			// ask is the code that has just panicked.
+			provider.returned.Gone(binding.DeviceID)
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
+		case err != nil && !answers(ctx, session, binding.DeviceSerial):
+			// A request that failed on an open card: gone, or refused? Asked before the session
+			// is closed, on the connection the failure happened on. A success needs no question.
+			provider.returned.Gone(binding.DeviceID)
 		}
 		if session.Close() != nil {
+			// The card did not let go of the connection: what state it is in is not known.
+			provider.returned.Gone(binding.DeviceID)
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
 		}
@@ -179,6 +230,12 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	}
 	pinPolicy, touchPolicy, err := session.Policies(ctx, binding.ObjectID)
 	if err != nil || pinPolicy != binding.PINPolicy || touchPolicy != "never" {
+		return nil, "", ErrUnavailable
+	}
+	// A CARD THAT WAS GONE WAITS FOR A FRESH LEASE. Asked once the card has proved to be the bound
+	// one, with the key and policies the binding names, and before anything is done with it, the
+	// PIN included.
+	if !provider.returned.Serves(ctx, binding.DeviceID) {
 		return nil, "", ErrUnavailable
 	}
 	if operation == "public-key" {
@@ -204,7 +261,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		}
 		return output, "application/vnd.regalia.wrapped-key", nil
 	}
-	retries, retryErr := provider.pinRetries(ctx, binding.DeviceID, session)
+	retries, retryErr := provider.pinRetries(ctx, binding, session)
 	if retryErr != nil || retries <= 1 {
 		if retryErr == nil {
 			provider.blockPIN(binding.DeviceID)
@@ -278,18 +335,30 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	session, err := provider.driver.Open(ctx, binding.DeviceID)
 	if err != nil || session == nil {
+		provider.returned.Gone(binding.DeviceID)
 		return false
 	}
 	defer session.Close()
 	serial, err := session.Identity(ctx)
 	if err != nil || serial != binding.DeviceSerial {
+		if err != nil {
+			provider.returned.Gone(binding.DeviceID) // opened, and it does not answer for its serial
+		}
 		return false
 	}
 	pinPolicy, touchPolicy, err := session.Policies(ctx, binding.ObjectID)
 	if err != nil || pinPolicy != binding.PINPolicy || touchPolicy != "never" {
+		if err != nil && !answers(ctx, session, binding.DeviceSerial) {
+			provider.returned.Gone(binding.DeviceID)
+		}
 		return false
 	}
-	retries, err := provider.pinRetries(ctx, binding.DeviceID, session)
+	// Present, the right card, and not yet vouched for again: not healthy, so routing and readiness
+	// say so. This is also where a card's return is first noticed.
+	if !provider.returned.Serves(ctx, binding.DeviceID) {
+		return false
+	}
+	retries, err := provider.pinRetries(ctx, binding, session)
 	return err == nil && retries > 1
 }
 
