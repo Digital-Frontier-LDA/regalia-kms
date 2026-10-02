@@ -2,9 +2,9 @@
 
 **A self-hosted, hardware-backed key-management service for the everyday key needs of a small or
 medium software company.** Keys are used through one centralized service, rooted in dedicated
-hardware you own — SmartCard-HSM tokens (Nitrokey HSM 2 for production, or a Raspberry Pi Pico
-running [Pico-HSM](https://github.com/polhenarejos/pico-hsm) for staging), YubiKey PIV, and OpenPGP
-cards. Clients call a **mutually-authenticated API** and never receive a PIN, a PKCS#11 path, a key
+hardware you own — SmartCard-HSM tokens (Nitrokey HSM 2, or a Raspberry Pi Pico running
+[Pico-HSM](https://github.com/polhenarejos/pico-hsm), which is supported but not yet qualified),
+YubiKey PIV, and OpenPGP cards. Clients call a **mutually-authenticated API** and never receive a PIN, a PKCS#11 path, a key
 handle, or raw key bytes. Every operation is authenticated, policy-checked, and written to a
 tamper-evident audit log. No cloud KMS, no vendor-held custody, no per-call billing.
 

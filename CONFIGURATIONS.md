@@ -15,7 +15,7 @@ that serves it is done before work that serves only the Pico.
 
 A configuration names the token *types* a deployment uses, not a device count. The registry still
 requires two hardware bindings for a production object (or custody `exception`), so "Pico HSM alone"
-means at least two Picos, not one.
+means at least two Picos for such an object, and one only where the manifest declares the exception.
 
 "Supported" means the product accepts the configuration, documents what it can do, and tests it.
 It is not the same as "qualified": a token and middleware combination is qualified only when it is
@@ -25,7 +25,8 @@ it. The status of each configuration is [below](#status).
 Whether an operator puts production keys on a Pico is that operator's trust decision: the Pico is a
 microcontroller with no secure element and no security certification. This document does not change
 the rule Digital Frontier applies to its own fleet (requirement D1: its production keys live on
-Nitrokeys).
+Nitrokeys), and it does not qualify anything: no Pico stack is qualified ([status](#status)), and in
+the three-site program a Pico host stays a lab profile until #62 to #64 are done.
 
 ### How an interface or an algorithm is chosen
 
