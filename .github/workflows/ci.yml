@@ -421,6 +421,24 @@ jobs:
       - name: Runtime leases against swtpm (issue, hold, revoke, reboot)
         run: bash e2e/runtime-lease-swtpm.sh
 
+  # regalia-kms#77: the disk recovery key, on a real dm-crypt volume (a loop device). With every other
+  # keyslot destroyed, the recovery key alone opens and mounts it; a wrong key, one wrong letter, no
+  # dashes, other grouping and capitals do not; a used key is replaced and then opens nothing. The
+  # script fails if the six file-backed tests of recovery-key.sh do not all run.
+  luks-recovery-key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin
+      - name: The recovery key alone opens the volume (loop device, LUKS2)
+        run: sudo bash e2e/luks-recovery-key.sh
+
   # regalia-kms#76: replacing a node, on three software TPMs (the old node, the new one, a peer). One
   # root-signed manifest retires the old node and enrolls the new; the new one attests, is unlocked and
   # holds a lease; the old hardware is refused by every decision; its identities cannot be enrolled

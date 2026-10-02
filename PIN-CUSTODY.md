@@ -178,6 +178,48 @@ an unseal, healing, and the PIN refused at swtpm's default limit of 3); `host_pr
 DL360's defaults, and whether its firmware counts a real power cut the same way, are a PoC still to
 run (#57).
 
+## The disk recovery key
+
+Each KMS host's encrypted root has one keyslot that needs neither its TPM nor a peer: the **recovery
+key** (#77, Phase 17). It exists for the cases the unattended paths cannot cover: a total outage of
+all three sites (threat model A3), a host whose TPM or measured-boot policy no longer releases the
+disk, or a node with no healthy peer.
+
+Decisions (#77, 2026-10-02; regalia-kms-24 under the owner's delegation):
+
+- **It adds a disk-only recovery secret. It does not change the 4-of-6 ceremony recovery.** The k-of-n
+  shares still guard the HSM keys and the payload; the recovery key opens one host's disk and nothing
+  else. A 2-of-3 scheme is a later experiment that needs its own approval (17.4).
+- **What it opens, and what it does not.** With the disk open the host can boot. The HSM keys are
+  still in the HSM, the HSM PIN is still sealed to the TPM (or typed from the PIN card), membership
+  still decides whether peers accept the node, and serving still needs a lease. The recovery key
+  restores a disk; it is not signing authority, membership authority or an HSM credential.
+- **One per host**, so one envelope reaches one host. It is generated at the ceremony (step 0), in
+  systemd's recovery-key format: 256 bits as 8 groups of 8 letters from `cbdefghijklnrtuv`, with a
+  dash between groups. Those letters sit on the same keys of the common keyboard layouts, which
+  matters at a boot prompt. The dashes are part of the key and it is lower case.
+- **Custody.** On paper, on the KMS host recovery card, in its own sealed tamper-evident envelope
+  in the Owner's safe: apart from every site and apart from the servers, because unlike everything
+  else on a host this one secret is enough for its disk. It is also in the tier-0 payload and in
+  every PIN escrow, so a lost card is recovered through k shares. It is never stored on a host and
+  never typed anywhere but that host's console.
+- **When it is used.** By the Owner, at the host's console, when no unattended path can unlock it.
+  Every use is recorded as an incident (who, when, which host, why).
+- **Using it spends it.** A key that was typed at a console has been seen. After any use, a
+  rehearsal included, a new key is generated and escrowed, and `recovery-key.sh --replace` enrols it
+  and destroys the used keyslot. A broken envelope seal is treated the same way.
+- **Nothing weaker stays beside it.** Commissioning wipes the installer's passphrase once the TPM
+  and the recovery key are proven; `root_disk_recovery_keyslot` fails while a keyslot that no token
+  names remains.
+
+*Verified by:* `tests/test_baremetal_recovery_key.py` (a real LUKS2 header in a file: enrolment, the
+refusals, replacement, no secret on a command line) and `e2e/luks-recovery-key.sh` in CI (a real
+dm-crypt volume on a loop device: every other keyslot destroyed, the recovery key alone opens and
+mounts it; a wrong key, one wrong letter, no dashes, other grouping and capitals do not);
+`host_probe.py` (`root_disk_recovery_keyslot`) on the host. **Not verified: any KMS host, a real boot
+prompt, or the physical custody procedure.** The rehearsal with the envelope, the safe and a
+witness (PoC 17.1 proper) is the Owner's to run.
+
 ## Retry circuit breaker
 
 Both providers refuse to present a PIN when the card reports one or zero remaining attempts, latch the

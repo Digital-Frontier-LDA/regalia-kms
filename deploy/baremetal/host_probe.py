@@ -27,6 +27,14 @@ PLATFORM AND TPM, measured:
   root_disk_tpm_unlocked    a dm-crypt device is among the root filesystem's block-device ancestors
                             (lsblk -s: LUKS directly or under LVM), and its crypttab entry unlocks with
                             the TPM (a tpm2-device=<value> option, parsed exactly)
+  root_disk_recovery_keyslot
+                            the same LUKS2 header carries the per-host RECOVERY keyslot (#77): exactly
+                            one systemd-recovery token, naming one keyslot that no other token names,
+                            and no keyslot that no token names (a leftover installer passphrase). Read
+                            from the header alone: the recovery key itself is never asked for or read.
+                            It is a ceremony secret on paper and in the escrow, enrolled by
+                            deploy/baremetal/recovery-key.sh; whether the paper copy OPENS that keyslot
+                            is recovery-key.sh --check, a rehearsal step, not a probe
   ima_policy_loaded         the IMA policy has an executable-measurement rule (measure func=BPRM_CHECK,
                             or MMAP_CHECK with MAY_EXEC), AND the newest IMA log entry for the
                             regalia-kms binary carries the digest of the bytes at that path NOW (a
@@ -108,7 +116,7 @@ CRED_REFUSED = {"5a1c6a86df9d4096b1d5a65e0862f19a": "the host key (bench only)",
 TPM2_ALG_SHA256 = 0x000B
 RSA_ALGORITHM = bytes.fromhex("300d06092a864886f70d0101010500")   # AlgorithmIdentifier: rsaEncryption, NULL
 PLATFORM = ("uefi_boot", "secure_boot_enabled", "tpm2_present", "tpm_sha256_bank", "tpm_lockout_policy",
-            "root_disk_tpm_unlocked", "ima_policy_loaded", "pin_import_key_present",
+            "root_disk_tpm_unlocked", "root_disk_recovery_keyslot", "ima_policy_loaded", "pin_import_key_present",
             "pin_credentials_sealed_as_recorded", "hsm_token_attached",
             "token_clients_root_only", "firewall_default_deny")
 MEASURED = PLATFORM + os_probe.MEASURED
@@ -174,16 +182,40 @@ def sha256_bank(host):
         (False, "no /sys/class/tpm/tpm0/pcr-sha256: enable the SHA-256 bank in the firmware (RBSU)")
 
 
-def root_unlock(host):
+def root_crypt_devices(host):
+    """The dm-crypt names under the root filesystem (LUKS directly, or LVM on LUKS), or (None, why)."""
     rc, out = host.run(["findmnt", "-n", "-o", "SOURCE", "/"])
     src = re.sub(r"\[.*\]$", "", out.strip())          # btrfs: /dev/mapper/x[/@]
     if rc != 0 or not src:
-        return False, "cannot find the root filesystem's device"
+        return None, "cannot find the root filesystem's device"
     # The device and its ancestors (inverse tree): LUKS directly, or LVM on LUKS, both resolve here.
     rc, out = host.run(["lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", src])
     crypts = [f[0] for f in (l.split() for l in out.splitlines()) if len(f) == 2 and f[1] == "crypt"]
     if rc != 0 or not crypts:
-        return False, "the root filesystem (%s) is not on dm-crypt" % src
+        return None, "the root filesystem (%s) is not on dm-crypt" % src
+    return crypts, ""
+
+
+def luks_header(host, name):
+    """(device, LUKS2 JSON metadata) of the volume under dm-crypt name, or (None, why)."""
+    rc, status = host.run(["cryptsetup", "status", name])
+    dev = next((l.split(":", 1)[1].strip() for l in status.splitlines() if l.strip().startswith("device:")), "")
+    if rc != 0 or not dev:
+        return None, "cannot find the LUKS device under %s (cryptsetup status)" % name
+    rc, meta = host.run(["cryptsetup", "luksDump", "--dump-json-metadata", dev])
+    try:
+        parsed = json.loads(meta) if rc == 0 else None
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        return None, "cannot read the LUKS2 header of %s (cryptsetup luksDump --dump-json-metadata)" % dev
+    return dev, parsed
+
+
+def root_unlock(host):
+    crypts, why = root_crypt_devices(host)
+    if crypts is None:
+        return False, why
     entries = {}
     for line in (host.read("/etc/crypttab") or "").splitlines():
         f = line.split()
@@ -197,17 +229,10 @@ def root_unlock(host):
             return False, "%s is in crypttab but not TPM-unlocked (options: %s)" % (name, entries[name] or "none")
         # crypttab only ASKS for the TPM; the LUKS2 header must actually carry a TPM2 token (what
         # systemd-cryptenroll --tpm2-device writes), or a passphrase-only volume would pass here.
-        rc, status = host.run(["cryptsetup", "status", name])
-        dev = next((l.split(":", 1)[1].strip() for l in status.splitlines() if l.strip().startswith("device:")), "")
-        if rc != 0 or not dev:
-            return False, "cannot find the LUKS device under %s (cryptsetup status)" % name
-        rc, meta = host.run(["cryptsetup", "luksDump", "--dump-json-metadata", dev])
-        try:
-            tokens = json.loads(meta).get("tokens", {}) if rc == 0 else None
-        except ValueError:
-            tokens = None
-        if tokens is None:
-            return False, "cannot read the LUKS2 header of %s (cryptsetup luksDump --dump-json-metadata)" % dev
+        dev, meta = luks_header(host, name)
+        if dev is None:
+            return False, meta
+        tokens = meta.get("tokens", {})
         tpm = [t for t in tokens.values() if t.get("type") == "systemd-tpm2" and t.get("keyslots")]
         if not tpm:
             return False, "%s (%s) has no systemd-tpm2 token in its LUKS2 header: enrol it with " \
@@ -220,6 +245,57 @@ def root_unlock(host):
                 "systemd-cryptenroll --wipe-slot=tpm2 --tpm2-device=auto --tpm2-pcrs=7" % (name, dev, wrong)
     return True, "%s unlocks with the TPM (%s; systemd-tpm2 token in the LUKS2 header)" % (
         ", ".join(crypts), "; ".join(entries[n] for n in crypts))
+
+
+def recovery_keyslots(meta):
+    """Judge one LUKS2 header (the JSON of cryptsetup luksDump --dump-json-metadata) for the recovery
+    keyslot. Pure: it is given metadata, which holds no key, and returns (ok, why)."""
+    keyslots = set(meta.get("keyslots") or {})
+    tokens = [t for t in (meta.get("tokens") or {}).values() if isinstance(t, dict)]
+    named = {}
+    for token in tokens:
+        for slot in token.get("keyslots") or []:
+            named.setdefault(str(slot), []).append(token.get("type"))
+    recovery = [t for t in tokens if t.get("type") == "systemd-recovery"]
+    if not recovery:
+        return False, "no recovery keyslot (no systemd-recovery token): enrol the host's recovery key with " \
+            "deploy/baremetal/recovery-key.sh --enrol"
+    if len(recovery) != 1 or len(recovery[0].get("keyslots") or []) != 1:
+        return False, "%d systemd-recovery tokens naming %s keyslots: one host has ONE recovery key in one keyslot " \
+            "(a second is a second secret to keep, and an old one that still opens the disk)" % (
+                len(recovery), [len(t.get("keyslots") or []) for t in recovery])
+    slot = str(recovery[0]["keyslots"][0])
+    if slot not in keyslots:
+        return False, "the systemd-recovery token names keyslot %s, which does not exist" % slot
+    # Its OWN keyslot: one that the TPM token (or any other) also names would be opened by that
+    # credential too, and wiping either would take the other with it.
+    if len(named[slot]) != 1:
+        return False, "keyslot %s is named by %s: the recovery key must have a keyslot of its own" % (
+            slot, " and ".join(sorted(str(t) for t in named[slot])))
+    # A keyslot that no token names is a plain passphrase: the installer's, typically. Left in place it
+    # is the weakest way into the disk, beside a TPM policy and a 256-bit recovery key.
+    stray = sorted(keyslots - set(named), key=lambda s: (len(s), s))
+    if stray:
+        return False, "keyslot %s is named by no token (a leftover passphrase?): once the TPM and the recovery " \
+            "key are proven, wipe it with systemd-cryptenroll --wipe-slot=password" % ", ".join(stray)
+    return True, "recovery keyslot %s (systemd-recovery token), separate from %s" % (
+        slot, ", ".join(sorted("%s in keyslot %s" % (kinds[0], s) for s, kinds in named.items() if s != slot)) or "nothing else")
+
+
+def recovery_keyslot(host):
+    crypts, why = root_crypt_devices(host)
+    if crypts is None:
+        return False, why
+    found = []
+    for name in crypts:
+        dev, meta = luks_header(host, name)
+        if dev is None:
+            return False, meta
+        ok, why = recovery_keyslots(meta)
+        if not ok:
+            return False, "%s (%s): %s" % (name, dev, why)
+        found.append("%s (%s): %s" % (name, dev, why))
+    return True, "; ".join(found)
 
 
 def ima(host):
@@ -506,7 +582,8 @@ def firewall(host):
 
 
 PROBES = dict(os_probe.PROBES, uefi_boot=uefi_boot, secure_boot_enabled=secure_boot,
-              tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock, ima_policy_loaded=ima,
+              tpm2_present=tpm2, tpm_sha256_bank=sha256_bank, tpm_lockout_policy=lockout_policy, root_disk_tpm_unlocked=root_unlock,
+              root_disk_recovery_keyslot=recovery_keyslot, ima_policy_loaded=ima,
               pin_import_key_present=import_key, pin_credentials_sealed_as_recorded=pin_credentials,
               hsm_token_attached=hsm_token, token_clients_root_only=token_clients_root_only, firewall_default_deny=firewall)
 
