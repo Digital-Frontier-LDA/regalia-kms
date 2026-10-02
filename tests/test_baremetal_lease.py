@@ -123,14 +123,14 @@ class Case(unittest.TestCase):
         self.now += seconds
         self.ticks += seconds * 1000
 
-    def evidence(self, attester, manifest, session=SESSION, reset=1, **quoted):
+    def evidence(self, attester, manifest, session=SESSION, reset=1, signed_by="a", **quoted):
         """Node a's fresh quote for `attester`: over a nonce it issues now, this epoch and that boot session
         (`quoted` overrides what the quote is really over)."""
         nonce = attester.nonce("a")
         key = b"ephemeral key of boot " + bytes.fromhex(session)
         fields = dict(node_id="a", epoch=manifest["epoch"], session_id=bytes.fromhex(session), ephemeral_public=key, nonce=nonce)
         fields.update(quoted)
-        signed = self.keys["a"].signer(reset=reset)(attest.qualifying_data(*fields.values()))
+        signed = self.keys[signed_by].signer(ek_name=self.keys["a"].ek_name, reset=reset)(attest.qualifying_data(*fields.values()))
         return {"ephemeral_public": key.hex(), "nonce": nonce.hex(), "quote": signed["quote"], "signature": signed["sig"]}
 
     def issue(self, issuer="b", manifest=None, request=None, evidence="default", reset=1, **kw):
@@ -325,8 +325,27 @@ class Issue(Case):
         b["attester"].nodes["a"]["ek_name"] = self.keys["c"].ek_name
         self.refused("does not pin the manifest's EK for a", self.issue)
         b["attester"].nodes["a"]["ek_name"] = self.keys["a"].ek_name
+        # another AK enrolled for a on this peer (in a's own TPM or not): a quote that verifies under it is
+        # still not a quote by the AK the manifest names
         self.enroll(b["attester"], self.keys["c"].ak_public)
-        self.refused("the attested AK is not the AK the manifest names for a", self.issue)
+        self.refused("attestation is refused: the quote's signature does not verify", self.issue)
+        self.refused("the attested AK is not the AK the manifest names for a", self.issue,
+                     evidence=self.evidence(b["attester"], self.m1, signed_by="c"))
+        self.enroll(b["attester"], self.keys["a"].ak_public)
+        # ... also when it is enrolled between the lease code looking and the verifier verifying
+        swapped = self.evidence(b["attester"], self.m1, signed_by="c")
+        real = b["attester"].verify
+
+        def enroll_then_verify(*args):
+            with open(b["attester"].state_path) as f:
+                state = json.load(f)
+            state["nodes"]["a"]["ak_public"] = self.keys["c"].ak_public.hex()
+            with open(b["attester"].state_path, "w") as f:
+                json.dump(state, f)
+            return real(*args)
+        b["attester"].verify = enroll_then_verify
+        self.refused("the attested AK is not the AK the manifest names for a", self.issue, evidence=swapped)
+        b["attester"].verify = real
         self.enroll(b["attester"], self.keys["a"].ak_public)
         good = self.evidence(b["attester"], self.m1)
         for label, reason, change in (("an extra field", "attestation evidence fields mismatch", lambda e: e.update(verdict="ok")),

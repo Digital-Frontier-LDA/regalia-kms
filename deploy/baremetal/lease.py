@@ -193,7 +193,7 @@ EVIDENCE_KEYS = ("ephemeral_public", "nonce", "quote", "signature")
 
 def _reattest(attester, evidence, request, manifest, subject):
     """The subject re-attests NOW, as the node the manifest names. The peer's attestation verifier
-    (attest.Verifier) pins the manifest's EK for it and has the manifest's AK enrolled; the quote in
+    (attest.Verifier) pins the manifest's EK for it and verified the quote under the manifest's AK; the quote in
     `evidence` answers a nonce that verifier issued within its last two minutes, good once, and is over
     this node ID, this epoch and the boot session in the request. An earlier verdict cannot be passed
     in: issue() runs the verification itself."""
@@ -207,13 +207,13 @@ def _reattest(attester, evidence, request, manifest, subject):
     require(policy is not None and policy["ek_name"] == subject["ek_name"],
             "the attestation policy does not pin the manifest's EK for %s" % node_id)
     try:
-        with attest.locked_state(attester.state_path) as (state, _):
-            enrolled = state["nodes"].get(node_id, {}).get("ak_public")
-        require(enrolled is not None and attest.ak_identity(bytes.fromhex(enrolled))[0].hex() == subject["ak_name"],
-                "the attested AK is not the AK the manifest names for %s" % node_id)
-        attester.verify(node_id, manifest["epoch"], bytes.fromhex(request["session_id"]), *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS))
+        verdict = attester.verify(node_id, manifest["epoch"], bytes.fromhex(request["session_id"]),
+                                  *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS))
     except attest.Refused as refusal:
         raise Refused("the subject's attestation is refused: %s" % refusal)
+    # The AK the quote was actually verified under, reported from inside the verifier's own lock: an AK
+    # enrolled over it a moment before or after cannot stand in for the manifest's.
+    require(verdict.get("ak_name") == subject["ak_name"], "the attested AK is not the AK the manifest names for %s" % node_id)
 
 
 def issue(manifest, issuer_id, request, attester, evidence, freshness, signer):
