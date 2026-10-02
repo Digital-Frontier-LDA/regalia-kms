@@ -622,6 +622,14 @@ func (provider *Provider) blockPIN(deviceID string) {
 // A latch is deliberately sticky. The conditions that set it — a spent PIN budget, a device
 // answering with the wrong identity, a secure channel that would not establish — are not states to
 // retry into, so returning the device to service is an explicit operator act.
+func (provider *Provider) quarantine(deviceID, reason string) {
+	provider.mu.Lock()
+	if _, exists := provider.blocked[deviceID]; !exists {
+		provider.blocked[deviceID] = reason
+	}
+	provider.mu.Unlock()
+}
+
 // quarantineUnlessTheRequestEnded is what a failed latching check means (regalia-kms#178).
 //
 // A CONTEXT THAT HAS ENDED IS NEVER EVIDENCE ABOUT THE TOKEN. Every driver call refuses an ended
@@ -638,14 +646,6 @@ func (provider *Provider) quarantineUnlessTheRequestEnded(ctx context.Context, d
 	if ctx.Err() == nil {
 		provider.quarantine(deviceID, reason)
 	}
-}
-
-func (provider *Provider) quarantine(deviceID, reason string) {
-	provider.mu.Lock()
-	if _, exists := provider.blocked[deviceID]; !exists {
-		provider.blocked[deviceID] = reason
-	}
-	provider.mu.Unlock()
 }
 
 // QuarantineReason reports why a device is latched, so the condition is diagnosable rather than
