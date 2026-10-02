@@ -86,10 +86,25 @@ func (provider *Provider) AwaitingReauthorization() map[string]int64 {
 
 // answers reports whether the card behind an open session still answers as the bound card. Asked
 // after a call on it failed, to tell a card that has gone from one that refused the request.
-func answers(ctx context.Context, session Session, serial string) bool {
-	answered, err := session.Identity(ctx)
-	return err == nil && answered == serial
+//
+// IT IS NOT ASKED UNDER THE REQUEST'S CONTEXT. A request that was cancelled, or ran out of time,
+// fails, and a session refuses every call made under a context that has ended: asked under it, a
+// card that is there would look gone, and a caller could take it out of service by hanging up in
+// the middle of a request. The question gets a few seconds of its own.
+func answers(ctx context.Context, session Session, serial string) (answered bool) {
+	defer func() {
+		if recover() != nil {
+			answered = false // a session that panics is not answering
+		}
+	}()
+	own, cancel := context.WithTimeout(context.WithoutCancel(ctx), answerTimeout)
+	defer cancel()
+	got, err := session.Identity(own)
+	return err == nil && got == serial
 }
+
+// answerTimeout bounds the question answers asks. Reading a serial takes milliseconds.
+const answerTimeout = 5 * time.Second
 
 // takeTurn makes PIV requests wait for each other.
 //

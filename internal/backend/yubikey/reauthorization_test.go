@@ -16,6 +16,7 @@ type removableCard struct {
 	pullOnSign   bool  // the card is pulled while it signs
 	closeErr     error
 	panicOnSign  bool
+	cancelOnSign func() // the caller hangs up while the card signs
 	identityRead int
 	// leaves pulls the card when the named call is made on an open session.
 	leaves string
@@ -43,7 +44,11 @@ func (card *removableCard) Open(context.Context, string) (Session, error) {
 	return card, nil
 }
 func (*removableCard) Ready(context.Context) bool { return true }
-func (card *removableCard) Identity(context.Context) (string, error) {
+func (card *removableCard) Identity(ctx context.Context) (string, error) {
+	// as the PIV session does: nothing is done under a context that has ended
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	card.identityRead++
 	if card.leaves == "identity" {
 		card.gone = true
@@ -57,6 +62,9 @@ func (card *removableCard) Sign(ctx context.Context, slot, algorithm string, pay
 	switch {
 	case card.panicOnSign:
 		panic("card library")
+	case card.cancelOnSign != nil:
+		card.cancelOnSign()
+		return nil, context.Canceled
 	case card.pullOnSign:
 		card.gone = true
 		return nil, errors.New("the card was removed")
@@ -242,6 +250,30 @@ func TestARefusedRequestDoesNotTakeTheCardOutOfService(t *testing.T) {
 	}
 	w.card.failSign = nil
 	w.requireServing("after a request the card refused")
+}
+
+// A CALLER WHO HANGS UP IS NOT A CARD THAT LEFT. The request's context ends, the operation fails,
+// and the session answers nothing more under that context; the card is still there.
+func TestACancelledRequestDoesNotTakeTheCardOutOfService(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("before the cancelled request")
+	ctx, cancel := context.WithCancel(context.Background())
+	w.card.cancelOnSign = cancel
+	if _, _, err := w.provider.Execute(ctx, route(), "sign", "", "application/octet-stream", []byte("payload"), nil); err == nil {
+		t.Fatal("setup: the cancelled request should fail")
+	}
+	w.card.cancelOnSign = nil
+	w.requireServing("after a request its caller cancelled")
+
+	// and a card that really left during a request whose caller also hung up is still seen gone
+	ctx, cancel = context.WithCancel(context.Background())
+	w.card.cancelOnSign = func() { cancel(); w.card.gone = true }
+	if _, _, err := w.provider.Execute(ctx, route(), "sign", "", "application/octet-stream", []byte("payload"), nil); err == nil {
+		t.Fatal("setup: the request should fail")
+	}
+	w.card.cancelOnSign, w.card.gone = nil, false
+	w.now = 3_000
+	w.requireWaiting("back after leaving during a cancelled request", 3_000)
 }
 
 func TestARefusedPINDoesNotCountAsAnAbsence(t *testing.T) {
