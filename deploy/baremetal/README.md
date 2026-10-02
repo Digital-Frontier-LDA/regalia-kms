@@ -245,7 +245,22 @@ commits to: the manifest's `policy_version` is a digest of the document (174 bit
 peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
 restored disk cannot roll back: the epoch is anchored in the TPM).
 
-Each node has one accepted set, or two while an update is under way. An update is three documents:
+Each node has one accepted set, or two while an update is under way.
+
+**One image, two PCR 11 values.** On a host that boots a unified kernel image, systemd extends PCR 11
+as the boot passes its phases. So the same image measures one PCR 11 in the initrd, where the node asks
+a peer for its disk, and another once booted, where it asks for a runtime lease. A set therefore gives
+PCR 11 **per phase** (`"phases": {"initrd": {"11": …}, "system": {"11": …}}`, both values from the
+image's build record), and a peer accepts each request from its own phase only: **an unlock from the
+initrd, a lease from the booted system.** A booted system that asks for a disk key is refused, on an
+approved image too. A set with one value per PCR (a host that does not boot a UKI) is judged the same in
+both. The peer's record of a node says in which phase it last saw it, and **"back on the new image"
+means seen up**: a node verified only in its initrd has asked for its disk and may never have come up,
+so it does not let the next node reboot and does not count towards retiring the old image.
+Until this was added, a set held one PCR 11 value and a real UKI host would have been refused at
+one of the two requests; the software-TPM tests extended PCR 11 once and did not show it.
+
+An update is three documents:
 
 | Step | Document | The root signs | What works |
 |---|---|---|---|
