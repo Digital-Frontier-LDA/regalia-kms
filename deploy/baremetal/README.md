@@ -57,11 +57,20 @@ Commissioning has two halves:
     `seal-hsm-pin.sh` refuses `--pcrs` with 10 or 11. PCR 11 is bound only through a *signed* PCR
     policy: `seal-hsm-pin.sh --pcrs 7 --tpm2-public-key FILE --tpm2-public-key-pcrs 11`
     (PIN-CUSTODY.md, "Binding the kernel as well"). That is proven on a software TPM only; the
-    PCR-signing key's custody, signed UKIs, the root disk and the commissioning evidence for it are
-    not provisioned yet (#57), so production binds PCR 7 alone until they are.
+    PCR-signing key's custody, signed UKIs and the root disk are not provisioned yet (#57), so
+    production binds PCR 7 alone until they are. The evidence records the two separately:
+    `credential_tpm2_pcrs` (bound directly) and `credential_tpm2_signed_pcrs` with
+    `credential_tpm2_pcr_key_pkfp` (the signed policy and its key; both `""` without one).
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by `deploy/baremetal/os_probe.py`.
+- **The service's sandbox.** Install `deploy/baremetal/regalia-kms-hardening.conf.example` as
+  `/etc/systemd/system/regalia-kms.service.d/hardening.conf`. Measured, with the service running:
+  `kms_service_sandboxed` (ProtectSystem=strict, ProtectHome, PrivateTmp, ProtectKernelTunables/
+  Modules/Logs, ProtectControlGroups, RestrictSUIDSGID, LockPersonality), `kms_capabilities_minimal`
+  (no capability in the unit's bounding or ambient set, nor in the running process's) and
+  `kms_apparmor_enforced` (the running process is confined by a profile in enforce mode; the
+  profile and how to load it are under **AppArmor** below). All three are required in the evidence.
 - **Token clients root-only.** Unlike the guest, this host seals and re-seals its own PINs, so
   `seal-hsm-pin.sh` needs `opensc-tool` and `pkcs11-tool` here. They must be `root:root`, mode `0700`
   (`chown root:root … && chmod 0700 …`), so the KMS user cannot run them, and every process
@@ -130,7 +139,13 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    fixedtpm|fixedparent|sensitivedataorigin|userwithauth|decrypt. Any other key at the handle fails.
 2. **PINs:** `sudo deploy/seal-hsm-pin.sh --id … --serial <Nitrokey> --pcrs 7 --from-blob
    pin-hsm_<x>.blob`, and `--yubikey <serial> … --from-blob pin-yubikey_<x>.blob` for the KMS YubiKey
-   (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card.
+   (PIN-CUSTODY.md). Without a blob, the PIN is typed from the PIN card. Record the binding in the
+   evidence (`host.credential_tpm2_pcrs`, and the signed policy's two fields). Measured:
+   `pin_credentials_sealed_as_recorded` reads the header of every
+   `/etc/credstore.encrypted/regalia-kms-*.pin` and fails unless each is sealed to the TPM alone (not
+   the host key) with exactly the recorded PCRs (of the SHA-256 bank) and signing key, and opens on
+   this boot under the name the unit loads it by. Without evidence, give the record on
+   the command line: `--credential-pcrs 7 [--credential-signed-pcrs 11 --credential-pcr-key-pkfp HEX]`.
 3. Then: the mTLS server key in the TPM, certified by an EK-bound attestation key; the fencing epoch in
    a TPM monotonic counter; audit checkpoints in an NV extend index (ADR-0002 D21).
 4. **Attestation key (three-site, #65):** `python3 deploy/baremetal/attest.py node-init --out DIR`
