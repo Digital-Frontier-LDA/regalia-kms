@@ -44,7 +44,10 @@ Commissioning has two halves:
   - **A disk enrolled this way FAILS `root_disk_unlock_revocable`, and `host_probe.py` exits 1. That is
     intended (#135): it is the known blocker for production.** PCR 7 does not change with the kernel, so
     an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
-    passes only when the unlock can retire an image: a peer's contribution (#67, being built), or an
+    passes only when the unlock can retire an image: a peer's contribution (#67: `regalia-peer-unlock`
+    tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
+    peer that holds a path; the enrolment exists in `deploy/baremetal/unlock.py`, its boot-time client
+    does not yet), or an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
     `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
     A host that is otherwise commissioned shows this as its only failing control. Signed evidence

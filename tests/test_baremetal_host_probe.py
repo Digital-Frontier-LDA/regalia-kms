@@ -5,6 +5,7 @@ import base64
 import datetime
 import shutil
 import subprocess
+import sys
 import hashlib
 import io
 import json
@@ -233,7 +234,7 @@ class HostProbe(unittest.TestCase):
         why = results["root_disk_unlock_revocable"][1]
         self.assertEqual(why, "root_crypt (/dev/sda3) is unlocked by the local TPM alone, under a policy that cannot retire a boot "
                          "image (PCRs [7]). An old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. "
-                         "BLOCKING FOR PRODUCTION (#135). What clears it: a peer's contribution to the unlock (#67, not built yet), "
+                         "BLOCKING FOR PRODUCTION (#135). What clears it: a peer's contribution to the unlock (#67: deploy/baremetal/unlock.py), "
                          "or an NV-backed policy (systemd-cryptenroll --tpm2-pcrlock; measured on a software TPM only, "
                          "e2e/pcrlock-luks-swtpm.sh). There is no option to skip this check")
 
@@ -275,9 +276,9 @@ class HostProbe(unittest.TestCase):
         recovery = LUKS_META["tokens"]["1"]
         value, why = host_probe.unlock_revocable(self.judge(NV_TOKEN, recovery))
         self.assertTrue(value, why)
-        self.assertEqual(why, "root_crypt: every token that names a keyslot is NV-backed (tpm2_pcrlock) or the recovery key, and "
-                         "/var/lib/systemd/pcrlock.json covers PCRs 0, 2, 4, 7, 11. NOT measured: that the NV index holds this policy, "
-                         "and that a retired image is refused on this host")
+        self.assertEqual(why, "root_crypt: every token that names a keyslot is the recovery key or needs more than a fixed TPM policy: "
+                         "NV-backed (tpm2_pcrlock) tokens, and /var/lib/systemd/pcrlock.json covers PCRs 0, 2, 4, 7, 11. NOT measured: "
+                         "that the NV index holds this policy; nor that a retired image is refused on this host")
         signed = dict(PCR7_TOKEN, tpm2_pubkey="LS0t", tpm2_pubkey_pcrs=[11])
         cases = {
             "PCR 7 only": ((PCR7_TOKEN, recovery), "(PCRs [7])"),
@@ -304,6 +305,185 @@ class HostProbe(unittest.TestCase):
         h = FakeHost()
         h.runs[("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/mapper/vg-root")] = (0, "vg-root lvm\nsda3 part\n")
         self.assertIn("not on dm-crypt", host_probe.unlock_revocable(h)[1])
+
+    # ---- the peer-assisted shape (#67): the TPM and a peer, never the TPM alone ----
+
+    RECORD = ("a", ("b", "c"))
+
+    @staticmethod
+    def path(peer, slot, local="tpm2-7.cred", **change):
+        """A peer-path token as deploy/baremetal/unlock.py enrols it; its local share is a real TPM-only credential."""
+        return dict({"type": "regalia-peer-unlock", "keyslots": [slot], "version": 1, "target": "a", "peer": peer,
+                     "path_epoch": 1, "local": cred(local)}, **change)
+
+    def peer_host(self, *tokens, crypttab="root_crypt UUID=abcd none luks\n", keyslots=None):
+        recovery = LUKS_META["tokens"]["1"]
+        tokens = tokens or (self.path("b", "1"), recovery, self.path("c", "3"))
+        h = self.judge(*tokens, keyslots=keyslots)
+        h.files["/etc/crypttab"] = crypttab
+        return h
+
+    def test_a_disk_that_needs_a_peer_passes_both_root_disk_controls(self):
+        h = self.peer_host()
+        value, why = host_probe.root_unlock(h, self.RECORD)
+        self.assertTrue(value, why)
+        self.assertEqual(why, "root_crypt unlocks with the TPM and a peer (peer-assisted unlock: b in keyslot 1 (path epoch 1), "
+                         "c in keyslot 3 (path epoch 1))")
+        value, why = host_probe.unlock_revocable(h, self.RECORD)
+        self.assertTrue(value, why)
+        self.assertIn("peer-assisted unlock (root_crypt: peer-assisted unlock: b in keyslot 1 (path epoch 1), c in keyslot 3 (path epoch 1))", why)
+        self.assertIn("NOT measured: that the peers refuse a retired image", why)
+        self.assertNotIn("pcrlock", why)                                   # no NV-backed token: the policy file is not consulted
+        h.files.pop(host_probe.PCRLOCK_POLICY)
+        self.assertTrue(host_probe.unlock_revocable(h, self.RECORD)[0])
+        self.assertTrue(host_probe.recovery_keyslot(h)[0])
+        # through main(): every platform control true, with the record from the command line
+        with redirect_stdout(io.StringIO()) as out:
+            host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--node-id", "a",
+                             "--unlock-peer", "b", "--unlock-peer", "c"], host=self.peer_host())
+        report = json.loads(out.getvalue())["measured"]
+        self.assertEqual([n for n in host_probe.PLATFORM if not report[n]["value"]], [])
+        # a signed PCR 11 policy on the local share is the other accepted binding; crypttab need not list the volume
+        signed = self.peer_host(self.path("b", "1", "pk-7-11.cred"), LUKS_META["tokens"]["1"], self.path("c", "3", "pk-7-11.cred"), crypttab="")
+        self.assertTrue(host_probe.root_unlock(signed, self.RECORD)[0])
+        self.assertTrue(host_probe.unlock_revocable(signed, self.RECORD)[0])
+
+    def test_the_peer_shape_is_judged_against_the_record_of_this_node_and_its_peers(self):
+        h = self.peer_host()
+        for probe_fn in (host_probe.root_unlock, host_probe.unlock_revocable):
+            with self.subTest(probe_fn.__name__):
+                value, why = probe_fn(h)                                  # no record at all
+                self.assertFalse(value, why)
+                self.assertIn("this run was not told which node this is: pass --node-id and one --unlock-peer per peer", why)
+                for record, reason in ((("b", ("a", "c")), "is for node a, not b: this header was not enrolled for this host"),
+                                       (("a", ("b",)), "the disk has paths from b, c; the record says b"),
+                                       (("a", ("b", "c", "d")), "the disk has paths from b, c; the record says b, c, d"),
+                                       (("a", ()), "the disk has paths from b, c; the record says none")):
+                    value, why = probe_fn(h, record)
+                    self.assertFalse(value, why)
+                    self.assertIn(reason, why)
+        self.assertIn("BLOCKING FOR PRODUCTION (#135)", host_probe.unlock_revocable(h, ("a", ("b",)))[1])
+        with redirect_stdout(io.StringIO()) as out:                      # main() with no record: both controls fail, and say why
+            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7"], host=self.peer_host())
+        report = json.loads(out.getvalue())["measured"]
+        self.assertEqual(rc, 1)
+        self.assertEqual([n for n in host_probe.PLATFORM if not report[n]["value"]], ["root_disk_tpm_unlocked", "root_disk_unlock_revocable"])
+        for bad in (["--unlock-peer", "b"], ["--node-id", "A"], ["--node-id", "a", "--unlock-peer", "a"],
+                    ["--node-id", "a", "--unlock-peer", "b", "--unlock-peer", "b"], ["--node-id", "a", "--unlock-peer", "b c"]):
+            with self.subTest(args=bad), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as refused:
+                host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", *bad], host=self.peer_host())
+            self.assertEqual(refused.exception.code, 2)
+
+    def test_nothing_the_local_tpm_opens_by_itself_may_sit_beside_the_peer_paths(self):
+        recovery = LUKS_META["tokens"]["1"]
+        b, c = self.path("b", "1"), self.path("c", "3")
+        cases = {
+            "an NV-backed systemd-tpm2 token": ((b, recovery, c, dict(NV_TOKEN, keyslots=["4"])), "a systemd-tpm2 token is still enrolled (keyslot 4)"),
+            "a PCR-7 systemd-tpm2 token": ((b, recovery, c, dict(PCR7_TOKEN, keyslots=["4"])), "a systemd-tpm2 token is still enrolled (keyslot 4)"),
+            "a clevis token": ((b, recovery, c, {"type": "clevis", "keyslots": ["4"]}), "token 3 of type 'clevis' names keyslot 4"),
+            "a second recovery token": ((b, recovery, c, dict(recovery, keyslots=["4"])), "has 2 systemd-recovery tokens"),
+            "a path that shares the recovery keyslot": ((b, recovery, dict(c, keyslots=["2"])), "keyslot 2 is named by"),
+            "two paths from one peer": ((b, recovery, dict(c, peer="b")), "are both for peer b"),
+            "a path token of another version": ((b, recovery, dict(c, version=2)), "a regalia-peer-unlock token of version 1 is expected"),
+            "a path token with an extra field": ((b, recovery, dict(c, note="x")), "token fields mismatch"),
+        }
+        for label, (tokens, reason) in cases.items():
+            with self.subTest(label):
+                h = self.peer_host(*tokens)
+                value, why = host_probe.unlock_revocable(h, self.RECORD)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
+                self.assertIn("BLOCKING FOR PRODUCTION (#135)", why)
+        # a keyslot no token names, beside the paths
+        value, why = host_probe.unlock_revocable(self.peer_host(keyslots=("0", "1", "2", "3")), self.RECORD)
+        self.assertFalse(value, why)
+        self.assertIn("keyslot 0 is named by no token", why)
+        # crypttab still asking systemd for a TPM-only unlock
+        value, why = host_probe.root_unlock(self.peer_host(crypttab="root_crypt UUID=abcd none tpm2-device=auto\n"), self.RECORD)
+        self.assertFalse(value, why)
+        self.assertIn("crypttab still asks systemd to unlock it with the TPM alone (tpm2-device=auto)", why)
+
+    def test_the_local_share_is_sealed_to_the_tpm_alone_under_pcr_7(self):
+        """The one credential that must NOT need the host key (it is on the disk being opened), and the one
+        place where the TPM-only key types are accepted. It opens nothing without the peer's contribution."""
+        self.assertEqual(host_probe.local_share_binding(cred("tpm2-7.cred")), ([7], [], ""))
+        self.assertEqual(host_probe.local_share_binding(cred("pk-7-11.cred")), SIGNED)
+        recovery = LUKS_META["tokens"]["1"]
+        for label, local, reason in (
+                ("sealed with the host key as well", "host-tpm2-7.cred", "the local contribution is not a systemd credential sealed to the TPM alone"),
+                ("sealed with the host key alone", "host.cred", "the local contribution is not a systemd credential sealed to the TPM alone"),
+                ("bound to PCRs 7 and 14", "tpm2-7-14.cred", "the local share of token 0 is sealed to PCRs 7+14, no signed policy, not to PCR 7 exactly")):
+            with self.subTest(label):
+                h = self.peer_host(self.path("b", "1", local), recovery, self.path("c", "3"))
+                for probe_fn in (host_probe.root_unlock, host_probe.unlock_revocable):
+                    value, why = probe_fn(h, self.RECORD)
+                    self.assertFalse(value, why)
+                    self.assertIn(reason, why)
+        for text, reason in ((cred("host-tpm2-7.cred"), "not sealed to the TPM alone"), (cred("host.cred"), "not sealed to the TPM alone"),
+                             ("7310048261", "not base64"), ("", "too short"), (None, "too short"), (7, "not base64"),
+                             (base64.b64encode(base64.b64decode(cred("tpm2-7.cred"))[:56]).decode(), "truncated"),
+                             (rebanked(cred("tpm2-7.cred"), 0x0004), "bound to PCR bank 0x0004, not SHA-256")):
+            with self.subTest(text=str(text)[:24]), self.assertRaises(ValueError) as caught:
+                host_probe.local_share_binding(text)
+            self.assertIn(reason, str(caught.exception))
+        # and the PIN credential's parser still refuses the TPM-only types: the two are not interchangeable
+        with self.assertRaises(ValueError) as caught:
+            host_probe.credential_header(cred("tpm2-7.cred"))
+        self.assertIn("the TPM alone, with no host key", str(caught.exception))
+
+    def test_the_local_share_follows_the_recorded_binding_of_the_pin_credentials(self):
+        """With a recorded binding (the evidence, or --credential-pcrs…), the local share must be sealed to
+        exactly that: when the PINs get the signed PCR 11 policy, so must it."""
+        recovery = LUKS_META["tokens"]["1"]
+        plain = self.peer_host()
+        signed = self.peer_host(self.path("b", "1", "pk-7-11.cred"), recovery, self.path("c", "3", "pk-7-11.cred"))
+        mixed = self.peer_host(self.path("b", "1", "pk-7-11.cred"), recovery, self.path("c", "3"))
+        for probe_fn in (host_probe.root_unlock, host_probe.unlock_revocable):
+            with self.subTest(probe_fn.__name__):
+                self.assertTrue(probe_fn(plain, self.RECORD, PCR7)[0])
+                self.assertTrue(probe_fn(signed, self.RECORD, SIGNED)[0])
+                value, why = probe_fn(plain, self.RECORD, SIGNED)
+                self.assertFalse(value, why)
+                self.assertIn("the local share of token 0 is sealed to PCRs 7, no signed policy; the recorded binding is PCRs 7, signed PCRs 11 by key pkfp " + PKFP, why)
+                value, why = probe_fn(signed, self.RECORD, PCR7)
+                self.assertFalse(value, why)
+                self.assertIn("the recorded binding is PCRs 7, no signed policy", why)
+                self.assertIn("the local share of token 2", probe_fn(mixed, self.RECORD, SIGNED)[1])
+                self.assertFalse(probe_fn(signed, self.RECORD, ([7], [11], "0" * 64))[0])    # signed by another key
+        # through main(): the binding given for the PINs is the one the local share is held to
+        with redirect_stdout(io.StringIO()) as out:
+            host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+                             "--credential-pcr-key-pkfp", PKFP, "--node-id", "a", "--unlock-peer", "b", "--unlock-peer", "c"], host=self.peer_host())
+        report = json.loads(out.getvalue())["measured"]
+        self.assertIn("the recorded binding is PCRs 7, signed PCRs 11", report["root_disk_unlock_revocable"]["why"])
+        self.assertIn("the recorded binding is PCRs 7, signed PCRs 11", report["root_disk_tpm_unlocked"]["why"])
+
+    def test_peer_paths_on_a_volume_that_is_not_the_root_one_fail(self):
+        """The unlock client opens the root volume only. A second volume holding the host key with peer
+        paths of its own could be opened at no boot; it is not judged like the root."""
+        h = self.peer_host()
+        h.runs[secret_mount(host_probe.HOST_KEY)] = (0, "/dev/mapper/var_crypt ext4 3333-4444\n")
+        h.runs[("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/mapper/var_crypt")] = (0, "var_crypt crypt\nsdb1 part\nsdb disk\n")
+        h.runs[("cryptsetup", "status", "var_crypt")] = (0, "  type:    LUKS2\n  device:  /dev/sdb1\n")
+        h.runs[("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sdb1")] = (0, json.dumps(
+            {"keyslots": {"1": {}, "3": {}}, "tokens": {"0": self.path("b", "1"), "1": self.path("c", "3")}}))
+        value, why = host_probe.unlock_revocable(h, self.RECORD)
+        self.assertFalse(value, why)
+        self.assertIn("var_crypt (/dev/sdb1, under %s) carries regalia-peer-unlock tokens, but it is not the root volume" % host_probe.HOST_KEY, why)
+        self.assertIn("BLOCKING FOR PRODUCTION (#135)", why)
+
+    def test_without_the_unlock_module_the_peer_shape_is_not_accepted(self):
+        real_import = __import__
+
+        def no_unlock(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "deploy.baremetal" and "unlock" in (fromlist or ()):
+                raise ImportError("no module named deploy.baremetal.unlock")
+            return real_import(name, globals, locals, fromlist, level)
+        with mock.patch("builtins.__import__", side_effect=no_unlock):
+            for probe_fn in (host_probe.root_unlock, host_probe.unlock_revocable):
+                value, why = probe_fn(self.peer_host(), self.RECORD)
+                self.assertFalse(value, why)
+                self.assertIn("deploy/baremetal/unlock.py cannot be loaded (ImportError", why)
 
     def test_a_token_of_any_other_type_that_names_a_keyslot_fails(self):
         """clevis seals a key to the TPM under PCR values, in a token systemd never looks at. An NV-backed
