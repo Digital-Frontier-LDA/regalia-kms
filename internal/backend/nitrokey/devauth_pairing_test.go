@@ -30,7 +30,8 @@ type pairedCardModule struct {
 	keyIDErr  bool  // the CKA_ID of key objects cannot be read
 }
 
-func (m *pairedCardModule) GetSlotList(bool) ([]uint, error) { return []uint{0}, nil }
+func (m *pairedCardModule) GetSlotList(bool) ([]uint, error)                 { return []uint{0}, nil }
+func (*pairedCardModule) GetMechanismList(uint) ([]*pkcs11.Mechanism, error) { return nil, nil }
 func (m *pairedCardModule) GetTokenInfo(uint) (pkcs11.TokenInfo, error) {
 	return pkcs11.TokenInfo{SerialNumber: "SERIAL-1", Flags: pkcs11.CKF_TOKEN_INITIALIZED}, nil
 }
