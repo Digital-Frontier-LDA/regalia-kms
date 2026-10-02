@@ -121,6 +121,37 @@ def catch_up(store, envelopes):
 AUTHORITY = "@authority"
 
 
+def agreed(root_key, sources, minimum, anchored):
+    """The chain that `sources` ({who: the whole chain they gave}) agree on, and its newest manifest: each
+    chain verified from the pinned root at epoch 1 and reaching epoch `anchored`, at least `minimum` of
+    them, no two differing at an epoch they share, and every source the authority or a node the newest
+    manifest lets authorize. The longest is returned. Nothing is installed here."""
+    require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
+            "sources must map each source (a node ID, or %r) to the non-empty chain it gave" % AUTHORITY)
+    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given)" % (minimum, len(sources)))
+    verified, last = {}, {}
+    for source, chain in sources.items():
+        require(len(chain) <= MAX_ENVELOPES * 100, "a chain is oversized")
+        digests, current = [], None
+        for envelope in chain:
+            nxt = membership.accept(current, envelope, root_key)
+            require(nxt is not current, "a fetched chain repeats epoch %d" % nxt["epoch"])
+            digests.append(membership.digest(nxt))
+            current = nxt
+        require(len(digests) >= anchored, "a fetched chain ends at epoch %d, below the TPM high-water %d: that source is behind "
+                "and cannot vouch for the anchored epochs" % (len(digests), anchored))
+        verified[source], last[source] = digests, current
+    longest = max(sources, key=lambda source: len(verified[source]))
+    for digests in verified.values():
+        for epoch, (one, other) in enumerate(zip(digests, verified[longest]), 1):
+            require(one == other, "CONFLICT: the sources' chains differ at epoch %d: two manifests were signed for one epoch; "
+                    "nothing is restored; record an incident" % epoch)
+    for source in sources:
+        require(source == AUTHORITY or membership.may(last[longest], source, "authorize"),
+                "%r is not a source this chain trusts: neither the authority nor a node it lets authorize" % source)
+    return sources[longest], last[longest]
+
+
 def recover(store, sources, minimum=None):
     """A node whose store refuses with ROLLBACK or CONFLICT (its disk is older than its TPM anchor, lost, or
     not the chain the TPM recorded) installs a whole chain fetched from its peers, through Store.restore.
@@ -144,31 +175,8 @@ def recover(store, sources, minimum=None):
     if minimum is None:
         minimum = 1 if store.pinned() else 2
     require(isinstance(minimum, int) and not isinstance(minimum, bool) and minimum >= 1, "minimum must be an integer >= 1")
-    require(isinstance(sources, dict) and all(isinstance(k, str) and isinstance(c, list) and c for k, c in sources.items()),
-            "sources must map each source (a node ID, or %r) to the non-empty chain it gave" % AUTHORITY)
-    require(len(sources) >= minimum, "recovery needs whole chains from %d different sources that agree (%d given)" % (minimum, len(sources)))
-    anchored = store.hw.value()
-    verified, last = {}, {}
-    for source, chain in sources.items():
-        require(len(chain) <= MAX_ENVELOPES * 100, "a chain is oversized")
-        digests, current = [], None
-        for envelope in chain:
-            nxt = membership.accept(current, envelope, store.root_key)
-            require(nxt is not current, "a fetched chain repeats epoch %d" % nxt["epoch"])
-            digests.append(membership.digest(nxt))
-            current = nxt
-        require(len(digests) >= anchored, "a fetched chain ends at epoch %d, below the TPM high-water %d: that source is behind "
-                "and cannot vouch for the anchored epochs" % (len(digests), anchored))
-        verified[source], last[source] = digests, current
-    longest = max(sources, key=lambda source: len(verified[source]))
-    for digests in verified.values():
-        for epoch, (one, other) in enumerate(zip(digests, verified[longest]), 1):
-            require(one == other, "CONFLICT: the sources' chains differ at epoch %d: two manifests were signed for one epoch; "
-                    "nothing is restored; record an incident" % epoch)
-    for source in sources:
-        require(source == AUTHORITY or membership.may(last[longest], source, "authorize"),
-                "%r is not a source this chain trusts: neither the authority nor a node it lets authorize" % source)
-    store.restore(sources[longest])
+    chain, _ = agreed(store.root_key, sources, minimum, store.hw.value())
+    store.restore(chain)
     return summary(store)
 
 

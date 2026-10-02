@@ -140,6 +140,8 @@ def load(raw, limit=MAX_BYTES):
         return json.loads(raw, object_pairs_hook=_pairs, parse_float=_no_float, parse_constant=_no_float)
     except ValueError as error:
         raise Refused("not valid JSON: %s" % error)
+    except RecursionError:
+        raise Refused("not valid JSON: nested too deeply")
 
 
 def canonical(obj):
@@ -203,7 +205,7 @@ def validate(manifest):
         require(isinstance(node["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node["node_id"]),
                 "nodes[%d].node_id must be a short lowercase name" % i)
         require(node["node_id"] not in by_id, "duplicate node_id %r" % node["node_id"])
-        require(node["state"] in CAPABILITIES, "nodes[%d].state %r is not a known state" % (i, node["state"]))
+        require(isinstance(node["state"], str) and node["state"] in CAPABILITIES, "nodes[%d].state %r is not a known state" % (i, node["state"]))
         hex_field(node["ek_name"], 68, "nodes[%d].ek_name" % i)
         hex_field(node["ak_name"], 68, "nodes[%d].ak_name" % i)
         hex_field(node["wg_boot_pub"], 64, "nodes[%d].wg_boot_pub" % i)
@@ -351,30 +353,39 @@ class HighWater:
     the running host, which this anchor does not defend against (it defends against a restored disk).
 
     THE RECORD. The counter says how far this node got, not by which chain: two validly signed chains can
-    reach one epoch if a key signed twice for it. So a third, ordinary index holds
-    `epoch (u64, big-endian) || SHA-256(canonical manifest at that epoch)`, 40 bytes. `define()` creates it
-    at epoch 0 with an all-zero digest. Only Store writes it, through `anchor()`, and always AFTER the
-    counter: for each epoch the counter is incremented, then the record written. The record's epoch is
-    therefore the counter's, or one below it after a crash between the two; `anchor()` and `verify()`
-    accept exactly those two, compare the digest with the chain they are given, and refuse anything else
-    (a record that cannot be read, another epoch, another digest). In the crash window the manifest AT the
-    counter's epoch is not yet recorded: `pinned()` is False until `anchor()` has repaired it.
-    The same limit as the counter: owner authorization on the running host can rewrite the record. And a
-    record whose write was torn by a power cut reads as neither epoch and fails closed, until an operator
-    redefines the anchor.
+    reach one epoch if a key signed twice for it. So the TPM also holds
+    `epoch (u64, big-endian) || SHA-256(canonical manifest at that epoch)`. `define()` creates it at epoch
+    0 with an all-zero digest. Only Store writes it, through `anchor()`, and always AFTER the counter: for
+    each epoch the counter is incremented, then the record written. The record's epoch is therefore the
+    counter's, or one below it after a crash between the two; `anchor()` and `verify()` accept exactly
+    those two, compare the digest with the chain they are given, and refuse anything else (another epoch,
+    another digest, no record at all). In the crash window the manifest AT the counter's epoch is not yet
+    recorded: `pinned()` is False until `anchor()` has repaired it.
+
+    TWO SLOTS, so that a power cut cannot strand the node. The record is kept in two ordinary indices of
+    48 bytes, each `epoch || digest || tag` (the tag is 8 bytes of a SHA-256 over the other 40). A write
+    goes to the slot that is not valid or, when both are, to the older one: never to the newest valid
+    slot. A write cut half-way leaves that slot with a tag that does not match; it is ignored, and the
+    other slot still holds the record for the epoch before, which is the crash window above. THE record
+    is the valid slot with the higher epoch. Only when NEITHER slot is valid, or an index is gone, is
+    there nothing to go by: that fails closed, and the way back is `Store.reanchor()`
+    (reanchor.py; MEMBERSHIP-RECOVERY.md), never a silent return to trusting the epoch alone.
+    The same limit as the counter: owner authorization on the running host can rewrite the record.
     """
 
     MAX_JUMP = 1000
     RECORD = True                        # heartbeat.Counter is this counter without the record
-    RECORD_BYTES, ZERO = 40, "00" * 32
+    RECORD_BYTES, ZERO = 48, "00" * 32
+    RECORD_TAG = b"regalia-membership-record/v1\0"
     NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
     WRITTEN, WRITELOCKED = 0x20000000, 0x800
 
-    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_index=None):
+    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None):
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
-        self.record_index = (record_index or "0x%x" % (int(index, 16) + 4)) if self.RECORD else None
+        self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
+        require(len(self.record_indices) in (0, 2) and len(set(self.record_indices)) == len(self.record_indices), "the record takes two different NV indices")
         # Two processes advancing at once could both increment and push the counter past any manifest.
         self.lock_path = lock_path or "/run/lock/regalia-highwater-%s.lock" % self.index
 
@@ -400,8 +411,11 @@ class HighWater:
         with _exclusive(self.lock_path):
             return self._define()
 
+    def _indices(self):
+        return (self.index, self.base_index) + self.record_indices
+
     def _define(self):
-        for index in filter(None, (self.index, self.base_index, self.record_index)):
+        for index in self._indices():
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
         r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
@@ -412,11 +426,23 @@ class HighWater:
         r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
         require(r.returncode == 0, "cannot write the base index")
         require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
-        if self.record_index:
-            r = self._tpm("nvdefine", self.record_index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
-            require(r.returncode == 0, "cannot define the record index %s" % self.record_index)
+        for index in self.record_indices:
+            r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
+            require(r.returncode == 0, "cannot define the record index %s" % index)
+        for _ in self.record_indices:            # each write takes the slot that is not valid yet
             self._write_record(0, self.ZERO)
         return base
+
+    def redefine(self):
+        """Delete this anchor's indices and define them anew, at epoch 0 with an empty record: the TPM half
+        of a re-anchor. It needs owner authorization and forgets what this TPM knew, so nothing calls it
+        but Store.reanchor(), after the chain to restore was verified. A new counter starts above every
+        value a counter on this TPM ever held, so the old epochs cannot be read back as the new ones."""
+        with _exclusive(self.lock_path):
+            for index in self._indices():
+                if self._tpm("nvreadpublic", index).returncode == 0:
+                    require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+            return self._define()
 
     def _base(self):
         """Checks both indices' attributes and returns the base (one call per value/advance/check)."""
@@ -454,20 +480,50 @@ class HighWater:
                 self._write_record(now, digest_of(now))
         return now
 
-    def _record(self):
-        require(self.record_index is not None, "this counter keeps no record")
-        a = self._attributes(self.record_index)
-        require(a & self.NT_MASK == self.NT_ORDINARY and a & self.WRITTEN, "record index %s is not a written ordinary index" % self.record_index)
-        r = self._tpm("nvread", self.record_index, "-C", "o", "-s", str(self.RECORD_BYTES))
+    @classmethod
+    def slot_bytes(cls, epoch, manifest_digest):
+        """What a record slot holds: epoch || digest || tag."""
+        hex_field(manifest_digest, 64, "a manifest digest")
+        body = epoch.to_bytes(8, "big") + bytes.fromhex(manifest_digest)
+        return body + hashlib.sha256(cls.RECORD_TAG + body).digest()[:8]
+
+    def _slot(self, index):
+        """(epoch, digest) held by one record slot, or None when what it holds is not a record (never
+        written, or a write that was cut: the tag does not match). An index that is missing, is not an
+        ordinary index or cannot be read is refused: that is not what a power cut leaves."""
+        a = self._attributes(index)
+        require(a & self.NT_MASK == self.NT_ORDINARY, "record index %s is not an ordinary index" % index)
+        if not a & self.WRITTEN:
+            return None
+        r = self._tpm("nvread", index, "-C", "o", "-s", str(self.RECORD_BYTES))
         require(r.returncode == 0 and len(r.stdout) == self.RECORD_BYTES, "cannot read %d bytes from the record index %s: the anchor "
-                "is unavailable (fail closed)" % (self.RECORD_BYTES, self.record_index))
-        return int.from_bytes(r.stdout[:8], "big"), r.stdout[8:].hex()
+                "is unavailable (fail closed)" % (self.RECORD_BYTES, index))
+        epoch, held = int.from_bytes(r.stdout[:8], "big"), r.stdout[8:40].hex()
+        return (epoch, held) if r.stdout == self.slot_bytes(epoch, held) else None
+
+    def _slots(self):
+        require(self.record_indices, "this counter keeps no record")
+        return [self._slot(index) for index in self.record_indices]
+
+    def _record(self):
+        valid = [slot for slot in self._slots() if slot is not None]
+        require(valid, "NO RECORD: neither record slot (%s) holds a valid record: the anchor cannot tell which chain this node "
+                "accepted (fail closed); re-anchor it (MEMBERSHIP-RECOVERY.md)" % ", ".join(self.record_indices))
+        newest = max(valid)
+        require(all(slot == newest for slot in valid if slot[0] == newest[0]), "the two record slots name different manifests at "
+                "epoch %d: the anchor is inconsistent (fail closed)" % newest[0])
+        return newest
 
     def _write_record(self, epoch, manifest_digest):
-        hex_field(manifest_digest, 64, "a manifest digest")
-        r = self._tpm("nvwrite", self.record_index, "-C", "o", "-i", "-", input=epoch.to_bytes(8, "big") + bytes.fromhex(manifest_digest))
-        require(r.returncode == 0, "cannot write the record index %s" % self.record_index)
-        require(self._record() == (epoch, manifest_digest), "the record index %s did not take the write" % self.record_index)
+        data = self.slot_bytes(epoch, manifest_digest)
+        slots = self._slots()
+        # the slot that holds no record, else the older one (the first when they are equal): the newest
+        # valid record is never the one being overwritten, so a cut write cannot lose it
+        target = min(range(len(slots)), key=lambda i: (slots[i] is not None, slots[i] or (0, "")))
+        index = self.record_indices[target]
+        r = self._tpm("nvwrite", index, "-C", "o", "-i", "-", input=data)
+        require(r.returncode == 0, "cannot write the record index %s" % index)
+        require(self._slot(index) == (epoch, manifest_digest), "the record index %s did not take the write" % index)
 
     def _verify(self, hw, digest_of, repair):
         """The record against a chain (`digest_of(epoch)` is its manifest digest there, ZERO at epoch 0)."""
@@ -479,10 +535,28 @@ class HighWater:
         if epoch != hw and repair:           # a crash after the counter moved and before the record was written
             self._write_record(hw, digest_of(hw))
 
+    def unusable(self):
+        """None while the anchor can do its work: the counter reads, and the record is valid and at the
+        counter's epoch or one below. Otherwise the reason, as text: what Store.reanchor() is for."""
+        with _exclusive(self.lock_path):
+            try:
+                hw = self._epoch(self._base())
+                epoch, _ = self._record()
+                require(epoch in (hw, hw - 1), "the TPM record is for epoch %d but the TPM high-water is %d: the anchor is inconsistent "
+                        "(fail closed)" % (epoch, hw))
+            except Refused as reason:
+                return str(reason)
+            return None
+
     def record(self):
-        """(epoch, manifest digest) as last written."""
+        """(epoch, manifest digest) as last written: the valid slot with the higher epoch."""
         with _exclusive(self.lock_path):
             return self._record()
+
+    def slots(self):
+        """What each record slot holds, in index order: (epoch, digest), or None for a slot that holds no record."""
+        with _exclusive(self.lock_path):
+            return self._slots()
 
     def pinned(self):
         """Whether the record names the manifest AT the high-water epoch (False in the crash window, where
@@ -532,6 +606,9 @@ class Store:
     restore(chain)    replaces the stored chain by one fetched whole from a peer, when load() refuses with
                       ROLLBACK or CONFLICT: verified from the root, at least as new as the TPM high-water,
                       the recorded manifest at the recorded epoch, and a continuation of what is on disk.
+    reanchor(chain)   gives the node a new TPM anchor and installs the chain under it, when the anchor
+                      itself is unusable and restore() must refuse too. An operator's decision, taken on
+                      the authority and a peer that agree (reanchor.py; MEMBERSHIP-RECOVERY.md).
     commit(envelope)  accepts the next manifest onto the loaded chain, writes the file durably
                       (temp file, fsync, rename, fsync of the directory), THEN increments the TPM counter,
                       THEN writes the TPM record; a crash between any two is completed by the next load(),
@@ -628,27 +705,74 @@ class Store:
                     "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
             # also before anything is written: a chain that is not the anchored one never reaches the disk
             self.hw.verify(self._digests(manifests))
-            # What is still on disk counts only as far as it is itself a valid chain: a corrupt or unsigned
-            # tail is what recovery is for, and must neither block it nor be compared.
-            held, previous = [], None
-            try:
-                for stored in self._read_chain():
-                    nxt = accept(previous, stored, self.root_key)
-                    if nxt is previous:
-                        break
-                    held.append(nxt)
-                    previous = nxt
-            except Refused:
-                pass
-            for mine, theirs in zip(held, envelopes):
-                require(digest(mine) == digest(theirs["manifest"]), "CONFLICT: the fetched chain differs from the "
-                        "stored one at epoch %d: record an incident" % mine["epoch"])
-            require(len(held) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
+            self._continues_disk(envelopes)
             self._write(copy.deepcopy(envelopes))
             self.hw.anchor(current["epoch"], self._digests(manifests))
             self.hw.check(current["epoch"])
             self.chain, self.manifests = copy.deepcopy(envelopes), manifests
             return current
+
+    def reanchor(self, envelopes):
+        """Give this node a NEW anchor and install a chain under it: the recovery when the anchor itself is
+        unusable (NO RECORD, an index deleted, an inconsistent anchor, a replaced TPM), which no chain from
+        a peer can repair. It forgets what this TPM knew, so the caller must have established the chain
+        from more than this node's word: reanchor.py takes it from the authority and a peer that agree.
+
+        A usable anchor is never reset: while the counter reads and the record is valid and in step with
+        it, this refuses, whatever the chain (that case is restore()'s, under the anchor as it is). And what
+        can still be read is honoured: while the counter reads, the chain must reach its epoch, so this is
+        not a way back. The valid chain still on disk must agree, as for restore().
+
+        Order: everything is verified; the chain is written durably; the anchor is redefined (epoch 0, an
+        empty record); the chain is anchored epoch by epoch. A crash after the write leaves the old anchor
+        to judge the new file; a crash after the redefinition leaves a verified chain on disk under an
+        empty anchor, which load() anchors, or reanchor() run again."""
+        with _exclusive(self.lock_path):
+            require(isinstance(envelopes, list) and envelopes, "a chain to re-anchor on is a non-empty list of envelopes")
+            require(len(canonical(envelopes)) <= MAX_CHAIN_BYTES, "the chain to re-anchor on is oversized")
+            current, manifests = None, []
+            for envelope in envelopes:
+                nxt = accept(current, envelope, self.root_key)
+                require(nxt is not current, "the fetched chain repeats epoch %d" % nxt["epoch"])
+                manifests.append(nxt)
+                current = nxt
+            digest_of = self._digests(manifests)
+            require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
+                    "substituted is restored under the anchor it has (restore)")
+            try:
+                old = self.hw.value()
+            except Refused:
+                old = None                      # the counter cannot be read: there is no epoch to hold the chain to
+            if old is not None:
+                require(current["epoch"] >= old, "the fetched chain ends at epoch %d, below the TPM high-water %d, which still reads: "
+                        "re-anchoring does not go back" % (current["epoch"], old))
+            self._continues_disk(envelopes)
+            self._write(copy.deepcopy(envelopes))
+            self.hw.redefine()
+            epoch = 0
+            while epoch < current["epoch"]:     # the jump bound is per step; the operator has authorized the whole way
+                epoch = self.hw.anchor(min(current["epoch"], epoch + self.hw.MAX_JUMP), digest_of)
+            self.hw.check(current["epoch"])
+            self.chain, self.manifests = copy.deepcopy(envelopes), manifests
+            return current
+
+    def _continues_disk(self, envelopes):
+        """What is still on disk counts only as far as it is itself a valid chain: a corrupt or unsigned
+        tail is what recovery is for, and must neither block it nor be compared."""
+        held, previous = [], None
+        try:
+            for stored in self._read_chain():
+                nxt = accept(previous, stored, self.root_key)
+                if nxt is previous:
+                    break
+                held.append(nxt)
+                previous = nxt
+        except Refused:
+            pass
+        for mine, theirs in zip(held, envelopes):
+            require(digest(mine) == digest(theirs["manifest"]), "CONFLICT: the fetched chain differs from the "
+                    "stored one at epoch %d: record an incident" % mine["epoch"])
+        require(len(held) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
 
     def commit(self, envelope):
         with _exclusive(self.lock_path):        # load, write and advance as one step

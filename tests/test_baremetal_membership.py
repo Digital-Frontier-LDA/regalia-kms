@@ -85,6 +85,17 @@ class Manifests(unittest.TestCase):
             with self.subTest(raw=raw), self.assertRaises(m.Refused):
                 m.load(raw)
 
+    def test_hostile_input_is_a_refusal_never_another_exception(self):
+        """48's findings: both are reachable with an unsigned envelope, before any signature is checked."""
+        with self.assertRaisesRegex(m.Refused, "not valid JSON: nested too deeply"):
+            m.load(b"[" * 30000 + b"]" * 30000)                                  # was a RecursionError
+        for label, bad in (("v1", manifest(2, m.digest(self.m1), three())), ("v2", manifest2(2, m.digest(self.m1), v2(three())))):
+            for state in (["ACTIVE"], {"ACTIVE": 1}, None, 1):                   # a list or dict was a TypeError (unhashable)
+                with self.subTest(schema=label, state=state):
+                    bad["nodes"][0]["state"] = state
+                    with self.assertRaisesRegex(m.Refused, r"nodes\[0\].state .* is not a known state"):
+                        m.accept(self.m1, sign(bad, ROOT), ROOT_PUB)
+
     def test_poc_8_4_maintenance_requests_only(self):
         m2 = m.accept(self.m1, sign(manifest(2, m.digest(self.m1), three(a="MAINTENANCE")), REVOKE, "revocation"), ROOT_PUB)
         self.assertEqual((m.may(m2, "a", "request"), m.may(m2, "a", "authorize"), m.may(m2, "a", "serve")), (True, False, False))
@@ -377,7 +388,7 @@ class HighWaterOnSwtpm(_Swtpm):
         other = m.HighWater("0x1500030", tcti=self.tcti, lock_path=self.d + "/other.lock")
         other.define()
         other.advance(5)
-        for idx in ("0x1500030", "0x1500031", "0x1500034", "0x1500016", "0x1500017", "0x150001a"):
+        for idx in ("0x1500030", "0x1500031", "0x1500034", "0x1500035", "0x1500016", "0x1500017", "0x150001a", "0x150001b"):
             subprocess.run(["tpm2_nvundefine", idx, "-C", "o"], env=self.env, check=True, capture_output=True)
         fresh = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock")
         self.assertGreater(fresh.define(), 5)
@@ -427,50 +438,96 @@ class HighWaterOnSwtpm(_Swtpm):
     def nv(self, *argv, **kw):
         return subprocess.run(["tpm2_" + argv[0], *argv[1:]], env=self.env, capture_output=True, **kw)
 
-    def test_define_creates_the_record_at_epoch_0_with_a_zero_digest(self):
-        self.assertEqual((self.hw.record_index, self.hw.record(), self.hw.pinned()), ("0x150001a", (0, "00" * 32), True))
-        public = self.nv("nvreadpublic", "0x150001a").stdout.decode()
-        self.assertRegex(public, r"size: 40\b")
-        self.assertRegex(public, r"value: 0x20060006\b")                 # ordinary, owner/auth read and write, written
+    def test_define_creates_the_record_at_epoch_0_with_a_zero_digest_in_both_slots(self):
+        zero = (0, "00" * 32)
+        self.assertEqual((self.hw.record_indices, self.hw.record(), self.hw.slots(), self.hw.pinned(), self.hw.unusable()),
+                         (("0x150001a", "0x150001b"), zero, [zero, zero], True, None))
+        for index in self.hw.record_indices:
+            public = self.nv("nvreadpublic", index).stdout.decode()
+            self.assertRegex(public, r"size: 48\b")
+            self.assertRegex(public, r"value: 0x20060006\b")             # ordinary, owner/auth read and write, written
+            self.assertEqual(self.nv("nvread", index, "-C", "o", "-s", "48").stdout, m.HighWater.slot_bytes(0, "00" * 32))
         self.assertEqual(self.hw.verify(lambda epoch: "00" * 32), 0)
-        # a counter without a record (the heartbeat's) defines no third index, and has none to read
+        # a counter without a record (the heartbeat's) defines no record index, and has none to read
         class Plain(m.HighWater):
             RECORD = False
         plain = Plain("0x1500030", tcti=self.tcti, lock_path=self.d + "/plain.lock")
         plain.define()
-        self.assertEqual((plain.record_index, plain.advance(2)), (None, 2))
-        self.assertNotEqual(self.nv("nvreadpublic", "0x1500034").returncode, 0)
+        self.assertEqual((plain.record_indices, plain.advance(2)), ((), 2))
+        for index in ("0x1500034", "0x1500035"):
+            self.assertNotEqual(self.nv("nvreadpublic", index).returncode, 0)
         with self.assertRaisesRegex(m.Refused, "this counter keeps no record"):
             plain.record()
+        with self.assertRaisesRegex(m.Refused, "the record takes two different NV indices"):
+            m.HighWater("0x1500016", record_indices=("0x150001a",))
+        with self.assertRaisesRegex(m.Refused, "the record takes two different NV indices"):
+            m.HighWater("0x1500016", record_indices=("0x150001a", "0x150001a"))
 
     def test_define_refuses_a_record_index_that_exists(self):
-        self.assertEqual(self.nv("nvdefine", "0x1500034", "-C", "o", "-s", "40").returncode, 0)
+        self.assertEqual(self.nv("nvdefine", "0x1500035", "-C", "o", "-s", "48").returncode, 0)
         other = m.HighWater("0x1500030", tcti=self.tcti, lock_path=self.d + "/other.lock")
-        with self.assertRaisesRegex(m.Refused, "NV index 0x1500034 already exists"):
+        with self.assertRaisesRegex(m.Refused, "NV index 0x1500035 already exists"):
             other.define()
         self.assertNotEqual(self.nv("nvreadpublic", "0x1500030").returncode, 0)     # refused before anything was defined
 
-    def test_a_record_that_cannot_be_read_fails_closed(self):
+    def test_a_record_index_that_is_gone_or_is_not_one_fails_closed(self):
+        """Not what a power cut leaves: an index deleted, or one that is not a 48-byte ordinary index. One good
+        slot beside it does not make up for that."""
         zero = lambda epoch: "00" * 32
-        cases = (
-            ("missing", (), "cannot read NV index 0x150001a: the high-water anchor is unavailable \\(fail closed\\)"),
-            ("defined and never written", (("nvdefine", "0x150001a", "-C", "o", "-s", "40", "-a", "ownerread|ownerwrite|authread|authwrite"),),
-             "record index 0x150001a is not a written ordinary index"),
-            ("a counter", (("nvdefine", "0x150001a", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite"),
-                           ("nvincrement", "0x150001a", "-C", "o")), "record index 0x150001a is not a written ordinary index"),
-            ("too short", (("nvdefine", "0x150001a", "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite"),
-                           ("nvwrite", "0x150001a", "-C", "o", "-i", "-")), "cannot read 40 bytes from the record index 0x150001a"),
-        )
-        for label, commands, reason in cases:
-            with self.subTest(label):
-                self.nv("nvundefine", "0x150001a", "-C", "o")
-                self.assertNotEqual(self.nv("nvreadpublic", "0x150001a").returncode, 0)
-                for argv in commands:
-                    self.assertEqual(self.nv(*argv, input=b"\0" * 8 if argv[0] == "nvwrite" else None).returncode, 0, argv)
-                for call in (self.hw.record, self.hw.pinned, lambda: self.hw.verify(zero), lambda: self.hw.anchor(1, zero)):
-                    with self.assertRaisesRegex(m.Refused, reason):
-                        call()
-                self.assertEqual(self.hw.value(), 0)                     # and the counter did not move
+        for index in self.hw.record_indices:
+            cases = (
+                ("missing", (), "cannot read NV index %s: the high-water anchor is unavailable \\(fail closed\\)" % index),
+                ("a counter", (("nvdefine", index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite"),
+                               ("nvincrement", index, "-C", "o")), "record index %s is not an ordinary index" % index),
+                ("too short", (("nvdefine", index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite"),
+                               ("nvwrite", index, "-C", "o", "-i", "-")), "cannot read 48 bytes from the record index %s" % index),
+            )
+            for label, commands, reason in cases:
+                with self.subTest(index=index, case=label):
+                    self.nv("nvundefine", index, "-C", "o")
+                    self.assertNotEqual(self.nv("nvreadpublic", index).returncode, 0)
+                    for argv in commands:
+                        self.assertEqual(self.nv(*argv, input=b"\0" * 8 if argv[0] == "nvwrite" else None).returncode, 0, argv)
+                    for call in (self.hw.record, self.hw.pinned, self.hw.slots, lambda: self.hw.verify(zero), lambda: self.hw.anchor(1, zero)):
+                        with self.assertRaisesRegex(m.Refused, reason):
+                            call()
+                    self.assertRegex(self.hw.unusable(), reason)
+                    self.assertEqual(self.hw.value(), 0)                 # and the counter did not move
+            self.nv("nvundefine", index, "-C", "o")                      # put the slot back for the other index's turn
+            self.assertEqual(self.nv("nvdefine", index, "-C", "o", "-s", "48", "-a", "ownerread|ownerwrite|authread|authwrite").returncode, 0)
+
+    def test_a_slot_that_was_never_written_or_holds_garbage_is_passed_over(self):
+        digest_of = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
+        self.nv("nvundefine", "0x150001a", "-C", "o")                    # defined again and never written: define() cut after its nvdefine
+        self.assertEqual(self.nv("nvdefine", "0x150001a", "-C", "o", "-s", "48", "-a", "ownerread|ownerwrite|authread|authwrite").returncode, 0)
+        self.assertEqual((self.hw.slots(), self.hw.record(), self.hw.unusable()), ([None, (0, "00" * 32)], (0, "00" * 32), None))
+        self.assertEqual(self.hw.anchor(1, digest_of), 1)                # and that is the slot the next write takes
+        self.assertEqual(self.hw.slots(), [(1, "01" * 32), (0, "00" * 32)])
+        self.assertEqual(self.nv("nvwrite", "0x150001b", "-C", "o", "-i", "-", input=b"\xa5" * 48).returncode, 0)   # garbage in the older slot
+        self.assertEqual((self.hw.slots(), self.hw.record(), self.hw.pinned()), ([(1, "01" * 32), None], (1, "01" * 32), True))
+        self.assertEqual(self.hw.anchor(2, digest_of), 2)
+        self.assertEqual(self.hw.slots(), [(1, "01" * 32), (2, "02" * 32)])
+        self.assertEqual(self.nv("nvwrite", "0x150001b", "-C", "o", "-i", "-", input=b"\xa5" * 48).returncode, 0)   # garbage in the NEWER slot:
+        self.assertEqual((self.hw.record(), self.hw.pinned(), self.hw.unusable()), ((1, "01" * 32), False, None))    # the crash window, and repaired
+        self.assertEqual((self.hw.anchor(2, digest_of), self.hw.slots()), (2, [(1, "01" * 32), (2, "02" * 32)]))
+        for index in self.hw.record_indices:                            # neither slot: nothing to go by
+            self.assertEqual(self.nv("nvwrite", index, "-C", "o", "-i", "-", input=b"\xa5" * 48).returncode, 0)
+        for call in (self.hw.record, self.hw.pinned, lambda: self.hw.verify(digest_of), lambda: self.hw.anchor(3, digest_of)):
+            with self.assertRaisesRegex(m.Refused, "NO RECORD: neither record slot \\(0x150001a, 0x150001b\\) holds a valid record"):
+                call()
+        self.assertEqual((self.hw.slots(), self.hw.value()), ([None, None], 2))
+        self.assertRegex(self.hw.unusable(), "NO RECORD")
+
+    def test_redefine_gives_a_new_anchor_at_epoch_0_above_every_old_counter_value(self):
+        digest_of = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
+        self.hw.anchor(3, digest_of)
+        old_counter = int.from_bytes(self.nv("nvread", "0x1500016", "-C", "o", "-s", "8").stdout, "big")
+        self.nv("nvundefine", "0x150001b", "-C", "o")                    # one index already gone: the rest is still replaced
+        base = self.hw.redefine()
+        self.assertGreater(base, old_counter)
+        zero = (0, "00" * 32)
+        self.assertEqual((self.hw.value(), self.hw.slots(), self.hw.unusable()), (0, [zero, zero], None))
+        self.assertEqual(self.hw.anchor(1, digest_of), 1)
 
 
 class RecordWrites(unittest.TestCase):
@@ -482,12 +539,15 @@ class RecordWrites(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tpm = FakeTpm()
         self.calls = []
+        self.fault = lambda argv: None
 
     def run_tpm(self, argv, **kw):
-        self.calls.append(argv[0])
+        self.calls.append((argv[0][len("tpm2_"):], argv[1]))
         verdict = self.fault(argv)
         if isinstance(verdict, bytes):                       # the tool succeeds and prints this
             return subprocess.CompletedProcess(argv, 0, verdict, b"")
+        if isinstance(verdict, tuple):                       # the tool FAILS and still prints this
+            return subprocess.CompletedProcess(argv, verdict[0], verdict[1], b"")
         if verdict is not None:
             return subprocess.CompletedProcess(argv, verdict, b"", b"")
         return self.tpm(argv, **kw)
@@ -495,59 +555,256 @@ class RecordWrites(unittest.TestCase):
     def anchor(self):
         return m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.run_tpm)
 
-    def test_a_record_index_that_cannot_be_defined(self):
-        self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvdefine", "0x150001a"] else None
-        with self.assertRaisesRegex(m.Refused, "cannot define the record index 0x150001a"):
-            self.anchor().define()
+    def test_the_record_takes_two_different_indices(self):
+        for bad in (("0x150001a",), ("0x150001a", "0x150001a"), ("0x150001a", "0x150001b", "0x150001c")):
+            with self.subTest(record_indices=bad), self.assertRaisesRegex(m.Refused, "the record takes two different NV indices"):
+                m.HighWater("0x1500016", record_indices=bad)
+        self.assertEqual(m.HighWater("0x1500016", record_indices=["0x1500020", "0x1500021"]).record_indices, ("0x1500020", "0x1500021"))
 
-    def test_a_record_write_the_tpm_refuses(self):
+    def test_redefine_stops_at_an_index_it_cannot_delete(self):
+        hw = self.defined()
+        hw.anchor(2, lambda epoch: "%02x" % epoch * 32)
+        self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvundefine", "0x150001a"] else None
+        with self.assertRaisesRegex(m.Refused, "cannot delete NV index 0x150001a"):
+            hw.redefine()
         self.fault = lambda argv: None
+        self.assertEqual(hw.redefine() > 0 and (hw.value(), hw.slots()), (0, [(0, "00" * 32), (0, "00" * 32)]))
+
+    def test_a_record_read_that_fails_is_refused_whatever_it_printed(self):
+        hw = self.defined()
+        whole = m.HighWater.slot_bytes(0, "00" * 32)
+        self.fault = lambda argv: (1, whole) if argv[:2] == ["tpm2_nvread", "0x150001a"] else None
+        with self.assertRaisesRegex(m.Refused, "cannot read 48 bytes from the record index 0x150001a"):
+            hw.record()
+
+    def defined(self):
         hw = self.anchor()
         hw.define()
+        del self.calls[:]
+        return hw
+
+    def test_a_record_index_that_cannot_be_defined(self):
+        for index in ("0x150001a", "0x150001b"):
+            with self.subTest(index=index):
+                self.tpm = FakeTpm()
+                self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvdefine", index] else None
+                with self.assertRaisesRegex(m.Refused, "cannot define the record index %s" % index):
+                    self.anchor().define()
+
+    def test_a_record_write_the_tpm_refuses(self):
+        hw = self.defined()
         self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvwrite", "0x150001a"] else None
         with self.assertRaisesRegex(m.Refused, "cannot write the record index 0x150001a"):
             hw.anchor(1, lambda epoch: "ab" * 32 if epoch else "00" * 32)
         self.assertEqual((hw.value(), hw.record(), hw.pinned()), (1, (0, "00" * 32), False))     # the crash window, as left
 
     def test_a_record_write_that_does_not_take(self):
-        self.fault = lambda argv: None
-        hw = self.anchor()
-        hw.define()
+        hw = self.defined()
         self.fault = lambda argv: 0 if argv[:2] == ["tpm2_nvwrite", "0x150001a"] else None      # says yes, stores nothing
         with self.assertRaisesRegex(m.Refused, "the record index 0x150001a did not take the write"):
             hw.anchor(1, lambda epoch: "ab" * 32 if epoch else "00" * 32)
 
     def test_a_record_read_of_another_length_is_refused(self):
-        # tpm2_nvread -s 40 gives 40 bytes or fails; a tool that gave fewer or more must not be parsed as a record
-        self.fault = lambda argv: None
-        hw = self.anchor()
-        hw.define()
-        for out in (b"", b"\0" * 39, b"\0" * 41):
-            self.fault = lambda argv: out if argv[:2] == ["tpm2_nvread", "0x150001a"] else None
-            for call in (hw.record, hw.pinned, lambda: hw.verify(lambda epoch: "00" * 32), lambda: hw.anchor(1, lambda epoch: "00" * 32)):
-                with self.subTest(length=len(out)), self.assertRaisesRegex(m.Refused, "cannot read 40 bytes from the record index 0x150001a"):
-                    call()
+        # tpm2_nvread -s 48 gives 48 bytes or fails; a tool that gave fewer or more must not be parsed as a record
+        hw = self.defined()
+        for index in hw.record_indices:
+            for out in (b"", b"\0" * 47, b"\0" * 49):
+                self.fault = lambda argv: out if argv[:2] == ["tpm2_nvread", index] else None
+                for call in (hw.record, hw.pinned, lambda: hw.verify(lambda epoch: "00" * 32), lambda: hw.anchor(1, lambda epoch: "00" * 32)):
+                    with self.subTest(index=index, length=len(out)), self.assertRaisesRegex(m.Refused, "cannot read 48 bytes from the record index %s" % index):
+                        call()
         self.fault = lambda argv: None
         self.assertEqual((hw.value(), hw.record()), (0, (0, "00" * 32)))
 
+    def test_a_slot_is_a_record_only_if_its_tag_matches(self):
+        hw = self.defined()
+        good = m.HighWater.slot_bytes(7, "ab" * 32)
+        self.assertEqual((len(good), good[:8], good[8:40]), (48, (7).to_bytes(8, "big"), b"\xab" * 32))
+        for label, data in (("another epoch under the same tag", (8).to_bytes(8, "big") + good[8:]),
+                            ("another digest under the same tag", good[:8] + b"\xac" + good[9:]),
+                            ("a tag off by one bit", good[:47] + bytes([good[47] ^ 1])),
+                            ("a tag made without the domain prefix", good[:40] + __import__("hashlib").sha256(good[:40]).digest()[:8]),
+                            ("all zero", b"\0" * 48), ("all ones", b"\xff" * 48)):
+            with self.subTest(label):
+                self.fault = lambda argv: data if argv[:2] == ["tpm2_nvread", "0x150001b"] else None
+                self.assertEqual(hw.slots(), [(0, "00" * 32), None])
+        self.fault = lambda argv: good if argv[:2] == ["tpm2_nvread", "0x150001b"] else None
+        self.assertEqual(hw.slots(), [(0, "00" * 32), (7, "ab" * 32)])
+
+    def test_an_index_that_is_not_a_written_ordinary_one(self):
+        # the same on swtpm in HighWaterOnSwtpm; here so that it runs where no TPM tools are installed
+        hw = self.defined()
+        self.tpm(["tpm2_nvundefine", "0x150001b", "-C", "o"])
+        self.tpm(["tpm2_nvdefine", "0x150001b", "-C", "o", "-s", "48", "-a", "ownerread|ownerwrite|authread|authwrite"])
+        self.assertEqual((hw.slots(), hw.record()), ([(0, "00" * 32), None], (0, "00" * 32)))        # never written: passed over
+        self.assertEqual(hw.anchor(1, lambda epoch: "01" * 32 if epoch else "00" * 32), 1)
+        self.assertEqual(hw.slots(), [(0, "00" * 32), (1, "01" * 32)])                               # and it took the write
+        self.tpm(["tpm2_nvundefine", "0x150001b", "-C", "o"])
+        self.tpm(["tpm2_nvdefine", "0x150001b", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite"])
+        self.tpm(["tpm2_nvincrement", "0x150001b", "-C", "o"])
+        for call in (hw.record, hw.slots, hw.pinned):
+            with self.assertRaisesRegex(m.Refused, "record index 0x150001b is not an ordinary index"):
+                call()
+        self.tpm(["tpm2_nvundefine", "0x150001b", "-C", "o"])
+        with self.assertRaisesRegex(m.Refused, "cannot read NV index 0x150001b: the high-water anchor is unavailable"):
+            hw.record()
+        with self.assertRaisesRegex(m.Refused, "this counter keeps no record"):
+            type("Plain", (m.HighWater,), {"RECORD": False})("0x1500030", lock_path=self.d + "/p.lock", run=self.run_tpm).slots()
+
+    def test_two_valid_slots_that_disagree_at_one_epoch_are_refused(self):
+        hw = self.defined()
+        hw.anchor(1, lambda epoch: "01" * 32 if epoch else "00" * 32)
+        other = m.HighWater.slot_bytes(1, "02" * 32)                     # valid, the same epoch, another manifest: no crash leaves this
+        self.fault = lambda argv: other if argv[:2] == ["tpm2_nvread", "0x150001b"] else None
+        for call in (hw.record, hw.pinned, lambda: hw.verify(lambda epoch: "01" * 32)):
+            with self.assertRaisesRegex(m.Refused, "the two record slots name different manifests at epoch 1"):
+                call()
+        self.assertRegex(hw.unusable(), "name different manifests")
+        older = m.HighWater.slot_bytes(0, "02" * 32)                     # disagreement BELOW the newest epoch does not matter: that slot is history
+        self.fault = lambda argv: older if argv[:2] == ["tpm2_nvread", "0x150001b"] else None
+        self.assertEqual(hw.record(), (1, "01" * 32))
+
     def test_a_digest_that_is_not_one_is_never_written(self):
-        self.fault = lambda argv: None
-        hw = self.anchor()
-        hw.define()
-        del self.calls[:]
+        hw = self.defined()
         for bad in ("AB" * 32, "ab" * 31, None, b"\0" * 32):
             with self.subTest(bad=bad), self.assertRaisesRegex(m.Refused, "a manifest digest must be 64 lowercase hex"):
                 hw._write_record(1, bad)
-        self.assertNotIn("tpm2_nvwrite", self.calls)
+        self.assertNotIn("nvwrite", [tool for tool, _ in self.calls])
 
-    def test_the_order_is_counter_then_record_for_every_epoch(self):
-        self.fault = lambda argv: None
-        hw = self.anchor()
-        hw.define()
-        del self.calls[:]
-        self.assertEqual(hw.anchor(3, lambda epoch: "%02x" % epoch * 32), 3)
-        self.assertEqual([c[len("tpm2_"):] for c in self.calls if c in ("tpm2_nvincrement", "tpm2_nvwrite")], ["nvincrement", "nvwrite"] * 3)
-        self.assertEqual((hw.record(), hw.pinned()), ((3, "03" * 32), True))
+    def test_the_order_is_counter_then_record_for_every_epoch_and_the_slots_alternate(self):
+        hw = self.defined()
+        self.assertEqual(hw.anchor(5, lambda epoch: "%02x" % epoch * 32), 5)
+        self.assertEqual([call for call in self.calls if call[0] in ("nvincrement", "nvwrite")],
+                         [("nvincrement", "0x1500016"), ("nvwrite", "0x150001a"), ("nvincrement", "0x1500016"), ("nvwrite", "0x150001b"),
+                          ("nvincrement", "0x1500016"), ("nvwrite", "0x150001a"), ("nvincrement", "0x1500016"), ("nvwrite", "0x150001b"),
+                          ("nvincrement", "0x1500016"), ("nvwrite", "0x150001a")])
+        self.assertEqual((hw.record(), hw.slots(), hw.pinned()), ((5, "05" * 32), [(5, "05" * 32), (4, "04" * 32)], True))
+
+
+class TornWrites(unittest.TestCase):
+    """A power cut during the record's NV write. The slot being written is left with part of the new record
+    over the old one; the command fails, and the process is gone. Whatever the cut, the node comes back: the
+    other slot still holds the record for the epoch before, which load() repairs as the crash window."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.tpm = FakeTpm()
+        self.cut_after = None                                # bytes of the record write to cut that reach the TPM; None: no cut
+        self.cut_skip = 0                                    # record writes let through whole before that one
+        self.writes = []
+        self.hw = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.run_tpm)
+        self.hw.define()
+        self.path = self.d + "/membership.json"
+        self.envs, cur = [], None
+        for e in range(1, 8):
+            env = sign(manifest(e, m.digest(cur) if cur else "", three(a="DRAINING" if e % 2 else "ACTIVE")), ROOT)
+            cur = m.accept(cur, env, ROOT_PUB)
+            self.envs.append(env)
+        del self.writes[:]
+
+    def run_tpm(self, argv, input=None, **kw):
+        if argv[0] == "tpm2_nvwrite" and argv[1] in ("0x150001a", "0x150001b"):
+            before = self.hw._slots() if hasattr(self, "hw") else [None, None]
+            self.writes.append((argv[1], before))
+            if self.cut_after is not None and self.cut_skip:
+                self.cut_skip -= 1
+            elif self.cut_after is not None:
+                kept, self.cut_after = self.cut_after, None
+                if kept:
+                    self.tpm(argv, input=input[:kept], **kw)     # FakeTpm keeps the old bytes after a short write
+                return subprocess.CompletedProcess(argv, 1, b"", b"power lost")
+        return self.tpm(argv, input=input, **kw)
+
+    def store(self):
+        return m.Store(self.path, ROOT_PUB, self.hw)
+
+    def digest(self, epoch):
+        return m.digest(self.envs[epoch - 1]["manifest"])
+
+    def test_a_write_cut_at_any_byte_is_repaired_by_the_next_load(self):
+        store = self.store()
+        store.commit(self.envs[0])
+        store.commit(self.envs[1])
+        epoch = 2
+        for kept in range(0, 49):
+            with self.subTest(bytes_written=kept):
+                epoch += 1
+                if epoch > len(self.envs):                   # start again on a fresh anchor: the chain is only seven long
+                    self.tpm.nv.clear()
+                    self.hw.define()
+                    os.unlink(self.path)
+                    store = self.store()
+                    store.commit(self.envs[0])
+                    store.commit(self.envs[1])
+                    epoch = 3
+                self.cut_after = kept
+                try:
+                    self.store().commit(self.envs[epoch - 1])
+                    cut = False                              # all 48 bytes arrived before the cut: the write is whole
+                except m.Refused as refusal:
+                    cut = True
+                    self.assertRegex(str(refusal), "cannot write the record index")
+                self.assertEqual(self.hw.value(), epoch)     # the counter had moved, and the disk before it
+                self.assertIsNone(self.hw.unusable())
+                self.assertIn(self.hw.record(), ((epoch - 1, self.digest(epoch - 1)), (epoch, self.digest(epoch))))
+                self.assertEqual(self.store().load()["epoch"], epoch)
+                self.assertEqual((self.hw.record(), self.hw.pinned(), sorted(self.hw.slots())),
+                                 ((epoch, self.digest(epoch)), True, [(epoch - 1, self.digest(epoch - 1)), (epoch, self.digest(epoch))]))
+                self.assertTrue(cut or kept == 48)
+
+    def test_the_newest_valid_slot_is_never_the_one_written(self):
+        store = self.store()
+        for env in self.envs:
+            store.commit(env)
+        self.assertEqual(len(self.writes), 7)
+        for index, before in self.writes:
+            valid = [slot for slot in before if slot is not None]
+            written = before[self.hw.record_indices.index(index)]
+            with self.subTest(index=index, before=before):
+                self.assertTrue(written is None or written == min(valid), "the write went to the newest valid record")
+
+    def test_a_cut_during_the_repair_is_repaired_too(self):
+        store = self.store()
+        store.commit(self.envs[0])
+        self.cut_after = 13
+        with self.assertRaises(m.Refused):
+            self.store().commit(self.envs[1])                # cut: the record stays at epoch 1, the counter is at 2
+        self.cut_after = 31
+        with self.assertRaisesRegex(m.Refused, "cannot write the record index"):
+            self.store().load()                              # the repair is cut as well
+        self.assertEqual((self.hw.value(), self.hw.record(), self.hw.unusable()), (2, (1, self.digest(1)), None))
+        self.assertEqual(self.store().load()["epoch"], 2)
+        self.assertEqual(self.hw.record(), (2, self.digest(2)))
+
+    def test_cuts_all_the_way_through_a_restore_never_strand_the_node(self):
+        self.store().commit(self.envs[0])
+        os.unlink(self.path)
+        attempts, done = 0, None
+        while done is None:
+            attempts += 1
+            self.assertLess(attempts, 30)
+            # each attempt gets one record write through whole (the repair of the last cut), and the next is cut
+            self.cut_after, self.cut_skip = (attempts * 7) % 48, 0 if attempts == 1 else 1
+            try:
+                done = self.store().restore(self.envs) if not os.path.exists(self.path) else self.store().load()
+            except m.Refused as refusal:
+                self.assertRegex(str(refusal), "cannot write the record index")
+                self.assertIsNone(self.hw.unusable())
+            self.cut_after = None
+        self.assertEqual((done["epoch"], self.hw.value(), self.hw.record()), (7, 7, (7, self.digest(7))))
+        self.assertEqual(attempts, 7)                        # the restore, cut at epoch 2; then one epoch gained per load, each cut again
+
+    def test_both_slots_lost_is_the_only_way_to_strand_and_it_says_what_to_do(self):
+        store = self.store()
+        store.commit(self.envs[0])
+        store.commit(self.envs[1])
+        for index in self.hw.record_indices:
+            self.tpm(["tpm2_nvwrite", index, "-C", "o", "-i", "-"], input=b"\x5a" * 48)
+        for call in (self.store().load, self.store().envelopes, lambda: self.store().restore(self.envs[:2]), lambda: self.store().commit(self.envs[2])):
+            with self.assertRaisesRegex(m.Refused, "NO RECORD: neither record slot .* re-anchor it"):
+                call()
+        self.assertEqual(self.hw.value(), 2)
 
 
 class StoreOnSwtpm(_Swtpm):
@@ -670,7 +927,7 @@ class StoreOnSwtpm(_Swtpm):
                 call()
         self.assertEqual(self.hw.record(), (1, self.digest(1)))
         # and a record AHEAD of the counter: written with owner authorization, by something that is not Store
-        ahead = (9).to_bytes(8, "big") + bytes.fromhex(self.digest(3))
+        ahead = m.HighWater.slot_bytes(9, self.digest(3))
         subprocess.run(["tpm2_nvwrite", "0x150001a", "-C", "o", "-i", "-"], input=ahead, env=self.env, check=True, capture_output=True)
         with self.assertRaisesRegex(m.Refused, "the TPM record is for epoch 9 but the TPM high-water is 3"):
             m.Store(self.path, ROOT_PUB, self.hw).load()
