@@ -25,8 +25,9 @@ opened.
 - `pin_policy` and `touch_policy: never`, as for every YubiKey binding.
 
 **What the host needs.**
-- [`deploy/opensc/yubikey-openpgp.conf`](deploy/opensc/yubikey-openpgp.conf) named by `OPENSC_CONF`:
-  OpenSC presents a YubiKey as PIV unless told otherwise.
+- The `card_atr` block of [`deploy/opensc/yubikey-openpgp.conf`](deploy/opensc/yubikey-openpgp.conf)
+  in `/etc/opensc/opensc.conf`, or that file named by `OPENSC_CONF`: OpenSC presents a YubiKey as
+  PIV unless told otherwise.
 - A `local-usb` entry for the token in the secure-channel evidence
   ([`config/secure-channel.example.json`](config/secure-channel.example.json)). The applet has no
   secure messaging, so the SmartCard-HSM attestation would be false for it. The operator attests

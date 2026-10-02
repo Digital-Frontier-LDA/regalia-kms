@@ -120,8 +120,8 @@ rule and works in every configuration once a `signtool` adapter exists.
    has no Ed25519.
 3. **The served applet is checked less than the hand-written adapter would check it.** PKCS#11
    does not expose the card's PIN-status byte or its touch flags, so a key that requires touch is
-   found out when a signature fails, not when the daemon starts. The systemd unit and its sandbox
-   do not yet carry `OPENSC_CONF`.
+   found out when a signature fails, not when the daemon starts. The path has not run under the
+   systemd unit and its AppArmor profile.
 4. **The Pico is not qualified, and two on one host may not be told apart.** `config/qualified-stack.json`
    and `tools/qualified_stack.py` do not know it, and `deploy/seal-hsm-pin.sh` accepts its serial but
    labels it staging. Nothing refuses a Pico in a manifest. The attached Pico reports the token
