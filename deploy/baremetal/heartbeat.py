@@ -289,6 +289,12 @@ class Freshness:
         with membership._exclusive(self.lock_path):
             return self._live_until(manifest)
 
+    def held(self):
+        """The heartbeat envelope on disk, or None: for passing on to a peer (convergence.bundle), which
+        verifies it as if a stranger had sent it. Nothing is checked here and nothing moves."""
+        with membership._exclusive(self.lock_path):
+            return self._read()["envelope"]
+
     def window(self, manifest):
         """check(), returning (now, issued, expires, sequence) of the heartbeat relied on: what a monitor
         needs to say how much of its life is left."""
