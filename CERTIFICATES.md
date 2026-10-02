@@ -67,9 +67,12 @@ its renewal needs a release, so that consumer must
 - Client identities are issued from a dedicated workload CA ([`IDENTITY.md`](IDENTITY.md)) and
   verified against `tls_client_ca_path`.
 - The listener's certificate (`tls_certificate_path`) is issued from an internal CA as well, and
-  clients trust that CA explicitly rather than the public roots. It is rotated by the same reviewed
-  issue, overlap and revoke steps as a client certificate. No ACME order, DNS record or public CA is
-  involved, so none of them can block a KMS restart or a certificate rotation.
+  clients trust that CA explicitly rather than the public roots (`ca_path` in the adapters). It is
+  rotated by issuing a replacement from that CA and restarting the daemon; clients need no change
+  while the CA is the same. Clients check no revocation list for it, so the client revocation steps
+  in `IDENTITY.md` do not apply: keep its lifetime short, and answer a compromised listener key by
+  replacing the CA that clients pin. No ACME order, DNS record or public CA is involved, so none of
+  them can block a KMS restart or a certificate rotation.
 
 Do not put a public ACME certificate on the KMS listener, and do not make KMS recovery wait on a
 fleet ACME service, a DNS provider or a mesh that itself needs the KMS to come up. Operator access
