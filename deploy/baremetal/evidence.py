@@ -142,8 +142,8 @@ def validate(doc, measured_names, now=None):
 
 def unlock_record(node_id, peers, label="host."):
     """The record the probe judges a peer-enrolled root disk against (#67): this host's node ID and the
-    peers that hold an unlock path for it. Returns (node_id, tuple of peers). Shared with host_probe.py,
-    which holds its --node-id and --unlock-peer arguments to the same rules."""
+    peers that hold an unlock path for it. Returns (node_id, tuple of peers). host_probe.py holds its
+    --node-id and --unlock-peer arguments to this same function."""
     require(isinstance(node_id, str) and NODE_ID.fullmatch(node_id) is not None,
             "%snode_id must be a node ID (lowercase letters, digits and dashes, at most 32)" % label)
     require(isinstance(peers, list) and len(peers) <= MAX_PEERS and all(isinstance(p, str) and NODE_ID.fullmatch(p) for p in peers),

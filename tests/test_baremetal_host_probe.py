@@ -1188,6 +1188,20 @@ class SignedEvidence(unittest.TestCase):
         self.judged_against = measure.call_args.args[3]
         return rc, json.loads(out.getvalue())
 
+    def test_the_record_of_a_bad_unlock_record_is_refused_by_validate_itself(self):
+        """evidence.validate refuses a malformed record on its own, whatever its caller does next."""
+        bad = {"a node ID that is a number": dict(node_id=1), "an empty node ID": dict(node_id=""),
+               "a node ID of 33 characters": dict(node_id="a" * 33), "a leading dash": dict(node_id="-a"),
+               "a lookalike letter": dict(node_id="\uff41"), "a trailing newline": dict(node_id="a\n"),
+               "peers as a string": dict(unlock_peers="bc"), "peers as a tuple-like object": dict(unlock_peers={"b": 1}),
+               "a peer that is not a node ID": dict(unlock_peers=["b", "C"]), "a peer that is a bool": dict(unlock_peers=[True]),
+               "seventeen peers": dict(unlock_peers=["p%d" % i for i in range(17)])}
+        for label, change in bad.items():
+            with self.subTest(label), self.assertRaises(evidence.InvalidEvidence):
+                evidence.validate(self.doc(**change), host_probe.MEASURED)
+        for good in (dict(node_id="a" * 32), dict(unlock_peers=[]), dict(unlock_peers=["p%d" % i for i in range(16)])):
+            evidence.validate(self.doc(**good), host_probe.MEASURED)
+
     def test_the_root_disk_is_judged_against_the_signed_unlock_record(self):
         """#67: which node this is and who its peers are come from the signed evidence. Arguments may repeat
         them, in any order; arguments that differ are a failing problem, and never replace the record."""
@@ -1207,6 +1221,11 @@ class SignedEvidence(unittest.TestCase):
         # peer tokens is then refused by unlock.judge_tokens for peers nobody recorded
         rc, report = self.run_probe(*self.write(self.doc(unlock_peers=[])))
         self.assertEqual((rc, self.judged_against), (0, ("a", ())), report.get("evidence_problems"))
+        # and the other direction: recorded peers, a root disk that the TPM alone opens: not the recorded disk
+        self.assertTrue(host_probe.root_unlock(FakeHost(), ("a", ()))[0])
+        ok, why = host_probe.root_unlock(FakeHost(), ("a", ("b", "c")))
+        self.assertFalse(ok)
+        self.assertIn("carries no regalia-peer-unlock token, but the unlock record names the peers b, c", why)
         self.assertIn("node_id", report["attested_not_measured"])
         self.assertIn("unlock_peers", report["attested_not_measured"])
 

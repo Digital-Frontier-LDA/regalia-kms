@@ -384,6 +384,11 @@ def root_unlock(host, unlock_record=None, binding=None):
                 return False, why
             how.append("%s unlocks with the TPM and a peer (%s)" % (name, why))
             continue
+        # The record says this host's root disk is opened with its peers: a disk without peer paths is not
+        # the disk the record describes, however well it is enrolled otherwise.
+        if unlock_record is not None and unlock_record[1]:
+            return False, "%s (%s) carries no %s token, but the unlock record names the peers %s: the root disk is not " \
+                "enrolled as recorded" % (name, dev, PEER_TOKEN, ", ".join(unlock_record[1]))
         if name not in entries:
             return False, "%s (under the root filesystem) is not listed in /etc/crypttab" % name
         if not opts.get("tpm2-device"):
@@ -1055,15 +1060,14 @@ def main(argv=None, host=None, run=None):
     host = host or Host()
     report = {"attested_not_measured": list(UNMEASURED)}
     problems, want, binding = [], args.import_key_sha256, None
-    node_form = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
     if args.unlock_peer and not args.node_id:
         ap.error("--unlock-peer needs --node-id")
-    for value in ([args.node_id] if args.node_id else []) + args.unlock_peer:
-        if not node_form.fullmatch(value):
-            ap.error("%r is not a node ID" % value)
-    if len(set(args.unlock_peer)) != len(args.unlock_peer) or args.node_id in args.unlock_peer:
-        ap.error("--unlock-peer names each peer once, and never this node")
-    unlock_record = (args.node_id, tuple(args.unlock_peer)) if args.node_id else None
+    unlock_record = None
+    if args.node_id:
+        try:
+            unlock_record = evidence_mod.unlock_record(args.node_id, list(args.unlock_peer), label="--")
+        except evidence_mod.InvalidEvidence as error:
+            ap.error(str(error))
     if args.credential_pcrs is not None and not args.evidence:
         try:
             binding = evidence_mod.credential_binding(args.credential_pcrs, args.credential_signed_pcrs,
