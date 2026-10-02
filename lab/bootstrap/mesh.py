@@ -121,15 +121,18 @@ for name in sys.argv[1:]: pathlib.Path(name).unlink(missing_ok=True)
         # underlay path. Every node keeps its existing default-deny firewall.
         subprocess.run(["docker", "network", "create", attack_network], check=True, capture_output=True, timeout=30)
         network_created = True
-        data = json.loads(subprocess.run(["docker", "network", "inspect", attack_network],
-                          check=True, capture_output=True, timeout=30).stdout)[0]
-        attack_subnet = ipaddress.IPv4Network(data["IPAM"]["Config"][0]["Subnet"])
-        attack_addresses = {node: str(attack_subnet.network_address + index) for index, node in enumerate("AB", 2)}
+        participants = {}
         for node in "AB":
             container = command("ps", "--quiet", node.lower()).stdout.decode().strip()
-            subprocess.run(["docker", "network", "connect", "--ip", attack_addresses[node],
-                            attack_network, container], check=True, capture_output=True, timeout=30)
+            subprocess.run(["docker", "network", "connect", attack_network, container],
+                           check=True, capture_output=True, timeout=30)
             connected.append(container)
+            participants[node] = container
+        data = json.loads(subprocess.run(["docker", "network", "inspect", attack_network],
+                          check=True, capture_output=True, timeout=30).stdout)[0]
+        attack_addresses = {node: str(ipaddress.IPv4Interface(
+                            data["Containers"][container]["IPv4Address"]).ip)
+                            for node, container in participants.items()}
         for node, overlay, peer in [("A", target, "B"), ("B", source, "A")]:
             admin(node, "ip", "route", "add", overlay + "/32", "via", attack_addresses[peer], "dev", "eth1")
             routes.append((node, overlay))
