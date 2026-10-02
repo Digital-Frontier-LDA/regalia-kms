@@ -24,6 +24,18 @@ check() {
         derror "regalia-unlock: libtss2-tcti-device is not installed: systemd could not unseal the boot credentials"
         return 1
     fi
+    # The client and its unit come from the host separately. The client stays for the whole initrd phase
+    # and records the boot session: under a unit that gives it nowhere to write, or does not stop it before
+    # the root filesystem takes over, the host would boot with its leases refused or the client left behind.
+    # Checked here and not in install(): dracut stops for a requested module whose check fails, and goes
+    # on after an install() that fails.
+    local line
+    for line in 'RuntimeDirectory=regalia' 'RuntimeDirectoryPreserve=yes' 'Conflicts=initrd-switch-root.target shutdown.target'; do
+        if ! grep -qxF "$line" "${systemdsystemunitdir:?}/regalia-unlock.service" 2>/dev/null; then
+            derror "regalia-unlock: the installed regalia-unlock.service is not the one of this client (no '$line')"
+            return 1
+        fi
+    done
     return 255
 }
 
@@ -40,14 +52,8 @@ installkernel() {
 }
 
 install() {
-    inst_multiple regalia-unlock wg nft ip sed cat sleep grep
+    inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
-    # The client and its unit come from the host separately: a client that records the boot session, run
-    # by a unit that gives it nowhere to write, would boot with its leases refused.
-    if ! grep -q '^RuntimeDirectory=regalia$' "${systemdsystemunitdir:?}/regalia-unlock.service"; then
-        dfatal "regalia-unlock: the installed regalia-unlock.service is older than the client (no RuntimeDirectory=regalia)"
-        return 1
-    fi
     for unit in regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done

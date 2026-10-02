@@ -853,6 +853,17 @@ class Units(unittest.TestCase):
         # the one place it may write: root's, 0755, kept after the unit ends (the lease service and the daemon use it)
         self.assertEqual((values["RuntimeDirectory"], values["RuntimeDirectoryMode"], values["RuntimeDirectoryPreserve"]), ("regalia", "0755", "yes"))
         self.assertNotIn("ReadWritePaths", values)
+        self.assertEqual(values["LimitCORE"], "0")
+        # it holds the local half and the session's key: systemd stops it before the root filesystem takes over
+        unit = dict(self.unit("regalia-unlock.service")["Unit"])
+        self.assertEqual((unit["Conflicts"], unit["Before"]), ("initrd-switch-root.target shutdown.target",) * 2)
+        # ... and the dracut module refuses, in check() (which stops dracut; install() does not), a unit without those lines
+        with open(os.path.join(REPO, "deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh")) as f:
+            module = f.read()
+        check = module[module.index("check() {"):module.index("depends() {")]
+        for line in ("RuntimeDirectory=regalia", "RuntimeDirectoryPreserve=yes", "Conflicts=" + unit["Conflicts"]):
+            self.assertIn("'%s'" % line, check)
+            self.assertIn(line.split("=", 1)[1], (values | unit)[line.split("=", 1)[0]])
         self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
         self.assertEqual(values["LoadCredentialEncrypted"], unlock.LOCAL_NAME + ":/etc/regalia/unlock-local.cred")
         self.assertNotIn("LoadCredential", values)                    # never a credential that is not sealed
@@ -1160,12 +1171,10 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual(self.unlock(peers=("c",)), ("c", 2))
         # PoC 7.4: no peer; the TPM half alone opens nothing, after a bounded number of rounds
         self.reboot("a", "the approved image")
-        before = self.left_session(self.session_dir)
         code, out, err, slot = self.native({"b": self.dead, "c": self.dead}, "-rounds", "2")
         self.assertEqual((code, out, slot), (1, "", None), err)
-        # a boot that got nothing still left its session: it is the one a peer may have verified
-        self.assertNotEqual(self.left_session(self.session_dir), before)
-        self.assertFalse(os.path.exists(self.session_dir + "/key-given-through"))
+        # no peer was reached, so no quote was taken and no peer holds a session of this boot: nothing is on record
+        self.assertEqual(os.listdir(self.session_dir), [])
         self.assertIn("regalia-unlock: the disk stays locked: no peer helped in 2 rounds", err)
         self.assertEqual(err.count("the transport failed (no connection)"), 4)
         self.refused("the disk stays locked: no peer to ask", self.unlock, peers=())
@@ -1311,7 +1320,7 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual((state("regalia-unlock.service", "ActiveState"), self.left_session("/run/regalia")), ("inactive", self.recorded_session("b")))
 
         # 2  no peer answers: systemd-cryptsetup gets nothing, gives up within a bound, maps nothing; the client
-        #    stays, with the session it put on record before asking
+        #    stays, and nothing is on record (no quote was taken, so no peer holds a session of this boot)
         self.reboot("a", "the approved image")
         boot({"b": self.dead, "c": self.dead})
         code, took, err = attach()
@@ -1319,7 +1328,7 @@ class OnSwtpm(unittest.TestCase):
         self.assertLess(took, 60)
         self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
         self.assertEqual((state("regalia-unlock.socket", "ActiveState"), state("regalia-unlock.service", "ActiveState")), ("active", "active"))
-        self.assertFalse(os.path.exists("/run/regalia/key-given-through"))
+        self.assertEqual(os.listdir("/run/regalia"), [])
         self.systemd_refusal = (code, round(took, 1), err.strip().splitlines()[-1] if err.strip() else "")
         print("\nsystemd-cryptsetup with no key from the socket: exit %d after %.1fs: %s" % self.systemd_refusal, file=sys.stderr)
 
@@ -1347,6 +1356,19 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.marker()
         self.assertEqual((state("regalia-unlock.service", "MainPID"), self.left_session("/run/regalia")), (pid, recorded))
+
+        # 3b the client is started again IN THAT BOOT (a crash, an operator's restart): its session would be a
+        #    second one. It finds the first on record, asks no peer, and gives nothing; the record stays the
+        #    session both peers hold.
+        self.assertEqual(run(["systemctl", "stop", "regalia-unlock.service"], capture_output=True).returncode, 0)
+        since = len(self.events)
+        code, took, err = attach()
+        self.assertNotEqual(code, 0)
+        self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
+        self.assertNotEqual(state("regalia-unlock.service", "MainPID"), pid)
+        self.assertEqual((len(self.events), self.left_session("/run/regalia")), (since, recorded))
+        journal = run(["journalctl", "-u", "regalia-unlock.service", "-o", "cat", "--since", "-1min", "--no-pager"], capture_output=True, text=True).stdout
+        self.assertIn("an earlier unlock client of this boot presented another session", journal)
 
         # 4  a retired image: systemd-cryptsetup gets nothing, and the peers' refusal is in their audit
         self.reboot("a", "a retired image")

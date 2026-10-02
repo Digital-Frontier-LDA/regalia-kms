@@ -381,12 +381,22 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
     file (`/run/regalia-unlock/key.sock`). If no peer helps, it gives nothing.
 - **The units** (`deploy/baremetal/initrd/regalia-unlock.socket` and `.service`): systemd-cryptsetup's
-  connection to the socket starts the client, sandboxed (no capability, no write anywhere, no device
-  but the TPM and the disks, read-only). Shown with a running systemd and the real systemd-cryptsetup:
-  the volume is mapped with the key from the socket; with no peer, systemd-cryptsetup gets no key and
-  gives up within a second, maps nothing, and the socket goes on listening for the next attempt.
-  **One boot carries one attested session**: after a peer has answered once in a boot, a second run in
-  that boot gets no second answer.
+  connection to the socket starts the client, sandboxed (no capability, no write anywhere but its own
+  `/run/regalia`, no device but the TPM and the disks, read-only). Shown with a running systemd and
+  the real systemd-cryptsetup: the volume is mapped with the key from the socket; with no peer,
+  systemd-cryptsetup gets no key, gives up within a second and maps nothing, and the client goes on
+  answering the next attempt.
+  **One boot carries one attested session.** The client is one process for the whole initrd phase and
+  makes one boot session; a retry in the same boot (a lost reply, peers that came back) is asked under
+  the same session and is answered. One valid response is used per boot: the key made from it is kept
+  in memory and given to each later connection on the socket. For the running system it leaves, in
+  `/run/regalia`, `boot-session` and `boot-session.pub` (the session's ID and public key, written
+  before the session's first quote is taken: the runtime leases of this boot are asked for under them)
+  and `key-given-through` (the peer and keyslot). None is secret. systemd stops the process before
+  switch-root; it zeroes the local half, the key and the session's private key. **If the client is
+  started a second time in one boot** (it crashed, or was restarted by hand) it finds the first one's
+  session on record and asks no peer, because a peer that recorded the first session refuses any
+  other: that boot ends at the recovery-key prompt, and a reboot is a new boot with a new session.
 - **The initrd** is built with dracut and the module `deploy/baremetal/initrd/dracut/90regalia-unlock`
   (`dracut --add regalia-unlock`): the client, the two units above, `regalia-wg-boot.service` with its
   script (the initrd ruleset first, then the declared address, then WireGuard with the WG-BOOT key

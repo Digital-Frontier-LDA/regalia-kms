@@ -7,7 +7,8 @@
 # The program runs no other program and writes no secret anywhere. It stays for as long as the initrd
 # lasts and answers each connection with the key or with nothing, always under the ONE boot session it
 # made when it started: a peer accepts one session per boot. systemd stops it before the root filesystem
-# takes over, and the local half and the session's private key end with it.
+# takes over; it zeroes the local half, the key and the session's private key and ends. Started again in
+# the same boot (after a crash), it finds the first one's session on record and asks no peer.
 
 [Unit]
 Description=Give the root volume's key: TPM plus one peer
@@ -35,6 +36,8 @@ LoadCredentialEncrypted=regalia-unlock-local:/etc/regalia/unlock-local.cred
 RuntimeDirectory=regalia
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
+# it holds secrets for the whole initrd phase: no core file, whatever the image's defaults
+LimitCORE=0
 # The program is root with nothing root can do: no capability, no new privilege, no write anywhere but
 # that directory, no device but the TPM and the disks it reads the LUKS2 header of, no socket family but
 # the three it uses.

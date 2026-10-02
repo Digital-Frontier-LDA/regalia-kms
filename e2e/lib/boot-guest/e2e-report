@@ -18,5 +18,10 @@ echo "REGALIA-E2E-CMDLINE $(cat /proc/cmdline)" > /dev/console
 # what the unlock client left for the running system, after switch-root (public values)
 echo "REGALIA-E2E-SESSION dir=$(stat -c '%U:%G:%a' /run/regalia 2>&1) id=$(cat /run/regalia/boot-session 2>&1) through=$(cat /run/regalia/key-given-through 2>&1 | tr -s ' \n' ' ')" > /dev/console
 # and the client itself is gone: it held the local half and the boot session's private key
-echo "REGALIA-E2E-CLIENT $(systemctl is-active regalia-unlock.service 2>&1) $(pgrep -c -x regalia-unlock 2>/dev/null || true)" > /dev/console
+clients=0
+for comm in /proc/[0-9]*/comm; do
+    read -r name < "$comm" 2>/dev/null || continue
+    [ "$name" = regalia-unlock ] && clients=$((clients + 1))
+done
+echo "REGALIA-E2E-CLIENT processes=$clients" > /dev/console
 systemctl --no-block poweroff

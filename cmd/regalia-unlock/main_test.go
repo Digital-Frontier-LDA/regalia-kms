@@ -16,10 +16,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +60,7 @@ type fakePeer struct {
 	forge        func(*unlockReply)                 // changes the reply after it is signed
 	requests     []map[string]any                   // every request received
 	deny         string                             // answer every request with this error
+	refuse       string                             // answer the unlock request with this error: the quote was seen, nothing is given
 	signWith     func(digest []byte) *peerSignature // another signer
 }
 
@@ -111,6 +114,9 @@ func (p *fakePeer) send(request []byte) ([]byte, error) {
 	p.requests = append(p.requests, message)
 	if p.deny != "" {
 		return json.Marshal(map[string]any{"v": 1, "error": p.deny})
+	}
+	if message["op"] == "unlock" && p.refuse != "" {
+		return json.Marshal(map[string]any{"v": 1, "error": p.refuse})
 	}
 	if message["op"] == "hello" {
 		reply := helloReply{V: 1, PeerID: p.id, Epoch: p.epoch, Nonce: hex.EncodeToString(p.nonce)}
@@ -931,6 +937,7 @@ func socketPair(t *testing.T) (*net.UnixListener, func() ([]byte, error)) {
 			return nil, err
 		}
 		defer connection.Close()
+		_ = connection.CloseWrite() // as systemd does when it reads a key from a socket: it only listens
 		_ = connection.SetDeadline(time.Now().Add(20 * time.Second))
 		return io.ReadAll(connection)
 	}
@@ -959,70 +966,124 @@ func recordOf(t *testing.T, directory string) (id, public string) {
 	return read("boot-session"), read("boot-session.pub")
 }
 
+// locked makes a peer and a log usable from the test while the serving loop runs in its own goroutine.
+type locked struct {
+	sync.Mutex
+	log bytes.Buffer
+}
+
+func (l *locked) Write(p []byte) (int, error) {
+	l.Lock()
+	defer l.Unlock()
+	return l.log.Write(p)
+}
+
+func (l *locked) said() string {
+	l.Lock()
+	defer l.Unlock()
+	return l.log.String()
+}
+
+// through wraps a dialer: every request to a peer is made under the lock, after `before` (if any).
+func (l *locked) through(dial func(string) transport, before func()) func(string) transport {
+	return func(endpoint string) transport {
+		send := dial(endpoint)
+		return func(request []byte) ([]byte, error) {
+			if before != nil {
+				before()
+			}
+			l.Lock()
+			defer l.Unlock()
+			return send(request)
+		}
+	}
+}
+
+func unlockSessions(peer *fakePeer) (sessions map[string]bool, unlocks int) {
+	sessions = map[string]bool{}
+	for _, request := range peer.requests {
+		if request["op"] == "unlock" {
+			sessions[request["session_id"].(string)] = true
+			unlocks++
+		}
+	}
+	return sessions, unlocks
+}
+
 // One boot, one process, ONE session: a peer accepts one session per boot and records it when it
-// verifies a quote. Every connection systemd-cryptsetup makes is answered under that same session.
+// verifies a quote. Every connection systemd-cryptsetup makes is answered by the same serving loop,
+// under that session, and the record names it from the moment a peer could have seen it.
 func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 	directory := t.TempDir()
 	porto := newFakePeer(t, "porto")
-	var log bytes.Buffer
-	u := newUnlocker(t, directory, &log, porto)
+	var l locked
+	u := newUnlocker(t, directory, &l, porto)
+	u.dial = l.through(dialer(porto), nil)
 	listener, ask := socketPair(t)
-	// the session is on record when the FIRST quote is taken, and it is this boot's
-	onRecordAtQuote := ""
+	onRecordAtFirstQuote := "?"
 	u.quote = func(qualifying []byte) ([]byte, []byte, error) {
-		if onRecordAtQuote == "" {
-			onRecordAtQuote, _ = recordOf(t, directory)
+		l.Lock()
+		if onRecordAtFirstQuote == "?" {
+			onRecordAtFirstQuote, _ = recordOf(t, directory)
 		}
+		l.Unlock()
 		return noQuote(qualifying)
 	}
-	// each connection is one call of serve here (-once), on the same unlocker: the same process, the same session
-	u.o.once = true
-	connect := func() ([]byte, error) {
-		got := make(chan []byte, 1)
-		go func() { key, _ := ask(); got <- key }()
-		err := u.serve(listener)
-		return <-got, err
-	}
+	mine := hex.EncodeToString(u.boot.id)
+	done := make(chan error, 1)
+	go func() { done <- u.serve(listener) }() // the real loop: no -once
+	set := func(change func()) { l.Lock(); change(); l.Unlock() }
 
-	// 1: the peer refuses (or its reply is lost): nothing is given, and the session is neither spent nor changed
-	porto.deny = "DENIED"
-	key, err := connect()
-	wantError(t, err, "no peer helped")
-	if len(key) != 0 || u.boot.consumed {
-		t.Fatalf("a refused attempt gave %q or spent the session", key)
+	// 1: no peer answers the hello. Nothing is given, no quote was taken, and so there is NO record:
+	// no peer holds this session.
+	set(func() { porto.deny = "DENIED" })
+	if key, err := ask(); err != nil || len(key) != 0 {
+		t.Fatalf("a refused attempt gave %q, %v", key, err)
+	}
+	if id, public := recordOf(t, directory); id != "" || public != "" {
+		t.Fatalf("a session no peer has seen is on record: %q", id)
+	}
+	// 2: the peer sees the quote and gives nothing (it holds no contribution right now, or its answer is
+	// lost). It has recorded the session; so has this node, and before the quote was taken.
+	set(func() { porto.deny, porto.refuse = "", "DENIED" })
+	if key, err := ask(); err != nil || len(key) != 0 {
+		t.Fatalf("a verified and refused attempt gave %q, %v", key, err)
 	}
 	id, public := recordOf(t, directory)
-	if id != hex.EncodeToString(u.boot.id)+"\n" || public != hex.EncodeToString(u.boot.ephemeralPublic)+"\n" || len(id) != 65 {
-		t.Fatalf("the record is not this boot's session: %q", id)
+	l.Lock()
+	atQuote := onRecordAtFirstQuote
+	l.Unlock()
+	if id != mine+"\n" || public != hex.EncodeToString(u.boot.ephemeralPublic)+"\n" || atQuote != id {
+		t.Fatalf("the record is not this boot's session, or was not there at the first quote: %q, at the quote %q", id, atQuote)
 	}
-	// 2: systemd-cryptsetup asks again in the same boot: the SAME session is presented, and now answered
-	porto.deny = ""
-	want, _ := credential(u.local, porto.contribution, "lisbon", "porto", 3)
-	if key, err := connect(); err != nil || !bytes.Equal(key, want) {
+	// 3: systemd-cryptsetup asks again in the same boot: the SAME session is presented, and now answered
+	set(func() { porto.refuse = "" })
+	want, _ := credential(bytes.Repeat([]byte{0x11}, 32), porto.contribution, "lisbon", "porto", 3)
+	if key, err := ask(); err != nil || !bytes.Equal(key, want) {
 		t.Fatalf("the retry gave %q, %v", key, err)
 	}
-	sessions := map[string]bool{}
-	for _, request := range porto.requests {
-		if request["op"] == "unlock" {
-			sessions[request["session_id"].(string)] = true
-		}
+	l.Lock()
+	sessions, unlocks := unlockSessions(porto)
+	l.Unlock()
+	if len(sessions) != 1 || !sessions[mine] || unlocks != 2 {
+		t.Fatalf("the attempts did not present one session: %v in %d unlock requests", sessions, unlocks)
 	}
-	if len(sessions) != 1 || !sessions[hex.EncodeToString(u.boot.id)] {
-		t.Fatalf("the attempts did not present one session: %v", sessions)
-	}
-	if again, _ := recordOf(t, directory); again != id || onRecordAtQuote != id {
-		t.Fatalf("the record changed within the boot, or was not there at the first quote: %q, at quote %q", again, onRecordAtQuote)
+	if again, _ := recordOf(t, directory); again != id {
+		t.Fatalf("the record changed within the boot: %q", again)
 	}
 	through, _ := os.ReadFile(filepath.Join(directory, "key-given-through"))
 	if string(through) != "porto 1\n" {
 		t.Fatalf("key-given-through is %q", through)
 	}
-	// 3: a third connection: this boot's one response is used, so nothing, and no peer is asked
-	asked := len(porto.requests)
-	key, err = connect()
-	wantError(t, err, "this boot's one response was used")
-	if len(key) != 0 || len(porto.requests) != asked {
-		t.Fatalf("a spent session gave %q or asked a peer again", key)
+	// 4: another connection in this boot gets the same key, and no peer is asked again
+	if key, err := ask(); err != nil || !bytes.Equal(key, want) {
+		t.Fatalf("a later connection gave %q, %v", key, err)
+	}
+	l.Lock()
+	_, unlocks = unlockSessions(porto)
+	l.Unlock()
+	if unlocks != 2 {
+		t.Fatalf("a peer was asked again for a key this process holds: %d unlock requests", unlocks)
 	}
 	// nothing of the private key was written, and nothing else was left
 	entries, _ := os.ReadDir(directory)
@@ -1037,64 +1098,117 @@ func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("the directory holds %d entries, not the three files", len(entries))
 	}
-
-	// without -once it serves until it is stopped: two connections to one process, then the listener closes
-	faro := newFakePeer(t, "faro")
-	long := newUnlocker(t, t.TempDir(), io.Discard, faro)
-	faro.deny = "DENIED"
-	done := make(chan error, 1)
-	go func() { done <- long.serve(listener) }()
-	for i := 0; i < 2; i++ {
-		if key, err := ask(); err != nil || len(key) != 0 {
-			t.Fatalf("connection %d of the long-running service: %q, %v", i, key, err)
-		}
-	}
-	listener.Close() // the unit is stopped
+	listener.Close()
 	if err := <-done; err != nil {
 		t.Fatalf("serve ended with %v", err)
 	}
-	if hellos := len(faro.requests); hellos != 2 {
-		t.Fatalf("the long-running service made %d requests for two connections", hellos)
+	// stopped: what the process held is zeroed
+	u.forget()
+	zero := func(number *big.Int) bool {
+		for _, word := range number.Bits() {
+			if word != 0 {
+				return false
+			}
+		}
+		return len(number.Bits()) > 0
+	}
+	if !bytes.Equal(u.local, make([]byte, 32)) || !bytes.Equal(u.key, make([]byte, len(want))) || len(want) == 0 {
+		t.Fatal("forget left the local half or the key")
+	}
+	if !zero(u.boot.key.D) || !zero(u.boot.key.Primes[0]) || !zero(u.boot.key.Primes[1]) || !zero(u.boot.key.Precomputed.Dp) {
+		t.Fatal("forget left the session's private key")
 	}
 }
 
-// The record when it is not this process's first word: an earlier process of the same boot left one.
-func TestAnEarlierSessionOfTheBootIsKeptUntilAPeerAnswersThisOne(t *testing.T) {
+// Whoever asked may leave before the answer (systemd-cryptsetup stopped, or its job timed out). That
+// does not cost the boot its one response: the next asker gets the key.
+func TestAnAskerThatLeftDoesNotSpendTheBootsResponse(t *testing.T) {
+	porto := newFakePeer(t, "porto")
+	var l locked
+	u := newUnlocker(t, t.TempDir(), &l, porto)
+	listener, ask := socketPair(t)
+	address := listener.Addr().(*net.UnixAddr)
+	// the first asker leaves while the peers are being asked for it
+	first, err := net.DialUnix("unix", nil, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	left := false
+	u.dial = l.through(dialer(porto), func() {
+		if !left {
+			left = true
+			first.Close()
+		}
+	})
+	// and one that left before its turn even came is not worked for at all
+	early, err := net.DialUnix("unix", nil, address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	early.Close()
+	done := make(chan error, 1)
+	go func() { done <- u.serve(listener) }()
+	want, _ := credential(bytes.Repeat([]byte{0x11}, 32), porto.contribution, "lisbon", "porto", 3)
+	key, err := ask()
+	if err != nil || !bytes.Equal(key, want) {
+		t.Fatalf("the asker that stayed got %q, %v", key, err)
+	}
+	l.Lock()
+	_, unlocks := unlockSessions(porto)
+	l.Unlock()
+	if unlocks != 1 {
+		t.Fatalf("%d unlock requests were made for one boot's key", unlocks)
+	}
+	if said := l.said(); !strings.Contains(said, "it is kept for the next connection") || !strings.Contains(said, "left before it was their turn") {
+		t.Fatalf("the two askers that left are not said:\n%s", said)
+	}
+	listener.Close()
+	<-done
+}
+
+// A client started again in the same boot would be a second session: a peer that recorded the first
+// refuses it, and one that accepted it would make the record wrong for the other. It asks nobody.
+func TestASecondClientInTheSameBootAsksNoPeer(t *testing.T) {
 	directory := t.TempDir()
 	porto := newFakePeer(t, "porto")
 	earlier := testSession(t)
 	if err := publishSession(directory, earlier); err != nil {
 		t.Fatal(err)
 	}
-	earlierID, _ := recordOf(t, directory)
+	earlierID, earlierPublic := recordOf(t, directory)
 	var log bytes.Buffer
 	u := newUnlocker(t, directory, &log, porto)
 	u.o.once = true
-	// no peer answers: the earlier session stays on record (a peer may hold it, and would refuse any other)
-	porto.deny = "DENIED"
 	listener, ask := socketPair(t)
-	go func() { _, _ = ask() }()
-	wantError(t, u.serve(listener), "no peer helped")
-	if id, _ := recordOf(t, directory); id != earlierID || !strings.Contains(log.String(), "an earlier session of this boot is on record") {
-		t.Fatalf("the earlier session was replaced without an answer:\n%s", log.String())
-	}
-	// a peer answers this session with a valid response: it recorded this one, so this one is the record
-	porto.deny = ""
 	got := make(chan []byte, 1)
 	go func() { key, _ := ask(); got <- key }()
-	if err := u.serve(listener); err != nil || len(<-got) == 0 {
-		t.Fatalf("the answered attempt failed: %v", err)
+	wantError(t, u.serve(listener), "an earlier unlock client of this boot presented another session")
+	if key := <-got; len(key) != 0 || len(porto.requests) != 0 {
+		t.Fatalf("a second client of the boot gave %q or asked a peer (%d requests)", key, len(porto.requests))
 	}
-	if id, public := recordOf(t, directory); id != hex.EncodeToString(u.boot.id)+"\n" || public != hex.EncodeToString(u.boot.ephemeralPublic)+"\n" {
-		t.Fatal("the answered session did not replace the earlier one")
+	if id, public := recordOf(t, directory); id != earlierID || public != earlierPublic {
+		t.Fatal("the record of the session the peers may hold was changed")
+	}
+	if !strings.Contains(log.String(), "reboot, or use the recovery key") {
+		t.Fatalf("what to do is not said:\n%s", log.String())
 	}
 
-	// a pair, or nothing: when the second file cannot be written, the first is not left beside an old ID
-	blocked := t.TempDir()
-	if err := publishSession(blocked, earlier); err != nil {
-		t.Fatal(err)
+	// An earlier client that ended before its first quote left no boot-session (the public key is written
+	// first, boot-session last, both before the quote): no peer saw it, and this client goes on.
+	halfway := t.TempDir()
+	_ = os.WriteFile(filepath.Join(halfway, "boot-session.pub"), []byte("00\n"), 0o644)
+	second := newUnlocker(t, halfway, &log, porto)
+	second.o.once = true
+	go func() { key, _ := ask(); got <- key }()
+	if err := second.serve(listener); err != nil || len(<-got) == 0 {
+		t.Fatalf("a client after one that presented nothing did not unlock: %v", err)
 	}
-	_ = os.Remove(filepath.Join(blocked, "boot-session"))
+	if id, public := recordOf(t, halfway); id != hex.EncodeToString(second.boot.id)+"\n" || public != hex.EncodeToString(second.boot.ephemeralPublic)+"\n" {
+		t.Fatal("the record is not the session that was presented")
+	}
+
+	// a pair, or nothing: when the second file cannot be written, the first is not left alone
+	blocked := t.TempDir()
 	_ = os.Mkdir(filepath.Join(blocked, "boot-session"), 0o755) // a rename onto a non-empty directory fails
 	_ = os.WriteFile(filepath.Join(blocked, "boot-session", "x"), nil, 0o644)
 	wantError(t, publishSession(blocked, testSession(t)), "cannot record boot-session")
@@ -1114,12 +1228,10 @@ func TestAnEarlierSessionOfTheBootIsKeptUntilAPeerAnswersThisOne(t *testing.T) {
 		t.Fatalf("the missing record is not said:\n%s", log.String())
 	}
 	// -once with nobody asking ends, with that reason
-	idle := newUnlocker(t, directory, &log, porto)
+	idle := newUnlocker(t, t.TempDir(), &log, porto)
 	idle.o.once = true
 	_ = listener.SetDeadline(time.Now().Add(50 * time.Millisecond))
-	if err := idle.serve(listener); err == nil {
-		t.Fatal("-once did not end when nobody asked")
-	}
+	wantError(t, idle.serve(listener), "nobody asked for the key")
 }
 
 func TestTheCommandLine(t *testing.T) {
