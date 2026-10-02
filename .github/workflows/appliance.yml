@@ -47,8 +47,9 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
         run: |
-          python3 -m deploy.images.scan lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
-            --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan
+          python3 -m lab.appliance.scan_build --build lab/appliance/.artifacts/debian13-prototype \
+            --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan \
+            --commit "$SOURCE_COMMIT"
           python3 -m lab.appliance.collect --build lab/appliance/.artifacts/debian13-prototype \
             --scan lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/release \
             --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
@@ -77,6 +78,7 @@ jobs:
             lab/appliance/.artifacts/**/acceptance.log
             lab/appliance/.artifacts/**/acceptance.stderr
             lab/appliance/.artifacts/**/normal-boot.log
+            lab/appliance/.artifacts/**/normal-boot.stderr
             lab/appliance/.artifacts/scan/*.json
             lab/appliance/.artifacts/triage/*
           include-hidden-files: true

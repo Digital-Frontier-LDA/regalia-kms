@@ -167,3 +167,14 @@ retains only public build/boot diagnostics, including failed private staging
 directories. This job checks boot behavior and does not issue release approval,
 signatures or image publication. The separate manual appliance workflow retains
 the complete final filesystem scan and signing gate.
+
+
+### Exact build scan gate
+
+PR CI authenticates Syft/Grype and scans the exact filesystem exported by its
+fresh passing build. `python3 -m lab.appliance.scan_build` first binds both rootfs
+and executable bytes to the expected full source commit and passing report.
+Its `build-binding.json` records the scan report and build report hashes. High
+or Critical findings fail this CI gate and keep `release_admissible: false`;
+public SBOMs, findings, binding, and Debian-tracker triage are retained even when
+blocked. These diagnostics do not waive the scan or commission the image.

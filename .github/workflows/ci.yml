@@ -53,6 +53,19 @@ jobs:
       - name: Install and exercise the actual daemon inside the appliance
         if: steps.recipe.outputs.changed == 'true'
         run: sudo -u "$(id -un)" -g kvm -- python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
+      - name: Authenticate scanners and scan the exact final filesystem (release gate)
+        if: steps.recipe.outputs.changed == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/regalia-scan-tools"
+          sh deploy/images/bootstrap-cosign.sh "$RUNNER_TEMP/regalia-scan-tools/cosign"
+          export PATH="$RUNNER_TEMP/regalia-scan-tools:$PATH"
+          python3 -m deploy.images.tools deploy/images/.artifacts/scanners
+          python3 -m lab.appliance.scan_build --build lab/appliance/.artifacts/debian13-prototype \
+            --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan \
+            --commit "$GITHUB_SHA"
+      - name: Preserve Debian triage without waiving the scan verdict
+        if: ${{ always() && hashFiles('lab/appliance/.artifacts/scan/scan-report.json') != '' }}
+        run: python3 -m deploy.images.triage lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/triage
       - name: Retain public build and boot diagnostics
         if: always() && steps.recipe.outputs.changed == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -66,6 +79,8 @@ jobs:
             lab/appliance/.artifacts/**/acceptance.stderr
             lab/appliance/.artifacts/**/normal-boot.log
             lab/appliance/.artifacts/**/normal-boot.stderr
+            lab/appliance/.artifacts/scan/*.json
+            lab/appliance/.artifacts/triage/*
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
