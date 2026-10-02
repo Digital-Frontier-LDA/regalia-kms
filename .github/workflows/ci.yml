@@ -561,14 +561,18 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          LINUX="$(ls /tmp/kernel/root/boot/vmlinuz-*)" bash e2e/uki-build.sh | tee "$RUNNER_TEMP/uki.log"
+          set -- /tmp/kernel/root/boot/vmlinuz-*
+          LINUX="$1" bash e2e/uki-build.sh | tee "$RUNNER_TEMP/uki.log"
           grep -q '^uki-build: 33 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
           grep '^uki-build: image ' "$RUNNER_TEMP/uki.log" >> "$GITHUB_STEP_SUMMARY"
       - name: Is a dracut initrd reproducible? (a measurement for the build design, regalia-kms#57)
         shell: bash
         run: |
-          kver="$(basename /tmp/kernel/root/boot/vmlinuz-* | sed 's/^vmlinuz-//')"
-          kmod="$(ls -d /tmp/kernel/root/usr/lib/modules/"$kver" /tmp/kernel/root/lib/modules/"$kver" 2>/dev/null | head -1)"
+          set -- /tmp/kernel/root/boot/vmlinuz-*
+          kver="${1##*/vmlinuz-}"
+          kmod="/tmp/kernel/root/usr/lib/modules/$kver"
+          [ -d "$kmod" ] || kmod="/tmp/kernel/root/lib/modules/$kver"
+          [ -d "$kmod" ] || { echo "no modules directory for $kver in the kernel package"; exit 1; }
           depmod -b "${kmod%/lib/modules/*}" "$kver"
           for n in 1 2; do
             dracut --force --no-hostonly --no-hostonly-cmdline --reproducible --kver "$kver" --kmoddir "$kmod" "/tmp/initrd-$n.img" > "/tmp/dracut-$n.log" 2>&1 \
