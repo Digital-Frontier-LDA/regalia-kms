@@ -139,7 +139,7 @@ update gap and unnecessary parser packages; a new scan still decides release sta
 
 The recipe installs the bare-metal AppArmor profile and hardening drop-in already
 shipped in this repository. Guest acceptance temporarily starts the real daemon
-with an empty configuration, then measures the running process: enforcing profile,
+with the shipped public custody fixture and no credentials, then measures the running process: enforcing profile,
 zero effective capabilities, no-new-privileges and seccomp filtering. Liveness
 must succeed while readiness remains 503 without credentials. The daemon's
 configuration check must accept the permitted path and specifically report

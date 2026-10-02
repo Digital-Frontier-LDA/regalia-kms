@@ -46,10 +46,13 @@ for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vi
     fail "unexpected-package-$package"
   fi
 done
-# Temporarily start the real daemon with an empty, credential-free configuration.
+# Temporarily start the real daemon with a public fixture and no credentials.
 # It must run under the installed policy while remaining cryptographically unready.
 # These public fixtures are removed before exporting the reusable disk.
-printf '{}\n' >/etc/regalia-kms/config.json
+cp /usr/local/share/regalia-appliance/custody-fixture.json /etc/regalia-kms/acceptance-manifest.json
+chown root:regalia-kms /etc/regalia-kms/acceptance-manifest.json
+chmod 0640 /etc/regalia-kms/acceptance-manifest.json
+printf '%s\n' '{"registry_path":"/etc/regalia-kms/acceptance-manifest.json","site":"sitea"}' >/etc/regalia-kms/config.json
 chown root:regalia-kms /etc/regalia-kms/config.json
 chmod 0640 /etc/regalia-kms/config.json
 touch /etc/regalia-kms/commissioned
@@ -105,6 +108,7 @@ if systemd-run --quiet --wait --pipe --unit=regalia-config-negative \
 fi
 check grep -q 'permission denied' /tmp/regalia-denial.log
 rm -f /etc/regalia-kms/config.json /etc/regalia-kms/commissioned \
+  /etc/regalia-kms/acceptance-manifest.json /usr/local/share/regalia-appliance/custody-fixture.json \
   /tmp/regalia-denied.json /tmp/regalia-denial.log
 check systemctl start regalia-kms.service
 check test "$(systemctl show regalia-kms.service -p ActiveState --value)" = inactive

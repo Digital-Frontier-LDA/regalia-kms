@@ -40,6 +40,10 @@ go build -trimpath -buildvcs=false -ldflags="-buildid= -X main.version=appliance
 # binary or systemd reading its public unit/drop-ins. All remain root-owned.
 chmod 0755 /usr/local/sbin/regalia-kms
 go version -m /usr/local/sbin/regalia-kms >/var/log/regalia-binary-build.txt
+# Public planned bindings only. Acceptance needs a structurally valid manifest
+# under the current daemon contract; it removes this fixture before export.
+install -d -m 0755 /usr/local/share/regalia-appliance
+install -m 0644 config/custody-manifest.example.json /usr/local/share/regalia-appliance/custody-fixture.json
 install -m 0644 deploy/systemd/regalia-kms.service /etc/systemd/system/regalia-kms.service
 mkdir -p /etc/systemd/system/regalia-kms.service.d /etc/regalia-kms
 chmod 0755 /etc/systemd/system/regalia-kms.service.d
