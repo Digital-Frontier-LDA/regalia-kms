@@ -28,6 +28,15 @@ cryptographic primitive.
                             "tpm_firmware_version": "<16 hex>",    # TPMS_ATTEST.firmwareVersion
                             "pcrs": {"0": "<64 hex>", "7": "<64 hex>"}}}}   # SHA-256 bank, expected values
 
+    ONE OR TWO ACCEPTED MEASUREMENT SETS (#75). A node entry may instead carry
+      {"ek_name": ..., "accepted": [{"label": "<name>", "tpm_firmware_version": ..., "pcrs": {...}}, ...]}
+    with one or two sets: CURRENT, and NEXT while an update rolls through the nodes (measurements.py
+    builds these from the document the membership manifest commits to). A quote is accepted when it
+    matches one set whole, its PCR values and its firmware version together; the verdict names the
+    set, and the verifier's state remembers the set and the epoch of each node's last accepted quote
+    (rollout.py reads that). Never more than two: a list that only grows is how a retired image
+    stays accepted. All sets of a node select the same PCRs, since the node quotes one selection.
+
     state (what the verifier has learned; 0600, updated under a lock):
       enrolled AKs, outstanding nonces (single use, 120 s), each node's last accepted counters and
       the hash of every boot session and ephemeral key it ever accepted.
@@ -50,6 +59,8 @@ import tempfile
 import time
 
 POLICY_SCHEMA = "regalia-kms/attest-policy/v1"
+MAX_SETS = 2          # CURRENT and NEXT; see the module text
+SET_KEYS = ("label", "tpm_firmware_version", "pcrs")
 STATE_SCHEMA = "regalia-kms/attest-state/v1"
 TRANSCRIPT_LABEL = b"regalia-kms/attest/v1"
 MAX_BYTES = 128 * 1024
@@ -206,22 +217,54 @@ def is_hex(value, n):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % n, value) is not None
 
 
+def validate_set(entry, label):
+    """One measurement set: a TPM firmware version and the expected value of each selected PCR."""
+    require(is_hex(entry["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
+    pcrs = entry["pcrs"]
+    require(isinstance(pcrs, dict) and pcrs, "%s.pcrs must expect at least one PCR" % label)
+    for index, value in pcrs.items():
+        # [0-9], not \d: \d also matches the digits of other scripts, and int() reads them ("1" + ARABIC-INDIC ONE is 11)
+        require(isinstance(index, str) and re.fullmatch(r"0|[1-9][0-9]?", index) and int(index) <= 23, "%s.pcrs: %r is not a PCR 0-23" % (label, index))
+        require(is_hex(value, 64), "%s.pcrs.%s must be 64 lowercase hex" % (label, index))
+
+
+def validate_sets(sets, label):
+    """The `accepted` list of a node: one or two distinct sets, named apart, over one PCR selection."""
+    require(isinstance(sets, list) and 1 <= len(sets) <= MAX_SETS,
+            "%s.accepted must hold one or two measurement sets (CURRENT, and NEXT during an update)" % label)
+    for i, entry in enumerate(sets):
+        here = "%s.accepted[%d]" % (label, i)
+        exact_keys(entry, SET_KEYS, here)
+        require(isinstance(entry["label"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,48}", entry["label"]), "%s.label must be a short plain name" % here)
+        validate_set(entry, here)
+    if len(sets) == 2:
+        require(sets[0]["label"] != sets[1]["label"], "%s.accepted: two sets share the label %r" % (label, sets[0]["label"]))
+        require(set(sets[0]["pcrs"]) == set(sets[1]["pcrs"]), "%s.accepted: the two sets select different PCRs; a node quotes one selection" % label)
+        require((sets[0]["tpm_firmware_version"], sets[0]["pcrs"]) != (sets[1]["tpm_firmware_version"], sets[1]["pcrs"]),
+                "%s.accepted: the two sets are the same measurements under two labels" % label)
+
+
 def validate_policy(doc):
+    """The policy's nodes, each as {"ek_name": ..., "accepted": [set, ...]}. The one-set form (the
+    firmware version and the PCRs beside the EK) is read as one set with an empty label."""
     root = exact_keys(doc, ("schema", "nodes"), "policy")
     require(root["schema"] == POLICY_SCHEMA, "policy schema must be %s" % POLICY_SCHEMA)
     require(isinstance(root["nodes"], dict) and root["nodes"], "policy.nodes must name at least one node")
+    nodes = {}
     for node_id, node in root["nodes"].items():
         label = "policy.nodes.%s" % node_id
         require(re.fullmatch(r"[A-Za-z0-9._-]{1,64}", node_id), "%s is not a plain name" % label)
-        exact_keys(node, ("ek_name", "tpm_firmware_version", "pcrs"), label)
+        if isinstance(node, dict) and "accepted" in node:
+            exact_keys(node, ("ek_name", "accepted"), label)
+            validate_sets(node["accepted"], label)
+            sets = node["accepted"]
+        else:
+            exact_keys(node, ("ek_name", "tpm_firmware_version", "pcrs"), label)
+            validate_set(node, label)
+            sets = [{"label": "", "tpm_firmware_version": node["tpm_firmware_version"], "pcrs": node["pcrs"]}]
         require(is_hex(node["ek_name"], 68) and node["ek_name"].startswith("000b"), "%s.ek_name must be a SHA-256 Name (000b + 64 hex)" % label)
-        require(is_hex(node["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
-        pcrs = node["pcrs"]
-        require(isinstance(pcrs, dict) and pcrs, "%s.pcrs must expect at least one PCR" % label)
-        for index, value in pcrs.items():
-            require(re.fullmatch(r"0|[1-9]\d?", index) and int(index) <= 23, "%s.pcrs: %r is not a PCR 0-23" % (label, index))
-            require(is_hex(value, 64), "%s.pcrs.%s must be 64 lowercase hex" % (label, index))
-    return root["nodes"]
+        nodes[node_id] = {"ek_name": node["ek_name"], "accepted": sets}
+    return nodes
 
 
 def expected_pcr_digest(pcrs):
@@ -373,20 +416,26 @@ class Verifier:
                     "the quote's signer is not the enrolled AK under the recorded EK")
             require(hmac.compare_digest(q["extra_data"], qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce)),
                     "the quote is not bound to this transcript (node ID, manifest epoch, boot session ID, ephemeral key, nonce)")
-            require(q["pcrs"] == sorted(int(i) for i in expected["pcrs"]),
-                    "the quote covers PCRs %s, not the expected %s" % (q["pcrs"], sorted(int(i) for i in expected["pcrs"])))
-            require(hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(expected["pcrs"])),
-                    "the quoted PCR digest is not the expected PCR values")
-            # TODO(#75): one pinned version means a TPM firmware update needs a policy edit on every peer at
-            # once. Rolling updates must stage CURRENT/NEXT firmware versions the way #75 stages PCR policies.
-            require(q["firmware_version"] == expected["tpm_firmware_version"],
-                    "the TPM firmware version %s is not the recorded %s" % (q["firmware_version"], expected["tpm_firmware_version"]))
+            sets = expected["accepted"]
+            selection = sorted(int(i) for i in sets[0]["pcrs"])       # the same for every set of a node
+            require(q["pcrs"] == selection, "the quote covers PCRs %s, not the expected %s" % (q["pcrs"], selection))
+            # One set must match WHOLE: its PCR values and its firmware version together. A new image
+            # under the old TPM firmware's set, or the reverse, is a combination nobody approved.
+            on_pcrs = [s for s in sets if hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(s["pcrs"]))]
+            require(on_pcrs, "the quoted PCR digest is not the expected PCR values" if len(sets) == 1 else
+                    "the quoted PCR digest is none of the accepted measurement sets (%s)" % ", ".join(s["label"] for s in sets))
+            matched = [s for s in on_pcrs if q["firmware_version"] == s["tpm_firmware_version"]]
+            require(matched, "the TPM firmware version %s is not the recorded %s" % (
+                q["firmware_version"], " or ".join(s["tpm_firmware_version"] for s in on_pcrs)))
             self.check_counters(record, q, session_id, ephemeral_public)
+            # Which set, and under which manifest epoch: what a rollout asks before it retires CURRENT.
+            record["measurement"] = {"label": matched[0]["label"], "epoch": epoch}
             save()
         # ak_name: the AK this quote was verified under, read inside the same lock as the verification, so
         # a caller that requires a particular AK (a runtime lease, lease.py) compares what was actually used
         return {"node": node_id, "epoch": epoch, "session_id": session_id.hex(), "ak_name": ak_name.hex(), "reset_count": q["reset_count"],
-                "restart_count": q["restart_count"], "clock": q["clock"], "clock_safe": bool(q["safe"]), "pcrs": q["pcrs"]}
+                "restart_count": q["restart_count"], "clock": q["clock"], "clock_safe": bool(q["safe"]), "pcrs": q["pcrs"],
+                "measurement": matched[0]["label"]}
 
     @staticmethod
     def check_counters(record, q, session_id, ephemeral_public):

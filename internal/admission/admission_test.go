@@ -483,3 +483,47 @@ func TestTheRunnerChecksAdmissionBeforeDuringAndAfterAnOperation(t *testing.T) {
 		}
 	}
 }
+
+// The daemon's start, as the kernel dates it: the number the lease service reads for the same PID.
+func TestProcessStartIsThisProcessOnTheBootClock(t *testing.T) {
+	started, err := ProcessStart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now, err := Boottime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started <= 0 || started > now {
+		t.Fatalf("the process started at %d and the boot clock reads %d", started, now)
+	}
+	if again, _ := ProcessStart(); again != started {
+		t.Fatalf("the start time moved: %d then %d", started, again)
+	}
+	if started%10 != 0 {
+		t.Fatalf("%d is not a whole number of 10 ms ticks", started)
+	}
+}
+
+func TestParseProcessStartCountsFromTheLastParenthesis(t *testing.T) {
+	tail := " S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 123456 20 21\n"
+	for _, name := range []string{"(regalia-kms)", "(a b)", "(evil) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 20)", "(()"} {
+		got, err := parseProcessStart("4242 " + name + tail)
+		if err != nil || got != 1234560 {
+			t.Fatalf("%q: %d, %v", name, got, err)
+		}
+	}
+	for label, stat := range map[string]string{
+		"no command name": "4242 regalia-kms S 1 2",
+		"too short":       "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+		"not a number":    "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 soon 20",
+		"zero":            "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 0 20",
+		"negative":        "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 -5 20",
+		"overflowing":     "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 9223372036854775807 20",
+		"empty":           "",
+	} {
+		if got, err := parseProcessStart(stat); err == nil {
+			t.Fatalf("%s: accepted as %d", label, got)
+		}
+	}
+}

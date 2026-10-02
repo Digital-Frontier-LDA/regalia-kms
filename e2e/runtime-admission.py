@@ -284,7 +284,10 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
             raise ConnectionError("peer b is unreachable")
         manifest = world["manifest"]
         return lease.issue(manifest, "b", request, fixture.attester, fixture.evidence(lt.SESSION, manifest), fixture.freshness, fixture.signer)
-    service = admission.Service(holder, lambda: world["manifest"], renew, str(w / "admission.staged"))
+    # As on a host: the service knows when the daemon's process started, from the kernel, by its PID.
+    def daemon_started():
+        return admission.process_started_ms(daemon.pid)
+    service = admission.Service(holder, lambda: world["manifest"], renew, str(w / "admission.staged"), daemon_started=daemon_started)
 
     def round_():
         """One round of the lease service, and its file placed as root."""
@@ -331,6 +334,34 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     ok(wait_for(200, 20) == 200, "the daemon is ready again")
     status, answer = sign(b"renewed")
     ok(status == 200, "and serves", "%s %s" % (status, answer))
+
+    # ---- 4b: the daemon restarts (#72: every token is "just arrived" for a new process) ------------------------
+    header("4b the daemon restarts: it waits for a lease asked for since, and the lease service asks at once")
+    before = round_()                                    # a fresh lease, nowhere near its scheduled renewal
+    daemon.terminate()
+    daemon.wait(timeout=30)
+    daemon = subprocess.Popen([str(w / "regalia-kms"), "-config", str(etc / "config.json")], env=softhsm,
+                                 stdout=open(w / "daemon.log", "a"), stderr=subprocess.STDOUT)
+    processes.append(daemon)                             # every helper above now means the new process
+    started = None
+    for _ in range(150):                                 # until it listens: "not ready" is an answer, no answer is not
+        if ready() is not None:
+            started = admission.process_started_ms(daemon.pid)
+            break
+        time.sleep(0.2)
+    ok(started is not None and started > before["requested_boottime_ms"], "the new daemon started after the held lease was asked for", (started, before))
+    status, answer = sign(b"new process, old lease")
+    ok(status == 503 and ready() == 503, "the admission file is still valid, yet the new daemon serves nothing on that lease (503, not ready)", "%s %s" % (status, answer))
+    service.daemon_started = None                        # a lease service that does not look at the daemon: its schedule says "not yet"
+    unchanged = round_()
+    ok(unchanged["requested_boottime_ms"] == before["requested_boottime_ms"] and ready() == 503,
+       "left to the schedule, the lease is not renewed and the daemon keeps waiting", unchanged)
+    service.daemon_started = daemon_started
+    document = round_()
+    ok(document["requested_boottime_ms"] > started, "the lease service sees the daemon's start and asks at once", (document, started))
+    ok(wait_for(200, 20) == 200, "the daemon is ready again, without waiting for the scheduled renewal")
+    status, answer = sign(b"new process, new lease")
+    ok(status == 200, "and signs", "%s %s" % (status, answer))
 
     # ---- 5 ------------------------------------------------------------------------------------------------
     header("5  a file from another boot is refused, whatever its times say")

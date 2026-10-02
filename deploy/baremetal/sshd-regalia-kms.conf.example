@@ -1,0 +1,46 @@
+# Install as /etc/ssh/sshd_config.d/00-regalia-kms.conf on a bare-metal KMS host (#143; SSH.md).
+# sshd takes the FIRST value it reads for a keyword and Debian's sshd_config includes this directory
+# before anything else, so these win. Check the result on the host with: sshd -T
+# tests/test_baremetal_ssh_trust.py runs a real sshd on this file (with the paths moved to a
+# temporary directory and, for want of a FIDO token, the two "sk-" algorithm lines widened).
+
+# THE HOST IS ONE KEY: the Ed25519 key whose public half is this node's ssh_host_pub in the membership
+# manifest. HostKey lines add up, so there must be no other HostKey line anywhere in the configuration.
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKeyAlgorithms ssh-ed25519
+
+# PEOPLE LOG IN WITH A CERTIFICATE FROM THE USER CA, AND NOTHING ELSE.
+# No passwords, no keyboard-interactive, no host-based trust.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+HostbasedAuthentication no
+PermitEmptyPasswords no
+AuthenticationMethods publickey
+# No authorized_keys: a key is accepted only inside a certificate the CA signed.
+AuthorizedKeysFile none
+AuthorizedKeysCommand none
+TrustedUserCAKeys /etc/ssh/regalia-user-ca.pub
+# Which certificate principals may log in as which account: one file per account, one principal a line.
+# An account with no file accepts nobody.
+AuthorizedPrincipalsFile /etc/ssh/regalia-principals/%u
+# Only certificates are offered at all, and only for keys held in a FIDO token (touch, and the PIN
+# where the key was made with verify-required). A plain key is refused before it is looked at.
+PubkeyAcceptedAlgorithms sk-ssh-ed25519-cert-v01@openssh.com
+# The CA key is a FIDO token key too: a certificate signed by a key in a file is not accepted.
+CASignatureAlgorithms sk-ssh-ed25519@openssh.com
+# Certificates revoked before they expire (ssh-keygen -k). The file MUST exist, empty if nothing is
+# revoked: sshd refuses every public-key login when it cannot read it.
+RevokedKeys /etc/ssh/regalia-revoked-keys
+
+# Nobody logs in as root; administrators use their own account and sudo.
+PermitRootLogin no
+# An SSH session on a KMS host is a terminal, not a network path.
+AllowAgentForwarding no
+AllowTcpForwarding no
+AllowStreamLocalForwarding no
+X11Forwarding no
+PermitTunnel no
+GatewayPorts no
+PermitUserEnvironment no
+MaxAuthTries 3
+LoginGraceTime 30

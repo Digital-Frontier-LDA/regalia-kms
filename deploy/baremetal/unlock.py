@@ -19,10 +19,8 @@ alone opens anything; the two paths of a node share local_T and nothing else.
 THE EXCHANGE, ported from the lab protocol of PR #91 (lab/bootstrap/PROTOCOL.md) onto the modules on main.
 One JSON object each way, exact field sets, duplicate fields refused, bounded input.
 
-    T -> P  {"v": 1, "op": "hello", "node_id": T, "summary": {"epoch": n, "manifest_digest": "..."}}
-    P -> T  {"v": 1, "peer_id": P, "epoch": n, "envelopes": [...], "nonce": "<64 hex>" | null}
-            or {"v": 1, "behind": {...P's summary...}}: P lacks manifests T holds
-    T -> P  {"v": 1, "op": "manifests", "envelopes": [...]}        (only after "behind")
+    T -> P  {"v": 1, "op": "hello", "node_id": T}
+    P -> T  {"v": 1, "peer_id": P, "epoch": n, "nonce": "<64 hex>"}
     T -> P  {"v": 1, "op": "unlock", "node_id": T, "session_id": "<64 hex>", "path_epoch": k,
              "evidence": {"ephemeral_public": ..., "nonce": ..., "quote": ..., "signature": ...}}
     P -> T  {"response": {"schema": "regalia.unlock-response/v1", "peer_id": P, "node_id": T, "epoch": n,
@@ -32,25 +30,32 @@ One JSON object each way, exact field sets, duplicate fields refused, bounded in
     a refusal is {"v": 1, "error": "DENIED" | "INVALID_REQUEST"}: the reason goes to the peer's audit
     sink, never to the requester.
 
-  * Manifests first. Both sides bring each other to the same root-signed manifest (convergence.py) before
-    any quote: T never names an epoch it has not verified against its own TPM anchor.
   * The nonce is the peer's attestation verifier's (attest.Verifier.nonce: good once, two minutes). It is
-    issued only to a node the peer may unlock right now.
+    issued only to a node the peer may unlock right now, with the peer's manifest epoch.
   * P decides with replacement.may_unlock: the membership matrix, a live heartbeat, and T's fresh quote
     under the EK and AK the manifest names, over (node, epoch, boot session, ephemeral key, nonce) and the
     measurements the peer's attestation policy expects. Nothing of that decision is repeated here.
   * The contribution travels under RSA-OAEP (SHA-256) to T's boot-session RSA-3072 key, with an OAEP label
     that is the digest of the attested transcript: it decrypts in that boot session only.
   * P signs the response with its TPM attestation key, as lease.py signs a lease. T accepts it only from
-    the peer it asked, for its own pending transcript, under the AK its own manifest names for a peer that
-    may authorize. The FIRST valid response consumes the boot session; an invalid one consumes nothing.
+    the peer it asked, for its own pending transcript and the epoch that peer's hello stated, under the EK
+    and AK names T holds for that peer. The FIRST valid response consumes the boot session; an invalid one
+    consumes nothing.
+  * NO MANIFEST CROSSES BEFORE ROOT, and the target holds none there. It quotes the epoch the peer states,
+    as the lab did: every decision about membership is the PEER's, under the peer's own manifest and TPM
+    anchor. The target catches up on manifests after boot, through convergence.py. What the target holds
+    before root is the boot configuration (boot_config): its node ID, the disk, the PCRs to quote, and for
+    each peer an address and the EK and AK names from the last manifest it saw. It is public data. A stale
+    or forged entry costs that one path and nothing else: a peer can only ever give its own half, and the
+    wrong half opens no keyslot.
 
 WHERE IT DIFFERS FROM #91, and why: the quote is over attest.transcript, not the lab's JSON request (the
 verifier on main, with its one-session-per-boot rule); the challenge is the verifier's nonce, with no
 second table of challenges; the peer signs with its TPM AK instead of a software Ed25519 key pinned at
 commissioning (no new key, not copyable off the peer's disk, revoked with the peer); freshness is
 heartbeat.py's; the measurements come from the peer's attestation policy, not one PCR 7 value in the
-manifest; and the HKDF label carries the path epoch, so a rotated path is a different credential.
+manifest; the HKDF label carries the path epoch, so a rotated path is a different credential; and the
+target holds the peers' AK names, taken from the signed manifest after each boot, not keys pinned once.
 
 ON THE DISK. One LUKS2 token per path (cryptsetup token import), naming a keyslot of its own:
 
@@ -71,15 +76,23 @@ LIMITS, stated:
   * A LUKS header backup restores killed keyslots. None is kept; a host with a damaged header is rebuilt.
   * A peer that has not heard of a revocation helps until its heartbeat expires (24 hours, #69).
 
-THE TARGET'S SIDE HERE IS A REFERENCE (BootSession, ask, unlock). It is what the tests drive and what the
-wire format is checked against; it is not what an initramfs ships. The pre-root client is to be a small
-native program (Clevis and systemd's token plugins are the mainstream shape; an interpreter is too much
-code for the most exposed stage of boot), tested against this peer with shared vectors. The peer's side
-runs on a booted, attested host and stays here.
+THE TARGET'S SIDE HERE IS A REFERENCE (BootSession, ask, unlock). It is what the tests drive; it is not what
+an initramfs ships. The pre-root client is cmd/regalia-unlock, a small native program (Clevis and systemd's
+token plugins are the mainstream shape; an interpreter is too much code for the most exposed stage of
+boot). It runs no other program and writes no file: systemd unseals the local half and passes it as the
+unit's credential (LoadCredentialEncrypted=, from the copy of the token's `local` kept beside the boot
+configuration), the client reads the LUKS2 header itself, and it gives the derived credential to
+systemd-cryptsetup over the socket crypttab names as the key file. Both clients are held to
+tests/vectors/unlock-v1.json, and the native one is run against this peer in e2e/peer-unlock-swtpm.sh.
+The peer's side runs on a booted, attested host and stays here.
 
-NOT HERE: the transport (WG-BOOT, #66), the pre-root client and its initramfs hook, and the commands an
-operator types; this module is the decisions and the formats. Nothing here implements a cryptographic
-primitive.
+THE TRANSPORT (serve, tcp_transport): one request per TCP connection, the request ended by the sender
+closing its side, at most 64 KiB each way, ten seconds. It carries no secrecy and no authentication of its
+own and needs none for the exchange above; what restricts WHO can reach a peer is the network under it
+(WG-BOOT from the declared datacenter addresses, #66).
+
+NOT HERE: WG-BOOT (#66), the initramfs hook, and the commands an operator types. Nothing here implements a
+cryptographic primitive.
 """
 import base64
 import contextlib
@@ -88,8 +101,10 @@ import hmac
 import json
 import os
 import re
+import socket
 import subprocess
 import tempfile
+import time
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -114,9 +129,13 @@ TOKEN_KEYS = ("type", "keyslots", "version", "target", "peer", "path_epoch", "lo
 LOCAL_NAME = "regalia-unlock-local"
 SECRET_BYTES = 32
 KEY_BITS = 3072
-MAX_BYTES = 4 * 1024 * 1024    # one message: a hello reply may carry manifests
-ENVELOPES_PER_MESSAGE = 8      # a node further behind asks again
-MAX_EXCHANGES = 16             # messages T sends one peer in one attempt
+BOOT_SCHEMA = "regalia.unlock-boot/v1"
+BOOT_KEYS = ("schema", "node_id", "device", "pcrs", "peers")
+PIN_KEYS = ("node_id", "endpoint", "ek_name", "ak_name")
+MAX_BYTES = 64 * 1024          # one message, either way
+IO_TIMEOUT = 10                # seconds for one connection, from accept to the last byte
+# a host name or IPv4 address, or an IPv6 address in brackets; then a port
+ENDPOINT = r"(\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9.-]{1,253}):([0-9]{1,5})"
 MAX_PATHS = 4                  # contributions a peer keeps per target (the current one, and one in rotation)
 # What systemd-cryptenroll gives a TPM2 or FIDO2 keyslot: the credential is 256 random bits, so a memory-hard
 # PBKDF buys nothing and would only slow the boot.
@@ -321,7 +340,7 @@ class Contributions:
 
 
 class Peer:
-    """One peer answering unlock requests. `store` is its membership.Store, `freshness` its
+    """One peer answering unlock requests. `store` is its membership.Store (only read here), `freshness` its
     heartbeat.Freshness, `attester_for(manifest)` its attest.Verifier under the policy that manifest
     commits to, `signer(digest)` its lease.TpmSigner, `audit(event)` the audit sink (S6)."""
 
@@ -329,17 +348,25 @@ class Peer:
         self.peer_id, self.store, self.freshness, self.attester_for = node_id(peer_id, "peer_id"), store, freshness, attester_for
         self.contributions, self.signer, self.audit, self.run = contributions, signer, audit, run
 
-    def handle(self, raw):
-        """One request (bytes) to one reply (a dict). A refusal tells the requester nothing but its kind."""
+    def handle(self, raw, caller=None):
+        """One request (bytes) to one reply (a dict). A refusal tells the requester nothing but its kind.
+        `caller` is the node the transport identified (the boot mesh knows which key a tunnel address
+        belongs to): a request that names another node is refused before anything else is looked at.
+        It narrows who may ask in a node's name; it authorizes nothing (the attestation does)."""
         try:
             try:
                 message = membership.load(raw, MAX_BYTES)
                 require(isinstance(message, dict) and type(message.get("v")) is int and message["v"] == VERSION
                         and isinstance(message.get("op"), str), "not a version 1 request")
-                handler = {"hello": self.hello, "manifests": self.manifests, "unlock": self.unlock}.get(message["op"])
+                handler = {"hello": self.hello, "unlock": self.unlock}.get(message["op"])
                 require(handler is not None, "unknown operation")
-            except Refused:
+            except (Refused, RecursionError):      # tens of thousands of nested brackets fit in one message
                 return {"v": VERSION, "error": "INVALID_REQUEST"}
+            if caller is not None and message.get("node_id") != caller:
+                self.audit({"event": "unlock-caller", "epoch": 0, "manifest_digest": "", "subject": convergence._printable(message.get("node_id")),
+                            "peer": self.peer_id, "outcome": "DENY", "reason": "the request names a node that is not the one the tunnel identified (%s)"
+                            % convergence._printable(caller)})
+                return {"v": VERSION, "error": "DENIED"}
             return handler(message)
         except (Refused, attest.Refused):
             return {"v": VERSION, "error": "DENIED"}
@@ -350,33 +377,19 @@ class Peer:
         return manifest
 
     def hello(self, message):
-        membership.exact(message, ("v", "op", "node_id", "summary"), "hello")
+        membership.exact(message, ("v", "op", "node_id"), "hello")
         requester = node_id(message["node_id"], "node_id")
-        standing = convergence.compare(self.store, message["summary"])
-        if standing == "behind":
-            return {"v": VERSION, "behind": convergence.summary(self.store)}
         manifest = self._manifest()
         self.contributions.drop_retired(manifest)
-        # Nothing, not a manifest and not a nonce, for a node this peer would not unlock now, however far
-        # behind it says it is: the refusal here is the one it would get with a quote.
+        # A nonce only for a node this peer would unlock now: the refusal here is the one it would get with
+        # a quote, and asking for nonces is not a way to learn anything.
         convergence.audited(self.audit, "unlock-challenge", manifest, requester, self.peer_id,
                             lambda: heartbeat.authorize(manifest, self.peer_id, requester, self.freshness))
-        envelopes = convergence.missing(self.store, message["summary"], ENVELOPES_PER_MESSAGE) if standing == "ahead" else []
-        reply = {"v": VERSION, "peer_id": self.peer_id, "epoch": manifest["epoch"], "envelopes": envelopes, "nonce": None}
-        if message["summary"]["epoch"] + len(envelopes) == manifest["epoch"]:
-            try:
-                reply["nonce"] = self.attester_for(manifest).nonce(requester).hex()
-            except attest.Refused as refusal:
-                raise Refused("no nonce for %s: %s" % (requester, refusal))
-        return reply
-
-    def manifests(self, message):
-        """Manifests the requester holds and this peer lacks. They are root-signed and chained: the store
-        verifies each one, whoever carried it."""
-        membership.exact(message, ("v", "op", "envelopes"), "manifests")
-        require(isinstance(message["envelopes"], list) and len(message["envelopes"]) <= ENVELOPES_PER_MESSAGE,
-                "at most %d envelopes at a time" % ENVELOPES_PER_MESSAGE)
-        return {"v": VERSION, "summary": convergence.catch_up(self.store, message["envelopes"])}
+        try:
+            nonce = self.attester_for(manifest).nonce(requester)
+        except attest.Refused as refusal:
+            raise Refused("no nonce for %s: %s" % (requester, refusal))
+        return {"v": VERSION, "peer_id": self.peer_id, "epoch": manifest["epoch"], "nonce": nonce.hex()}
 
     def unlock(self, message):
         membership.exact(message, ("v", "op", "node_id", "session_id", "path_epoch", "evidence"), "unlock")
@@ -412,15 +425,17 @@ class BootSession:
         self.ephemeral_public = _spki(self._private)
         self.pending, self.consumed = {}, False
 
-    def expect(self, peer_id, manifest, nonce):
+    def expect(self, peer_id, epoch, nonce):
         """Note the transcript the quote for `peer_id` is over; the response must name exactly it."""
-        self.pending[peer_id] = hashlib.sha256(attest.transcript(self.node_id, manifest["epoch"], self.session_id,
-                                                                 self.ephemeral_public, nonce)).hexdigest()
+        self.pending[peer_id] = (epoch, hashlib.sha256(attest.transcript(self.node_id, epoch, self.session_id,
+                                                                          self.ephemeral_public, nonce)).hexdigest())
 
-    def open(self, peer_id, envelope, manifest, epoch, run=subprocess.run):
-        """The contribution in `envelope`, the reply of `peer_id` for path epoch `epoch`, judged by the target's
-        own `manifest`. Raises Refused, and stays usable, for anything but a valid response to what was asked."""
+    def open(self, pin, envelope, epoch, run=subprocess.run):
+        """The contribution in `envelope`, the reply of the peer `pin` names ({node_id, ek_name, ak_name}: the
+        boot configuration's entry) for path epoch `epoch`. Raises Refused, and stays usable, for anything
+        but a valid response to what was asked."""
         require(not self.consumed and self._private is not None, "this boot session has already accepted a response")
+        peer_id = pin["node_id"]
         membership.exact(envelope, ("response", "signature"), "unlock reply")
         response = envelope["response"]
         validate_response(response)
@@ -430,12 +445,12 @@ class BootSession:
         require(response["path_epoch"] == epoch, "the peer answered for path epoch %d, not %d" % (response["path_epoch"], epoch))
         require(response["node_id"] == self.node_id and response["session_id"] == self.session_id.hex(),
                 "the response is for another node or another boot session")
-        require(peer_id in self.pending and hmac.compare_digest(response["transcript_sha256"], self.pending[peer_id]),
+        require(peer_id in self.pending, "nothing was asked of %s in this boot session" % peer_id)
+        stated, transcript = self.pending[peer_id]
+        require(hmac.compare_digest(response["transcript_sha256"], transcript),
                 "the response does not answer the request this boot session sent %s" % peer_id)
-        require(response["epoch"] == manifest["epoch"] and response["manifest_digest"] == membership.digest(manifest),
-                "the response was decided under another manifest than the one this node holds (epoch %d)" % manifest["epoch"])
-        require(membership.may(manifest, peer_id, "authorize"), "%s may not authorize under epoch %d" % (peer_id, manifest["epoch"]))
-        verify_signature(envelope, membership.validate(manifest)[peer_id], run)
+        require(response["epoch"] == stated, "the response was decided under epoch %d, not the epoch %d the peer's hello stated" % (response["epoch"], stated))
+        verify_signature(envelope, pin, run)
         secret = _decrypt(self._private, bytes.fromhex(response["ciphertext"]), CONTRIBUTION_LABEL + bytes.fromhex(response["transcript_sha256"]))
         self.consumed = True
         return secret
@@ -475,40 +490,140 @@ def _reply(transport, message, label):
     return reply
 
 
-def ask(session, store, peer_id, epoch, transport, quote, run=subprocess.run):
-    """The target asks `peer_id` for its contribution at path epoch `epoch`. `transport(request bytes)` returns
-    the peer's reply (bytes or a dict); `quote` is tpm_quote(). Returns the contribution, or raises Refused:
-    the session is spent only by a valid response."""
-    node_id(peer_id, "peer_id")
-    for _ in range(MAX_EXCHANGES):
-        reply = _reply(transport, {"v": VERSION, "op": "hello", "node_id": session.node_id, "summary": convergence.summary(store)}, "hello")
-        if "behind" in reply:
-            membership.exact(reply, ("v", "behind"), "hello reply")
-            _reply(transport, {"v": VERSION, "op": "manifests",
-                               "envelopes": convergence.missing(store, convergence.validate_summary(reply["behind"]), ENVELOPES_PER_MESSAGE)}, "manifests")
+def ask(session, pin, epoch, transport, quote, run=subprocess.run):
+    """The target asks the peer `pin` names for its contribution at path epoch `epoch`. `transport(request
+    bytes)` returns the peer's reply (bytes or a dict); `quote` is tpm_quote(). Returns the contribution, or
+    raises Refused: the session is spent only by a valid response."""
+    peer_id = validate_pin(pin)["node_id"]
+    reply = _reply(transport, {"v": VERSION, "op": "hello", "node_id": session.node_id}, "hello")
+    membership.exact(reply, ("v", "peer_id", "epoch", "nonce"), "hello reply")
+    require(type(reply["v"]) is int and reply["v"] == VERSION, "the hello reply is not version %d" % VERSION)
+    require(reply["peer_id"] == peer_id, "the peer that answered is %r, not %s" % (reply["peer_id"], peer_id))
+    stated = reply["epoch"]
+    require(isinstance(stated, int) and not isinstance(stated, bool) and 1 <= stated < 2 ** 63, "the peer's epoch must be an integer >= 1")
+    membership.hex_field(reply["nonce"], 64, "nonce")
+    nonce = bytes.fromhex(reply["nonce"])
+    signed, signature = quote(session.node_id, stated, session.session_id, session.ephemeral_public, nonce)
+    session.expect(peer_id, stated, nonce)
+    answer = _reply(transport, {"v": VERSION, "op": "unlock", "node_id": session.node_id, "session_id": session.session_id.hex(),
+                                "path_epoch": epoch, "evidence": {"ephemeral_public": session.ephemeral_public.hex(), "nonce": reply["nonce"],
+                                                                  "quote": signed.hex(), "signature": signature.hex()}}, "unlock")
+    return session.open(pin, answer, epoch, run)
+
+
+# ---- what the target holds before root, and the transport ----
+
+def validate_pin(pin):
+    membership.exact(pin, PIN_KEYS, "peer")
+    node_id(pin["node_id"], "peer.node_id")
+    endpoint = re.fullmatch(ENDPOINT, pin["endpoint"]) if isinstance(pin["endpoint"], str) else None
+    require(endpoint is not None and 1 <= int(endpoint.group(2)) <= 65535,
+            "peer.endpoint must be host:port, an IPv6 address in brackets, the port 1-65535")
+    for k in ("ek_name", "ak_name"):
+        require(isinstance(pin[k], str) and re.fullmatch(r"000b[0-9a-f]{64}", pin[k]) is not None, "peer.%s must be a SHA-256 TPM Name" % k)
+    return pin
+
+
+def validate_boot_config(config):
+    """The boot configuration. Returns its peers by node ID, in the order they are tried."""
+    membership.exact(config, BOOT_KEYS, "boot configuration")
+    require(config["schema"] == BOOT_SCHEMA, "schema must be %s" % BOOT_SCHEMA)
+    target = node_id(config["node_id"], "node_id")
+    require(isinstance(config["device"], str) and re.fullmatch(r"[A-Za-z0-9/_.:=-]{1,255}", config["device"]) is not None, "device must be a plain path")
+    pcrs = config["pcrs"]
+    require(isinstance(pcrs, list) and pcrs and all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i <= 23 for i in pcrs)
+            and pcrs == sorted(set(pcrs)), "pcrs must be an ascending list of PCR indices 0-23")
+    require(isinstance(config["peers"], list) and 1 <= len(config["peers"]) <= 8, "peers must list 1 to 8 peers")
+    pins = {}
+    for pin in config["peers"]:
+        validate_pin(pin)
+        require(pin["node_id"] != target and pin["node_id"] not in pins, "peer %s is listed twice, or is the node itself" % pin["node_id"])
+        pins[pin["node_id"]] = pin
+    return pins
+
+
+def boot_config(manifest, target, device, pcrs, endpoints):
+    """The boot configuration of `target` under `manifest`: written beside the kernel after every manifest
+    the node accepts. Its peers are the nodes that may authorize, each with the address in `endpoints`."""
+    nodes = membership.validate(manifest)
+    require(target in nodes, "%s is not in the manifest" % target)
+    peers = [{"node_id": n, "endpoint": endpoints[n], "ek_name": node["ek_name"], "ak_name": node["ak_name"]}
+             for n, node in nodes.items() if n != target and membership.may(manifest, n, "authorize") and n in endpoints]
+    config = {"schema": BOOT_SCHEMA, "node_id": target, "device": device, "pcrs": sorted(set(pcrs)), "peers": peers}
+    require(peers, "the manifest leaves %s no peer with an address" % target)
+    validate_boot_config(config)
+    return config
+
+
+def _read_all(conn, deadline):
+    """Everything the other side sends before it closes, by `deadline` (time.monotonic) for the whole of it:
+    a sender of one byte every few seconds does not hold the connection."""
+    data = b""
+    while len(data) <= MAX_BYTES:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the connection took longer than %d seconds" % IO_TIMEOUT)
+        conn.settimeout(left)
+        chunk = conn.recv(65536)
+        if not chunk:
+            return data
+        data += chunk
+    return data            # too long: the caller's parser refuses it
+
+
+def serve(peer, listener, count=None, caller=None):
+    """Answer unlock requests on `listener`, a bound and listening socket: one request per connection (the
+    sender closes its side to end it), one at a time, each bounded in size and in time from accept to the
+    last byte. A connection that breaks, stalls, sends too much, or makes the handler fail in a way nobody
+    foresaw costs only itself: the failure goes to the peer's audit sink by its kind, and the next
+    connection is served. The loop ends when the listener is closed, or after `count` connections.
+    `caller(source address)` names the node that address belongs to, or None (bootnet.caller_of): with it,
+    a connection from an address of no node is closed unanswered, and a request must name that node."""
+    served = 0
+    while count is None or served < count:
+        try:
+            conn, source = listener.accept()
+        except OSError:
+            if listener.fileno() == -1:
+                return
             continue
-        membership.exact(reply, ("v", "peer_id", "epoch", "envelopes", "nonce"), "hello reply")
-        require(reply["peer_id"] == peer_id, "the peer that answered is %r, not %s" % (reply["peer_id"], peer_id))
-        require(isinstance(reply["envelopes"], list) and len(reply["envelopes"]) <= ENVELOPES_PER_MESSAGE,
-                "at most %d envelopes at a time" % ENVELOPES_PER_MESSAGE)
-        if reply["envelopes"]:
-            convergence.catch_up(store, reply["envelopes"])      # verified from the root, anchored in this node's TPM
-        if reply["nonce"] is None:
-            require(reply["envelopes"], "the peer gave neither a nonce nor a manifest")
-            continue
-        membership.hex_field(reply["nonce"], 64, "nonce")
-        manifest = store.load()
-        require(manifest is not None and reply["epoch"] == manifest["epoch"],
-                "the peer is at epoch %r and this node at %d" % (reply["epoch"], manifest["epoch"] if manifest else 0))
-        require(membership.may(manifest, peer_id, "authorize"), "%s may not authorize under epoch %d" % (peer_id, manifest["epoch"]))
-        nonce = bytes.fromhex(reply["nonce"])
-        signed, signature = quote(session.node_id, manifest["epoch"], session.session_id, session.ephemeral_public, nonce)
-        session.expect(peer_id, manifest, nonce)
-        answer = _reply(transport, {"v": VERSION, "op": "unlock", "node_id": session.node_id, "session_id": session.session_id.hex(),
-                                    "path_epoch": epoch, "evidence": {"ephemeral_public": session.ephemeral_public.hex(), "nonce": reply["nonce"],
-                                                                      "quote": signed.hex(), "signature": signature.hex()}}, "unlock")
-        return session.open(peer_id, answer, manifest, epoch, run)
-    raise Refused("no contribution from %s after %d messages" % (peer_id, MAX_EXCHANGES))
+        served += 1
+        with conn:
+            try:
+                node = None
+                if caller is not None:
+                    address = source[0]
+                    if address.startswith("::ffff:"):       # an IPv4 connection on a dual-stack listener
+                        address = address[len("::ffff:"):]
+                    node = caller(address)
+                    if node is None:
+                        continue
+                deadline = time.monotonic() + IO_TIMEOUT
+                reply = membership.canonical(peer.handle(_read_all(conn, deadline), caller=node) if caller is not None
+                                             else peer.handle(_read_all(conn, deadline)))
+                conn.settimeout(max(deadline - time.monotonic(), 0.001))
+                conn.sendall(reply)
+            except OSError:
+                continue
+            except Exception as error:      # never a reason to stop answering the nodes that reboot next
+                try:
+                    peer.audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
+                                "outcome": "ERROR", "reason": type(error).__name__})
+                except Exception:           # the sink itself failed: the request was not answered, and the loop goes on
+                    pass
+
+
+def tcp_transport(endpoint):
+    """The reference client's transport to a peer's `host:port`."""
+    host, _, port = endpoint.rpartition(":")
+
+    def send(raw):
+        deadline = time.monotonic() + IO_TIMEOUT
+        with socket.create_connection((host.strip("[]"), int(port)), timeout=IO_TIMEOUT) as conn:
+            conn.sendall(raw)
+            conn.shutdown(socket.SHUT_WR)
+            return _read_all(conn, deadline)
+    return send
 
 
 # ---- the disk: LUKS2 tokens and keyslots ----
@@ -699,11 +814,12 @@ def unseal_local(sealed, signature=None, tpm2_device=None, run=subprocess.run):
     return done.stdout
 
 
-def unlock(device, session, store, transports, quote, unseal, name=None, run=subprocess.run):
-    """Open `device` through the first peer that helps. `transports` maps a peer ID to its transport, in the
-    order to try; `unseal(sealed text)` returns the local contribution. With `name` the volume is mapped
-    under that dm-crypt name; without it the keyslot is only tested. Returns (peer, keyslot). Every refusal
-    is collected: if no path opens the disk, the Refused raised names each peer's reason."""
+def unlock(device, session, pins, transports, quote, unseal, name=None, run=subprocess.run):
+    """Open `device` through the first peer that helps. `pins` is validate_boot_config()'s result; `transports`
+    maps a peer ID to its transport, in the order to try; `unseal(sealed text)` returns the local
+    contribution. With `name` the volume is mapped under that dm-crypt name; without it the keyslot is only
+    tested. Returns (peer, keyslot). Every refusal is collected: if no path opens the disk, the Refused
+    raised names each peer's reason."""
     reasons = []
     paths = {}
     for token_id, token in path_tokens(luks_meta(device, run)):
@@ -715,11 +831,14 @@ def unlock(device, session, store, transports, quote, unseal, name=None, run=sub
             continue
         paths.setdefault(token["peer"], []).append(token)
     for peer_id, transport in transports.items():
+        if peer_id not in pins:
+            reasons.append("%s: the boot configuration does not list it" % peer_id)
+            continue
         # the newest path first: during a rotation the old keyslot is still there
         for token in sorted(paths.get(peer_id, []), key=lambda t: -t["path_epoch"]):
             try:
                 local = unseal(token["local"])
-                contribution = ask(session, store, peer_id, token["path_epoch"], transport, quote, run)
+                contribution = ask(session, pins[peer_id], token["path_epoch"], transport, quote, run)
                 key = credential(local, contribution, session.node_id, peer_id, token["path_epoch"])
                 slot = token["keyslots"][0]
                 args = ["open", "--key-slot", slot, "--key-file", "-", device] + ([name] if name else ["--test-passphrase"])

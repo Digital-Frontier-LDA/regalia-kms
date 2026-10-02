@@ -27,7 +27,7 @@ func (gate *scriptedAdmission) Ready(context.Context) bool {
 	return answer
 }
 
-func admissionFixture(t *testing.T, gate *scriptedAdmission) (*Coordinator, *fakePolicy, *fakeAudit, *fakeHardware) {
+func admissionFixture(t *testing.T, gate *scriptedAdmission) (*Coordinator, *fakePolicy, *fakeAudit, *fakeHardware, *fakeRouter) {
 	t.Helper()
 	router := &fakeRouter{route: registry.Route{ObjectID: "production-sops", Purpose: "sops-data-key", Environment: "production",
 		Algorithm: "rsa2048", PolicyID: "sops", Binding: registry.Binding{DeviceID: "hsm-sitea"}}}
@@ -40,7 +40,7 @@ func admissionFixture(t *testing.T, gate *scriptedAdmission) (*Coordinator, *fak
 		t.Fatal(err)
 	}
 	coordinator.RequireAdmission(gate)
-	return coordinator, semantic, recorder, hardware
+	return coordinator, semantic, recorder, hardware, router
 }
 
 func wantNotAdmitted(t *testing.T, result api.Result, err error) {
@@ -60,21 +60,21 @@ func wantNotAdmitted(t *testing.T, result api.Result, err error) {
 // quota, and a node that will not do the work must not consume either.
 func TestANodeThatIsNotAdmittedRefusesBeforePolicyIsEvaluated(t *testing.T) {
 	gate := &scriptedAdmission{}
-	coordinator, semantic, recorder, hardware := admissionFixture(t, gate)
+	coordinator, semantic, recorder, hardware, router := admissionFixture(t, gate)
 	result, err := coordinator.Execute(context.Background(), operationRequest())
 	wantNotAdmitted(t, result, err)
-	if semantic.calls != 0 || hardware.calls != 0 {
-		t.Fatalf("policy evaluated %d times and the token used %d times for a node that is not admitted", semantic.calls, hardware.calls)
+	if semantic.calls != 0 || hardware.calls != 0 || router.calls != 0 {
+		t.Fatalf("for a node that is not admitted: policy evaluated %d times, the token used %d times, routing asked %d times",
+			semantic.calls, hardware.calls, router.calls)
 	}
-	if len(recorder.drafts) != 1 || recorder.drafts[0].Decision != "deny" || recorder.drafts[0].Outcome != "not-admitted" ||
-		recorder.drafts[0].DeviceID != "hsm-sitea" {
+	if len(recorder.drafts) != 1 || recorder.drafts[0].Decision != "deny" || recorder.drafts[0].Outcome != "not-admitted" {
 		t.Fatalf("audit events = %#v", recorder.drafts)
 	}
 }
 
 func TestAnAdmittedNodeServes(t *testing.T) {
 	gate := &scriptedAdmission{answers: []bool{true, true, true, true}}
-	coordinator, _, recorder, hardware := admissionFixture(t, gate)
+	coordinator, _, recorder, hardware, _ := admissionFixture(t, gate)
 	result, err := coordinator.Execute(context.Background(), operationRequest())
 	if err != nil || string(result.Data) != "data-key" || hardware.calls != 1 {
 		t.Fatalf("Execute = %#v, %v; token used %d times", result, err, hardware.calls)
@@ -101,7 +101,7 @@ func TestALeaseThatLapsesMidOperationYieldsNoOutputAndIsAuditedAsSuch(t *testing
 	} {
 		t.Run(name, func(t *testing.T) {
 			gate := &scriptedAdmission{answers: c.answers}
-			coordinator, semantic, recorder, hardware := admissionFixture(t, gate)
+			coordinator, semantic, recorder, hardware, _ := admissionFixture(t, gate)
 			result, err := coordinator.Execute(context.Background(), operationRequest())
 			wantNotAdmitted(t, result, err)
 			if hardware.calls != c.executed || semantic.calls != 1 {
@@ -138,7 +138,7 @@ func TestWithoutRequireAdmissionNothingChanges(t *testing.T) {
 
 // EVERY CHANGE OF ADMISSION IS IN THE TRAIL, with the epoch the lease service decided under.
 func TestAnAdmissionTransitionIsOneCompleteAuditEvent(t *testing.T) {
-	coordinator, _, recorder, _ := admissionFixture(t, &scriptedAdmission{})
+	coordinator, _, recorder, _, _ := admissionFixture(t, &scriptedAdmission{})
 	if err := coordinator.RecordAdmission(context.Background(), "site-a", false, 8); err != nil {
 		t.Fatal(err)
 	}

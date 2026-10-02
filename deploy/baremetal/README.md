@@ -41,6 +41,28 @@ Commissioning has two halves:
 - **Full-disk encryption** (LUKS2), enrolled to the TPM:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
   `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
+  - **A disk enrolled this way FAILS `root_disk_unlock_revocable`, and `host_probe.py` exits 1. That is
+    intended (#135): it is the known blocker for production.** PCR 7 does not change with the kernel, so
+    an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
+    passes only when the unlock can retire an image: a peer's contribution (#67: `regalia-peer-unlock`
+    tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
+    peer that holds a path; the enrolment exists in `deploy/baremetal/unlock.py`, its boot-time client
+    does not yet), or an
+    NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
+    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
+    A host that is otherwise commissioned shows this as its only failing control. Signed evidence
+    (section 5) records every measured control as true, so no evidence can be signed for such a host:
+    with `--evidence` the run says the evidence is refused; run it without, to see the one control.
+  - The probe judges every dm-crypt volume under `/`, under the host key and under the credstore, and
+    every token that names a keyslot on them: a second volume, a `clevis` token or a stale token fails
+    it, and so does a keyslot that no token names (a passphrase, or a key file) on any of them. For an
+    NV-backed token it also requires `/var/lib/systemd/pcrlock.json` to bind PCR 7 and a PCR that tells
+    boot images apart, with measured values: `systemd-pcrlock` leaves out a PCR it cannot predict, and a
+    PCR nothing was measured into is all zeros for every image. PCR 11 qualifies on a UKI boot
+    (systemd-stub measures the image into it); PCR 4 qualifies when the kernel is started as an EFI
+    image, as a UKI is, and not when GRUB loads the kernel itself. It
+    does not measure that the NV index holds that policy, nor that a retired image is refused on the
+    host; that is the #65 checklist, section D.
 - **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this
   host's disk by itself after a total outage (#77; PIN-CUSTODY.md, "The disk recovery key"). It is a
   ceremony secret, one per host, written on the KMS host recovery card and carried in every escrow;
@@ -114,12 +136,17 @@ Commissioning has two halves:
   `/v1/health/ready` is 503 and every key operation is a 503 `DEPENDENCY_UNAVAILABLE`, audited as
   `not-admitted`. `/run/regalia` must be root's, mode 0755, and the two files in it root's, mode 0644.
   `python3 -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
-  lease service to a peer is not shipped yet (#80). Measured: `kms_runtime_admission_required` (the
+  lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
+  absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
+  it asked for after the token was back (after the daemon's own start, for a restart): until then that
+  binding is unavailable and the daemon is not ready. The lease service sees the daemon's start and asks
+  at once; a token's return it does not see, and that waits for the next scheduled renewal. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
 
 ### Host firewall (default deny, both directions)
 
-The site config (`site.example.json`, validated by `sitecfg.py`) declares the host's address, the
+The site config (`site.example.json`, validated by `sitecfg.py`; `"boot_mesh": null` for a single-site
+host, section 7 otherwise) declares the host's address, the
 KMS and SSH ports, the zones allowed to reach each, and the only destinations the host may reach
 (the audit and NTP sinks at least). From it:
 
@@ -197,6 +224,72 @@ matrix in network namespaces in CI. Never load the ruleset on a workstation: it 
    `verify`. Proven on a software TPM (`e2e/tpm-attest-swtpm.sh`); the PCRs to expect and the EK
    certificate check are set on the DL360s (#65 PoC 5.2/5.3).
 
+## 4a. Updating the kernel on three nodes without locking the cluster out (#75)
+
+**The whole procedure, step by step, with what can and cannot be run today: `KERNEL-UPDATE.md`** (gaps:
+#156). This section explains the mechanism.
+
+A peer unlocks a node only if its quote matches the reference values the peer holds. Those values are
+a **measurement document** (`deploy/baremetal/measurements.py`) that the signed membership manifest
+commits to: the manifest's `policy_version` is a digest of the document (174 bits of its SHA-256), so a
+peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
+restored disk cannot roll back: the epoch is anchored in the TPM).
+
+Each node has one accepted set, or two while an update is under way. An update is three documents:
+
+| Step | Document | The root signs | What works |
+|---|---|---|---|
+| before | CURRENT | manifest N | the running image |
+| approve | CURRENT + NEXT | manifest N+1 | both; nodes reboot into NEXT one at a time |
+| retire | NEXT | manifest N+2 | NEXT only; the old image is refused by every peer |
+
+1. **Build and predict.** Build the new UKI, predict its PCR 11 (`systemd-measure calculate`), sign it
+   with the PCR-signing key (so the PIN and the disk unseal under it with no reseal), and write the
+   CURRENT + NEXT document. `measurements.transition(old, new)` must say `approve`.
+2. **Approve.** The root's operator computes `measurements.version(document)` from the file in hand, at
+   signing time, and the root signs manifest N+1 with that as `policy_version`. Distribute the manifest
+   and the document to all three nodes.
+3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
+   pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
+   before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
+   unlock it holds the new manifest and has vouched for it, in its current boot, in the last five
+   minutes (a runtime lease for this boot session). With every record current, one node can pass at
+   a time: the first, in order, that is not on NEXT. **The limit:** a node judges "the one before me is
+   back" from its own last re-attestation of that node, which it repeats only at the next lease
+   renewal. If the earlier node falls back or goes down just after, the next node may still pass for up
+   to the lease lifetime (five minutes), and two nodes can then be down together. Three cannot. So
+   wait for a node to be back and serving before starting the next, and do not treat `may_reboot` alone
+   as the interlock. A node that is down
+   and must not hold the others up is taken out by a signed manifest (QUARANTINED); there is no
+   unsigned way to skip it.
+4. **If the new image fails**, the node boots CURRENT again and is unlocked as before: both sets are
+   accepted until the retirement. That is the fallback, at every step up to step 5.
+5. **Retire.** When `rollout.retire_ready(...)` passes (given the state of every node that may
+   authorize: under manifest N+1, every peer that has seen a node last saw it on NEXT, for every node), and `transition` says `retire` (not `abandon`, which is
+   the document that gives NEXT up instead), the root signs manifest N+2 for the NEXT-only document.
+   From then on a node booted
+   into the old image gets no unlock and no lease. A lease issued just before the retirement runs out
+   within five minutes.
+
+Both manifests can be signed in one root-key session and the second released later; if a revocation
+is published in between, the second no longer chains and is signed again.
+
+**Replacing a node during all this** (#76) changes the document too, since the new node needs an entry:
+`measurements.check_replacement(...)` requires the manifest to replace the node and the document to
+differ by that node's and the new node's entries, and nothing else.
+
+**An emergency** (the current image is compromised) skips the overlap: `transition(..., emergency=True)`
+accepts a document that drops CURRENT at once, on every node. Every node still on it is then locked out until it boots
+the new image; that is the intent.
+
+Proven on three software TPMs, with real quotes, NV counters and TPM-signed leases
+(`e2e/rolling-policy-swtpm.sh`); the rules themselves in `tests/test_baremetal_rollout.py`. **Not done:**
+nothing here is wired into a service or reboots a machine; `may_reboot` is a check an operator or a
+script must call, and it does not stop a reboot it was not asked about. Real UKIs, systemd-boot's boot
+counting and automatic fallback, a TPM firmware update (staged the same way, as a second set) and the
+timing of three reboots are for the DL360s (#65). And retirement by the peers protects what needs a peer:
+see PIN-CUSTODY.md, "Why the host key is in the seal", for the local seal and what is still open there.
+
 ## 5. Pass criteria
 
 Sign the evidence with the commissioning evidence key (`openssl dgst -sha256 -sign key.pem -out
@@ -243,22 +336,54 @@ releases the disk key to every image its policy ever accepted (#135). The three-
 it: the disk needs the host's TPM **and** one peer, and a peer helps only a node its current manifest
 lets be unlocked, on an image the manifest's measurements still list.
 
-`deploy/baremetal/unlock.py` holds the decisions and the formats, proven on software TPMs and a real
-dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
+Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 
 - **The credential** of each peer path is derived from two halves: one sealed in this host's TPM, one
   kept on the peer's encrypted disk. Each peer has a LUKS2 keyslot and a `regalia-peer-unlock` token of
   its own, so either peer restores the host and each path is rotated alone.
-- **The exchange:** the host sends a fresh TPM quote for this boot; the peer decides with
-  `replacement.may_unlock`, and answers with its half encrypted to this boot's one-time key and signed
-  by its own TPM. A captured exchange is useless in another boot.
-- **Enrolment** is an operator step between two running hosts; the recovery key (section 3) authorizes
-  adding the keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer
-  unlock the disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
+- **The peer** (`deploy/baremetal/unlock.py`, on a booted host): the host sends a fresh TPM quote for
+  this boot; the peer decides with `replacement.may_unlock`, and answers with its half encrypted to
+  this boot's one-time key and signed by its own TPM. A captured exchange is useless in another boot.
+- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary; `unlock.py` also holds a
+  reference client that the tests use and that is not shipped). It holds no manifest and makes no
+  membership decision. It runs no other program and writes no file:
+  - systemd unseals the local half with the TPM and passes it as the unit's credential
+    `regalia-unlock-local` (`LoadCredentialEncrypted=`);
+  - the client reads the LUKS2 header for the peer paths, asks the peers of its boot configuration in
+    turn (`unlock.boot_config`: node ID, disk, PCRs to quote, and each peer's address and TPM key
+    names), for a bounded number of rounds;
+  - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
+    file. If no peer helps, it gives nothing and the console asks for the recovery key (section 3).
+- **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
+  keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
+  disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
 - **`unlock.judge_tokens`** judges the LUKS2 header for the probe: one path per expected peer, each with
   a keyslot of its own, and no `systemd-tpm2` token left.
 
-Not there yet, so **nothing here is to be run on a KMS host**: the transport (WireGuard before root,
-#66), the pre-root client (a small native program; the Python client in `unlock.py` is the reference
-the tests use and is not shipped in an initramfs), the operator commands, and every run on a physical
-TPM or a DL360 (#65).
+**A dependency this adds.** A peer helps only while it holds a live heartbeat from the revocation
+authority (#69). If the authority is unreachable for longer than a heartbeat lives, a host that
+reboots stays locked until someone types its recovery key. Where the authority runs and who is alerted
+when heartbeats stop are decided before commissioning.
+
+**The boot mesh (#66).** Unlock requests travel over WireGuard, and the network decides who can reach
+a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network namespaces by
+`e2e/wg-boot-netns.sh`):
+
+- The site config's `boot_mesh` says where the nodes are (their addresses outside and inside the
+  tunnel, the two ports). Which keys are WireGuard peers comes from the signed manifest only: a node
+  that may no longer be unlocked leaves every peer's list with the manifest that says so.
+- The booting node, in its initrd: interface `wg-boot` with its WG-BOOT key, and a default-deny ruleset
+  that lets out WireGuard to the peers' declared addresses and the unlock port inside the tunnel.
+- The running peer: interface `wg-unlock` with its WG-SERVICE key. The host firewall of section 3
+  gains two openings: WireGuard from the peers' declared addresses only, and the unlock port inside the
+  tunnel only. There is no SSH and no KMS port inside the tunnel.
+- A valid key at an undeclared address gets no answer: that is the stolen server powered on elsewhere.
+- **WG-BOOT is a transport identity, never an authorization.** Its key is sealed like the local half
+  (PCR 7 and the signed PCR 11 policy), so a retired but signed image still brings the tunnel up. It is
+  refused at attestation, by the peer, against current measurements.
+- A WireGuard configuration is applied with its private key added in memory (`bootnet.with_key`),
+  never without it: `wg syncconf` with a file that has no key unsets the interface's key.
+
+Not there yet, so **nothing here is to be run on a KMS host**: the systemd units and the initrd
+(dracut) that bring up the mesh and start the client, sealing the WG-BOOT key, the operator commands,
+and every run on a physical TPM, a DL360 (#65) or the real datacenter networks.

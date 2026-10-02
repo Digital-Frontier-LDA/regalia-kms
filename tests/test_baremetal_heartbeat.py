@@ -150,8 +150,8 @@ class Heartbeats(Case):
         self.f.accept(beat(self.m1, 2, issued=self.now - 10), self.m1)                      # the next one restores it
         self.assertEqual(self.f.check(self.m1), hb.MAX_LIFETIME - 10)
 
-    def test_a_heartbeat_lives_at_most_24_hours_whatever_the_signer_wrote(self):
-        self.refused("at most 24 hours", self.f.accept, beat(self.m1, 1, lifetime=hb.MAX_LIFETIME + 1), self.m1)
+    def test_a_heartbeat_lives_at_most_24_hours_under_a_v1_manifest_whatever_the_signer_wrote(self):
+        self.refused("at most 86400 s under the current manifest", self.f.accept, beat(self.m1, 1, lifetime=hb.MAX_LIFETIME + 1), self.m1)
         self.refused("expires_at must be after issued_at", self.f.accept, beat(self.m1, 1, lifetime=0), self.m1)
         self.refused("issued in the future", self.f.accept, beat(self.m1, 1, issued=self.now + hb.FUTURE_SKEW + 1), self.m1)
         self.f.accept(beat(self.m1, 1, issued=self.now + hb.FUTURE_SKEW), self.m1)
@@ -414,7 +414,8 @@ class Sequence(Case):
                 ("a stranger's signature", "not a revocation key named by the current manifest", beat(self.m1, 900, key=OTHER)),
                 ("an altered sequence", "signature does not verify", dict(beat(self.m1, 2), heartbeat=dict(beat(self.m1, 2)["heartbeat"], sequence=900))),
                 ("another manifest", "digest mismatch", beat(manifest(c="DRAINING"), 900)),
-                ("too long a life", "at most 24 hours", beat(self.m1, 900, lifetime=hb.MAX_LIFETIME * 30)),
+                ("too long a life", "at most 604800 s under any manifest", beat(self.m1, 900, lifetime=hb.MAX_LIFETIME * 30)),
+                ("too long a life for this manifest", "at most 86400 s under the current manifest", beat(self.m1, 900, lifetime=hb.MAX_LIFETIME * 2)),
                 ("expired", "EXPIRED", beat(self.m1, 900, issued=T0 - 2 * hb.MAX_LIFETIME)),
                 ("from the future", "issued in the future", beat(self.m1, 900, issued=self.now + 3600)),
                 ("a jump", "exceeds the bound 1000: anomaly", beat(self.m1, 5000))):
