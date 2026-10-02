@@ -86,9 +86,9 @@ still served, renewal-blocked alert raised.
 
 | Option | Outcome | Reason |
 |---|---|---|
-| Better local automation (renew, reload, probe every consumer) | **Chosen** | It is what the incidents needed, and it adds no shared dependency |
+| Better local automation (renew, reload, probe every consumer) | **Chosen** | Covers the certificate lifecycle without adding a shared dependency |
 | Per-name scoped DNS delegation | Chosen where a broad token is the exposure | Removes cross-name authority at the source; DNS-side work |
-| Shared DNS validation broker | Rejected for now | A new privileged service with authority across names, and no failure it would have prevented |
+| Shared DNS validation broker | Rejected for now | Adds cross-name authority and a shared renewal dependency; needs a demonstrated consumer benefit |
 | Central issuer backed by the KMS | Rejected | Every public endpoint would depend on the KMS for renewal; leaf keys gain nothing from hardware custody |
 
 ### Compromise and failure, per option
@@ -139,7 +139,7 @@ services' public certificates.
 
 ## Deferred
 
-- **ACME account key custody.** The account key is long-lived and a fair candidate. No consumer has
-  asked, and no incident points at it.
+- **ACME account key custody.** The account key is long-lived and a fair candidate. Adoption needs
+  a concrete consumer requirement and a reviewed integration contract.
 - **An internal ACME server.** If the fleet wants automatic internal certificates, that belongs to a
   PKI service in front of the KMS, with the CA key held here, not in the daemon.
