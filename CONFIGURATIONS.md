@@ -126,9 +126,10 @@ rule and works in every configuration once a `signtool` adapter exists.
    SmartCard-HSM secure messaging on this token, and a recorded change to the legacy-only rule. The
    OpenSC driver choice is a `card_atr` block in `opensc.conf` naming `driver = "openpgp"` for the
    YubiKey's ATR; it leaves the Nitrokey on its own driver in the same module.
-4. **The Pico is not qualified, and two Picos cannot be told apart.** `config/qualified-stack.json`
+4. **The Pico is not qualified, and two on one host may not be told apart.** `config/qualified-stack.json`
    and `tools/qualified_stack.py` do not know it, and `deploy/seal-hsm-pin.sh` accepts its serial but
    labels it staging. Nothing refuses a Pico in a manifest. The attached Pico reports the token
-   serial `ESPICOHSMTR`, not a per-device one; if a second reports the same, the driver, which
-   requires a serial to name exactly one slot, cannot serve two of them on one host.
+   serial `ESPICOHSMTR`, not a per-device one. Only that one unit was measured. If a second reports
+   the same, the driver, which requires a serial to name exactly one slot, cannot serve two of them
+   on one host; Picos on separate hosts are unaffected.
 5. **Apple and Microsoft have no client adapter.** Only SOPS and OpenPGP have one.
