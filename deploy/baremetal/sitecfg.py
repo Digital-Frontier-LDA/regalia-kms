@@ -116,11 +116,13 @@ def validate(doc):
 
 
 def _address(value, label):
+    require(isinstance(value, str), "%s must be an IPv4 address, as text" % label)     # IPv4Address(True) is 0.0.0.1
     try:
         address = ipaddress.IPv4Address(value)
-    except (TypeError, ValueError):
+    except ValueError:
         raise InvalidSite("%s must be an IPv4 address" % label)
-    require(not (address.is_unspecified or address.is_loopback or address.is_multicast), "%s must be a host address" % label)
+    require(not (address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local or address.is_reserved),
+            "%s must be a host address" % label)
     return str(address)
 
 
@@ -131,8 +133,10 @@ def _boot_mesh(mesh, cfg):
         return None
     require(isinstance(mesh, dict) and set(mesh) == set(MESH_KEYS), "boot_mesh must be null or hold exactly %s" % list(MESH_KEYS))
     require(isinstance(mesh["node_id"], str) and re.fullmatch(NODE_ID, mesh["node_id"]), "boot_mesh.node_id is not a node ID")
-    require(isinstance(mesh["interface"], str) and re.fullmatch(r"[a-z][a-z0-9-]{0,14}", mesh["interface"]),
-            "boot_mesh.interface must be an interface name of at most 15 characters")
+    # Its own WireGuard interface, by name: the firewall trusts what arrives on it to come from a peer's
+    # key. Named after a physical interface, the unlock rule would open the port on the wire.
+    require(isinstance(mesh["interface"], str) and re.fullmatch(r"wg-[a-z0-9-]{1,12}", mesh["interface"]) and mesh["interface"] != "wg-boot",
+            "boot_mesh.interface must be a WireGuard interface of its own, named wg-… (at most 15 characters, and not wg-boot, the initrd's)")
     listen, unlock = _port(mesh["listen_port"], "boot_mesh.listen_port"), _port(mesh["unlock_port"], "boot_mesh.unlock_port")
     require(unlock not in (cfg["kms_port"], cfg["ssh_port"]), "boot_mesh.unlock_port must differ from kms_port and ssh_port")
     out = {"node_id": mesh["node_id"], "interface": mesh["interface"], "listen_port": listen, "unlock_port": unlock,
@@ -147,9 +151,18 @@ def _boot_mesh(mesh, cfg):
         entry = {"node_id": peer["node_id"], "underlay": _address(peer["underlay"], "boot_mesh.peers[%d].underlay" % i),
                  "address": _address(peer["address"], "boot_mesh.peers[%d].address" % i)}
         require(entry["address"] not in inside and entry["underlay"] not in outside and entry["address"] not in outside
-                and entry["underlay"] not in inside, "boot_mesh.peers[%d]: no two nodes share an address, inside or outside the tunnel" % i)
+                and entry["underlay"] not in inside and entry["address"] != entry["underlay"],
+                "boot_mesh.peers[%d]: no two nodes share an address, inside or outside the tunnel, and no address is both" % i)
         nodes.add(entry["node_id"]), inside.add(entry["address"]), outside.add(entry["underlay"])
         out["peers"].append(entry)
+    # A tunnel address inside a zone would carry that zone's permission into the tunnel: the KMS port or
+    # SSH, for whoever holds a boot key. The zones and the tunnel are disjoint. (The firewall also drops
+    # everything else that arrives on the mesh interface; this refuses the configuration that needs it.)
+    zones = [(k, n) for k in ("client_cidrs", "monitoring_cidrs", "admin_cidrs") for n in cfg[k]] + [("outbound", o["cidr"]) for o in cfg["outbound"]]
+    for address in sorted(inside):
+        for zone, network in zones:
+            require(ipaddress.ip_address(address) not in ipaddress.ip_network(network),
+                    "the tunnel address %s is inside %s (%s): the tunnel and the zones must be disjoint" % (address, zone, network))
     return out
 
 

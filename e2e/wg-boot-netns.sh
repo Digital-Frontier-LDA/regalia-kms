@@ -10,9 +10,9 @@
 #   lisbon    the node that boots: interface wg-boot with its WG-BOOT key, the initrd ruleset
 #             (bootnet.boot_ruleset), as its initrd would have them. No root filesystem is involved.
 #   porto     two running peers: interface wg-unlock with their WG-SERVICE keys (bootnet.peer_wg_conf),
-#   faro      the host firewall (firewall.py) with the two boot-mesh openings, and unlock.py's serve()
-#             answering on the unlock port. The handler is a stand-in that refuses every request: what
-#             is under test is who gets an answer, not what the answer says.
+#   faro      the host firewall (firewall.py) with the boot-mesh rules, and unlock.py's serve() on the
+#             unlock port with bootnet.caller_of. The peer is unlock.Peer with its two decisions
+#             replaced by fixed answers: what is under test is who gets an answer, not what it says.
 #   outsider  a host on the same network, in no list
 #   away      lisbon's own WG-BOOT key, on an address the site never declared: the stolen server,
 #             powered on somewhere else (THREE-SITE-THREAT-MODEL.md, attacker case 1)
@@ -21,14 +21,17 @@
 #      below is the configuration's doing. That includes `away`: WireGuard itself accepts a known key
 #      from any address.
 #   1  the rendered rulesets pass nft -c and load; every chain defaults to drop
-#   2  PoC 6.1: lisbon reaches both peers' unlock port through the tunnel
-#   3  inside the tunnel there is no SSH, no KMS port, nothing but the unlock port; outside it, lisbon
-#      reaches nothing but WireGuard on the peers' declared addresses
-#   4  the outsider reaches the unlock port neither at the peer's address nor at its tunnel address
-#   5  the stolen server away from its datacenter: a valid key, an undeclared address, no answer
-#   6  a revoked node leaves the WireGuard list of the peer that took the manifest, and is still
+#   2  the stolen server away from its datacenter: a valid key, a live session, an undeclared address,
+#      and no answer
+#   3  PoC 6.1: lisbon boots and reaches both peers' unlock port through the tunnel; a request made in
+#      another node's name is refused by the peer
+#   4  the booting node's own ruleset: nothing but WireGuard to the peers and the unlock port
+#   5  the PEER's firewall, asked from inside the tunnel by a node that ignores its own ruleset: no
+#      SSH, no KMS port, nothing but the unlock port
+#   6  the outsider reaches the unlock port neither at the peer's address nor at its tunnel address
+#   7  a revoked node leaves the WireGuard list of the peer that took the manifest, and is still
 #      answered by the peer that has not (the window #69 bounds)
-#   7  PoC 6.4: packet loss and latency, an unreachable peer, a wrong key: each ends within a bound
+#   8  PoC 6.4: packet loss and latency, an unreachable peer, a wrong key: each ends within a bound
 #
 # NOT covered: an initrd, the TPM-sealed WG-BOOT key, the systemd units, a real boot (the QEMU test),
 # and the real datacenter networks.
@@ -111,6 +114,8 @@ for peer in ("porto", "faro"):
     write(peer + ".unlock.conf", bootnet.peer_wg_conf(site(peer), m1))
     write(peer + ".unlock.revoked.conf", bootnet.peer_wg_conf(site(peer), m2))
     write(peer + ".nft", firewall.render(site(peer)))
+    write(peer + ".site.json", json.dumps(site(peer)))
+write("m1.json", json.dumps(m1))
 PY
 
 # WireGuard. The running peers: wg-unlock, WG-SERVICE key. The booting node: wg-boot, WG-BOOT key.
@@ -138,38 +143,49 @@ x outsider ip route add "${TUN[porto]}/32" via "${IP[porto]}" dev eth0 onlink
 # Listeners on the peers, all bound to every address: if only the binding kept a port closed, a
 # misbound service would open it. The firewall has to.
 cat > "$T/serve.py" <<'PY'
-import socket, sys, threading
-from deploy.baremetal import unlock
-class Refusing:                      # stands for unlock.Peer: every request is answered, and refused
-    peer_id = "stand-in"
-    def handle(self, raw): return {"v": 1, "error": "DENIED"}
-    def audit(self, event): pass
+import json, socket, sys, threading
+from deploy.baremetal import bootnet, unlock
+T, name, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+class StandIn(unlock.Peer):          # unlock.Peer's own handle(), with the two decisions replaced by fixed answers
+    def __init__(self):
+        self.peer_id = name
+    def audit(self, event):
+        with open("%s/%s.audit" % (T, name), "a") as f:
+            f.write(json.dumps(event) + "\n")
+    def hello(self, message):
+        return {"v": 1, "peer_id": name, "epoch": 1, "nonce": "00" * 32}
+    def unlock(self, message):
+        return {"v": 1, "error": "DENIED"}
 def plain(port):
     s = socket.create_server(("0.0.0.0", port))
     while True:
         c, _ = s.accept(); c.close()
-for port in (8443, 22, 9999):
-    threading.Thread(target=plain, args=(port,), daemon=True).start()
-unlock.serve(Refusing(), socket.create_server(("0.0.0.0", int(sys.argv[1]))))
+for other in (8443, 22, 9999):
+    threading.Thread(target=plain, args=(other,), daemon=True).start()
+cfg, manifest = json.load(open("%s/%s.site.json" % (T, name))), json.load(open(T + "/m1.json"))
+unlock.serve(StandIn(), socket.create_server(("0.0.0.0", port)), caller=bootnet.caller_of(cfg, manifest))
 PY
-for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 "$T/serve.py" "$UNLOCK" & disown; done
-x outsider python3 -c "
+for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
+for h in outsider:443 lisbon:22; do
+  x "${h%%:*}" python3 -c "
 import socket
-s = socket.create_server(('0.0.0.0', 443))
+s = socket.create_server(('0.0.0.0', ${h##*:}))
 while True:
     c, _ = s.accept(); c.close()" & disown
+done
 sleep 1
 
-# asked <namespace> <address> [timeout]: an unlock request gets the peer's answer (its refusal, here).
+# asked <namespace> <address> [timeout] [node]: an unlock request in `node`'s name (lisbon's) is answered
+# by the peer with a nonce. Exit 3 when the peer answers with a refusal instead.
 asked(){ x "$1" env PYTHONPATH="$HERE" python3 -c "
-import sys
+import json, sys
 from deploy.baremetal import unlock
 unlock.IO_TIMEOUT = float(sys.argv[2])
 try:
-    reply = unlock.tcp_transport(sys.argv[1] + ':$UNLOCK')(b'{\"v\":1,\"op\":\"hello\",\"node_id\":\"lisbon\"}')
-except OSError:
+    reply = json.loads(unlock.tcp_transport(sys.argv[1] + ':$UNLOCK')(json.dumps({'v': 1, 'op': 'hello', 'node_id': sys.argv[3]}).encode()))
+except (OSError, ValueError):
     sys.exit(1)
-sys.exit(0 if reply == b'{\"error\":\"DENIED\",\"v\":1}' else 1)" "$2" "${3:-3}"; }
+sys.exit(0 if reply.get('nonce') else 3 if reply == {'v': 1, 'error': 'DENIED'} else 1)" "$2" "${3:-3}" "${4:-lisbon}"; }
 tcpok(){ x "$1" python3 -c "
 import socket, sys
 try:
@@ -185,6 +201,7 @@ tcpok lisbon "${TUN[porto]}" 22 && tcpok lisbon "${TUN[porto]}" 8443 && tcpok li
   && P "control: inside the tunnel, SSH, the KMS port and port 9999 of a peer answer" || F "control: the listeners inside the tunnel do not answer"
 tcpok lisbon "${IP[porto]}" "$UNLOCK" && tcpok lisbon "${IP[porto]}" 22 && P "control: at the peer's own address, the unlock port and SSH answer" || F "control: the peer's own address does not answer"
 tcpok lisbon "${IP[outsider]}" 443 && P "control: lisbon reaches an undeclared host" || F "control: lisbon has no path to the outsider"
+tcpok outsider "${IP[lisbon]}" 22 && P "control: a listener on the booting node answers the outsider" || F "control: nothing listens on the booting node"
 tcpok outsider "${IP[porto]}" "$UNLOCK" && P "control: the outsider reaches the unlock port at the peer's address" || F "control: the outsider has no path to the peer"
 tcpok outsider "${TUN[porto]}" "$UNLOCK" && P "control: the outsider reaches the peer's tunnel address from outside the tunnel" || F "control: no path to the tunnel address from outside"
 asked away "${TUN[porto]}" && shook porto "$T/lisbon.boot.pub" \
@@ -203,30 +220,55 @@ print(" ".join(sorted("%s=%s" % (c["chain"]["name"], c["chain"].get("policy")) f
 # A ruleset does not cut a flow that was already established: the controls above left some. A host
 # loads its ruleset at boot, before any flow; here the connection tracking table is emptied instead.
 for h in lisbon porto faro; do x "$h" conntrack -F >/dev/null 2>&1; done
-# And lisbon boots: a new WireGuard session. The control with `away` left porto holding a session with
-# that copy of the key, and a node whose session a peer has replaced waits out WireGuard's own timers
-# (some 15 s) before it shakes hands again. A boot starts with a handshake.
+
+hdr "2  the stolen server away from its datacenter: lisbon's key, a live session, an undeclared address"
+# The control a moment ago left porto holding a live session with `away` (the last to shake hands with
+# that key). Without the firewall its next request would be answered, as it just was.
+shaken(){ x "$1" wg show wg-unlock latest-handshakes | awk -v k="$(cat "$T/lisbon.boot.pub")" '$1 == k { print $2 }'; }
+before="$(shaken porto)"; before_faro="$(shaken faro)"
+asked away "${TUN[porto]}" 4 && F "lisbon's key was answered from an undeclared address" || P "lisbon's key, with a live session, gets no answer from an undeclared address"
+asked away "${TUN[faro]}" 4 && F "lisbon's key was answered by the other peer from an undeclared address" || P "nor a first handshake with the other peer"
+[ "$(shaken porto)" = "$before" ] && [ "$(shaken faro)" = "$before_faro" ] && P "neither peer shook hands with it" \
+  || F "a peer shook hands with the undeclared address (porto: $before -> $(shaken porto), faro: $before_faro -> $(shaken faro))"
+
+hdr "3  PoC 6.1: the node boots and reaches both peers' unlock port through the tunnel"
+# A boot starts with a handshake. (A node whose session a peer has replaced, as `away` did to lisbon's
+# here, otherwise waits out WireGuard's own timers, some 15 s, before it shakes hands again.)
 boot_up lisbon "$T/lisbon.boot.key"
 x lisbon nft -f "$T/lisbon.boot.nft"
-
-hdr "2  PoC 6.1: the booting node reaches both peers' unlock port through the tunnel"
 for h in porto faro; do
   asked lisbon "${TUN[$h]}" && P "lisbon is answered by $h on the unlock port, inside the tunnel" || F "lisbon is not answered by $h"
 done
+endpoint="$(x porto wg show wg-unlock endpoints | awk -v k="$(cat "$T/lisbon.boot.pub")" '$1 == k { print $2 }')"
+[ "$endpoint" = "${IP[lisbon]}:$(x lisbon wg show wg-boot listen-port)" ] && P "the peer now knows that key at its declared address ($endpoint)" || F "the peer's endpoint for lisbon's key is $endpoint"
 [ "$(cat "$T/lisbon.endpoints")" = "{\"faro\": \"${TUN[faro]}:$UNLOCK\", \"porto\": \"${TUN[porto]}:$UNLOCK\"}" ] \
   && P "the endpoints for the client's boot configuration are those two" || F "endpoints: $(cat "$T/lisbon.endpoints")"
+asked lisbon "${TUN[porto]}" 3 faro; rc=$?
+[ "$rc" = 3 ] && grep -q '"unlock-caller"' "$T/porto.audit" && P "a request in faro's name from lisbon's tunnel address is refused by the peer, and audited" \
+  || F "a request in another node's name: rc=$rc (3 is a refusal)"
 
-hdr "3  nothing but the unlock port inside the tunnel, nothing but WireGuard outside it"
+hdr "4  the booting node's own ruleset: nothing but WireGuard to the peers and the unlock port"
 for port in 22 8443 9999; do
-  tcpok lisbon "${TUN[porto]}" "$port" && F "inside the tunnel, port $port of a peer answered" || P "inside the tunnel, port $port of a peer does not answer"
+  tcpok lisbon "${TUN[porto]}" "$port" && F "inside the tunnel, lisbon reached port $port of a peer" || P "inside the tunnel, lisbon does not reach port $port of a peer"
+done
+tcpok lisbon "${IP[outsider]}" 443 && F "the booting node reached an undeclared host" || P "the booting node reaches no undeclared host"
+tcpok outsider "${IP[lisbon]}" 22 && F "the listener on the booting node answered" || P "the listener on the booting node answers nobody"
+
+hdr "5  the peer's firewall, asked from inside the tunnel by a node that ignores its own ruleset"
+# What a retired but signed image, or anything else holding the boot key at the declared address, can
+# do: bring the tunnel up and send what it likes. lisbon's ruleset is taken away; porto's must hold.
+x lisbon nft delete table inet regalia_boot
+tcpok lisbon "${IP[outsider]}" 443 && P "control: without its ruleset lisbon reaches an undeclared host again" || F "control: lisbon's ruleset is still in the way"
+asked lisbon "${TUN[porto]}" && P "inside the tunnel, the unlock port answers" || F "the unlock port stopped answering"
+for port in 22 8443 9999; do
+  tcpok lisbon "${TUN[porto]}" "$port" && F "inside the tunnel, port $port of the peer answered" || P "inside the tunnel, port $port of the peer does not answer"
 done
 for port in "$UNLOCK" 22 8443; do
   tcpok lisbon "${IP[porto]}" "$port" && F "at the peer's own address, port $port answered lisbon" || P "at the peer's own address, port $port does not answer lisbon"
 done
-tcpok lisbon "${IP[outsider]}" 443 && F "the booting node reached an undeclared host" || P "the booting node reaches no undeclared host"
-tcpok outsider "${IP[lisbon]}" 22 && F "something answered on the booting node" || P "nothing answers on the booting node"
+x lisbon nft -f "$T/lisbon.boot.nft"
 
-hdr "4  the outsider"
+hdr "6  the outsider"
 tcpok outsider "${IP[porto]}" "$UNLOCK" && F "the outsider reached the unlock port at the peer's address" || P "the outsider does not reach the unlock port at the peer's address"
 tcpok outsider "${TUN[porto]}" "$UNLOCK" && F "the outsider reached the peer's tunnel address from outside the tunnel" || P "the outsider does not reach the peer's tunnel address from outside the tunnel"
 x outsider ip link add wg-out type wireguard; x outsider wg set wg-out private-key "$T/outsider.key" peer "$(cat "$T/porto.service.pub")" \
@@ -234,16 +276,7 @@ x outsider ip link add wg-out type wireguard; x outsider wg set wg-out private-k
 x outsider ip route del "${TUN[porto]}/32"; x outsider ip addr add 10.89.0.9/32 dev wg-out; x outsider ip link set wg-out up; x outsider ip route add "${TUN[porto]}/32" dev wg-out
 asked outsider "${TUN[porto]}" 2 && F "a key that is in no manifest got an answer" || P "a key that is in no manifest gets no answer"
 
-hdr "5  the stolen server away from its datacenter: lisbon's key, an undeclared address"
-before="$(x porto wg show wg-unlock latest-handshakes | awk -v k="$(cat "$T/lisbon.boot.pub")" '$1 == k { print $2 }')"
-sleep 1
-asked away "${TUN[porto]}" 4 && F "lisbon's key was answered from an undeclared address" || P "lisbon's key gets no answer from an undeclared address"
-asked away "${TUN[faro]}" 4 && F "lisbon's key was answered by the other peer from an undeclared address" || P "nor from the other peer"
-asked lisbon "${TUN[porto]}" && P "and from its declared address the same key is still answered" || F "the declared address stopped working"
-endpoint="$(x porto wg show wg-unlock endpoints | awk -v k="$(cat "$T/lisbon.boot.pub")" '$1 == k { print $2 }')"
-[ "$endpoint" = "${IP[lisbon]}:$(x lisbon wg show wg-boot listen-port)" ] && P "the peer knows that key at its declared address only ($endpoint)" || F "the peer's endpoint for lisbon's key is $endpoint (before: $before)"
-
-hdr "6  revocation: the peer that took the manifest drops the key; the peer that has not still answers"
+hdr "7  revocation: the peer that took the manifest drops the key; the peer that has not still answers"
 apply porto wg-unlock "$T/porto.unlock.revoked.conf" "$T/porto.service.key"
 x porto wg show wg-unlock peers | grep -qx "$(cat "$T/lisbon.boot.pub")" && F "porto still lists the revoked node's key" || P "porto no longer lists the revoked node's key"
 # so that the refusal below is the list's doing: porto still has its own key and still lists the other node
@@ -255,7 +288,7 @@ apply porto wg-unlock "$T/porto.unlock.conf" "$T/porto.service.key"
 boot_up lisbon "$T/lisbon.boot.key"          # the next boot: porto dropped the old session with the key
 asked lisbon "${TUN[porto]}" && P "(the manifest put back for the checks below: at its next boot lisbon is answered by porto again)" || F "porto does not answer after the peer list was restored"
 
-hdr "7  PoC 6.4: loss and latency, an unreachable peer, a wrong key: each ends within a bound"
+hdr "8  PoC 6.4: loss and latency, an unreachable peer, a wrong key: each ends within a bound"
 timed(){ local start=$SECONDS; "$@"; local rc=$?; took=$((SECONDS - start)); return $rc; }
 x lisbon tc qdisc add dev eth0 root netem loss 20% delay 100ms || F "netem is not available: the loss and latency case did not run"
 ok=0; worst=0

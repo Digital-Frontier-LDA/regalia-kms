@@ -592,7 +592,10 @@ def serve(peer, listener, count=None, caller=None):
             try:
                 node = None
                 if caller is not None:
-                    node = caller(source[0])
+                    address = source[0]
+                    if address.startswith("::ffff:"):       # an IPv4 connection on a dual-stack listener
+                        address = address[len("::ffff:"):]
+                    node = caller(address)
                     if node is None:
                         continue
                 deadline = time.monotonic() + IO_TIMEOUT
@@ -603,8 +606,11 @@ def serve(peer, listener, count=None, caller=None):
             except OSError:
                 continue
             except Exception as error:      # never a reason to stop answering the nodes that reboot next
-                peer.audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
-                            "outcome": "ERROR", "reason": type(error).__name__})
+                try:
+                    peer.audit({"event": "unlock-server-error", "epoch": 0, "manifest_digest": "", "subject": "", "peer": peer.peer_id,
+                                "outcome": "ERROR", "reason": type(error).__name__})
+                except Exception:           # the sink itself failed: the request was not answered, and the loop goes on
+                    pass
 
 
 def tcp_transport(endpoint):

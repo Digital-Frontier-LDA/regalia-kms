@@ -479,8 +479,9 @@ class Exchange(Case):
         listener = socket.create_server(("127.0.0.1", 0))
         self.addCleanup(listener.close)
         send = unlock.tcp_transport("127.0.0.1:%d" % listener.getsockname()[1])
-        owners = iter(["a", "c", None])
-        server = threading.Thread(target=unlock.serve, args=(peer, listener, 4), kwargs={"caller": lambda address: next(owners, "a")}, daemon=True)
+        owners, seen = iter(["a", "c", None]), []
+        server = threading.Thread(target=unlock.serve, args=(peer, listener, 4),
+                                  kwargs={"caller": lambda address: seen.append(address) or next(owners, "a")}, daemon=True)
         server.start()
         self.assertIn("nonce", json.loads(send(hello)))                # the address is a's
         self.assertEqual(json.loads(send(hello)), {"v": 1, "error": "DENIED"})   # the address is c's, the request says a
@@ -491,6 +492,25 @@ class Exchange(Case):
         self.assertIn("nonce", json.loads(send(hello)))                # and the server went on serving
         server.join(10)
         self.assertFalse(server.is_alive())
+        self.assertEqual(seen, ["127.0.0.1"] * 4)
+        # a dual-stack listener reports an IPv4 caller as ::ffff:a.b.c.d: the same node, not a stranger
+        dual = socket.create_server(("::", 0), family=socket.AF_INET6, dualstack_ipv6=True)
+        self.addCleanup(dual.close)
+        mapped = []
+        # and a sink that fails does not end the loop: the second connection is still served
+        broken = unittest.mock.patch.object(peer, "audit", side_effect=OSError("the sink is down"))
+        server = threading.Thread(target=unlock.serve, args=(peer, dual, 2), kwargs={"caller": lambda address: mapped.append(address) or "c"}, daemon=True)
+        with broken:
+            server.start()
+            via = unlock.tcp_transport("127.0.0.1:%d" % dual.getsockname()[1])
+            for _ in range(2):
+                try:
+                    via(hello)                                        # refused (c's address, a's name); the audit of it fails
+                except OSError:
+                    pass
+            server.join(10)
+        self.assertFalse(server.is_alive())
+        self.assertEqual(mapped, ["127.0.0.1"] * 2)
 
     def test_the_ephemeral_key_must_be_the_one_kind_a_contribution_is_encrypted_to(self):
         epoch, _ = self.enrolled("b")

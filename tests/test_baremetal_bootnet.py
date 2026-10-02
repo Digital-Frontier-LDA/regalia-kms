@@ -121,7 +121,13 @@ class Mesh(Case):
     def test_the_running_hosts_firewall_opens_the_mesh_to_declared_addresses_only(self):
         text = firewall.render(sitecfg.validate(site("b")))
         self.assertIn("ip daddr 198.51.100.7 udp dport 51820 ip saddr { 192.0.2.10/32, 198.51.100.9/32 } accept", text)
-        self.assertIn('iifname "wg-unlock" ip daddr 10.89.0.2 tcp dport 7443 ip saddr { 10.89.0.1/32, 10.89.0.3/32 } accept', text)
+        unlock_rule = 'iifname "wg-unlock" ip daddr 10.89.0.2 tcp dport 7443 ip saddr { 10.89.0.1/32, 10.89.0.3/32 } accept'
+        self.assertIn(unlock_rule, text)
+        # everything else that arrives inside the tunnel is dropped BEFORE the zone rules: a packet from a
+        # tunnel address to the host's own address never reaches the KMS or SSH rule, whatever the zones say
+        order = [text.index(rule) for rule in ("ct state established,related accept", unlock_rule, 'iifname "wg-unlock" drop',
+                                               "tcp dport 8443", "tcp dport 22", "icmp type echo-request")]
+        self.assertEqual(order, sorted(order))
         self.assertEqual(text.count(" dport "), 6)                    # kms, ssh, audit, ntp, and the two of the mesh
         self.assertEqual(text.count("7443"), 1)                       # the unlock port is open inside the tunnel and nowhere else
         plain = firewall.render(sitecfg.validate(json.loads(EXAMPLE.read_text())))
@@ -148,8 +154,20 @@ class SiteMesh(Case):
             "not an object": (lambda d: d.__setitem__("boot_mesh", []), "boot_mesh must be null or hold exactly"),
             "unknown field": (lambda d: d["boot_mesh"].__setitem__("psk", "x"), "boot_mesh must be null or hold exactly"),
             "node id": (lambda d: d["boot_mesh"].__setitem__("node_id", "Lisbon"), "boot_mesh.node_id is not a node ID"),
-            "interface": (lambda d: d["boot_mesh"].__setitem__("interface", "wg-unlock-too-long"), "interface name of at most 15"),
-            "interface quote": (lambda d: d["boot_mesh"].__setitem__("interface", 'wg" accept'), "interface name"),
+            "interface": (lambda d: d["boot_mesh"].__setitem__("interface", "wg-unlock-too-long"), "a WireGuard interface of its own"),
+            "interface quote": (lambda d: d["boot_mesh"].__setitem__("interface", 'wg-" accept'), "a WireGuard interface of its own"),
+            "a physical interface": (lambda d: d["boot_mesh"].__setitem__("interface", "eth0"), "a WireGuard interface of its own"),
+            "loopback interface": (lambda d: d["boot_mesh"].__setitem__("interface", "lo"), "a WireGuard interface of its own"),
+            "the initrd's interface": (lambda d: d["boot_mesh"].__setitem__("interface", "wg-boot"), "not wg-boot"),
+            "tunnel inside the client zone": (lambda d: d.__setitem__("client_cidrs", ["10.0.0.0/8"]), "the tunnel address 10.89.0.1 is inside client_cidrs (10.0.0.0/8)"),
+            "tunnel inside the admin zone": (lambda d: d.__setitem__("admin_cidrs", ["10.89.0.0/28"]), "is inside admin_cidrs"),
+            "tunnel inside monitoring": (lambda d: d.__setitem__("monitoring_cidrs", ["10.89.0.3/32"]), "the tunnel address 10.89.0.3 is inside monitoring_cidrs"),
+            "tunnel is a sink": (lambda d: d["outbound"][0].__setitem__("cidr", "10.89.0.2/32"), "is inside outbound"),
+            "address not text": (lambda d: d["boot_mesh"].__setitem__("address", True), "must be an IPv4 address, as text"),
+            "address a number": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", 167772161), "must be an IPv4 address, as text"),
+            "broadcast": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("address", "255.255.255.255"), "must be a host address"),
+            "link-local": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", "169.254.1.1"), "must be a host address"),
+            "one address for both": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("address", "198.51.100.7"), "no address is both"),
             "port": (lambda d: d["boot_mesh"].__setitem__("listen_port", 0), "boot_mesh.listen_port must be a port"),
             "unlock on the KMS port": (lambda d: d["boot_mesh"].__setitem__("unlock_port", 8443), "must differ from kms_port and ssh_port"),
             "address": (lambda d: d["boot_mesh"].__setitem__("address", "10.89.0.0/24"), "boot_mesh.address must be an IPv4 address"),
