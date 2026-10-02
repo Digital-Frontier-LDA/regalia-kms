@@ -68,8 +68,11 @@ func New(driver Driver, pins PINSource) (*Provider, error) {
 // for a runtime lease asked for since (internal/backend/reauth; regalia-kms#72 PoC 12.4). Without
 // this call nothing waits, as before.
 //
-// WHEN A CARD IS TAKEN TO BE GONE. When it cannot be opened, and when a call on an open card fails
-// and the card then does not answer for its serial on that same connection (answers). A card that
+// WHEN A CARD IS TAKEN TO BE GONE. When it cannot be opened under a live context, whatever the
+// reason: absent, held by another process, pcscd restarting, two cards answering to one serial.
+// The driver does not say which, and each means this daemon could not vouch for where the card
+// was. And when a call on an open card fails and the card then does not answer for its serial on
+// that same connection (answers), when the session will not close, and on a panic. A card that
 // was pulled cannot answer on a connection made before it left; a card that refused a request (a
 // payload of the wrong size, a key the slot does not hold) still does. The distinction matters:
 // counting every failed operation as an absence would let any caller who may use a key take the
@@ -109,7 +112,9 @@ func (provider *Provider) goneUnlessItAnswers(ctx context.Context, session Sessi
 // IT IS NOT ASKED UNDER THE REQUEST'S CONTEXT. A request that was cancelled, or ran out of time,
 // fails, and a session refuses every call made under a context that has ended: asked under it, a
 // card that is there would look gone, and a caller could take it out of service by hanging up in
-// the middle of a request. The question gets a few seconds of its own.
+// the middle of a request. The context it is asked under is live and detached from the request's.
+// That does not bound the read: on a card, reading the serial is one PC/SC exchange that nothing
+// here can interrupt, as every other card call is, and it is made while the turn is held.
 func answers(ctx context.Context, session Session, serial string) (answered bool) {
 	defer func() {
 		if recover() != nil {
@@ -122,8 +127,19 @@ func answers(ctx context.Context, session Session, serial string) (answered bool
 	return err == nil && got == serial
 }
 
-// answerTimeout bounds the question answers asks. Reading a serial takes milliseconds.
+// answerTimeout is the deadline of the context answers asks under. A session looks at it before it
+// talks to the card, not while.
 const answerTimeout = 5 * time.Second
+
+// closed closes a session. A session that panics while closing has not closed.
+func closed(session Session) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = ErrUnavailable
+		}
+	}()
+	return session.Close()
+}
 
 // takeTurn makes PIV requests wait for each other.
 //
@@ -189,17 +205,18 @@ func (provider *Provider) forgetPINRetries(deviceID string) {
 // is illegible — not zero — and the last legible reading stands in for it. A failed read
 // never overwrites that reading, and a device with no reading at all is still refused.
 //
-// AN ILLEGIBLE COUNT IS ALSO WHAT A CARD THAT HAS GONE GIVES. The earlier reading must not stand
-// in for a card that is no longer there, so when the read fails the card is asked for its serial
-// on the same connection: only a card that still answers gets the fallback. One that does not is
-// recorded as gone (RequireReauthorization) and the read fails.
+// AN ILLEGIBLE COUNT IS ALSO WHAT A CARD THAT HAS GONE GIVES. Where a returned card must wait
+// (RequireReauthorization), the earlier reading must not stand in for a card that is no longer
+// there: when the read fails the card is asked for its serial on the same connection, and only a
+// card that still answers gets the fallback. One that does not is recorded as gone and the read
+// fails. Where nothing waits, the fallback is as it was.
 func (provider *Provider) pinRetries(ctx context.Context, binding registry.Binding, session Session) (int, error) {
 	retries, err := session.PINRetries(ctx)
 	if err == nil {
 		provider.notePINRetries(binding.DeviceID, retries)
 		return retries, nil
 	}
-	if !answers(ctx, session, binding.DeviceSerial) {
+	if provider.returned.Required() && !answers(ctx, session, binding.DeviceSerial) {
 		provider.returned.Gone(binding.DeviceID)
 		return 0, err
 	}
@@ -251,7 +268,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 			// is closed, on the connection the failure happened on. A success needs no question.
 			provider.goneUnlessItAnswers(ctx, session, binding)
 		}
-		if session.Close() != nil {
+		if closed(session) != nil {
 			// The card did not let go of the connection: what state it is in is not known.
 			provider.returned.Gone(binding.DeviceID)
 			zero(output)
@@ -350,7 +367,7 @@ func executeSign(ctx context.Context, session Session, objectID, algorithm strin
 	return value, err, contentType
 }
 
-func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding) bool {
+func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding) (healthy bool) {
 	if binding.Backend != "yubikey-piv" || binding.DeviceSerial == "" || binding.TouchPolicy != "never" {
 		return false
 	}
@@ -372,7 +389,15 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 		provider.notOpened(ctx, binding.DeviceID)
 		return false
 	}
-	defer session.Close()
+	// As in Execute: a panic, or a session that will not close, leaves a card whose state is not
+	// known. It is not healthy, and it waits. A request sent to it would fail on the same close.
+	defer func() {
+		panicked := recover() != nil
+		if closed(session) != nil || panicked {
+			provider.returned.Gone(binding.DeviceID)
+			healthy = false
+		}
+	}()
 	serial, err := session.Identity(ctx)
 	if err != nil || serial != binding.DeviceSerial {
 		// It does not answer for the bound serial: the bound card is not there, whether nothing

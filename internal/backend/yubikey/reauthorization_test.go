@@ -17,14 +17,27 @@ type removableCard struct {
 	closeErr     error
 	panicOnSign  bool
 	cancelOnSign func() // the caller hangs up while the card signs
-	identityRead int
+	closePanics  bool
+	frame        []byte // what Unwrap returns
+	unwraps      int
+	publicReads  int
+	// afterIdentity runs after a successful identity read: a caller hanging up at that moment.
+	afterIdentity func()
+	identityRead  int
 	// leaves pulls the card when the named call is made on an open session.
 	leaves string
 	// other is the serial of another card that sits where the bound one was.
 	other string
+	// onOpen runs when the card is opened: a caller hanging up at that moment.
+	onOpen func()
+	// panicOnIdentity makes the n-th identity read from now panic (1: the next one).
+	panicOnIdentity int
 }
 
 func (card *removableCard) Policies(ctx context.Context, slot string) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
 	if card.leaves == "policies" {
 		card.gone = true
 		return "", "", errors.New("the card was removed")
@@ -47,6 +60,9 @@ func (card *removableCard) Open(ctx context.Context, _ string) (Session, error) 
 	if card.gone {
 		return nil, errors.New("no card with that serial")
 	}
+	if card.onOpen != nil {
+		card.onOpen()
+	}
 	return card, nil
 }
 func (*removableCard) Ready(context.Context) bool { return true }
@@ -56,6 +72,11 @@ func (card *removableCard) Identity(ctx context.Context) (string, error) {
 		return "", err
 	}
 	card.identityRead++
+	if card.panicOnIdentity > 0 {
+		if card.panicOnIdentity--; card.panicOnIdentity == 0 {
+			panic("card library")
+		}
+	}
 	if card.leaves == "identity" {
 		card.gone = true
 	}
@@ -64,6 +85,9 @@ func (card *removableCard) Identity(ctx context.Context) (string, error) {
 	}
 	if card.other != "" {
 		return card.other, nil
+	}
+	if card.afterIdentity != nil {
+		card.afterIdentity()
 	}
 	return card.serial, nil
 }
@@ -82,7 +106,20 @@ func (card *removableCard) Sign(ctx context.Context, slot, algorithm string, pay
 	}
 	return card.fakeSession.Sign(ctx, slot, algorithm, payload)
 }
-func (card *removableCard) Close() error { return card.closeErr }
+func (card *removableCard) Unwrap(context.Context, string, string, []byte, []byte) ([]byte, error) {
+	card.unwraps++
+	return append([]byte{}, card.frame...), nil
+}
+func (card *removableCard) PublicKey(ctx context.Context, slot string) ([]byte, error) {
+	card.publicReads++
+	return card.fakeSession.PublicKey(ctx, slot)
+}
+func (card *removableCard) Close() error {
+	if card.closePanics {
+		panic("card library")
+	}
+	return card.closeErr
+}
 
 type leaseGate struct {
 	admitted    bool
@@ -323,6 +360,107 @@ func TestAnotherCardInItsPlaceSeenByTheHealthCheckIsAnAbsence(t *testing.T) {
 	w.requireWaiting("the bound card back after another sat in its place", 3_000)
 }
 
+// The health check runs under the request's context on the routing path, so the caller can end it
+// at any step: after the card was opened, and after it was identified.
+func TestAHealthCheckWhoseCallerHangsUpPartWayDoesNotTakeTheCardOutOfService(t *testing.T) {
+	for _, when := range []string{"while the card is opened", "after the card was identified"} {
+		w := newReauthWorld(t)
+		w.requireServing(when + ": before")
+		w.now = 2_000
+		ctx, cancel := context.WithCancel(context.Background())
+		if when == "while the card is opened" {
+			w.card.onOpen = cancel
+		} else {
+			w.card.afterIdentity = cancel
+		}
+		if w.provider.Healthy(ctx, route().Binding) {
+			t.Fatalf("%s: setup: the health check should fail", when)
+		}
+		cancel()
+		w.card.onOpen, w.card.afterIdentity = nil, nil
+		if waiting := w.provider.AwaitingReauthorization(); len(waiting) != 0 {
+			t.Fatalf("%s: a health check whose caller hung up marked the card: %v", when, waiting)
+		}
+		w.requireServing(when + ": afterwards")
+	}
+}
+
+// Every operation waits, not only signing: a waiting card is asked neither for its public key
+// (wrap) nor to unwrap, and is not shown the PIN.
+func TestAWaitingCardNeitherWrapsNorUnwraps(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 900 // the lease held before this process started
+	rsa := route()
+	rsa.Algorithm = "rsa2048"
+	aad, key := []byte("aad-for-the-waiting-card-test"), []byte("decrypted-data-key-32-bytes-long")
+	w.card.frame = boundaryV2Frame(aad, key)
+	for _, operation := range []string{"wrap", "unwrap"} {
+		if _, _, err := w.provider.Execute(context.Background(), rsa, operation, "regalia-envelope-v2", "", []byte("ciphertext"), aad); err == nil {
+			t.Fatalf("a waiting card performed %s", operation)
+		}
+	}
+	if w.card.loginCalls != 0 || w.card.publicReads != 0 || w.card.unwraps != 0 {
+		t.Fatalf("a waiting card was used: %d logins, %d public-key reads, %d unwraps", w.card.loginCalls, w.card.publicReads, w.card.unwraps)
+	}
+	w.gate.requestedMs = 1_001
+	if _, _, err := w.provider.Execute(context.Background(), rsa, "unwrap", "regalia-envelope-v2", "", []byte("ciphertext"), aad); err != nil || w.card.unwraps != 1 {
+		t.Fatalf("under a lease asked for after the start the card must unwrap: %v (%d unwraps)", err, w.card.unwraps)
+	}
+	// wrap needs only the public key; the stand-in's is not a real one, so reaching it is the evidence
+	_, _, _ = w.provider.Execute(context.Background(), rsa, "wrap", "regalia-envelope-v2", "", []byte("0123456789abcdef0123456789abcdef"), aad)
+	if w.card.publicReads != 1 {
+		t.Fatalf("under a lease asked for after the start wrap must reach the card's public key (%d reads)", w.card.publicReads)
+	}
+}
+
+// The question "does it still answer" is itself a card call, and a card library can panic in it.
+func TestACardWhoseFollowUpIdentityReadPanicsIsGoneAndNothingEscapes(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("before")
+	w.card.failSign = errors.New("refused")
+	w.card.panicOnIdentity = 2 // the first read identifies the card; the second is the question
+	w.now = 2_000
+	if w.sign() == nil {
+		t.Fatal("setup: the request should fail")
+	}
+	w.card.failSign = nil
+	w.now = 3_000
+	w.requireWaiting("after the follow-up read panicked", 3_000)
+}
+
+func TestAHealthCheckOnASessionThatWillNotCloseOrPanicsIsUnhealthyAndTheCardWaits(t *testing.T) {
+	for name, arrange := range map[string]func(*removableCard){
+		"close fails":  func(card *removableCard) { card.closeErr = errors.New("still connected") },
+		"close panics": func(card *removableCard) { card.closePanics = true },
+		"panic":        func(card *removableCard) { card.panicOnIdentity = 1 },
+	} {
+		w := newReauthWorld(t)
+		w.requireServing(name + ": before")
+		arrange(w.card)
+		w.now = 2_000
+		if w.healthy() {
+			t.Fatalf("%s: reported healthy", name)
+		}
+		w.card.closeErr, w.card.closePanics, w.card.panicOnIdentity = nil, false, 0
+		w.now = 3_000
+		w.requireWaiting(name+": afterwards", 3_000)
+	}
+}
+
+// A panic while closing must not escape Execute, and the card waits.
+func TestASessionThatPanicsWhileClosingAfterAnOperationIsGone(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("before")
+	w.card.closePanics = true
+	w.now = 2_000
+	if w.sign() == nil {
+		t.Fatal("an operation whose session panicked while closing succeeded")
+	}
+	w.card.closePanics = false
+	w.now = 3_000
+	w.requireWaiting("afterwards", 3_000)
+}
+
 func TestARefusedPINDoesNotCountAsAnAbsence(t *testing.T) {
 	w := newReauthWorld(t)
 	w.now = 2_000
@@ -369,5 +507,15 @@ func TestWithoutReauthorizationAReturnedCardResumesAsBefore(t *testing.T) {
 	card.gone = false
 	if err := sign(); err != nil {
 		t.Fatalf("with no admission gate a returned card must resume: %v", err)
+	}
+	// and the retry counter's fallback is as it was: an illegible count is answered from the last
+	// legible reading without the card being asked anything more
+	logins, reads := card.loginCalls, card.identityRead
+	card.leaves = "retries"
+	if err := sign(); err != nil || card.loginCalls != logins+1 {
+		t.Fatalf("with no admission gate an illegible retry count must fall back to the last reading: %v (%d logins)", err, card.loginCalls-logins)
+	}
+	if card.identityRead != reads+1 {
+		t.Fatalf("with no admission gate the card was asked for its serial %d times in one request, want once", card.identityRead-reads)
 	}
 }

@@ -178,6 +178,28 @@ func TestAnUnreadableBootClockKeepsAReturnedTokenOut(t *testing.T) {
 	}
 }
 
+// Require starts over: what was seen before is forgotten, and every token is again taken to have
+// arrived at the new start. The daemon therefore tells each provider once.
+func TestRequireCalledAgainForgetsWhatWasSeen(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	w.gate.requestedMs = 1_500
+	if !w.tracker.Serves(ctx, "card") {
+		t.Fatal("setup: the token should serve")
+	}
+	w.tracker.Gone("other")
+	w.now = 2_000
+	if err := w.tracker.Require(w.gate, func() (int64, error) { return w.now, nil }, 2_000); err != nil {
+		t.Fatal(err)
+	}
+	if len(w.tracker.Awaiting()) != 0 {
+		t.Fatalf("marks survived a second Require: %v", w.tracker.Awaiting())
+	}
+	if w.tracker.Serves(ctx, "card") {
+		t.Fatal("a token served on a lease asked for before the second start")
+	}
+}
+
 func TestRequireNeedsItsParts(t *testing.T) {
 	gate, clock := &lease{}, func() (int64, error) { return 1_000, nil }
 	for name, call := range map[string]func() error{
