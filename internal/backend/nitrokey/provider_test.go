@@ -56,6 +56,8 @@ type fakeSession struct {
 	order      []string
 	retriesErr error
 	loginErr   error
+	// mechanismErr is what OffersMechanism answers; nil means the token offers it.
+	mechanismErr error
 	// closeErr makes Close refuse. Every other session fake in this package returns nil from
 	// Close unconditionally, which is why #312's guard had nothing that could fail it: a fake
 	// that makes the valid case convenient makes the invalid case unreachable.
@@ -152,6 +154,11 @@ func (session *fakeSession) Unwrap(_ context.Context, _, _ string, _, aad []byte
 	out = append(out, plaintext...)
 	return out, nil
 }
+func (session *fakeSession) OffersMechanism(context.Context, string, string) error {
+	session.order = append(session.order, "mechanism")
+	return session.mechanismErr
+}
+
 func (session *fakeSession) PublicKey(context.Context, string) ([]byte, error) {
 	// Return session.publicKey alongside session.publicKeyErr so a test can isolate the err clause
 	// (provider.go:150) from the len(output)==0 clause by setting publicKey to non-empty bytes

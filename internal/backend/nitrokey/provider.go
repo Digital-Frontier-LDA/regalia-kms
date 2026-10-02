@@ -50,6 +50,10 @@ type Session interface {
 	Identity(context.Context) (deviceSerial, devAuthFingerprint string, err error)
 	EstablishSecureChannel(context.Context) error
 	PINRetries(context.Context) (int, error)
+	// OffersMechanism reports whether the token lists the mechanism an operation on a key of this
+	// algorithm needs: nil, ErrMechanismNotOffered, or another error when it could not be asked. On
+	// the interface, like the KEK assertions below, so that a session cannot silently skip it.
+	OffersMechanism(ctx context.Context, operation, algorithm string) error
 	Login(context.Context, []byte) error
 	Sign(context.Context, string, string, []byte) ([]byte, error)
 	// Wrap is the inverse of Unwrap. It exists for symmetry so an end-to-end round trip can be
@@ -198,6 +202,15 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 			return nil, "", ErrUnavailable
 		}
 		return output, "application/vnd.regalia.wrapped-key", nil
+	}
+	// A TOKEN THAT DOES NOT OFFER THE MECHANISM IS NOT GIVEN THE PIN. The answer is permanent for
+	// this object on this token, so nothing is gained by logging in to be told so again, and an
+	// answer that could not be read is refused the same way. The device is NOT latched: the fault is
+	// in one object's binding, and latching would let whoever may call that object take every other
+	// key on the token out of service. The daemon names the object at startup instead
+	// (requireTokensOfferBoundMechanisms).
+	if session.OffersMechanism(ctx, operation, route.Algorithm) != nil {
+		return nil, "", ErrUnavailable
 	}
 	retries, retryErr := session.PINRetries(ctx)
 	if retryErr == nil {

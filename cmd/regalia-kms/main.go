@@ -542,6 +542,15 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 			}
 			providers[nitrokey.OpenPGPAppletBackend] = provider
 		}
+		// With every token this host serves now openable: does each one offer what its objects
+		// declare? Asked of the token itself, without a login.
+		mechanismCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		mechanismErr := requireTokensOfferBoundMechanisms(mechanismCtx, driver, keyRegistry)
+		cancel()
+		if mechanismErr != nil {
+			_ = driver.Close()
+			return nil, nil, nil, nil, mechanismErr
+		}
 	}
 	if len(settings.YubiKeyDevices) > 0 {
 		provider, providerErr := newYubiKeyBackend(settings.YubiKeyDevices, pins)

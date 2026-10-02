@@ -59,7 +59,8 @@ Both HSMs are SmartCard-HSMs reached through the OpenSC `sc-hsm` driver, and bot
 one `nitrokey-pkcs11` backend. Through that driver the two offer the same mechanisms: the Pico's
 extra algorithms are not reachable. The capability matrix
 ([`config/backend-capabilities.json`](config/backend-capabilities.json)) is per backend, and it
-promises more than either token delivers:
+promises more than either token delivers; the daemon asks each token for its own mechanism list
+before relying on it:
 
 | Token | Backend | What it offers | Evidence |
 |---|---|---|---|
@@ -109,10 +110,13 @@ rule and works in every configuration once a `signtool` adapter exists.
 
 ## Gaps this decision opens
 
-1. **The capability matrix promises what neither HSM offers.** `ed25519/sign` and `aes-256/unwrap`
-   are advertised for `nitrokey-pkcs11`, and neither token lists an EdDSA or AES mechanism. A
-   manifest that binds such a key validates, the daemon starts, and every operation fails as
-   unavailable. The token's own mechanism list should be checked against its bindings at startup.
+1. **The capability matrix promises what neither HSM offers, and the token is now asked.**
+   `ed25519/sign` and `aes-256/unwrap` are advertised for `nitrokey-pkcs11`, and neither HSM lists
+   an EdDSA or AES mechanism. The matrix is one answer per backend, so it stays; the token's own
+   mechanism list decides. At startup the daemon asks each attached token once and refuses a
+   registry that binds such a key, naming the object and the token (measured on Nitrokeys
+   DENK0404144 and DENK0404380). A token that is absent then is not a refusal, so the provider also
+   asks before every private operation and refuses before the PIN is presented.
 2. **Ed25519 is served from the YubiKey only, and that stack is not qualified.** The daemon signs
    Ed25519 on the OpenPGP applet through OpenSC, and `regalia-sign` frames it as an OpenPGP
    signature GnuPG accepts. Removal of the card, recovery onto a replacement and the daemon under
