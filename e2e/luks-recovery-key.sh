@@ -41,7 +41,7 @@ NEW_KEY="vvuuttrr-nnllkkjj-iihhggff-eeddccbb-cbdefghi-jklnrtuv-bcdefghi-jklnrtuc
 FAST=(--pbkdf pbkdf2 --pbkdf-force-iterations 1000)
 # unlock <secret>: open the volume for real, as the boot prompt does with what was typed there.
 unlock(){ cryptsetup open --key-file <(printf '%s' "$1") "$LOOP" "$NAME" </dev/null >/dev/null 2>&1; }
-judge(){ cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -I -c '
+judge(){ cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -IB -c '
 import json, sys
 sys.path.insert(0, "deploy/baremetal")
 import host_probe
