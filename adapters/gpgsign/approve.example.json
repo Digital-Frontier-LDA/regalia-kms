@@ -1,0 +1,16 @@
+{
+  "approver_id": "spiffe://regalia/approver/release",
+  "approver_public_key_path": "/etc/regalia-approve/approver.pub.pem",
+  "pkcs11": {
+    "tool": "/usr/bin/pkcs11-tool",
+    "module": "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so",
+    "token_label": "OpenPGP card (User PIN (sig))",
+    "key_id": "01"
+  },
+  "object_id": "release-signing-key",
+  "environment": "production",
+  "purpose": "release-artifact",
+  "public_key_path": "/etc/regalia-approve/release-signing-key.pub.pem",
+  "key_created": "2026-10-02T00:00:00Z",
+  "user_id": "Example Releases <releases@example.com>"
+}

@@ -112,26 +112,63 @@ type errorResponse struct {
 	Retryable bool   `json:"retryable"`
 }
 
+// Fixed is what a request says about itself, decided before it is sent: the nonce (which is also
+// the idempotency key), the request ID and the expiry. An approval is bound to these, so a request
+// that needs one has them fixed at prepare time and sent unchanged at complete time.
+type Fixed struct {
+	Nonce     string
+	RequestID string
+	ExpiresAt time.Time
+}
+
+// Fresh draws a nonce and a request ID and sets the expiry validFor from now.
+func (client *Client) Fresh(validFor time.Duration) (Fixed, error) {
+	entropy := make([]byte, 32)
+	if _, err := io.ReadFull(client.random, entropy); err != nil {
+		return Fixed{}, errors.New("no randomness for the request nonce")
+	}
+	// One fresh nonce per request, and it IS the idempotency key (API.md): the KMS reserves it
+	// durably, so a request cannot be replayed under another key.
+	return Fixed{Nonce: hex.EncodeToString(entropy[:16]), RequestID: uuidV4(entropy[16:]),
+		ExpiresAt: client.now().UTC().Add(validFor).Truncate(time.Second)}, nil
+}
+
 // Sign asks the KMS to sign payload with target's object and returns the raw signature bytes.
 // subject is recorded with the request (at most 256 bytes); it says what the digest is of, and is a
 // statement by this client, not something the KMS can check.
 func (client *Client) Sign(ctx context.Context, target Target, payload []byte, subject string) ([]byte, error) {
-	if client == nil || !target.valid() || len(payload) == 0 || len(subject) > 256 {
+	if client == nil {
 		return nil, errors.New("invalid KMS sign request")
 	}
-	entropy := make([]byte, 32)
-	if _, err := io.ReadFull(client.random, entropy); err != nil {
-		return nil, errors.New("no randomness for the request nonce")
+	fixed, err := client.Fresh(time.Minute)
+	if err != nil {
+		return nil, err
 	}
-	// One fresh nonce per request, and it IS the idempotency key (API.md): the KMS reserves it
-	// durably, so a request cannot be replayed under another key.
-	nonce := hex.EncodeToString(entropy[:16])
-	requestID := uuidV4(entropy[16:])
+	return client.SignFixed(ctx, target, payload, subject, fixed, nil)
+}
+
+// SignFixed is Sign with the request's nonce, ID and expiry given, and with approval evidence:
+// each approval is an approver's Ed25519 signature over the binding of exactly this request
+// (API.md, X-Verified-Approvals). The KMS verifies every one against its own key set; evidence that
+// does not verify is not an error there, it simply does not count.
+func (client *Client) SignFixed(ctx context.Context, target Target, payload []byte, subject string, fixed Fixed, approvals []Approval) ([]byte, error) {
+	if client == nil || !target.valid() || len(payload) == 0 || len(subject) > 256 || fixed.Nonce == "" || fixed.RequestID == "" || fixed.ExpiresAt.IsZero() {
+		return nil, errors.New("invalid KMS sign request")
+	}
+	nonce, requestID := fixed.Nonce, fixed.RequestID
+	var evidence string
+	if len(approvals) > 0 {
+		encodedApprovals, err := json.Marshal(approvals)
+		if err != nil {
+			return nil, errors.New("invalid KMS sign request")
+		}
+		evidence = base64.StdEncoding.EncodeToString(encodedApprovals)
+	}
 	encoded, err := json.Marshal(operationRequest{
 		ObjectID: target.ObjectID,
 		Context: operationContext{
 			Environment: target.Environment, Purpose: target.Purpose,
-			ExpiresAt: client.now().UTC().Add(time.Minute).Format(time.RFC3339Nano), Nonce: nonce, Subject: subject,
+			ExpiresAt: fixed.ExpiresAt.UTC().Format(time.RFC3339Nano), Nonce: nonce, Subject: subject,
 		},
 		ContentType: digestContentType, Payload: base64.StdEncoding.EncodeToString(payload),
 	})
@@ -146,6 +183,9 @@ func (client *Client) Sign(ctx context.Context, target Target, payload []byte, s
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("X-Request-ID", requestID)
 	request.Header.Set("Idempotency-Key", nonce)
+	if evidence != "" {
+		request.Header.Set("X-Verified-Approvals", evidence)
+	}
 	response, err := client.client.Do(request)
 	if err != nil {
 		// The cause is a TLS or network failure. It is reported as one fixed line: the transport's

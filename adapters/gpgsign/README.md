@@ -21,6 +21,8 @@ regalia-sign --config /etc/regalia-sign/config.json --clearsign Release --output
 | `--clearsign FILE` | writes `FILE.asc` (or `--output`), the text followed by a signature over it: what `gpg --clearsign` makes, and what apt reads as `InRelease`. Never replaces an existing file. | 1 |
 | `--export-key` | prints the armored public key verifiers import | 1 |
 | `--fingerprint` | prints the key's fingerprint | 0 |
+| `--prepare PENDING` + one of the three above | under a policy that requires approval: writes the pending record an approver signs ([below](#signing-under-a-policy-that-requires-approval)) | 0 |
+| `--complete PENDING --approval FILE` + the same | sends the prepared request with the approval and writes the result | 1 |
 | `--status-fd=2 -bsau KEY` | git's form: signs stdin to stdout | 1 |
 | `--verify …` | hands the whole line to the real `gpg` (or `REGALIA_SIGN_GPG`) | 0 |
 
@@ -115,18 +117,64 @@ what limits that runner to signing digests with this one key; the KMS audit jour
 signature, and the request's `subject` carries the SHA-256 of the file that was signed
 (`openpgp-detached sha256:…`), so a signature can be matched to an artifact.
 
+## Signing under a policy that requires approval
+
+The example production policy requires one approval for a release signature (ADR-0002 D25): the
+release identity alone cannot sign. The approver signs, with their own Ed25519 key, a binding of the
+exact request: object, purpose, environment, nonce, expiry and the SHA-256 of the payload (API.md).
+The payload of an OpenPGP signature includes the signature's creation time, so the signature is
+prepared first, approved, and completed unchanged.
+
+```sh
+# 1. On the runner. Contacts nobody; writes a pending record and prints the file's SHA-256.
+regalia-sign --prepare SHA256SUMS.pending --detach SHA256SUMS
+
+# 2. On the approver's machine, with the approver's OWN copy of the file and their hardware key.
+regalia-approve --pending SHA256SUMS.pending --file SHA256SUMS      # writes SHA256SUMS.pending.approval
+
+# 3. On the runner, before the record expires (5 minutes by default; --valid-for at step 1).
+regalia-sign --complete SHA256SUMS.pending --approval SHA256SUMS.pending.approval --detach SHA256SUMS
+```
+
+`--clearsign` and `--export-key` work the same way. The key export is a signature too (the key's
+self-certification), so it needs its own approval, once.
+
+What each step checks:
+
+- **Prepare** fixes the signature's creation time, the request's nonce and its expiry, and records
+  the SHA-256 of the payload. Nothing in the pending record is secret.
+- **Approve** does not sign an opaque digest. `regalia-approve` pins the release public key, object,
+  purpose and environment in its own configuration ([approve.example.json](approve.example.json)),
+  recomputes the payload from the approver's copy of the file, and refuses unless it is the payload
+  in the record. A record for another key or target, or an expired one, is refused. `--unseen`
+  approves without the file; the output then says `NOT CHECKED`, and the file hash shown is only
+  what the preparer wrote.
+- **The approver key** is Ed25519, on a token reached through OpenSC's `pkcs11-tool`
+  (`CKM_EDDSA`). The PIN is typed into `pkcs11-tool`, not into `regalia-approve`. What the token
+  returns is verified against the pinned approver public key before an approval is written, so a
+  device that cannot make a plain Ed25519 signature is refused here and not found out as a denial
+  at the KMS. `key_file` instead of `pkcs11` is a software approver, for tests and staging.
+- **Complete** rebuilds the signature and refuses, without contacting the KMS, if its payload is not
+  the prepared one (the file or the key changed), if the record expired, or if an approval is for
+  another request. The KMS then verifies the approval against its own approver keys; evidence it
+  does not count is a plain `DENIED`.
+- **An approval is spent with its request.** The nonce is the idempotency key, so completing the
+  same record twice signs once.
+
+The approval window is at most the policy's `max_future_seconds` (300 in the example): the KMS
+denies a request that expires later than that from the moment it arrives, so keep `--valid-for`
+within it.
+
 ## What it does not do
 
 - **The KMS signs a digest it cannot interpret.** It knows who asked, for which key and purpose, and
   when. It does not see the file. What may be signed is decided by who holds the release identity.
-- **No approvals.** A policy with `required_approvals` needs evidence over the exact payload, which
-  here is a digest that includes the signature's own creation time. `regalia-sign` sends none, so
-  such a policy denies it.
+- **No approval in one step.** `--detach`, `--clearsign`, `--export-key` and git's form send no
+  approval evidence, so a policy with `required_approvals` denies them. Under such a policy use the
+  two-step form below. Signing a commit or tag from git cannot be approved this way: git runs one
+  command and expects the signature back.
 - **No encryption, no inline (binary) signed messages, no subkeys, no expiry.** The key is a single
   version-4 signing key.
-- **No release signing under the example production policy yet.** `release-signing` requires one
-  approval, and `regalia-sign` sends no approval evidence, so that policy denies it. That is the
-  intended failure until an approval flow exists (regalia#530).
 
 ## How it is tested
 
@@ -142,10 +190,22 @@ signature, and the request's `subject` carries the SHA-256 of the file that was 
 - `TestDeployedRegaliaSignExecutableThroughMTLS` in the parent module (run by
   `e2e/softhsm-pkcs11.sh`) uses no stand-in: the built binary reaches the daemon's policy stack over
   mTLS and the signature is made by the PKCS#11 driver on keys generated inside a SoftHSM token.
+- The approval flow is tested at both levels. Here, the stand-in KMS verifies approvals against the
+  binding of the request that arrived, and a stand-in token (the test binary, run as `pkcs11-tool`
+  would be) signs honestly, with another key, over something derived from the binding, or returns a
+  short result; only the first yields an approval. `TestTheBindingIsTheBytesAPIMdPublishes` holds
+  this module's copy of the binding to the vector API.md publishes.
+  `TestAReleaseSignatureNeedsAHardwareKeyApprovalAtTheRealDaemon` in the parent module uses no
+  stand-in: the daemon's own approval verifier and policy decide, and the approver key is an Ed25519
+  key on the SoftHSM token, signed with by the real `pkcs11-tool`.
 - With `REGALIA_EXPECT_GPG=1` a missing `gpg` or `git` fails these tests instead of skipping them.
   CI sets it.
 
-Evidence class: **emulated**. No release has been signed on a Nitrokey through this path yet.
+Evidence class: **emulated**. No release has been signed on a Nitrokey through this path yet, and
+no approval has been made on a YubiKey with `regalia-approve`. Measured separately on a YubiKey 5
+(firmware 5.7.4, OpenPGP applet, through OpenSC): `CKM_EDDSA` signs inputs of 200 to 1024 bytes as
+plain Ed25519, which covers the binding (about 200 bytes). A key with touch required has not been
+measured.
 
 ## Ed25519: signing twice (a recorded deviation)
 
