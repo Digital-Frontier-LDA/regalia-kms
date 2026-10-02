@@ -5,6 +5,9 @@ supported production plugin. It uses the official OpenBao Wrapper/plugin SDK
 and existing Regalia HTTP operations; it adds no daemon endpoint. Default frame
 1 uses raw wrap/unwrap. Opt-in frame 2 uses generation-aware seal-envelope and
 release-secret; see [the versioned seal contract](VERSIONED-SEAL.md).
+The accepted production design was documented separately in merged #134;
+[the experiment's differences](VERSIONED-SEAL.md#relationship-to-the-accepted-design)
+remain alignment work for #121. This PoC does not replace that contract.
 
 ## Contract
 

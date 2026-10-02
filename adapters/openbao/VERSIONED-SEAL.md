@@ -3,6 +3,32 @@
 Tracks #120/#121/#123. This is a draft, development-only contract alongside
 the existing raw-wrap format. It changes no daemon endpoint or SOPS contract.
 
+## Relationship to the accepted design
+
+The project's accepted design is
+[OPENBAO-COMPATIBILITY.md](https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/OPENBAO-COMPATIBILITY.md),
+introduced by merged #134. Issue #120 is completed. This separate experiment
+does **not** replace that design or qualify its full production mapping.
+Both use generation-aware seal-envelope/release-secret, and this fixture proves
+OpenBao's rewrap and historical recovery behavior. These differences remain:
+
+| Area | This development experiment | Accepted plugin design |
+| --- | --- | --- |
+| Type | regalia-poc | regalia |
+| Blob | Outer local AEAD + inner envelope protecting its data key; non-empty IV | Native Regalia envelope directly in Ciphertext; empty IV |
+| KeyId | Configured current generation, checked against every server write | object@generation from the last server-produced envelope |
+| Metadata | Outer KeyInfo/frame/inner generation must agree | Native envelope is authoritative; KeyInfo is informational |
+| AAD | Additional repository/path/caller AAD authenticated locally | Non-empty caller AAD refused |
+| Payload | 1 MiB outer bound; only 32-byte outer key sent as inner secret | 32 KiB seal plaintext bound to fit release-secret |
+| Promotion | Explicit coordinated registry/configuration changes | Server-selected generation drives KeyId and rewrap |
+
+Configuration names, typed provider errors/retries and production environment
+policy also need alignment in #121. OpenBao consumes reserved `purpose` before
+forwarding seal fields, so the accepted example needs a plugin-specific purpose
+field proven on 2.7.1. No experimental blob is a previously released production
+format. Passing these fixtures is behavioral evidence for #123, not full
+conformance to every row of the accepted contract.
+
 Setting `key_version` opts into outer frame version 2. Its SDK KeyId is
 `regalia-poc-v2:<object_id>:<key_version>`. `historical_key_versions` is an
 explicit comma-separated allowlist of at most 16 other generations. Empty,
