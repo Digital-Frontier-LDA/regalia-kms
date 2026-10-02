@@ -125,6 +125,8 @@ class Counter(membership.HighWater):
     replay too. It needs an index pair of its own: membership uses 0x1500016/0x1500017, so this takes
     e.g. 0x1500018 (its base is then 0x1500019). A TPM that cannot be read is a refusal, never zero."""
 
+    RECORD = False     # a sequence has no manifest to record: membership's record index is not defined here
+
     def _advance(self, sequence):
         # under HighWater's lock, with the increments: two processes given the same sequence cannot both pass
         now = self.value()

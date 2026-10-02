@@ -62,7 +62,8 @@ def simulated_ticks(test, tcti):
 
 class FakeTpm:
     """tpm2-tools as HighWater calls them: NV indices with the real rules. A counter's first increment
-    lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes."""
+    lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes.
+    A counter's value is an integer; an ordinary index holds bytes, at most the size it was defined with."""
     COUNTER, WRITTEN, LOCKED = 0x10, 0x20000000, 0x800
 
     def __init__(self, highest=0):
@@ -77,21 +78,24 @@ class FakeTpm:
         if tool == "nvdefine":
             if index in self.nv:
                 return no
-            self.nv[index] = [self.COUNTER if "nt=counter" in argv[argv.index("-a") + 1] else 0, None]
+            self.nv[index] = [self.COUNTER if "nt=counter" in argv[argv.index("-a") + 1] else 0, None, int(argv[argv.index("-s") + 1])]
             return ok()
         if index not in self.nv:
             return no
         entry = self.nv[index]
         if tool == "nvreadpublic":
-            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: 8\n" % (index, entry[0] | 0x60006)).encode())
+            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: %d\n" % (index, entry[0] | 0x60006, entry[2])).encode())
         if tool == "nvread":
-            return ok(entry[1].to_bytes(8, "big")) if entry[1] is not None else no
+            size = int(argv[argv.index("-s") + 1])
+            if entry[1] is None or size > entry[2]:
+                return no
+            return ok((entry[1].to_bytes(8, "big") if entry[0] & self.COUNTER else entry[1])[:size])
         if tool == "nvincrement" and entry[0] & self.COUNTER:
             entry[1] = self.highest + 1 if entry[1] is None else entry[1] + 1
             self.highest, entry[0] = max(self.highest, entry[1]), entry[0] | self.WRITTEN
             return ok()
-        if tool == "nvwrite" and not entry[0] & (self.COUNTER | self.LOCKED):
-            entry[1], entry[0] = int.from_bytes(input, "big"), entry[0] | self.WRITTEN
+        if tool == "nvwrite" and not entry[0] & (self.COUNTER | self.LOCKED) and len(input) <= entry[2]:
+            entry[1], entry[0] = input + (entry[1] or b"\xff" * entry[2])[len(input):], entry[0] | self.WRITTEN
             return ok()
         if tool == "nvwritelock":
             entry[0] |= self.LOCKED
