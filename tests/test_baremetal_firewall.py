@@ -115,6 +115,13 @@ class Render(unittest.TestCase):
         self.assertNotIn("ip6", self.text)                 # a single-site host carries no IPv6 at all
         self.assertEqual(self.text.count("meta nfproto ipv6 drop"), 2)
 
+    @unittest.skipUnless(shutil.which("nft"), "nft not installed")
+    def test_nft_accepts_the_syntax(self):
+        r = subprocess.run(["nft", "-c", "-f", "-"], input=self.text, capture_output=True, text=True)
+        if "Operation not permitted" in r.stderr:
+            self.skipTest("nft -c needs CAP_NET_ADMIN here")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
 
 def meshed(authority=None, **service):
     """The example site as node a of a three-site cluster, with the boot mesh and the service mesh."""
@@ -244,13 +251,6 @@ class ServiceMesh(unittest.TestCase):
     @unittest.skipUnless(shutil.which("nft"), "nft not installed")
     def test_nft_accepts_the_syntax_with_both_meshes(self):
         r = subprocess.run(["nft", "-c", "-f", "-"], input=firewall.render(sitecfg.validate(meshed(AUTHORITY))), capture_output=True, text=True)
-        if "Operation not permitted" in r.stderr:
-            self.skipTest("nft -c needs CAP_NET_ADMIN here")
-        self.assertEqual(r.returncode, 0, r.stderr)
-
-    @unittest.skipUnless(shutil.which("nft"), "nft not installed")
-    def test_nft_accepts_the_syntax(self):
-        r = subprocess.run(["nft", "-c", "-f", "-"], input=self.text, capture_output=True, text=True)
         if "Operation not permitted" in r.stderr:
             self.skipTest("nft -c needs CAP_NET_ADMIN here")
         self.assertEqual(r.returncode, 0, r.stderr)
