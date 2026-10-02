@@ -149,9 +149,8 @@ Commissioning has two halves:
   pulled while an operation is in flight is seen too (it stops answering for its identity); a request the
   token merely refuses, or one whose caller hung up, is not an absence. A token pulled during the PIN
   login also leaves the PIN latch set: after its return it needs the fresh lease **and** an operator's
-  PIN-block reset, as any failed login does. This holds for the HSM's keys and for a YubiKey's OpenPGP applet.
-  interim: until the PIV provider has the hook, a YubiKey PIV key pulled and put back serves on the lease
-  already held; the daemon says so at startup, and refuses to start with any other provider that lacks it. Measured: `kms_runtime_admission_required` (the
+  PIN-block reset, as any failed login does. This holds for every key the daemon serves: the HSM's, a
+  YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
   configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
 
 ### OpenSC leaves the YubiKey to the PIV backend
@@ -397,8 +396,41 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   the volume is mapped with the key from the socket; with no peer, systemd-cryptsetup gets no key and
   gives up within a second, maps nothing, and the socket goes on listening for the next attempt.
   **One boot carries one attested session**: after a peer has answered once in a boot, a second run in
-  that boot gets no second answer. NOT shown yet: the prompt for the recovery key at a console after
-  that (it needs a console: the boot test), and the units inside an initrd.
+  that boot gets no second answer.
+- **The initrd** is built with dracut and the module `deploy/baremetal/initrd/dracut/90regalia-unlock`
+  (`dracut --add regalia-unlock`): the client, the two units above, `regalia-wg-boot.service` with its
+  script (the initrd ruleset first, then the declared address, then WireGuard with the WG-BOOT key
+  systemd unsealed), `ip`, `wg`, `nft`, and the network drivers. The files that differ per host and
+  per manifest are under `/etc/regalia` (the boot configuration, the two sealed credentials, the
+  WireGuard configuration, the ruleset, `boot.env`), with the root volume's crypttab entry:
+  `root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach`.
+- **Shown on a real boot** (`e2e/unlock-boot-qemu.sh`: a Debian 13 guest in QEMU with a software TPM,
+  its whole disk one LUKS2 volume, the peers reached over WireGuard):
+  - enrolment: with nothing enrolled the console asks "Please enter recovery key for disk root", and
+    the key opens the volume; the running guest seals the two boot credentials to its own TPM;
+  - unattended: systemd unseals both credentials in the initrd, the boot mesh comes up, a peer
+    verifies the guest's quote and gives its half, and the root volume opens with nobody typing
+    anything (a few seconds after the kernel started, in the runs so far); after switch-root the boot
+    interface, its ruleset and its addresses are gone and the link is down;
+  - no peer: the client gives nothing after its five rounds (about two minutes in the runs so far),
+    and the console asks for the passphrase or recovery key, which opens the volume.
+  NOT shown: measured boot. The guest boots a plain kernel and initrd under SeaBIOS, so PCR 11 is zero
+  and PCR 7 holds no Secure Boot state: sealing to the TPM and the peers' check of the quote are shown
+  as mechanics, on this TPM and no other, and nothing there would refuse a changed initrd. That needs
+  a unified kernel image under UEFI. Also not shown: a network card that udev renames in the initrd
+  (the guest's is `eth0`), a host whose initrd is built with the files already under `/etc/regalia`
+  (the test appends them to the image), and any physical machine.
+- **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
+  keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen
+  in the boot test). `/etc/crypttab` on the root is only what the initrd was built from, if it was
+  rebuilt since the last edit. So it is checked on the image, before the image is approved:
+  ```sh
+  lsinitrd IMAGE | grep -E 'regalia|etc/crypttab|etc/cmdline\.d|usr/bin/(wg|nft)$'   # what it holds
+  lsinitrd -f etc/crypttab IMAGE          # one entry: root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach
+  lsinitrd -f etc/regalia/unlock.json IMAGE   # this node, its disk, the PCRs it quotes, its peers
+  ```
+  No file under `etc/cmdline.d` may configure LUKS (`rd.luks.*`), and no other crypttab entry may
+  name the root volume.
 - **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
   keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
   disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
@@ -429,6 +461,8 @@ a peer's unlock port at all (`deploy/baremetal/bootnet.py`, proven in network na
 - A WireGuard configuration is applied with its private key added in memory (`bootnet.with_key`),
   never without it: `wg syncconf` with a file that has no key unsets the interface's key.
 
-Not there yet, so **nothing here is to be run on a KMS host**: the systemd units and the initrd
-(dracut) that bring up the mesh and start the client, sealing the WG-BOOT key, the operator commands,
-and every run on a physical TPM, a DL360 (#65) or the real datacenter networks.
+Not there yet, so **nothing here is to be run on a KMS host**: measured boot with a unified kernel
+image (a changed or retired initrd refused on a real boot), the commands an operator types to enrol a
+host and to write `/etc/regalia` after each manifest, the long-running peer process, and every run on
+a physical TPM, a DL360 (#65) or the real datacenter networks. Sections 3 to 5 above still describe
+the single-site baseline (initramfs-tools, TPM-only crypttab); they change when this is commissioned.
