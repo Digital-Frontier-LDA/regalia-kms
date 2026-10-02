@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/keywrap"
@@ -43,6 +44,9 @@ type Provider struct {
 	// process; a failed refresh must not turn a previously measured healthy
 	// counter into the indistinguishable value zero.
 	pinReadings map[string]pinRetryReading
+	// turn holds the one slot PIV requests take in order. See takeTurn.
+	turn    chan struct{}
+	waiting atomic.Int32
 }
 
 type pinRetryReading struct {
@@ -54,7 +58,40 @@ func New(driver Driver, pins PINSource) (*Provider, error) {
 	if driver == nil || pins == nil {
 		return nil, errors.New("YubiKey driver and PIN source are required")
 	}
-	return &Provider{driver: driver, pins: pins, blocked: make(map[string]struct{}), pinReadings: make(map[string]pinRetryReading)}, nil
+	return &Provider{driver: driver, pins: pins, blocked: make(map[string]struct{}), pinReadings: make(map[string]pinRetryReading), turn: make(chan struct{}, 1)}, nil
+}
+
+// takeTurn makes PIV requests wait for each other.
+//
+// A CARD IS OPENED FOR EXCLUSIVE USE, ONE REQUEST AT A TIME. A YubiKey that holds several keys gets
+// requests for them at the same moment, and so does any key under load. Without this the second
+// request's Open found the card taken and failed as "unavailable": on the bench, nine of twelve
+// simultaneous signatures on one card were refused that way (regalia#541).
+//
+// THERE IS ONE TURN FOR ALL CARDS, NOT ONE PER CARD. The driver finds its card by opening every
+// reader in turn to read its serial, exclusively, so a request for one YubiKey briefly holds the
+// others; a turn per device would let two requests collide there. A PIV signature takes about a
+// tenth of a second, which is what this costs.
+//
+// A request waits as long as its own context allows, and one that gives up never touches a card.
+// It returns the function that ends the turn, or false when the context ended first.
+func (provider *Provider) takeTurn(ctx context.Context) (func(), bool) {
+	done := func() { <-provider.turn }
+	select {
+	case provider.turn <- struct{}{}:
+		return done, true
+	default:
+	}
+	// waiting counts the requests parked here, so that a test can know they have arrived instead
+	// of guessing with a sleep.
+	provider.waiting.Add(1)
+	defer provider.waiting.Add(-1)
+	select {
+	case provider.turn <- struct{}{}:
+		return done, true
+	case <-ctx.Done():
+		return nil, false
+	}
 }
 
 func (provider *Provider) notePINRetries(deviceID string, retries int) {
@@ -108,6 +145,17 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		binding.TouchPolicy != "never" || (binding.PINPolicy != "once" && binding.PINPolicy != "always") {
 		return nil, "", ErrUnavailable
 	}
+	if provider.pinBlocked(binding.DeviceID) {
+		return nil, "", ErrUnavailable
+	}
+	done, ok := provider.takeTurn(ctx)
+	if !ok {
+		return nil, "", ErrUnavailable
+	}
+	defer done()
+	// The latch is read again now that the turn is this request's: the one before it may have just
+	// had its PIN refused. Queued behind it, this request would otherwise open the card and
+	// present the same PIN a second time, and one bad credential would cost two tries.
 	if provider.pinBlocked(binding.DeviceID) {
 		return nil, "", ErrUnavailable
 	}
@@ -215,6 +263,16 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	if binding.Backend != "yubikey-piv" || binding.DeviceSerial == "" || binding.TouchPolicy != "never" {
 		return false
 	}
+	if provider.pinBlocked(binding.DeviceID) {
+		return false
+	}
+	// A health probe waits its turn too: opening the card while a signature is in flight would
+	// report a healthy, busy card as unhealthy.
+	done, ok := provider.takeTurn(ctx)
+	if !ok {
+		return false
+	}
+	defer done()
 	if provider.pinBlocked(binding.DeviceID) {
 		return false
 	}
