@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/keywrap"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
@@ -105,10 +106,9 @@ type Provider struct {
 }
 
 // Reauthorizer says whether the node holds a runtime lease it asked for after a moment, given in
-// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter).
-type Reauthorizer interface {
-	RequestedAfter(ctx context.Context, boottimeMs int64) bool
-}
+// this host's CLOCK_BOOTTIME milliseconds (internal/admission.Gate.RequestedAfter). It is the gate
+// every provider takes (internal/backend/reauth), under the name this package has always used.
+type Reauthorizer = reauth.Gate
 
 type tokenAbsence struct {
 	returned     bool
@@ -147,9 +147,16 @@ func (provider *Provider) notePINRetries(deviceID string, retries int) {
 // at once (deploy/baremetal/admission.py), and the node's readiness says so meanwhile. sinceMs
 // must not be in the future: a start time ahead of the clock would be a lease nobody can ask for.
 //
-// WHAT IT CANNOT SEE: an absence nobody looked during. A token is known to be gone only when an
-// operation or a health check opens it and fails. Every routing decision and every readiness probe
-// does open it, so the window is the gap between two of those.
+// WHAT COUNTS AS SEEN GONE. A token that cannot be opened. And a token that stopped answering while
+// it was open: when a call on an open session fails, the token is asked for its identity again on
+// that same session, and if it does not answer (a pulled card cannot, on its old handle), or the
+// session will not close, it is marked gone. A token that still answers was not gone: the failure
+// was about the request (a payload the key refuses, a malformed blob). That distinction matters,
+// because marking on any failure would let a caller who may sign take a token out of service at
+// will, for up to a third of a lease each time.
+//
+// WHAT IT CANNOT SEE: an absence nobody looked during. Every routing decision and every readiness
+// probe opens the token, so the window is the gap between two of those.
 func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime func() (int64, error), sinceMs int64) error {
 	if gate == nil || boottime == nil {
 		return errors.New("reauthorization needs the admission gate and the boot clock")
@@ -169,8 +176,27 @@ func (provider *Provider) RequireReauthorization(gate Reauthorizer, boottime fun
 	return nil
 }
 
-// tokenGone records that a token could not be opened. Whatever lease the node holds now was asked
-// for before the token comes back.
+// gates reports whether reauthorization is required at all.
+func (provider *Provider) gates() bool {
+	provider.mu.RLock()
+	defer provider.mu.RUnlock()
+	return provider.reauthorizer != nil
+}
+
+// stillAnswers asks an open session's token for its identity again. A token that was pulled cannot
+// answer on its old handle. A session that panics is not answering either.
+func stillAnswers(ctx context.Context, session Session) (answers bool) {
+	defer func() {
+		if recover() != nil {
+			answers = false
+		}
+	}()
+	_, _, err := session.Identity(ctx)
+	return err == nil
+}
+
+// tokenGone records that a token could not be opened, or stopped answering while it was open.
+// Whatever lease the node holds now was asked for before the token comes back.
 func (provider *Provider) tokenGone(deviceID string) {
 	provider.mu.Lock()
 	defer provider.mu.Unlock()
@@ -255,12 +281,22 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 		provider.tokenGone(binding.DeviceID)
 		return nil, "", ErrUnavailable
 	}
+	// gated is set once this token has passed the reauthorization check below: from then on, a
+	// failure is looked at to see whether the token itself went away (RequireReauthorization).
+	gated := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		panicked := recover() != nil
+		if panicked {
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
 		}
+		if gated && (panicked || (err != nil && !stillAnswers(ctx, session))) {
+			provider.tokenGone(binding.DeviceID)
+		}
 		if closeErr := session.Close(); closeErr != nil {
+			if gated {
+				provider.tokenGone(binding.DeviceID)
+			}
 			zero(output)
 			output, outputType, err = nil, "", ErrUnavailable
 		}
@@ -289,6 +325,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	if !provider.reauthorized(ctx, binding.DeviceID) {
 		return nil, "", ErrUnavailable
 	}
+	gated = provider.gates()
 	if operation == "public-key" {
 		output, err = session.PublicKey(ctx, binding.ObjectID)
 		if err != nil || len(output) == 0 {
@@ -473,8 +510,12 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	// registry.safeHealthy is called from Route, RouteForUnwrap and Ready, with no cache and
 	// no latch -- so returning false skips the device exactly while it is failing and stops
 	// skipping it the moment it recovers, with no operator action. See #312.
+	gated := false
 	defer func() {
 		if session.Close() != nil {
+			if gated {
+				provider.tokenGone(binding.DeviceID)
+			}
 			healthy = false
 		}
 	}()
@@ -495,9 +536,12 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	if !provider.reauthorized(ctx, binding.DeviceID) {
 		return false
 	}
+	gated = provider.gates()
 	retries, err := session.PINRetries(ctx)
 	if err == nil {
 		provider.notePINRetries(binding.DeviceID, retries)
+	} else if gated && !stillAnswers(ctx, session) {
+		provider.tokenGone(binding.DeviceID)
 	}
 	return err == nil && retries > 1
 }
