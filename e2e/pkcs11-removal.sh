@@ -45,9 +45,9 @@ hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
 # that tests pcscd, not the token.
 remove(){ echo 0 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null; log "removed $USBDEV at $(date -u +%T.%N)"; }
 restore(){ echo 1 | sudo tee "/sys/bus/usb/devices/$USBDEV/authorized" >/dev/null 2>&1; log "restored $USBDEV at $(date -u +%T.%N)"; }
-ID_EC=""; ID_RSA=""
+ID_EC=""; ID_RSA=""; CREATED=()
 # On any exit: the token back on the bus, then its test keys deleted (best effort), then the temp dir.
-cleanup_keys(){ local id; wait_back 2>/dev/null; for id in $ID_EC $ID_RSA; do
+cleanup_keys(){ local id; wait_back 2>/dev/null; for id in "${CREATED[@]}"; do
   p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
 trap 'restore; cleanup_keys; rm -rf "$W"' EXIT
 
@@ -63,9 +63,17 @@ wait_back(){ local i; for i in $(seq 1 30); do SLOT="$(slot_of)"; [ -n "$SLOT" ]
 p11(){ pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
 p11l(){ p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL"
-ID_EC="$(printf '7d%06x' $((RANDOM*RANDOM % 16777215)))"; ID_RSA="$(printf '7c%06x' $((RANDOM*RANDOM % 16777215)))"
-p11l --keypairgen --key-type EC:prime256v1 --id "$ID_EC" --label "q62r-ec-$UTC" --usage-sign >/dev/null 2>&1 || die "EC keygen failed"
-p11l --keypairgen --key-type rsa:2048 --id "$ID_RSA" --label "q62r-rsa-$UTC" --usage-decrypt >/dev/null 2>&1 || die "RSA keygen failed"
+# Fresh ids: refuse any id already on the token (PKCS#11 does not make CKA_ID unique), and remember
+# only the objects THIS run created, so cleanup can never delete a key that was there before.
+# An id counts as free only against a listing that SUCCEEDED (an absent token lists nothing).
+free_id(){ local prefix="$1" id listing; listing="$(p11l --list-objects 2>/dev/null)" || return 1
+  for _ in 1 2 3 4 5; do
+    id="$(printf '%s%06x' "$prefix" $((RANDOM*RANDOM % 16777215)))"
+    grep -qiE "ID: *$id\b" <<< "$listing" || { echo "$id"; return 0; }
+  done; return 1; }
+ID_EC="$(free_id 7d)" && ID_RSA="$(free_id 7c)" || die "no free object id on the token"
+p11l --keypairgen --key-type EC:prime256v1 --id "$ID_EC" --label "q62r-ec-$UTC" --usage-sign >/dev/null 2>&1 && CREATED+=("$ID_EC") || die "EC keygen failed"
+p11l --keypairgen --key-type rsa:2048 --id "$ID_RSA" --label "q62r-rsa-$UTC" --usage-decrypt >/dev/null 2>&1 && CREATED+=("$ID_RSA") || die "RSA keygen failed"
 p11 --read-object --type pubkey --id "$ID_EC" -o "$W/ec.der" >/dev/null 2>&1; openssl pkey -pubin -inform DER -in "$W/ec.der" -out "$W/ec.pem"
 p11 --read-object --type pubkey --id "$ID_RSA" -o "$W/rsa.der" >/dev/null 2>&1; openssl pkey -pubin -inform DER -in "$W/rsa.der" -out "$W/rsa.pem"
 EC_FP="$(sha256sum < "$W/ec.der")"; RSA_FP="$(sha256sum < "$W/rsa.der")"
@@ -107,17 +115,21 @@ MECH=(); for m in OAEP PKCS; do
   if p11l --decrypt "${try[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d0" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/d0"; then MECH=("${try[@]}"); break; fi
 done
 [ "${#MECH[@]}" -gt 0 ] && P "before the removal, ${MECH[1]} decrypts exactly" || F "no RSA mechanism decrypts before the removal: section 3 cannot test anything"
-( for i in $(seq 1 30); do
-    if p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" >/dev/null 2>&1; then echo "ok $i"; else echo "err $i"; fi
-  done ) > "$W/dstream" 2>&1 &
-dp=$!; sleep 3; remove; sleep 3; restore; wait "$dp"
-ok=$(grep -c '^ok' "$W/dstream"); er=$(grep -c '^err' "$W/dstream"); log "decrypt stream (${MECH[1]}): $ok ok, $er err"
-bad=0; for i in $(sed -n 's/^ok //p' "$W/dstream"); do cmp -s "$W/pt" "$W/d$i" || bad=$((bad+1)); done
-[ "$ok" -gt 0 ] && [ "$er" -gt 0 ] && P "the removal interrupted the decryptions ($ok done, $er failed)" || F "the stream needs both outcomes: $ok done, $er failed"
-[ "$bad" = 0 ] && P "every decryption reported as done is exact ($ok of $ok)" || F "$bad decryption(s) reported done are wrong"
-wait_back && p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/dafter" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/dafter" \
-  && P "after reinsertion, decryption is exact again" || F "no exact decryption after reinsertion"
-same_keys && P "the same keys are there" || F "keys changed after removal during decryption"
+if [ "${#MECH[@]}" -gt 0 ]; then
+  ( for i in $(seq 1 30); do
+      if p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/d$i" >/dev/null 2>&1; then echo "ok $i"; else echo "err $i"; fi
+    done ) > "$W/dstream" 2>&1 &
+  dp=$!; sleep 3; remove; sleep 3; restore; wait "$dp"
+  ok=$(grep -c '^ok' "$W/dstream"); er=$(grep -c '^err' "$W/dstream"); log "decrypt stream (${MECH[1]}): $ok ok, $er err"
+  bad=0; for i in $(sed -n 's/^ok //p' "$W/dstream"); do cmp -s "$W/pt" "$W/d$i" || bad=$((bad+1)); done
+  [ "$ok" -gt 0 ] && [ "$er" -gt 0 ] && P "the removal interrupted the decryptions ($ok done, $er failed)" || F "the stream needs both outcomes: $ok done, $er failed"
+  [ "$bad" = 0 ] && P "every decryption reported as done is exact ($ok of $ok)" || F "$bad decryption(s) reported done are wrong"
+  wait_back && p11l --decrypt "${MECH[@]}" --id "$ID_RSA" -i "$W/ct" -o "$W/dafter" >/dev/null 2>&1 && cmp -s "$W/pt" "$W/dafter" \
+    && P "after reinsertion, decryption is exact again" || F "no exact decryption after reinsertion"
+  same_keys && P "the same keys are there" || F "keys changed after removal during decryption"
+else
+  log "section 3 skipped its stream: no RSA mechanism decrypts (already counted as a failure)"
+fi
 
 hdr "4  startup without the token"
 remove; sleep 2
@@ -126,9 +138,15 @@ out="$(pkcs11-tool --module "$MODULE" --login --pin env:REGALIA_Q_PIN --token-la
 restore; wait_back && sign_once start && P "it works once the token is back" || F "no recovery after restore"
 
 hdr "5  cleanup"
-for id in "$ID_EC" "$ID_RSA"; do p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done
-left="$(p11l --list-objects 2>&1 | grep -cE "ID: *($ID_EC|$ID_RSA)")"
-[ "$left" = 0 ] && P "the test keys are deleted" || F "$left test object(s) remain"
+for id in "${CREATED[@]}"; do p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done
+# Only a listing that SUCCEEDED can show the keys are gone: an absent token lists nothing and would
+# otherwise read as "deleted" (seen on the bench: a run whose token had vanished reported its keys gone).
+if listing="$(p11l --list-objects 2>&1)"; then
+  left="$(grep -cE "ID: *($ID_EC|$ID_RSA)" <<< "$listing")"
+  [ "$left" = 0 ] && P "the test keys are deleted" || F "$left test object(s) remain"
+else
+  F "cannot list the token to confirm the test keys are gone: $(tail -1 <<< "$listing")"
+fi
 
 echo; echo "pkcs11-removal $SERIAL: $pass passed, $fail failed (evidence: $EVID)"; log "RESULT $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

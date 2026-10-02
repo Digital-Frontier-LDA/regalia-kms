@@ -123,8 +123,19 @@ def main(argv):
         report["key_type"] = key_type or "unknown"
         applicable = {"EC": ("CKA_VALUE",), "RSA": ("CKA_PRIVATE_EXPONENT", "CKA_PRIME_1")}.get(key_type, ())
         refused = all(report[n]["rv"] in ("0x11", "0x12") and report[n]["bytes_returned"] == 0 for n in applicable)
-        exposed = report["CKA_SENSITIVE"] is not True or report["CKA_EXTRACTABLE"] is not False
-        verdict = "LEAK" if leaked else ("EXPOSABLE" if exposed else ("REFUSED" if applicable and refused else "INCONCLUSIVE"))
+        # Only an explicit answer decides: SENSITIVE false or EXTRACTABLE true is EXPOSABLE; a failed query
+        # (an "rv=..." string) is INCONCLUSIVE, never a verdict either way.
+        flags_known = isinstance(report["CKA_SENSITIVE"], bool) and isinstance(report["CKA_EXTRACTABLE"], bool)
+        exposed = report["CKA_SENSITIVE"] is False or report["CKA_EXTRACTABLE"] is True
+        protected = report["CKA_SENSITIVE"] is True and report["CKA_EXTRACTABLE"] is False
+        if leaked:
+            verdict = "LEAK"
+        elif exposed:
+            verdict = "EXPOSABLE"
+        elif flags_known and protected and applicable and refused:
+            verdict = "REFUSED"
+        else:
+            verdict = "INCONCLUSIVE"
         report["verdict"] = verdict
         print(json.dumps(report, sort_keys=True))
         call("C_Logout", h)

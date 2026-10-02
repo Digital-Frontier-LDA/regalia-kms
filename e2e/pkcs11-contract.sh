@@ -39,9 +39,9 @@ export REGALIA_Q_PIN="$HSM_USER_PIN"; unset HSM_USER_PIN
 
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"
 EVID="${EVIDENCE_DIR:-.}/evidence-pkcs11-$SERIAL-$UTC.log"
-W="$(mktemp -d)"; ID_EC=""; ID_RSA=""
+W="$(mktemp -d)"; ID_EC=""; ID_RSA=""; CREATED=()
 # On any exit, interrupted or not: delete the test keys from the token (best effort), then the temp dir.
-cleanup_keys(){ local id; for id in $ID_EC $ID_RSA; do
+cleanup_keys(){ local id; for id in "${CREATED[@]}"; do
   p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
 trap 'cleanup_keys; rm -rf "$W"' EXIT
 pass=0; fail=0
@@ -64,7 +64,15 @@ print(hits[0] if len(hits) == 1 else "")' "$SERIAL"; }
 SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL (pkcs11-tool -L)"
 p11(){ pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
 p11l(){ p11 --login --pin env:REGALIA_Q_PIN "$@"; }
-ID_EC="$(printf '7e%06x' $((RANDOM*RANDOM % 16777215)))"; ID_RSA="$(printf '7f%06x' $((RANDOM*RANDOM % 16777215)))"
+# Fresh ids: refuse any id already on the token (PKCS#11 does not make CKA_ID unique), and remember
+# only the objects THIS run created, so cleanup can never delete a key that was there before.
+# An id counts as free only against a listing that SUCCEEDED (an absent token lists nothing).
+free_id(){ local prefix="$1" id listing; listing="$(p11l --list-objects 2>/dev/null)" || return 1
+  for _ in 1 2 3 4 5; do
+    id="$(printf '%s%06x' "$prefix" $((RANDOM*RANDOM % 16777215)))"
+    grep -qiE "ID: *$id\b" <<< "$listing" || { echo "$id"; return 0; }
+  done; return 1; }
+ID_EC="$(free_id 7e)" && ID_RSA="$(free_id 7f)" || die "no free object id on the token"
 
 hdr "1  identity and versions"
 log "date: $UTC"; log "module: $MODULE"; log "opensc: $(opensc-tool --info 2>&1 | head -1)"; log "openssl: $(openssl version)"
@@ -73,8 +81,10 @@ grep -q "$SERIAL" <<< "$info" && P "token $SERIAL in slot $SLOT ($(sed -n 's/.*t
 
 hdr "2  keys generated on the token"
 out="$(p11l --keypairgen --key-type EC:prime256v1 --id "$ID_EC" --label "q62-ec-$UTC" --usage-sign 2>&1)"; rc=$?; log "$out"
+[ "$rc" = 0 ] && CREATED+=("$ID_EC")
 [ "$rc" = 0 ] && P "EC P-256 generated (id $ID_EC)" || F "EC generation failed: $(tail -1 <<< "$out")"
 out="$(p11l --keypairgen --key-type rsa:2048 --id "$ID_RSA" --label "q62-rsa-$UTC" --usage-decrypt --usage-sign 2>&1)"; rc=$?; log "$out"
+[ "$rc" = 0 ] && CREATED+=("$ID_RSA")
 [ "$rc" = 0 ] && P "RSA-2048 generated (id $ID_RSA)" || F "RSA generation failed: $(tail -1 <<< "$out")"
 
 hdr "3  private halves: sensitive, never extractable, local; reading one fails"
@@ -134,11 +144,17 @@ if sudo -n systemctl restart pcscd 2>/dev/null; then
 else F "the pcscd restart could not be run (needs passwordless sudo): the contract is incomplete"; fi
 
 hdr "7  cleanup"
-for id in "$ID_EC" "$ID_RSA"; do
+for id in "${CREATED[@]}"; do
   p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1
 done
-left="$(p11l --list-objects 2>&1 | grep -cE "ID: *($ID_EC|$ID_RSA)")"
-[ "$left" = 0 ] && P "the test keys are deleted" || F "$left test object(s) remain"
+# Only a listing that SUCCEEDED can show the keys are gone: an absent token lists nothing and would
+# otherwise read as "deleted" (seen on the bench: a run whose token had vanished reported its keys gone).
+if listing="$(p11l --list-objects 2>&1)"; then
+  left="$(grep -cE "ID: *($ID_EC|$ID_RSA)" <<< "$listing")"
+  [ "$left" = 0 ] && P "the test keys are deleted" || F "$left test object(s) remain"
+else
+  F "cannot list the token to confirm the test keys are gone: $(tail -1 <<< "$listing")"
+fi
 
 echo; echo "pkcs11-contract $SERIAL: $pass passed, $fail failed (evidence: $EVID)"; log "RESULT $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
