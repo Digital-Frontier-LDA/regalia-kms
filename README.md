@@ -79,6 +79,7 @@ YubiKey. What each can serve, and which are qualified, is in [`CONFIGURATIONS.md
 
 **Not yet**
 - ⚠️ **Not production-qualified** — Nitrokey HSM 2 hardware qualification is open.
+- ⚠️ **No OpenBao plugin yet** — the contract it will meet is [`OPENBAO-COMPATIBILITY.md`](OPENBAO-COMPATIBILITY.md); nothing in it is a support claim until its real-server tests pass.
 - ⚠️ **Not a KMIP server** — Regalia exposes its own minimal mTLS API ([`api/openapi.json`](api/openapi.json)), not KMIP.
 - ⚠️ **Not a general-purpose cloud KMS** — no cloud/database/disk-encryption integrations.
 
@@ -127,7 +128,7 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
-| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `CERTIFICATES`, `TESTING`) |
+| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `OPENBAO-COMPATIBILITY`, `CERTIFICATES`, `TESTING`) |
 
 ## Security
 
