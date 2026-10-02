@@ -239,18 +239,18 @@ class Exchange(Case):
         with open(c.path, "wb") as f:
             f.write(epoch_1)
         self.refused("ROLLBACK", convergence.catch_up, c, [e2, e3])                          # the normal path is closed
-        self.refused("the fetched chain ends at epoch 2, below the TPM high-water 3", convergence.recover, c, b.envelopes()[:2])
-        self.refused("does not follow", convergence.recover, c, [self.e1, e3])               # not a chain
-        self.refused("signature does not verify", convergence.recover, c, [self.e1, e2, dict(e3, signature=dict(e3["signature"], sig="00" * 64))])
-        self.refused("a chain to restore is a non-empty list", convergence.recover, c, [])
+        self.refused("the fetched chain ends at epoch 2, below the TPM high-water 3", c.restore, b.envelopes()[:2])
+        self.refused("does not follow", c.restore, [self.e1, e3])               # not a chain
+        self.refused("signature does not verify", c.restore, [self.e1, e2, dict(e3, signature=dict(e3["signature"], sig="00" * 64))])
+        self.refused("a chain to restore is a non-empty list", c.restore, [])
         rival2 = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "DRAINING")]), hbt.REVOKE, "revocation")
         rival3 = rt.sign(self.chain(rival2["manifest"], [self.entry("a"), self.entry("b"), self.entry("c", "RETIRED")]), hbt.REVOKE, "revocation")
         with open(c.path, "wb") as f:
             f.write(m.canonical([self.e1, e2]))                                              # the disk holds epochs 1-2 of the real chain
-        self.refused("CONFLICT: the fetched chain differs from the stored one at epoch 2", convergence.recover, c, [self.e1, rival2, rival3])
+        self.refused("CONFLICT: the fetched chain differs from the stored one at epoch 2", c.restore, [self.e1, rival2, rival3])
         with open(c.path, "rb") as f:
             self.assertEqual(f.read(), m.canonical([self.e1, e2]))                           # refused: nothing written
-        self.assertEqual(convergence.recover(c, b.envelopes()), {"epoch": 3, "manifest_digest": m.digest(e3["manifest"])})
+        self.assertEqual(convergence.recover(c, [b.envelopes(), self.stores["authority"].envelopes()]), {"epoch": 3, "manifest_digest": m.digest(e3["manifest"])})
         self.assertEqual(c.load()["epoch"], 3)
         # a disk AHEAD of the fetched chain (a crash after the write, before the TPM moved) is not shortened
         d = self.store("d")
@@ -260,10 +260,10 @@ class Exchange(Case):
         self.refused("the fetched chain is shorter than the stored one: nothing to restore", d.restore, [self.e1, e2])
         self.assertEqual(d.load()["epoch"], 3)                                               # load() completes that crash by itself
         os.unlink(c.path)                                                                    # lost altogether
-        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        self.assertEqual(convergence.recover(c, [b.envelopes(), self.stores["authority"].envelopes()])["epoch"], 3)
         with open(c.path, "w") as f:
             f.write("{")                                                                     # or unreadable
-        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        self.assertEqual(convergence.recover(c, [b.envelopes(), self.stores["authority"].envelopes()])["epoch"], 3)
         # or well-formed JSON with a corrupt tail: only the valid prefix counts, and a tail of junk as long as
         # the real chain, or longer, does not make the fetched chain "shorter"
         for label, tail in (("an empty object", [{}]), ("junk entries", [{}, {"manifest": {}}, "x", 7]),
@@ -273,26 +273,61 @@ class Exchange(Case):
                     f.write(m.canonical([self.e1] + tail))
                 with self.assertRaises(m.Refused):
                     c.load()
-                self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+                self.assertEqual(convergence.recover(c, [b.envelopes(), self.stores["authority"].envelopes()])["epoch"], 3)
                 self.assertEqual(c.load()["epoch"], 3)
         # a node that is merely behind may be restored forward too: its TPM anchor moves with the chain
         behind = self.store("behind")
         behind.commit(self.e1)
-        self.assertEqual((convergence.recover(behind, b.envelopes())["epoch"], behind.hw.value()), (3, 3))
-        self.refused("the fetched chain repeats epoch 1", convergence.recover, c, [self.e1, self.e1, e2, e3])
+        self.assertEqual((convergence.recover(behind, [b.envelopes(), self.stores["authority"].envelopes()])["epoch"], behind.hw.value()), (3, 3))
+        self.refused("the fetched chain repeats epoch 1", c.restore, [self.e1, self.e1, e2, e3])
         # a chain further above the anchor than the anchor will move in one go: refused before anything is written
         far = self.store("far")
         far.commit(self.e1)
         with open(far.path, "rb") as f:
             before = f.read()
         with unittest.mock.patch.object(m.HighWater, "MAX_JUMP", 1):
-            self.refused("2 above the TPM high-water: the jump exceeds the bound 1: anomaly", convergence.recover, far, b.envelopes())
+            self.refused("2 above the TPM high-water: the jump exceeds the bound 1: anomaly", far.restore, b.envelopes())
         with open(far.path, "rb") as f:
             self.assertEqual(f.read(), before)
         self.assertEqual((far.hw.value(), far.load()["epoch"]), (1, 1))
         whole = b.envelopes()
         with unittest.mock.patch.object(m, "MAX_CHAIN_BYTES", 100):
-            self.refused("the chain to restore is oversized", convergence.recover, c, whole)
+            self.refused("the chain to restore is oversized", c.restore, whole)
+
+    def test_a_node_that_lost_its_chain_needs_two_sources_that_agree(self):
+        """The TPM anchors the epoch, not the digest. Two validly signed chains of the same length (the
+        revocation key signed twice at epoch 2) look alike to a node that holds neither."""
+        b, c, authority = self.stores["b"], self.stores["c"], self.stores["authority"]
+        e2 = self.revoke(self.m1)                                            # the accepted branch: a is REVOKED_STOLEN
+        for store in (b, c):
+            convergence.catch_up(store, [e2])
+        fork2 = rt.sign(self.chain(self.m1, [self.entry("a"), self.entry("b"), self.entry("c", "DRAINING")]), hbt.REVOKE, "revocation")
+        fork = [self.e1, fork2]                                              # a branch on which a was never revoked
+        os.unlink(c.path)                                                    # c loses its chain
+        self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", convergence.recover, c, [fork])
+        self.refused("CONFLICT: the sources' chains differ at epoch 2", convergence.recover, c, [fork, b.envelopes()])
+        self.refused("CONFLICT: the sources' chains differ at epoch 2", convergence.recover, c, [b.envelopes(), authority.envelopes(), fork])
+        self.assertFalse(os.path.exists(c.path))                             # nothing was installed
+        for label, reason, chains in (
+                ("a source that is behind", "ends at epoch 1, below the TPM high-water 2: that source is behind", [b.envelopes(), [self.e1]]),
+                ("a source with a forged link", "signature does not verify", [b.envelopes(), [self.e1, dict(e2, signature=dict(e2["signature"], sig="00" * 64))]]),
+                ("a source that repeats an epoch", "a fetched chain repeats epoch 1", [b.envelopes(), [self.e1, self.e1, e2]]),
+                ("an empty source", "chains must be a list of non-empty chains", [b.envelopes(), []]),
+                ("not a list of chains", "chains must be a list of non-empty chains", b.envelopes())):
+            with self.subTest(label):
+                self.refused(reason, convergence.recover, c, chains)
+        for bad in (0, True, "2"):
+            self.refused("minimum must be an integer >= 1", convergence.recover, c, [b.envelopes()], bad)
+        with unittest.mock.patch.object(convergence, "MAX_ENVELOPES", 0):
+            self.refused("a chain is oversized", convergence.recover, c, [b.envelopes(), authority.envelopes()])
+        self.assertEqual(convergence.recover(c, [b.envelopes(), authority.envelopes()])["epoch"], 2)
+        self.assertEqual(c.load()["nodes"][0]["state"], "REVOKED_STOLEN")
+        # one source, as an operator's explicit decision; and then a longer source brings the newer epochs
+        os.unlink(c.path)
+        e3 = self.revoke(e2["manifest"], "DRAINING", "c")
+        self.assertEqual(convergence.recover(c, [b.envelopes()], minimum=1)["epoch"], 2)
+        os.unlink(c.path)
+        self.assertEqual(convergence.recover(c, [b.envelopes(), authority.envelopes()])["epoch"], 3)   # the longest of the agreeing chains
 
     def test_the_partition_bound_is_24_hours_and_the_accepted_skew(self):
         c, fresh = self.stores["c"], self.peer("c", "-skew")["freshness"]
@@ -512,12 +547,13 @@ class OnSwtpm(unittest.TestCase):
         self.refused("ROLLBACK", convergence.missing, c, convergence.NOT_ENROLLED)
         self.refused("ROLLBACK", convergence.catch_up, c, b.envelopes(1))
         # recovery: fetch b's whole chain and install it through the store
-        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        self.refused("recovery needs whole chains from 2 different sources that agree (1 given)", convergence.recover, c, [b.envelopes()])
+        self.assertEqual(convergence.recover(c, [b.envelopes(), [e1, e2, e3]])["epoch"], 3)   # b's chain and the authority's agree
         self.assertEqual((c.load()["epoch"], c.hw.value()), (3, 3))
         self.refused("a may not be unlocked under epoch 3", hb.authorize, c.load(), "c", "a", self.fresh["c"])
         os.unlink(c.path)                                                    # the file lost altogether: the same recovery
         self.refused("ROLLBACK", c.load)
-        self.assertEqual(convergence.recover(c, b.envelopes())["epoch"], 3)
+        self.assertEqual(convergence.recover(c, [b.envelopes(), [e1, e2, e3]])["epoch"], 3)
 
 
 if __name__ == "__main__":
