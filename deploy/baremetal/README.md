@@ -127,15 +127,23 @@ Commissioning has two halves:
   connected to pcscd must be the KMS binary. Measured: `token_clients_root_only`. A KMS user that
   brings its own client is caught by the pcscd check only while it is connected.
 - **pcscd admits the KMS user and root, and nobody else.** Install
-  `deploy/polkit/50-regalia-kms-pcscd.rules` as `/etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules`
-  (`root:root`, `0644`). **It is required, not an extra:** Debian's pcscd asks polkit, and its policy
-  lets in only a user with an active local session. The daemon's user has none, so without the rule
-  pcscd refuses it and the daemon reaches neither the HSM nor the YubiKey: it starts, is never
+  `deploy/polkit/50-regalia-kms-pcscd.rules` as `/etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules`,
+  byte for byte, `root:root`, mode `0644` (polkitd reads it as its own user: a file only root can
+  read is silently not loaded). **It is required, not an extra:** Debian's pcscd asks polkit, and its
+  policy lets in only a user with an active local session. The daemon's user has none, so without the
+  rule pcscd refuses it and the daemon reaches neither the HSM nor the YubiKey: it starts, is never
   ready, and every key is unavailable (measured with pcscd 2.3.3 under the shipped unit,
-  `e2e/kms-two-token-systemd.sh`). The same rule refuses every other user, an operator at the
-  console included: whoever can talk to pcscd can present PINs and spend retry counters. No other
-  polkit rule on the host may name pcscd's actions or grant every action. Measured:
-  `kms_pcscd_access_rule`.
+  `e2e/kms-two-token-systemd.sh`). The same rule is written to refuse every other user, an operator
+  at the console included, because whoever can talk to pcscd can present PINs and spend retry
+  counters; that refusal follows from the rule and from no other rules file deciding first, and has
+  been observed only for users without a session. polkit runs every rules file in name order and the
+  first answer wins, so no other rules file may speak about pcscd or grant without naming its
+  action. Measured: `kms_pcscd_access_rule` (the file is the shipped one byte for byte, root's,
+  readable by polkitd; the other rules files in the four polkit directories are read for anything
+  that speaks about pcscd, reaches into polkit's rules, or grants first; and `pkcheck` says polkit
+  admits the running daemon to both of pcscd's actions). Reading other rules files cannot prove what
+  a program does: the list it refuses is wide on purpose, and a host should carry no rules files
+  beyond the distribution's and this one.
 - **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
   `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
   capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name

@@ -1,6 +1,8 @@
 // pcscd access for the Regalia KMS: the KMS user and root, and nobody else.
 //
-// Install as /etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules (root:root, 0644) on a KMS host.
+// Install as /etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules (root:root, 0644: polkitd reads it as
+// its own user, so a file only root can read is silently not loaded). Install it byte for byte: the
+// host probe (kms_pcscd_access_rule) compares the installed file with this one.
 //
 // WHY IT IS NEEDED. Debian's pcscd asks polkit before it lets a client in
 // (org.debian.pcsc-lite.access_pcsc) and before it lets it use a card (…access_card), and its policy
@@ -11,18 +13,24 @@
 // WHY IT ALSO REFUSES. Whoever can talk to pcscd can talk to the tokens: present PINs, spend the
 // retry counters, select applets under the daemon's feet. On a KMS host only the daemon and root
 // have any business there (deploy/baremetal/README.md, "token clients"), so every other user is
-// refused, an operator with a console session included. root is always allowed by polkit itself.
+// refused, an operator with a console session included. root is allowed by polkit before any rule.
+//
+// WHAT IT CANNOT DO. polkit runs rules files in file-name order and the first definite answer wins:
+// a file that sorts before this one and grants (an allow-all rule for an admin group, say) decides
+// first. The host probe refuses such files. Every rules file also shares one JavaScript context, so
+// everything here is inside a function: no other file can reach in and change it.
 //
 // ONLY_THE_KMS = false keeps the grant and drops the refusal: for a bench or a workstation where
 // other users must still reach pcscd. A KMS host keeps it true; the host probe checks that.
-var ONLY_THE_KMS = true;
-
-polkit.addRule(function(action, subject) {
-    if (action.id != "org.debian.pcsc-lite.access_pcsc" && action.id != "org.debian.pcsc-lite.access_card") {
-        return polkit.Result.NOT_HANDLED;
-    }
-    if (subject.user == "regalia-kms" || subject.user == "root") {
-        return polkit.Result.YES;
-    }
-    return ONLY_THE_KMS ? polkit.Result.NO : polkit.Result.NOT_HANDLED;
-});
+(function () {
+    var ONLY_THE_KMS = true;
+    polkit.addRule(function (action, subject) {
+        if (action.id != "org.debian.pcsc-lite.access_pcsc" && action.id != "org.debian.pcsc-lite.access_card") {
+            return polkit.Result.NOT_HANDLED;
+        }
+        if (subject.user == "regalia-kms" || subject.user == "root") {
+            return polkit.Result.YES;
+        }
+        return ONLY_THE_KMS ? polkit.Result.NO : polkit.Result.NOT_HANDLED;
+    });
+})();

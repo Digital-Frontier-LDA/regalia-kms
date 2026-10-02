@@ -48,11 +48,15 @@ and that the daemon, and only the daemon, may talk to pcscd (regalia#541):
                               (deploy/polkit/): pcscd's two polkit actions are granted to the KMS user
                               and root and refused to everyone else. Debian's pcscd lets in only users
                               with an active session, so without the grant the daemon reaches no token;
-                              without the refusal any user with a console session reaches them all. No
-                              other polkit rule may speak about pcscd or grant every action
+                              without the refusal any user with a console session reaches them all. The
+                              file is compared byte for byte and must be readable by polkitd; no other
+                              rules file may speak about pcscd or grant first without naming its action;
+                              and pkcheck must say polkit admits the running daemon. That a user WITH a
+                              console session is refused is not measured: it follows from the rule
 
 Standard library only.
 """
+import hashlib
 import json
 import os
 import re
@@ -100,6 +104,13 @@ class Host:
             return os.listdir(path)
         except OSError:
             return []
+
+    def read_bytes(self, path):
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except OSError:
+            return None
 
     def run(self, argv):
         try:
@@ -497,56 +508,91 @@ def opensc_leaves_piv_cards(host):
 
 PCSCD_RULE_PATH = "/etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules"
 POLKIT_RULE_DIRECTORIES = ("/etc/polkit-1/rules.d", "/run/polkit-1/rules.d", "/usr/local/share/polkit-1/rules.d", "/usr/share/polkit-1/rules.d")
-# The shipped rule (deploy/polkit/50-regalia-kms-pcscd.rules) with its comments and blank lines left
-# out; tests/test_baremetal_os_probe.py holds the two together.
-PCSCD_RULE = """var ONLY_THE_KMS = true;
-polkit.addRule(function(action, subject) {
-if (action.id != "org.debian.pcsc-lite.access_pcsc" && action.id != "org.debian.pcsc-lite.access_card") {
-return polkit.Result.NOT_HANDLED;
-}
-if (subject.user == "regalia-kms" || subject.user == "root") {
-return polkit.Result.YES;
-}
-return ONLY_THE_KMS ? polkit.Result.NO : polkit.Result.NOT_HANDLED;
-});"""
+# sha256 of deploy/polkit/50-regalia-kms-pcscd.rules, and of the same file with ONLY_THE_KMS = false.
+# tests/test_baremetal_os_probe.py holds these to the file. The file is compared byte for byte: what a
+# JavaScript file does cannot be decided by reading it line by line.
+PCSCD_RULE_SHA256 = "0d826c93062a308a44879e9dfa60e05c051098962659e7381bc1e324bb04d804"
+PCSCD_RULE_BENCH_SHA256 = "3f9336b25b4c994501fb19d7b8d39ca1a448899f3132c436f511e463cb9c8eef"
+PCSCD_ACTIONS = ("org.debian.pcsc-lite.access_pcsc", "org.debian.pcsc-lite.access_card")
+# In another rules file, any of these is refused. They are not a JavaScript analysis; they are the ways
+# a file can speak about pcscd, reach into the shared rules context, or decide something it does not show.
+SUSPECT_IN_OTHER_RULES = (
+    ("pcsc", "speaks about pcscd"),
+    ("ONLY_THE_KMS", "names the KMS rule's setting"),
+    ("_ruleFuncs", "reaches into polkit's list of rules"),
+    ("Result =", "reassigns polkit's results"),
+    ("Result.YES =", "reassigns polkit's results"),
+    ("Result.NO =", "reassigns polkit's results"),
+    ("spawn(", "hands the decision to a program"),
+    ("AUTH_", "can grant after authentication"),
+)
+# In a file that polkit runs BEFORE the KMS rule, a grant that does not name its action decides first.
+GRANT_WORDS = ("YES", '"yes"', "'yes'")
 
 
-def rule_statements(text):
-    """A polkit rules file without its // comments, blank lines and indentation."""
-    lines = (line.strip() for line in (text or "").splitlines())
-    return "\n".join(line for line in lines if line and not line.startswith("//"))
+def rules_files(host, directory):
+    """The *.rules file names in a polkit rules directory, or None when it exists and cannot be listed."""
+    rc, _ = host.run(["test", "-d", directory])
+    if rc != 0:
+        return []
+    rc, out = host.run(["find", directory, "-mindepth", "1", "-maxdepth", "1", "-name", "*.rules", "-printf", "%f\\n"])
+    if rc != 0:
+        return None
+    return sorted(line for line in out.splitlines() if line)
 
 
 def pcscd_access_rule(host):
-    """pcscd lets in the KMS user and root, and nobody else, by the shipped polkit rule; and no other rule
-    on the host undoes that. What a rule file DOES cannot be decided by reading it, so two things are
-    refused outright in any other file: naming pcscd's actions, and granting without looking at the
-    action at all (an allow-everything rule, which polkit would consult first if its name sorts first)."""
-    text = host.read(PCSCD_RULE_PATH)
-    if text is None:
+    """pcscd lets in the KMS user and root, and nobody else, by the shipped polkit rule; nothing on the host
+    is seen to undo that; and polkit, asked about the running daemon, says yes.
+
+    What it cannot measure: that a user with an active console session is refused. That follows from the
+    rule and from no other file deciding first, which is checked here by reading the other files; a check
+    by reading cannot be complete for a program, so the list of what it refuses is deliberately wide."""
+    raw = host.read_bytes(PCSCD_RULE_PATH)
+    if raw is None:
         return False, (f"{PCSCD_RULE_PATH} is missing or unreadable: pcscd admits only users with an active session, "
                        "so the KMS service user reaches no token (install deploy/polkit/50-regalia-kms-pcscd.rules)")
-    if rule_statements(text) != PCSCD_RULE:
-        if rule_statements(text) == PCSCD_RULE.replace("ONLY_THE_KMS = true", "ONLY_THE_KMS = false"):
-            return False, f"{PCSCD_RULE_PATH} grants the KMS user and refuses nobody (ONLY_THE_KMS = false): a bench setting, not a KMS host's"
-        return False, f"{PCSCD_RULE_PATH} is not the shipped rule (deploy/polkit/50-regalia-kms-pcscd.rules)"
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest == PCSCD_RULE_BENCH_SHA256:
+        return False, f"{PCSCD_RULE_PATH} grants the KMS user and refuses nobody (ONLY_THE_KMS = false): a bench setting, not a KMS host's"
+    if digest != PCSCD_RULE_SHA256:
+        return False, f"{PCSCD_RULE_PATH} is not, byte for byte, the shipped rule (deploy/polkit/50-regalia-kms-pcscd.rules)"
     rc, out = host.run(["stat", "-c", "%u %a", PCSCD_RULE_PATH])
     fields = out.split()
-    if rc != 0 or len(fields) != 2 or fields[0] != "0" or not re.fullmatch(r"[0-7]{3,4}", fields[1]) or int(fields[1], 8) & 0o022:
+    mode = int(fields[1], 8) if rc == 0 and len(fields) == 2 and re.fullmatch(r"[0-7]{3,4}", fields[1]) else None
+    if mode is None or fields[0] != "0" or mode & 0o022:
         return False, f"{PCSCD_RULE_PATH} is not root's alone to change (owner and mode: {out.strip() or 'unreadable'})"
+    if not mode & 0o004:
+        return False, f"{PCSCD_RULE_PATH} is not readable by others (mode {fields[1]}): polkitd reads it as its own user and would not load it"
     for directory in POLKIT_RULE_DIRECTORIES:
-        for name in sorted(host.listdir(directory)):
+        names = rules_files(host, directory)
+        if names is None:
+            return False, f"{directory} cannot be listed: what it grants is unknown"
+        for name in names:
             path = f"{directory}/{name}"
-            if path == PCSCD_RULE_PATH or not name.endswith(".rules"):
+            if path == PCSCD_RULE_PATH:
                 continue
-            other = rule_statements(host.read(path))
-            if not other and host.read(path) is None:
+            text = host.read(path)
+            if text is None:
                 return False, f"{path} cannot be read: what it grants is unknown"
-            if "pcsc-lite" in other:
-                return False, f"{path} also speaks about pcscd's actions: only the shipped rule may"
-            if "Result.YES" in other and "action.id" not in other and "action.lookup" not in other:
-                return False, f"{path} grants without looking at the action: it would let its subjects into pcscd whatever the shipped rule says"
-    return True, f"{PCSCD_RULE_PATH}: pcscd admits regalia-kms and root, and refuses every other user"
+            for needle, what in SUSPECT_IN_OTHER_RULES:
+                if needle in text:
+                    return False, f"{path} {what} ({needle!r}): only the shipped rule may decide about pcscd"
+            # polkit runs the files in name order (all four directories together); a file that sorts
+            # first and grants anything that does not name its action decides before the KMS rule does.
+            if name < os.path.basename(PCSCD_RULE_PATH) and any(word in text for word in GRANT_WORDS) and "action.id ==" not in text:
+                return False, f"{path} grants without naming the action, and polkit runs it before the KMS rule"
+    # The effect, asked of polkit itself: the running daemon is admitted to both actions.
+    rc, out = host.run(["systemctl", "show", SERVICE, "-p", "MainPID", "--value"])
+    pid = out.strip()
+    if rc != 0 or not pid.isdigit() or pid == "0":
+        return False, f"{SERVICE} is not running: polkit cannot be asked whether it admits the daemon"
+    for action in PCSCD_ACTIONS:
+        rc, _ = host.run(["pkcheck", "--action-id", action, "--process", pid])
+        if rc != 0:
+            return False, f"polkit does not authorize the running KMS (pid {pid}) for {action}"
+    return True, (f"{PCSCD_RULE_PATH}: the shipped rule; no other rules file speaks about pcscd or grants first; "
+                  f"polkit authorizes the running KMS (pid {pid}) for pcscd")
 
 
 def pcscd_clients(host):

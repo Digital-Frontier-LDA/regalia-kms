@@ -46,7 +46,11 @@ export PATH="$PATH:/usr/sbin:/sbin"
 HSM_SERIAL="${REGALIA_TWO_TOKEN_HSM_SERIAL:-}"; YK_SERIAL="${REGALIA_TWO_TOKEN_YK_SERIAL:-}"
 [ -n "$HSM_SERIAL" ] && [ -n "$YK_SERIAL" ] || die "set REGALIA_TWO_TOKEN_HSM_SERIAL and REGALIA_TWO_TOKEN_YK_SERIAL"
 [ -n "${REGALIA_TWO_TOKEN_HSM_PIN:-}" ] && [ -n "${REGALIA_TWO_TOKEN_YK_PIN:-}" ] || die "set REGALIA_TWO_TOKEN_HSM_PIN and REGALIA_TWO_TOKEN_YK_PIN (environment only)"
-for t in go pkcs11-tool ykman openssl python3 curl systemctl; do command -v "$t" >/dev/null || die "$t is required"; done
+# The PINs stay in this shell: not exported, so no child (go, curl, the audit collector) inherits them.
+# Each token tool that needs one is handed it as P_ for that one command.
+HSM_PIN="$REGALIA_TWO_TOKEN_HSM_PIN"; YK_PIN="$REGALIA_TWO_TOKEN_YK_PIN"
+export -n REGALIA_TWO_TOKEN_HSM_PIN REGALIA_TWO_TOKEN_YK_PIN; unset REGALIA_TWO_TOKEN_HSM_PIN REGALIA_TWO_TOKEN_YK_PIN
+for t in go pkcs11-tool ykman openssl python3 curl systemctl pkcheck; do command -v "$t" >/dev/null || die "$t is required"; done
 sudo -n true 2>/dev/null || die "needs sudo"
 MODULE=""; for c in /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so /usr/lib/opensc-pkcs11.so /usr/lib/x86_64-linux-gnu/pkcs11/opensc-pkcs11.so; do [ -f "$c" ] && MODULE="$c" && break; done
 [ -n "$MODULE" ] || die "opensc-pkcs11.so not found"
@@ -64,19 +68,26 @@ KEY_ID=e2; KEY_LABEL=regalia-two-token-e2e
 IGNORE="$HERE/deploy/opensc/ignore-yubikey.conf"; SHIPPED_RULE="$HERE/deploy/polkit/50-regalia-kms-pcscd.rules"
 W="$(mktemp -d)"; collector=""; made_user=0; made_key=0
 # This user's own token tools run with OpenSC told to leave the YubiKey alone, as the daemon's does.
-hsm(){ OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --token-label "$HSM_LABEL" "$@"; }
+# By slot, found by serial: SmartCard-HSMs often share a label, and --token-label takes the first match.
+hsm(){ OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --slot "$HSM_SLOT" "$@"; }
 delete_key(){
   [ "$made_key" = 1 ] || return 0
-  P_="$REGALIA_TWO_TOKEN_HSM_PIN" hsm --login --pin env:P_ --delete-object --type privkey --id "$KEY_ID" >/dev/null 2>&1
-  P_="$REGALIA_TWO_TOKEN_HSM_PIN" hsm --login --pin env:P_ --delete-object --type pubkey --id "$KEY_ID" >/dev/null 2>&1
-  left="$(P_="$REGALIA_TWO_TOKEN_HSM_PIN" hsm --login --pin env:P_ --list-objects 2>/dev/null | grep -c "$KEY_LABEL")"
-  [ "$left" = 0 ] && { echo "kms-two-token-systemd: the throwaway HSM key $KEY_LABEL (id $KEY_ID) is deleted; a listing shows none left"; made_key=0; } \
-    || echo "kms-two-token-systemd: WARNING: $left object(s) labelled $KEY_LABEL are STILL on $HSM_SERIAL: delete them by hand" >&2
+  P_="$HSM_PIN" hsm --login --pin env:P_ --delete-object --type privkey --id "$KEY_ID" >/dev/null 2>&1
+  P_="$HSM_PIN" hsm --login --pin env:P_ --delete-object --type pubkey --id "$KEY_ID" >/dev/null 2>&1
+  # "None left" counts only from a listing that worked: the login succeeded (pkcs11-tool exits non-zero
+  # otherwise) and nothing in it is an error.
+  if listing="$(P_="$HSM_PIN" hsm --login --pin env:P_ --list-objects 2>&1)" && ! grep -qi "error\|CKR_" <<< "$listing"; then
+    if ! grep -q "ID:[[:space:]]*$KEY_ID\$" <<< "$listing" && ! grep -q "$KEY_LABEL" <<< "$listing"; then
+      echo "kms-two-token-systemd: the throwaway HSM key $KEY_LABEL (id $KEY_ID) is deleted; a listing that read the token shows none left"; made_key=0; return 0
+    fi
+  fi
+  echo "kms-two-token-systemd: WARNING: cannot show that the throwaway key $KEY_LABEL (id $KEY_ID) is gone from $HSM_SERIAL: check and delete it by hand" >&2
 }
 cleanup(){
   sudo systemctl stop "$SVC" 2>/dev/null
   [ -n "$collector" ] && kill "$collector" 2>/dev/null
   sudo rm -f "$RULE"; sleep 2      # polkit rereads its rules; this user's own token calls below need pcscd again
+  sudo sh -c 'for f in "$1"/*.pin; do [ -f "$f" ] && shred -u "$f"; done' sh "$ETC" 2>/dev/null
   sudo rm -rf "$UNITDIR/$SVC" "$UNITDIR/$SVC.d" "$ETC" "$STATE" /usr/local/sbin/regalia-kms
   sudo systemctl daemon-reload 2>/dev/null
   sudo systemctl reset-failed "$SVC" 2>/dev/null
@@ -87,15 +98,24 @@ cleanup(){
 trap cleanup EXIT
 
 # ---- the tokens, as this user sees them ----------------------------------------------------------------
-HSM_LABEL="$(OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | awk -v s="$HSM_SERIAL" -F: '
-  /token label/{gsub(/^[ \t]+|[ \t]+$/, "", $2); label=$2} /serial num/{gsub(/[ \t]/, "", $2); if ($2==s) {print label; exit}}')"
-[ -n "$HSM_LABEL" ] || die "no PKCS#11 token with serial $HSM_SERIAL is attached"
+HSM_SLOT="$(OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | awk -v s="$HSM_SERIAL" '
+  /^Slot [0-9]+ \(0x[0-9a-f]+\)/{slot=$3; gsub(/[():]/, "", slot)} /serial num/{v=$0; sub(/.*: */, "", v); gsub(/[ \t]/, "", v); if (v==s) {print slot; exit}}')"
+[ -n "$HSM_SLOT" ] || die "no PKCS#11 token with serial $HSM_SERIAL is attached"
+HSM_LABEL="$(hsm --list-token-slots 2>/dev/null | awk -v s="$HSM_SLOT" '/^Slot /{on=(index($0, "(" s ")")>0)} on && /token label/{v=$0; sub(/.*: */, "", v); print v; exit}')"
+# A PIN is presented only to a token that can afford a wrong one.
+flags="$(hsm --list-token-slots 2>/dev/null | awk -v s="$HSM_SLOT" '/^Slot /{on=(index($0, "(" s ")")>0)} on && /token flags/{print; exit}')"
+grep -qi "count low\|final try\|locked" <<< "$flags" && die "the HSM's user PIN counter is not full ($flags): not presenting a PIN to it"
+case "$(ykman --device "$YK_SERIAL" piv info 2>/dev/null | awk -F: '/PIN tries/{gsub(/ /, "", $2); print $2}')" in
+  3/3) ;; *) die "the YubiKey's PIV PIN counter is not 3/3: not presenting a PIN to it";; esac
 ykman --device "$YK_SERIAL" piv info >/dev/null 2>&1 || die "no YubiKey with serial $YK_SERIAL is attached"
-echo "kms-two-token-systemd: HSM $HSM_SERIAL (label $HSM_LABEL), YubiKey $YK_SERIAL; PIV PIN $(ykman --device "$YK_SERIAL" piv info 2>/dev/null | awk -F: '/PIN tries/{gsub(/ /, "", $2); print $2}')"
-P_="$REGALIA_TWO_TOKEN_HSM_PIN" hsm --login --pin env:P_ --list-objects 2>/dev/null | grep -q "$KEY_LABEL" && die "an object labelled $KEY_LABEL is already on the HSM"
-P_="$REGALIA_TWO_TOKEN_HSM_PIN" hsm --login --pin env:P_ --keypairgen --key-type EC:prime256v1 --usage-sign --label "$KEY_LABEL" --id "$KEY_ID" >/dev/null 2>&1 \
+echo "kms-two-token-systemd: HSM $HSM_SERIAL (slot $HSM_SLOT, label ${HSM_LABEL:-?}), YubiKey $YK_SERIAL; PIV PIN $(ykman --device "$YK_SERIAL" piv info 2>/dev/null | awk -F: '/PIN tries/{gsub(/ /, "", $2); print $2}')"
+# Without a login: a public object with that label or id means a key from an earlier run is there.
+existing="$(hsm --list-objects 2>/dev/null)"
+grep -q "$KEY_LABEL" <<< "$existing" || grep -q "ID:[[:space:]]*$KEY_ID\$" <<< "$existing" \
+  && die "an object with label $KEY_LABEL or id $KEY_ID is already on the HSM (an earlier run?): delete it by hand first"
+made_key=1   # from here on the cleanup looks for it, whatever happens next
+P_="$HSM_PIN" hsm --login --pin env:P_ --keypairgen --key-type EC:prime256v1 --usage-sign --label "$KEY_LABEL" --id "$KEY_ID" >/dev/null 2>&1 \
   || die "cannot generate the throwaway P-256 key on the HSM (is the PIN the token's?)"
-made_key=1
 hsm --read-object --type pubkey --id "$KEY_ID" --output-file "$W/hsm.der" >/dev/null 2>&1 || die "cannot read the HSM key's public half"
 openssl pkey -pubin -inform DER -in "$W/hsm.der" -out "$W/hsm.pem" 2>/dev/null || die "the HSM's public key is not a SubjectPublicKeyInfo"
 ykman --device "$YK_SERIAL" piv keys export 9c "$W/yk.pem" >/dev/null 2>&1 || die "cannot read the public key of PIV slot 9c"
@@ -171,7 +191,7 @@ JSON
 for f in config.json manifest.json policy.json rbac.json secure-channel.json server.pem server.key ca.pem; do
   sudo install -m 0640 -o root -g regalia-kms "$W/$f" "$ETC/$f" || die "cannot install $f"; done
 # The PINs: root's alone on disk, exactly the PIN and no newline; systemd hands them over as credentials.
-( umask 077; printf '%s' "$REGALIA_TWO_TOKEN_HSM_PIN" > "$W/hsm.pin"; printf '%s' "$REGALIA_TWO_TOKEN_YK_PIN" > "$W/yk.pin" )
+( umask 077; printf '%s' "$HSM_PIN" > "$W/hsm.pin"; printf '%s' "$YK_PIN" > "$W/yk.pin" )
 sudo install -m 0600 -o root -g root "$W/hsm.pin" "$ETC/$HSM_DEVICE.pin"; sudo install -m 0600 -o root -g root "$W/yk.pin" "$ETC/$YK_DEVICE.pin"; rm -f "$W/hsm.pin" "$W/yk.pin"
 
 # ---- the unit: the shipped file, the shipped drop-in, and the test's three lines --------------------------
@@ -234,10 +254,11 @@ hdr "1  without a polkit rule, the service user cannot reach pcscd"
 STARTED="$(date '+%F %T')"
 sudo systemctl start "$SVC"; code="$(wait_ready 25)"
 status="$(sign "$HSM_OBJECT" "e2e-nonce-$(openssl rand -hex 12)")"; status_yk="$(sign "$YK_OBJECT" "e2e-nonce-$(openssl rand -hex 12)")"
-if [ "$status" != 200 ] && [ "$status_yk" != 200 ]; then
-  P "no key is served (ready: HTTP ${code:-none}; unit $(systemctl is-active "$SVC"); sign HSM $status, YubiKey $status_yk)"
+refused="$(sudo journalctl -u pcscd --no-pager --since "$STARTED" 2>/dev/null | grep -c "user: $(id -u regalia-kms)) is NOT authorized")"
+if [ "$status" != 200 ] && [ "$status_yk" != 200 ] && [ "$refused" -ge 1 ]; then
+  P "no key is served (ready: HTTP ${code:-none}; sign HSM $status, YubiKey $status_yk), and pcscd logged that polkit did not authorize regalia-kms ($refused time(s))"
 else
-  F "a key was served with no polkit rule (HSM $status, YubiKey $status_yk): pcscd does not ask polkit here, and the rule is not what gives access"
+  F "with no polkit rule: HSM $status, YubiKey $status_yk, pcscd refusals of regalia-kms logged: $refused (both must be refused, and pcscd must say why)"
 fi
 echo "  what the daemon said:"; journal 8 | sed 's/^/    /'
 sudo systemctl stop "$SVC"
@@ -246,8 +267,8 @@ hdr "2  with the shipped rule's grant, systemd starts the shipped unit"
 [ -f "$SHIPPED_RULE" ] || die "the shipped polkit rule $SHIPPED_RULE is missing"
 # The shipped rule also REFUSES every other user. On a bench that would cut this user's own tools off
 # pcscd, so the grant alone is installed here; the rule as shipped is step 6.
-sed 's/^var ONLY_THE_KMS = true;$/var ONLY_THE_KMS = false;/' "$SHIPPED_RULE" > "$W/grant.rules"
-cmp -s "$SHIPPED_RULE" "$W/grant.rules" && die "the shipped rule has no 'var ONLY_THE_KMS = true;' line to switch"
+sed 's/^    var ONLY_THE_KMS = true;$/    var ONLY_THE_KMS = false;/' "$SHIPPED_RULE" > "$W/grant.rules"
+cmp -s "$SHIPPED_RULE" "$W/grant.rules" && die "the shipped rule has no '    var ONLY_THE_KMS = true;' line to switch"
 sudo install -m 0644 -o root -g root "$W/grant.rules" "$RULE"; sleep 2
 STARTED="$(date '+%F %T')"
 sudo systemctl start "$SVC"; rc=$?
@@ -285,7 +306,8 @@ for name in kms_service_unprivileged kms_service_sandboxed kms_capabilities_mini
 done
 nnp="$(awk '/^NoNewPrivs:/{print $2}' "/proc/$pid/status")"; seccomp="$(awk '/^Seccomp:/{print $2}' "/proc/$pid/status")"
 [ "$nnp" = 1 ] && [ "$seccomp" = 2 ] && P "the kernel reports NoNewPrivs 1 and a seccomp filter (2) for pid $pid" || F "NoNewPrivs $nnp, Seccomp $seccomp"
-IFS=$'\t' read -r value why < <(probe pcscd_clients); echo "  pcscd clients right now: ${value:-?}: ${why:-}"
+IFS=$'\t' read -r value why < <(probe pcscd_clients)
+[ "${value:-}" = true ] && P "pcscd's clients: $why" || F "pcscd's clients: ${value:-not measured}: ${why:-}"
 IFS=$'\t' read -r value why < <(probe kms_apparmor_enforced)
 if [ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" = Y ]; then
   [ "${value:-}" = true ] && P "kms_apparmor_enforced: $why" || F "kms_apparmor_enforced is ${value:-not measured}: ${why:-}"
@@ -306,7 +328,7 @@ for _ in $(seq 1 45); do
   [ "$said" -ge 1 ] && break; sleep 1
 done
 code="$(ready)"; result="$(systemctl show "$SVC" -p Result --value)"
-[ "$code" != 200 ] && [ "$said" -ge 1 ] && P "the daemon stopped itself (unit result: $result; ready: HTTP ${code:-none}), and the journal names ignored_readers and the shipped file" \
+[ "$code" != 200 ] && [ "$said" -ge 1 ] && [ "$result" = exit-code ] && P "the daemon stopped itself (unit result: $result; ready: HTTP ${code:-none}), and the journal names ignored_readers and the shipped file" \
   || { F "with no opensc.conf: ready HTTP ${code:-none}, $said journal line(s) naming the setting"; journal 10; }
 sudo systemctl stop "$SVC" 2>/dev/null; sudo systemctl reset-failed "$SVC" 2>/dev/null
 sudo mv "$ETC/opensc.conf.aside" "$ETC/opensc.conf"
@@ -317,13 +339,16 @@ STARTED="$(date '+%F %T')"
 sudo systemctl start "$SVC"; code="$(wait_ready 60)"
 [ "$code" = 200 ] && P "the daemon is ready under the shipped rule" || { F "not ready under the shipped rule (HTTP ${code:-none})"; journal; }
 sign_both "under the shipped rule"
-# Another user, with no session: nobody, in a transient unit. (This user cannot stand in for "another
-# user" on a Qubes machine: Qubes ships a polkit rule that allows its qubes group everything, ahead of
-# any other rule. Whether the refusal also holds against a user WITH an active console session is
-# therefore not measured here.)
-seen="$(sudo systemd-run --quiet --wait --pipe --collect -p User=nobody -E OPENSC_CONF="$IGNORE" \
-  pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | grep -c "$HSM_SERIAL")"
-[ "$seen" = 0 ] && P "another user (nobody, in a unit of its own) is refused by pcscd: it sees no token" || F "another user (nobody) sees the HSM through pcscd ($seen)"
+# Another user, in a transient unit, against the KMS user in the same kind of unit as the positive
+# control: same tool, same pcscd, only the user differs. What this does NOT show is the rule's own NO:
+# a user with no session is refused by Debian's default policy as well. The refusal of a user WITH an
+# active console session is not measured on this bench (see below).
+seen_as(){ sudo systemd-run --quiet --wait --pipe --collect -p User="$1" -E OPENSC_CONF="$IGNORE" \
+  pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | grep -c "$HSM_SERIAL"; }
+kms_sees="$(seen_as regalia-kms)"; nobody_sees="$(seen_as nobody)"
+[ "$kms_sees" -ge 1 ] && [ "$nobody_sees" = 0 ] \
+  && P "regalia-kms in a unit of its own sees the HSM, and nobody in the same kind of unit does not" \
+  || F "positive control and refusal: regalia-kms sees the HSM $kms_sees time(s), nobody $nobody_sees"
 mine="$(OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | grep -c "$HSM_SERIAL")"
 if id -nG | tr ' ' '\n' | grep -qx qubes; then
   echo "  (this user, $(id -un), is in the qubes group, which a Qubes polkit rule allows everything: it sees $mine line(s) for the HSM, and that says nothing about the shipped rule)"
@@ -336,13 +361,13 @@ from deploy.baremetal import os_probe
 ok, why = os_probe.PROBES["kms_pcscd_access_rule"](os_probe.Host())
 print("%s\t%s" % ("true" if ok else "false", why))')
 if sudo sh -c 'ls /etc/polkit-1/rules.d/ /usr/share/polkit-1/rules.d/ 2>/dev/null' | grep -q qubes; then
-  [ "${value:-}" = false ] && grep -q "grants without looking at the action" <<< "$why" \
+  [ "${value:-}" = false ] && grep -q "grants without naming the action" <<< "$why" \
     && P "kms_pcscd_access_rule is false here, for the right reason: $why" || F "kms_pcscd_access_rule is ${value:-not measured} beside Qubes' allow-everything rule: ${why:-}"
 else
   [ "${value:-}" = true ] && P "kms_pcscd_access_rule: $why" || F "kms_pcscd_access_rule is ${value:-not measured}: ${why:-}"
 fi
 sudo systemctl stop "$SVC"
-# back to the grant alone, so that the cleanup's own token calls (deleting the key) are not refused
+# no rule at all again, so that the cleanup's own token calls (deleting the key) are not refused
 sudo rm -f "$RULE"; sleep 2
 
 echo; echo "kms-two-token-systemd: $pass passed, $fail failed"
