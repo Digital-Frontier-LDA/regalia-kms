@@ -354,7 +354,8 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 - **The peer** (`deploy/baremetal/unlock.py`, on a booted host): the host sends a fresh TPM quote for
   this boot; the peer decides with `replacement.may_unlock`, and answers with its half encrypted to
   this boot's one-time key and signed by its own TPM. A captured exchange is useless in another boot.
-- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary; `unlock.py` also holds a
+- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary that talks to the TPM through
+  `go-tpm`, the standard Go library for it; `unlock.py` also holds a
   reference client that the tests use and that is not shipped). It holds no manifest and makes no
   membership decision. It runs no other program and writes no file:
   - systemd unseals the local half with the TPM and passes it as the unit's credential
