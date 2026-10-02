@@ -191,3 +191,41 @@ Tool references: [tpm2_quote](https://tpm2-tools.readthedocs.io/en/latest/man/tp
 and [cryptsetup source/documentation](https://gitlab.com/cryptsetup/cryptsetup).
 Response primitives: [RSA-OAEP](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/rsa/)
 and [Ed25519](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ed25519/).
+
+
+## Bounded extended runs
+
+```sh
+python3 -m lab.bootstrap.soak --rounds 2 --steps 128 --seed 20261002 \
+  --output lab/bootstrap/.artifacts/soak
+```
+
+The controller requires 1–8 rounds and 13–256 faults per round, with a two-hour
+maximum per round. It preserves each schedule/report/log separately and checks
+complete fault coverage, every assertion and cleanup. Reports cannot be replaced
+by an earlier passing run. Each round has its own random Compose project and
+report path; timeout cleanup is confined to that project. Runs still reserve the
+laboratory subnet and must be serialized on a Docker daemon. The manual
+`Bounded cluster soak` workflow runs the same controller with pinned actions.
+
+Longer runs exposed `TPM_RC_LOCKOUT` after unorderly software-TPM starts. The
+default PIN-less AK was DA-protected. The revised lab AK remains restricted,
+fixed to its TPM/parent under TPM object rules; its explicit template adds `noDA`.
+Software-TPM state remains copyable and supplies no physical possession guarantee.
+Policy-only sealed contributions also use `noDA`, with `userwithauth` absent.
+Actual enrolled attributes are read back and checked. TPM commands and restarts
+are serialized, and diagnostic reports contain tool names/status codes only.
+
+`lab/bootstrap/tpm_soak.py` performs 100 concurrent quote/replay checks, PCR
+refusals, unorderly restarts and two contribution checks. It deliberately locks
+the disposable DA-protected storage parent and proves bootstrap still works
+while that parent continues to refuse. No global DA budget, recovery interval
+or lockout state is cleared or relaxed. Empty-password bypass remains refused.
+CI repeats this experiment inside an isolated container. No real TPM or PIN
+protected key is touched; physical firmware/object-policy qualification remains
+required.
+
+See [runtime mTLS evidence](RUNTIME-MTLS.md) for the separate external gateway
+experiment using the actual Go authentication middleware.
+
+See [extended soak evidence](SOAK-VALIDATION.md) for the completed 256-fault run.

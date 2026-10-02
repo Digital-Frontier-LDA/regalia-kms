@@ -258,3 +258,54 @@ and compiler caches on one Linux host with Go 1.26.6. Both binaries are identica
 at `745d8445f3c9e5b6c3f62daccf4449eb75cf34b0d020894eef82c26096523c4f`.
 That repeatability test uses its own build parameters; this hash is not the
 appliance executable hash above. All 64 image verification tests pass locally.
+
+
+## Authenticated package snapshot and fresh exact scan — 2026-10-02
+
+[CI run 37056356186](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37056356186)
+built and normally booted a fresh appliance from authenticated Debian package
+snapshots at `20261002T000000Z`. Actual source is synthetic merge
+`31358c6d86428570d147eb7fcf57345f30b2d733`. The enforcing-daemon checks passed;
+normal UEFI startup took 10.82 seconds with no verification rerun. Every one of
+274 installed package/version pairs was found in the authenticated snapshot
+indexes. This is version-membership evidence, not independent file integrity.
+
+The same job scanned the exact final exported root filesystem with authenticated
+Syft/Grype tools, retaining SBOM, findings and Debian triage. It remains **blocked**:
+38 Critical + 258 High matches. No waiver, release signature or publication was
+issued. Earlier fresh build/boot success does not override this scan verdict.
+
+| Artifact | SHA-256 |
+|---|---|
+| Disk (runner claim) | `d55c7a7a692aa2532c2d19035727e2381d7bfa3f1cfd2cefe673073578031463` |
+| Root filesystem export (runner claim) | `b8084aa6c9f7ad54830491df5d10b62eafca653269b135970263e71362fbb932` |
+| Executable (runner claim) | `82a416be0015f5c367a18bd08111f049a41bea7e2f54ff6062572164d5e24d8c` |
+| Package inventory | `dedb5d503ea9c51ed22e413d8652e4ac8171c708eb20abfa13364f7ce218b2ab` |
+| Build report | `7e806042794e10198e249b54f30eabbf8bb2cb3cda5d63cc41cd33099055236c` |
+| Normal boot log | `13480c74d2614b710942f9d4d4a210731912a3243885551e2cf0ecb1efb6dc07` |
+| Scan report | `190e116375c666225cd0991430405fbe81ab64a6f74e675ebc249d2619ec8602` |
+
+Public reports/logs were downloaded and their hashes checked locally under
+`lab/appliance/.artifacts/ci-4d97bee/`. Images/rootfs/binaries are not uploaded;
+their hashes remain CI build claims. Snapshot verification pins exact Debian 13
+primary fingerprints, validates signed Release identity/date/expiry and compressed
+index hashes, and maps final installed versions to those indexes. No rolling
+repository fallback or signature/expiry bypass is configured. The security
+Release expires **2026-10-08 18:36:23 UTC**; refresh the reviewed policy/bundle
+before expiry. The recipe remains an uncommissioned, unencrypted reusable template
+without node keys; physical TPM/LUKS/HSM commissioning is separate.
+
+### Separate ephemeral runner comparison
+
+[CI run 37055124230](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37055124230)
+compared binaries built on two distinct Linux runner boots with private source,
+module and compiler caches. Exact executable bytes matched at
+`1e74f22536d47956f7d1046ec88e96f2596887d3337d896678f43a1a78ee1ff7`
+(12,117,384 bytes), source `6bc1a4f777dbb636ca646f509aeb26928dd4ce1e`.
+Runner boot identifiers were `1c549c3a-7f0a-40a2-bf4a-f1235cf3a910` and
+`64320d57-a1c5-42ad-8205-a6d50355b17f`. Retained comparison:
+`lab/appliance/.artifacts/ci-5594a00-independent/independent-comparison.json`.
+Both builders use the same CI provider/toolchain trust; this proves binary
+repeatability across runners, not independent trust authorities or disk-image
+reproducibility. This binary comparison has its own fixed flags and is not the
+appliance executable listed above.

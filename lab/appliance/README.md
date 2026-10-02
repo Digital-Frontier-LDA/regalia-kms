@@ -40,15 +40,34 @@ The QEMU binary, build host and repository policy are trusted build infrastructu
 From the repository root:
 
 ```sh
-python3 -m lab.appliance.build --media deploy/images/.artifacts/debian-13.7.0-amd64
+mkdir -p deploy/images/.artifacts
+python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+python3 -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
+python3 -m lab.appliance.build --media deploy/images/.artifacts/debian
 ```
 
 The builder requires QEMU x86, xorriso, cpio, gzip, GnuPG and Python 3.11+.
 `preseed.cfg`, `finish.sh` and `acceptance.sh` are the guest build/verification
 inputs; `build.py` is the host orchestrator. Artifacts go under ignored `.artifacts/`.
 Python verification uses unittest and real external signing tools where available.
-Build inputs are frozen before guest launch. Package repositories
-are authenticated but not snapshot-pinned; disk reproducibility is not yet claimed.
+Build inputs are frozen before guest launch. The installer uses the reviewed
+Debian and security snapshot timestamp from `package-snapshot-policy.json`, and
+the builder checks every final installed package version against those signed
+indexes. Disk reproducibility is not yet claimed.
+
+Snapshot capture requires the exact Debian 13 archive/security primary
+fingerprints, valid clear signatures, matching SHA-256 package indexes and a
+recent policy timestamp. Security Release expiry stays enabled; after expiry,
+review and capture a newer snapshot. There is no automatic rolling-mirror
+fallback or historical-expiry bypass. HTTP during Debian installation retains
+APT signature, package hash and expiry checks; host capture uses HTTPS.
+The authenticated ISO remains a separate fixed input.
+
+Independent CI jobs build the same exact Git archive on two Linux runner
+instances with separate source/module/compiler caches. The comparison checks
+distinct boot IDs, equal source/toolchain inputs and identical executable bytes.
+Both runners belong to the same CI provider; this is repeatability evidence, not
+independent builder trust or a reproducible full disk.
 
 ## Security Findings
 
