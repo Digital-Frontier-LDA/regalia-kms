@@ -40,7 +40,7 @@ from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
 
-MAX_ENVELOPES = membership.HighWater.MAX_JUMP   # more than the epoch anchor would accept in one step is an anomaly
+MAX_ENVELOPES = 1000   # per message: a node further behind catches up in several exchanges
 NOT_ENROLLED = {"epoch": 0, "manifest_digest": ""}
 
 
@@ -79,18 +79,21 @@ def compare(store, theirs):
     return "same" if theirs["epoch"] == mine["epoch"] else "ahead"
 
 
-def missing(store, theirs):
-    """The envelopes a peer with summary `theirs` lacks, in order. Refused on a CONFLICT."""
+def missing(store, theirs, limit=MAX_ENVELOPES):
+    """The envelopes a peer with summary `theirs` lacks, in order, at most `limit` of them: a peer further
+    behind than that asks again from where it then stands. Refused on a CONFLICT."""
+    require(isinstance(limit, int) and not isinstance(limit, bool) and 1 <= limit <= MAX_ENVELOPES, "limit must be 1 to %d" % MAX_ENVELOPES)
     standing = compare(store, theirs)
     require(standing != "behind", "this node is behind the peer (epoch %d): it has nothing to offer it" % theirs["epoch"])
-    return store.envelopes(theirs["epoch"])
+    return store.envelopes(theirs["epoch"])[:limit]
 
 
 def catch_up(store, envelopes):
-    """Apply envelopes received from a peer or the authority, in order, through the store. An envelope this
-    node already holds is skipped if it is the same manifest and is a CONFLICT if it is not. Each accepted
-    manifest is durable and anchored before the next is looked at, so a refusal part-way leaves the node
-    at the last good epoch. Returns the summary afterwards."""
+    """Apply envelopes received from a peer or the authority, in order, through the store. An envelope for
+    an epoch this node already holds is verified like any other (its signature, against the manifest
+    before it) and must then be the same manifest; a different one is a CONFLICT. Each accepted manifest
+    is durable and anchored before the next is looked at, so a refusal part-way leaves the node at the
+    last good epoch. Returns the summary afterwards."""
     require(isinstance(envelopes, list) and len(envelopes) <= MAX_ENVELOPES, "at most %d envelopes at a time" % MAX_ENVELOPES)
     current = store.load()
     for envelope in envelopes:
@@ -98,35 +101,47 @@ def catch_up(store, envelopes):
         epoch = envelope["manifest"].get("epoch")
         held = current["epoch"] if current else 0
         if isinstance(epoch, int) and not isinstance(epoch, bool) and 1 <= epoch <= held:
-            require(membership.digest(envelope["manifest"]) == membership.digest(store.envelopes(epoch - 1)[0]["manifest"]),
+            around = store.envelopes(max(epoch - 2, 0))          # the manifest before it (if any), and the one held at that epoch
+            before, mine = (None, around[0]) if epoch == 1 else (around[0]["manifest"], around[1])
+            received = membership.verify_envelope(envelope, store.root_key, before)[0]   # authentic, whoever resent it
+            require(membership.digest(received) == membership.digest(mine["manifest"]),
                     "CONFLICT: a different manifest at epoch %d: two manifests were signed for one epoch; record an incident" % epoch)
             continue
         current = store.commit(envelope)
     return summary(store)
 
 
-def bundle(store, theirs, heartbeat_envelope):
-    """What the authority, or a peer passing it on, sends a node with summary `theirs`."""
-    return {"envelopes": missing(store, theirs), "heartbeat": heartbeat_envelope}
+def bundle(store, theirs, heartbeat_envelope, limit=MAX_ENVELOPES):
+    """What the authority, or a peer passing it on, sends a node with summary `theirs`: up to `limit`
+    envelopes, and the heartbeat only if they bring the node to this store's current manifest (a heartbeat
+    is for one manifest; a node still on the way gets None and asks again)."""
+    envelopes = missing(store, theirs, limit)
+    reaches_tip = theirs["epoch"] + len(envelopes) == summary(store)["epoch"]
+    return {"envelopes": envelopes, "heartbeat": heartbeat_envelope if reaches_tip else None}
 
 
 def apply_bundle(store, freshness, received):
     """Manifests first, then the heartbeat for the manifest this node now holds. Returns (summary, seconds
-    of freshness). A heartbeat for an epoch the bundle did not bring is refused by Freshness.accept."""
+    of freshness), or (summary, None) for a bundle without a heartbeat (the node is still catching up:
+    it asks again). A heartbeat for an epoch the bundle did not bring is refused by Freshness.accept."""
     membership.exact(received, ("envelopes", "heartbeat"), "bundle")
     now_at = catch_up(store, received["envelopes"])
+    if received["heartbeat"] is None:
+        return now_at, None
     require(now_at["epoch"] >= 1, "a heartbeat cannot be taken before the first manifest")
     return now_at, freshness.accept(received["heartbeat"], store.load())
 
 
 def exposure(store, freshness, running=False):
-    """For how many more seconds this peer would go on helping a node its manifest still trusts, if it heard
-    nothing from now on: the life left in its heartbeat, plus one lease lifetime for a node that is
-    already running. 0 when it has already stopped."""
+    """For how many more seconds a node this peer's manifest still trusts could go on being helped by it, if
+    the peer heard nothing from now on: the life left in its heartbeat (0 once it issues nothing more).
+    For a node that is already `running`, one lease lifetime is added, ALWAYS: a lease this peer issued a
+    moment before it stopped is still good for up to that long, whatever the peer holds now. An upper
+    bound, not a measurement of any one lease."""
     try:
         left = freshness.check(store.load())
     except Refused:
-        return 0
+        left = 0
     return left + (lease.MAX_LIFETIME if running else 0)
 
 

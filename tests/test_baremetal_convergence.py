@@ -164,6 +164,16 @@ class Exchange(Case):
         self.assertEqual(b.load()["epoch"], 2)                                             # the good one stays
         unsigned_by_root = rt.sign(self.chain(e3["manifest"], [self.entry("a"), self.entry("b"), self.entry("c")]), hbt.REVOKE, "revocation")
         self.refused("tombstone: a is REVOKED_STOLEN", convergence.catch_up, c, [unsigned_by_root])   # nobody un-revokes through catch-up
+        # an envelope for an epoch already held is authenticated too: the same manifest with a broken or foreign signature is refused
+        for label, reason, change in (("a corrupted signature", "signature does not verify", lambda e: e["signature"].update(sig="00" * 64)),
+                                      ("a stranger's key as root", "names a root key that is not the pinned root", lambda e: e["signature"].update(signer="root", key=hbt.pub(hbt.OTHER))),
+                                      ("an extra field", "envelope fields mismatch", lambda e: e.update(note="x"))):
+            with self.subTest(label):
+                resent = copy.deepcopy(e2)
+                change(resent)
+                self.refused(reason, convergence.catch_up, c, [resent])
+        self.refused("signature does not verify", convergence.catch_up, c, [dict(self.e1, signature=dict(self.e1["signature"], sig="11" * 64))])
+        self.assertEqual(convergence.summary(c)["epoch"], 3)
         for label, reason, bad in (("not a list", "at most 1000 envelopes at a time", e2), ("too many", "at most 1000 envelopes at a time", [e2] * 1001),
                                    ("not an envelope", "an envelope must hold a manifest", ["x"]), ("no manifest", "an envelope must hold a manifest", [{"signature": {}}])):
             with self.subTest(label):
@@ -186,13 +196,32 @@ class Exchange(Case):
         self.refused("bundle fields mismatch", convergence.apply_bundle, b, fresh, {"envelopes": []})
         self.refused("a heartbeat cannot be taken before the first manifest", convergence.apply_bundle, self.store("new"), fresh, {"envelopes": [], "heartbeat": alone})
 
+    def test_a_node_far_behind_catches_up_in_chunks_and_gets_the_heartbeat_with_the_last(self):
+        authority, c, fresh = self.stores["authority"], self.stores["c"], self.peers["c"]["freshness"]
+        previous = self.m1
+        for state in ("DRAINING", "QUARANTINED", "RETIRED", "REVOKED_STOLEN"):      # epochs 2 to 5
+            previous = self.revoke(previous, state)["manifest"]
+        beat = self.heartbeat(previous)
+        self.assertEqual(len(convergence.missing(authority, convergence.summary(c))), 4)
+        self.assertEqual([e["manifest"]["epoch"] for e in convergence.missing(authority, convergence.summary(c), limit=3)], [2, 3, 4])
+        rounds = []
+        while convergence.compare(c, convergence.summary(authority)) == "behind":
+            sent = convergence.bundle(authority, convergence.summary(c), beat, limit=3)
+            now_at, left = convergence.apply_bundle(c, fresh, sent)
+            rounds.append((len(sent["envelopes"]), sent["heartbeat"] is not None, now_at["epoch"], left))
+        self.assertEqual(rounds, [(3, False, 4, None), (1, True, 5, hb.MAX_LIFETIME)])
+        self.assertEqual(fresh.check(c.load()), hb.MAX_LIFETIME)
+        for bad in (0, 1001, True, "3"):
+            with self.subTest(limit=bad):
+                self.refused("limit must be 1 to 1000", convergence.missing, authority, convergence.summary(c), bad)
+
     def test_exposure_is_the_life_left_in_the_heartbeat(self):
         c, fresh = self.stores["c"], self.peers["c"]["freshness"]
         self.assertEqual(convergence.exposure(c, fresh), hb.MAX_LIFETIME - 60)
         self.assertEqual(convergence.exposure(c, fresh, running=True), hb.MAX_LIFETIME - 60 + lease.MAX_LIFETIME)
         self.later(hb.MAX_LIFETIME)
         self.assertEqual(convergence.exposure(c, fresh), 0)
-        self.assertEqual(convergence.exposure(c, fresh, running=True), 0)
+        self.assertEqual(convergence.exposure(c, fresh, running=True), lease.MAX_LIFETIME)   # a lease it issued just before is still out
         self.assertEqual(convergence.exposure(self.stores["authority"], self.peer("b", "-none")["freshness"]), 0)   # no heartbeat at all
 
     def test_every_decision_leaves_one_event_naming_the_epoch(self):
@@ -289,6 +318,9 @@ class Theft(Case):
         self.assertEqual((c.load()["epoch"], c.hw.value()), (3, 3))
         self.assertEqual(exchange(c, b), "same")
         self.assertEqual(exchange(b, c), "same")
+        # c issues nothing now, but the lease it gave a before catching up is still out: the bound says so
+        self.assertEqual(convergence.exposure(c, self.peers["c"]["freshness"]), 0)
+        self.assertEqual(convergence.exposure(c, self.peers["c"]["freshness"], running=True), lease.MAX_LIFETIME)
         # with the manifest: refused at once, although c holds no heartbeat for epoch 3 yet
         self.refused("a may not be unlocked under epoch 3", self.unlock, "c")
         self.refused("a may not serve under epoch 3", self.holder.check, c.load())
@@ -345,7 +377,7 @@ class OnSwtpm(unittest.TestCase):
             self.stores[name] = m.Store("%s/%s-membership.json" % (self.d, name), ROOT, anchor)
             counter = hb.Counter("0x1500018", tcti=tcti, lock_path="%s/%s-seq.lock" % (self.d, name))
             counter.define()
-            self.fresh[name] = hb.Freshness(counter, clock, hb.TpmClock(tcti=tcti), "%s/%s-freshness.json" % (self.d, name))
+            self.fresh[name] = hb.Freshness(counter, clock, hbt.simulated_ticks(self, tcti), "%s/%s-freshness.json" % (self.d, name))
 
     def manifest(self, previous=None, **states):
         return {"schema": m.SCHEMA, "epoch": previous["epoch"] + 1 if previous else 1, "prev_digest": m.digest(previous) if previous else "",
