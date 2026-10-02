@@ -47,7 +47,10 @@ Commissioning has two halves:
     passes only when the unlock can retire an image: a peer's contribution (#67: `regalia-peer-unlock`
     tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
     peer that holds a path, and a crypttab entry whose key file is the unlock client's socket,
-    `/run/regalia-unlock/key.sock`, with no `tpm2-device`, `fido2-device` or `pkcs11-uri` option; the enrolment exists in
+    `/run/regalia-unlock/key.sock`, with only options known to leave the unlock alone (`luks`, `x-initrd.attach`,
+    `discard`, `tries=`, `timeout=`, …: no `header=`, no `headless`, no other token device) and no `rd.luks.*` on the
+    kernel command line. The probe reads `/etc/crypttab`, which is what the initrd was built from, not necessarily
+    what the initrd holds: rebuild the initrd after every edit. The enrolment exists in
     `deploy/baremetal/unlock.py`, its boot-time client
     does not yet), or an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
