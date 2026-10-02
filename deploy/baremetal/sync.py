@@ -170,6 +170,25 @@ def _refusal(reason):
     return membership.canonical({"v": VERSION, "ok": False, "refused": convergence._printable(reason)})
 
 
+class _View:
+    """One request's view of the node's store: the chain is read and verified ONCE, and every decision of
+    the request is made on that one reading. Without it a pull verified the chain six times over (the
+    summary, the comparison, the bundle, each reading the store again), and could have compared against
+    one manifest and bundled from the next."""
+
+    def __init__(self, store):
+        self._store, self._envelopes = store, None
+
+    def envelopes(self, after_epoch=0):
+        if self._envelopes is None:
+            self._envelopes = self._store.envelopes(0)
+        return self._envelopes[after_epoch:]        # epochs run from 1 with no gap: the store's own rule
+
+    def load(self):
+        chain = self.envelopes(0)
+        return chain[-1]["manifest"] if chain else None
+
+
 class Server:
     """One node's answering side. `store`, `freshness`, `attester` and `signer` are the node's own
     membership.Store, heartbeat.Freshness (anything with held() will do for a source that issues no leases),
@@ -235,7 +254,8 @@ class Server:
 
     def _decide(self, raw, source, known):
         self.buckets.take(convergence._printable(source), "address")       # before the disk and the TPM are touched for anybody
-        manifest = known["manifest"] = self.store.load()
+        view = _View(self.store)
+        manifest = known["manifest"] = view.load()
         require(manifest is not None, "this node holds no manifest")
         key = self.identify(manifest, source)
         caller = known["caller"] = pinned(manifest, key)["node_id"]      # recorded by name even if it is then refused
@@ -251,29 +271,29 @@ class Server:
         require(isinstance(op, str) and op in REQUEST_FIELDS, "unknown operation")
         known["kind"] = "sync-" + op
         membership.exact(message, REQUEST_FIELDS[op], op)
-        answer = getattr(self, "_" + op.replace("-", "_"))(manifest, caller, message)
+        answer = getattr(self, "_" + op.replace("-", "_"))(view, manifest, caller, message)
         encoded = membership.canonical(dict({"v": VERSION, "ok": True}, **answer))
         require(len(encoded) <= MAX_ANSWER, "the answer would exceed %d bytes" % MAX_ANSWER)
         return encoded
 
     # ---- the operations ----
 
-    def _pull(self, manifest, caller, message):
+    def _pull(self, view, manifest, caller, message):
         theirs, sequence = convergence.validate_summary(message["summary"]), message["sequence"]
         require(isinstance(sequence, int) and not isinstance(sequence, bool) and 0 <= sequence < 2 ** 63, "sequence must be an integer >= 0")
-        mine = convergence.summary(self.store)
+        mine = convergence.summary(view)
         try:
-            standing = convergence.compare(self.store, theirs)
+            standing = convergence.compare(view, theirs)
         except Refused:
             # The caller says it holds ANOTHER manifest at its epoch. A summary is unsigned: this proves
             # nothing, and is no incident here. It gets this node's chain from that epoch on; if it really
             # holds another signed manifest there, its own catch-up proves the conflict and records it.
-            return {"summary": mine, "bundle": self._fit(lambda limit: {"envelopes": self.store.envelopes(theirs["epoch"] - 1)[:limit],
+            return {"summary": mine, "bundle": self._fit(lambda limit: {"envelopes": view.envelopes(theirs["epoch"] - 1)[:limit],
                                                                          "heartbeat": None})}
         if standing == "behind":
             return {"summary": mine, "bundle": {"envelopes": [], "heartbeat": None}}
         held = self._passable(manifest, sequence)
-        return {"summary": mine, "bundle": self._fit(lambda limit: convergence.bundle(self.store, theirs, held, limit))}
+        return {"summary": mine, "bundle": self._fit(lambda limit: convergence.bundle(view, theirs, held, limit))}
 
     def _passable(self, manifest, sequence):
         """The heartbeat this node holds, if it is worth passing on: for the manifest held here, newer than
@@ -298,13 +318,13 @@ class Server:
                 return bundle
             limit //= 2
 
-    def _lease_nonce(self, manifest, caller, message):
+    def _lease_nonce(self, view, manifest, caller, message):
         require(self.attester is not None, "this source issues no leases")
         require(message["node_id"] == caller, "the request names %s; the tunnel is %s's" % (convergence._printable(message["node_id"]), caller))
         self.buckets.take(caller, "lease")
         return {"nonce": self.attester.nonce(caller).hex()}
 
-    def _lease(self, manifest, caller, message):
+    def _lease(self, view, manifest, caller, message):
         require(self.attester is not None, "this source issues no leases")
         request, evidence = message["request"], message["evidence"]
         require(isinstance(request, dict) and isinstance(evidence, dict), "request and evidence are objects")

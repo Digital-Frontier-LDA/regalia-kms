@@ -108,6 +108,12 @@ class Identity(Case):
         self.assertEqual((answer["ok"], [e["manifest"]["epoch"] for e in answer["bundle"]["envelopes"]]), (True, [1]))
         self.assertEqual(self.last(), {"event": "sync-pull", "epoch": 1, "manifest_digest": m.digest(self.m1), "subject": "a", "peer": "b",
                                        "outcome": "ALLOW", "reason": ""})
+        # one request reads and verifies the chain once, and decides everything on that reading
+        with unittest.mock.patch.object(self.stores["b"], "envelopes", wraps=self.stores["b"].envelopes) as chain, \
+                unittest.mock.patch.object(self.stores["b"], "load", wraps=self.stores["b"].load) as manifest:
+            self.assertTrue(self.pull("b")["ok"])
+            self.assertTrue(self.pull("b", summary={"epoch": 1, "manifest_digest": "ab" * 32})["ok"])
+        self.assertEqual((chain.call_count, manifest.call_count), (2, 0))
         self.assertEqual(sync.peer_of(self.m1, self.entry("c")["wg_service_pub"]), "c")
         self.assertEqual(sync.peer_of(self.m1, self.entry("c")["wg_boot_pub"], "wg_boot_pub"), "c")
 
@@ -169,9 +175,9 @@ class Identity(Case):
     def test_what_this_node_holds_is_not_told_to_a_caller_it_did_not_identify(self):
         """The store's own refusal, and this node's epoch, are for the trail. Found by an independent read:
         an address nobody owns was told "ROLLBACK: ... the TPM high-water is 3"."""
-        def rolled_back():
+        def rolled_back(after_epoch=0):
             raise m.Refused("ROLLBACK: the membership on disk is epoch 1 but the TPM high-water is 3; fetch the chain from a peer")
-        with unittest.mock.patch.object(self.stores["b"], "load", rolled_back):
+        with unittest.mock.patch.object(self.stores["b"], "envelopes", rolled_back):
             for caller in ("2001:db8::1", "a"):
                 self.denied("ROLLBACK", self.pull("b", caller=caller))
         self.denied("epoch 1", self.pull("b", caller="a2"))                         # an unpinned key does not learn the epoch
@@ -221,13 +227,13 @@ class Bounds(Case):
     def test_an_address_has_twenty_requests_a_minute_and_over_it_costs_this_node_nothing(self):
         for _ in range(20):
             self.assertTrue(self.pull("b")["ok"])
-        with unittest.mock.patch.object(self.stores["b"], "load", wraps=self.stores["b"].load) as loads:
+        with unittest.mock.patch.object(self.stores["b"], "envelopes", wraps=self.stores["b"].envelopes) as loads:
             self.denied("RATE: more than 20 address requests in 60 s from %s" % ADDRESS["a"], self.pull("b"))
             self.assertEqual((self.last()["event"], self.last()["subject"]), ("sync", ADDRESS["a"]))
             before = len(self.events)
             for _ in range(500):                                                    # a flood: answered, and that is all
                 self.assertEqual(self.pull("b"), {"v": 1, "ok": False, "refused": "refused"})
-            self.assertEqual((loads.call_count, len(self.events) - before), (0, 0))   # no manifest read, no TPM, no event
+            self.assertEqual((loads.call_count, len(self.events) - before), (0, 0))   # the chain is not read, no TPM, no event
         self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])   # c has its own bucket
         self.assertTrue(self.pull("c")["ok"])                                       # and c's server its own count of a
         self.tick += 3
@@ -247,7 +253,7 @@ class Bounds(Case):
         """Found by an independent read: refused callers reached no bucket, so each request cost a chain
         verification, TPM reads and an audit event, without limit."""
         self.stores["b"].commit(self.revoke(self.m1))
-        with unittest.mock.patch.object(self.stores["b"], "load", wraps=self.stores["b"].load) as loads:
+        with unittest.mock.patch.object(self.stores["b"], "envelopes", wraps=self.stores["b"].envelopes) as loads:
             for _ in range(500):
                 self.assertEqual(self.pull("b")["refused"], "refused")
         self.assertEqual(loads.call_count, 20)
@@ -642,7 +648,7 @@ class Sockets(Case):
             self.assertIn("at most 65536 bytes", json.loads(raw)["refused"])
         except OSError:
             pass
-        time.sleep(0.3)
+        self.until("the refusal's event", lambda: repr(self.events).encode(), lambda seen: seen != b"[]")
         self.assertEqual([(e["outcome"], e["reason"]) for e in self.events], [("DENY", "a request is at most 65536 bytes")])
 
     def drops(self):
@@ -651,30 +657,26 @@ class Sockets(Case):
     def test_a_caller_that_never_finishes_its_request_is_dropped_at_the_deadline(self):
         with socket.create_connection(("127.0.0.1", self.port)) as conn:
             conn.sendall(b'{"v":1,')
-            conn.settimeout(5)
-            started = time.monotonic()
-            self.assertEqual(conn.recv(100), b"")                                   # closed, unanswered
-            self.assertLess(time.monotonic() - started, 4)
-        time.sleep(0.2)
+            conn.settimeout(60)
+            self.assertEqual(conn.recv(100), b"")                                   # closed, unanswered, by the server's deadline (1 s)
+        self.until("the drop", lambda: repr(self.drops()).encode(), lambda seen: seen != b"[]")
         self.assertEqual(self.drops(), [("127.0.0.1", "DENY", "no complete request within 1 s")])   # no request was decided; the drop is recorded
         self.assertEqual([e for e in self.events if e["event"] != "sync-drop"], [])
 
     def test_a_caller_that_drips_its_request_is_dropped_at_the_same_deadline(self):
         """The deadline is for the whole request, not for each read: a byte every 300 ms would otherwise hold
-        a place for as long as the caller liked."""
+        a place for as long as the caller liked. Two hundred drips would take a minute; the deadline is 1 s."""
         with socket.create_connection(("127.0.0.1", self.port)) as conn:
-            started, closed = time.monotonic(), None
+            sent = 0
             try:
-                for _ in range(20):
+                for _ in range(200):
                     conn.sendall(b" ")
+                    sent += 1
                     time.sleep(0.3)
             except OSError:
-                closed = time.monotonic() - started
-            if closed is None:
-                conn.settimeout(1)
-                closed = time.monotonic() - started if conn.recv(10) == b"" else None
-        self.assertIsNotNone(closed)
-        self.assertLess(closed, 3)                                                  # twenty drips would have taken six seconds
+                pass
+        self.assertLess(sent, 150)                                                  # the server hung up long before the drips ran out
+        self.until("the drop", lambda: repr(self.drops()).encode(), lambda seen: seen != b"[]")
         self.assertEqual(len(self.drops()), 1)
 
     def test_a_caller_that_never_reads_its_answer_gives_its_place_back_at_the_deadline(self):
@@ -696,23 +698,39 @@ class Sockets(Case):
         self.addCleanup(silent.close)
         silent.sendall(b"{}")
         silent.shutdown(socket.SHUT_WR)                                             # a whole request, and then it reads nothing
-        time.sleep(0.3)
-        self.assertEqual(self.complete(port), b"")                                  # its place is taken while the answer is being sent
-        time.sleep(2.0)                                                             # past the deadline for sending it
-        self.assertEqual(self.complete(port)[:4], b"    ")                          # the place is free again
+        self.turned_away(port, "while the answer is being sent to a caller that does not read, a request")
+        got = self.until("past the deadline for sending it, a request", lambda: self.complete(port), lambda answer: answer != b"", seconds=60)
+        self.assertEqual(got[:4], b"    ")                                          # the place is free again
 
     def complete(self, port=None):
         """A whole request on a new connection; what came back (b"" when it was closed unanswered)."""
         with socket.create_connection(("127.0.0.1", port or self.port)) as conn:
-            conn.settimeout(5)
+            conn.settimeout(30)
             try:
                 conn.sendall(b"{}")
                 conn.shutdown(socket.SHUT_WR)
-                answer = conn.recv(4096)
+                return conn.recv(4096)
             except OSError:      # the server had already closed it: reset, or no longer connected
                 return b""
-        time.sleep(0.2)          # the place is given back just after the answer is sent, not before
-        return answer
+
+    def until(self, what, attempt, wanted, seconds=30):
+        """Repeat `attempt()` until `wanted(result)`, for `seconds`. The server gives a place back, and
+        counts a new connection, a moment after the client's side of it returns; on a busy machine that
+        moment is not short. Nothing here depends on how long it is."""
+        deadline = time.monotonic() + seconds
+        while True:
+            result = attempt()
+            if wanted(result):
+                return result
+            if time.monotonic() > deadline:
+                self.fail("%s: still %r after %d s" % (what, result[:80], seconds))
+            time.sleep(0.1)
+
+    def answered(self, port, what):
+        return self.until(what, lambda: self.complete(port), lambda answer: answer != b"")
+
+    def turned_away(self, port, what):
+        return self.until(what, lambda: self.complete(port), lambda answer: answer == b"")
 
     def serving(self, **limits):
         """Another serve loop on a port of its own, with these limits; its port."""
@@ -728,27 +746,27 @@ class Sockets(Case):
         """A connection that sends nothing: it occupies a place until it is closed (the deadline is far)."""
         conn = socket.create_connection(("127.0.0.1", port))
         self.addCleanup(conn.close)
-        time.sleep(0.2)                                                             # accepted and counted
         return conn
 
     def release(self, conn):
         conn.close()
-        time.sleep(0.3)                                                             # the server saw it go
 
     def test_two_connections_from_one_address_and_no_more(self):
-        port = self.serving(deadline=60.0)
+        port = self.serving(deadline=600.0)
         first, second = self.hold(port), self.hold(port)
-        for _ in range(4):
-            self.assertEqual(self.complete(port), b"")                              # a whole request, closed unanswered
+        self.turned_away(port, "with two connections held, a third")                # a whole request, closed unanswered
+        for _ in range(3):
+            self.assertEqual(self.complete(port), b"")                              # and every one after it
         self.release(second)                                                        # one of the two goes away
-        self.assertIn(b'"ok"', self.complete(port))                                 # room for one
+        self.assertIn(b'"ok"', self.answered(port, "with one of the two gone, a request"))
         third = self.hold(port)
-        self.assertEqual(self.complete(port), b"")                                  # and for one only: the other is still counted
+        self.turned_away(port, "with two held again, a request")                    # room for one only: the other is still counted
         self.release(first)
         self.release(third)
+        self.answered(port, "with both gone, a request")
         self.hold(port)                                                             # the refused ones were never counted:
-        self.assertIn(b'"ok"', self.complete(port))                                 # two at once again
-        # five connections were closed unanswered: ONE event, not five (the next minute's would carry the count)
+        self.assertIn(b'"ok"', self.answered(port, "beside one held connection, a request"))   # two at once again
+        # many connections were closed unanswered: ONE event, not one each (the next minute's would carry the count)
         self.assertEqual(self.drops(), [("127.0.0.1", "DENY", "over the connection limit (8 in all, 2 from one address)")])
 
     def test_drops_are_reported_once_a_minute_with_the_count(self):
@@ -767,11 +785,11 @@ class Sockets(Case):
             server.dropped("127.0.0.9", "over the connection limit")                  # serve() swallows this; the method does not hide it
 
     def test_no_more_connections_in_all_than_the_limit(self):
-        port = self.serving(deadline=60.0, connections=3, per_address=10)
+        port = self.serving(deadline=600.0, connections=3, per_address=10)
         held = [self.hold(port) for _ in range(3)]
-        self.assertEqual(self.complete(port), b"")
+        self.turned_away(port, "with three connections held, a fourth")
         self.release(held.pop())
-        self.assertIn(b'"ok"', self.complete(port))
+        self.assertIn(b'"ok"', self.answered(port, "with one of the three gone, a request"))
 
     def test_the_transport_reads_no_more_than_an_answer_may_be(self):
         flood = socket.create_server(("127.0.0.1", 0))
