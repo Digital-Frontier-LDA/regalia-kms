@@ -32,11 +32,10 @@ import (
 
 const usage = `usage:
   regalia-approve [--config FILE] --pending PENDING --file FILE [--output APPROVAL]
-  regalia-approve [--config FILE] --pending PENDING --unseen   [--output APPROVAL]
+  regalia-approve [--config FILE] --pending PENDING             (a key export: it signs no file)
 --file is the approver's own copy of what is being signed. The pending record is checked to be a
-signature over exactly that file before anything is signed. A key export needs no file.
---unseen approves the record without that check: the file hash it shows is then only what the
-preparer wrote.
+signature over exactly that file, by the pinned key, of the kind and date it states, before
+anything is signed. There is no way to approve a file without holding it.
 --config defaults to $REGALIA_APPROVE_CONFIG. The approval is written to PENDING.approval, or to
 --output; an existing file is never replaced.
 `
@@ -242,24 +241,33 @@ func (signer *tokenSigner) slot(tool, module string) (string, error) {
 	if err != nil {
 		return "", errors.New("the tokens could not be listed")
 	}
+	// THE LISTING IS TEXT THAT TOKENS HELP WRITE: a label or a manufacturer string is the token's own.
+	// One with a line break in it could draw a second "Slot" block, or a second label, inside its
+	// own. So a listing is refused when a slot ID appears twice or a field is repeated within a
+	// block: either can only come from a string that was not one line.
 	var matches []string
-	var id, label, serial string
+	var id string
+	fields := map[string]string{}
+	seen := map[string]bool{}
 	flush := func() {
-		if id != "" && label == signer.device.TokenLabel && serial == signer.device.TokenSerial {
+		if id != "" && fields["token label"] == signer.device.TokenLabel && fields["serial num"] == signer.device.TokenSerial {
 			matches = append(matches, id)
 		}
-		id, label, serial = "", "", ""
+		id, fields = "", map[string]string{}
 	}
 	for _, line := range strings.Split(string(listing), "\n") {
 		if found := slotLine.FindStringSubmatch(line); found != nil {
 			flush()
-			id = found[1]
-		} else if found := fieldLine.FindStringSubmatch(line); found != nil {
-			if found[1] == "token label" {
-				label = strings.TrimSpace(found[2])
-			} else {
-				serial = strings.TrimSpace(found[2])
+			id = strings.ToLower(found[1])
+			if seen[id] {
+				return "", errors.New("the token listing names one slot twice; it is not trusted")
 			}
+			seen[id] = true
+		} else if found := fieldLine.FindStringSubmatch(line); found != nil {
+			if _, repeated := fields[found[1]]; repeated || id == "" {
+				return "", errors.New("the token listing repeats a field within a slot; it is not trusted")
+			}
+			fields[found[1]] = strings.TrimSpace(found[2])
 		}
 	}
 	flush()
@@ -274,7 +282,6 @@ const maxRecordBytes = 64 << 10
 
 type invocation struct {
 	configPath, pending, file, output string
-	unseen                            bool
 }
 
 func parse(args []string) (invocation, error) {
@@ -305,8 +312,6 @@ func parse(args []string) (invocation, error) {
 			result.file, err = take()
 		case name == "--output":
 			result.output, err = take()
-		case args[index] == "--unseen":
-			result.unseen = true
 		default:
 			return result, fmt.Errorf("unknown argument %q", args[index])
 		}
@@ -316,9 +321,6 @@ func parse(args []string) (invocation, error) {
 	}
 	if result.pending == "" {
 		return result, errors.New("--pending is required")
-	}
-	if result.unseen && result.file != "" {
-		return result, errors.New("--file and --unseen exclude each other")
 	}
 	return result, nil
 }
@@ -380,17 +382,17 @@ func approve(cfg config, request invocation, stdin io.Reader, stdout, stderr io.
 		}
 		sum := sha256.Sum256(document)
 		seen = "checked against " + filepath.Base(request.file) + ", sha256 " + hex.EncodeToString(sum[:])
-	case request.unseen:
-		seen = "NOT CHECKED (--unseen). The preparer says: sha256 " + pending.DocumentSHA256
 	default:
-		return errors.New("pass --file with your own copy of what is being signed, or --unseen to approve without checking it")
+		// THERE IS NO APPROVAL WITHOUT THE FILE. The binding carries a digest; everything the record
+		// says about that digest (which file, what kind of signature, what date) is the preparer's
+		// word until this side recomputes it. An approval given on that word would be a signature
+		// over whatever the release key can sign.
+		return errors.New("pass --file with your own copy of what is being signed: nothing is approved unseen")
 	}
-	if pending.Mode == gpgsign.ModeExportKey || request.file != "" {
-		if err := key.Covers(ctx, pending, document); err != nil {
-			return err
-		}
-	} else if pending.Fingerprint != key.Fingerprint() || pending.ObjectID != cfg.ObjectID || pending.Purpose != cfg.Purpose || pending.Environment != cfg.Environment {
-		return errors.New("the pending signature is for another key or target than the one this approver approves for")
+	// Every line printed below is a fact this side established: Covers recomputes the payload from
+	// the approver's file, the pinned key, the record's kind and its date, and compares.
+	if err := key.Covers(ctx, pending, document); err != nil {
+		return err
 	}
 	fmt.Fprintf(stdout, "approving as %s, valid until %s:\n  key          %s\n  object       %s (%s, %s)\n  what         %s, dated %s\n  file         %s\n",
 		cfg.ApproverID, pending.ExpiresAt, pending.Fingerprint, pending.ObjectID, pending.Purpose, pending.Environment, pending.Mode, pending.Created, seen)

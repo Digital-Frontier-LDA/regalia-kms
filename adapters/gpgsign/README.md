@@ -150,8 +150,10 @@ What each step checks:
   byte: a cleartext signature's payload ignores trailing whitespace and the form of line endings
   (RFC 4880, 7.1), so the payload alone would not tell two such files apart. A record for another
   key or target, an expired one, or one that expires more than an hour from now, is refused.
-  `--unseen` approves without the file; the output then says `NOT CHECKED`, and the file hash shown
-  is only what the preparer wrote.
+  **Nothing is approved unseen**: there is no option to approve without the file, because the
+  record's own account of what its digest is (which file, what kind of signature, what date) is only
+  the preparer's word until the approver's side recomputes it. A key export signs no file and is
+  checked against the pinned key and its date.
 - **What a cleartext signature cannot pin.** The file hash is checked by the approver and by
   `--complete`; it is not in the binding the KMS verifies, and it could not usefully be. Whoever
   holds a finished cleartext signature can attach it to any text with the same canonical form, with

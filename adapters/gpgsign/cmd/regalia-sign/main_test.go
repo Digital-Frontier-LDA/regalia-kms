@@ -75,7 +75,10 @@ func (d *deployment) approved(header, objectID, purpose, environment, nonce, exp
 	}
 	for _, approval := range approvals {
 		signature, err := base64.StdEncoding.DecodeString(approval.Signature)
-		if err == nil && approval.ApproverID == releaseApprover && ed25519.Verify(d.approver, binding, signature) {
+		// As internal/approval counts one: the evidence must also carry THIS request's nonce, expiry
+		// and payload digest, not only a signature that verifies.
+		if err == nil && approval.ApproverID == releaseApprover && approval.Nonce == nonce && approval.ExpiresAt == expiresAt &&
+			approval.PayloadDigest == hex.EncodeToString(digest[:]) && ed25519.Verify(d.approver, binding, signature) {
 			return true
 		}
 	}
@@ -900,9 +903,12 @@ func TestAnEmptyPrepareValueNeverReachesTheKMS(t *testing.T) {
 	}
 }
 
-// A cleartext signature verifies over any file with the same canonical text. --complete emits the
-// file it is given, so it must be given the exact file that was prepared and approved.
-func TestCompleteEmitsOnlyTheExactFileThatWasApproved(t *testing.T) {
+// --complete is given the exact file that was prepared, or it refuses. For a cleartext signature
+// this guards the RECORD, not the output: the text that is emitted is the canonical one either way
+// (trailing whitespace and carriage returns are dropped by the framing), so two such files would
+// produce the same document. What the refusal keeps true is that the file hash in the record, which
+// the approver compared with their own copy, is the hash of the file this step was run on.
+func TestCompleteRefusesAFileThatIsNotByteForByteTheOnePrepared(t *testing.T) {
 	d := newDeployment(t)
 	_, approverPrivate, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign"
+	"github.com/Digital-Frontier-LDA/regalia-kms/adapters/gpgsign/internal/protected"
 )
 
 // THE TOKEN IS STOOD IN FOR BY THIS TEST BINARY. regalia-approve reaches a hardware key by running
@@ -58,7 +59,8 @@ func stubTool(behaviour string, args []string) int {
 		}
 	}
 	if record := os.Getenv("REGALIA_APPROVE_TEST_ARGV"); record != "" {
-		_ = os.WriteFile(record, []byte(strings.Join(args, "\n")), 0o600)
+		// The command line, and whether the PIN variable reached this process (its length only).
+		_ = os.WriteFile(record, []byte(strings.Join(args, "\n")+fmt.Sprintf("\nPIN-IN-ENVIRONMENT=%d\n", len(os.Getenv(pinVariable)))), 0o600)
 	}
 	message, err := os.ReadFile(values["--input-file"])
 	if err != nil || values["--mechanism"] != "EDDSA" {
@@ -180,6 +182,11 @@ func (b *bench) useToken(behaviour string) {
 	executable = b.write("pkcs11-tool", contents, 0o755)
 	if err := os.Chmod(executable, 0o755); err != nil {
 		b.t.Fatal(err)
+	}
+	// The tool refuses to run from a directory someone else could write (rightly). If the directory
+	// tests are given is such a place, that is the machine, not the code under test: say so.
+	if _, err := protected.Program(executable); err != nil {
+		b.t.Skipf("the test directory is not one a tool may be run from on this machine: %v", err)
 	}
 	delete(b.config, "key_file")
 	// The module is only named to the stub, never loaded; any file that passes the same ownership
@@ -315,6 +322,24 @@ func TestNothingIsApprovedThatTheApproverDidNotCheck(t *testing.T) {
 	}
 	payloadSum := sha256.Sum256(payload)
 	backdated.PayloadSHA256 = hex.EncodeToString(payloadSum[:])
+	ahead, offset, fractional, upperDigest, noNonce, brokenNonce, longNonce, badRequestID := honest, honest, honest, honest, honest, honest, honest, honest
+	// Consistent with itself, an hour ahead of the approver: created = expires = now + 1h.
+	inAnHour := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	ahead.Created, ahead.ExpiresAt = inAnHour.Add(-time.Minute).Format(time.RFC3339), inAnHour.Format(time.RFC3339Nano)
+	aheadPayload, err := b.key.Payload(context.Background(), gpgsign.ModeDetach, bytes.NewReader(sums), inAnHour.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aheadSum := sha256.Sum256(aheadPayload)
+	ahead.PayloadSHA256 = hex.EncodeToString(aheadSum[:]) // the true digest for that date: only the clock refuses it
+	honestCreated, _ := time.Parse(time.RFC3339, honest.Created)
+	offset.Created = honestCreated.In(time.FixedZone("", 14*3600)).Format(time.RFC3339)
+	fractional.Created = strings.TrimSuffix(honest.Created, "Z") + ".999999999Z"
+	upperDigest.PayloadSHA256 = strings.ToUpper(honest.PayloadSHA256)
+	noNonce.Nonce, brokenNonce.Nonce, longNonce.Nonce = "", honest.Nonce[:16]+"\n"+honest.Nonce[16:], strings.Repeat("a", 4000)
+	badRequestID.RequestID = "request-1"
+	_, datedExport := b.prepare("export", gpgsign.ModeExportKey, nil)
+	datedExport.Created = "1999-01-01T00:00:00Z"
 	otherMode := honest
 	otherMode.Mode = gpgsign.ModeClearSign
 	// Prepared five minutes and one second ago, honestly, and not approved in time.
@@ -336,20 +361,28 @@ func TestNothingIsApprovedThatTheApproverDidNotCheck(t *testing.T) {
 	}{
 		"a record for another file, labelled with this file's hash": {lying, []string{"--file", file}, "not a signature over this file"},
 		"the approver's file is not the one prepared":               {honest, []string{"--file", other}, "not a signature over this file"},
-		"another object":         {otherObject, []string{"--file", file}, "another key or target"},
-		"another purpose":        {otherPurpose, []string{"--file", file}, "another key or target"},
-		"another environment":    {otherEnvironment, []string{"--file", file}, "another key or target"},
-		"another key":            {otherKey, []string{"--file", file}, "another key or target"},
-		"another object, unseen": {otherObject, []string{"--unseen"}, "another key or target"},
-		"another key, unseen":    {otherKey, []string{"--unseen"}, "another key or target"},
-		"a creation time other than the one the digest covers": {laterTime, []string{"--file", file}, "outside its approval window"},
-		"another kind of signature than the digest is of":      {otherMode, []string{"--file", file}, "not a signature over this file"},
+		"another object":      {otherObject, []string{"--file", file}, "another key or target"},
+		"another purpose":     {otherPurpose, []string{"--file", file}, "another key or target"},
+		"another environment": {otherEnvironment, []string{"--file", file}, "another key or target"},
+		"another key":         {otherKey, []string{"--file", file}, "another key or target"},
+		"a creation time years outside its window":           {laterTime, []string{"--file", file}, "outside its approval window"},
+		"another kind of signature than the digest is of":    {otherMode, []string{"--file", file}, "not a signature over this file"},
 		"an expired record":                                  {expired, []string{"--file", file}, "expired"},
 		"a creation time moved within the window":            {movedTime, []string{"--file", file}, "not a signature over this file"},
 		"a backdated signature whose digest is the true one": {backdated, []string{"--file", file}, "outside its approval window"},
-		"a backdated signature, unseen":                      {backdated, []string{"--unseen"}, "outside its approval window"},
-		"a record that names no file hash":                   {noHash, []string{"--file", file}, "does not carry the SHA-256"},
-		"neither the file nor --unseen":                      {honest, nil, "pass --file"},
+		// The option that approved a record without the file is gone; asking for it is a usage error
+		// (exit 2), tested with the command line below.
+		"a record that names no file hash": {noHash, []string{"--file", file}, "does not carry the SHA-256"},
+		"no file":                          {honest, nil, "nothing is approved unseen"},
+		"a signature dated ahead of the approver's clock": {ahead, []string{"--file", file}, "dated in the future"},
+		"a creation time written with an offset":          {offset, []string{"--file", file}, "not in canonical form"},
+		"a creation time with fractional seconds":         {fractional, []string{"--file", file}, "not in canonical form"},
+		"a payload digest in upper case":                  {upperDigest, []string{"--file", file}, "not a lower-case SHA-256"},
+		"an empty nonce":                                  {noNonce, []string{"--file", file}, "nonce or request ID"},
+		"a nonce with a line break":                       {brokenNonce, []string{"--file", file}, "nonce or request ID"},
+		"a 4000-byte nonce":                               {longNonce, []string{"--file", file}, "nonce or request ID"},
+		"a request ID that is not a UUID":                 {badRequestID, []string{"--file", file}, "nonce or request ID"},
+		"a key export with a date of its own":             {datedExport, nil, "not dated as the pinned key is"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := rewrite("case.pending", test.pending)
@@ -364,12 +397,23 @@ func TestNothingIsApprovedThatTheApproverDidNotCheck(t *testing.T) {
 		})
 	}
 
-	// --unseen is the stated exception: it approves the record as it stands and says, in the
-	// output, that the file was not checked.
-	path := rewrite("unseen.pending", lying)
-	code, stdout, stderr := b.invoke(nil, "--pending", path, "--unseen")
-	if code != 0 || !strings.Contains(stdout, "NOT CHECKED (--unseen)") {
-		t.Fatalf("--unseen: exit %d, stdout %q, stderr %q", code, stdout, stderr)
+	// THE DIGEST IS OPAQUE, AND THE RECORD'S ACCOUNT OF IT IS THE PREPARER'S. This record is honest in
+	// every field an approver would read (the good file's hash, today's date, a detached signature)
+	// and carries the payload digest of ANOTHER file signed a year ago. With the file in hand it is
+	// refused; there is no way to approve it without the file.
+	disguised := honest
+	disguised.PayloadSHA256 = backdated.PayloadSHA256
+	path := rewrite("disguised.pending", disguised)
+	if code, _, stderr := b.invoke(nil, "--pending", path, "--file", file); code != 1 || !strings.Contains(stderr, "not a signature over this file") {
+		t.Fatalf("a record whose digest is not what it says: exit %d, stderr %q", code, stderr)
+	}
+	for _, args := range [][]string{{"--pending", path, "--unseen"}, {"--pending", path, "--file="}, {"--pending", path, "--file", ""}} {
+		if code, _, _ := b.invoke(nil, args...); code != 2 {
+			t.Fatalf("%v: exit %d, want a usage error", args[2:], code)
+		}
+	}
+	if _, err := os.Stat(path + ".approval"); !os.IsNotExist(err) {
+		t.Fatal("an approval was written for a record whose digest was never checked")
 	}
 }
 
@@ -421,11 +465,13 @@ func TestATokenApproverIsBelievedOnlyWhenItsSignatureVerifies(t *testing.T) {
 	path, _ := b.prepare("pending", gpgsign.ModeDetach, sums)
 	argv := filepath.Join(b.directory, "argv")
 	t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+	// In the real environment, as an unattended run has it: the child must find the value there.
+	t.Setenv(pinVariable, "648219")
 	if code, _, stderr := b.invoke(map[string]string{pinVariable: "648219"}, "--pending", path, "--file", sumsPath); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
 	}
 	recorded, _ := os.ReadFile(argv)
-	if !strings.Contains(string(recorded), "--pin\nenv:"+pinVariable) || strings.Contains(string(recorded), "648219") {
+	if !strings.Contains(string(recorded), "--pin\nenv:"+pinVariable) || strings.Contains(string(recorded), "648219") || !strings.Contains(string(recorded), "PIN-IN-ENVIRONMENT=6\n") {
 		t.Fatalf("the PIN handling on the command line is wrong: %q", recorded)
 	}
 }
@@ -482,7 +528,7 @@ func TestTheConfigurationAndCommandLineAreStrict(t *testing.T) {
 			}
 		})
 	}
-	for _, args := range [][]string{{}, {"--file", "f"}, {"--pending"}, {"--pending", "p", "--frobnicate"}, {"--pending", "p", "--file", "f", "--unseen"}, {"p"}, {"--pending="}, {"--pending", ""}, {"--pending", "p", "--file="}, {"--pending", "p", "--output", ""}} {
+	for _, args := range [][]string{{}, {"--file", "f"}, {"--pending"}, {"--pending", "p", "--frobnicate"}, {"--pending", "p", "--file", "f", "--unseen"}, {"--pending", "p", "--unseen"}, {"p"}, {"--pending="}, {"--pending", ""}, {"--pending", "p", "--file="}, {"--pending", "p", "--output", ""}} {
 		if code, _, stderr := b.invoke(nil, args...); code != 2 || !strings.Contains(stderr, "usage:") {
 			t.Errorf("%v: exit %d, stderr %q", args, code, stderr)
 		}
@@ -633,7 +679,36 @@ func TestTheTokenIsTheOneWithTheConfiguredSerialAndLabel(t *testing.T) {
 func TestAnOversizedPendingRecordIsRefused(t *testing.T) {
 	b := newBench(t)
 	huge := b.write("huge.pending", bytes.Repeat([]byte(" "), maxRecordBytes+1), 0o644)
-	if code, _, stderr := b.invoke(nil, "--pending", huge, "--unseen"); code != 1 || !strings.Contains(stderr, "unreadable or too large") {
+	if code, _, stderr := b.invoke(nil, "--pending", huge); code != 1 || !strings.Contains(stderr, "unreadable or too large") {
 		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+}
+
+// A TOKEN WRITES PART OF THE LISTING. Its label and manufacturer are its own strings; one with a line
+// break could draw a "Slot" line, or a second label, inside its own block and so pass for the
+// configured token. A listing where a slot ID appears twice, or a field twice in one block, is
+// refused before any PIN is asked for.
+func TestATokenListingThatDoesNotParseOneWayIsRefused(t *testing.T) {
+	configured := "  token label        : OpenPGP card (User PIN (sig))\n  serial num         : " + stubSerial + "\n"
+	for name, extra := range map[string]string{
+		"a second block claiming slot 0x1":               "Slot 9 (0x1): fake\n" + configured,
+		"a second block claiming slot 0x0 in other case": "Slot 9 (0X0): fake\n" + configured,
+		"a label that carries a second label line":       "Slot 2 (0x2): hostile\n  token label        : x\n  token label        : OpenPGP card (User PIN (sig))\n  serial num         : " + stubSerial + "\n",
+		"a label that carries a second serial line":      "Slot 2 (0x2): hostile\n  token label        : OpenPGP card (User PIN (sig))\n  serial num         : 000f00000000\n  serial num         : " + stubSerial + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBench(t)
+			b.useToken("honest")
+			t.Setenv("REGALIA_APPROVE_TEST_SLOTS", extra)
+			argv := filepath.Join(b.directory, "argv")
+			t.Setenv("REGALIA_APPROVE_TEST_ARGV", argv)
+			sumsPath := b.write("SHA256SUMS", sums, 0o644)
+			path, _ := b.prepare("pending", gpgsign.ModeDetach, sums)
+			code, _, stderr := b.invoke(map[string]string{}, "--pending", path, "--file", sumsPath)
+			recorded, _ := os.ReadFile(argv)
+			if code != 1 || !strings.Contains(stderr, "it is not trusted") || len(recorded) != 0 {
+				t.Fatalf("exit %d, stderr %q, signing command run with %q", code, stderr, recorded)
+			}
+		})
 	}
 }

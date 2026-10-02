@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -177,6 +178,14 @@ func documentHash(document []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+var (
+	noncePattern     = regexp.MustCompile(`^[A-Za-z0-9_-]{16,128}$`)
+	requestIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
+)
+
+// clockSkew is how far ahead of the approver's clock a record's creation time may be.
+const clockSkew = 2 * time.Minute
+
 // maxWindow is the longest a prepared request may stay valid, and so the furthest a signature's
 // creation time may lie before its request's expiry.
 const maxWindow = time.Hour
@@ -194,6 +203,12 @@ func (pending Pending) consistent() error {
 	created, expires, err := pending.times()
 	if err != nil {
 		return err
+	}
+	// What the KMS accepts as a nonce and a request ID (API.md). A record outside these is one whose
+	// request the KMS refuses, so an approval of it would cost the approver a PIN and a touch for
+	// nothing; and the nonce is part of the bytes the token signs, so it is bounded here.
+	if !noncePattern.MatchString(pending.Nonce) || !requestIDPattern.MatchString(pending.RequestID) {
+		return errors.New("the pending signature's nonce or request ID is not one the KMS accepts")
 	}
 	switch pending.Mode {
 	case ModeExportKey:
@@ -241,6 +256,11 @@ func (key *Key) Covers(ctx context.Context, pending Pending, document []byte) er
 		pending.Purpose != target.Purpose || pending.Environment != target.Environment {
 		return errors.New("the pending signature is for another key or target than the one this approver approves for")
 	}
+	// A key export is dated by the key, not by the preparer: ExportPublic ignores any other time, so
+	// a record that claims one would show the approver a date that is not the signature's.
+	if pending.Mode == ModeExportKey && !created.Equal(key.created) {
+		return errors.New("the pending key export is not dated as the pinned key is")
+	}
 	if !pending.covers(document) {
 		return errors.New("the pending signature is not a signature over this file: the record names another file's SHA-256")
 	}
@@ -260,14 +280,18 @@ func (pending Pending) times() (created, expires time.Time, err error) {
 	if pending.Version != 1 {
 		return created, expires, errors.New("unknown pending-signature version")
 	}
-	if created, err = time.Parse(time.RFC3339, pending.Created); err != nil {
-		return created, expires, errors.New("the pending signature's creation time is not readable")
+	// Both times in the one form Prepare writes. RFC 3339 has many spellings of one instant (an
+	// offset, fractional seconds), and the approver is SHOWN this string: "02:00:00+14:00" is today
+	// read as tomorrow.
+	if created, err = time.Parse(time.RFC3339, pending.Created); err != nil || created.UTC().Format(time.RFC3339) != pending.Created {
+		return created, expires, errors.New("the pending signature's creation time is not in canonical form (UTC, to the second)")
 	}
 	if expires, err = time.Parse(time.RFC3339Nano, pending.ExpiresAt); err != nil || expires.UTC().Format(time.RFC3339Nano) != pending.ExpiresAt {
 		return created, expires, errors.New("the pending signature's expiry is not in canonical form")
 	}
-	if decoded, decodeErr := hex.DecodeString(pending.PayloadSHA256); decodeErr != nil || len(decoded) != sha256.Size {
-		return created, expires, errors.New("the pending signature's payload digest is not a SHA-256")
+	// Lower-case hex, as the KMS compares it: an upper-case digest makes an approval that never counts.
+	if decoded, decodeErr := hex.DecodeString(pending.PayloadSHA256); decodeErr != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != pending.PayloadSHA256 {
+		return created, expires, errors.New("the pending signature's payload digest is not a lower-case SHA-256")
 	}
 	return created, expires, nil
 }
@@ -293,7 +317,12 @@ func (pending Pending) Binding() ([]byte, error) {
 	return []byte(canonical.String()), nil
 }
 
-// Approve signs the pending signature's binding as approverID. signer must be an Ed25519 key: the
+// Approve signs the pending signature's binding as approverID. It checks the RECORD (its form, its
+// window, its expiry); it does not check what the payload is a signature of. That is Key.Covers,
+// which a caller runs first with the approver's own copy of the file: an approval made without it
+// is a signature over whatever digest the preparer chose.
+//
+// signer must be an Ed25519 key: the
 // KMS verifies approvals with Ed25519 and nothing else. now is the approver's clock; an expired
 // record is refused, because its approval could never count.
 func Approve(pending Pending, approverID string, signer crypto.Signer, now time.Time) (Approval, error) {
@@ -306,6 +335,12 @@ func Approve(pending Pending, approverID string, signer crypto.Signer, now time.
 	}
 	if !now.Before(expires) {
 		return Approval{}, errors.New("the pending signature has expired; prepare it again")
+	}
+	// The creation time is bounded against the expiry by consistent(); the expiry is bounded against
+	// this clock below. This closes the remaining side: a signature dated ahead of the approver's
+	// own clock. (A key export is dated by the key, which Covers pins.)
+	if created, _, _ := pending.times(); pending.Mode != ModeExportKey && created.After(now.Add(clockSkew)) {
+		return Approval{}, errors.New("the pending signature is dated in the future")
 	}
 	// AN APPROVAL IS FOR NOW. A record that expires next year is internally consistent (its creation
 	// time can sit an hour before that), and an approval of it today could be kept until the KMS's

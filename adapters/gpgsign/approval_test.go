@@ -26,7 +26,7 @@ func TestTheBindingIsTheBytesAPIMdPublishes(t *testing.T) {
 	pending := Pending{Version: 1, Mode: ModeDetach, ObjectID: "signing-key-1", Purpose: "release-signing", Environment: "production",
 		Nonce: "nonce-aaaa-bbbb-cccc", ExpiresAt: "2026-01-02T15:04:05Z", Created: "2026-01-02T15:00:00Z", PayloadSHA256: hex.EncodeToString(payload[:]),
 		// Not part of the binding: the record's own statement of which file it is for.
-		DocumentSHA256: documentHash([]byte("the file"))}
+		DocumentSHA256: documentHash([]byte("the file")), RequestID: "0f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b"}
 	binding, err := pending.Binding()
 	if err != nil {
 		t.Fatal(err)
@@ -284,8 +284,16 @@ func TestApproveAndPrepareRefuseWhatCannotCount(t *testing.T) {
 	future := pending
 	future.Created = fixedNow.AddDate(1, 0, 0).Format(time.RFC3339)
 	future.ExpiresAt = fixedNow.AddDate(1, 0, 0).Add(5 * time.Minute).Format(time.RFC3339Nano)
-	if _, err := Approve(future, releaseApprover, approver, fixedNow); err == nil || !strings.Contains(err.Error(), "too far in the future") {
-		t.Errorf("a record expiring next year was approved today: %v", err)
+	if _, err := Approve(future, releaseApprover, approver, fixedNow); err == nil || !strings.Contains(err.Error(), "dated in the future") {
+		t.Errorf("a record dated next year was approved today: %v", err)
+	}
+	// Dated now (within the allowed skew) and expiring just over one window from the approver's
+	// clock: the date check passes, and the expiry check is what refuses it.
+	late := pending
+	late.Created = fixedNow.Add(time.Minute).Format(time.RFC3339)
+	late.ExpiresAt = fixedNow.Add(time.Hour + time.Minute).Format(time.RFC3339Nano)
+	if _, err := Approve(late, releaseApprover, approver, fixedNow); err == nil || !strings.Contains(err.Error(), "too far in the future") {
+		t.Errorf("a record expiring more than a window ahead was approved: %v", err)
 	}
 	if _, err := Approve(pending, "", approver, fixedNow); err == nil {
 		t.Error("an approval without an approver ID was made")
