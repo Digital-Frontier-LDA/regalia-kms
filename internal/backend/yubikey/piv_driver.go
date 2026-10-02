@@ -306,7 +306,8 @@ func touchPolicyName(value piv.TouchPolicy) string {
 func algorithmMatches(value piv.Algorithm, algorithm string) bool {
 	return (value == piv.AlgorithmEC256 && algorithm == "p256") ||
 		(value == piv.AlgorithmEC384 && algorithm == "p384") ||
-		(value == piv.AlgorithmRSA2048 && algorithm == "rsa2048")
+		(value == piv.AlgorithmRSA2048 && algorithm == "rsa2048") ||
+		(value == piv.AlgorithmEd25519 && algorithm == "ed25519")
 }
 
 func signingHash(algorithm string, size int) (crypto.Hash, bool) {
@@ -315,6 +316,12 @@ func signingHash(algorithm string, size int) (crypto.Hash, bool) {
 		return crypto.SHA256, size == crypto.SHA256.Size()
 	case "p384":
 		return crypto.SHA384, size == crypto.SHA384.Size()
+	case "ed25519":
+		// Ed25519 hashes what it is given itself, so there is no hash to name: the card signs the
+		// bytes as the message (pure Ed25519; firmware 5.7 and later). What this API sends it is a
+		// SHA-256 digest, the payload an OpenPGP EdDSA signature is made over (regalia#530), and
+		// the size gate holds it to that as it holds the other algorithms to theirs.
+		return crypto.Hash(0), size == crypto.SHA256.Size()
 	default:
 		return 0, false
 	}

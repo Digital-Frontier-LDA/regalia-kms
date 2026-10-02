@@ -43,6 +43,8 @@ type Provider struct {
 	// process; a failed refresh must not turn a previously measured healthy
 	// counter into the indistinguishable value zero.
 	pinReadings map[string]pinRetryReading
+	// turns holds one slot per device. See takeTurn.
+	turns map[string]chan struct{}
 }
 
 type pinRetryReading struct {
@@ -54,7 +56,36 @@ func New(driver Driver, pins PINSource) (*Provider, error) {
 	if driver == nil || pins == nil {
 		return nil, errors.New("YubiKey driver and PIN source are required")
 	}
-	return &Provider{driver: driver, pins: pins, blocked: make(map[string]struct{}), pinReadings: make(map[string]pinRetryReading)}, nil
+	return &Provider{driver: driver, pins: pins, blocked: make(map[string]struct{}), pinReadings: make(map[string]pinRetryReading), turns: make(map[string]chan struct{})}, nil
+}
+
+// takeTurn makes the requests for one card wait for each other.
+//
+// THE CARD IS OPENED FOR EXCLUSIVE USE, ONE REQUEST AT A TIME. A YubiKey that holds several keys
+// gets requests for them at the same moment, and so does any key under load. Without this the
+// second request's Open found the card taken and failed as "unavailable": on the bench, nine of
+// twelve simultaneous signatures on one card were refused that way (regalia#541). A request now
+// waits for the one before it, for as long as its own context allows, and a request that gives up
+// waiting never touches the card.
+//
+// It returns the function that ends the turn, or false when the context ended first.
+func (provider *Provider) takeTurn(ctx context.Context, deviceID string) (func(), bool) {
+	provider.mu.Lock()
+	if provider.turns == nil {
+		provider.turns = make(map[string]chan struct{})
+	}
+	turn, known := provider.turns[deviceID]
+	if !known {
+		turn = make(chan struct{}, 1)
+		provider.turns[deviceID] = turn
+	}
+	provider.mu.Unlock()
+	select {
+	case turn <- struct{}{}:
+		return func() { <-turn }, true
+	case <-ctx.Done():
+		return nil, false
+	}
 }
 
 func (provider *Provider) notePINRetries(deviceID string, retries int) {
@@ -111,6 +142,11 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	if provider.pinBlocked(binding.DeviceID) {
 		return nil, "", ErrUnavailable
 	}
+	done, ok := provider.takeTurn(ctx, binding.DeviceID)
+	if !ok {
+		return nil, "", ErrUnavailable
+	}
+	defer done()
 	session, err := provider.driver.Open(ctx, binding.DeviceID)
 	if err != nil || session == nil {
 		return nil, "", ErrUnavailable
@@ -218,6 +254,13 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	if provider.pinBlocked(binding.DeviceID) {
 		return false
 	}
+	// A health probe waits its turn too: opening the card while a signature is in flight would
+	// report a healthy, busy card as unhealthy.
+	done, ok := provider.takeTurn(ctx, binding.DeviceID)
+	if !ok {
+		return false
+	}
+	defer done()
 	session, err := provider.driver.Open(ctx, binding.DeviceID)
 	if err != nil || session == nil {
 		return false

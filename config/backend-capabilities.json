@@ -68,6 +68,9 @@
     ]
   },
   "yubikey-piv": {
+    "ed25519": [
+      "sign"
+    ],
     "p256": [
       "certificate-sign",
       "sign"

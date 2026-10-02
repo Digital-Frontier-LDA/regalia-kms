@@ -21,6 +21,7 @@ var pivAlgorithms = map[string]piv.Algorithm{
 	"p256":    piv.AlgorithmEC256,
 	"p384":    piv.AlgorithmEC384,
 	"rsa2048": piv.AlgorithmRSA2048,
+	"ed25519": piv.AlgorithmEd25519,
 }
 
 // digestSizes is the digest length each advertised signing algorithm must accept.
@@ -28,6 +29,7 @@ var digestSizes = map[string]int{
 	"p256":    crypto.SHA256.Size(),
 	"p384":    crypto.SHA384.Size(),
 	"rsa2048": crypto.SHA256.Size(),
+	"ed25519": crypto.SHA256.Size(),
 }
 
 func advertisedForYubiKeyPIV(t *testing.T) map[string]map[string]bool {

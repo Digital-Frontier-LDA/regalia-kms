@@ -44,6 +44,11 @@ not a qualification: removal and recovery are not recorded.
 User Interaction Flags, and refuses a binding the card contradicts. PKCS#11 exposes neither. A key
 that requires touch does not sign unattended here; it fails, and the operation is refused.
 
+**Not on a card that also serves PIV.** The PIV backend opens the YubiKey for exclusive use and
+needs OpenSC to ignore it; this path needs OpenSC to drive it. One daemon cannot do both for one
+card (measured, [`CONFIGURATIONS.md`](CONFIGURATIONS.md)). Ed25519 is also available in PIV slots,
+which is the path for a YubiKey that does everything; this one is for a card dedicated to it.
+
 **Open.**
 - How a production key gets onto the card. A recoverable key is imported from ceremony-controlled
   material onto the primary and standby cards, so that a replacement holds the same identity; it is
