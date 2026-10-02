@@ -907,16 +907,19 @@ func namesEd25519(params []byte) bool {
 }
 
 // marshalEd25519PublicKey encodes an Ed25519 public key as SubjectPublicKeyInfo (RFC 8410). The
-// point is the 32-byte key, either bare or wrapped in a DER OCTET STRING; modules do both. Anything
-// that is not exactly 32 bytes after unwrapping is refused: a key of another length published under
-// the Ed25519 OID would be pinned and handed to verifiers as something it is not.
+// point is the 32-byte key, wrapped in a DER OCTET STRING (the PKCS#11 v3.0 form, 34 bytes) or bare;
+// modules do both.
+//
+// THE WRAPPED FORM IS TRIED FIRST, AND WINS. A point that is exactly one OCTET STRING is read as
+// one, and must then hold 32 bytes. Checking the length first would take `04 1e` followed by 30
+// bytes — a wrapped value of the wrong size, 32 bytes long in all — for a bare key, and publish the
+// wrapper as key material. The price is that a bare key which happens to begin `04 1e` (one in
+// 65536) is refused on a module that does not wrap; that is a refusal with a reason, where the other
+// order is a wrong key pinned and handed to verifiers.
 func marshalEd25519PublicKey(point []byte) ([]byte, error) {
 	raw := point
-	if len(raw) != ed25519.PublicKeySize {
-		var unwrapped []byte
-		if rest, err := asn1.Unmarshal(point, &unwrapped); err != nil || len(rest) != 0 {
-			return nil, errors.New("invalid PKCS#11 EC point")
-		}
+	var unwrapped []byte
+	if rest, err := asn1.Unmarshal(point, &unwrapped); err == nil && len(rest) == 0 {
 		raw = unwrapped
 	}
 	if len(raw) != ed25519.PublicKeySize {

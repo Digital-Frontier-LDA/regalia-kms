@@ -179,6 +179,14 @@ func TestAnEd25519KeyNamedByItsCurveNameIsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// One key in 65536 begins 04 1e and is, bare, indistinguishable from a wrapped 30-byte value;
+	// the driver refuses that one by design (see marshalEd25519PublicKey). Not the key for a test
+	// of the ordinary case.
+	for public[0] == 0x04 && public[1] == 0x1e {
+		if public, _, err = ed25519.GenerateKey(rand.Reader); err != nil {
+			t.Fatal(err)
+		}
+	}
 	name, err := asn1.MarshalWithParams("edwards25519", "printable")
 	if err != nil {
 		t.Fatal(err)
@@ -207,13 +215,20 @@ func TestAnEd25519KeyNamedByItsCurveNameIsRead(t *testing.T) {
 	// in either form. Each would otherwise be published under the Ed25519 OID as a key it is not.
 	other, _ := asn1.MarshalWithParams("edwards448", "printable")
 	short, _ := asn1.Marshal([]byte(public[:31]))
+	// 04 1e + 30 bytes: an OCTET STRING of the wrong size that is itself 32 bytes long. Read by
+	// length first, it would pass as a bare key and the wrapper would be published as key material.
+	wrapped30, _ := asn1.Marshal([]byte(public[:30]))
+	if len(wrapped30) != ed25519.PublicKeySize {
+		t.Fatalf("the collision fixture is %d bytes, not 32", len(wrapped30))
+	}
 	for what, attributes := range map[string][2][]byte{
-		"another curve name":            {other, wrapped},
-		"the name with trailing bytes":  {append(append([]byte{}, name...), 0x00), wrapped},
-		"a 31-byte key in OCTET STRING": {name, short},
-		"a bare 31-byte key":            {name, public[:31]},
-		"a 33-byte point":               {name, append([]byte{0x04}, public...)},
-		"an empty point":                {name, nil},
+		"another curve name":                              {other, wrapped},
+		"the name with trailing bytes":                    {append(append([]byte{}, name...), 0x00), wrapped},
+		"a 31-byte key in OCTET STRING":                   {name, short},
+		"a 30-byte key in OCTET STRING (32 bytes in all)": {name, wrapped30},
+		"a bare 31-byte key":                              {name, public[:31]},
+		"a 33-byte point":                                 {name, append([]byte{0x04}, public...)},
+		"an empty point":                                  {name, nil},
 	} {
 		encoded, err := marshalPublicKey([]*pkcs11.Attribute{
 			pkcs11.NewAttribute(pkcs11.CKA_KEY_TYPE, uint(ckkECEdwards)),
