@@ -78,7 +78,7 @@ refused "a node that is not in the policy is refused" 'unknown node' \
   ver challenge --node-id site-z --ek-public "$W/a/ek.pub" --ak-public "$W/a/ak.pub" --credential "$W/cred"
 refused "another TPM's EK is refused for site-a" 'not the one recorded for this node at intake' \
   ver challenge --node-id site-a --ek-public "$W/b/ek.pub" --ak-public "$W/b/ak.pub" --credential "$W/cred"
-( export TPM2TOOLS_TCTI="$(tcti A)"; tpm2_createprimary -C e -G ecc256:ecdsa-sha256 -c "$W/plain.ctx" \
+( TPM2TOOLS_TCTI="$(tcti A)"; export TPM2TOOLS_TCTI; tpm2_createprimary -C e -G ecc256:ecdsa-sha256 -c "$W/plain.ctx" \
   -a 'fixedtpm|fixedparent|sensitivedataorigin|userwithauth|sign' && tpm2_readpublic -c "$W/plain.ctx" -o "$W/plain.pub" ) \
   >/dev/null 2>&1 || F "could not make the unrestricted key"
 TPM2TOOLS_TCTI="$(tcti A)" tpm2_flushcontext -t
