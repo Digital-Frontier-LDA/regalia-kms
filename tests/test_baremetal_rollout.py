@@ -62,9 +62,44 @@ class Document(Case):
         self.assertNotEqual(measurements.version(changed), v)
         renamed = dict(copy.deepcopy(BOTH), name="v2b")
         self.assertNotEqual(measurements.version(renamed), v)
-        # key order is not content
+        # key order is not content, and neither is how the file was written out
         reordered = {"nodes": dict(reversed(list(BOTH["nodes"].items()))), "name": "v2", "schema": measurements.SCHEMA}
         self.assertEqual(measurements.version(reordered), v)
+        for text in (json.dumps(BOTH, indent=4), json.dumps(BOTH, separators=(",", ":")), "\n\n  " + json.dumps(reordered, indent="\t") + "\n"):
+            self.assertEqual(measurements.version(measurements.load(text)), v)
+        # every part of the content is: each field of each set of each node
+        for change in (lambda d: d["nodes"]["a"]["accepted"][0].update(label="image-1b"),
+                       lambda d: d["nodes"]["b"]["accepted"][0].update(tpm_firmware_version="1" * 16),
+                       lambda d: d["nodes"]["a"]["accepted"][0]["pcrs"].update({"7": "01" * 32}) or d["nodes"]["a"]["accepted"][1]["pcrs"].update({"7": "01" * 32}),
+                       lambda d: d["nodes"]["c"]["accepted"].reverse(),
+                       lambda d: d["nodes"]["c"]["accepted"].pop(),
+                       lambda d: d["nodes"].pop("c")):
+            other = copy.deepcopy(BOTH)
+            change(other)
+            self.assertNotEqual(measurements.version(other), v)
+
+    def test_only_the_root_approves_or_retires_an_image(self):
+        """A revocation key signs restrictive changes only, and a manifest that names another document is
+        not one: it cannot approve NEXT, and it cannot retire CURRENT either."""
+        root = hbt.pub(hbt.ROOT)
+        m1 = self.under(CURRENT)
+
+        def signed(manifest, key, signer):
+            return {"manifest": manifest, "signature": {"signer": signer, "key": hbt.pub(key),
+                                                        "sig": key.sign(m.DOMAIN + m.canonical(manifest)).hex()}}
+        approve = self.under(BOTH, epoch=2, prev=m.digest(m1))
+        self.refused("a revocation key cannot change the policy version", m.accept, m1, signed(approve, hbt.REVOKE, "revocation"), root)
+        m2 = m.accept(m1, signed(approve, hbt.ROOT, "root"), root)
+        measurements.bind(m2, BOTH)
+        retire = self.under(NEXT, epoch=3, prev=m.digest(m2))
+        self.refused("a revocation key cannot change the policy version", m.accept, m2, signed(retire, hbt.REVOKE, "revocation"), root)
+        # what a revocation key CAN sign leaves the document in force, for the nodes that remain
+        quarantine = self.under(BOTH, epoch=3, prev=m.digest(m2), c="QUARANTINED")
+        m3 = m.accept(m2, signed(quarantine, hbt.REVOKE, "revocation"), root)
+        self.assertEqual(sorted(measurements.bind(m3, BOTH)), ["a", "b", "c"])
+        self.assertEqual(rollout.attesting(m3), ["a", "b"])
+        m4 = m.accept(m3, signed(self.under(NEXT, epoch=4, prev=m.digest(m3), c="QUARANTINED"), hbt.ROOT, "root"), root)
+        measurements.bind(m4, NEXT)
 
     def test_a_document_is_accepted_only_under_the_manifest_that_commits_to_it(self):
         bound = measurements.bind(self.under(BOTH), BOTH)

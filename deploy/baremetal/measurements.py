@@ -14,7 +14,11 @@ SIGNED MEMBERSHIP MANIFEST COMMITS TO, with one or two sets per node.
 
 HOW IT IS AUTHENTICATED. The document is not signed. The manifest's `policy_version` field is the
 document's version: version(document) = "m1-" + the first 29 hex digits of SHA-256 over its canonical
-JSON (116 bits). bind() accepts a document only under a manifest whose policy_version is exactly that.
+JSON (116 bits: membership.canonical, sorted keys and no spaces, so the same content has one version
+however it was written out). bind() accepts a document only under a manifest whose policy_version is
+exactly that. 116 bits is the strength against finding ANOTHER document for a version the root signed
+(a second preimage). Two documents made to share a version (a collision) cost about 2^58, and only whoever
+writes both can try: that is the root's own operator, who could sign either document openly.
 The manifest is root-signed, chained by epoch, and its epoch is anchored in the TPM (membership.py), so:
   * a document nobody approved has a version no manifest names;
   * an OLDER document is refused by the manifest a peer holds now, and that manifest cannot be rolled
