@@ -12,10 +12,13 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
+import socket
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -31,6 +34,8 @@ import tests.test_baremetal_replacement as rt
 PATH = os.environ.get("PATH", "") + os.pathsep + "/usr/sbin" + os.pathsep + "/sbin"
 CRYPTSETUP = shutil.which("cryptsetup", path=PATH)
 RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+VECTORS = os.path.join(REPO, "tests", "vectors", "unlock-v1.json")
 TPM2_ID = next(k for k, v in unlock.LOCAL_KEY_TYPES.items() if v == "tpm2")
 
 
@@ -74,8 +79,8 @@ class Case(ct.Case):
         pool = unittest.mock.patch.object(unlock.rsa, "generate_private_key", KeyPool())
         pool.start()
         self.addCleanup(pool.stop)
-        self.stores["a"] = self.store("a")
-        self.stores["a"].commit(self.e1)
+        self.pins = unlock.validate_boot_config(unlock.boot_config(self.m1, "a", "/dev/disk/by-partlabel/root", [7],
+                                                                   {"b": "192.0.2.2:7443", "c": "192.0.2.3:7443"}))
         self.contributions = {p: unlock.Contributions(os.path.join(self.d, p + "-contributions.json")) for p in ("b", "c")}
         self.attesters = {p: self.peers[p]["attester"] for p in ("b", "c")}
         self.served = {p: unlock.Peer(p, self.stores[p], self.peers[p]["freshness"], lambda manifest, p=p: self.attesters[p],
@@ -114,7 +119,7 @@ class Case(ct.Case):
         return enrolment.open(json.loads(json.dumps(wrapped)), peer)
 
     def ask(self, peer, path, session=None, **kw):
-        return unlock.ask(session or self.session, self.stores["a"], peer, path, self.transport(peer), self.quote(**kw), run=run)
+        return unlock.ask(session or self.session, self.pins[peer], path, self.transport(peer), self.quote(**kw), run=run)
 
     def refused(self, reason, fn, *args, **kw):
         with self.assertRaises((m.Refused, attest.Refused)) as caught:
@@ -188,8 +193,7 @@ class Exchange(Case):
             ("the response does not answer the request this boot session sent b", resigned("b", transcript_sha256="ab" * 32)),
             ("the response is for another node or another boot session", resigned("b", node_id="c")),
             ("the response is for another node or another boot session", resigned("b", session_id=other.session_id.hex())),
-            ("decided under another manifest", resigned("b", epoch=2)),
-            ("decided under another manifest", resigned("b", manifest_digest="cd" * 32)),
+            ("the response was decided under epoch 2, not the epoch 1 the peer's hello stated", resigned("b", epoch=2)),
             ("the contribution does not decrypt", resigned("b", ciphertext=other._private.public_key().encrypt(
                 secret, unlock._oaep(unlock.CONTRIBUTION_LABEL + bytes(32))).hex())),
             ("unlock reply fields mismatch", lambda reply: dict(reply, extra=1)),
@@ -197,7 +201,7 @@ class Exchange(Case):
         ]
         for reason, change in cases:
             with self.subTest(reason):
-                self.refused(reason, unlock.ask, self.session, self.stores["a"], "b", epoch, forged(change), self.quote(), run)
+                self.refused(reason, unlock.ask, self.session, self.pins["b"], epoch, forged(change), self.quote(), run)
                 self.assertFalse(self.session.consumed)               # an invalid response consumes nothing
         self.assertEqual(self.ask("b", epoch), secret)                # and the real peer still restores the node
 
@@ -214,8 +218,8 @@ class Exchange(Case):
                 self.denied(why)
                 self.assertFalse(self.session.consumed)
         # a node the peer has never enrolled, and one that is not in the manifest at all
-        self.refused("hello: the peer refused (DENIED)", unlock.ask, unlock.BootSession("c"), self.stores["a"], "b", epoch, self.transport("b"), self.quote(), run)
-        self.refused("hello: the peer refused (DENIED)", unlock.ask, unlock.BootSession("x"), self.stores["a"], "b", epoch, self.transport("b"), self.quote(), run)
+        self.refused("hello: the peer refused (DENIED)", unlock.ask, unlock.BootSession("c"), self.pins["b"], epoch, self.transport("b"), self.quote(), run)
+        self.refused("hello: the peer refused (DENIED)", unlock.ask, unlock.BootSession("x"), self.pins["b"], epoch, self.transport("b"), self.quote(), run)
         self.denied("x may not be unlocked under epoch 1")
         # a refusal tells the requester its kind and nothing else
         self.assertEqual(json.loads(self.wire[-1][2]), {"v": 1, "error": "DENIED"})
@@ -229,13 +233,13 @@ class Exchange(Case):
         self.denied("the nonce is not outstanding")
         # the captured response, handed to the next boot: another session, another key
         rebooted = self.boot()
-        self.refused("the response is for another node or another boot session", unlock.ask, rebooted, self.stores["a"], "b", epoch,
+        self.refused("the response is for another node or another boot session", unlock.ask, rebooted, self.pins["b"], epoch,
                      lambda raw: response if b'"unlock"' in raw else self.transport("b")(raw), self.quote(), run)
         self.assertFalse(rebooted.consumed)
         self.refused("the contribution does not decrypt", unlock._decrypt, rebooted._private,
                      bytes.fromhex(json.loads(response)["response"]["ciphertext"]),
                      unlock.CONTRIBUTION_LABEL + bytes.fromhex(json.loads(response)["response"]["transcript_sha256"]))
-        self.assertEqual(unlock.ask(rebooted, self.stores["a"], "b", epoch, self.transport("b"), self.quote(), run), secret)
+        self.assertEqual(unlock.ask(rebooted, self.pins["b"], epoch, self.transport("b"), self.quote(), run), secret)
         # the first boot's session, presented again after the reboot: the verifier remembers it
         stale = self.boots
         self.boots += 1
@@ -257,27 +261,10 @@ class Exchange(Case):
             if message["op"] == "unlock":
                 message["path_epoch"] = old
             return genuine(json.dumps(message).encode())
-        self.refused("the peer answered for path epoch 1, not 2", unlock.ask, self.session, self.stores["a"], "b", new, downgraded, self.quote(), run)
+        self.refused("the peer answered for path epoch 1, not 2", unlock.ask, self.session, self.pins["b"], new, downgraded, self.quote(), run)
         self.assertEqual(self.events[-1]["outcome"], "ALLOW")         # the peer did answer, validly
         self.assertFalse(self.session.consumed)
         self.assertEqual(self.ask("b", new), secret)                  # the same boot still unlocks
-
-    def test_a_node_far_behind_that_may_not_be_unlocked_is_sent_no_manifest(self):
-        """More manifests behind than one message carries: the reply would hold manifests and no nonce yet.
-        A node the peer will not unlock gets neither."""
-        authority = self.stores["authority"]
-        self.revoke(authority.load(), "QUARANTINED")
-        for _ in range(unlock.ENVELOPES_PER_MESSAGE + 1):             # the root re-issues; a stays quarantined
-            current = authority.load()
-            authority.commit(rt.sign(dict(self.chain(current, current["nodes"]), policy_version="p%d" % (current["epoch"] + 1))))
-        self.publish("b")
-        self.assertGreater(self.stores["b"].load()["epoch"] - 1, unlock.ENVELOPES_PER_MESSAGE)
-        behind = {"v": 1, "op": "hello", "node_id": "a", "summary": {"epoch": 1, "manifest_digest": m.digest(self.m1)}}
-        self.assertEqual(self.served["b"].handle(json.dumps(behind).encode()), {"v": 1, "error": "DENIED"})
-        self.denied("a may not be unlocked")
-        # c, which may be unlocked, is brought forward message by message (it is not enrolled with b's verifier: no nonce at the end)
-        reply = self.served["b"].handle(json.dumps(dict(behind, node_id="c")).encode())
-        self.assertEqual((len(reply["envelopes"]), reply["nonce"]), (unlock.ENVELOPES_PER_MESSAGE, None))
 
     def test_an_unreachable_peer_is_one_refusal_and_the_next_peer_is_asked(self):
         epoch, secret = self.enrolled("c")
@@ -285,7 +272,7 @@ class Exchange(Case):
             def dead(raw, error=error):
                 raise error
             with self.subTest(type(error).__name__):
-                self.refused("hello: the transport failed (%s)" % type(error).__name__, unlock.ask, self.session, self.stores["a"], "b", 1, dead, self.quote(), run)
+                self.refused("hello: the transport failed (%s)" % type(error).__name__, unlock.ask, self.session, self.pins["b"], 1, dead, self.quote(), run)
         self.assertFalse(self.session.consumed)
         self.assertEqual(self.ask("c", epoch), secret)
 
@@ -318,7 +305,6 @@ class Exchange(Case):
                 self.refused("hello: the peer refused (DENIED)", self.ask, "b", epoch)
                 self.denied("a may not be unlocked under epoch %d" % self.stores["b"].load()["epoch"])
                 self.assertEqual(self.contributions["b"].epochs("a"), kept)       # stolen: gone for good
-        self.assertEqual(self.stores["a"].load()["epoch"], 1)        # a refused node is told nothing, not even the manifests
 
     def test_a_peer_without_a_live_heartbeat_gives_nothing(self):
         epoch, _ = self.enrolled("b")
@@ -333,55 +319,144 @@ class Exchange(Case):
             if b'"unlock"' in raw:
                 self.later(hb.MAX_LIFETIME + 1)
             return genuine(raw)
-        self.refused("unlock: the peer refused (DENIED)", unlock.ask, self.session, self.stores["a"], "b", epoch, slow, self.quote(), run)
+        self.refused("unlock: the peer refused (DENIED)", unlock.ask, self.session, self.pins["b"], epoch, slow, self.quote(), run)
         self.denied("heartbeat")
 
-    def test_the_two_sides_converge_on_one_manifest_before_any_quote(self):
+    def test_the_target_quotes_the_epoch_the_peer_states_and_holds_no_manifest(self):
         epoch, secret = self.enrolled("b")
-        # the peer is ahead (c was quarantined while a was down): a catches up inside the hello
+        # c was quarantined while a was down: b is at epoch 2, a's boot configuration is from epoch 1
         self.revoke(self.stores["authority"].load(), "QUARANTINED", node="c")
         self.publish("b")
         self.assertEqual(self.ask("b", epoch), secret)
-        self.assertEqual((self.stores["a"].load()["epoch"], self.stores["a"].hw.value()), (2, 2))
-        ops = [json.loads(raw)["op"] for _, raw, _ in self.wire]
-        self.assertEqual(ops, ["hello", "unlock"])
-        # the peer is behind: it takes the root-signed manifests from the node, and then has no heartbeat for them
-        fresh = self.boot()
-        self.wire.clear()
-        self.assertEqual(self.stores["c"].load()["epoch"], 1)
-        self.enrolled("c")
-        self.refused("hello: the peer refused (DENIED)", unlock.ask, fresh, self.stores["a"], "c", 1, self.transport("c"), self.quote(), run)
-        self.assertEqual([json.loads(raw)["op"] for _, raw, _ in self.wire], ["hello", "manifests", "hello"])
-        self.assertEqual(self.stores["c"].load()["epoch"], 2)
-        self.denied("c may not authorize under epoch 2")              # and it is the quarantined one
+        self.assertEqual([json.loads(raw)["op"] for _, raw, _ in self.wire], ["hello", "unlock"])
+        self.assertEqual(json.loads(self.wire[0][1]), {"v": 1, "op": "hello", "node_id": "a"})
+        self.assertEqual(sorted(json.loads(self.wire[0][2])), ["epoch", "nonce", "peer_id", "v"])
+        self.assertEqual(json.loads(self.wire[1][2])["response"]["epoch"], 2)
+        other = self.boot()
+        self.refused("the hello reply is not version 1", unlock.ask, other, self.pins["b"], epoch,
+                     lambda raw: json.dumps(dict(json.loads(self.transport("b")(raw)), v=2)).encode(), self.quote(), run)
+        # a hello reply changed on the way to state another epoch: the quote is over it, and the peer refuses
+        fresh, genuine = self.boot(), self.transport("b")
 
-    def test_the_target_judges_the_peer_by_its_own_manifest(self):
-        epoch, _ = self.enrolled("b")
-        # a holds a manifest that quarantines b; b never got it and cannot take it from a here
-        self.stores["a"].commit(self.revoke(self.stores["authority"].load(), "QUARANTINED", node="b"))
-        self.served["b"].manifests = lambda message: {"v": 1, "summary": {}}
-        self.refused("no contribution from b after 16 messages", self.ask, "b", epoch)
-        manifest = self.stores["a"].load()
-        self.session.expect("b", manifest, bytes(32))
-        response = {"schema": unlock.RESPONSE_SCHEMA, "peer_id": "b", "node_id": "a", "epoch": 2, "manifest_digest": m.digest(manifest),
-                    "session_id": self.session.session_id.hex(), "transcript_sha256": self.session.pending["b"], "path_epoch": epoch, "ciphertext": "00" * 384}
-        envelope = {"response": response, "signature": self.keys["b"].signer()(unlock.signed_digest(response))}
-        self.refused("b may not authorize under epoch 2", self.session.open, "b", envelope, manifest, epoch, run)
+        def restated(raw):
+            reply = json.loads(genuine(raw))
+            if "nonce" in reply:
+                reply["epoch"] = 1
+            return json.dumps(reply).encode()
+        self.refused("unlock: the peer refused (DENIED)", unlock.ask, fresh, self.pins["b"], epoch, restated, self.quote(), run)
+        self.denied("the quote is not bound to this transcript")
+
+    def test_the_target_accepts_only_the_peers_its_boot_configuration_names(self):
+        epoch, secret = self.enrolled("b")
+        other_ak = dict(self.pins["b"], ak_name=self.keys["c"].ak_name)
+        self.refused("the response is not signed by the AK the manifest names for b", unlock.ask, self.session, other_ak, epoch, self.transport("b"), self.quote(), run)
+        other_ek = dict(self.pins["b"], ek_name=self.keys["c"].ek_name)
+        self.refused("the response is not signed by b's AK under the EK the manifest names", unlock.ask, self.session, other_ek, epoch, self.transport("b"), self.quote(), run)
+        self.refused("the peer that answered is 'b', not c", unlock.ask, self.session, self.pins["c"], epoch, self.transport("b"), self.quote(), run)
+        self.assertFalse(self.session.consumed)
+        self.assertEqual(self.ask("b", epoch), secret)
+
+    def test_the_boot_configuration_lists_the_peers_that_may_authorize(self):
+        config = unlock.boot_config(self.m1, "a", "/dev/sda3", [11, 7, 7], {"c": "[2001:db8::3]:7443", "b": "porto.boot:7443"})
+        self.assertEqual((config["node_id"], config["pcrs"], [p["node_id"] for p in config["peers"]]), ("a", [7, 11], ["b", "c"]))
+        self.assertEqual(config["peers"][0], {"node_id": "b", "endpoint": "porto.boot:7443", "ek_name": self.keys["b"].ek_name, "ak_name": self.keys["b"].ak_name})
+        self.assertEqual(list(unlock.validate_boot_config(json.loads(json.dumps(config)))), ["b", "c"])
+        quarantined = unlock.boot_config(self.manifest(c="QUARANTINED"), "a", "/dev/sda3", [7], {"b": "192.0.2.2:1", "c": "192.0.2.3:1"})
+        self.assertEqual([p["node_id"] for p in quarantined["peers"]], ["b"])
+        self.refused("the manifest leaves a no peer with an address", unlock.boot_config, self.m1, "a", "/dev/sda3", [7], {})
+        self.refused("x is not in the manifest", unlock.boot_config, self.m1, "x", "/dev/sda3", [7], {"b": "192.0.2.2:1"})
+        for change, reason in ((dict(extra=1), "boot configuration fields mismatch"), (dict(schema="v0"), "schema must be"),
+                               (dict(device="/dev/sda3; rm"), "device must be a plain path"), (dict(pcrs=[11, 7]), "pcrs must be an ascending list"),
+                               (dict(pcrs=[]), "pcrs must be an ascending list"), (dict(pcrs=[24]), "pcrs must be an ascending list"),
+                               (dict(peers=[]), "peers must list 1 to 8 peers"), (dict(peers=config["peers"][:1] * 2), "peer b is listed twice"),
+                               (dict(node_id="b"), "is listed twice, or is the node itself"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="porto.boot")]), "peer.endpoint must be host:port"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="fd00::2:7000")]), "an IPv6 address in brackets"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="192.0.2.2:70000")]), "the port 1-65535"),
+                               (dict(peers=[dict(config["peers"][0], endpoint="192.0.2.2:0")]), "the port 1-65535"),
+                               (dict(peers=[dict(config["peers"][0], endpoint=7)]), "peer.endpoint must be host:port"),
+                               (dict(peers=[dict(config["peers"][0], ak_name="000b" + "zz" * 32)]), "peer.ak_name must be a SHA-256 TPM Name"),
+                               (dict(peers=[dict(config["peers"][0], extra=1)]), "peer fields mismatch")):
+            with self.subTest(reason):
+                self.refused(reason, unlock.validate_boot_config, dict(config, **change))
+
+    def test_the_transport_is_one_bounded_request_per_connection(self):
+        epoch, secret = self.enrolled("b")
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        endpoint = "127.0.0.1:%d" % listener.getsockname()[1]
+        with unittest.mock.patch.object(unlock, "IO_TIMEOUT", 2):
+            server = threading.Thread(target=unlock.serve, args=(self.served["b"], listener, 9), daemon=True)
+            server.start()
+            send = unlock.tcp_transport(endpoint)
+            self.assertEqual(json.loads(send(b"{")), {"v": 1, "error": "INVALID_REQUEST"})
+            self.assertEqual(json.loads(send(b"[" * 60000)), {"v": 1, "error": "INVALID_REQUEST"})
+            # a sender of one byte now and then: the whole connection has the time limit, not each byte
+            with socket.create_connection(listener.getsockname()) as dripping:
+                started = time.monotonic()
+                with self.assertRaises(OSError):
+                    while time.monotonic() - started < 8:
+                        dripping.sendall(b" ")
+                        time.sleep(0.4)
+                self.assertLess(time.monotonic() - started, 4)
+            # a failure of the handler that nobody foresaw: audited by its kind, and the next request is served
+            handle = self.served["b"].handle
+            with unittest.mock.patch.object(self.served["b"], "handle", side_effect=ZeroDivisionError("a bug")):
+                self.assertEqual(send(b"{}"), b"")
+            self.assertEqual((self.events[-1]["event"], self.events[-1]["outcome"], self.events[-1]["reason"]), ("unlock-server-error", "ERROR", "ZeroDivisionError"))
+            self.assertIs(self.served["b"].handle.__func__, handle.__func__)
+            self.assertEqual(json.loads(send(b" " * (unlock.MAX_BYTES + 1))), {"v": 1, "error": "INVALID_REQUEST"})
+            with socket.create_connection(listener.getsockname()) as stalled:      # says half a request and stalls: it costs itself only
+                stalled.sendall(b'{"v":1,')
+                time.sleep(2.5)
+            socket.create_connection(listener.getsockname()).close()               # connects and leaves
+            self.assertEqual(unlock.ask(self.session, self.pins["b"], epoch, send, self.quote(), run), secret)   # two connections
+            server.join(10)
+            self.assertFalse(server.is_alive())
+        listener.close()
+        self.refused("hello: the transport failed (ConnectionRefusedError)", unlock.ask, self.boot(), self.pins["b"], epoch, send, self.quote(), run)
+
+    def test_both_clients_and_the_peer_agree_on_the_published_vectors(self):
+        """tests/vectors/unlock-v1.json is what the native client (internal/unlock) is tested against as well:
+        the transcript, the digest a response is signed over, the qualified name of an AK, the OAEP label
+        and the credential, each from fixed inputs."""
+        with open(VECTORS) as f:
+            vectors = json.load(f)
+        t = vectors["transcript"]
+        raw = attest.transcript(t["node_id"], t["epoch"], bytes.fromhex(t["session_id"]), bytes.fromhex(t["ephemeral_public"]), bytes.fromhex(t["nonce"]))
+        self.assertEqual((raw.hex(), hashlib.sha256(raw).hexdigest()), (t["bytes"], t["sha256"]))
+        refused = vectors["transcripts_a_peer_must_refuse"]["variants"]
+        self.assertEqual(sorted(x["changed"] for x in refused), ["ephemeral_public", "epoch", "node_id", "nonce", "session_id"])
+        for x in refused:
+            changed = attest.qualifying_data(x["node_id"], x["epoch"], bytes.fromhex(x["session_id"]), bytes.fromhex(x["ephemeral_public"]), bytes.fromhex(x["nonce"]))
+            self.assertEqual(changed.hex(), x["sha256"])
+            self.assertNotEqual(x["sha256"], t["sha256"])
+            # the peer's verifier, given a quote over the first transcript: refused for each variant
+            quote = self.keys["a"].signer()(bytes.fromhex(t["sha256"]))
+            self.assertNotEqual(attest.parse_quote(bytes.fromhex(quote["quote"]))["extra_data"], changed)
+        r = vectors["response"]
+        self.assertEqual((m.canonical(r["response"]).decode(), unlock.signed_digest(r["response"]).hex()), (r["canonical"], r["signed_digest"]))
+        unlock.validate_response(r["response"])
+        q = vectors["qualified_name"]
+        self.assertEqual(attest.qualified_name(bytes.fromhex(q["ek_name"]), bytes.fromhex(q["ak_name"])).hex(), q["qualified_name"])
+        c = vectors["credential"]
+        self.assertEqual(unlock.credential(bytes.fromhex(c["local"]), bytes.fromhex(c["contribution"]), c["target"], c["peer"], c["path_epoch"]).decode(), c["passphrase"])
+        self.assertEqual((unlock.HKDF_INFO % (c["target"], c["peer"], c["path_epoch"])), c["info"])
+        self.assertEqual((unlock.CONTRIBUTION_LABEL + bytes.fromhex(t["sha256"])).hex(), vectors["oaep_label"])
+        self.assertEqual(unlock.RESPONSE_DOMAIN.hex(), vectors["response_domain"])
 
     def test_a_request_is_bounded_and_exact(self):
         peer = self.served["b"]
-        hello = {"v": 1, "op": "hello", "node_id": "a", "summary": {"epoch": 1, "manifest_digest": m.digest(self.m1)}}
+        hello = {"v": 1, "op": "hello", "node_id": "a"}
         self.assertIn("nonce", peer.handle(json.dumps(hello).encode()))
         invalid = {"v": 1, "error": "INVALID_REQUEST"}
         for raw in (b"", b"[]", b"{", b'{"v":1}', b'{"v":2,"op":"hello"}', b'{"v":true,"op":"hello"}', b'{"v":1,"op":"init"}', b'{"v":1,"op":7}',
-                    b'{"v":1,"v":1,"op":"hello"}', b'{"v":1.0,"op":"hello"}', b" " * (unlock.MAX_BYTES + 1)):
+                    b'{"v":1,"v":1,"op":"hello"}', b'{"v":1.0,"op":"hello"}', b'{"v":1,"op":"manifests","envelopes":[]}', b" " * (unlock.MAX_BYTES + 1),
+                    b"[" * 60000):                                    # deeper than the JSON parser recurses: refused, not a crash
             with self.subTest(raw[:30]):
                 self.assertEqual(peer.handle(raw), invalid)
         denied = {"v": 1, "error": "DENIED"}
-        for message in (dict(hello, extra=1), dict(hello, node_id="A"), dict(hello, node_id=7), dict(hello, summary={"epoch": 1}),
-                        dict(hello, summary={"epoch": 1, "manifest_digest": "ff" * 32}),      # a CONFLICT: another manifest at our epoch
-                        {"v": 1, "op": "manifests", "envelopes": [{}] * (unlock.ENVELOPES_PER_MESSAGE + 1)},
-                        {"v": 1, "op": "manifests", "envelopes": [{"manifest": {}}]},
+        for message in (dict(hello, extra=1), dict(hello, node_id="A"), dict(hello, node_id=7), dict(hello, summary={"epoch": 1, "manifest_digest": ""}),
                         {"v": 1, "op": "unlock", "node_id": "a", "session_id": "00" * 32, "path_epoch": 1},
                         {"v": 1, "op": "unlock", "node_id": "a", "session_id": "00" * 32, "path_epoch": True, "evidence": {}},
                         {"v": 1, "op": "unlock", "node_id": "a", "session_id": "00" * 31, "path_epoch": 1, "evidence": {}},
@@ -546,7 +621,7 @@ class Disk(Case):
 
     def unlock(self, peers=("b", "c"), session=None, transports=None, unseal=None, **kw):
         transports = transports or {p: self.transport(p) for p in peers}
-        return unlock.unlock(self.disk, session or self.session, self.stores["a"], transports, self.quote(**kw), unseal or self.unseal, run=run)
+        return unlock.unlock(self.disk, session or self.session, self.pins, transports, self.quote(**kw), unseal or self.unseal, run=run)
 
     def meta(self):
         return unlock.luks_meta(self.disk, run)
@@ -659,7 +734,7 @@ class Disk(Case):
             return run(argv, **kw)
         epoch, secret = self.enrolled("b")
         unlock.enrol_path(self.disk, "a", "b", epoch, self.local, fake_seal(self.local), secret, RECOVERY, watching)
-        unlock.unlock(self.disk, self.session, self.stores["a"], {"b": self.transport("b")}, self.quote(), self.unseal, run=watching)
+        unlock.unlock(self.disk, self.session, self.pins, {"b": self.transport("b")}, self.quote(), self.unseal, run=watching)
         key = unlock.credential(self.local, secret, "a", "b", epoch)
         flat = " ".join(str(a) for argv in seen for a in argv).encode()
         for value in (key, RECOVERY, secret.hex().encode(), self.local.hex().encode()):
@@ -704,10 +779,12 @@ class Disk(Case):
 class OnSwtpm(unittest.TestCase):
     """Three software TPMs (target a, peers b and c): real EKs and AKs, real quotes, the peers' responses
     signed by their TPMs, the local contribution sealed by systemd-creds to a's TPM, and a real LUKS2
-    volume. Run as root by e2e/peer-unlock-swtpm.sh, which gives a loop device in REGALIA_UNLOCK_DEVICE: the
+    volume. Each step is made with the native pre-root client (cmd/regalia-unlock) over TCP, and with the
+    reference client. Run as root by e2e/peer-unlock-swtpm.sh, which gives a loop device in REGALIA_UNLOCK_DEVICE: the
     volume is then mapped by dm-crypt and its filesystem read. Where the tools are provisioned
     (REGALIA_EXPECT_SWTPM=1) a missing one is a failure, not a skip."""
     TOOLS = ("swtpm", "tpm2_createak", "tpm2_quote", "tpm2_nvdefine", "tpm2_pcrextend", "openssl", "systemd-creds", "cryptsetup")
+    """The native client (cmd/regalia-unlock) is REGALIA_UNLOCK_BIN, or is built here with `go`."""
 
     def setUp(self):
         missing = [t for t in self.TOOLS if not shutil.which(t, path=PATH)]
@@ -733,7 +810,9 @@ class OnSwtpm(unittest.TestCase):
         self.events, self.sequence, self.stores, self.fresh, self.attesters, self.contributions, self.served = [], 1, {}, {}, {}, {}, {}
         firmware = attest.parse_quote(self.quote_as("a", 1, bytes(32), b"k", bytes(32))[0])["firmware_version"]
         self.reference = {"tpm_firmware_version": firmware, "pcrs": {"7": self.pcr("a", 7), "11": self.pcr("a", 11)}}
-        for name in ("a", "b", "c"):
+        self.pins = unlock.validate_boot_config(unlock.boot_config(self.m1, "a", "/dev/disk/by-partlabel/root", [7, 11],
+                                                                   {"b": "192.0.2.2:7443", "c": "192.0.2.3:7443"}))
+        for name in ("b", "c"):
             anchor = m.HighWater("0x1500016", tcti=self.tcti[name], lock_path="%s/%s-hw.lock" % (self.d, name))
             anchor.define()
             self.stores[name] = m.Store("%s/%s-membership.json" % (self.d, name), self.root, anchor)
@@ -754,6 +833,10 @@ class OnSwtpm(unittest.TestCase):
             with open(self.device, "wb") as f:
                 f.truncate(32 * 1024 * 1024)
         self.name = "regalia-unlock-test-%d" % os.getpid()
+        self.client = os.environ.get("REGALIA_UNLOCK_BIN") or self.d + "/regalia-unlock"
+        if not os.environ.get("REGALIA_UNLOCK_BIN"):
+            built = run(["go", "build", "-o", self.client, "./cmd/regalia-unlock"], capture_output=True, text=True, cwd=REPO)
+            self.assertEqual(built.returncode, 0, "the native client did not build (or set REGALIA_UNLOCK_BIN): " + built.stderr)
         self.addCleanup(lambda: os.path.exists("/dev/mapper/" + self.name) and run(["cryptsetup", "close", self.name], capture_output=True))
 
     # -- the TPMs --
@@ -827,7 +910,7 @@ class OnSwtpm(unittest.TestCase):
         return lambda sealed: unlock.unseal_local(sealed, tpm2_device=self.tcti[tpm], run=run)
 
     def unlock(self, peers=("b", "c"), tpm="a", name=None):
-        return unlock.unlock(self.device, unlock.BootSession("a"), self.stores["a"], {p: self.transport(p) for p in peers},
+        return unlock.unlock(self.device, unlock.BootSession("a"), self.pins, {p: self.transport(p) for p in peers},
                              unlock.tpm_quote([7, 11], tcti=self.tcti[tpm]), self.unseal(tpm), name=name, run=run)
 
     def refused(self, reason, fn, *args, **kw):
@@ -837,6 +920,71 @@ class OnSwtpm(unittest.TestCase):
 
     def reasons(self, since):
         return [e["reason"] for e in self.events[since:] if e["outcome"] == "DENY"]
+
+    # -- the native client (cmd/regalia-unlock), against the peers served over TCP --
+    def serve(self):
+        """b and c answer on 127.0.0.1; returns {peer: endpoint}. `dead` is an endpoint nobody listens on."""
+        endpoints = {}
+        for peer in ("b", "c"):
+            listener = socket.create_server(("127.0.0.1", 0))
+            self.addCleanup(listener.close)
+            threading.Thread(target=unlock.serve, args=(self.served[peer], listener), daemon=True).start()
+            endpoints[peer] = "127.0.0.1:%d" % listener.getsockname()[1]
+        closed = socket.create_server(("127.0.0.1", 0))
+        self.dead = "127.0.0.1:%d" % closed.getsockname()[1]
+        closed.close()
+        return endpoints
+
+    def native(self, endpoints, *flags, tpm="a", mapped=False, config_text=None):
+        """One boot's run of the pre-root client on TPM `tpm`, with this test in systemd's two roles.
+        As the unit's manager: unseal the local half with the TPM (LoadCredentialEncrypted=; a refusal
+        means the unit never starts) and pass it in a credentials directory, with the listening socket.
+        As systemd-cryptsetup: wait on that socket for the key, and open the volume with it, mapped or as a
+        test. Returns (exit code, stdout, stderr, the keyslot the key opened or None)."""
+        config, creds, path = self.d + "/unlock.json", tempfile.mkdtemp(dir=self.d), self.d + "/key.sock"
+        with open(config, "w") as f:
+            f.write(config_text or json.dumps(unlock.boot_config(self.m1, "a", self.device, [7, 11], endpoints)))
+        tokens = [t for _, t in unlock.path_tokens(unlock.luks_meta(self.device, run))]
+        local = unlock.unseal_local(tokens[0]["local"], tpm2_device=self.tcti[tpm], run=run)     # Refused on another TPM
+        with open(os.open(creds + "/" + unlock.LOCAL_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400), "wb") as f:
+            f.write(local)
+        if os.path.exists(path):
+            os.unlink(path)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(1)
+        asker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        asker.connect(path)                                           # systemd-cryptsetup, waiting for its key
+
+        def activated():                                              # sd_listen_fds: descriptor 3, for this process
+            os.dup2(listener.fileno(), 3)
+            os.set_inheritable(3, True)
+            os.putenv("LISTEN_PID", str(os.getpid()))
+        try:
+            with unittest.mock.patch.dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=creds):
+                done = subprocess.run([self.client, "-config", config, "-tpm", "unix:" + self.tcti[tpm][len("swtpm:path="):], "-wait", "0s", *flags],
+                                      capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, preexec_fn=activated, close_fds=False)
+            listener.close()
+            asker.settimeout(5)
+            key, slot = asker.recv(4096), None                         # a run that gives no key answers with nothing, at once
+            self.assertEqual(bool(key), done.returncode == 0, done.stderr)
+            if key:
+                args = [self.device, self.name] if mapped else ["--test-passphrase", self.device]
+                opened = run(["cryptsetup", "open", "--key-file", "-", "-v", *args], input=key, capture_output=True)
+                self.assertEqual(opened.returncode, 0, opened.stderr)
+                slot = int(re.search(rb"Key slot (\d+) unlocked", opened.stdout).group(1))
+            return done.returncode, done.stdout, done.stderr, slot
+        finally:
+            asker.close()
+            listener.close()
+            shutil.rmtree(creds)
+
+    def marker(self):
+        """The mapped volume's filesystem mounts and holds the marker; then it is closed again."""
+        self.assertEqual(run(["mount", "-o", "ro", "/dev/mapper/" + self.name, self.d + "/mnt"], capture_output=True).returncode, 0)
+        self.assertEqual(lt.slurp(self.d + "/mnt/marker"), b"regalia-kms root volume marker")
+        self.assertEqual(run(["umount", self.d + "/mnt"], capture_output=True).returncode, 0)
+        self.assertEqual(run(["cryptsetup", "close", self.name], capture_output=True).returncode, 0)
 
     def test_tpm_plus_one_peer_opens_the_disk_and_a_retired_image_a_stolen_disk_or_a_revoked_node_does_not(self):
         cs = lambda args, stdin=None: self.assertEqual(run(["cryptsetup", *args], input=stdin, capture_output=True).returncode, 0, args)
@@ -852,10 +1000,13 @@ class OnSwtpm(unittest.TestCase):
                 f.write("regalia-kms root volume marker")
             self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
             cs(["close", self.name])
+        endpoints = self.serve()
 
-        # enrolment: the local half sealed to a's TPM under the approved image's PCRs 7 and 11, one path per peer
+        # enrolment. The local half is sealed to a's TPM under PCR 7 only, as the PIN is today: PCR 7 does not
+        # change with the boot image, so the TPM releases this half to EVERY image (the gap of #135). The
+        # image is judged by the peers, whose reference values hold PCR 11 as well.
         local = os.urandom(32)
-        sealed = unlock.seal_local(local, pcrs="7+11", tpm2_device=self.tcti["a"], run=run)
+        sealed = unlock.seal_local(local, pcrs="7", tpm2_device=self.tcti["a"], run=run)
         self.assertEqual(unlock.local_key_type(sealed), "tpm2")
         self.assertEqual(self.unseal()(sealed), local)
         for peer in ("b", "c"):
@@ -867,56 +1018,79 @@ class OnSwtpm(unittest.TestCase):
         self.assertEqual(unlock.judge_tokens(unlock.luks_meta(self.device, run), "a", ["b", "c"])[:2],
                          (True, "peer-assisted unlock: b in keyslot 1 (path epoch 1), c in keyslot 2 (path epoch 1)"))
 
-        # PoC 7.1: a reboots on the approved image; b restores it. Mapped for real when a block device is given.
+        # PoC 7.1: a reboots on the approved image; b restores it. First the reference client, then the
+        # native one, which maps the volume for real when a block device is given.
         self.reboot("a", "the approved image")
-        self.assertEqual(self.unlock(name=self.name if self.mapped else None), ("b", 1))
+        self.assertEqual(self.unlock(), ("b", 1))
+        self.reboot("a", "the approved image")
+        self.assertEqual(self.native(endpoints, mapped=self.mapped),
+                         (0, "regalia-unlock: gave the key of %s for keyslot 1, through b\n" % self.device, "", 1))
         if self.mapped:
-            self.assertEqual(run(["mount", "-o", "ro", "/dev/mapper/" + self.name, self.d + "/mnt"], capture_output=True).returncode, 0)
-            self.assertEqual(lt.slurp(self.d + "/mnt/marker"), b"regalia-kms root volume marker")
-            self.assertEqual(run(["umount", self.d + "/mnt"], capture_output=True).returncode, 0)
-            cs(["close", self.name])
-        # PoC 7.2, 7.3: b is down; c restores it through its own keyslot
+            self.marker()
+        # PoC 7.2, 7.3: b is unreachable; c restores a through its own keyslot
+        self.reboot("a", "the approved image")
+        code, out, err, slot = self.native(dict(endpoints, b=self.dead), mapped=self.mapped)
+        self.assertEqual((code, out, slot), (0, "regalia-unlock: gave the key of %s for keyslot 2, through c\n" % self.device, 2), err)
+        self.assertIn("round 1, b (path epoch 1): hello: the transport failed (no connection)", err)
+        if self.mapped:
+            self.marker()
         self.reboot("a", "the approved image")
         self.assertEqual(self.unlock(peers=("c",)), ("c", 2))
-        # PoC 7.4: no peer; the TPM half alone opens nothing
+        # PoC 7.4: no peer; the TPM half alone opens nothing, after a bounded number of rounds
         self.reboot("a", "the approved image")
+        code, out, err, slot = self.native({"b": self.dead, "c": self.dead}, "-rounds", "2")
+        self.assertEqual((code, out, slot), (1, "", None), err)
+        self.assertIn("regalia-unlock: the disk stays locked: no peer helped in 2 rounds", err)
+        self.assertEqual(err.count("the transport failed (no connection)"), 4)
         self.refused("the disk stays locked: no peer to ask", self.unlock, peers=())
+        self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
+        # a boot configuration that cannot be read: refused before any peer is asked, and the socket is still answered
+        since = len(self.events)
+        code, out, err, slot = self.native(endpoints, config_text='{"schema": "regalia.unlock-boot/v1"}}')
+        self.assertEqual((code, out, slot, self.events[since:]), (1, "", None, []), err)
+        self.assertEqual(err, "regalia-unlock: the boot configuration has trailing data\n")
 
-        # #135: a boots an image the peers' reference values do not list. Its TPM refuses the local half here
-        # (it is bound to PCR 11 directly); with a SIGNED PCR 11 policy the TPM would release it for every image
-        # ever signed, which is the case the next block makes.
+        # #135: a boots an image the root has retired. Its TPM releases the local half all the same; both
+        # peers refuse the quote, and the disk stays locked. With each client.
         self.reboot("a", "a retired image")
         since = len(self.events)
-        self.refused("the TPM does not release the local contribution", self.unlock)
-        self.assertEqual(self.events[since:], [])                     # no peer was even asked
-        # the same retired image, with the local half in hand (as a signed policy would give it): both peers refuse
-        session = unlock.BootSession("a")
+        code, out, err, slot = self.native(endpoints, "-rounds", "1")
+        self.assertEqual((code, out, slot), (1, "", None), err)
         for peer in ("b", "c"):
-            self.refused("unlock: the peer refused (DENIED)", unlock.ask, session, self.stores["a"], peer, 1, self.transport(peer),
-                         unlock.tpm_quote([7, 11], tcti=self.tcti["a"]), run)
-        self.assertEqual(self.reasons(since), ["the subject's attestation is refused: the quoted PCR digest is not the expected PCR values"] * 2)
-        self.assertFalse(session.consumed)
+            self.assertIn("round 1, %s (path epoch 1): unlock: the peer refused (DENIED)" % peer, err)
+        self.assertNotIn("does not release the local contribution", err)
+        refusal = "the subject's attestation is refused: the quoted PCR digest is not the expected PCR values"
+        self.assertEqual(self.reasons(since), [refusal] * 2)
+        self.assertNotIn("PCR", err)                                  # the reason stays with the peers
+        self.reboot("a", "a retired image")
+        since = len(self.events)
+        self.refused("the disk stays locked: b (path epoch 1): unlock: the peer refused (DENIED); c (path epoch 1): unlock: the peer refused (DENIED)", self.unlock)
+        self.assertEqual(self.reasons(since), [refusal] * 2)
+        self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
 
         # PoC 7.8, 7.9: the disk in another machine (c's TPM, booted on the approved image, claiming to be a)
         self.reboot("c", "the approved image")
         since = len(self.events)
-        self.refused("the TPM does not release the local contribution", self.unlock, peers=("b",), tpm="c")
-        self.refused("unlock: the peer refused (DENIED)", unlock.ask, unlock.BootSession("a"), self.stores["a"], "b", 1, self.transport("b"),
+        self.refused("the TPM does not release the local contribution", self.native, endpoints, tpm="c")   # systemd never starts the client
+        self.assertEqual(self.events[since:], [])                     # without the local half no peer is even asked
+        self.refused("unlock: the peer refused (DENIED)", unlock.ask, unlock.BootSession("a"), self.pins["b"], 1, self.transport("b"),
                      unlock.tpm_quote([7, 11], tcti=self.tcti["c"]), run)
         self.assertIn("the subject's attestation is refused", self.reasons(since)[-1])
 
         # the approved image again: restored. Then a is reported stolen: the revocation key alone, no root ceremony.
         self.reboot("a", "the approved image")
-        self.assertEqual(self.unlock(), ("b", 1))
+        self.assertEqual(self.native(endpoints)[::3], (0, 1))
         m2 = self.manifest(self.m1, a="REVOKED_STOLEN")
         for peer in ("b", "c"):
             self.stores[peer].commit(rt.sign(m2, hbt.REVOKE, "revocation"))
             self.fresh[peer].accept(hbt.beat(m2, 2, issued=self.now), m2)
         self.reboot("a", "the approved image")
         since = len(self.events)
-        self.refused("the disk stays locked: b (path epoch 1): hello: the peer refused (DENIED); c (path epoch 1): hello: the peer refused (DENIED)", self.unlock)
+        code, out, err, slot = self.native(endpoints, "-rounds", "1")
+        self.assertEqual((code, out, slot), (1, "", None), err)
+        for peer in ("b", "c"):
+            self.assertIn("round 1, %s (path epoch 1): hello: the peer refused (DENIED)" % peer, err)
         self.assertEqual(self.reasons(since), ["a may not be unlocked under epoch 2"] * 2)
-        self.assertEqual(self.stores["a"].load()["epoch"], 1)         # a refused node is told nothing
         self.assertEqual([self.contributions[p].epochs("a") for p in ("b", "c")], [[], []])       # and the peers' halves are gone
         # the recovery key still opens the volume: the manual path of a total outage (#77) does not go through a peer
         self.assertTrue(unlock.opens(self.device, 0, RECOVERY, run))

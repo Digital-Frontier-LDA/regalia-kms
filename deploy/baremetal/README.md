@@ -328,22 +328,35 @@ releases the disk key to every image its policy ever accepted (#135). The three-
 it: the disk needs the host's TPM **and** one peer, and a peer helps only a node its current manifest
 lets be unlocked, on an image the manifest's measurements still list.
 
-`deploy/baremetal/unlock.py` holds the decisions and the formats, proven on software TPMs and a real
-dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
+Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 
 - **The credential** of each peer path is derived from two halves: one sealed in this host's TPM, one
   kept on the peer's encrypted disk. Each peer has a LUKS2 keyslot and a `regalia-peer-unlock` token of
   its own, so either peer restores the host and each path is rotated alone.
-- **The exchange:** the host sends a fresh TPM quote for this boot; the peer decides with
-  `replacement.may_unlock`, and answers with its half encrypted to this boot's one-time key and signed
-  by its own TPM. A captured exchange is useless in another boot.
-- **Enrolment** is an operator step between two running hosts; the recovery key (section 3) authorizes
-  adding the keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer
-  unlock the disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
+- **The peer** (`deploy/baremetal/unlock.py`, on a booted host): the host sends a fresh TPM quote for
+  this boot; the peer decides with `replacement.may_unlock`, and answers with its half encrypted to
+  this boot's one-time key and signed by its own TPM. A captured exchange is useless in another boot.
+- **The pre-root client** (`cmd/regalia-unlock`, a static Go binary; `unlock.py` also holds a
+  reference client that the tests use and that is not shipped). It holds no manifest and makes no
+  membership decision. It runs no other program and writes no file:
+  - systemd unseals the local half with the TPM and passes it as the unit's credential
+    `regalia-unlock-local` (`LoadCredentialEncrypted=`);
+  - the client reads the LUKS2 header for the peer paths, asks the peers of its boot configuration in
+    turn (`unlock.boot_config`: node ID, disk, PCRs to quote, and each peer's address and TPM key
+    names), for a bounded number of rounds;
+  - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
+    file. If no peer helps, it gives nothing and the console asks for the recovery key (section 3).
+- **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
+  keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
+  disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
 - **`unlock.judge_tokens`** judges the LUKS2 header for the probe: one path per expected peer, each with
   a keyslot of its own, and no `systemd-tpm2` token left.
 
-Not there yet, so **nothing here is to be run on a KMS host**: the transport (WireGuard before root,
-#66), the pre-root client (a small native program; the Python client in `unlock.py` is the reference
-the tests use and is not shipped in an initramfs), the operator commands, and every run on a physical
-TPM or a DL360 (#65).
+**A dependency this adds.** A peer helps only while it holds a live heartbeat from the revocation
+authority (#69). If the authority is unreachable for longer than a heartbeat lives, a host that
+reboots stays locked until someone types its recovery key. Where the authority runs and who is alerted
+when heartbeats stop are decided before commissioning.
+
+Not there yet, so **nothing here is to be run on a KMS host**: WireGuard before root under the TCP
+transport (#66), the systemd units and the initramfs that start the client, the operator commands, and
+every run on a physical TPM or a DL360 (#65).
