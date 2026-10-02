@@ -48,9 +48,11 @@ PLATFORM AND TPM, measured:
                             unlock (#67, deploy/baremetal/unlock.py): regalia-peer-unlock tokens and no
                             systemd-tpm2 token at all, judged by unlock.judge_tokens against --node-id
                             and --unlock-peer (this node, and exactly the peers that hold a path), each
-                            path's local share sealed to the TPM alone under PCR 7 (with or without a
-                            signed PCR 11 policy). root_disk_tpm_unlocked accepts the same shape, with
-                            no tpm2-device in crypttab. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY
+                            path's local share sealed to the TPM alone under the binding RECORDED for the
+                            PIN credentials (PCR 7, and the signed PCR 11 policy when the PINs have it).
+                            On the root volume only: the unlock client opens no other. A second volume
+                            that holds a secret needs an NV-backed token of its own. root_disk_tpm_unlocked
+                            accepts the same shape, with no tpm2-device in crypttab. A HOST ENROLLED WITH --tpm2-pcrs=7 FAILS THIS, BY
                             DESIGN: it is the known blocker for production, and there is no option to
                             skip it. Signed commissioning evidence records every measured control as
                             true, so no evidence can be signed for such a host either.
@@ -271,11 +273,13 @@ def token_keyslots(token, meta):
 PEER_TOKEN = "regalia-peer-unlock"      # deploy/baremetal/unlock.py: one token per peer path
 
 
-def peer_paths(meta, where, unlock_record):
+def peer_paths(meta, where, unlock_record, binding=None):
     """Judge a volume that carries peer-path tokens (#67): (ok, why). unlock.judge_tokens decides whether
     the paths are well-formed, for this node, from the recorded peers, each with a keyslot of its own,
     with NO systemd-tpm2 token beside them; here the local share of each path must also be sealed to the
-    TPM under PCR 7 exactly (with or without a signed PCR 11 policy), as the disk policy is.
+    TPM as the PIN credentials are RECORDED to be (`binding`: the same direct PCRs, signed PCRs and
+    signing key, so the day the PINs get the signed PCR 11 policy the local share must have it too, with
+    no second switch). With no recorded binding: PCR 7 exactly, with or without a signed PCR 11 policy.
     `unlock_record` is (this host's node ID, its unlock peers), from --node-id and --unlock-peer."""
     if unlock_record is None:
         return False, "%s carries %s tokens, and this run was not told which node this is: pass --node-id and one " \
@@ -298,13 +302,18 @@ def peer_paths(meta, where, unlock_record):
             direct, signed, _pkfp = local_share_binding(token.get("local"))
         except ValueError as error:
             return False, "%s: the local share of token %s is %s" % (where, token_id, error)
-        if direct != [7] or signed not in ([], [11]):
+        if binding is not None:
+            want = (list(binding[0]), list(binding[1]), binding[2])
+            if (direct, signed, _pkfp) != want:
+                return False, "%s: the local share of token %s is sealed to %s; the recorded binding is %s" % (
+                    where, token_id, binding_text(direct, signed, _pkfp), binding_text(*want))
+        elif direct != [7] or signed not in ([], [11]):
             return False, "%s: the local share of token %s is sealed to %s, not to PCR 7 exactly (with or without a signed " \
                 "PCR 11 policy)" % (where, token_id, binding_text(direct, signed, _pkfp))
     return True, why
 
 
-def root_unlock(host, unlock_record=None):
+def root_unlock(host, unlock_record=None, binding=None):
     crypts, why = root_crypt_devices(host)
     if crypts is None:
         return False, why
@@ -326,7 +335,7 @@ def root_unlock(host, unlock_record=None):
             if opts.get("tpm2-device"):
                 return False, "%s (%s) carries %s tokens, but crypttab still asks systemd to unlock it with the TPM alone " \
                     "(tpm2-device=%s)" % (name, dev, PEER_TOKEN, opts["tpm2-device"])
-            ok, why = peer_paths(meta, "%s (%s)" % (name, dev), unlock_record)
+            ok, why = peer_paths(meta, "%s (%s)" % (name, dev), unlock_record, binding)
             if not ok:
                 return False, why
             how.append("%s unlocks with the TPM and a peer (%s)" % (name, why))
@@ -453,7 +462,7 @@ NOT_REVOCABLE = (
     "There is no option to skip this check")
 
 
-def unlock_revocable(host, unlock_record=None):
+def unlock_revocable(host, unlock_record=None, binding=None):
     volumes, why = secret_volumes(host)
     if volumes is None:
         return False, why
@@ -487,7 +496,12 @@ def unlock_revocable(host, unlock_record=None):
         # sits beside the paths, NV-backed or not: a keyslot the local TPM opens by itself bypasses the peers.
         peer_shape = any(t.get("type") == PEER_TOKEN for t in meta["tokens"].values())
         if peer_shape:
-            ok, why = peer_paths(meta, where, unlock_record)
+            # The unlock client opens ONE volume per boot, the root one, and a peer keeps its contribution
+            # per node, not per volume (unlock.py, v1). Peer paths on any other volume open at no boot.
+            if "/" not in paths:
+                return False, "%s carries %s tokens, but it is not the root volume: the unlock client opens the root volume " \
+                    "only, so nothing can open this one through its peer paths. BLOCKING FOR PRODUCTION (#135)" % (where, PEER_TOKEN)
+            ok, why = peer_paths(meta, where, unlock_record, binding)
             if not ok:
                 return False, "%s. BLOCKING FOR PRODUCTION (#135)" % why
             by_peer.append("%s: %s" % (name, why))
@@ -944,7 +958,7 @@ def measure(host, import_key_sha256=None, credential_binding=None, unlock_record
         if name == "pin_credentials_sealed_as_recorded":
             return pin_credentials(host, credential_binding)
         if name in ("root_disk_tpm_unlocked", "root_disk_unlock_revocable"):
-            return PROBES[name](host, unlock_record)
+            return PROBES[name](host, unlock_record, credential_binding)
         return PROBES[name](host)
 
     def judged(name):

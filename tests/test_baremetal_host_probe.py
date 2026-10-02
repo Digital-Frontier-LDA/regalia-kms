@@ -431,6 +431,47 @@ class HostProbe(unittest.TestCase):
             host_probe.credential_header(cred("tpm2-7.cred"))
         self.assertIn("the TPM alone, with no host key", str(caught.exception))
 
+    def test_the_local_share_follows_the_recorded_binding_of_the_pin_credentials(self):
+        """With a recorded binding (the evidence, or --credential-pcrs…), the local share must be sealed to
+        exactly that: when the PINs get the signed PCR 11 policy, so must it."""
+        recovery = LUKS_META["tokens"]["1"]
+        plain = self.peer_host()
+        signed = self.peer_host(self.path("b", "1", "pk-7-11.cred"), recovery, self.path("c", "3", "pk-7-11.cred"))
+        mixed = self.peer_host(self.path("b", "1", "pk-7-11.cred"), recovery, self.path("c", "3"))
+        for probe_fn in (host_probe.root_unlock, host_probe.unlock_revocable):
+            with self.subTest(probe_fn.__name__):
+                self.assertTrue(probe_fn(plain, self.RECORD, PCR7)[0])
+                self.assertTrue(probe_fn(signed, self.RECORD, SIGNED)[0])
+                value, why = probe_fn(plain, self.RECORD, SIGNED)
+                self.assertFalse(value, why)
+                self.assertIn("the local share of token 0 is sealed to PCRs 7, no signed policy; the recorded binding is PCRs 7, signed PCRs 11 by key pkfp " + PKFP, why)
+                value, why = probe_fn(signed, self.RECORD, PCR7)
+                self.assertFalse(value, why)
+                self.assertIn("the recorded binding is PCRs 7, no signed policy", why)
+                self.assertIn("the local share of token 2", probe_fn(mixed, self.RECORD, SIGNED)[1])
+                self.assertFalse(probe_fn(signed, self.RECORD, ([7], [11], "0" * 64))[0])    # signed by another key
+        # through main(): the binding given for the PINs is the one the local share is held to
+        with redirect_stdout(io.StringIO()) as out:
+            host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+                             "--credential-pcr-key-pkfp", PKFP, "--node-id", "a", "--unlock-peer", "b", "--unlock-peer", "c"], host=self.peer_host())
+        report = json.loads(out.getvalue())["measured"]
+        self.assertIn("the recorded binding is PCRs 7, signed PCRs 11", report["root_disk_unlock_revocable"]["why"])
+        self.assertIn("the recorded binding is PCRs 7, signed PCRs 11", report["root_disk_tpm_unlocked"]["why"])
+
+    def test_peer_paths_on_a_volume_that_is_not_the_root_one_fail(self):
+        """The unlock client opens the root volume only. A second volume holding the host key with peer
+        paths of its own could be opened at no boot; it is not judged like the root."""
+        h = self.peer_host()
+        h.runs[secret_mount(host_probe.HOST_KEY)] = (0, "/dev/mapper/var_crypt ext4 3333-4444\n")
+        h.runs[("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/mapper/var_crypt")] = (0, "var_crypt crypt\nsdb1 part\nsdb disk\n")
+        h.runs[("cryptsetup", "status", "var_crypt")] = (0, "  type:    LUKS2\n  device:  /dev/sdb1\n")
+        h.runs[("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sdb1")] = (0, json.dumps(
+            {"keyslots": {"1": {}, "3": {}}, "tokens": {"0": self.path("b", "1"), "1": self.path("c", "3")}}))
+        value, why = host_probe.unlock_revocable(h, self.RECORD)
+        self.assertFalse(value, why)
+        self.assertIn("var_crypt (/dev/sdb1, under %s) carries regalia-peer-unlock tokens, but it is not the root volume" % host_probe.HOST_KEY, why)
+        self.assertIn("BLOCKING FOR PRODUCTION (#135)", why)
+
     def test_without_the_unlock_module_the_peer_shape_is_not_accepted(self):
         real_import = __import__
 
