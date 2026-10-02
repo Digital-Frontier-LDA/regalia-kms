@@ -25,6 +25,14 @@ from this repository.
 
 ## Committed secrets
 
+Before publishing an issue, comment, pull request or document, check the target
+repository's visibility and review the text and linked issue titles. Public
+material should describe product contracts, supported capabilities and synthetic
+examples. Keep deployment identities, endpoints, key inventories, credential
+findings, incident timelines and recovery procedures in restricted operational
+records. Preserve product security limitations in public documentation so users
+can assess them. Editing public text does not remove earlier revisions or copies.
+
 This repository is scanned for committed credentials by gitleaks in CI (fail-closed, full history)
 and by GitHub secret scanning with push protection. If you believe a credential was committed,
 report it privately — the fix is **rotation**, not deletion (a secret removed in a later commit is
