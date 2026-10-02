@@ -182,7 +182,8 @@ class Exchange(Case):
         cases = [
             ("the response is not signed by the AK the manifest names for b", resigned("c")),
             ("the response is from c, not from b, the peer that was asked", resigned("c", peer_id="c")),
-            ("the quote is not over this response", edited(path_epoch=epoch + 1)),
+            ("the peer answered for path epoch 2, not 1", edited(path_epoch=epoch + 1)),
+            ("the peer answered for path epoch 2, not 1", resigned("b", path_epoch=epoch + 1)),
             ("the quote is not over this response", edited(ciphertext="00" * 384)),
             ("the response does not answer the request this boot session sent b", resigned("b", transcript_sha256="ab" * 32)),
             ("the response is for another node or another boot session", resigned("b", node_id="c")),
@@ -242,6 +243,51 @@ class Exchange(Case):
         replayed.consumed = False
         self.refused("unlock: the peer refused (DENIED)", self.ask, "b", epoch, session=replayed, reset=stale + 1)
         self.denied("a boot session or ephemeral key from an earlier boot was presented after a reboot")
+
+    def test_a_request_changed_on_the_way_to_another_path_epoch_does_not_spend_the_session(self):
+        """During a rotation the peer holds two contributions. The path epoch asked for is not in the quote, so
+        whoever sits on the path can change it; the peer's answer is then valid, and for the wrong path."""
+        old, _ = self.enrolled("b")
+        new, secret = self.enrolled("b")
+        self.assertEqual((old, new), (1, 2))
+        genuine = self.transport("b")
+
+        def downgraded(raw):
+            message = json.loads(raw)
+            if message["op"] == "unlock":
+                message["path_epoch"] = old
+            return genuine(json.dumps(message).encode())
+        self.refused("the peer answered for path epoch 1, not 2", unlock.ask, self.session, self.stores["a"], "b", new, downgraded, self.quote(), run)
+        self.assertEqual(self.events[-1]["outcome"], "ALLOW")         # the peer did answer, validly
+        self.assertFalse(self.session.consumed)
+        self.assertEqual(self.ask("b", new), secret)                  # the same boot still unlocks
+
+    def test_a_node_far_behind_that_may_not_be_unlocked_is_sent_no_manifest(self):
+        """More manifests behind than one message carries: the reply would hold manifests and no nonce yet.
+        A node the peer will not unlock gets neither."""
+        authority = self.stores["authority"]
+        self.revoke(authority.load(), "QUARANTINED")
+        for _ in range(unlock.ENVELOPES_PER_MESSAGE + 1):             # the root re-issues; a stays quarantined
+            current = authority.load()
+            authority.commit(rt.sign(dict(self.chain(current, current["nodes"]), policy_version="p%d" % (current["epoch"] + 1))))
+        self.publish("b")
+        self.assertGreater(self.stores["b"].load()["epoch"] - 1, unlock.ENVELOPES_PER_MESSAGE)
+        behind = {"v": 1, "op": "hello", "node_id": "a", "summary": {"epoch": 1, "manifest_digest": m.digest(self.m1)}}
+        self.assertEqual(self.served["b"].handle(json.dumps(behind).encode()), {"v": 1, "error": "DENIED"})
+        self.denied("a may not be unlocked")
+        # c, which may be unlocked, is brought forward message by message (it is not enrolled with b's verifier: no nonce at the end)
+        reply = self.served["b"].handle(json.dumps(dict(behind, node_id="c")).encode())
+        self.assertEqual((len(reply["envelopes"]), reply["nonce"]), (unlock.ENVELOPES_PER_MESSAGE, None))
+
+    def test_an_unreachable_peer_is_one_refusal_and_the_next_peer_is_asked(self):
+        epoch, secret = self.enrolled("c")
+        for error in (ConnectionRefusedError("refused"), TimeoutError("timed out"), OSError("no route to host"), EOFError()):
+            def dead(raw, error=error):
+                raise error
+            with self.subTest(type(error).__name__):
+                self.refused("hello: the transport failed (%s)" % type(error).__name__, unlock.ask, self.session, self.stores["a"], "b", 1, dead, self.quote(), run)
+        self.assertFalse(self.session.consumed)
+        self.assertEqual(self.ask("c", epoch), secret)
 
     def test_a_second_session_in_one_boot_is_refused(self):
         epoch, _ = self.enrolled("b")
@@ -320,7 +366,7 @@ class Exchange(Case):
         response = {"schema": unlock.RESPONSE_SCHEMA, "peer_id": "b", "node_id": "a", "epoch": 2, "manifest_digest": m.digest(manifest),
                     "session_id": self.session.session_id.hex(), "transcript_sha256": self.session.pending["b"], "path_epoch": epoch, "ciphertext": "00" * 384}
         envelope = {"response": response, "signature": self.keys["b"].signer()(unlock.signed_digest(response))}
-        self.refused("b may not authorize under epoch 2", self.session.open, "b", envelope, manifest, run)
+        self.refused("b may not authorize under epoch 2", self.session.open, "b", envelope, manifest, epoch, run)
 
     def test_a_request_is_bounded_and_exact(self):
         peer = self.served["b"]
@@ -506,7 +552,7 @@ class Disk(Case):
         return unlock.luks_meta(self.disk, run)
 
     def down(self, raw):
-        raise m.Refused("no route to host")
+        raise ConnectionRefusedError("no route to host")
 
     def test_poc_7_1_to_7_4_either_peer_restores_the_node_and_without_a_peer_the_disk_stays_locked(self):
         self.assertEqual((self.enrol("b"), self.enrol("c")), (1, 2))
@@ -516,7 +562,8 @@ class Disk(Case):
         self.assertEqual(self.unlock(session=self.boot()), ("b", 1))
         self.assertEqual(self.unlock(session=self.boot(), transports={"b": self.down, "c": self.transport("c")}), ("c", 2))   # 7.2, 7.3
         rebooted = self.boot()
-        self.refused("the disk stays locked: b (path epoch 1): no route to host; c (path epoch 1): no route to host",
+        self.refused("the disk stays locked: b (path epoch 1): hello: the transport failed (ConnectionRefusedError); "
+                     "c (path epoch 1): hello: the transport failed (ConnectionRefusedError)",
                      self.unlock, session=rebooted, transports={"b": self.down, "c": self.down})    # 7.4
         self.assertFalse(rebooted.consumed)                                                  # it may go on retrying
         self.assertEqual(self.unlock(session=rebooted), ("b", 1))

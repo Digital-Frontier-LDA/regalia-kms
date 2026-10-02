@@ -355,15 +355,15 @@ class Peer:
         standing = convergence.compare(self.store, message["summary"])
         if standing == "behind":
             return {"v": VERSION, "behind": convergence.summary(self.store)}
-        envelopes = convergence.missing(self.store, message["summary"], ENVELOPES_PER_MESSAGE) if standing == "ahead" else []
         manifest = self._manifest()
         self.contributions.drop_retired(manifest)
+        # Nothing, not a manifest and not a nonce, for a node this peer would not unlock now, however far
+        # behind it says it is: the refusal here is the one it would get with a quote.
+        convergence.audited(self.audit, "unlock-challenge", manifest, requester, self.peer_id,
+                            lambda: heartbeat.authorize(manifest, self.peer_id, requester, self.freshness))
+        envelopes = convergence.missing(self.store, message["summary"], ENVELOPES_PER_MESSAGE) if standing == "ahead" else []
         reply = {"v": VERSION, "peer_id": self.peer_id, "epoch": manifest["epoch"], "envelopes": envelopes, "nonce": None}
         if message["summary"]["epoch"] + len(envelopes) == manifest["epoch"]:
-            # A nonce only for a node this peer would unlock now: asking for nonces is not a way to learn
-            # anything, and a refusal here is the refusal the requester would get with a quote.
-            convergence.audited(self.audit, "unlock-challenge", manifest, requester, self.peer_id,
-                                lambda: heartbeat.authorize(manifest, self.peer_id, requester, self.freshness))
             try:
                 reply["nonce"] = self.attester_for(manifest).nonce(requester).hex()
             except attest.Refused as refusal:
@@ -417,14 +417,17 @@ class BootSession:
         self.pending[peer_id] = hashlib.sha256(attest.transcript(self.node_id, manifest["epoch"], self.session_id,
                                                                  self.ephemeral_public, nonce)).hexdigest()
 
-    def open(self, peer_id, envelope, manifest, run=subprocess.run):
-        """The contribution in `envelope`, the reply of `peer_id`, judged by the target's own `manifest`.
-        Raises Refused, and stays usable, for anything but a valid response."""
+    def open(self, peer_id, envelope, manifest, epoch, run=subprocess.run):
+        """The contribution in `envelope`, the reply of `peer_id` for path epoch `epoch`, judged by the target's
+        own `manifest`. Raises Refused, and stays usable, for anything but a valid response to what was asked."""
         require(not self.consumed and self._private is not None, "this boot session has already accepted a response")
         membership.exact(envelope, ("response", "signature"), "unlock reply")
         response = envelope["response"]
         validate_response(response)
         require(response["peer_id"] == peer_id, "the response is from %s, not from %s, the peer that was asked" % (response["peer_id"], peer_id))
+        # The path epoch asked for is not in the quote, so the request's can be changed on the way: a valid
+        # response for another path of this pair must not spend the session.
+        require(response["path_epoch"] == epoch, "the peer answered for path epoch %d, not %d" % (response["path_epoch"], epoch))
         require(response["node_id"] == self.node_id and response["session_id"] == self.session_id.hex(),
                 "the response is for another node or another boot session")
         require(peer_id in self.pending and hmac.compare_digest(response["transcript_sha256"], self.pending[peer_id]),
@@ -435,7 +438,7 @@ class BootSession:
         verify_signature(envelope, membership.validate(manifest)[peer_id], run)
         secret = _decrypt(self._private, bytes.fromhex(response["ciphertext"]), CONTRIBUTION_LABEL + bytes.fromhex(response["transcript_sha256"]))
         self.consumed = True
-        return response["path_epoch"], secret
+        return secret
 
     def wipe(self):
         """Drop the private key. Python cannot scrub memory: the process holding it must end before the root
@@ -461,7 +464,11 @@ def tpm_quote(pcrs, tcti=None, run=subprocess.run):
 
 
 def _reply(transport, message, label):
-    raw = transport(membership.canonical(message))
+    try:
+        raw = transport(membership.canonical(message))
+    except (OSError, EOFError) as error:
+        # an unreachable peer is one peer's refusal, never the end of the attempt: the next peer is asked
+        raise Refused("%s: the transport failed (%s)" % (label, type(error).__name__)) from None
     reply = membership.load(raw, MAX_BYTES) if isinstance(raw, (bytes, str)) else raw
     require(isinstance(reply, dict), "%s: the reply is not an object" % label)
     require("error" not in reply, "%s: the peer refused (%s)" % (label, reply.get("error") if reply.get("error") in ("DENIED", "INVALID_REQUEST") else "?"))
@@ -500,9 +507,7 @@ def ask(session, store, peer_id, epoch, transport, quote, run=subprocess.run):
         answer = _reply(transport, {"v": VERSION, "op": "unlock", "node_id": session.node_id, "session_id": session.session_id.hex(),
                                     "path_epoch": epoch, "evidence": {"ephemeral_public": session.ephemeral_public.hex(), "nonce": reply["nonce"],
                                                                       "quote": signed.hex(), "signature": signature.hex()}}, "unlock")
-        got, secret = session.open(peer_id, answer, manifest, run)
-        require(got == epoch, "the peer answered for path epoch %d, not %d" % (got, epoch))
-        return secret
+        return session.open(peer_id, answer, manifest, epoch, run)
     raise Refused("no contribution from %s after %d messages" % (peer_id, MAX_EXCHANGES))
 
 
