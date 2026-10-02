@@ -81,7 +81,7 @@ LUKS_TODAY = json.dumps(dict(LUKS_META, tokens=dict(LUKS_META["tokens"], **{"0":
 # /var/lib/systemd/pcrlock.json, as systemd-pcrlock make-policy writes it (trimmed to what the probe reads):
 # the PCRs the NV index's policy covers, each with its accepted values.
 PCRLOCK = {"pcrBank": "sha256", "nvIndex": 25661857,
-           "pcrValues": [{"pcr": n, "values": [("%02x" % n) * 32]} for n in (0, 2, 4, 7, 11)]}
+           "pcrValues": [{"pcr": n, "values": [("%02x" % (0xa0 + n)) * 32]} for n in (0, 2, 4, 7, 11)]}
 
 
 def secret_mount(path):
@@ -259,7 +259,11 @@ class HostProbe(unittest.TestCase):
                 host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", attempt], host=h)
             self.assertEqual(refused.exception.code, 2)
 
-    def judge(self, *tokens, keyslots=("1", "2", "3"), prepare=None):
+    def judge(self, *tokens, keyslots=None, prepare=None):
+        """A host whose root volume carries `tokens`. Its keyslots are the ones those tokens name, unless given."""
+        if keyslots is None:
+            keyslots = sorted({s for t in tokens for s in (t.get("keyslots") if isinstance(t.get("keyslots"), list) else [])
+                               if isinstance(s, str)})
         h = FakeHost()
         h.runs[LUKS_DUMP] = (0, json.dumps({"keyslots": {k: {"type": "luks2"} for k in keyslots},
                                             "tokens": {str(i): t for i, t in enumerate(tokens)}}))
@@ -319,32 +323,90 @@ class HostProbe(unittest.TestCase):
         """A stale token naming a wiped keyslot unlocks nothing: "every TPM token is NV-backed" would be
         true of a volume the TPM cannot open at all."""
         recovery = LUKS_META["tokens"]["1"]
-        for slots in (["9"], ["1", "9"], "1", [1], [["1"]], {"1": 1}):
+        for slots in (["9"], ["1", "9"], ["01"], [""], ["1 "]):
             with self.subTest(keyslots=repr(slots)):
-                h = self.judge(dict(NV_TOKEN, keyslots=slots), recovery)
+                h = self.judge(dict(NV_TOKEN, keyslots=slots), recovery, keyslots=("1", "2"))
                 value, why = host_probe.unlock_revocable(h)
                 self.assertFalse(value, why)
                 self.assertIn("which are not all keyslots of this header", why)
                 value, why = host_probe.root_unlock(h)
                 self.assertFalse(value, why)
                 self.assertIn("no systemd-tpm2 token", why)
+        # the recovery token too: one that names a keyslot which is gone is stale, not "the recovery key"
+        h = self.judge(NV_TOKEN, dict(recovery, keyslots=["7"]), keyslots=("1",))
+        value, why = host_probe.unlock_revocable(h)
+        self.assertFalse(value, why)
+        self.assertIn("token 1 (systemd-recovery) names keyslots ['7'], which are not all keyslots of this header", why)
+        # keyslots that are not a list of text make the header one no probe judges, and none raises
+        for slots in ("1", 1, [1], [["1"]], {"1": 1}, [True], [None]):
+            with self.subTest(keyslots=repr(slots)):
+                h = self.judge(dict(NV_TOKEN, keyslots=slots), recovery, keyslots=("1", "2"))
+                for probe_fn in (host_probe.root_unlock, host_probe.unlock_revocable, host_probe.recovery_keyslot):
+                    value, why = probe_fn(h)
+                    self.assertFalse(value, why)
+                    self.assertIn("is malformed: token 0 names keyslots", why)
+
+    def test_every_keyslot_of_a_secret_volume_is_named_by_exactly_one_token(self):
+        """A keyslot no token names is opened by something this check cannot see. On the root volume the
+        recovery probe says so too; on a second volume holding the host key, nothing else would."""
+        recovery = LUKS_META["tokens"]["1"]
+        value, why = host_probe.unlock_revocable(self.judge(NV_TOKEN, recovery, keyslots=("0", "1", "2")))
+        self.assertFalse(value, why)
+        self.assertIn("keyslot 0 is named by no token: a passphrase, a key file or a sealed key this check cannot judge", why)
+        value, why = host_probe.unlock_revocable(self.judge(NV_TOKEN, dict(recovery, keyslots=["1"]), keyslots=("1",)))
+        self.assertFalse(value, why)
+        self.assertIn("keyslot 1 is named by more than one token (token 0, token 1)", why)
+        value, why = host_probe.unlock_revocable(self.judge(NV_TOKEN, recovery, dict(recovery, keyslots=["3"])))
+        self.assertFalse(value, why)
+        self.assertIn("has 2 systemd-recovery tokens", why)
+
+        # the same on the volume that holds the host key: a key file's keyslot beside an NV-backed token
+        def var(tokens, keyslots):
+            h = FakeHost()
+            h.files["/etc/crypttab"] += "var_crypt UUID=ef01 /boot/efi/var.key luks\n"
+            h.runs[secret_mount(host_probe.HOST_KEY)] = (0, "/dev/mapper/var_crypt ext4 3333-4444\n")
+            h.runs[("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/mapper/var_crypt")] = (0, "var_crypt crypt\nsdb1 part\nsdb disk\n")
+            h.runs[("cryptsetup", "status", "var_crypt")] = (0, "  type:    LUKS2\n  device:  /dev/sdb1\n")
+            h.runs[("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sdb1")] = (0, json.dumps({"keyslots": {k: {} for k in keyslots}, "tokens": tokens}))
+            return h
+        h = var({"0": NV_TOKEN}, ("0", "1"))
+        self.assertEqual([n for n, (value, _) in platform(h).items() if not value], ["root_disk_unlock_revocable"])
+        self.assertIn("var_crypt (/dev/sdb1, under %s): keyslot 0 is named by no token" % host_probe.HOST_KEY, host_probe.unlock_revocable(h)[1])
+        self.assertTrue(host_probe.unlock_revocable(var({"0": NV_TOKEN}, ("1",)))[0])
 
     def test_the_nv_policy_must_be_shown_to_cover_pcr_7_and_the_boot_image(self):
         """systemd-pcrlock leaves out a PCR it cannot predict. An NV-backed token says nothing by itself
         about which PCRs bind the disk; the policy file does."""
         def policy(*pcrs, **change):
-            doc = dict(PCRLOCK, pcrValues=[{"pcr": n, "values": ["%064x" % n]} for n in pcrs], **change)
+            doc = dict(PCRLOCK, pcrValues=[{"pcr": n, "values": ["%064x" % (n + 1)]} for n in pcrs], **change)
+            return lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, json.dumps(doc))
+
+        def zeros(pcr, beside=False):
+            values = {7: ["07" * 32], 11: ["0b" * 32]}
+            values[pcr] = ["00" * 32] + (values[pcr] if beside else [])
+            doc = dict(PCRLOCK, pcrValues=[{"pcr": n, "values": v} for n, v in values.items()])
             return lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, json.dumps(doc))
         recovery = LUKS_META["tokens"]["1"]
+        self.assertEqual(host_probe.IMAGE_PCRS, {4, 11})
         for pcrs in ((7, 11), (7, 4), (0, 4, 7, 11, 12)):
             with self.subTest(pcrs=pcrs):
                 h = self.judge(NV_TOKEN, recovery, prepare=policy(*pcrs))
                 self.assertTrue(host_probe.unlock_revocable(h)[0])
                 self.assertTrue(host_probe.root_unlock(h)[0])
         cases = {
-            "only PCR 7: every old image satisfies it": (policy(7), "covers PCRs [7]: it must cover PCR 7 and a PCR that tells boot images apart", True),
-            "the image but not PCR 7": (policy(4, 11), "covers PCRs [4, 11]", False),
-            "neither": (policy(0, 2), "covers PCRs [0, 2]", False),
+            "only PCR 7: every old image satisfies it": (policy(7), "binds PCRs [7] (with measured values): it must bind PCR 7 and a PCR that tells boot images apart", True),
+            "the image but not PCR 7": (policy(4, 11), "binds PCRs [4, 11]", False),
+            "neither": (policy(0, 2), "binds PCRs [0, 2]", False),
+            "PCR 12 is not the image": (policy(7, 12), "binds PCRs [7, 12]", True),
+            "PCR 9 is not the image": (policy(7, 9), "binds PCRs [7, 9]", True),
+            # a PCR nothing was measured into is zero on every boot of every image
+            "PCR 11 accepted as all zeros": (zeros(11), "binds PCRs [7] (with measured values)", True),
+            "PCR 11 with a zero value beside a real one": (zeros(11, beside=True), "binds PCRs [7] (with measured values)", True),
+            "PCR 7 accepted as all zeros": (zeros(7), "binds PCRs [11]", False),
+            "a value that is not 64 hex": (lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, json.dumps(dict(
+                PCRLOCK, pcrValues=[{"pcr": 7, "values": ["07" * 32]}, {"pcr": 11, "values": ["xyz"]}]))), "has a PCR entry that is not", False),
+            "a value in upper case": (lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, json.dumps(dict(
+                PCRLOCK, pcrValues=[{"pcr": 7, "values": ["07" * 32]}, {"pcr": 11, "values": ["AB" * 32]}]))), "has a PCR entry that is not", False),
             "no policy file": (lambda h: h.files.pop(host_probe.PCRLOCK_POLICY), "there is no /var/lib/systemd/pcrlock.json", False),
             "not JSON": (lambda h: h.files.__setitem__(host_probe.PCRLOCK_POLICY, "{"), "is not a SHA-256 pcrlock policy", False),
             "the SHA-1 bank": (policy(7, 11, pcrBank="sha1"), "is not a SHA-256 pcrlock policy", False),
@@ -363,9 +425,10 @@ class HostProbe(unittest.TestCase):
                 self.assertIn("BLOCKING FOR PRODUCTION (#135)", why)
                 # and the widened root_disk_tpm_unlocked: an NV-backed token counts only when its policy binds PCR 7
                 self.assertEqual(host_probe.root_unlock(h)[0], still_tpm_unlocked, host_probe.root_unlock(h)[1])
-        # a PCR-7 token needs no policy file
-        h = self.judge(PCR7_TOKEN, recovery, prepare=lambda h: h.files.pop(host_probe.PCRLOCK_POLICY))
-        self.assertTrue(host_probe.root_unlock(h)[0])
+        # a PCR-7 token needs no policy file, with or without a stray tpm2_pcrlock flag: it is judged by its PCR list
+        for token in (PCR7_TOKEN, dict(PCR7_TOKEN, tpm2_pcrlock=True)):
+            h = self.judge(token, recovery, prepare=lambda h: h.files.pop(host_probe.PCRLOCK_POLICY))
+            self.assertTrue(host_probe.root_unlock(h)[0], token)
 
     def test_every_volume_that_holds_a_secret_is_judged_not_only_the_root(self):
         """The host key on a separate /var whose LUKS volume a PCR-7 token opens: the root volume is
@@ -392,7 +455,26 @@ class HostProbe(unittest.TestCase):
         separate_var(h, {})
         value, why = host_probe.unlock_revocable(h)
         self.assertFalse(value, why)
-        self.assertIn("var_crypt (/dev/sdb1, under %s) has no systemd-tpm2 token" % host_probe.HOST_KEY, why)
+        self.assertIn("var_crypt (/dev/sdb1, under %s): keyslot 1, 2 is named by no token" % host_probe.HOST_KEY, why)
+        # the credentials themselves on a volume a PCR-7 token opens
+        self.assertEqual(host_probe.SECRET_PATHS, ("/", "/var/lib/systemd/credential.secret", "/etc/credstore.encrypted"))
+        h = FakeHost()
+        h.runs[secret_mount(host_probe.CREDSTORE)] = (0, "/dev/mapper/etc_crypt ext4 7777-8888\n")
+        h.runs[("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/mapper/etc_crypt")] = (0, "etc_crypt crypt\nsdc1 part\nsdc disk\n")
+        h.runs[("cryptsetup", "status", "etc_crypt")] = (0, "  type:    LUKS2\n  device:  /dev/sdc1\n")
+        h.runs[("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sdc1")] = (0, json.dumps({"keyslots": {"1": {}}, "tokens": {"0": PCR7_TOKEN}}))
+        value, why = host_probe.unlock_revocable(h)
+        self.assertFalse(value, why)
+        self.assertIn("etc_crypt (/dev/sdc1) is unlocked by the local TPM alone", why)
+        # one filesystem over TWO encrypted devices (LVM over two PVs): both are judged, not the first
+        h = FakeHost()
+        h.runs[("lsblk", "-s", "-n", "-r", "-o", "NAME,TYPE", "/dev/mapper/vg-root")] = (
+            0, "vg-root lvm\nroot_crypt crypt\nsda3 part\nsda disk\npv2_crypt crypt\nsdb1 part\nsdb disk\n")
+        h.runs[("cryptsetup", "status", "pv2_crypt")] = (0, "  type:    LUKS2\n  device:  /dev/sdb1\n")
+        h.runs[("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sdb1")] = (0, json.dumps({"keyslots": {"1": {}}, "tokens": {"0": PCR7_TOKEN}}))
+        value, why = host_probe.unlock_revocable(h)
+        self.assertFalse(value, why)
+        self.assertIn("pv2_crypt (/dev/sdb1) is unlocked by the local TPM alone", why)
         # each secret path is looked up, and one that is on no dm-crypt device fails
         for path in host_probe.SECRET_PATHS:
             with self.subTest(path=path):
@@ -433,7 +515,8 @@ class HostProbe(unittest.TestCase):
                             ("a token that is a list", {"keyslots": {"1": {}}, "tokens": {"0": NV_TOKEN, "1": ["x"]}}),
                             ("a token that is text", {"keyslots": {"1": {}}, "tokens": {"0": "systemd-tpm2"}}),
                             ("keyslots as a list", {"keyslots": ["1"], "tokens": {"0": NV_TOKEN}}),
-                            ("a keyslot that is a number", {"keyslots": {"1": 1}, "tokens": {"0": NV_TOKEN}})):
+                            ("a keyslot that is a number", {"keyslots": {"1": 1}, "tokens": {"0": NV_TOKEN}}),
+                            ("a token whose keyslots is a number", {"keyslots": {"1": {}}, "tokens": {"0": dict(NV_TOKEN, keyslots=1)}})):
             with self.subTest(label):
                 h = FakeHost()
                 h.runs[LUKS_DUMP] = (0, json.dumps(meta))

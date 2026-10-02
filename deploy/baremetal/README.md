@@ -52,8 +52,12 @@ Commissioning has two halves:
     with `--evidence` the run says the evidence is refused; run it without, to see the one control.
   - The probe judges every dm-crypt volume under `/`, under the host key and under the credstore, and
     every token that names a keyslot on them: a second volume, a `clevis` token or a stale token fails
-    it. For an NV-backed token it also requires `/var/lib/systemd/pcrlock.json` to cover PCR 7 and a PCR
-    that tells boot images apart (11 or 4): `systemd-pcrlock` leaves out a PCR it cannot predict. It
+    it, and so does a keyslot that no token names (a passphrase, or a key file) on any of them. For an
+    NV-backed token it also requires `/var/lib/systemd/pcrlock.json` to bind PCR 7 and a PCR that tells
+    boot images apart, with measured values: `systemd-pcrlock` leaves out a PCR it cannot predict, and a
+    PCR nothing was measured into is all zeros for every image. PCR 11 qualifies on a UKI boot
+    (systemd-stub measures the image into it); PCR 4 qualifies when the kernel is started as an EFI
+    image, as a UKI is, and not when GRUB loads the kernel itself. It
     does not measure that the NV index holds that policy, nor that a retired image is refused on the
     host; that is the #65 checklist, section D.
 - **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this

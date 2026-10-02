@@ -39,8 +39,9 @@ PLATFORM AND TPM, measured:
                             NV-backed systemd-tpm2 token (tpm2_pcrlock), and no token naming a keyslot
                             that is anything but such a token or the systemd-recovery token; each names
                             keyslots that exist; and /var/lib/systemd/pcrlock.json, the policy systemd
-                            keeps for the NV index, covers PCR 7 and a PCR that tells boot images apart
-                            (11 or 4). A token of any other type (clevis, an unknown name) fails: this
+                            keeps for the NV index, binds PCR 7 and a PCR that tells boot images apart
+                            (11 or 4), each with measured values (an all-zero value binds nothing); and
+                            every keyslot of those volumes is named by exactly one such token. A token of any other type (clevis, an unknown name) fails: this
                             check cannot say what releases its keyslot. NOT measured: that the NV index
                             holds that file's policy, and that a retired image is in fact refused on this
                             host (#65 checklist, section D). The peer contribution of #67 will be a
@@ -246,6 +247,10 @@ def luks_header(host, name):
         value = parsed.setdefault(part, {})
         if not isinstance(value, dict) or not all(isinstance(v, dict) for v in value.values()):
             return None, "the LUKS2 header of %s is malformed: %s is not an object of objects" % (dev, part)
+    for token_id, token in parsed["tokens"].items():
+        slots = token.get("keyslots", [])
+        if not isinstance(slots, list) or not all(isinstance(slot, str) for slot in slots):
+            return None, "the LUKS2 header of %s is malformed: token %s names keyslots %r, not a list of keyslot IDs" % (dev, token_id, slots)
     return dev, parsed
 
 
@@ -308,11 +313,17 @@ def nv_backed(token):
 
 
 PCRLOCK_POLICY = "/var/lib/systemd/pcrlock.json"
+# The PCRs that differ between two boot images: 11 (systemd-stub measures the UKI's sections into it) and 4
+# (the firmware measures each EFI binary it starts: the boot loader, and the kernel WHEN it is started as an
+# EFI image, as a UKI is; a kernel that GRUB loads itself is not in PCR 4). Not 12 (the command line and
+# credentials), nor 9: the same image boots with either.
+IMAGE_PCRS = frozenset({4, 11})
 
 
 def pcrlock_pcrs(host):
-    """The PCRs covered by the policy systemd keeps for its NV index (systemd-pcrlock make-policy writes
-    it): (set of PCR numbers, ""), or (None, why). make-policy LEAVES OUT a PCR whose measurements it
+    """The PCRs BOUND by the policy systemd keeps for its NV index (systemd-pcrlock make-policy writes
+    it): (set of PCR numbers whose accepted values are all measured ones, never the all-zero value of a
+    PCR nothing was extended into, ""), or (None, why). make-policy LEAVES OUT a PCR whose measurements it
     cannot match to components, and says so only in its log, so an NV-backed token says nothing by
     itself about WHICH PCRs bind the disk. The file is not authenticated here: whether the NV index
     holds this policy is not measured."""
@@ -333,13 +344,19 @@ def pcrlock_pcrs(host):
             and all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) for v in entry["values"])
         if not good:
             return None, "%s has a PCR entry that is not {pcr, values: [64 hex, ...]}" % PCRLOCK_POLICY
-        pcrs.add(entry["pcr"])
+        # A PCR nothing was measured into is all zeros, on every boot of every image: accepting that value
+        # binds nothing. PCR 11 is extended only by systemd-stub (a UKI boot); on a GRUB + initramfs host it
+        # stays zero, and a policy "covering" it is satisfied by every old kernel.
+        if "0" * 64 not in entry["values"]:
+            pcrs.add(entry["pcr"])
     return pcrs, ""
 
 
 # Where this host's secrets are: the root filesystem, systemd's host key (the other half of every PIN
 # credential) and the credentials themselves. A separate /var, or a second device of the root
 # filesystem, is a volume an old image can open like any other.
+# NOT resolved: a filesystem that spans devices without naming them as its source (an f2fs with several
+# devices, an ext4 or xfs with an external journal) is judged as its one named device. Swap is not judged.
 SECRET_PATHS = ("/", HOST_KEY, CREDSTORE)
 
 
@@ -388,17 +405,32 @@ def unlock_revocable(host):
         if dev is None:
             return False, meta
         where = "%s (%s, under %s)" % (name, dev, ", ".join(paths)) if paths != ["/"] and set(paths) != set(SECRET_PATHS) else "%s (%s)" % (name, dev)
-        nv, fixed = 0, []
+        nv, fixed, named, recovery = 0, [], {}, 0
+        for token_id, token in sorted(meta["tokens"].items()):
+            if token.get("keyslots") and token_keyslots(token, meta) is None:
+                return False, "%s: token %s (%s) names keyslots %r, which are not all keyslots of this header: a stale or " \
+                    "damaged token. BLOCKING FOR PRODUCTION (#135): what unlocks this volume cannot be judged" % (
+                        where, token_id, token.get("type"), token.get("keyslots"))
+            for slot in token.get("keyslots") or []:
+                named.setdefault(slot, []).append(token_id)
+        # A keyslot that no token names is opened by something this check cannot see: a passphrase, a key file
+        # (on the ESP, say), or a TPM-sealed key from a tool that writes no token. On the root volume
+        # root_disk_recovery_keyslot says the same; here it holds for EVERY volume with a secret on it.
+        stray = sorted(set(meta["keyslots"]) - set(named), key=lambda slot: (len(slot), slot))
+        if stray:
+            return False, "%s: keyslot %s is named by no token: a passphrase, a key file or a sealed key this check cannot " \
+                "judge. BLOCKING FOR PRODUCTION (#135): wipe it, or enrol what opens it as a token" % (where, ", ".join(stray))
+        shared = sorted(slot for slot, ids in named.items() if len(ids) > 1)
+        if shared:
+            return False, "%s: keyslot %s is named by more than one token (%s): what releases it cannot be judged. BLOCKING FOR " \
+                "PRODUCTION (#135)" % (where, ", ".join(shared), ", ".join("token " + i for i in named[shared[0]]))
         for token_id, token in sorted(meta["tokens"].items()):
             if not token.get("keyslots"):
                 continue                       # a token that names no keyslot releases nothing
             kind = token.get("type")
-            if token_keyslots(token, meta) is None:
-                return False, "%s: token %s (%s) names keyslots %r, which are not all keyslots of this header: a stale or " \
-                    "damaged token. BLOCKING FOR PRODUCTION (#135): what unlocks this volume cannot be judged" % (
-                        where, token_id, kind, token.get("keyslots"))
             if kind == "systemd-recovery":
-                continue                       # the recovery key: root_disk_recovery_keyslot judges it
+                recovery += 1                  # the recovery key: root_disk_recovery_keyslot judges the root volume's
+                continue
             if kind != "systemd-tpm2":
                 return False, "%s: token %s of type %r names keyslot %s. This check knows what releases a systemd-tpm2 " \
                     "keyslot and the recovery key's, and nothing else: an unknown token may be a TPM-sealed key that no " \
@@ -412,6 +444,9 @@ def unlock_revocable(host):
             fixed.append(how)
         if fixed:
             return False, NOT_REVOCABLE % (name, dev, "; ".join(fixed))
+        if recovery > 1:
+            return False, "%s has %d systemd-recovery tokens: one volume has one recovery key (a second is a second secret " \
+                "that opens it). BLOCKING FOR PRODUCTION (#135)" % (where, recovery)
         if not nv:
             return False, "%s has no systemd-tpm2 token that names a keyslot: nothing to judge (root_disk_tpm_unlocked says " \
                 "what is missing on the root volume; a volume opened by a key file cannot be judged here). BLOCKING FOR " \
@@ -419,10 +454,11 @@ def unlock_revocable(host):
     pcrs, why = pcrlock_pcrs(host)
     if pcrs is None:
         return False, "the TPM tokens are NV-backed, but %s: nothing shows what their policy binds. BLOCKING FOR PRODUCTION (#135)" % why
-    if 7 not in pcrs or not pcrs & {4, 11}:
-        return False, "the TPM tokens are NV-backed, but %s covers PCRs %s: it must cover PCR 7 and a PCR that tells boot " \
-            "images apart (11, or 4). systemd-pcrlock leaves out a PCR it cannot predict, and a policy without the image is " \
-            "satisfied by every old one. BLOCKING FOR PRODUCTION (#135)" % (PCRLOCK_POLICY, sorted(pcrs))
+    if 7 not in pcrs or not pcrs & IMAGE_PCRS:
+        return False, "the TPM tokens are NV-backed, but %s binds PCRs %s (with measured values): it must bind PCR 7 and a PCR " \
+            "that tells boot images apart (11, or 4). systemd-pcrlock leaves out a PCR it cannot predict, a PCR nothing was " \
+            "measured into is all zeros for every image, and a policy without the image is satisfied by every old one. " \
+            "BLOCKING FOR PRODUCTION (#135)" % (PCRLOCK_POLICY, sorted(pcrs))
     return True, "%s: every token that names a keyslot is NV-backed (tpm2_pcrlock) or the recovery key, and %s covers PCRs %s. " \
         "NOT measured: that the NV index holds this policy, and that a retired image is refused on this host" % (
             ", ".join(volumes), PCRLOCK_POLICY, ", ".join(str(n) for n in sorted(pcrs)))
