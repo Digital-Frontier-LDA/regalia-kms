@@ -255,7 +255,9 @@ def main():
         # off-host copy), so the drill runs the real collector: the OFF-HOST memory of what was shipped.
         "audit_sink_url": f"https://127.0.0.1:{args.port + 1}",
         "fencing_lease_path": str(etc / "lease.json"), "fencing_state_path": str(state / "epochs.jsonl"),
-        "fencing_public_key_path": str(etc / "fence.pub")})
+        "fencing_public_key_path": str(etc / "fence.pub"),
+        # A drill host runs no lease service; with a token configured the daemon requires this to be said.
+        "runtime_admission": "disabled-for-lab"})
     check = run([str(binary), "-config", str(config), "-check-config"], env=env, check=False)
     if check.returncode != 0:
         die(f"-check-config refused the bench config: {(check.stderr or check.stdout).strip()[-900:]}")

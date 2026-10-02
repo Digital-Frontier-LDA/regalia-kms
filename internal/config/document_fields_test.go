@@ -85,9 +85,12 @@ func documentFieldRows() []documentFieldRow {
 	)
 	// Hardware is all-or-nothing AND requires routing, policy and authorization, so the
 	// hardware rows carry the minimum that lets the document validate at all.
+	// A token also requires runtime_admission to be stated; the lab value needs nothing else.
+	const lab = `,"runtime_admission":"disabled-for-lab"`
 	hardwareDocument := "{" + hardwareQuad + "," + registryAndSite + "," + policyPair +
-		`,"rbac_policy_path":"/etc/regalia/rbac.json"}`
-	yubikeyDocument := "{" + yubikeyTriple + "," + registryAndSite + "," + policyPair + `,"rbac_policy_path":"/etc/regalia/rbac.json"}`
+		`,"rbac_policy_path":"/etc/regalia/rbac.json"` + lab + `}`
+	yubikeyDocument := "{" + yubikeyTriple + "," + registryAndSite + "," + policyPair + `,"rbac_policy_path":"/etc/regalia/rbac.json"` + lab + `}`
+	admissionDocument := `{"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission.json","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
 	fencingDocument := "{" + fencingTriple + "," + registryAndSite + "}"
 
 	return []documentFieldRow{
@@ -161,6 +164,16 @@ func documentFieldRows() []documentFieldRow {
 		// every revoked serial is accepted, and the operator's file is never opened.
 		{"revoked_serials_path", `{"revoked_serials_path":"/etc/regalia/revoked-serials.txt"}`,
 			func(c Config) string { return c.RevokedSerialsPath }, "/etc/regalia/revoked-serials.txt"},
+
+		// Dropped, a production host would serve with no runtime lease and nothing would say so.
+		{"runtime_admission", admissionDocument,
+			func(c Config) string { return c.RuntimeAdmission }, "required"},
+		{"runtime_admission_path", admissionDocument,
+			func(c Config) string { return c.RuntimeAdmissionPath }, "/run/regalia/admission.json"},
+		{"node_id", admissionDocument,
+			func(c Config) string { return c.NodeID }, "site-a"},
+		{"boot_session_path", admissionDocument,
+			func(c Config) string { return c.BootSessionPath }, "/run/regalia/boot-session"},
 
 		{"metrics_reader_principals", `{"metrics_reader_principals":["spiffe://regalia/operator/monitoring"]}`,
 			func(c Config) string { return strings.Join(c.MetricsReaderPrincipals, ",") }, "spiffe://regalia/operator/monitoring"},

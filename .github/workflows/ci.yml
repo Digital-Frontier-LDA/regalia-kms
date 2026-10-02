@@ -496,3 +496,31 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools
       - name: Manifest convergence against swtpm (bundle, partition, catch-up, rollback)
         run: bash e2e/convergence-swtpm.sh
+
+
+  # regalia-kms#74: the real daemon serves key operations only while the node holds a runtime lease.
+  # SoftHSM for the token; the lease is real (node and peer on software TPMs) and reaches the daemon
+  # through the admission file. Not ready and 503 without a lease; a verified signature with one;
+  # stops by itself when renewal stops; refuses at once when the node is revoked.
+  runtime-admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the PKCS#11 emulator, the software TPM and their tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc swtpm swtpm-tools tpm2-tools libpcsclite-dev
+      - name: The daemon serves only while admitted (SoftHSM, leases on swtpm)
+        run: |
+          status=0
+          python3 e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/admission.log"
+          [ "$status" -eq 0 ] || exit "$status"
+          grep -q '^runtime-admission: 26 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
+            echo "::error::the admission test did not run all 26 checks" >&2; exit 1; }
