@@ -220,7 +220,7 @@ wait_ready(){ local code=""; for _ in $(seq 1 "${1:-60}"); do code="$(ready)"; [
 printf 'regalia-kms two-token e2e %s\n' "$NOW" > "$W/message"; printf 'another message\n' > "$W/other"
 # sign <object> <nonce>: POST the SHA-256 digest of the message; the HTTP status to stdout, the body to $W/response.
 sign(){
-  python3 - "$W/message" "$2" "$1" > "$W/request.json" <<'PY'
+  python3 -I - "$W/message" "$2" "$1" > "$W/request.json" <<'PY'
 import base64, datetime, hashlib, json, sys
 digest = hashlib.sha256(open(sys.argv[1], "rb").read()).digest()
 expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -232,7 +232,7 @@ PY
     --data-binary "@$W/request.json" "https://127.0.0.1:$PORT/v1/operations/sign"; }
 # verified <public key pem>: the response is a 64-byte r||s that openssl verifies over the message and not over another.
 verified(){
-  python3 - "$W/response" "$W/sig.der" <<'PY' || return 1
+  python3 -I - "$W/response" "$W/sig.der" <<'PY' || return 1
 import base64, json, sys
 raw = base64.b64decode(json.load(open(sys.argv[1]))["result_base64"], validate=True)
 assert len(raw) == 64, len(raw)
@@ -301,7 +301,7 @@ fi
 
 hdr "4  the hardening and the OpenSC setting, measured on that process"
 # shellcheck disable=SC2024  # the report is this user's, on purpose: only the probe is root
-sudo env PYTHONPATH="$HERE" python3 - > "$W/probes" <<'PY'
+sudo env PYTHONPATH="$HERE" python3 -Ps - > "$W/probes" <<'PY'
 from deploy.baremetal import os_probe
 host = os_probe.Host()
 for name in ("kms_service_unprivileged", "kms_service_sandboxed", "kms_capabilities_minimal", "kms_opensc_leaves_piv_cards", "kms_apparmor_enforced"):
@@ -367,7 +367,7 @@ else
   [ "$mine" = 0 ] && P "this user ($(id -un)), with an active session, is refused too" || F "this user ($(id -un)) still sees the HSM under the shipped rule ($mine)"
 fi
 # The host probe's reading of the rule, on this machine as it is.
-IFS=$'\t' read -r value why < <(sudo env PYTHONPATH="$HERE" python3 -c '
+IFS=$'\t' read -r value why < <(sudo env PYTHONPATH="$HERE" python3 -Ps -c '
 from deploy.baremetal import os_probe
 ok, why = os_probe.PROBES["kms_pcscd_access_rule"](os_probe.Host())
 print("%s\t%s" % ("true" if ok else "false", why))')
