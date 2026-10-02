@@ -4,7 +4,7 @@ import hashlib
 import json
 import subprocess
 
-CANDIDATES = ('locales', 'libc-l10n', 'util-linux-locales', 'eject', 'fdisk')
+CANDIDATES = ('locales', 'libc-l10n', 'util-linux-locales', 'eject', 'fdisk', 'task-english', 'tasksel', 'tasksel-data')
 REQUIRED = ('linux-image-amd64', 'systemd-sysv', 'cryptsetup-initramfs', 'wireguard-tools',
             'nftables', 'apparmor', 'apparmor-utils', 'tpm2-tools', 'opensc', 'pcscd',
             'python3', 'ca-certificates')
@@ -24,7 +24,7 @@ def removal_plan(text, selected):
         words = line.split()
         if words and words[0] in ('Remv', 'Purg'):
             if len(words) < 2 or words[1] not in selected:
-                raise ValueError('APT would remove an unreviewed package')
+                raise ValueError('APT would remove an unreviewed package: ' + (words[1] if len(words)>1 else 'missing name'))
             if words[1] not in removed: removed.append(words[1])
         if words and words[0] in ('Inst', 'Conf'):
             raise ValueError('a removal plan must not install or configure packages')
