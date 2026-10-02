@@ -95,6 +95,8 @@ jobs:
           # internal/pin's mlock refusal can only be exercised where mlock can be made to fail, and
           # on linux it can. With this set the test fails rather than skips if that stops being true.
           REGALIA_EXPECT_MLOCK_ENFORCED: "1"
+          # internal/pin's ACL guard needs a filesystem that takes POSIX ACLs; the runner's does.
+          REGALIA_EXPECT_ACL_GUARD_ENFORCED: "1"
         run: |
           umask 002
           go test -race ./...
@@ -248,6 +250,27 @@ jobs:
           persist-credentials: false
       - name: The shipped sandbox refuses what it should, with a control for every refusal
         run: bash e2e/kms-sandbox-negative.sh
+
+  # #61: the other half of kms-sandbox. The REAL daemon, started by systemd from the shipped unit and
+  # hardening drop-in, serves a signature from a SoftHSM token that openssl verifies, and the hardening
+  # is measured on that process (os_probe.py). It installs a binary, a user, a unit and an AppArmor
+  # profile (complain mode) on the runner, so it has a runner to itself too.
+  kms-hardened-serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the PKCS#11 emulator and the AppArmor parser
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends softhsm2 opensc apparmor acl
+      - name: The real daemon serves a verifiable signature inside the shipped sandbox
+        run: bash e2e/kms-hardened-serve.sh
 
   # regalia#439, RE-PROVEN ON EVERY CHANGE: a live Cosmos node accepts the transactions the KMS
   # signed, and every negative case fails for its own reason — replay, chain id, destination,
