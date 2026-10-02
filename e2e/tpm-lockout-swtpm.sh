@@ -113,9 +113,19 @@ while time.time() < deadline:
     if pending.rstrip(" ").endswith("(hidden):") and answers:
         os.write(fd, (answers.pop(0) + "\n").encode())
         pending = ""
-_, status = os.waitpid(pid, 0)
+# Never wait for ever: a child still alive at the deadline (an unexpected prompt, say) is hung up on
+# by closing its terminal, which this user may do even though the child runs under sudo, and then
+# given five seconds to go.
+done, status = os.waitpid(pid, os.WNOHANG)
+if done == 0:
+    os.close(fd)
+    for _ in range(50):
+        done, status = os.waitpid(pid, os.WNOHANG)
+        if done:
+            break
+        time.sleep(0.1)
 print(out.replace("\r", ""))
-print("RC=%d" % os.waitstatus_to_exitcode(status))
+print("RC=%s" % (os.waitstatus_to_exitcode(status) if done else "TIMEOUT: the script was still running at the deadline"))
 PY
 }
 printf '%s' "$AUTH" | tpm2_dictionarylockout -Q -s -n 5 -t 600 -l 86400 -p file:- >/dev/null 2>&1 || F "could not make the settings drift again"
