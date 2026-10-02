@@ -150,6 +150,16 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "rbac-denied", started, false, nil)
 		return api.Result{}, failure("DENIED", http.StatusForbidden, false)
 	}
+	// NOT ADMITTED: REFUSED BEFORE ROUTING AND BEFORE ANY POLICY STATE IS SPENT (regalia-kms#74). A
+	// node with no runtime lease must not consume a nonce or a quota for work it will not do, and it
+	// is refused HERE rather than after routing because routing asks the token whether it is healthy:
+	// a token waiting for a fresh lease (#72) is not, and the caller and the trail would then be told
+	// "backend unavailable" for what is really "this node is not admitted". The runner checks again
+	// while the operation runs and after it.
+	if coordinator.admission != nil && !coordinator.admission.Ready(ctx) {
+		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "not-admitted", started, false, nil)
+		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
+	}
 	// Seal routes differently: RouteForSeal admits standby and qualified bindings, because an
 	// envelope sealed today must open after tomorrow's rotation. Release routes differently
 	// again: it must reach the KEK the envelope names, which after a rotation is not the active
@@ -229,13 +239,6 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		}
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", outcome, started, false, nil)
 		return api.Result{}, failure(code, status, retryable)
-	}
-	// NOT ADMITTED: REFUSED BEFORE ANY POLICY STATE IS SPENT (regalia-kms#74). A node with no runtime
-	// lease must not consume a nonce or a quota for work it will not do. The runner checks again
-	// while the operation runs and after it; this is the cheap refusal for the common case.
-	if coordinator.admission != nil && !coordinator.admission.Ready(ctx) {
-		coordinator.recordOrCount(ctx, request, route, "deny", "not-admitted", started, false, nil)
-		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
 	contentType := request.ContentType
 	if contentType == "" {

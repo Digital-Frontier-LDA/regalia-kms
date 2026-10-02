@@ -20,7 +20,9 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
 	api "github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/auth"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/config"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/server"
 )
 
@@ -233,6 +235,56 @@ func TestNoTokenMeansNoKeyOperation(t *testing.T) {
 		}
 	}
 }
+
+// THE PROVIDER MUST ACTUALLY BE TOLD. RequireReauthorization can be complete and tested in its own
+// package and never called: a returned token would then resume on the old lease, as before #72's
+// hook, with every provider test green.
+func TestRequiredAdmissionMakesTheTokenProviderWaitForAFreshLease(t *testing.T) {
+	directory := t.TempDir()
+	gate, err := admission.Open(admission.Options{Path: filepath.Join(directory, "admission.json"), NodeID: "site-a",
+		SessionPath: filepath.Join(directory, "boot-session")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := nitrokey.New(unopenableDriver{}, noPIN{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := requireReauthorization(provider, gate); err != nil {
+		t.Fatal(err)
+	}
+	// A token the provider fails to open is now remembered as gone: the mark only exists once
+	// reauthorization has been required.
+	binding := registry.Binding{Backend: "nitrokey-pkcs11", DeviceID: "hsm-sitea", DeviceSerial: "serial-1",
+		DevAuthFingerprint: "sha256:" + strings.Repeat("a", 64), ObjectID: "01"}
+	provider.Healthy(context.Background(), binding)
+	if waiting := provider.AwaitingReauthorization(); len(waiting) != 1 || waiting["hsm-sitea"] != -1 {
+		t.Fatalf("after requireReauthorization, a token that cannot be opened is not tracked: %v", waiting)
+	}
+	// Not required, or no PKCS#11 provider: nothing changes and nothing fails.
+	untouched, _ := nitrokey.New(unopenableDriver{}, noPIN{})
+	if err := requireReauthorization(untouched, nil); err != nil {
+		t.Fatal(err)
+	}
+	untouched.Healthy(context.Background(), binding)
+	if len(untouched.AwaitingReauthorization()) != 0 {
+		t.Fatal("a provider on a host with no required admission tracks absences")
+	}
+	if err := requireReauthorization(nil, gate); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type unopenableDriver struct{}
+
+func (unopenableDriver) Open(context.Context, registry.Binding) (nitrokey.Session, error) {
+	return nil, errors.New("token not present")
+}
+func (unopenableDriver) Ready(context.Context) bool { return true }
+
+type noPIN struct{}
+
+func (noPIN) PIN(context.Context, string) ([]byte, error) { return nil, errors.New("no PIN") }
 
 // readinessOf asks the health handler the question a load balancer asks.
 func readinessOf(handler http.Handler) bool {
