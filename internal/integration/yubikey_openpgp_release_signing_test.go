@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -8,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,8 +18,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/auth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/operations"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/policy"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
@@ -109,7 +116,7 @@ func TestRegaliaSignEd25519OnAYubiKeyOpenPGPApplet(t *testing.T) {
 		Operation: "sign", Algorithm: "ed25519", ContentTypes: []string{"application/vnd.regalia.digest"},
 		MaxPayloadBytes: 32, MaxFuture: 2 * time.Minute,
 	}}
-	daemon := startReleaseSigningDaemon(t, hardware, manifest, []string{strconv.Quote(objectID)}, policies, pki)
+	daemon := startYubiKeyReleaseDaemon(t, hardware, manifest, []string{strconv.Quote(objectID)}, policies, pki)
 
 	deployment := t.TempDir()
 	config := writeSignDeployment(t, deployment, signConfig{
@@ -180,4 +187,50 @@ func TestRegaliaSignEd25519OnAYubiKeyOpenPGPApplet(t *testing.T) {
 	} else {
 		t.Logf("expired attestation latched the device: %s", reason)
 	}
+}
+
+// startYubiKeyReleaseDaemon puts the control plane in front of a hardware manager: the registry
+// loaded from manifest, RBAC granting sign on the quoted object ids in granted, the purpose
+// policies, the audit journal, and a real TLS 1.3 mTLS endpoint. It is newReleaseSigningDaemon's
+// second half, repeated here so that this test adds a file and changes none.
+func startYubiKeyReleaseDaemon(t *testing.T, hardware *backend.Manager, manifest string, granted []string, policies []policy.Policy, pki *sidecarPKI) *sopsDaemon {
+	t.Helper()
+	principal := "spiffe://regalia/workload/sops-e2e"
+	router, err := registry.Load(bytes.NewBufferString(manifest), "e2e-site", hardware)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rbac, err := auth.LoadPolicy(bytes.NewBufferString(fmt.Sprintf(`{"schema_version":1,"principals":[{"uri":%q,"grants":[{"objects":[%s],"operations":["sign"],"environments":["development"]}]}]}`, principal, strings.Join(granted, ","))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := policy.OpenFileState(filepath.Join(t.TempDir(), "policy.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = state.Close() })
+	engine, err := policy.New(policies, state, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &synchronizedAuditSink{}
+	recorder, err := audit.Open(filepath.Join(t.TempDir(), "audit.jsonl"), sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = recorder.Close() })
+	coordinator, err := operations.New(rbac, router, engine, recorder, executor.New(1, 10*time.Second), hardware, "sha256:release-e2e", nil, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := auth.NewAuthenticator("spiffe://regalia/", nil, time.Now, time.Minute).Middleware(api.NewHandler(coordinator))
+	tlsConfig, err := auth.ServerTLSConfig(pki.serverCertificate, pki.caPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.TLS = tlsConfig
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return &sopsDaemon{server: server, handler: handler, sink: sink, clientCertificate: pki.clientPair, roots: pki.caPool}
 }

@@ -358,6 +358,7 @@ func writeSignDeployment(t *testing.T, directory string, cfg signConfig) string 
 // The workload identity is the one newSidecarPKI issues.
 func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidecarPKI) *sopsDaemon {
 	t.Helper()
+	principal := "spiffe://regalia/workload/sops-e2e"
 	devAuth := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	driver, err := nitrokey.NewPKCS11Driver(modulePath, devAuthProbe(devAuth), secureChannel{}, retryProbe(3))
@@ -401,15 +402,6 @@ func newReleaseSigningDaemon(t *testing.T, modulePath, serial string, pki *sidec
 		})
 	}
 	manifest := fmt.Sprintf(`{"schema_version":1,"manifest_id":"release-e2e","generated_at":"2026-10-02T00:00:00Z","objects":[%s]}`, strings.Join(manifestObjects, ","))
-	return startReleaseSigningDaemon(t, hardware, manifest, granted, policies, pki)
-}
-
-// startReleaseSigningDaemon puts the control plane in front of a hardware manager: the registry
-// loaded from manifest, RBAC granting sign on the quoted object ids in granted, the purpose
-// policies, the audit journal, and a real TLS 1.3 mTLS endpoint.
-func startReleaseSigningDaemon(t *testing.T, hardware *backend.Manager, manifest string, granted []string, policies []policy.Policy, pki *sidecarPKI) *sopsDaemon {
-	t.Helper()
-	principal := "spiffe://regalia/workload/sops-e2e"
 	router, err := registry.Load(bytes.NewBufferString(manifest), "e2e-site", hardware)
 	if err != nil {
 		t.Fatal(err)
