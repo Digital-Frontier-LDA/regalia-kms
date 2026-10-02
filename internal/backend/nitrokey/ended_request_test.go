@@ -3,6 +3,8 @@ package nitrokey
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
@@ -181,5 +183,55 @@ func TestTheDriverNamesALoginItRefusedBeforeThePINReachedTheToken(t *testing.T) 
 	already := &pkcs11Session{loggedIn: true}
 	if err := already.Login(context.Background(), []byte("123456")); err == nil || errors.Is(err, ErrPINNotPresented) {
 		t.Fatalf("a second login: %v", err)
+	}
+}
+
+// THE NEXT LATCH MUST NOT FORGET THE RULE. provider.go's own text is read: a latch may be set only
+//   - by quarantineUnlessTheRequestEnded (after a check made under the request's context),
+//   - at the low-retry reading (a read that completed: `if retryErr == nil`),
+//   - after a Login that was not ErrPINNotPresented.
+//
+// A new `provider.quarantine(` or `provider.blockPIN(` anywhere else fails here, and whoever adds it
+// has to decide which of the three it is.
+func TestEveryLatchInTheProviderIsOneOfTheThreeKinds(t *testing.T) {
+	source, err := os.ReadFile("provider.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(source), "\n")
+	before := func(i int) string { // the nearest line above that is not blank and not a comment
+		for j := i - 1; j >= 0; j-- {
+			if text := strings.TrimSpace(lines[j]); text != "" && !strings.HasPrefix(text, "//") {
+				return text
+			}
+		}
+		return ""
+	}
+	direct, pin := 0, 0
+	for i, line := range lines {
+		text := strings.TrimSpace(line)
+		if strings.HasPrefix(text, "//") {
+			continue
+		}
+		switch {
+		case strings.Contains(text, "provider.quarantine("):
+			direct++
+			above := before(i)
+			if above != "if ctx.Err() == nil {" && above != "func (provider *Provider) blockPIN(deviceID string) {" {
+				t.Errorf("provider.go:%d sets a latch directly, after %q: go through quarantineUnlessTheRequestEnded", i+1, above)
+			}
+		case strings.Contains(text, "provider.blockPIN("):
+			pin++
+			above := before(i)
+			if above != "if retryErr == nil {" && above != "if !errors.Is(err, ErrPINNotPresented) {" {
+				t.Errorf("provider.go:%d sets the PIN latch after %q: only a completed retry reading or a PIN that was presented may", i+1, above)
+			}
+		}
+	}
+	if direct != 2 || pin != 2 {
+		t.Fatalf("found %d direct latches and %d PIN latches, want 2 and 2: the provider's latches changed, and this test must be told how", direct, pin)
+	}
+	if helper := strings.Count(string(source), "provider.quarantineUnlessTheRequestEnded(ctx, "); helper != 8 {
+		t.Fatalf("found %d latches through the helper, want 8", helper)
 	}
 }
