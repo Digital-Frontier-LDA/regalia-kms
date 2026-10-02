@@ -64,13 +64,19 @@ NFT_JSON = json.dumps({"nftables": [
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "input", "type": "filter", "hook": "input", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "forward", "type": "filter", "hook": "forward", "prio": 0, "policy": "drop"}},
     {"chain": {"family": "inet", "table": "regalia_kms", "name": "output", "type": "filter", "hook": "output", "prio": 0, "policy": "drop"}}]})
-# cryptsetup luksDump --dump-json-metadata, trimmed: a passphrase slot 0 and the TPM2 slot 1 with the
-# token systemd-cryptenroll --tpm2-device writes
-LUKS_JSON = json.dumps({"keyslots": {"0": {"type": "luks2"}, "1": {"type": "luks2"}},
-                        "tokens": {"0": {"type": "systemd-tpm2", "keyslots": ["1"], "tpm2-pcrs": [7]}}})
+# cryptsetup luksDump --dump-json-metadata, trimmed: the TPM2 slot 1 with the token
+# systemd-cryptenroll --tpm2-device writes, and the recovery key's slot 2 with the systemd-recovery
+# token recovery-key.sh --enrol writes. The installer's passphrase (slot 0) has been wiped.
+LUKS_META = {"keyslots": {"1": {"type": "luks2"}, "2": {"type": "luks2"}},
+             "tokens": {"0": {"type": "systemd-tpm2", "keyslots": ["1"], "tpm2-pcrs": [7]},
+                        "1": {"type": "systemd-recovery", "keyslots": ["2"]}}}
+LUKS_JSON = json.dumps(LUKS_META)
 # Real systemd encrypted credentials (systemd 257.7, a throwaway swtpm, the test PIN): one per key
 # type, and the PCR-signing public key the signed one embeds.
 CREDS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "credentials")
+
+
+LUKS_DUMP = ("cryptsetup", "luksDump", "--dump-json-metadata", "/dev/sda3")
 
 
 def cred(name):
@@ -174,6 +180,7 @@ class HostProbe(unittest.TestCase):
             "tpm2_present": (lambda h: h.files.__setitem__("/sys/class/tpm/tpm0/tpm_version_major", "1\n"), "no TPM 2.0"),
             "tpm_sha256_bank": (lambda h: h.dirs.pop("/sys/class/tpm/tpm0/pcr-sha256"), "SHA-256 bank"),
             "root_disk_tpm_unlocked": (lambda h: h.files.__setitem__("/etc/crypttab", "root_crypt UUID=abcd none luks\n"), "not TPM-unlocked"),
+            "root_disk_recovery_keyslot": (lambda h: h.runs.__setitem__(LUKS_DUMP, (0, json.dumps(dict(LUKS_META, tokens={"0": LUKS_META["tokens"]["0"]}, keyslots={"1": {}})))), "no recovery keyslot"),
             "ima_policy_loaded": (lambda h: h.files.pop("/sys/kernel/security/ima/policy"), "no IMA policy"),
             "pin_import_key_present": (lambda h: h.runs.pop(("tpm2_readpublic", "-c", host_probe.IMPORT_HANDLE)), "--init-import-key"),
             "pin_credentials_sealed_as_recorded": (lambda h: h.files.__setitem__(PIN_FILE, cred("host.cred")), "the host key alone (bench only)"),
@@ -191,6 +198,39 @@ class HostProbe(unittest.TestCase):
                 self.assertIn(reason, why)
                 others = {n: v for n, (v, _) in platform(h).items() if n != name}
                 self.assertTrue(all(others.values()), "breaking %s broke %s" % (name, others))
+
+    def test_the_recovery_keyslot_is_one_keyslot_of_its_own_and_nothing_is_left_unlabelled(self):
+        tpm, recovery = LUKS_META["tokens"]["0"], LUKS_META["tokens"]["1"]
+        slots = lambda *names: {n: {"type": "luks2"} for n in names}
+        cases = {
+            "no systemd-recovery token": ({"keyslots": slots("1"), "tokens": {"0": tpm}}, "no recovery keyslot"),
+            "a recovery token naming no keyslot": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=[])}}, "ONE recovery key"),
+            "two recovery keys": ({"keyslots": slots("1", "2", "3"), "tokens": {"0": tpm, "1": recovery, "2": dict(recovery, keyslots=["3"])}}, "ONE recovery key"),
+            "one recovery token naming two keyslots": ({"keyslots": slots("1", "2", "3"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=["2", "3"])}}, "ONE recovery key"),
+            "a token naming a keyslot that is gone": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": recovery}}, "does not exist"),
+            "the recovery token on the TPM's keyslot": ({"keyslots": slots("1"), "tokens": {"0": tpm, "1": dict(recovery, keyslots=["1"])}}, "a keyslot of its own"),
+            "the installer's passphrase still there": ({"keyslots": slots("0", "1", "2"), "tokens": {"0": tpm, "1": recovery}}, "keyslot 0 is named by no token"),
+            # A passphrase volume with a recovery key and no TPM: this check is about the recovery
+            # keyslot only (root_disk_tpm_unlocked is the one that fails), so it passes.
+        }
+        for name, (meta, reason) in cases.items():
+            with self.subTest(name=name):
+                value, why = host_probe.recovery_keyslots(meta)
+                self.assertFalse(value, "%s passed: %s" % (name, why))
+                self.assertIn(reason, why)
+        value, why = host_probe.recovery_keyslots(LUKS_META)
+        self.assertTrue(value, why)
+        self.assertIn("recovery keyslot 2", why)
+        self.assertIn("systemd-tpm2 in keyslot 1", why)
+        # The probe reads the header and nothing else: it never runs a command that could take a key.
+        h = FakeHost()
+        seen = []
+        real = h.run
+        h.run = lambda argv: (seen.append(tuple(argv)), real(argv))[1]
+        self.assertTrue(host_probe.recovery_keyslot(h)[0])
+        self.assertEqual({c[:2] for c in seen}, {("findmnt", "-n"), ("lsblk", "-s"), ("cryptsetup", "status"), ("cryptsetup", "luksDump")})
+        h.runs.pop(LUKS_DUMP)
+        self.assertIn("cannot read the LUKS2 header", host_probe.recovery_keyslot(h)[1])
 
     def test_raw_tpm0_without_the_resource_manager_fails(self):
         h = FakeHost()

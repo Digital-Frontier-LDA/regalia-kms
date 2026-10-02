@@ -40,8 +40,22 @@ Commissioning has two halves:
 
 - **Full-disk encryption** (LUKS2), enrolled to the TPM:
   `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
-  `tpm2-device=auto` in `/etc/crypttab`. Keep a recovery passphrase in the escrow. Measured:
-  `root_disk_tpm_unlocked`.
+  `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
+- **The recovery key**: a second keyslot, independent of the TPM and of every peer, that opens this
+  host's disk by itself after a total outage (#77; PIN-CUSTODY.md, "The disk recovery key"). It is a
+  ceremony secret, one per host, written on the KMS host recovery card and carried in every escrow;
+  it is never stored on a host. In this order:
+  1. `sudo deploy/baremetal/recovery-key.sh --enrol <root partition>`: asks for the installer's
+     passphrase, then for the recovery key twice. Then `--check`, with the key read from the **card**.
+  2. Enrol the TPM (above) and reboot once to see the disk unlock unattended.
+  3. Only then wipe the installer's passphrase: `systemd-cryptenroll --wipe-slot=password <root partition>`.
+
+  The key is 8 groups of 8 lower-case letters with a dash between groups. **The dashes are part of
+  the key**; typed without them, or in capitals, it does not open the disk. Measured:
+  `root_disk_recovery_keyslot` (exactly one recovery keyslot, of its own, and no keyslot left that no
+  token names, such as the installer's passphrase). The probe reads the LUKS2 header only and never
+  asks for the key. After **any** use of the key, a rehearsal included: `recovery-key.sh --replace`
+  with a new key from a new escrow.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
