@@ -36,8 +36,11 @@ ADMISSION = {"listen_address": "0.0.0.0:8443", "runtime_admission": "required", 
 RULE_STAT = ("stat", "-c", "%u %a", os_probe.PCSCD_RULE_PATH)
 MAINPID_VALUE = ("systemctl", "show", os_probe.SERVICE, "-p", "MainPID", "--value")
 SHIPPED_PCSCD_RULE = (Path(__file__).resolve().parent.parent / "deploy/polkit/50-regalia-kms-pcscd.rules").read_text()
-# Debian's own rule file (polkitd 126): who is an administrator. It grants nothing by itself.
+# Debian's own rule file (polkitd 126): who is an administrator. It grants nothing by itself. The
+# probe knows the distribution's files by digest; this stand-in's digest is put in its place below.
 DEBIAN_DEFAULT_RULE = 'polkit.addAdminRule(function(action, subject) {\n    return ["unix-group:sudo"];\n});\n'
+REAL_KNOWN_RULES_FILES = dict(os_probe.KNOWN_RULES_FILES)
+os_probe.KNOWN_RULES_FILES["/usr/share/polkit-1/rules.d/50-default.rules"] = hashlib.sha256(DEBIAN_DEFAULT_RULE.encode()).hexdigest()
 
 
 def exec_start(arguments="-config " + CONFIG, load="loaded"):
@@ -114,6 +117,7 @@ class FakeHost:
         }
         for directory in os_probe.POLKIT_RULE_DIRECTORIES:
             self.commands[("test", "-d", directory)] = ""
+            self.commands[("stat", "-L", "-c", "%u %a", directory)] = "0 755\n"
         self.links = {"/proc/20/exe": "/usr/local/sbin/regalia-kms", "/proc/10/exe": "/usr/sbin/pcscd"}
         for target in os_probe.HIBERNATING_TARGETS:
             self.commands[("systemctl", "is-enabled", target)] = "masked\n"
@@ -130,8 +134,8 @@ class FakeHost:
         return None if text is None else text.encode()
 
     def run(self, argv):
-        if argv[:1] == ["find"] and argv[1] in self.dirs and argv[1] not in self.unlistable:
-            return 0, "".join(name + "\n" for name in self.dirs[argv[1]] if name.endswith(".rules"))
+        if argv[:2] == ["find", "-H"] and argv[2] in self.dirs and argv[2] not in self.unlistable:
+            return 0, "".join(name + "\n" for name in self.dirs[argv[2]] if name.endswith(".rules"))
         out = self.commands.get(tuple(argv))
         return (0, out) if out is not None else (1, "")
 
@@ -590,13 +594,14 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
         def installed(text):
             return lambda h: h.files.update({os_probe.PCSCD_RULE_PATH: text})
         qubes = 'polkit.addRule(function(action,subject) { if (subject.isInGroup("qubes")) return polkit.Result.YES; });\n'
+        harmless = 'polkit.addRule(function(action, s) { if (action.id == "org.freedesktop.udisks2.filesystem-mount" && s.user == "backup") return polkit.Result.YES; });\n'
         cases = {
             "the rule is not installed": (lambda h: h.files.pop(os_probe.PCSCD_RULE_PATH), "missing or unreadable"),
             "the bench variant, which refuses nobody": (installed(SHIPPED_PCSCD_RULE.replace("ONLY_THE_KMS = true", "ONLY_THE_KMS = false")), "refuses nobody"),
             "another user is granted": (installed(SHIPPED_PCSCD_RULE.replace('subject.user == "root"', 'subject.user == "operator"')), "byte for byte"),
-            "code after the rule": (installed(SHIPPED_PCSCD_RULE + 'polkit.addRule(function(a, s) { return polkit.Result.YES; });\n'), "byte for byte"),
-            "code before the rule": (installed("ONLY_THE_KMS = false;\n" + SHIPPED_PCSCD_RULE), "byte for byte"),
-            "a form feed that turns the refusal into a comment": (installed(SHIPPED_PCSCD_RULE.replace("        return ONLY_THE_KMS", "        //\x0c return ONLY_THE_KMS")), "byte for byte"),
+            "code after the rule": (installed(SHIPPED_PCSCD_RULE + 'polkit.addRule(function(a, s) { return "yes"; });\n'), "byte for byte"),
+            "code before the rule": (installed("polkit.Result.NO=null;\n" + SHIPPED_PCSCD_RULE), "byte for byte"),
+            "a form feed that turns the refusal into a comment": (installed(SHIPPED_PCSCD_RULE.replace('        return ONLY_THE_KMS', '        //\x0c return ONLY_THE_KMS')), "byte for byte"),
             "comments changed": (installed(SHIPPED_PCSCD_RULE.replace("// pcscd access", "// PCSCD access")), "byte for byte"),
             "an empty file": (installed(""), "byte for byte"),
             "the file is another user's": (lambda h: h.commands.update({RULE_STAT: "1000 644\n"}), "not root's alone to change"),
@@ -606,24 +611,26 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
             "stat prints something else": (lambda h: h.commands.update({RULE_STAT: "0 644 extra\n"}), "not root's alone to change"),
             "root-only (polkitd would not load it)": (lambda h: h.commands.update({RULE_STAT: "0 600\n"}), "not readable by others"),
             "root and group only": (lambda h: h.commands.update({RULE_STAT: "0 640\n"}), "not readable by others"),
-            "another rule names pcscd's action": (other("60-site.rules", 'polkit.addRule(function(action, subject) { if (action.id == "org.debian.pcsc-lite.access_pcsc") return polkit.Result.YES; });\n'), "speaks about pcscd"),
-            "another rule matches it by prefix": (other("60-site.rules", 'polkit.addRule(function(a, s) { if (/pcsc.lite/.test(a.id)) return polkit.Result.YES; });\n'), "speaks about pcscd"),
-            "another rule names only access_card": (other("60-site.rules", 'if (action.id == "org.debian.pcsc-lite.access_card") {}\n'), "speaks about pcscd"),
-            "another file switches the KMS rule's setting": (other("60-x.rules", "ONLY_THE_KMS = false;\n"), "names the KMS rule's setting"),
-            "another file reaches into the rule list": (other("60-x.rules", 'polkit._ruleFuncs.unshift(function(){return "yes"});\n'), "reaches into polkit's list of rules"),
-            "another file reassigns NO": (other("60-x.rules", "polkit.Result.NO = null;\n"), "reassigns polkit's results"),
-            "another file hands the decision to a program": (other("60-x.rules", 'polkit.addRule(function(a, s) { return polkit.spawn(["/bin/x"]); });\n'), "hands the decision to a program"),
-            "an earlier file that grants after authentication": (other("10-x.rules", "polkit.addRule(function(a, s) { return polkit.Result.AUTH_SELF; });\n"), "can grant after authentication"),
-            "a group allowed everything, as Qubes ships": (other("00-qubes-allow-all.rules", qubes), "grants without naming the action"),
-            "the same, granting with a string": (other("49-x.rules", 'polkit.addRule(function(a, s) { if (s.isInGroup("sudo")) return "yes"; });\n'), "grants without naming the action"),
-            "the same, mentioning action.id only to log it": (other("49-x.rules", 'polkit.addRule(function(action, s) { polkit.log("a=" + action.id); if (s.isInGroup("sudo")) return polkit.Result.YES; });\n'), "grants without naming the action"),
-            "the same in the distribution's directory": (other("00-allow.rules", qubes, "/usr/share/polkit-1/rules.d"), "grants without naming the action"),
-            "the same in /usr/local": (other("00-allow.rules", qubes, "/usr/local/share/polkit-1/rules.d"), "grants without naming the action"),
-            "the same in /run": (other("00-allow.rules", qubes, "/run/polkit-1/rules.d"), "grants without naming the action"),
-            # polkit runs both; the one in /etc first, so it is the content of the other that matters
-            "a file of the same name in another directory": (other("50-regalia-kms-pcscd.rules", 'if (action.id == "org.debian.pcsc-lite.access_pcsc") {}\n', "/usr/share/polkit-1/rules.d"), "speaks about pcscd"),
-            "another rules file that cannot be read": (other("10-secret.rules", None), "cannot be read"),
+            # Any other rules file is refused by name, whatever it says: the bypasses an independent
+            # read found in a word list, and a file that is harmless, alike.
+            "a group allowed everything, as Qubes ships": (other("00-qubes-allow-all.rules", qubes), "not known to need"),
+            "results rewritten without spaces": (other("60-x.rules", "polkit.Result.NO=null;\n"), "not known to need"),
+            "results rewritten by index": (other("60-x.rules", 'polkit.Result["NO"] = null;\n'), "not known to need"),
+            "results rewritten by defineProperty": (other("60-x.rules", "Object.defineProperty(polkit.Result, 'NO', {value: null});\n"), "not known to need"),
+            "the rule runner replaced": (other("60-x.rules", 'polkit._runRules = function(a,s){ return "y"+"es"; };\n'), "not known to need"),
+            "a grant exempted by an unrelated action.id": (other("10-x.rules", 'if (action.id == "org.foo.bar") {} if (subject.isInGroup("sudo")) return polkit.Result.YES;\n'), "not known to need"),
+            "a grant spelled in pieces": (other("10-x.rules", 'polkit.addRule(function(a, s) { return "y" + "es"; });\n'), "not known to need"),
+            "spawn spelled differently": (other("10-x.rules", 'polkit.addRule(function(a, s) { return polkit["spawn"](["/bin/x"]); });\n'), "not known to need"),
+            "a harmless rule for another action": (other("10-backup.rules", harmless), "not known to need"),
+            "the same in the distribution's directory": (other("00-allow.rules", qubes, "/usr/share/polkit-1/rules.d"), "not known to need"),
+            "the same in /usr/local": (other("00-allow.rules", qubes, "/usr/local/share/polkit-1/rules.d"), "not known to need"),
+            "the same in /run": (other("00-allow.rules", qubes, "/run/polkit-1/rules.d"), "not known to need"),
+            "a file of the same name in another directory": (other("50-regalia-kms-pcscd.rules", SHIPPED_PCSCD_RULE, "/usr/share/polkit-1/rules.d"), "not known to need"),
+            "the distribution's file, changed": (lambda h: h.files.update({"/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE + qubes}), "digest differs"),
+            "the distribution's file, unreadable": (lambda h: h.files.pop("/usr/share/polkit-1/rules.d/50-default.rules"), "cannot be read"),
             "a rules directory that cannot be listed": (lambda h: h.unlistable.add("/usr/share/polkit-1/rules.d"), "cannot be listed"),
+            "a rules directory another user can change": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/usr/share/polkit-1/rules.d"): "0 777\n"}), "not root's alone to change"),
+            "a rules directory that is not root's": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/etc/polkit-1/rules.d"): "1000 755\n"}), "not root's alone to change"),
             "the daemon is not running": (lambda h: h.commands.update({MAINPID_VALUE: "0\n"}), "is not running"),
             "polkit refuses the daemon access_pcsc": (lambda h: h.commands.pop(("pkcheck", "--action-id", "org.debian.pcsc-lite.access_pcsc", "--process", "20")), "does not authorize the running KMS"),
             "polkit refuses the daemon access_card": (lambda h: h.commands.pop(("pkcheck", "--action-id", "org.debian.pcsc-lite.access_card", "--process", "20")), "does not authorize the running KMS"),
@@ -637,19 +644,27 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
                 self.assertIn(reason, why)
                 self.assertTrue(all(v["value"] for k, v in measure(host).items() if k != self.control))
 
-    def test_rules_that_do_not_touch_pcscd_are_left_alone(self):
+    def test_the_distribution_s_own_files_are_accepted_and_empty_directories_need_no_stat(self):
         host = FakeHost()
-        host.dirs["/usr/share/polkit-1/rules.d"] += ["systemd-networkd.rules", "org.freedesktop.NetworkManager.rules", "README"]
-        host.files["/usr/share/polkit-1/rules.d/systemd-networkd.rules"] = (
-            'polkit.addRule(function(action, subject) {\n    if (action.id == "org.freedesktop.network1.reload" && subject.user == "systemd-network") {\n'
-            '        return polkit.Result.YES;\n    }\n});\n')
-        host.files["/usr/share/polkit-1/rules.d/org.freedesktop.NetworkManager.rules"] = (
-            'polkit.addRule(function(action, subject) { if (action.id.indexOf("org.freedesktop.NetworkManager.") == 0 && subject.isInGroup("netdev")) { return polkit.Result.YES; } });\n')
-        # an earlier file that names its action is not an allow-all
-        host.dirs["/etc/polkit-1/rules.d"].append("10-backup.rules")
-        host.files["/etc/polkit-1/rules.d/10-backup.rules"] = 'polkit.addRule(function(action, s) { if (action.id == "org.freedesktop.udisks2.filesystem-mount" && s.user == "backup") return polkit.Result.YES; });\n'
+        for directory in os_probe.POLKIT_RULE_DIRECTORIES:
+            if not host.dirs.get(directory):
+                host.commands.pop(("stat", "-L", "-c", "%u %a", directory))
         value, why = self.verdict(host)
         self.assertTrue(value, why)
+        self.assertIn("the only other rules files are the distribution's", why)
+
+    def test_the_known_digests_are_this_machine_s_files_where_it_has_them(self):
+        """The digests were measured on Debian 13; where this machine has the files, they must agree."""
+        checked = 0
+        for path, digest in REAL_KNOWN_RULES_FILES.items():
+            try:
+                data = Path(path).read_bytes()
+            except OSError:
+                continue
+            checked += 1
+            self.assertEqual(hashlib.sha256(data).hexdigest(), digest, f"{path} on this machine is not the file the probe knows")
+        if not checked:
+            self.skipTest("no distribution polkit rules file is readable here")
 
 
 if __name__ == "__main__":

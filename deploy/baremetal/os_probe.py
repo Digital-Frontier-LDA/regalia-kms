@@ -49,8 +49,8 @@ and that the daemon, and only the daemon, may talk to pcscd (regalia#541):
                               and root and refused to everyone else. Debian's pcscd lets in only users
                               with an active session, so without the grant the daemon reaches no token;
                               without the refusal any user with a console session reaches them all. The
-                              file is compared byte for byte and must be readable by polkitd; no other
-                              rules file may speak about pcscd or grant first without naming its action;
+                              file is compared byte for byte and must be readable by polkitd; the only
+                              other rules files allowed are the distribution's, known by path and digest;
                               and pkcheck must say polkit admits the running daemon. That a user WITH a
                               console session is refused is not measured: it follows from the rule
 
@@ -511,23 +511,20 @@ POLKIT_RULE_DIRECTORIES = ("/etc/polkit-1/rules.d", "/run/polkit-1/rules.d", "/u
 # sha256 of deploy/polkit/50-regalia-kms-pcscd.rules, and of the same file with ONLY_THE_KMS = false.
 # tests/test_baremetal_os_probe.py holds these to the file. The file is compared byte for byte: what a
 # JavaScript file does cannot be decided by reading it line by line.
-PCSCD_RULE_SHA256 = "0d826c93062a308a44879e9dfa60e05c051098962659e7381bc1e324bb04d804"
-PCSCD_RULE_BENCH_SHA256 = "3f9336b25b4c994501fb19d7b8d39ca1a448899f3132c436f511e463cb9c8eef"
+PCSCD_RULE_SHA256 = "75d942b8a3d3c62be4082787eb1373504b09bee0fe0197541c910402a66eb55b"
+PCSCD_RULE_BENCH_SHA256 = "4a052de6c145ea44ebce731bb968099b445e6eb89e80385747025bdbe9a3abbf"
 PCSCD_ACTIONS = ("org.debian.pcsc-lite.access_pcsc", "org.debian.pcsc-lite.access_card")
-# In another rules file, any of these is refused. They are not a JavaScript analysis; they are the ways
-# a file can speak about pcscd, reach into the shared rules context, or decide something it does not show.
-SUSPECT_IN_OTHER_RULES = (
-    ("pcsc", "speaks about pcscd"),
-    ("ONLY_THE_KMS", "names the KMS rule's setting"),
-    ("_ruleFuncs", "reaches into polkit's list of rules"),
-    ("Result =", "reassigns polkit's results"),
-    ("Result.YES =", "reassigns polkit's results"),
-    ("Result.NO =", "reassigns polkit's results"),
-    ("spawn(", "hands the decision to a program"),
-    ("AUTH_", "can grant after authentication"),
-)
-# In a file that polkit runs BEFORE the KMS rule, a grant that does not name its action decides first.
-GRANT_WORDS = ("YES", '"yes"', "'yes'")
+# THE ONLY OTHER RULES FILES A KMS HOST MAY CARRY: the distribution's own, known by path and sha256
+# (measured on Debian 13: polkitd 126-2, systemd 257.13, network-manager 1.52.1). Every rules file runs
+# in one JavaScript context with the KMS rule and can grant before it or rewrite polkit's objects under
+# it, and what a program does cannot be decided by reading it: a list of suspicious words was tried and
+# an independent read found a dozen ways round it. So any other file fails the control, by name. A
+# distribution update that changes one of these files fails it too, until the digest here is renewed.
+KNOWN_RULES_FILES = {
+    "/usr/share/polkit-1/rules.d/50-default.rules": "29f073ed9a8a6996b62f718e2bec962d5c84d311d23bb874830b4f9887eeabbf",
+    "/usr/share/polkit-1/rules.d/org.freedesktop.NetworkManager.rules": "c9c419a58f716c4de1f469a362dbb00745c0d35ae3077857b03168bdd9b06ee0",
+    "/usr/share/polkit-1/rules.d/systemd-networkd.rules": "f199e386a9297858331b00df07ed0b0ee5fcf4bea67f6c0bccc8a92b7e310bbd",
+}
 
 
 def rules_files(host, directory):
@@ -535,7 +532,8 @@ def rules_files(host, directory):
     rc, _ = host.run(["test", "-d", directory])
     if rc != 0:
         return []
-    rc, out = host.run(["find", directory, "-mindepth", "1", "-maxdepth", "1", "-name", "*.rules", "-printf", "%f\\n"])
+    # -H: a directory that is a symlink is followed, as polkitd's opendir follows it
+    rc, out = host.run(["find", "-H", directory, "-mindepth", "1", "-maxdepth", "1", "-name", "*.rules", "-printf", "%f\\n"])
     if rc != 0:
         return None
     return sorted(line for line in out.splitlines() if line)
@@ -568,20 +566,23 @@ def pcscd_access_rule(host):
         names = rules_files(host, directory)
         if names is None:
             return False, f"{directory} cannot be listed: what it grants is unknown"
+        if names:
+            rc, out = host.run(["stat", "-L", "-c", "%u %a", directory])
+            fields = out.split()
+            if rc != 0 or len(fields) != 2 or fields[0] != "0" or not re.fullmatch(r"[0-7]{3,4}", fields[1]) or int(fields[1], 8) & 0o022:
+                return False, f"{directory} is not root's alone to change (owner and mode: {out.strip() or 'unreadable'})"
         for name in names:
             path = f"{directory}/{name}"
             if path == PCSCD_RULE_PATH:
                 continue
-            text = host.read(path)
-            if text is None:
+            if path not in KNOWN_RULES_FILES:
+                return False, (f"{path} is a polkit rules file this host is not known to need: it runs beside the KMS rule and could "
+                               "grant pcscd before it or rewrite polkit under it. A KMS host carries only the distribution's rules files and the KMS rule")
+            other = host.read_bytes(path)
+            if other is None:
                 return False, f"{path} cannot be read: what it grants is unknown"
-            for needle, what in SUSPECT_IN_OTHER_RULES:
-                if needle in text:
-                    return False, f"{path} {what} ({needle!r}): only the shipped rule may decide about pcscd"
-            # polkit runs the files in name order (all four directories together); a file that sorts
-            # first and grants anything that does not name its action decides before the KMS rule does.
-            if name < os.path.basename(PCSCD_RULE_PATH) and any(word in text for word in GRANT_WORDS) and "action.id ==" not in text:
-                return False, f"{path} grants without naming the action, and polkit runs it before the KMS rule"
+            if hashlib.sha256(other).hexdigest() != KNOWN_RULES_FILES[path]:
+                return False, f"{path} is not the distribution's file as known (its digest differs): what it grants is unknown"
     # The effect, asked of polkit itself: the running daemon is admitted to both actions.
     rc, out = host.run(["systemctl", "show", SERVICE, "-p", "MainPID", "--value"])
     pid = out.strip()
@@ -591,7 +592,7 @@ def pcscd_access_rule(host):
         rc, _ = host.run(["pkcheck", "--action-id", action, "--process", pid])
         if rc != 0:
             return False, f"polkit does not authorize the running KMS (pid {pid}) for {action}"
-    return True, (f"{PCSCD_RULE_PATH}: the shipped rule; no other rules file speaks about pcscd or grants first; "
+    return True, (f"{PCSCD_RULE_PATH}: the shipped rule; the only other rules files are the distribution's, known by digest; "
                   f"polkit authorizes the running KMS (pid {pid}) for pcscd")
 
 

@@ -136,14 +136,15 @@ Commissioning has two halves:
   `e2e/kms-two-token-systemd.sh`). The same rule is written to refuse every other user, an operator
   at the console included, because whoever can talk to pcscd can present PINs and spend retry
   counters; that refusal follows from the rule and from no other rules file deciding first, and has
-  been observed only for users without a session. polkit runs every rules file in name order and the
-  first answer wins, so no other rules file may speak about pcscd or grant without naming its
-  action. Measured: `kms_pcscd_access_rule` (the file is the shipped one byte for byte, root's,
-  readable by polkitd; the other rules files in the four polkit directories are read for anything
-  that speaks about pcscd, reaches into polkit's rules, or grants first; and `pkcheck` says polkit
-  admits the running daemon to both of pcscd's actions). Reading other rules files cannot prove what
-  a program does: the list it refuses is wide on purpose, and a host should carry no rules files
-  beyond the distribution's and this one.
+  been observed only for users without a session. polkit runs every rules file in one shared
+  JavaScript context, in name order, and the first answer wins: any other rules file could grant
+  first or rewrite polkit under the KMS rule. **So a KMS host carries no polkit rules file but the
+  distribution's own and this one.** Measured: `kms_pcscd_access_rule` (the file is the shipped one
+  byte for byte, root's, readable by polkitd; every other rules file in the four polkit directories
+  is one of the distribution's, by path and sha256 as measured on Debian 13, and the directories are
+  root's; and `pkcheck` says polkit admits the running daemon to both of pcscd's actions). A
+  distribution update that changes one of those files fails the control until its digest is renewed
+  in `os_probe.KNOWN_RULES_FILES`.
 - **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
   `regalia-kms-hardening.conf.example`) and does not start without it. Deny by default: no
   capability, no execution, no datagram socket, so `audit_sink_url` must be an IP address or a name

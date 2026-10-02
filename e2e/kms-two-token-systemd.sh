@@ -104,16 +104,21 @@ HSM_SLOT="$(OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --list-token-sl
 HSM_LABEL="$(hsm --list-token-slots 2>/dev/null | awk -v s="$HSM_SLOT" '/^Slot /{on=(index($0, "(" s ")")>0)} on && /token label/{v=$0; sub(/.*: */, "", v); print v; exit}')"
 # A PIN is presented only to a token that can afford a wrong one.
 flags="$(hsm --list-token-slots 2>/dev/null | awk -v s="$HSM_SLOT" '/^Slot /{on=(index($0, "(" s ")")>0)} on && /token flags/{print; exit}')"
+# Fails closed: a flags line must be found, say the PIN is initialised, and say nothing of a low count.
+grep -q "PIN initialized" <<< "$flags" || die "the HSM's token flags could not be read ('$flags'): not presenting a PIN to it"
 grep -qi "count low\|final try\|locked" <<< "$flags" && die "the HSM's user PIN counter is not full ($flags): not presenting a PIN to it"
 case "$(ykman --device "$YK_SERIAL" piv info 2>/dev/null | awk -F: '/PIN tries/{gsub(/ /, "", $2); print $2}')" in
   3/3) ;; *) die "the YubiKey's PIV PIN counter is not 3/3: not presenting a PIN to it";; esac
 ykman --device "$YK_SERIAL" piv info >/dev/null 2>&1 || die "no YubiKey with serial $YK_SERIAL is attached"
 echo "kms-two-token-systemd: HSM $HSM_SERIAL (slot $HSM_SLOT, label ${HSM_LABEL:-?}), YubiKey $YK_SERIAL; PIV PIN $(ykman --device "$YK_SERIAL" piv info 2>/dev/null | awk -F: '/PIN tries/{gsub(/ /, "", $2); print $2}')"
-# Without a login: a public object with that label or id means a key from an earlier run is there.
-existing="$(hsm --list-objects 2>/dev/null)"
+# ONE login before anything is created: it proves the PIN (a wrong one costs one try, and the script
+# stops before the cleanup could spend more on deleting a key that was never made), and it lists the
+# private objects too, so a key already holding the id is seen and never deleted by mistake.
+existing="$(P_="$HSM_PIN" hsm --login --pin env:P_ --list-objects 2>&1)" \
+  || die "the HSM refused the PIN (one try spent; nothing was created): check REGALIA_TWO_TOKEN_HSM_PIN"
 grep -q "$KEY_LABEL" <<< "$existing" || grep -q "ID:[[:space:]]*$KEY_ID\$" <<< "$existing" \
   && die "an object with label $KEY_LABEL or id $KEY_ID is already on the HSM (an earlier run?): delete it by hand first"
-made_key=1   # from here on the cleanup looks for it, whatever happens next
+made_key=1   # the PIN is good and the id is free: from here on the cleanup looks for the key, whatever happens
 P_="$HSM_PIN" hsm --login --pin env:P_ --keypairgen --key-type EC:prime256v1 --usage-sign --label "$KEY_LABEL" --id "$KEY_ID" >/dev/null 2>&1 \
   || die "cannot generate the throwaway P-256 key on the HSM (is the PIN the token's?)"
 hsm --read-object --type pubkey --id "$KEY_ID" --output-file "$W/hsm.der" >/dev/null 2>&1 || die "cannot read the HSM key's public half"
@@ -286,6 +291,12 @@ conf="$(sudo cat "/proc/$pid/environ" 2>/dev/null | tr '\0' '\n' | sed -n 's/^OP
 hdr "3  it signs through both tokens"
 sign_both "first"
 sign_both "again"
+# A signature through the YubiKey that failed may have been a refused PIN. Every later step starts the
+# daemon again, which presents the PIN again: stop here rather than spend the card's counter.
+if [ "$fail" -gt 0 ]; then
+  echo "kms-two-token-systemd: stopping after step 3: a signature failed, and the later steps would present the PINs again" >&2
+  echo; echo "kms-two-token-systemd: $pass passed, $fail failed"; exit 1
+fi
 [ "$(systemctl show "$SVC" -p MainPID --value)" = "$pid" ] && P "it is still the process that started (pid $pid, no restart)" || F "the main pid changed"
 
 hdr "4  the hardening and the OpenSC setting, measured on that process"
@@ -361,7 +372,7 @@ from deploy.baremetal import os_probe
 ok, why = os_probe.PROBES["kms_pcscd_access_rule"](os_probe.Host())
 print("%s\t%s" % ("true" if ok else "false", why))')
 if sudo sh -c 'ls /etc/polkit-1/rules.d/ /usr/share/polkit-1/rules.d/ 2>/dev/null' | grep -q qubes; then
-  [ "${value:-}" = false ] && grep -q "grants without naming the action" <<< "$why" \
+  [ "${value:-}" = false ] && grep -q "00-qubes-allow-all.rules is a polkit rules file this host is not known to need" <<< "$why" \
     && P "kms_pcscd_access_rule is false here, for the right reason: $why" || F "kms_pcscd_access_rule is ${value:-not measured} beside Qubes' allow-everything rule: ${why:-}"
 else
   [ "${value:-}" = true ] && P "kms_pcscd_access_rule: $why" || F "kms_pcscd_access_rule is ${value:-not measured}: ${why:-}"

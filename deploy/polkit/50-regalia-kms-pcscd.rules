@@ -15,10 +15,12 @@
 // have any business there (deploy/baremetal/README.md, "token clients"), so every other user is
 // refused, an operator with a console session included. root is allowed by polkit before any rule.
 //
-// WHAT IT CANNOT DO. polkit runs rules files in file-name order and the first definite answer wins:
-// a file that sorts before this one and grants (an allow-all rule for an admin group, say) decides
-// first. The host probe refuses such files. Every rules file also shares one JavaScript context, so
-// everything here is inside a function: no other file can reach in and change it.
+// WHAT IT CANNOT DO. polkit runs rules files in file-name order and the first definite answer wins,
+// and every rules file runs in one shared JavaScript context: any other rules file can grant first,
+// or change polkit's own objects. This file keeps its setting inside a function and returns literal
+// answers rather than reading polkit.Result, so it does not depend on those objects; but it cannot
+// defend against another rules file. That is why the host probe accepts no rules file on a KMS
+// host except this one and the distribution's own, which it knows by digest.
 //
 // ONLY_THE_KMS = false keeps the grant and drops the refusal: for a bench or a workstation where
 // other users must still reach pcscd. A KMS host keeps it true; the host probe checks that.
@@ -26,11 +28,11 @@
     var ONLY_THE_KMS = true;
     polkit.addRule(function (action, subject) {
         if (action.id != "org.debian.pcsc-lite.access_pcsc" && action.id != "org.debian.pcsc-lite.access_card") {
-            return polkit.Result.NOT_HANDLED;
+            return null; // not handled: another rule, or the default policy, decides
         }
         if (subject.user == "regalia-kms" || subject.user == "root") {
-            return polkit.Result.YES;
+            return "yes";
         }
-        return ONLY_THE_KMS ? polkit.Result.NO : polkit.Result.NOT_HANDLED;
+        return ONLY_THE_KMS ? "no" : null;
     });
 })();
