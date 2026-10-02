@@ -108,6 +108,15 @@ class Identity(Case):
         self.assertEqual((answer["ok"], [e["manifest"]["epoch"] for e in answer["bundle"]["envelopes"]]), (True, [1]))
         self.assertEqual(self.last(), {"event": "sync-pull", "epoch": 1, "manifest_digest": m.digest(self.m1), "subject": "a", "peer": "b",
                                        "outcome": "ALLOW", "reason": ""})
+        # the view takes the store's own rule for an epoch, and hands out copies
+        view = sync._View(self.stores["b"])
+        for bad in (-1, -2, True, None, "0", 1.0):
+            with self.subTest(after_epoch=bad):
+                self.refused("after_epoch must be an integer >= 0", view.envelopes, bad)
+        view.load()["nodes"].clear()
+        view.envelopes(0)[0]["manifest"]["epoch"] = 99
+        self.assertEqual((len(view.load()["nodes"]), view.envelopes(0)[0]["manifest"]["epoch"]), (3, 1))
+        self.assertIsNone(sync._View(self.store("nothing-yet")).load())
         # one request reads and verifies the chain once, and decides everything on that reading
         with unittest.mock.patch.object(self.stores["b"], "envelopes", wraps=self.stores["b"].envelopes) as chain, \
                 unittest.mock.patch.object(self.stores["b"], "load", wraps=self.stores["b"].load) as manifest:
@@ -224,30 +233,45 @@ class Bounds(Case):
         self.assertFalse(deep["ok"])
         self.assertEqual(self.last()["outcome"], "DENY")
 
-    def test_an_address_has_twenty_requests_a_minute_and_over_it_costs_this_node_nothing(self):
+    def test_a_node_over_its_rate_is_refused_by_name_and_a_flood_costs_this_node_nothing(self):
         for _ in range(20):
             self.assertTrue(self.pull("b")["ok"])
+        # the node's own limit comes first (20 a minute; its address has 30): refused BY NAME, and told why
+        self.refusal("RATE: more than 20 any requests in 60 s from a", self.pull("b"))
+        self.assertEqual((self.last()["event"], self.last()["subject"], self.last()["epoch"]), ("sync", "a", 1))
+        before = len(self.events)
         with unittest.mock.patch.object(self.stores["b"], "envelopes", wraps=self.stores["b"].envelopes) as loads:
-            self.denied("RATE: more than 20 address requests in 60 s from %s" % ADDRESS["a"], self.pull("b"))
-            self.assertEqual((self.last()["event"], self.last()["subject"]), ("sync", ADDRESS["a"]))
-            before = len(self.events)
             for _ in range(500):                                                    # a flood: answered, and that is all
-                self.assertEqual(self.pull("b"), {"v": 1, "ok": False, "refused": "refused"})
-            self.assertEqual((loads.call_count, len(self.events) - before), (0, 0))   # the chain is not read, no TPM, no event
-        self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])   # c has its own bucket
+                self.assertFalse(self.pull("b")["ok"])
+        # nine more reach the store before the ADDRESS limit (30) stops them at the door; one more event, for that
+        self.assertEqual((loads.call_count, len(self.events) - before), (9, 1))
+        self.assertIn("RATE: more than 30 address requests in 60 s from %s" % ADDRESS["a"], self.last()["reason"])
+        self.assertEqual(self.pull("b"), {"v": 1, "ok": False, "refused": "refused"})   # at the door nobody is identified yet
+        self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])   # c has its own buckets
         self.assertTrue(self.pull("c")["ok"])                                       # and c's server its own count of a
-        self.tick += 3
-        self.assertTrue(self.pull("b")["ok"])                                       # one request every three seconds refills
-        self.assertEqual(self.pull("b")["refused"], "refused")
-        self.assertEqual(len(self.events) - before, 3)                              # c's pull and a's two: the refusal is still inside the reported minute
-        self.tick += 60
+        # the flood ends. A minute later a's first request passes, and what was never counted is written with it
+        self.tick += 61
+        del self.events[:]
+        self.assertTrue(self.pull("b")["ok"])
+        self.assertEqual([(e["event"], e["subject"], e["outcome"]) for e in self.events],
+                         [("sync-rate", ADDRESS["a"], "DENY"), ("sync-rate", "a", "DENY"), ("sync-pull", "a", "ALLOW")])
+        self.assertEqual([e["reason"] for e in self.events[:2]],
+                         ["RATE: 491 more address requests from %s were refused before this one" % ADDRESS["a"],
+                          "RATE: 9 more any requests from a were refused before this one"])
+        self.assertTrue(self.pull("b")["ok"])
+        self.assertEqual(len(self.events), 4)                                       # said once
+
+    def test_a_bucket_refills_at_its_rate_and_does_not_grow_past_its_size(self):
         for _ in range(20):
             self.pull("b")
-        self.denied("(501 more refused since the last report)", self.pull("b"))     # the next minute's report carries the count
+        self.assertFalse(self.pull("b")["ok"])
+        self.tick += 3
+        self.assertTrue(self.pull("b")["ok"])                                       # one request every three seconds refills
+        self.assertFalse(self.pull("b")["ok"])
         self.tick += 3600
-        for _ in range(21):
-            last = self.pull("b")
-        self.assertEqual(last["refused"], "refused")                                # the bucket does not grow past its size
+        for _ in range(20):
+            self.assertTrue(self.pull("b")["ok"])
+        self.assertFalse(self.pull("b")["ok"])                                      # an hour idle is still twenty, not more
 
     def test_a_revoked_node_whose_tunnel_is_still_up_cannot_drive_this_node(self):
         """Found by an independent read: refused callers reached no bucket, so each request cost a chain
@@ -255,20 +279,32 @@ class Bounds(Case):
         self.stores["b"].commit(self.revoke(self.m1))
         with unittest.mock.patch.object(self.stores["b"], "envelopes", wraps=self.stores["b"].envelopes) as loads:
             for _ in range(500):
-                self.assertEqual(self.pull("b")["refused"], "refused")
-        self.assertEqual(loads.call_count, 20)
-        self.assertEqual(len([e for e in self.events if e["subject"] in ("a", ADDRESS["a"])]), 21)   # twenty denials by name, one RATE report
+                self.assertEqual(self.pull("b")["refused"], "refused")              # never told why: it is no longer a peer
+        self.assertEqual(loads.call_count, 30)                                      # its address's thirty, then the door
+        mine = [(e["subject"], e["reason"][:4]) for e in self.events if e["subject"] in ("a", ADDRESS["a"])]
+        self.assertEqual(mine, [("a", "a is")] * 20 + [("a", "RATE"), (ADDRESS["a"], "RATE")])   # twenty denials by name, then one report each
         self.keys_at["2001:db8::9"] = "77" * 32                                     # a WireGuard peer the manifest does not pin
         before = len(self.events)
         for _ in range(500):
             self.pull("b", caller="2001:db8::9")
-        self.assertEqual(len(self.events) - before, 21)
+        self.assertEqual(len(self.events) - before, 31)
+
+    def test_a_revoked_node_on_several_addresses_is_still_held_to_one_node_s_limit(self):
+        """The node's bucket is spent BEFORE the terminal-state refusal, so the refusals are limited by name."""
+        self.stores["b"].commit(self.revoke(self.m1))
+        for extra in ("fd72:6567:616c::a:2", "fd72:6567:616c::a:3"):
+            self.keys_at[extra] = self.entry("a")["wg_service_pub"]
+        for address in ("a", "fd72:6567:616c::a:2", "fd72:6567:616c::a:3"):
+            for _ in range(25):
+                self.pull("b", caller=address)
+        named = [e for e in self.events if e["subject"] == "a"]
+        self.assertEqual(([e["reason"][:4] for e in named].count("a is"), len(named)), (20, 21))   # twenty by name and one RATE report, over 75 requests
 
     def test_a_node_has_twenty_requests_a_minute_whatever_address_it_comes_from_and_six_may_ask_for_a_lease(self):
         self.keys_at["fd72:6567:616c::a:2"] = self.entry("a")["wg_service_pub"]      # a second address of node a's key
         for _ in range(20):
             self.assertTrue(self.pull("b")["ok"])
-        self.denied("RATE: more than 20 any requests in 60 s from a", self.pull("b", caller="fd72:6567:616c::a:2"))
+        self.refusal("RATE: more than 20 any requests in 60 s from a", self.pull("b", caller="fd72:6567:616c::a:2"))   # an admitted node: told why
         self.assertEqual(self.last()["subject"], "a")
         self.tick += 3600
         for _ in range(6):
@@ -282,16 +318,57 @@ class Bounds(Case):
         nonce = self.peers["b"]["attester"].nonce("a").hex()                        # a seventh, with a nonce b did issue
         self.refusal("RATE: more than 6 lease requests", self.ask("b", v=1, op="lease", request=self.holder.request(), evidence=self.quote(nonce, self.m1)))
 
-    def test_the_buckets_forget_idle_callers_and_refuse_when_full_of_busy_ones(self):
+    def test_addresses_cannot_crowd_a_node_out_and_a_full_table_is_one_event_a_minute(self):
+        """Found by the confirming read: with the address table full, an honest node that had been idle was
+        evicted and refused, and two newcomers alternating wrote an event for every request."""
+        with unittest.mock.patch.object(sync, "MAX_BUCKETS", 5):
+            for _ in range(3):
+                self.assertTrue(self.pull("b")["ok"])
+            for i in range(4):                                                      # four more addresses fill the table (a's is the fifth)
+                self.pull("b", caller="2001:db8::%d" % i)
+            before = len(self.events)
+            for _ in range(100):                                                    # two newcomers, alternating
+                for newcomer in ("2001:db8::aa", "2001:db8::bb"):
+                    self.assertEqual(self.pull("b", caller=newcomer)["refused"], "refused")
+            self.assertEqual(len(self.events) - before, 1)                          # ONE event for two hundred refusals
+            self.assertIn("RATE: too many callers at once", self.last()["reason"])
+            self.assertTrue(self.pull("b")["ok"])                                   # a, whose address is in the table, is served
+            self.tick += 61                                                         # everyone idle for a minute, a included
+            self.assertTrue(self.pull("b")["ok"])                                   # a is forgotten and comes back as a newcomer: there is room
+            self.assertTrue(self.pull("b", caller="c", summary=convergence.summary(self.stores["c"]))["ok"])
+
+    def test_the_address_table_forgets_idle_keys_keeps_busy_ones_and_what_it_counted(self):
         buckets = sync.Buckets(clock=lambda: self.tick)
         with unittest.mock.patch.object(sync, "MAX_BUCKETS", 3):
             for name in ("x", "y", "z"):
                 buckets.take(name, "address")
+            for _ in range(29):
+                buckets.take("y", "address")
+            self.refused("RATE: more than 30 address requests", buckets.take, "y", "address")   # y went over once: something is counted for it
+            self.assertIn(("y", "address"), buckets.reported)
             self.refused("RATE: too many callers at once", buckets.take, "w", "address")
+            with self.assertRaises(sync.Quiet):
+                buckets.take("v", "address")                                        # another newcomer, the same minute: counted under one key
             buckets.take("x", "address")                                            # a caller already known is still served
-            self.tick += 61                                                         # the three are idle: forgotten for a newcomer
-            buckets.take("w", "address")
-            self.assertEqual(sorted(k[0] for k in buckets.state), ["w"])
+            for _ in range(40):                                                     # x is hammered past its limit for a minute and a half
+                self.tick += 2
+                try:
+                    buckets.take("x", "address")
+                except m.Refused:
+                    pass
+            for _ in range(60):
+                try:
+                    buckets.take("x", "address")
+                except m.Refused:
+                    pass
+            self.tick += 30                                                         # y and z have been idle for 110 s, x for 30
+            buckets.take("w", "address")                                            # there is room now: the idle ones went
+            self.assertEqual(sorted(k[0] for k in buckets.open), ["w", "x"])        # the busy one was NOT forgotten: its requests keep passing at its rate
+            self.assertEqual(sorted(k[0] for k in buckets.reported), ["*", "x"])    # nor what is being counted for it; nothing is kept for y, which is gone
+            # the node table is another table: addresses filling theirs never refuse a node
+            for name in ("n1", "n2", "n3", "n4", "n5"):
+                self.assertEqual(buckets.take(name, "any"), 0)
+            self.assertEqual(len(buckets.nodes), 5)
 
     def test_a_bundle_is_at_most_64_envelopes_and_a_node_far_behind_catches_up_in_rounds(self):
         self.advance(130)
@@ -344,6 +421,32 @@ class Pull(Case):
         answer = self.pull("c", summary=convergence.summary(self.stores["a"]), sequence=2)
         self.assertIsNone(answer["bundle"]["heartbeat"])
         self.assertEqual(self.pull("c", summary=convergence.summary(self.stores["a"]), sequence=1)["bundle"]["heartbeat"]["heartbeat"]["sequence"], 2)
+
+    def test_which_clock_judges_the_heartbeat_and_a_clock_that_fails_withholds_nothing(self):
+        """Found by the confirming read: an unauthenticated wall clock at 0 passed on an expired heartbeat, one
+        ten years fast withheld every heartbeat, and one that raised turned the whole pull into a refusal."""
+        server = self.servers["b"]
+        beat = lambda: self.pull("b")["bundle"]["heartbeat"]       # noqa: E731
+        self.assertIsNotNone(beat())
+        # the peer's own authenticated reading is the one used: a wall clock ten years fast changes nothing
+        server.clock = lambda: self.now + 10 * 365 * 86400
+        self.assertIsNotNone(beat())
+        # with no authenticated time, the wall clock judges
+        self.authenticated = False
+        self.assertIsNone(beat())
+        server.clock = lambda: self.now
+        self.assertIsNotNone(beat())
+        # a clock that says nothing withholds nothing, and the manifests still go out
+        for broken in (lambda: None, lambda: "noon", lambda: True, lambda: 1 / 0):
+            server.clock = broken
+            answer = self.pull("b")
+            self.assertEqual((answer["ok"], len(answer["bundle"]["envelopes"])), (True, 1))
+            self.assertIsNotNone(answer["bundle"]["heartbeat"])
+        # a Freshness whose clock raises is a clock that says nothing, too
+        self.authenticated = True
+        self.peers["b"]["freshness"].clock = lambda: 1 / 0
+        server.clock = lambda: self.now + hb.MAX_LIFETIME
+        self.assertIsNone(beat())
 
     def test_a_peer_passes_on_only_a_heartbeat_for_the_manifest_it_holds(self):
         self.stores["b"].commit(self.revoke(self.m1, node="c"))                                    # b moved on; its heartbeat is for epoch 1
@@ -467,6 +570,37 @@ class Lying(Case):
                           "sync-heartbeat")
         self.assertEqual(convergence.summary(self.stores["a"])["epoch"], 0)
 
+    def test_a_fault_on_this_node_is_a_recorded_refusal_and_is_not_blamed_on_the_source(self):
+        """Found by the confirming read: a membership file this node could not read raised PermissionError out
+        of pull with no event, and a full disk here was recorded as the source's answer being unreadable."""
+        self.client.pull("b")
+        e2 = self.revoke(self.m1, node="c")
+
+        def unreadable(*a, **kw):
+            raise PermissionError("membership.json")
+        with unittest.mock.patch.object(self.stores["a"], "load", unreadable):
+            self.refused_pull("the round failed (PermissionError)", self.source(self.answer([e2])))
+        self.assertEqual(self.last()["epoch"], 0)                       # the event's header could not name a manifest either
+
+        def full(envelope):
+            raise OSError(28, "No space left on device")
+        with unittest.mock.patch.object(self.stores["a"], "commit", full):
+            self.refused_pull("the round failed (OSError)", self.source(self.answer([e2])))
+        self.assertNotIn("source", self.last()["reason"])
+        # the heartbeat arrives and the manifest then cannot be read: the heartbeat's own decision says so
+        beat = hbt.beat(self.m1, 9, issued=self.now)
+        answers = [self.m1, None]                                       # readable when the round begins, not when the heartbeat is taken
+        with unittest.mock.patch.object(self.client, "_held", lambda: answers.pop(0) if answers else None):
+            self.refused_pull("this node's manifest cannot be read: the heartbeat is not taken", self.source(self.answer([], beat)), "sync-heartbeat")
+        self.assertEqual(self.own.check(self.m1), hb.MAX_LIFETIME - 60)   # and the heartbeat it held is the one it still holds
+
+    def test_a_round_that_cannot_be_recorded_raises_and_is_not_mistaken_for_a_refusal(self):
+        def refusing(event):
+            raise m.Refused("the audit file is full")
+        self.client.sink = refusing
+        with self.assertRaises(sync.SinkFailed):
+            self.client.pull("b")
+
     def test_a_source_that_does_not_answer_is_a_refusal_and_an_unknown_source_is_not_asked(self):
         def down(raw):
             raise ConnectionRefusedError("down")
@@ -510,7 +644,7 @@ class Lying(Case):
         self.client.transports["liar"] = lambda raw: deep
         with self.assertRaises(m.Refused) as caught:
             self.client.renewer("liar", self.quote)(self.holder.request())
-        self.assertIn("could not be read (RecursionError)", str(caught.exception))
+        self.assertIn("the lease could not be asked for (RecursionError)", str(caught.exception))
 
         def broken_quote(nonce, manifest):
             raise KeyError("tpm")
@@ -768,6 +902,43 @@ class Sockets(Case):
         self.assertIn(b'"ok"', self.answered(port, "beside one held connection, a request"))   # two at once again
         # many connections were closed unanswered: ONE event, not one each (the next minute's would carry the count)
         self.assertEqual(self.drops(), [("127.0.0.1", "DENY", "over the connection limit (8 in all, 2 from one address)")])
+
+    def test_an_accept_that_fails_is_recorded_and_the_listener_goes_on(self):
+        """Found by the confirming read: any accept() error but a timeout ended serve(), with no event."""
+        class Flaky:
+            def __init__(self, real, failures):
+                self.real, self.failures = real, list(failures)
+
+            def accept(self):
+                if self.failures:
+                    raise self.failures.pop(0)
+                return self.real.accept()
+        real = socket.create_server(("127.0.0.1", 0))
+        real.settimeout(0.05)
+        stopped = []
+        listener = Flaky(real, [ConnectionAbortedError("aborted"), OSError(24, "Too many open files")])
+        thread = threading.Thread(target=sync.serve, args=(self.servers["b"], listener, lambda: bool(stopped)), daemon=True)
+        thread.start()
+        self.addCleanup(lambda: (stopped.append(1), thread.join(5), real.close()))
+        self.assertIn(b'"ok"', self.answered(real.getsockname()[1], "after two failed accepts, a request"))
+        self.assertTrue(thread.is_alive())
+        self.assertEqual(self.drops(), [("the listener", "DENY", "a connection could not be accepted (ConnectionAbortedError)")])   # once a minute
+
+    def test_a_connection_no_thread_can_be_started_for_gives_its_place_back_and_is_recorded(self):
+        port = self.serving(deadline=600.0, per_address=1)
+        starts = {"left": 1}
+        real_thread = threading.Thread
+
+        class NoThread(real_thread):
+            def start(thread):
+                if starts["left"] and thread._target.__name__ == "answer":
+                    starts["left"] -= 1
+                    raise RuntimeError("can't start new thread")
+                return super().start()
+        with unittest.mock.patch.object(sync.threading, "Thread", NoThread):
+            self.assertEqual(self.complete(port), b"")                              # no thread: closed unanswered
+            self.assertIn(b'"ok"', self.answered(port, "after a thread could not be started, the next request"))   # its place was given back
+        self.assertEqual(self.drops(), [("127.0.0.1", "DENY", "no thread could be started for the connection")])
 
     def test_drops_are_reported_once_a_minute_with_the_count(self):
         server = self.servers["b"]

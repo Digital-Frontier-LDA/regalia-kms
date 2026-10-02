@@ -32,10 +32,11 @@ HOW MUCH.
   * a request is at most 64 KiB, an answer at most 1 MiB. A bundle carries at most 64 envelopes and is cut
     further until it fits, so a node far behind catches up over several pulls (a bundle short of the tip
     carries no heartbeat: convergence.bundle);
-  * token buckets: 20 requests a minute per SOURCE ADDRESS, spent BEFORE anything else is done (no
+  * token buckets: 30 requests a minute per SOURCE ADDRESS, spent BEFORE anything else is done (no
     manifest is read and no TPM is touched for a caller over it, whoever it is: a revoked node whose
-    tunnel is still up cannot drive this node's disk and TPM); then 20 a minute per node, of which 6 may
-    be lease requests;
+    tunnel is still up cannot drive this node's disk and TPM); then 20 a minute per NODE, of which 6 may
+    be lease requests. The address limit is the looser one on purpose: a node with one address meets
+    its own limit first, is refused by name, and is told why;
   * (the socket layer, serve) 8 connections at once, 2 from one address, 10 seconds each. Which addresses
     can connect at all is the tunnel's business: each key is allowed its one address (wgsvc.py).
 
@@ -43,8 +44,11 @@ EVERY DECISION IS ONE AUDIT EVENT (convergence.audited): the operation, the epoc
 decided under, the caller the tunnel identified (its source address when it could not be identified),
 ALLOW or DENY, and the reason. A sink that cannot take the event (whatever it raises) means no answer.
 THE ONE EXCEPTION IS A FLOOD: once a caller is over a rate limit, or connections are being dropped, ONE
-event is written per minute for it, carrying how many more were refused since the last one. A caller that
-can make this node refuse cannot thereby fill its trail.
+event is written per minute for it; how many more were refused is written with the next report, or with
+the caller's next request that passes (sync-rate). A caller that can make this node refuse cannot
+thereby fill its trail. Buckets keyed by a source address are capped (4096); a newcomer is refused while
+they are all busy, under one key, so that is one event a minute too. Buckets keyed by a NODE are bounded
+by the manifest and kept apart: addresses cannot crowd a node out.
 
 WHAT A CALLER IS TOLD. An identified, admitted node is told the reason it was refused. A caller that was
 not identified, or is in a terminal state, is told "refused" and nothing else: the reason (this node's
@@ -67,6 +71,7 @@ signed or attested end to end. See #80.
 NOT HERE: the WireGuard interface and the kernel lookup behind `identify` (step 2); units, firewall
 rules and probes (step 3); convergence.recover over this transport.
 """
+import copy
 import socket
 import threading
 import time
@@ -88,8 +93,10 @@ ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "lease": ("v", "ok", "lease")}
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (20, 60), "any": (20, 60), "lease": (6, 60), "drop": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
-MAX_BUCKETS = 4096               # callers remembered at once; idle ones are forgotten first
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "drop": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
+MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
+EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under
 MAX_CONNECTIONS, MAX_PER_ADDRESS, DEADLINE = 8, 2, 10
 MAX_ROUNDS = 64                  # pulls in one catch-up: 64 * 64 epochs, then the next timer tick goes on
 
@@ -122,29 +129,36 @@ class SinkFailed(Exception):
 
 class Buckets:
     """Token buckets, one per (caller, class). `clock()` is monotonic seconds. The first refusal of a
-    (caller, class) in a window is a Refused; the rest of that window are Quiet, and the next window's
-    first one says how many there were."""
+    (caller, class) in a window is a Refused; the rest of that window are Quiet, and the count of those is
+    given with the next report, or by the next take() of that key that passes.
+
+    Two tables. The classes keyed by a NODE ("any", "lease") are bounded by the manifest. Those keyed by
+    a SOURCE ADDRESS (OPEN) are capped at MAX_BUCKETS, and cannot fill the nodes' table."""
 
     def __init__(self, rates=None, clock=time.monotonic):
         self.rates, self.clock = dict(RATE if rates is None else rates), clock
-        self.state, self.reported, self.lock = {}, {}, threading.Lock()
+        self.nodes, self.open, self.reported, self.lock = {}, {}, {}, threading.Lock()
 
     def take(self, caller, kind):
-        """Spend one request of `kind` for `caller`, or Refused (Quiet when already reported)."""
+        """Spend one request of `kind` for `caller`, or Refused (Quiet when already reported). Returns how
+        many of this caller's requests of this kind were refused since the last one that passed: 0, except
+        on the first request that passes after it was over its limit. (The first of those was a Refused,
+        which its caller may have recorded; the rest were Quiet.)"""
         count, per = self.rates[kind]
-        key = (caller, kind)
+        key, table = (caller, kind), (self.open if kind in OPEN else self.nodes)
         with self.lock:
             now = self.clock()
-            if key not in self.state and len(self.state) >= MAX_BUCKETS:
+            if table is self.open and key not in table and len(table) >= MAX_BUCKETS:
                 self._forget_idle(now)
-                if len(self.state) >= MAX_BUCKETS:
-                    self._refuse(key, now, per, "RATE: too many callers at once")
-            tokens, at = self.state.get(key, (float(count), now))
+                if len(table) >= MAX_BUCKETS:
+                    self._refuse((EVERYBODY, kind), now, per, "RATE: too many callers at once")
+            tokens, at = table.get(key, (float(count), now))
             tokens = min(float(count), tokens + max(0.0, now - at) * count / per)
-            if tokens < 1.0:
-                self.state[key] = (tokens, now)
+            if tokens < 1.0:      # nothing is written: the bucket is as it was at its last request that passed
                 self._refuse(key, now, per, "RATE: more than %d %s requests in %d s from %s" % (count, kind, per, caller))
-            self.state[key] = (tokens - 1.0, now)
+            table[key] = (tokens - 1.0, now)
+            since, suppressed = self.reported.pop(key, (None, 0))
+            return suppressed + (0 if since is None else 1)
 
     def _refuse(self, key, now, per, text):
         since, suppressed = self.reported.get(key, (None, 0))
@@ -154,16 +168,15 @@ class Buckets:
         self.reported[key] = (now, 0)
         raise Refused(text + (" (%d more refused since the last report)" % suppressed if suppressed else ""))
 
-    def forgotten(self, caller, kind):
-        """How many of `caller`'s `kind` were refused since the last one that passed; the count restarts."""
-        with self.lock:
-            since, suppressed = self.reported.pop((caller, kind), (None, 0))
-            return suppressed + (0 if since is None else 1)
-
     def _forget_idle(self, now):
-        """Drop the buckets that are full again: their callers have not been heard from for a window."""
-        self.state = {k: v for k, v in self.state.items() if now - v[1] < self.rates[k[1]][1]}
-        self.reported = {k: v for k, v in self.reported.items() if k in self.state}
+        """Drop the address-keyed buckets that are full again (nothing of theirs passed for a whole window,
+        so forgetting one gives its caller nothing it did not have), and what was being counted for them.
+        A key that is being hammered has a request pass as often as its rate allows, so it is never one
+        of these. The count for "everybody" stays."""
+        for key in [k for k, v in self.open.items() if now - v[1] >= self.rates[k[1]][1]]:
+            del self.open[key]                  # in place: take() is holding this very table
+        for key in [k for k in self.reported if k[1] in OPEN and k not in self.open and k[0] != EVERYBODY]:
+            del self.reported[key]
 
 
 def _refusal(reason):
@@ -178,13 +191,16 @@ class _View:
 
     def __init__(self, store):
         self._store, self._envelopes = store, None
+        self.late = []      # (caller, class, count): refusals of an earlier flood that no report has counted yet
 
     def envelopes(self, after_epoch=0):
+        require(isinstance(after_epoch, int) and not isinstance(after_epoch, bool) and after_epoch >= 0, "after_epoch must be an integer >= 0")
         if self._envelopes is None:
             self._envelopes = self._store.envelopes(0)
-        return self._envelopes[after_epoch:]        # epochs run from 1 with no gap: the store's own rule
+        return copy.deepcopy(self._envelopes[after_epoch:])        # epochs run from 1 with no gap: the store's own rule
 
     def load(self):
+        """The current manifest, as a copy: whatever a caller of this view does to it stays its own."""
         chain = self.envelopes(0)
         return chain[-1]["manifest"] if chain else None
 
@@ -211,7 +227,7 @@ class Server:
         """The answer (bytes) to one request from `source`. A refusal is an answer, and so is a failure
         inside this node. Only a sink that cannot take the event raises (SinkFailed): nothing is answered
         that is not recorded."""
-        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False}
+        known = {"kind": "sync", "manifest": None, "caller": convergence._printable(source), "identified": False, "late": []}
         answer = refusal = None
         try:
             answer = self._decide(raw, source, known)
@@ -224,6 +240,10 @@ class Server:
             if refusal is not None:
                 raise refusal
             return answer
+        # A flood that ended: what was refused and never counted is written now, with the first request
+        # of that caller that got through.
+        for who, kind, count in known["late"]:
+            self._report(who, kind, count)
         # One event, written when the decision is known, under whatever was established on the way: the
         # manifest, the caller the tunnel identified, the operation. Not for a refusal already reported
         # in this window (Quiet): the flood is in the count of the next report.
@@ -235,13 +255,26 @@ class Server:
         # the reason goes to a caller this node identified and may talk to; anybody else learns nothing
         return _refusal(refusal if known["identified"] else "refused")
 
+    def _report(self, who, kind, count):
+        def said():
+            raise Refused("RATE: %d more %s requests from %s were refused before this one" % (count, kind, who))
+        try:
+            convergence.audited(self._record, "sync-rate", None, who, self.node_id, said)
+        except Refused:
+            pass
+
+    def _spend(self, late, who, kind):
+        """One request of `kind` for `who`, or Refused; a count left over from a flood is put on `late`."""
+        refused = self.buckets.take(who, kind)
+        if refused > 1:          # the first of them was recorded when it happened
+            late.append((who, kind, refused - 1))
+
     def dropped(self, source, reason):
         """serve() closed a connection from `source` unanswered (over a connection limit, or no complete
         request in time). Recorded, at most once a minute per address."""
         name = convergence._printable(source)
-        try:
-            self.buckets.take(name, "drop")       # the first of a window passes; the next one says how many followed
-            suppressed = self.buckets.forgotten(name, "drop")
+        try:      # the first of a window passes; the others are counted, and none of them is an event of its own
+            suppressed = self.buckets.take(name, "drop")
         except Refused:
             return
 
@@ -253,16 +286,20 @@ class Server:
             pass
 
     def _decide(self, raw, source, known):
-        self.buckets.take(convergence._printable(source), "address")       # before the disk and the TPM are touched for anybody
-        view = _View(self.store)
+        view = _View(self.store)                                           # nothing is read yet
+        view.late = known["late"]
+        self._spend(view.late, convergence._printable(source), "address")  # before the disk and the TPM are touched for anybody
         manifest = known["manifest"] = view.load()
         require(manifest is not None, "this node holds no manifest")
         key = self.identify(manifest, source)
-        caller = known["caller"] = pinned(manifest, key)["node_id"]      # recorded by name even if it is then refused
-        self.buckets.take(caller, "any")
+        node = pinned(manifest, key)
+        caller = known["caller"] = node["node_id"]                       # recorded by name even if it is then refused
+        # From here an admitted node is told why it is refused, its own rate limit included. A node in a
+        # terminal state, and this node's own key, stay "refused" and nothing more.
+        known["identified"] = node["state"] not in membership.TERMINAL and caller != self.node_id
+        self._spend(view.late, caller, "any")                            # before the refusals below: they are limited too
         peer_of(manifest, key)
         require(caller != self.node_id, "a node does not ask itself")
-        known["identified"] = True
         require(isinstance(raw, bytes) and len(raw) <= MAX_REQUEST, "a request is at most %d bytes" % MAX_REQUEST)
         message = membership.load(raw, MAX_REQUEST)
         require(isinstance(message, dict) and message.get("v") == VERSION and not isinstance(message.get("v"), bool),
@@ -297,16 +334,33 @@ class Server:
 
     def _passable(self, manifest, sequence):
         """The heartbeat this node holds, if it is worth passing on: for the manifest held here, newer than
-        the caller's, and not already expired by this node's wall clock (the caller's authenticated clock
-        decides; this only spares it a refusal). None held is None."""
+        the caller's, and not already expired. None held is None. The caller's authenticated clock decides
+        what is live; dropping an expired one here only spares it a refusal."""
         held = self.freshness.held()
         try:
             body = heartbeat.verify(held, manifest)
-            if body["sequence"] <= sequence or heartbeat.parse_time(body["expires_at"], "expires_at") <= self.clock():
+            if body["sequence"] <= sequence:
+                return None
+            now = self._now()
+            if now is not None and heartbeat.parse_time(body["expires_at"], "expires_at") <= now:
                 return None
         except Refused:
             return None
         return held
+
+    def _now(self):
+        """This node's time, for that one judgement: its authenticated reading when it has one (the clock
+        its own Freshness uses), else its wall clock, else None. A clock that cannot be read withholds
+        nothing: the heartbeat is passed on and the caller judges it."""
+        for read in (getattr(self.freshness, "clock", None), self.clock):
+            try:
+                value = read()
+                seconds, trusted = value if isinstance(value, tuple) else (value, True)
+                if trusted is True and isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+                    return seconds
+            except Exception:      # noqa: BLE001 - a clock that fails is a clock that says nothing
+                continue
+        return None
 
     @staticmethod
     def _fit(bundle_of):
@@ -321,7 +375,7 @@ class Server:
     def _lease_nonce(self, view, manifest, caller, message):
         require(self.attester is not None, "this source issues no leases")
         require(message["node_id"] == caller, "the request names %s; the tunnel is %s's" % (convergence._printable(message["node_id"]), caller))
-        self.buckets.take(caller, "lease")
+        self._spend(view.late, caller, "lease")
         return {"nonce": self.attester.nonce(caller).hex()}
 
     def _lease(self, view, manifest, caller, message):
@@ -331,7 +385,7 @@ class Server:
         lease.validate_request(request)
         require(request["node_id"] == caller, "the request names %s; the tunnel is %s's" % (request["node_id"], caller))
         membership.exact(evidence, EVIDENCE_FIELDS, "evidence")
-        self.buckets.take(caller, "lease")
+        self._spend(view.late, caller, "lease")
         return {"lease": lease.issue(manifest, self.node_id, request, self.attester, evidence, self.freshness, self.signer)}
 
 
@@ -358,6 +412,12 @@ class Client:
     def __init__(self, node_id, store, freshness, transports, sink):
         self.node_id, self.store, self.freshness, self.transports, self.sink = node_id, store, freshness, transports, sink
 
+    def _record(self, event):
+        try:
+            self.sink(event)
+        except Exception as failure:      # noqa: BLE001 - as on the answering side: never mistaken for a decision
+            raise SinkFailed("the audit sink did not take the event (%s)" % type(failure).__name__) from failure
+
     def _ask(self, source, op, **fields):
         require(source in self.transports, "%r is not a configured source" % (source,))
         request = membership.canonical(dict({"v": VERSION, "op": op}, **fields))
@@ -368,23 +428,25 @@ class Client:
         return _answer(raw, op)
 
     @staticmethod
-    def _safely(step):
-        """`step`, with anything it raises that is not a refusal turned into one. A source's answer is read
-        by code that expects well-formed input in places (a deeply nested answer, a field of the wrong
-        type inside an envelope): whatever that raises, the node was lied to or mis-served, which is a
-        refusal to record, not an exception to die of."""
+    def _safely(step, what="the round failed"):
+        """`step`, with anything it raises that is not a refusal turned into one. A round reads a source's
+        answer with code that expects well-formed input in places (a deeply nested answer, a field of the
+        wrong type inside an envelope), and it writes to this node's own disk and TPM. Whatever any of
+        that raises, the round is refused and recorded, not died of. The words do not say whose fault it
+        was: a full disk here and a malformed envelope there both end up in this message."""
         def run():
             try:
                 return step()
             except Refused:
                 raise
             except Exception as failure:      # noqa: BLE001 - see above
-                raise Refused("the source's answer could not be read (%s)" % type(failure).__name__) from None
+                raise Refused("%s (%s)" % (what, type(failure).__name__)) from None
         return run
 
     def pull(self, source):
         """Ask `source` for what this node lacks and apply it, round after round until it has nothing more
-        (at most MAX_ROUNDS). Returns (summary, seconds of freshness or None).
+        (at most MAX_ROUNDS). Returns (summary, seconds of freshness or None). Raises Refused, or SinkFailed
+        when the trail cannot be written.
 
         A round is TWO decisions, each one audit event: the manifests (sync-apply, under the manifest held
         when the round began), then the heartbeat if one came (sync-heartbeat, under the manifest held
@@ -407,31 +469,32 @@ class Client:
                 try:
                     now_at = self._safely(lambda: convergence.catch_up(self.store, bundle["envelopes"]))()
                 except Refused as refused:
-                    reached = convergence.summary(self.store)["epoch"]
-                    if reached != started["epoch"]:
-                        raise Refused("%s (the membership had moved from epoch %d to %d before this)" % (refused, started["epoch"], reached)) from None
+                    reached = self._held()
+                    if reached is not None and reached["epoch"] != started["epoch"]:
+                        raise Refused("%s (the membership had moved from epoch %d to %d before this)" % (refused, started["epoch"], reached["epoch"])) from None
                     raise
                 return now_at, bundle["heartbeat"], len(bundle["envelopes"])
-            now_at, beat, received = convergence.audited(self.sink, "sync-apply", before, self.node_id, source, self._safely(manifests))
+            now_at, beat, received = convergence.audited(self._record, "sync-apply", before, self.node_id, source, self._safely(manifests))
             fresh = None
             if beat is not None:
                 current = self._held()
 
                 def accept():
-                    require(current is not None and now_at["epoch"] >= 1, "a heartbeat cannot be taken before the first manifest")
+                    require(now_at["epoch"] >= 1, "a heartbeat cannot be taken before the first manifest")
+                    require(current is not None, "this node's manifest cannot be read: the heartbeat is not taken")
                     return self.freshness.accept(beat, current)
-                fresh = convergence.audited(self.sink, "sync-heartbeat", current, self.node_id, source, self._safely(accept))
+                fresh = convergence.audited(self._record, "sync-heartbeat", current, self.node_id, source, self._safely(accept))
             left = fresh if fresh is not None else left
             if fresh is not None or received == 0:
                 return now_at, left
         return convergence.summary(self.store), left
 
     def _held(self):
-        """The manifest an audit event is filed under; None when there is none or the store refuses (the
-        round then refuses too, and says why)."""
+        """The manifest an audit event is filed under; None when there is none, the store refuses, or it
+        cannot be read at all (the round then refuses too, inside its own decision, and says why)."""
         try:
             return self.store.load()
-        except Refused:
+        except Exception:      # noqa: BLE001 - a store that cannot be read is "no manifest" for the event's header
             return None
 
     def renewer(self, source, quote):
@@ -443,7 +506,7 @@ class Client:
                 membership.hex_field(nonce, 64, "nonce")
                 evidence = quote(nonce, self.store.load())
                 return self._ask(source, "lease", request=request, evidence=evidence)["lease"]
-            return self._safely(asked)()
+            return self._safely(asked, "the lease could not be asked for")()
         return renew
 
 
@@ -466,7 +529,8 @@ def serve(server, listener, stop, deadline=DEADLINE, connections=MAX_CONNECTIONS
     """Answer connections on `listener` until `stop()` is true: one request each, read until the caller
     shuts its sending side. Over the limits, or with no complete request by the deadline, a connection is
     closed unanswered and server.dropped() records it (at most once a minute per address); the caller's
-    retry is its next timer tick. The listener's own timeout is how often `stop` is looked at."""
+    retry is its next timer tick. An accept() that fails is recorded the same way and the loop goes on:
+    it ends only when `stop()` says so. The listener's own timeout is how often `stop` is looked at."""
     active, lock = [], threading.Lock()      # the address of every connection being answered
 
     def dropped(address, reason):
@@ -496,6 +560,10 @@ def serve(server, listener, stop, deadline=DEADLINE, connections=MAX_CONNECTIONS
             conn, peer = listener.accept()
         except (TimeoutError, socket.timeout):
             continue
+        except OSError as failure:      # a connection aborted before it was accepted, no descriptor left: the listener goes on
+            dropped("the listener", "a connection could not be accepted (%s)" % type(failure).__name__)
+            time.sleep(0.1)
+            continue
         address = peer[0]
         with lock:
             admitted = len(active) < connections and active.count(address) < per_address
@@ -511,6 +579,7 @@ def serve(server, listener, stop, deadline=DEADLINE, connections=MAX_CONNECTIONS
             conn.close()
             with lock:
                 active.remove(address)
+            dropped(address, "no thread could be started for the connection")
 
 
 def tcp_transport(host, port=PORT, source=None, timeout=DEADLINE):
