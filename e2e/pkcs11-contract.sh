@@ -40,6 +40,13 @@ export REGALIA_Q_PIN="$HSM_USER_PIN"; unset HSM_USER_PIN
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"
 EVID="${EVIDENCE_DIR:-.}/evidence-pkcs11-$SERIAL-$UTC.log"
 W="$(mktemp -d)"; ID_EC=""; ID_RSA=""; CREATED=()
+# A BENCH-SAFE OpenSC. These suites never test the YubiKey, but OpenSC's enumeration leaves its PIV applet
+# selected, so a concurrent OpenPGP login by another process lands on PIV and spends PIV PIN tries (three
+# were spent that way on 2026-10-02). Unless the caller set OPENSC_CONF, the YubiKey's reader is ignored.
+if [ -z "${OPENSC_CONF:-}" ]; then
+  printf 'app default {\n  ignored_readers = "%s";\n}\n' "${HSM_IGNORE_READERS:-Yubico}" > "$W/opensc.conf"
+  export OPENSC_CONF="$W/opensc.conf"; OWN_OPENSC_CONF=1
+fi
 # On any exit, interrupted or not: delete the test keys from the token (best effort), then the temp dir.
 cleanup_keys(){ local id; for id in "${CREATED[@]}"; do
   p11l --delete-object --type privkey --id "$id" >/dev/null 2>&1; p11l --delete-object --type pubkey --id "$id" >/dev/null 2>&1; done; }
@@ -62,6 +69,14 @@ for line in sys.stdin:
     if "serial num" in line and line.split(":", 1)[1].strip() == serial: hits.append(slot)
 print(hits[0] if len(hits) == 1 else "")' "$SERIAL"; }
 SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL (pkcs11-tool -L)"
+# ONE READER ONLY from here on (e2e/lib/opensc_isolate.py): another token can no longer take this
+# token's slot ID when its reader disappears, and OpenSC stops probing the other cards.
+if [ "${OWN_OPENSC_CONF:-0}" = 1 ]; then
+  python3 "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT" "$W/opensc.conf" "$MODULE" >/dev/null \
+    || die "cannot isolate this token's reader in OpenSC"
+  SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "the token is not visible after isolating its reader"
+  [ "$(pkcs11-tool --module "$MODULE" -L 2>/dev/null | grep -c '^Slot')" = 1 ] || die "more than one slot is visible after isolation"
+fi
 p11(){ pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
 p11l(){ p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 # Fresh ids: refuse any id already on the token (PKCS#11 does not make CKA_ID unique), and remember
