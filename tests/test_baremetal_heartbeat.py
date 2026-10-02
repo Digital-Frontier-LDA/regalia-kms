@@ -51,6 +51,15 @@ def beat(man, sequence, issued=T0, lifetime=hb.MAX_LIFETIME, key=REVOKE, domain=
     return {"heartbeat": body, "signature": {"key": pub(key), "sig": key.sign(domain + m.canonical(body)).hex()}}
 
 
+def simulated_ticks(test, tcti):
+    """The TPM clock for a swtpm test whose wall clock (`test.now`) is simulated. The real TPM is read on
+    every call, so TpmClock runs against swtpm; the value handed on is the test's own time in milliseconds.
+    Feeding the real TPM's elapsed time to a clock that stands still makes the time floor depend on how
+    long the test took: past about six seconds it refuses "the clock went backwards"."""
+    real = hb.TpmClock(tcti=tcti)
+    return lambda: (real(), int((test.now - T0 + 10 ** 6) * 1000))[1]
+
+
 class FakeTpm:
     """tpm2-tools as HighWater calls them: NV indices with the real rules. A counter's first increment
     lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes."""
@@ -555,7 +564,7 @@ class OnSwtpm(unittest.TestCase):
         self.counter.define()
         self.now = T0 + 60
         self.state = self.d + "/freshness.json"
-        self.f = hb.Freshness(self.counter, lambda: (self.now, True), hb.TpmClock(tcti=self.tcti), self.state)
+        self.f = hb.Freshness(self.counter, lambda: (self.now, True), simulated_ticks(self, self.tcti), self.state)
         self.m1 = manifest()
 
     def refused(self, reason, fn, *args):
@@ -603,7 +612,12 @@ class OnSwtpm(unittest.TestCase):
         time.sleep(0.3)
         self.assertGreater(clock(), first)
         self.f.accept(beat(self.m1, 1), self.m1)
+        # the real TPM clock behind the floor (the other tests simulate it: see simulated_ticks)
+        real = hb.Freshness(self.counter, lambda: (self.now, True), clock, self.d + "/real-clock.json")
+        real.accept(beat(self.m1, 2), self.m1)
+        self.assertGreater(real.check(self.m1), 0)
         self.now -= 3600
+        self.refused("the clock went backwards", real.check, self.m1)
         self.refused("the clock went backwards", self.f.check, self.m1)
         self.refused("the TPM clock cannot be read", hb.TpmClock(tcti="swtpm:path=" + self.d + "/absent"))
         self.refused("fail closed", hb.Counter("0x1500018", lock_path=self.d + "/lock", tcti="swtpm:path=" + self.d + "/absent").value)
