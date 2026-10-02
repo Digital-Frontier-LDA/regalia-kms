@@ -191,23 +191,24 @@ class TpmSigner:
 EVIDENCE_KEYS = ("ephemeral_public", "nonce", "quote", "signature")
 
 
-def _reattest(attester, evidence, request, manifest, subject):
-    """The subject re-attests NOW, as the node the manifest names. The peer's attestation verifier
+def reattest(attester, evidence, node_id, session_id, manifest, subject):
+    """`node_id` re-attests NOW, in boot session `session_id`, as the node the manifest names (`subject`, its
+    entry). Freshness comes only from the nonce inside `evidence`, which the peer's attestation verifier
+    issued and accepts once; nothing the requester chose is trusted for it. The peer's attestation verifier
     (attest.Verifier) pins the manifest's EK for it and verified the quote under the manifest's AK; the quote in
     `evidence` answers a nonce that verifier issued within its last two minutes, good once, and is over
-    this node ID, this epoch and the boot session in the request. An earlier verdict cannot be passed
-    in: issue() runs the verification itself."""
+    this node ID, this epoch and that boot session. An earlier verdict cannot be passed in: the
+    verification runs here. Used for a lease (issue) and for an unlock (replacement.may_unlock)."""
     require(isinstance(evidence, dict), "the subject has not re-attested: no lease")
     membership.exact(evidence, EVIDENCE_KEYS, "attestation evidence")
     for k, limit in (("ephemeral_public", 512), ("nonce", 32), ("quote", 1024), ("signature", 256)):
         require(isinstance(evidence[k], str) and re.fullmatch(r"([0-9a-f]{2}){1,%d}" % limit, evidence[k]) is not None,
                 "evidence.%s must be lowercase hex, at most %d bytes" % (k, limit))
-    node_id = request["node_id"]
     policy = attester.nodes.get(node_id)
     require(policy is not None and policy["ek_name"] == subject["ek_name"],
             "the attestation policy does not pin the manifest's EK for %s" % node_id)
     try:
-        verdict = attester.verify(node_id, manifest["epoch"], bytes.fromhex(request["session_id"]),
+        verdict = attester.verify(node_id, manifest["epoch"], bytes.fromhex(session_id),
                                   *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS))
     except attest.Refused as refusal:
         raise Refused("the subject's attestation is refused: %s" % refusal)
@@ -230,7 +231,7 @@ def issue(manifest, issuer_id, request, attester, evidence, freshness, signer):
     # absolute expiry bounds it: however long the attestation below takes, the lease cannot outlive the
     # heartbeat. A lease dated slightly early only ends slightly early.
     now, fresh_until = freshness.live_until(manifest)
-    _reattest(attester, evidence, request, manifest, nodes[subject_id])
+    reattest(attester, evidence, subject_id, request["session_id"], manifest, nodes[subject_id])
     lease = {"schema": SCHEMA, "node_id": subject_id, "ak_name": nodes[subject_id]["ak_name"], "issuer": issuer_id,
              "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "session_id": request["session_id"],
              "nonce": request["nonce"], "issued_at": _stamp(now), "expires_at": _stamp(min(now + MAX_LIFETIME, fresh_until))}
