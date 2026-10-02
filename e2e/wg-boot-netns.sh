@@ -101,7 +101,8 @@ def site(node):
                              "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514},
                                           {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
                              "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUN[node], "unlock_port": 7443,
-                                           "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]}})
+                                           "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]},
+                             "service_mesh": None})
 m1 = manifest(1, "")
 m2 = manifest(2, m.digest(m1), lisbon="REVOKED_STOLEN")
 def write(name, text):
