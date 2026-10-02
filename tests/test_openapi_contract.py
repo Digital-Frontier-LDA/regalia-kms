@@ -230,5 +230,98 @@ class OpenAPIContractTests(unittest.TestCase):
             self.resolve(ref)
 
 
+    # ---- the contract against the code ---------------------------------------------------------
+    #
+    # THE DOCUMENTS DRIFTED FROM THE DAEMON AND NOTHING NOTICED. api/openapi.json declared 422 on
+    # every operation, a status the daemon never writes, and declared none of 404, 405, 429, 500 or
+    # 504, which it does. API.md's table had no row for DEADLINE_EXCEEDED or CANCELED. And
+    # SignRequest.content_type was a closed list without application/vnd.regalia.digest, the one
+    # content type the shipped release-signing policy, the hardened-serve e2e and regalia-sign use.
+    # Every test above compares the document with itself or with a list written in this file, so
+    # none of them could see it. The tests below read the Go source.
+
+    GO_STATUS = {
+        "StatusBadRequest": 400, "StatusUnauthorized": 401, "StatusForbidden": 403,
+        "StatusNotFound": 404, "StatusMethodNotAllowed": 405, "StatusConflict": 409,
+        "StatusTooManyRequests": 429, "StatusInternalServerError": 500,
+        "StatusServiceUnavailable": 503, "StatusGatewayTimeout": 504,
+    }
+    # The executor's codes reach the wire verbatim (coordinator.classifyExecution), with a status
+    # chosen there by an if-chain a regex cannot read. So the pairs are stated here, and the test
+    # holds this table to the executor's own constants: a code added there fails until it is
+    # listed, and so documented.
+    EXECUTOR = {
+        "RESOURCE_EXHAUSTED": (429, True), "DEADLINE_EXCEEDED": (504, True),
+        "CANCELED": (504, False), "INTERNAL": (500, False),
+    }
+
+    def emitted(self):
+        """{(code, status, retryable)} for every error the daemon's source writes. `retryable` is
+        None where the source assigns code and status only and the flag keeps an earlier value."""
+        written = re.compile(r'"([A-Z][A-Z_]{3,})",\s*http\.(Status[A-Za-z]+)(?:,\s*(true|false))?')
+        found = set()
+        for directory in ("api", "operations"):
+            for path in sorted((ROOT / "internal" / directory).glob("*.go")):
+                if path.name.endswith("_test.go"):
+                    continue
+                for code, status, retryable in written.findall(path.read_text(encoding="utf-8")):
+                    self.assertIn(status, self.GO_STATUS, f"{path.name} writes http.{status}; add it to GO_STATUS")
+                    found.add((code, self.GO_STATUS[status], {"true": True, "false": False}.get(retryable)))
+        executor = (ROOT / "internal" / "executor" / "executor.go").read_text(encoding="utf-8")
+        constants = set(re.findall(r'Code\s*=\s*"([A-Z_]+)"', executor))
+        self.assertEqual(constants, set(self.EXECUTOR), "the executor's codes and EXECUTOR above disagree")
+        classify = (ROOT / "internal" / "operations" / "coordinator.go").read_text(encoding="utf-8")
+        classify = classify[classify.index("func classifyExecution"):]
+        classify = classify[:classify.index("\nfunc ", 1)]
+        self.assertEqual(
+            {self.GO_STATUS[name] for name in re.findall(r"http\.(Status[A-Za-z]+)", classify)},
+            {status for status, _ in self.EXECUTOR.values()} | {503},
+            "classifyExecution maps to other statuses than EXECUTOR records")
+        found |= {(code, status, retryable) for code, (status, retryable) in self.EXECUTOR.items()}
+        # Not vacuous: a pattern that stopped matching would otherwise pass every assertion below.
+        self.assertGreaterEqual(len(found), 12)
+        self.assertIn(("INVALID_ARGUMENT", 400, False), found)
+        self.assertIn(("NOT_FOUND", 404, None), found)
+        return found
+
+    def test_every_code_and_status_the_daemon_writes_is_declared(self):
+        codes = set(self.spec["components"]["schemas"]["Error"]["properties"]["code"]["enum"])
+        emitted = self.emitted()
+        self.assertLessEqual({code for code, _, _ in emitted}, codes)
+        statuses = {str(status) for _, status, _ in emitted}
+        operations = [path for path, _, _ in self.operations() if path.startswith("/v1/operations/")]
+        self.assertGreaterEqual(len(operations), 7)
+        for path in operations:
+            declared = set(self.operation(path, "post")["responses"])
+            self.assertLessEqual(statuses, declared, f"{path} does not declare {sorted(statuses - declared)}")
+        # #74's admission gate answers a key operation with the EXISTING code and status, so that
+        # no client contract moves. That only holds while this pair stays documented everywhere.
+        self.assertIn(("DEPENDENCY_UNAVAILABLE", 503, True), emitted)
+
+    def error_table(self):
+        """API.md's error table as {code: (statuses, retryable)}."""
+        text = (ROOT / "API.md").read_text(encoding="utf-8")
+        rows = re.findall(r"^\| `([A-Z_]+)` \| ([0-9, ]+) \| (yes|no) \|", text, flags=re.MULTILINE)
+        self.assertGreaterEqual(len(rows), 9)
+        return {code: ({int(s) for s in statuses.split(",")}, retryable == "yes") for code, statuses, retryable in rows}
+
+    def test_API_md_error_table_matches_the_document_and_the_daemon(self):
+        table = self.error_table()
+        codes = set(self.spec["components"]["schemas"]["Error"]["properties"]["code"]["enum"])
+        self.assertEqual(set(table), codes, "API.md's error table and the OpenAPI code list name different codes")
+        for code, status, retryable in sorted(self.emitted(), key=str):
+            statuses, documented = table[code]
+            self.assertIn(status, statuses, f"the daemon answers {code} with {status}; API.md says {sorted(statuses)}")
+            if retryable is not None:
+                self.assertEqual(retryable, documented, f"the daemon marks {code} retryable={retryable}; API.md says otherwise")
+
+    def test_sign_declares_the_content_types_the_shipped_policy_uses(self):
+        declared = set(self.spec["components"]["schemas"]["SignRequest"]["properties"]["content_type"]["enum"])
+        policies = json.loads((ROOT / "config" / "policy.example.json").read_text(encoding="utf-8"))["policies"]
+        used = {kind for policy in policies if policy["operation"] == "sign" for kind in policy["content_types"]}
+        self.assertTrue(used, "the example policy has no sign entry")
+        self.assertLessEqual(used, declared, f"SignRequest.content_type omits {sorted(used - declared)}")
+
+
 if __name__ == "__main__":
     unittest.main()

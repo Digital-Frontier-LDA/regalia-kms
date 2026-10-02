@@ -526,6 +526,22 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 		providers["nitrokey-pkcs11"] = provider
 		observer = provider
 		closers = append(closers, func() { _ = driver.Close() })
+		// A YUBIKEY'S OPENPGP APPLET IS A SECOND KIND OF TOKEN BEHIND THE SAME MODULE. It is served
+		// only when the evidence carries a local-usb attestation: that is the operator saying such
+		// a token exists on this host, and without it the driver refuses every applet binding. One
+		// provider answers for both backend names, so quarantine and PIN-budget state stay in the
+		// one place the metrics surface reads.
+		if local := channel.LocalTokens(); local != nil {
+			if err := requireOpenPGPAppletBindingsAreServable(keyRegistry, local); err != nil {
+				_ = driver.Close()
+				return nil, nil, nil, nil, err
+			}
+			if err := driver.ServeLocalTokens(local); err != nil {
+				_ = driver.Close()
+				return nil, nil, nil, nil, err
+			}
+			providers[nitrokey.OpenPGPAppletBackend] = provider
+		}
 	}
 	if len(settings.YubiKeyDevices) > 0 {
 		provider, providerErr := newYubiKeyBackend(settings.YubiKeyDevices, pins)
@@ -726,11 +742,12 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 // bindBackendToRegistry refuses a key registry that routes to a backend the daemon cannot serve.
 //
 // The registry accepts bindings to yubikey-piv and yubikey-openpgp — it has capability entries for
-// both and will route to them — while buildHardware only ever constructs a nitrokey-pkcs11
-// provider. Nothing connected the two, so an operator could bind a key to a YubiKey, watch the
-// custody manifest validate and the daemon start clean, and then have every operation on that key
-// fail at signing time as DEPENDENCY_UNAVAILABLE. Fail-closed, but discovered one request at a
-// time, at the moment someone needed the key.
+// both and will route to them — while buildHardware serves each only when this host is configured
+// for it: yubikey-piv with devices in a piv-tagged build, yubikey-openpgp with a local-usb
+// attestation in the evidence. Nothing connected the two, so an operator could bind a key to a
+// YubiKey, watch the custody manifest validate and the daemon start clean, and then have every
+// operation on that key fail at signing time as DEPENDENCY_UNAVAILABLE. Fail-closed, but discovered
+// one request at a time, at the moment someone needed the key.
 //
 // A backend the routing table names and the daemon cannot reach is a configuration error, and a
 // configuration error belongs at startup where somebody is watching.
