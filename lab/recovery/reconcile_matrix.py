@@ -53,7 +53,9 @@ def run(script, output):
             observer.cs(executable,['config','--priority','ignore','--key-slot','2',str(base)])
             untouched=observer.header(executable,base)['keyslots']
             image=directory/'trial.img'
+            last_public = ''
             def invoke(point=0,fault='',keep='2',retire='1',supplied=None):
+                nonlocal last_public
                 calls.unlink(missing_ok=True)
                 env=dict(os.environ,MATRIX_CALLS=str(calls),MATRIX_CRYPTSETUP=executable,MATRIX_POINT=str(point),MATRIX_FAULT=fault)
                 proc=subprocess.Popen(['python3','-I','-c',WORKER,str(script),str(shim),str(image),'--keep-slot',keep,'--retire-slot',retire],
@@ -64,6 +66,7 @@ def run(script, output):
                 recorded=[json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
                 public=(out+err).decode(errors='replace')+json.dumps(recorded)
                 if any(k in public for k in keys.values()):raise ValueError('fixture secret escaped')
+                last_public = public
                 if point == 0 and 'REFUSED:' in public:
                     print(public[:1500],flush=True)
                 return proc.returncode,recorded
@@ -110,7 +113,7 @@ def run(script, output):
                     pass_fds=(existing.fileno(),replacement.fileno()),capture_output=True,check=True,timeout=30)
             preserved=observer.header(executable,image)['keyslots']['3']
             code,_=invoke()
-            if code == 0 or observer.header(executable,image)['keyslots'].get('3')!=preserved or not observer.opens(executable,image,keys['old']):
+            if code == 0 or 'a retired card still opens' not in last_public or observer.header(executable,image)['keyslots'].get('3')!=preserved or not observer.opens(executable,image,keys['old']):
                 raise ValueError('an unselected copy was erased or its surviving card was not refused')
             report.update(status='passed',cases_executed=len(report['cases']),fault_points_reached=len(report['cases']),
                           negative_controls=4,unknown_keys_retained=True,scope='Command boundaries and explicit same-card retries, not internal sector writes')

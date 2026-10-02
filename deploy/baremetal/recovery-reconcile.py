@@ -171,8 +171,13 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     final = header(device)
     if any(s in final['keyslots'] for s in retire) or not proves(device, kept_key, keep) or not proves(device, kept_key):
         raise Refused('selected reconciliation did not finish')
-    if any(value != kept_key and proves(device, value) for value in retired_keys):
-        raise Refused('a retired card still opens an unselected slot; review it without deleting unknown slots')
+    for value in retired_keys:
+        if value == kept_key: continue  # explicit retirement of a redundant copy
+        tested = command(device, ['open', '--test-passphrase'], value)
+        if tested.returncode == 0:
+            raise Refused('a retired card still opens an unselected slot; review it without deleting unknown slots')
+        if tested.returncode != 2:
+            raise Refused('cannot prove the retired card no longer opens; inspect and repeat the selections')
     return describe(final)
 
 
