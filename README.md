@@ -46,6 +46,9 @@ One device serving every cryptographic role a small company actually has:
 
 ## Backends
 
+Three token configurations are supported — Pico HSM alone, Pico HSM + YubiKey, and Nitrokey HSM 2 +
+YubiKey. What each can serve, and which are qualified, is in [`CONFIGURATIONS.md`](CONFIGURATIONS.md).
+
 | Backend | Transport | Status | Notes |
 |---|---|---|---|
 | **Nitrokey HSM 2** (SmartCard-HSM) | PKCS#11 | ✅ software · 🚧 production qualification | The designated production HSM (audited NXP firmware). Device-cert identity and on-token key-provenance probes await final hardware sign-off. |
@@ -122,7 +125,7 @@ strict JSON object (≤32 KiB) with **no** fields for PINs, credentials, or key 
 | `api/` | OpenAPI contract |
 | `config/` | Example configs and the custody-manifest JSON schema |
 | `tools/` | Developer tooling (mutation-guard enumerator, inventory, PKCS#11 throughput benchmark) |
-| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `OPENPGP-COMPATIBILITY`, `TESTING`) |
+| `*.md` | Per-component design docs (`API`, `IDENTITY`, `POLICY`, `ENVELOPE`, `AUDIT`, `OBSERVABILITY`, `FENCING`, `PIN-CUSTODY`, `SOPS-TRANSPORT`, `COSMOS-SUPPORT`, `CONFIGURATIONS`, `OPENPGP-COMPATIBILITY`, `TESTING`) |
 
 ## Security
 
