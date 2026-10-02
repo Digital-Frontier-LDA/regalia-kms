@@ -28,8 +28,9 @@ Transition rules (accept(current, candidate)):
     the same nodes, identities, policy version and revocation keys, and each node's capabilities a
     subset of what they were;
   * NO NODE IS EVER REMOVED, by any signer: a node leaves service by being retired, and a mistaken
-    enrollment is corrected the same way. Once issued, an identity is never forgotten (as a revocation
-    list never forgets a certificate);
+    enrollment is corrected the same way, so the identities a node holds WHEN IT IS RETIRED are never
+    forgotten. This is not a history of every identity: the root may rotate a live node's AK or
+    WireGuard keys, and the values it replaces are then no longer listed;
   * RETIREMENT IS TERMINAL, for every signer: a RETIRED or REVOKED_STOLEN node stays in every later
     manifest as a tombstone (the same node_id, identities and HSM serials; RETIRED may only become
     REVOKED_STOLEN). Its hardware can then never be enrolled again, under any name: the uniqueness rule

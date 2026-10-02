@@ -112,7 +112,7 @@ class Tombstones(Case):
                 current = self.accept(self.m1, self.chain(self.m1, [self.entry("a", state), self.entry("b"), self.entry("c")]))
                 removed = self.chain(current, [self.entry("b"), self.entry("c")])
                 self.refused("tombstone: a cannot be removed; retire it instead", self.accept, current, removed)
-                # nor removed and replaced by new hardware in the same manifest, under another name or its own
+                # nor removed while new hardware is enrolled under another name in the same manifest
                 self.refused("tombstone: a cannot be removed; retire it instead", self.accept, current,
                              self.chain(current, [self.entry("b"), self.entry("c"), self.entry("a2")]))
                 # a mistaken enrollment is corrected by retiring it: it stays, and its identities stay unusable
