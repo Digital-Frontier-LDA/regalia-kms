@@ -566,11 +566,14 @@ def pcscd_access_rule(host):
         names = rules_files(host, directory)
         if names is None:
             return False, f"{directory} cannot be listed: what it grants is unknown"
-        if names:
-            rc, out = host.run(["stat", "-L", "-c", "%u %a", directory])
+        # Every directory polkitd reads, empty or not, and its parent: whoever can write either can add
+        # a rules file, or rename one in, and polkitd loads it at once.
+        rc, _ = host.run(["test", "-e", directory])
+        for place in ((directory, os.path.dirname(directory)) if rc == 0 else ()):
+            rc, out = host.run(["stat", "-L", "-c", "%u %a", place])
             fields = out.split()
             if rc != 0 or len(fields) != 2 or fields[0] != "0" or not re.fullmatch(r"[0-7]{3,4}", fields[1]) or int(fields[1], 8) & 0o022:
-                return False, f"{directory} is not root's alone to change (owner and mode: {out.strip() or 'unreadable'})"
+                return False, f"{place} is not root's alone to change (owner and mode: {out.strip() or 'unreadable'})"
         for name in names:
             path = f"{directory}/{name}"
             if path == PCSCD_RULE_PATH:

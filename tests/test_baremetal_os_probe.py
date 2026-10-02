@@ -4,6 +4,7 @@ the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
 import hashlib
 import json
+import os
 import pathlib
 import unittest
 from pathlib import Path
@@ -117,7 +118,9 @@ class FakeHost:
         }
         for directory in os_probe.POLKIT_RULE_DIRECTORIES:
             self.commands[("test", "-d", directory)] = ""
+            self.commands[("test", "-e", directory)] = ""
             self.commands[("stat", "-L", "-c", "%u %a", directory)] = "0 755\n"
+            self.commands[("stat", "-L", "-c", "%u %a", os.path.dirname(directory))] = "0 755\n"
         self.links = {"/proc/20/exe": "/usr/local/sbin/regalia-kms", "/proc/10/exe": "/usr/sbin/pcscd"}
         for target in os_probe.HIBERNATING_TARGETS:
             self.commands[("systemctl", "is-enabled", target)] = "masked\n"
@@ -630,6 +633,8 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
             "the distribution's file, unreadable": (lambda h: h.files.pop("/usr/share/polkit-1/rules.d/50-default.rules"), "cannot be read"),
             "a rules directory that cannot be listed": (lambda h: h.unlistable.add("/usr/share/polkit-1/rules.d"), "cannot be listed"),
             "a rules directory another user can change": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/usr/share/polkit-1/rules.d"): "0 777\n"}), "not root's alone to change"),
+            "an EMPTY rules directory anyone can write": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/usr/local/share/polkit-1/rules.d"): "1000 777\n"}), "not root's alone to change"),
+            "the parent of a rules directory anyone can write": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/run/polkit-1"): "0 777\n"}), "not root's alone to change"),
             "a rules directory that is not root's": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/etc/polkit-1/rules.d"): "1000 755\n"}), "not root's alone to change"),
             "the daemon is not running": (lambda h: h.commands.update({MAINPID_VALUE: "0\n"}), "is not running"),
             "polkit refuses the daemon access_pcsc": (lambda h: h.commands.pop(("pkcheck", "--action-id", "org.debian.pcsc-lite.access_pcsc", "--process", "20")), "does not authorize the running KMS"),
@@ -644,11 +649,12 @@ class OnlyTheKMSReachesPcscd(unittest.TestCase):
                 self.assertIn(reason, why)
                 self.assertTrue(all(v["value"] for k, v in measure(host).items() if k != self.control))
 
-    def test_the_distribution_s_own_files_are_accepted_and_empty_directories_need_no_stat(self):
+    def test_a_rules_directory_that_does_not_exist_needs_no_stat(self):
         host = FakeHost()
-        for directory in os_probe.POLKIT_RULE_DIRECTORIES:
-            if not host.dirs.get(directory):
-                host.commands.pop(("stat", "-L", "-c", "%u %a", directory))
+        for key in (("test", "-d", "/run/polkit-1/rules.d"), ("test", "-e", "/run/polkit-1/rules.d"),
+                    ("stat", "-L", "-c", "%u %a", "/run/polkit-1/rules.d"), ("stat", "-L", "-c", "%u %a", "/run/polkit-1")):
+            host.commands.pop(key)
+        host.dirs.pop("/run/polkit-1/rules.d")
         value, why = self.verdict(host)
         self.assertTrue(value, why)
         self.assertIn("the only other rules files are the distribution's", why)

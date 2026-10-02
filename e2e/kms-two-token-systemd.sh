@@ -115,7 +115,7 @@ echo "kms-two-token-systemd: HSM $HSM_SERIAL (slot $HSM_SLOT, label ${HSM_LABEL:
 # stops before the cleanup could spend more on deleting a key that was never made), and it lists the
 # private objects too, so a key already holding the id is seen and never deleted by mistake.
 existing="$(P_="$HSM_PIN" hsm --login --pin env:P_ --list-objects 2>&1)" \
-  || die "the HSM refused the PIN (one try spent; nothing was created): check REGALIA_TWO_TOKEN_HSM_PIN"
+  || die "the logged-in listing failed (a refused PIN spends one try; pcscd or the token may also have refused): nothing was created"
 grep -q "$KEY_LABEL" <<< "$existing" || grep -q "ID:[[:space:]]*$KEY_ID\$" <<< "$existing" \
   && die "an object with label $KEY_LABEL or id $KEY_ID is already on the HSM (an earlier run?): delete it by hand first"
 made_key=1   # the PIN is good and the id is free: from here on the cleanup looks for the key, whatever happens

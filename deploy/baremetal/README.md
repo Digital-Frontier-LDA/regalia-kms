@@ -141,8 +141,8 @@ Commissioning has two halves:
   first or rewrite polkit under the KMS rule. **So a KMS host carries no polkit rules file but the
   distribution's own and this one.** Measured: `kms_pcscd_access_rule` (the file is the shipped one
   byte for byte, root's, readable by polkitd; every other rules file in the four polkit directories
-  is one of the distribution's, by path and sha256 as measured on Debian 13, and the directories are
-  root's; and `pkcheck` says polkit admits the running daemon to both of pcscd's actions). A
+  is one of the distribution's, by path and sha256 as measured on Debian 13, and each of those
+  directories that exists, and its parent, is root's alone to change; and `pkcheck` says polkit admits the running daemon to both of pcscd's actions). A
   distribution update that changes one of those files fails the control until its digest is renewed
   in `os_probe.KNOWN_RULES_FILES`.
 - **AppArmor.** The unit asks for the profile by name (`AppArmorProfile=regalia-kms` in
