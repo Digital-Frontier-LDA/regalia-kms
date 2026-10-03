@@ -164,3 +164,20 @@ either the next update, or a document that re-approves the old image.
 5. The boot-time unlock client, so that a peer is actually needed to open the disk (#66, #67, #135).
 6. A rehearsal on the three DL360s (#65), including the boot loader's automatic fallback.
 7. The owner's decision on who approves an image (above).
+
+## A booted host and the image that was reviewed (#198)
+
+Once a host has booted, nothing on it shows what its initrd used to open the root disk (#135). What ties
+the running boot to a reviewed image is the PIN credentials. `host_probe.py`'s
+`pin_credentials_sealed_as_recorded` requires them to be sealed under the signed PCR 11 policy (recorded
+as `credential_tpm2_signed_pcrs` 11 with its key's fingerprint) and to open on this boot. When they open,
+the TPM has checked this boot's PCR 11 against a signature of the system-phase key, and `uki sign` signs only an
+image whose initrd passed its review (step 2.2a). A host whose PINs are sealed without that policy fails the
+control. There is no record file on the host: one that root could write would add nothing.
+
+Two limits, so this is not read as more than it is:
+
+1. It holds only if every system-phase signature comes from `uki sign`. Whoever holds that offline key could
+   sign an unreviewed image by hand, so the key's custody (the owner, #156) is part of this guarantee.
+2. It shows an image that passed the review when it was signed, not that it is the current one. A retired image
+   that once passed still opens until it is retired: that is #135's (pcrlock retirement).
