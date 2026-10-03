@@ -78,8 +78,10 @@ else
   # the main suite, its updates and its SECURITY suite (REGALIA_BOOT_SECURITY_MIRROR, the security archive's
   # snapshot at the same time in CI): a reviewed baseline without security updates is not one to ship (#198)
   MIRROR="${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}"
-  SOURCES=("deb $MIRROR $SUITE main" "deb $MIRROR $SUITE-updates main"
-           "deb ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
+  # (explicit lines name their keyring: mmdebstrap only picks one by itself for a bare mirror URL)
+  KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
+  SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
+           "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
   mmdebstrap --variant=minbase "${APTOPT[@]}" \
     --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
     "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
