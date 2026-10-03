@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 from deploy.baremetal import attest
+from deploy.baremetal import membership as m
 
 # Captured from swtpm (tpm2-tools 5.7): an AK made by tpm2_createak under the EK, a quote it signed over
 # PCRs 0 and 7, and the names tpm2-tools printed for them.
@@ -223,13 +224,14 @@ class Verification(unittest.TestCase):
         return attest.qualified_name(self.ek_name, attest.ak_identity(ak_pub or self.ak_pub)[0])
 
     def attempt(self, session=SESSION, key=KEY, epoch=EPOCH, node="site-a", quoted=None, sign_with=None, nonce=None,
-                signature=None, phase=None, **fields):
+                signature=None, phase=None, pcr_values=None, **fields):
         """The node quotes `quoted` (default: exactly what the verifier holds); the verifier checks its own values."""
         nonce = nonce or self.v.nonce("site-a")
         told = dict(node_id=node, epoch=epoch, session_id=session, ephemeral_public=key, nonce=nonce)
         extra = attest.qualifying_data(*dict(told, **(quoted or {})).values())
         blob = quote(extra, fields.pop("signer", self.signer()), **fields)
-        return self.v.verify(node, epoch, session, key, nonce, blob, signature or self.sign(blob, sign_with), **({"phase": phase} if phase else {}))
+        kw = dict({"phase": phase} if phase else {}, **({"pcr_values": pcr_values} if pcr_values is not None else {}))
+        return self.v.verify(node, epoch, session, key, nonce, blob, signature or self.sign(blob, sign_with), **kw)
 
     def refused(self, reason, **kw):
         with self.assertRaises(attest.Refused) as caught:
@@ -654,6 +656,109 @@ class Verification(unittest.TestCase):
         with self.assertRaises(attest.Refused) as caught:
             attest.validate_policy(flat)
         self.assertIn("fields mismatch", str(caught.exception))
+
+
+class ReportedValues(Verification):
+    """Protocol v2: the node sends its PCR values beside the quote. They are used only once they hash to the
+    quoted digest under the verifier's selection, and then only to name each PCR that differs."""
+
+    def test_values_that_match_the_quote_name_every_differing_pcr(self):
+        other = {"0": "11" * 32, "7": "99" * 32}
+        digest = attest.expected_pcr_digest(other)
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(digest=digest, pcr_values=dict(other))
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is not the expected PCR values. the set: PCR 7 is %s, expected %s"
+                         % ("99" * 32, "77" * 32))
+        # two sets, two PCRs off in one of them: each set named, PCRs in index order
+        self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
+        third = {"0": "10" * 32, "7": "99" * 32}
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(digest=attest.expected_pcr_digest(third), pcr_values=dict(third), session=b"T" * 32, key=b"k2", reset=2)
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is none of the accepted measurement sets (image-1, image-2). "
+                         "image-1: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s | image-2: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s"
+                         % ("10" * 32, "11" * 32, "99" * 32, "77" * 32, "10" * 32, "11" * 32, "99" * 32, "88" * 32))
+
+    def test_the_whole_refusal_reaches_the_audit_trail(self):
+        """The names are for the operator: a two-set, two-PCR refusal must reach the audit event whole, not cut
+        at the 240 characters a name is allowed (convergence.audited, regalia-kms-24's read)."""
+        from deploy.baremetal import convergence
+        self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
+        third = {"0": "10" * 32, "7": "99" * 32}
+        events = []
+        def decide():                       # as lease.reattest hands an attestation refusal on
+            try:
+                self.attempt(digest=attest.expected_pcr_digest(third), pcr_values=dict(third))
+            except attest.Refused as refusal:
+                raise m.Refused("the subject's attestation is refused: %s" % refusal)
+        with self.assertRaises(m.Refused) as caught:
+            convergence.audited(events.append, "unlock", None, "site-a", "b", decide)
+        self.assertGreater(len(str(caught.exception)), 240)
+        self.assertEqual(events[-1]["outcome"], "DENY")
+        self.assertEqual(events[-1]["reason"], str(caught.exception))
+        self.assertTrue(events[-1]["reason"].endswith("image-2: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s"
+                                                       % ("10" * 32, "11" * 32, "99" * 32, "88" * 32)))
+        # names stay short, and a reason is still one printable line, and still bounded
+        self.assertEqual(len(convergence._printable("x" * 1000)), 240)
+        self.assertEqual(len(convergence._printable("x" * 10000, m.REASON_LIMIT)), 4096)
+        self.assertEqual(convergence._printable("a\nb\x1b[31m"), "a?b?[31m")
+
+    def test_values_that_do_not_match_the_quote_are_refused_and_never_used(self):
+        tampered = dict(PCRS, **{"7": "78" * 32})                   # the quote is of PCRS, the values say otherwise
+        self.refused("the reported PCR values do not match the quote", pcr_values=tampered)
+        self.refused("the reported PCR values cover PCRs ['0', '7', '8'], not the quoted selection [0, 7]",
+                     pcr_values=dict(PCRS, **{"8": "00" * 32}))     # a PCR outside the selection
+        self.refused("the reported PCR values cover PCRs ['7'], not the quoted selection [0, 7]", pcr_values={"7": "77" * 32})   # one missing
+        for bad in ({"0": "11" * 32, "7": "77" * 31}, {"0": "11" * 32, "7": "AA" * 32}, {0: "11" * 32, "7": "77" * 32}, ["11" * 32], "x"):
+            with self.subTest(bad=str(bad)[:20]):
+                self.refused("must map PCR indices to 64 lowercase hex", pcr_values=bad)
+        self.refused("cover PCRs ['7', '00']", pcr_values={"00": "11" * 32, "7": "77" * 32})   # an index in another spelling
+
+    def test_matching_values_change_nothing_on_an_accepted_quote_and_v1_is_as_before(self):
+        verdict = self.attempt(pcr_values=dict(PCRS))
+        self.assertEqual(verdict["measurement"], "")
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(digest=attest.expected_pcr_digest({"0": "11" * 32, "7": "99" * 32}), session=b"T" * 32, key=b"k2", reset=2)
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is not the expected PCR values")      # v1: no values, no names
+
+    def test_per_phase_sets_are_named_with_their_phase(self):
+        self.policy["nodes"]["site-a"] = {"ek_name": self.ek_name.hex(), "accepted": [
+            {"label": "uki-1", "tpm_firmware_version": FW, "pcrs": dict(PCRS), "phases": {"initrd": {"11": "a1" * 32}, "system": {"11": "a2" * 32}}}]}
+        self.v = self.verifier()
+        got = dict(PCRS, **{"11": "a9" * 32})
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(pcrs=(0, 7, 11), digest=attest.expected_pcr_digest(got), pcr_values=got, phase="initrd")
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is not the expected PCR values. uki-1 (initrd phase): PCR 11 is %s, expected %s"
+                         % ("a9" * 32, "a1" * 32))
+
+
+class ReportedValuesVector(unittest.TestCase):
+    """tests/vectors/pcr-values-v2.json, the vector the Go client's test reads too: a real quote from a software
+    TPM and the values read beside it. The verifier takes those values, and refuses each case the vector
+    lists with the very reason it records, so the two sides of the exchange agree on one file. The reasons were
+    written by check_reported_values itself when the vector was made: they pin today's wording against drift,
+    they are not an outside oracle. The independent part is the real swtpm quote and the values read beside it."""
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "pcr-values-v2.json")
+        with open(path) as f:
+            self.vector = json.load(f)
+        self.quote = attest.parse_quote(bytes.fromhex(self.vector["quote"]))
+
+    def test_the_quote_selects_and_digests_what_the_vector_says(self):
+        self.assertEqual(self.quote["pcrs"], self.vector["selection"])
+        self.assertEqual(self.quote["pcr_digest"].hex(), self.vector["pcr_digest"])
+
+    def test_the_values_read_beside_the_quote_are_taken(self):
+        values = self.vector["pcr_values"]
+        self.assertEqual(attest.check_reported_values(values, self.quote["pcrs"], self.quote["pcr_digest"]), values)
+        self.assertIsNone(attest.check_reported_values(None, self.quote["pcrs"], self.quote["pcr_digest"]))
+
+    def test_every_refused_case_is_refused_with_the_reason_the_vector_records(self):
+        self.assertEqual(sorted(self.vector["refused"]), ["another_spelling", "malformed", "missing", "outside_the_selection", "tampered"])
+        for name, case in self.vector["refused"].items():
+            with self.subTest(name), self.assertRaises(attest.Refused) as refused:
+                attest.check_reported_values(case["pcr_values"], self.quote["pcrs"], self.quote["pcr_digest"])
+            self.assertEqual(str(refused.exception), case["reason"])
 
 
 class Node(unittest.TestCase):

@@ -53,7 +53,7 @@ print(v)' "$1" "$2"; }
 UNAME="$(basename "$LINUX" | sed 's/^vmlinuz-//')"
 if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   mkdir "$W/ird"; printf '#!/bin/sh\n' > "$W/ird/init"; (cd "$W/ird" && printf 'init\n' | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
-printf 'root=/dev/mapper/root ro quiet\n' > "$W/cmdline"
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
   openssl genrsa -out "$W/TEST-$k.key" 2048 2>/dev/null
@@ -75,16 +75,16 @@ REC="$W/a/test-image.record.json"
 i11="$(field "$REC" pcr11.initrd)"; s11="$(field "$REC" pcr11.system)"
 [ "${#i11}" = 64 ] && [ "${#s11}" = 64 ] && [ "$i11" != "$s11" ] && P "one image, two PCR 11 values: initrd ${i11:0:16}…, system ${s11:0:16}…" || F "the record's PCR 11 values: '$i11' '$s11'"
 # the same prediction, asked of ukify itself (its --measure runs systemd-measure over the image it builds, for every phase)
-theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet" --os-release "@$W/os-release" \
+theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1" --os-release "@$W/os-release" \
   --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub" --tools "$(dirname "$MEASURE")" --measure --output "$W/ukify-own.efi" 2>/dev/null | sed -n 's/^11:sha256=//p')"
 grep -qx "$i11" <<< "$theirs" && grep -qx "$s11" <<< "$theirs" && P "ukify --measure predicts both values for the image it builds from the same inputs" \
   || F "ukify --measure says '$(tr '\n' ' ' <<< "$theirs")', the record $i11 and $s11"
-printf 'root=/dev/mapper/root ro quiet rd.luks.uuid=0\n' > "$W/cmdline-bad"
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.luks.uuid=0\n' > "$W/cmdline-bad"
 out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-bad" "${IN[@]:6}" --name x --out "$W/x" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && grep -q "holds 'rd.luks.uuid=0'" <<< "$out" && [ ! -e "$W/x/x.unsigned.efi" ] && P "a command line that unlocks a disk by itself is refused, nothing built" || F "bad command line: exit $rc: $out"
 
 hdr "2  two PCR signatures and a Secure Boot signature; keys in files, then in a PKCS#11 token"
-out="$(uki sign "${IN[@]}" --record "$REC" --out "$W/a" "${FILEKEYS[@]}" 2>&1)"; rc=$?
+out="$(uki sign "${IN[@]}" --record "$REC" --second-record "$W/b/test-image.record.json" --out "$W/a" "${FILEKEYS[@]}" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && [ -s "$W/a/test-image.efi" ] && P "signed with file keys" || F "sign failed (exit $rc): $out"
 SIGNED="$W/a/test-image.signed.json"
 out="$(uki verify --image "$W/a/test-image.efi" --record "$SIGNED" --initrd-pub "$W/TEST-initrd.crt" --system-pub "$W/TEST-system.pub" --secure-boot-cert "$W/TEST-secure-boot.crt" 2>&1)"; rc=$?
@@ -112,10 +112,12 @@ MODULE_PATH = $SOFTHSM
 PIN = $TESTPIN
 init = 0
 EOF
-uri(){ printf 'pkcs11:token=TEST-IMAGE;object=%s;type=private' "$1"; }
+TOKSERIAL="$(softhsm2-util --show-slots | awk '/Serial number:/{s=$3} /Label:[[:space:]]*TEST-IMAGE/{print s; exit}')"
+[ -n "$TOKSERIAL" ] || { echo "uki-build: cannot read the test token's serial"; exit 2; }
+uri(){ printf 'pkcs11:serial=%s;token=TEST-IMAGE;object=%s;type=private' "$TOKSERIAL" "$1"; }
 TOKENKEYS=(--key-source engine:pkcs11 --initrd-key "$(uri initrd)" --initrd-cert "$W/TEST-initrd.crt" --system-key "$(uri system)" --system-cert "$W/TEST-system.crt"
            --secure-boot-key "$(uri secure-boot)" --secure-boot-cert "$W/TEST-secure-boot.crt")
-out="$(OPENSSL_CONF="$W/engine.cnf" uki sign "${IN[@]}" --record "$REC" --out "$W/t" "${TOKENKEYS[@]}" 2>&1)"; rc=$?
+out="$(OPENSSL_CONF="$W/engine.cnf" uki sign "${IN[@]}" --record "$REC" --second-record "$W/b/test-image.record.json" --out "$W/t" "${TOKENKEYS[@]}" 2>&1)"; rc=$?
 [ "$rc" = 0 ] && [ -s "$W/t/test-image.efi" ] && P "signed with the keys inside a PKCS#11 token (pkcs11 engine)" || F "token sign failed (exit $rc): $out"
 if [ -s "$W/t/test-image.signed.json" ]; then
   [ "$(field "$SIGNED" signed.pcr_signatures)" = "$(field "$W/t/test-image.signed.json" signed.pcr_signatures)" ] && P "the token's PCR signatures are for the same keys and policies as the files'" || F "token and file signatures differ"
@@ -128,22 +130,22 @@ no(){ local what="$1" msg="$2" out rc; shift 2; out="$("$@" 2>&1)"; rc=$?
   [ "$rc" = 1 ] && grep -q -- "$msg" <<< "$out" && P "$what" || F "$what: exit $rc: $out"; }
 cp "$W/initrd" "$W/initrd-2"; printf 'x' >> "$W/initrd-2"
 no "an input that is not the record's is refused" "the input --initrd is not the one the record was built from" \
-  uki sign "${IN[@]:0:2}" --initrd "$W/initrd-2" "${IN[@]:4}" --record "$REC" --out "$W/r1" "${FILEKEYS[@]}"
-no "a PIN in a key URI is refused" "carries a PIN or a PIN file in the URI" \
-  uki sign "${IN[@]}" --record "$REC" --out "$W/r2" --key-source engine:pkcs11 --initrd-key "$(uri initrd);pin-value=$TESTPIN" "${TOKENKEYS[@]:4}"
+  uki sign "${IN[@]:0:2}" --initrd "$W/initrd-2" "${IN[@]:4}" --record "$REC" --second-record "$W/b/test-image.record.json" --out "$W/r1" "${FILEKEYS[@]}"
+no "a PIN in a key URI is refused" "names .pin-value., which is not one of" \
+  uki sign "${IN[@]}" --record "$REC" --second-record "$W/b/test-image.record.json" --out "$W/r2" --key-source engine:pkcs11 --initrd-key "$(uri initrd);pin-value=$TESTPIN" "${TOKENKEYS[@]:4}"
 no "one key for both phases is refused" "must be three different keys" \
-  uki sign "${IN[@]}" --record "$REC" --out "$W/r3" --initrd-key "$W/TEST-system.key" --initrd-cert "$W/TEST-system.crt" "${FILEKEYS[@]:4}"
+  uki sign "${IN[@]}" --record "$REC" --second-record "$W/b/test-image.record.json" --out "$W/r3" --initrd-key "$W/TEST-system.key" --initrd-cert "$W/TEST-system.crt" "${FILEKEYS[@]:4}"
 no "a system key that is not the image's is refused" "is not for the key the image carries" \
-  uki sign "${IN[@]}" --record "$REC" --out "$W/r4" "${FILEKEYS[@]:0:4}" --system-key "$W/TEST-other.key" --system-cert "$W/TEST-other.crt" "${FILEKEYS[@]:8}"
+  uki sign "${IN[@]}" --record "$REC" --second-record "$W/b/test-image.record.json" --out "$W/r4" "${FILEKEYS[@]:0:4}" --system-key "$W/TEST-other.key" --system-cert "$W/TEST-other.crt" "${FILEKEYS[@]:8}"
 [ ! -e "$W/r1/test-image.efi" ] && [ ! -e "$W/r2/test-image.efi" ] && [ ! -e "$W/r3/test-image.efi" ] && [ ! -e "$W/r4/test-image.efi" ] \
   && P "no refused signing left an image behind" || F "a refused signing wrote an image"
 cp "$W/a/test-image.efi" "$W/tampered.efi"; printf 'x' >> "$W/tampered.efi"
 no "a changed file is not the image the record names" "the image is not the file the record names" \
-  uki verify --image "$W/tampered.efi" --record "$SIGNED" --initrd-pub "$W/TEST-initrd.pub" --system-pub "$W/TEST-system.pub"
+  uki verify --image "$W/tampered.efi" --record "$SIGNED" --initrd-pub "$W/TEST-initrd.pub" --system-pub "$W/TEST-system.pub" --secure-boot-cert "$W/TEST-secure-boot.crt"
 no "the unsigned image does not pass for the signed one" "the image is not the file the record names" \
-  uki verify --image "$W/a/test-image.unsigned.efi" --record "$SIGNED" --initrd-pub "$W/TEST-initrd.pub" --system-pub "$W/TEST-system.pub"
+  uki verify --image "$W/a/test-image.unsigned.efi" --record "$SIGNED" --initrd-pub "$W/TEST-initrd.pub" --system-pub "$W/TEST-system.pub" --secure-boot-cert "$W/TEST-secure-boot.crt"
 no "other keys than the record's are refused" "is not the one the record names" \
-  uki verify --image "$W/a/test-image.efi" --record "$SIGNED" --initrd-pub "$W/TEST-other.pub" --system-pub "$W/TEST-system.pub"
+  uki verify --image "$W/a/test-image.efi" --record "$SIGNED" --initrd-pub "$W/TEST-other.pub" --system-pub "$W/TEST-system.pub" --secure-boot-cert "$W/TEST-secure-boot.crt"
 
 hdr "4  a software TPM measures the image; its own signatures open a secret in the right phase only"
 export TPM2TOOLS_TCTI="$D"

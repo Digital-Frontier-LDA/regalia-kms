@@ -352,11 +352,24 @@ class Issue(Case):
         for label, reason, change in (("an extra field", "attestation evidence fields mismatch", lambda e: e.update(verdict="ok")),
                                       ("uppercase", "evidence.quote must be lowercase hex", lambda e: e.update(quote=e["quote"].upper())),
                                       ("an oversized key", "evidence.ephemeral_public must be lowercase hex, at most 512 bytes", lambda e: e.update(ephemeral_public="00" * 513)),
-                                      ("an altered signature", "attestation is refused: the quote's signature does not verify", lambda e: e.update(signature=e["signature"][:-2] + "%02x" % (int(e["signature"][-2:], 16) ^ 0xff)))):   # never the byte it was
+                                      ("an altered signature", "attestation is refused: the quote's signature does not verify", lambda e: e.update(signature=e["signature"][:-2] + "%02x" % (int(e["signature"][-2:], 16) ^ 0xff))),   # never the byte it was
+                                      # the optional PCR values (the unlock exchange's version 2): checked here for form, by the verifier for meaning
+                                      ("pcr_values not a map", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values=["7"])),
+                                      ("pcr_values empty", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={})),
+                                      ("PCR 24", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"24": "00" * 32})),
+                                      ("PCR 07", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"07": "00" * 32})),
+                                      ("a short value", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"7": "00" * 31})),
+                                      ("an uppercase value", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"7": "AB" * 32})),
+                                      ("a null", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values=None))):
             with self.subTest(label):
                 evidence = dict(good)
                 change(evidence)
                 self.refused(reason, self.issue, evidence=evidence)
+        # values that are not the quoted ones reach the verifier and are refused there (fresh evidence: a nonce is good once)
+        self.refused("the reported PCR values do not match the quote", self.issue,
+                     evidence=dict(self.evidence(b["attester"], self.m1), pcr_values={"7": "11" * 32}))
+        # the values that ARE the quoted ones are taken, and the evidence without them is the same request as before
+        self.issue(evidence=dict(self.evidence(b["attester"], self.m1), pcr_values={"7": "00" * 32}))
         with open(b["attester"].state_path, "w") as f:
             f.write("{")
         self.refused("the subject's attestation is refused", self.issue, evidence=good)

@@ -96,14 +96,19 @@ profile regalia-kms {
   /run/regalia-kms/*.json r,
 
   # ---- runtime admission (regalia-kms#74) ----
-  # runtime_admission_path: written by the root lease service (deploy/baremetal/admission.py), read
-  # here; boot_session_path: this boot's attested session, written once by the bootstrap. The
-  # directory is examined too (it must be root's alone), and the kernel's boot ID ties the file's
-  # CLOCK_BOOTTIME values to this boot.            internal/admission/admission.go readTrusted, KernelBootID
+  # runtime_admission_path: written by the lease service as its own user, regalia-admission (#191,
+  # deploy/baremetal/admission.py), in its own directory, read here; boot_session_path: this boot's
+  # attested session, written once by root (the unlock client, or regalia-boot-session.service). The
+  # directories are examined too (each the writer's or root's alone), and the kernel's boot ID ties
+  # the file's CLOCK_BOOTTIME values to this boot.  internal/admission/admission.go readTrusted, KernelBootID
   /run/regalia/ r,
-  /run/regalia/admission.json r,
+  /run/regalia/admission/ r,
+  /run/regalia/admission/admission.json r,
   /run/regalia/boot-session r,
   @{PROC}/sys/kernel/random/boot_id r,
+  # runtime_admission_owner is a user name, resolved to its uid when the daemon starts (os/user:
+  # /etc/passwd, or through NSS with nsswitch.conf, granted below). The user database only; never shadow.
+  /etc/passwd r,
 
   # ---- the token: PKCS#11 over PC/SC ----
   # pkcs11_module_path, dlopen()ed.  internal/backend/nitrokey/pkcs11_driver.go, probes.go
@@ -152,7 +157,7 @@ profile regalia-kms {
   # Nor reads a sealed blob, nor changes its own configuration or binary.
   audit deny /etc/credstore.encrypted/** rwklx,
   audit deny /etc/regalia-kms/** wkl,
-  # Nor writes its own admission: only the root lease service says whether this node may serve.
+  # Nor writes its own admission: only the lease service says whether this node may serve.
   audit deny /run/regalia/** wkl,
   audit deny /usr/local/sbin/** wkl,
 }

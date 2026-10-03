@@ -1,4 +1,5 @@
-# The pre-root unlock client (cmd/regalia-unlock), started by a connection on regalia-unlock.socket.
+# The pre-root unlock client (cmd/regalia-unlock), started by a connection on regalia-unlock-core.socket,
+# which only the relay on the key socket (regalia-unlock-relay.service) connects to.
 #
 # systemd does two things for it, and the program does neither itself:
 #   - it unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On
@@ -14,7 +15,7 @@
 Description=Give the root volume's key: TPM plus one peer
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 DefaultDependencies=no
-Requires=regalia-unlock.socket
+Requires=regalia-unlock-core.socket
 # the local half is unsealed with the TPM: not before its device is there
 Wants=tpm2.target
 # and, in a measured boot, not before the initrd's phase is in PCR 11: the quote must show that phase
@@ -28,15 +29,19 @@ Before=initrd-switch-root.target shutdown.target
 
 [Service]
 Type=exec
-# Everything that differs per host comes as a SYSTEM CREDENTIAL, none from the image: the image is the
-# same for every host (one PCR 11 to sign). In production systemd-stub passes them from the ESP
-# (loader/credentials/<name>.cred, measured into PCR 12, which the peers attest; see README). Named
-# without a path, a missing one is not fatal: the client then gives nothing, and the console asks.
+# Everything that differs per host comes from the ESP, none from the image: the image is the same for
+# every host (one PCR 11 to sign). systemd-stub packs the ESP's loader/credentials/<name>.cred files into
+# the initrd at /.extra/global_credentials/ and measures them into PCR 12, which the peers attest. The
+# image's command line carries systemd.import_credentials=no, so systemd imports NO credential from any
+# source (ESP, SMBIOS, fw_cfg, command line) and nothing in the initrd acts on one by name; this unit
+# reads exactly its two files, by these fixed paths, as data:
 #   regalia.unlock-local   the local half, sealed to this TPM (decrypted here, never accepted in plain)
 #   regalia.unlock-config  the boot configuration (unlock.boot_config): not secret
-ExecStart=/usr/bin/regalia-unlock -config %d/regalia.unlock-config
-LoadCredentialEncrypted=regalia.unlock-local
-LoadCredential=regalia.unlock-config
+# With a path, a missing file is fatal: the unit does not start, and systemd-cryptsetup asks at the
+# console (the boot test times it).
+ExecStart=/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 200s
+LoadCredentialEncrypted=regalia.unlock-local:/.extra/global_credentials/regalia.unlock-local.cred
+LoadCredential=regalia.unlock-config:/.extra/global_credentials/regalia.unlock-config.cred
 # What it leaves for the running system: the boot session's ID and public key, and who opened the disk,
 # in /run/regalia. The directory is root's, 0755, and stays when this unit ends and across switch-root:
 # the lease service and the KMS daemon read and write there after boot.

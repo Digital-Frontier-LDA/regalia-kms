@@ -72,7 +72,7 @@ installkernel() {
 install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
-    for unit in regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service; do
+    for unit in regalia-unlock-relay.service regalia-unlock-core.socket regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done
     # The one crypttab line, the same on every host: the root partition is found by its GPT label. Nothing
@@ -81,5 +81,35 @@ install() {
     # (in place of any other: dracut's crypt modules copy the build machine's in hostonly mode)
     rm -f -- "${initdir:?}/etc/crypttab"
     inst_simple "${moddir:?}/crypttab" /etc/crypttab
-    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket
+    # Nothing in the initrd acts on a credential by name. The image's command line already stops systemd
+    # importing any (systemd.import_credentials=no); this is the second layer, for an image built without
+    # it: no unit or drop-in from a credential (the generator that makes them is left out), and no unit
+    # imports or loads one by name (below). fstab-generator (which mounts the root), the network
+    # generator and PID 1 itself still read some: the first layer covers those.
+    rm -f -- "${initdir:?}${systemdutildir:?}/system-generators/systemd-debug-generator"
+    # Every unit already in the image that takes credentials by name, found rather than listed, and
+    # systemd-cryptsetup's (its generator writes ImportCredential=cryptsetup.* into units made at boot):
+    # all three settings reset. The boot test checks the finished image for any unit left out.
+    local unit
+    for unit in "${initdir:?}${systemdsystemunitdir:?}"/*.service systemd-cryptsetup@.service; do
+        unit="${unit##*/}"
+        case "$unit" in regalia-*) continue ;; esac
+        # (the unit file and its vendor drop-ins; the reset is named to sort last, so it wins over them)
+        # (grep over the files themselves, not a pipe: under pipefail a missing drop-in directory would fail
+        # the pipe even on a match; -q exits 0 on a match whatever else it could not read)
+        if [ "$unit" != systemd-cryptsetup@.service ] \
+            && ! grep -qsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=' \
+                "${initdir:?}${systemdsystemunitdir:?}/$unit" "${initdir:?}${systemdsystemunitdir:?}/$unit.d/"*.conf; then
+            continue
+        fi
+        mkdir -p "${initdir:?}${systemdsystemunitdir:?}/$unit.d"
+        printf '[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n' \
+            > "${initdir:?}${systemdsystemunitdir:?}/$unit.d/99-regalia-no-credentials.conf"
+    done
+    # systemd-cryptsetup waits for the relay's socket to listen, and does not need the relay to start: if it
+    # does not, the key file is missing and systemd-cryptsetup asks for the recovery key
+    mkdir -p "${initdir:?}${systemdsystemunitdir:?}/systemd-cryptsetup@.service.d"
+    printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' \
+        > "${initdir:?}${systemdsystemunitdir:?}/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
+    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock-relay.service regalia-unlock-core.socket
 }

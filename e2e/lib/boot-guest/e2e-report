@@ -19,6 +19,10 @@ echo "REGALIA-E2E-CMDLINE $(cat /proc/cmdline)" > /dev/console
 echo "REGALIA-E2E-PCRS 7=$(cat /sys/class/tpm/tpm0/pcr-sha256/7 2>&1) 11=$(cat /sys/class/tpm/tpm0/pcr-sha256/11 2>&1) 12=$(cat /sys/class/tpm/tpm0/pcr-sha256/12 2>&1)" > /dev/console
 # what the unlock client left for the running system, after switch-root (public values)
 echo "REGALIA-E2E-SESSION dir=$(stat -c '%U:%G:%a' /run/regalia 2>&1) id=$(cat /run/regalia/boot-session 2>&1) through=$(cat /run/regalia/key-given-through 2>&1 | tr -s ' \n' ' ')" > /dev/console
+# whether systemd in the initrd imported credentials (the image's command line says it must not); its own
+# message, kept in the journal across switch-root
+imported=yes; journalctl -b -o cat --no-pager 2>/dev/null | grep -q "systemd.import_credentials=no is set, skipping importing of credentials" && imported=no
+echo "REGALIA-E2E-IMPORT credentials-imported=$imported" > /dev/console
 # and the client itself is gone: it held the local half and the boot session's private key
 clients=0
 for comm in /proc/[0-9]*/comm; do
@@ -26,4 +30,8 @@ for comm in /proc/[0-9]*/comm; do
     [ "$name" = regalia-unlock ] && clients=$((clients + 1))
 done
 echo "REGALIA-E2E-CLIENT processes=$clients" > /dev/console
+# whether the kernel really zeroes pages it frees and hands out (#221): the words are on the command line,
+# but a kernel built without the options, or with a debug option that excludes them, ignores them. The
+# kernel says what it enabled at boot (an info message, kept in the ring buffer whatever the loglevel).
+echo "REGALIA-E2E-MEMINIT $(dmesg 2>/dev/null | grep -o 'mem auto-init:.*' | head -1)" > /dev/console
 systemctl --no-block poweroff

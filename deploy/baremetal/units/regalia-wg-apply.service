@@ -36,6 +36,13 @@ RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
 IPAddressDeny=any
 # a run that hangs (a TPM call that does not return) must not absorb every later trigger
 TimeoutStartSec=60
+# A failed run (a transient TPM error, the 60 s timeout, a published chain still behind the TPM anchor
+# after the wait) leaves both tunnels DOWN; without a retry they would stay down until the chain next
+# changes. Every run re-verifies the chain, and a run that keeps failing keeps the tunnels down, so
+# retrying is safe. It never reaches `failed` while it retries: watch the journal or NRestarts, not
+# --failed. (Found by the systemd end-to-end test.)
+Restart=on-failure
+RestartSec=15s
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
