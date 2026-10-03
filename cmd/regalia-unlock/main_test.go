@@ -113,14 +113,15 @@ func (p *fakePeer) send(request []byte) ([]byte, error) {
 		return nil, err
 	}
 	p.requests = append(p.requests, message)
+	version, _ := message["v"].(float64) // a peer answers in the version it was asked in (1 or 2)
 	if p.deny != "" {
-		return json.Marshal(map[string]any{"v": 1, "error": p.deny})
+		return json.Marshal(map[string]any{"v": version, "error": p.deny})
 	}
 	if message["op"] == "unlock" && p.refuse != "" {
-		return json.Marshal(map[string]any{"v": 1, "error": p.refuse})
+		return json.Marshal(map[string]any{"v": version, "error": p.refuse})
 	}
 	if message["op"] == "hello" {
-		reply := helloReply{V: 1, PeerID: p.id, Epoch: p.epoch, Nonce: hex.EncodeToString(p.nonce)}
+		reply := helloReply{V: int(version), PeerID: p.id, Epoch: p.epoch, Nonce: hex.EncodeToString(p.nonce)}
 		if p.hello != nil {
 			p.hello(&reply)
 		}
@@ -156,8 +157,8 @@ func (p *fakePeer) send(request []byte) ([]byte, error) {
 	return json.Marshal(map[string]any{"response": reply.Response, "signature": reply.Signature})
 }
 
-func noQuote(qualifying []byte) ([]byte, []byte, error) {
-	return []byte("attest"), []byte("signature"), nil
+func noQuote(qualifying []byte) ([]byte, []byte, map[string]string, error) {
+	return []byte("attest"), []byte("signature"), map[string]string{"7": strings.Repeat("77", 32)}, nil
 }
 
 func testSession(t *testing.T) *session {
@@ -293,9 +294,9 @@ func TestTheQuoteIsOverTheTranscriptOfThisBootAndTheEpochThePeerStates(t *testin
 	peer, boot := newFakePeer(t, "porto"), testSession(t)
 	peer.epoch = 12
 	var qualified []byte
-	_, err := boot.ask(peer.pin(), 3, peer.send, func(qualifying []byte) ([]byte, []byte, error) {
+	_, err := boot.ask(peer.pin(), 3, peer.send, func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 		qualified = append([]byte(nil), qualifying...)
-		return []byte("a"), []byte("s"), nil
+		return []byte("a"), []byte("s"), nil, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -308,8 +309,8 @@ func TestTheQuoteIsOverTheTranscriptOfThisBootAndTheEpochThePeerStates(t *testin
 		t.Fatal("the ephemeral key is not an RSA-3072 SubjectPublicKeyInfo of at most 512 bytes")
 	}
 	failing := testSession(t)
-	_, err = failing.ask(peer.pin(), 3, peer.send, func([]byte) ([]byte, []byte, error) {
-		return nil, nil, errors.New("the TPM refused the quote (TPM_RC_LOCKOUT)")
+	_, err = failing.ask(peer.pin(), 3, peer.send, func([]byte) ([]byte, []byte, map[string]string, error) {
+		return nil, nil, nil, errors.New("the TPM refused the quote (TPM_RC_LOCKOUT)")
 	})
 	wantError(t, err, "quote: the TPM refused the quote (TPM_RC_LOCKOUT)")
 }
@@ -411,8 +412,10 @@ func (deadTPM) Send([]byte) ([]byte, error) { return nil, errors.New("no TPM") }
 // back are both checked against bytes written here from the TPM 2.0 Library (Part 3).
 type wireTPM struct {
 	commands [][]byte
-	public   []byte // TPM2B_PUBLIC of the key at the handle
-	quote    []byte // the whole TPM2_Quote response
+	public   []byte         // TPM2B_PUBLIC of the key at the handle
+	quote    []byte         // the whole TPM2_Quote response
+	pcrs     map[int][]byte // what TPM2_PCR_Read answers, per PCR
+	moving   int            // that many PCR_Reads answer another value first (a PCR extended under the quote)
 }
 
 func tpmResponse(tag uint16, code uint32, body []byte) []byte {
@@ -441,6 +444,28 @@ func (w *wireTPM) Send(command []byte) ([]byte, error) {
 		return tpmResponse(0x8001, 0, append(append(append([]byte(nil), w.public...), sized(name)...), sized(name)...)), nil
 	case 0x00000158: // TPM2_Quote
 		return w.quote, nil
+	case 0x0000017e: // TPM2_PCR_Read: one selection of SHA-256 in, the counter, the selection and one digest out
+		selection := command[10:]
+		pcr := -1
+		for byteIndex, bits := range selection[7:10] {
+			for bit := 0; bit < 8; bit++ {
+				if bits&(1<<bit) != 0 {
+					pcr = byteIndex*8 + bit
+				}
+			}
+		}
+		value, ok := w.pcrs[pcr]
+		if !ok {
+			return tpmResponse(0x8001, 0x1c4, nil), nil // TPM_RC_VALUE
+		}
+		if w.moving > 0 {
+			w.moving--
+			value = bytes.Repeat([]byte{0xee}, 32)
+		}
+		body := binary.BigEndian.AppendUint32(nil, 1)
+		body = append(body, selection[:10]...)
+		body = binary.BigEndian.AppendUint32(body, 1)
+		return tpmResponse(0x8001, 0, append(body, sized(value)...)), nil
 	}
 	return tpmResponse(0x8001, 0x143, nil), nil // TPM_RC_COMMAND_CODE
 }
@@ -498,7 +523,7 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 	_, _, err = quoted(&tpm2.QuoteResponse{Signature: tpm2.TPMTSignature{SigAlg: tpm2.TPMAlgRSASSA}})
 	wantError(t, err, "the quote is not signed with ECDSA")
 
-	_, _, err = tpmQuote(deadTPM{}, qualifying, []int{7})
+	_, _, err = tpmQuoteOnce(deadTPM{}, qualifying, []int{7})
 	wantError(t, err, "the TPM has no usable attestation key")
 
 	// On the wire. The Quote command is, byte for byte, the one the TPM specifies: sessions tag, size,
@@ -508,7 +533,7 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 		"0020" + strings.Repeat("5c", 32) + "0010" + "00000001" + "000b" + "03" + "800800"
 	peer := newFakePeer(t, "porto") // its public area stands for this TPM's attestation key
 	device := &wireTPM{public: peer.akPublic, quote: quoteResponse(attestation, algECDSA, algSHA256, []byte{0x01, 0x02}, []byte{0x80, 0x03})}
-	attest, signature, err = tpmQuote(device, qualifying, []int{7, 11})
+	attest, signature, err = tpmQuoteOnce(device, qualifying, []int{7, 11})
 	if err != nil || len(device.commands) != 2 || hex.EncodeToString(device.commands[1]) != wantCommand {
 		t.Fatalf("%v; the commands sent: %x", err, device.commands)
 	}
@@ -525,7 +550,7 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 		"the quote is not signed with ECDSA":             quoteResponse(attestation, 0x0014, algSHA256, []byte{1}, nil), // RSASSA
 		"the quote is not signed with ECDSA and SHA-256": quoteResponse(attestation, algECDSA, 0x0004, []byte{1}, []byte{2}),
 	} {
-		_, _, err := tpmQuote(&wireTPM{public: peer.akPublic, quote: raw}, qualifying, []int{7})
+		_, _, err := tpmQuoteOnce(&wireTPM{public: peer.akPublic, quote: raw}, qualifying, []int{7})
 		wantError(t, err, strings.TrimSpace(reason))
 	}
 	if _, err := openTPM(filepath.Join(t.TempDir(), "absent")); err == nil {
@@ -533,6 +558,59 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 	}
 	if _, err := openTPM("unix:" + filepath.Join(t.TempDir(), "absent.sock")); err == nil {
 		t.Fatal("a TPM socket that does not exist was opened")
+	}
+}
+
+// Wire v2: the quoted PCRs are read beside the quote, and sent only if they hash to the quote's own digest.
+// A PCR that moves between the two is met by quoting again; one that keeps moving is an error, never values
+// that do not match.
+func TestThePCRValuesBesideTheQuoteAreTheQuotedOnes(t *testing.T) {
+	qualifying := bytes.Repeat([]byte{0x5c}, 32)
+	seven, eleven := bytes.Repeat([]byte{0x07}, 32), bytes.Repeat([]byte{0x11}, 32)
+	digest := sha256.Sum256(append(append([]byte(nil), seven...), eleven...))
+	attestation := append(binary.BigEndian.AppendUint32(nil, tpmGenerated), 0x80, 0x18)
+	attestation = append(attestation, sized(make([]byte, 34))...)
+	attestation = append(attestation, sized(qualifying)...)
+	attestation = append(attestation, make([]byte, 8+4+4+1+8)...)
+	attestation = binary.BigEndian.AppendUint32(attestation, 1)
+	attestation = append(attestation, 0x00, 0x0b, 3, 0x80, 0x08, 0)
+	attestation = append(attestation, sized(digest[:])...)
+	peer := newFakePeer(t, "porto")
+	device := &wireTPM{public: peer.akPublic, quote: quoteResponse(attestation, algECDSA, algSHA256, []byte{1}, []byte{2}),
+		pcrs: map[int][]byte{7: seven, 11: eleven}}
+	_, _, values, err := tpmQuote(device, qualifying, []int{7, 11})
+	if err != nil || len(values) != 2 || values["7"] != hex.EncodeToString(seven) || values["11"] != hex.EncodeToString(eleven) {
+		t.Fatalf("values %v, %v", values, err)
+	}
+	// one PCR_Read per PCR, of exactly that PCR, after the quote
+	reads := 0
+	for _, command := range device.commands {
+		if binary.BigEndian.Uint32(command[6:10]) == 0x17e {
+			reads++
+		}
+	}
+	if reads != 2 {
+		t.Fatalf("%d PCR_Reads for two PCRs", reads)
+	}
+	// a PCR that moved once: quoted again, and the values that match are sent
+	device = &wireTPM{public: peer.akPublic, quote: device.quote, pcrs: device.pcrs, moving: 1}
+	if _, _, values, err = tpmQuote(device, qualifying, []int{7, 11}); err != nil || values["7"] != hex.EncodeToString(seven) {
+		t.Fatalf("after one move: %v, %v", values, err)
+	}
+	// one that keeps moving: an error, no values
+	device = &wireTPM{public: peer.akPublic, quote: device.quote, pcrs: device.pcrs, moving: 100}
+	_, _, values, err = tpmQuote(device, qualifying, []int{7, 11})
+	wantError(t, err, "the PCRs kept changing between the quote and their reading")
+	if values != nil {
+		t.Fatal("values were returned with the error")
+	}
+	// a PCR the TPM will not read
+	device = &wireTPM{public: peer.akPublic, quote: device.quote, pcrs: map[int][]byte{7: seven}}
+	_, _, _, err = tpmQuote(device, qualifying, []int{7, 11})
+	wantError(t, err, "the TPM refused to read PCR 11")
+	if pcrDigest(map[string]string{"11": hex.EncodeToString(eleven), "7": hex.EncodeToString(seven)}) == nil ||
+		!bytes.Equal(pcrDigest(map[string]string{"11": hex.EncodeToString(eleven), "7": hex.EncodeToString(seven)}), digest[:]) {
+		t.Fatal("the digest is not over the values in index order")
 	}
 }
 
@@ -1022,7 +1100,7 @@ func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 	u.dial = l.through(dialer(porto), nil)
 	listener, ask := socketPair(t)
 	onRecordAtFirstQuote := "?"
-	u.quote = func(qualifying []byte) ([]byte, []byte, error) {
+	u.quote = func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 		l.Lock()
 		if onRecordAtFirstQuote == "?" {
 			onRecordAtFirstQuote, _ = recordOf(t, directory)
@@ -1068,6 +1146,20 @@ func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 	}
 	l.Lock()
 	sessions, unlocks := unlockSessions(porto)
+	l.Unlock()
+	// wire v2: every request in version 2, and the unlock carries the PCR values read beside the quote
+	l.Lock()
+	for _, request := range porto.requests {
+		if request["v"] != float64(2) {
+			t.Fatalf("a request in version %v", request["v"])
+		}
+		if request["op"] == "unlock" {
+			values, _ := request["evidence"].(map[string]any)["pcr_values"].(map[string]any)
+			if len(values) != 1 || values["7"] != strings.Repeat("77", 32) {
+				t.Fatalf("the unlock request carries pcr_values %v", values)
+			}
+		}
+	}
 	l.Unlock()
 	if len(sessions) != 1 || !sessions[mine] || unlocks != 2 {
 		t.Fatalf("the attempts did not present one session: %v in %d unlock requests", sessions, unlocks)
@@ -1300,3 +1392,40 @@ func TestTheCommandLine(t *testing.T) {
 }
 
 func errHelp() error { return flag.ErrHelp }
+
+// tests/vectors/pcr-values-v2.json: a real quote from a software TPM and the values read beside it. The
+// client's own check (tpmQuote sends values only when they hash to the quote's digest) holds on it, and
+// fails on every value the verifier refuses as "not the quote".
+func TestThePCRValuesVectorIsWhatTheClientSends(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "tests", "vectors", "pcr-values-v2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vector struct {
+		Quote     string            `json:"quote"`
+		PCRDigest string            `json:"pcr_digest"`
+		Values    map[string]string `json:"pcr_values"`
+		Refused   map[string]struct {
+			Values map[string]string `json:"pcr_values"`
+			Reason string            `json:"reason"`
+		} `json:"refused"`
+	}
+	if err := json.Unmarshal(raw, &vector); err != nil {
+		t.Fatal(err)
+	}
+	quote, _ := hex.DecodeString(vector.Quote)
+	quoted, err := quotedPCRDigest(quote)
+	if err != nil || hex.EncodeToString(quoted) != vector.PCRDigest {
+		t.Fatalf("the vector's quote: %x, %v", quoted, err)
+	}
+	if !bytes.Equal(pcrDigest(vector.Values), quoted) {
+		t.Fatal("the values read beside the quote do not hash to it")
+	}
+	if !bytes.Equal(pcrDigest(map[string]string{"12": vector.Values["12"], "11": vector.Values["11"], "7": vector.Values["7"]}), quoted) {
+		t.Fatal("the digest depends on the order the values were given in")
+	}
+	tampered := vector.Refused["tampered"]
+	if tampered.Reason != "the reported PCR values do not match the quote" || bytes.Equal(pcrDigest(tampered.Values), quoted) {
+		t.Fatalf("the tampered case: %q", tampered.Reason)
+	}
+}

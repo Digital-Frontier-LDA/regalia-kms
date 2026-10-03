@@ -149,10 +149,10 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 		return errors.New("cannot open the TPM " + o.tpm)
 	}
 	device.Close()
-	quote := func(qualifying []byte) ([]byte, []byte, error) {
+	quote := func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 		device, err := openTPM(o.tpm)
 		if err != nil {
-			return nil, nil, errors.New("cannot open the TPM " + o.tpm)
+			return nil, nil, nil, errors.New("cannot open the TPM " + o.tpm)
 		}
 		defer device.Close()
 		return tpmQuote(device, qualifying, config.PCRs)
@@ -318,7 +318,7 @@ func gone(connection *net.UnixConn) bool {
 //
 // A record that cannot be written is said and is NOT a reason to leave the disk locked: the node then
 // boots, its leases may be refused until the next boot, and that can be repaired without the recovery key.
-func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, error) {
+func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 	// Tried again before each quote until it is written: a full /run may have room a moment later.
 	if !u.presented && u.o.sessionDir != "" {
 		if err := publishSession(u.o.sessionDir, u.boot); err != nil {

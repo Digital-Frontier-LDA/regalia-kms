@@ -451,7 +451,7 @@ class Exchange(Case):
         hello = {"v": 1, "op": "hello", "node_id": "a"}
         self.assertIn("nonce", peer.handle(json.dumps(hello).encode()))
         invalid = {"v": 1, "error": "INVALID_REQUEST"}
-        for raw in (b"", b"[]", b"{", b'{"v":1}', b'{"v":2,"op":"hello"}', b'{"v":true,"op":"hello"}', b'{"v":1,"op":"init"}', b'{"v":1,"op":7}',
+        for raw in (b"", b"[]", b"{", b'{"v":1}', b'{"v":3,"op":"hello"}', b'{"v":true,"op":"hello"}', b'{"v":1,"op":"init"}', b'{"v":1,"op":7}',
                     b'{"v":1,"v":1,"op":"hello"}', b'{"v":1.0,"op":"hello"}', b'{"v":1,"op":"manifests","envelopes":[]}', b" " * (unlock.MAX_BYTES + 1),
                     b"[" * 60000):                                    # deeper than the JSON parser recurses: refused, not a crash
             with self.subTest(raw[:30]):
@@ -464,6 +464,39 @@ class Exchange(Case):
                         {"v": 1, "op": "unlock", "node_id": "a", "session_id": "00" * 32, "path_epoch": 1, "evidence": None}):
             with self.subTest(str(message)[:60]):
                 self.assertEqual(peer.handle(json.dumps(message).encode()), denied)
+
+    def test_version_2_carries_the_quoted_pcr_values_and_the_peer_uses_them_only_when_they_match(self):
+        """Wire v2: the evidence carries the values of the quoted PCRs beside the quote. The peer takes v1 and v2
+        and answers in the version asked; v2 needs the values and v1 may not have them; values that do not hash to
+        the quote are refused (the verifier's reason, in the audit only); values that do are taken."""
+        epoch, secret = self.enrolled("b")
+        peer, session, quote = self.served["b"], self.session, self.quote()
+
+        def request(v, values, drop=False):
+            hello = peer.handle(json.dumps({"v": v, "op": "hello", "node_id": "a"}).encode())
+            self.assertEqual(hello["v"], v)
+            nonce = bytes.fromhex(hello["nonce"])
+            session.expect("b", hello["epoch"], nonce)
+            signed, signature = quote("a", hello["epoch"], session.session_id, session.ephemeral_public, nonce)
+            evidence = {"ephemeral_public": session.ephemeral_public.hex(), "nonce": hello["nonce"], "quote": signed.hex(), "signature": signature.hex()}
+            if not drop:
+                evidence["pcr_values"] = values
+            return peer.handle(json.dumps({"v": v, "op": "unlock", "node_id": "a", "session_id": session.session_id.hex(),
+                                           "path_epoch": epoch, "evidence": evidence}).encode())
+        quoted = {"7": "00" * 32}                                      # what the test TPM's quote is over
+        for label, v, values, drop, why in (
+                ("v2 without values", 2, None, True, "a version 2 request without pcr_values"),
+                ("v1 with values", 1, quoted, False, "a version 1 request with pcr_values"),
+                ("v2, values that are not the quoted ones", 2, {"7": "11" * 32}, False, "the reported PCR values do not match the quote"),
+                ("v2, another PCR", 2, {"8": "00" * 32}, False, "the reported PCR values cover PCRs ['8'], not the quoted selection [7]"),
+                ("v2, not hex", 2, {"7": "zz"}, False, "evidence.pcr_values must map PCR indices 0-23 to 64 lowercase hex")):
+            with self.subTest(label):
+                self.assertEqual(request(v, values, drop), {"v": v, "error": "DENIED"})
+                self.denied(why)
+        answer = request(2, quoted)
+        self.assertIn("response", answer)
+        self.assertEqual(self.events[-1]["outcome"], "ALLOW")
+        self.assertEqual(session.open(self.pins["b"], answer, epoch, run=run), secret)
 
     def test_a_request_must_name_the_node_the_tunnel_identified(self):
         """The boot mesh knows which node a connection comes from. A request made in another node's name is

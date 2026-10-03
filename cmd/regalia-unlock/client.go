@@ -16,7 +16,7 @@ import (
 type transport func(request []byte) ([]byte, error)
 
 // quoter returns the TPM's quote over 32 bytes of qualifying data: the TPMS_ATTEST and its signature.
-type quoter func(qualifying []byte) (attest, signature []byte, err error)
+type quoter func(qualifying []byte) (attest, signature []byte, values map[string]string, err error)
 
 // session is what one boot holds in memory: a session ID and an RSA key, both made here and never
 // stored. It opens one response, the first valid one, and is then spent.
@@ -50,7 +50,7 @@ func (s *session) ask(peer pin, pathEpoch uint64, send transport, quote quoter) 
 	if s.consumed {
 		return nil, errors.New("this boot session has already accepted a response")
 	}
-	request, _ := json.Marshal(map[string]any{"v": wireVersion, "op": "hello", "node_id": s.nodeID})
+	request, _ := json.Marshal(map[string]any{"v": exchangeVersion, "op": "hello", "node_id": s.nodeID})
 	raw, err := send(request)
 	if err != nil {
 		return nil, fmt.Errorf("hello: the transport failed (%w)", err)
@@ -62,7 +62,7 @@ func (s *session) ask(peer pin, pathEpoch uint64, send transport, quote quoter) 
 	if hello.Error != "" {
 		return nil, fmt.Errorf("hello: %w", refusal(hello.Error))
 	}
-	if hello.V != wireVersion || hello.PeerID != peer.NodeID {
+	if hello.V != exchangeVersion || hello.PeerID != peer.NodeID {
 		return nil, errors.New("hello: the peer that answered is not " + peer.NodeID)
 	}
 	if hello.Epoch < 1 || hello.Epoch > maxEpoch || !hex64Pattern.MatchString(hello.Nonce) {
@@ -72,13 +72,13 @@ func (s *session) ask(peer pin, pathEpoch uint64, send transport, quote quoter) 
 	// The epoch is the one the peer states. Every decision about membership is the peer's, under its own
 	// manifest; the node holds none before root. A reply changed on the way makes a quote the peer refuses.
 	expected := sha256.Sum256(transcript(s.nodeID, hello.Epoch, s.id, s.ephemeralPublic, nonce))
-	attest, signature, err := quote(expected[:])
+	attest, signature, values, err := quote(expected[:])
 	if err != nil {
 		return nil, fmt.Errorf("quote: %w", err)
 	}
-	request, _ = json.Marshal(unlockRequest{V: wireVersion, Op: "unlock", NodeID: s.nodeID, SessionID: hex.EncodeToString(s.id), PathEpoch: pathEpoch,
+	request, _ = json.Marshal(unlockRequest{V: exchangeVersion, Op: "unlock", NodeID: s.nodeID, SessionID: hex.EncodeToString(s.id), PathEpoch: pathEpoch,
 		Evidence: evidence{EphemeralPublic: hex.EncodeToString(s.ephemeralPublic), Nonce: hello.Nonce,
-			Quote: hex.EncodeToString(attest), Signature: hex.EncodeToString(signature)}})
+			Quote: hex.EncodeToString(attest), Signature: hex.EncodeToString(signature), PCRValues: values}})
 	raw, err = send(request)
 	if err != nil {
 		return nil, fmt.Errorf("unlock: the transport failed (%w)", err)

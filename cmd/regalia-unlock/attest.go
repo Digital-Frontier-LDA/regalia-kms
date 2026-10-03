@@ -102,6 +102,16 @@ func parseAttest(attest []byte) (qualifiedSigner, extraData []byte, err error) {
 	return parsed.QualifiedSigner.Buffer, parsed.ExtraData.Buffer, nil
 }
 
+// quotedPCRDigest is the pcrDigest of a quote, once parseAttest has accepted it.
+func quotedPCRDigest(attest []byte) ([]byte, error) {
+	if _, _, err := parseAttest(attest); err != nil {
+		return nil, err
+	}
+	parsed, _ := tpm2.Unmarshal[tpm2.TPMSAttest](attest)
+	quote, _ := parsed.Attested.Quote()
+	return quote.PCRDigest.Buffer, nil
+}
+
 // verifyPeerSignature is unlock.verify_signature: the response is signed by the AK the boot
 // configuration names for the peer, under its EK, as a TPM2_Quote whose qualifying data is the digest
 // of exactly this response.

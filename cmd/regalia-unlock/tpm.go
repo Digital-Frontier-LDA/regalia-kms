@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/asn1"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-tpm/tpm2"
@@ -72,8 +77,70 @@ func quoted(response *tpm2.QuoteResponse) (attest, signature []byte, err error) 
 	return attest, signature, nil
 }
 
-// tpmQuote asks the TPM for a quote by its attestation key.
-func tpmQuote(device tpmtransport.TPM, qualifying []byte, pcrs []int) (attest, signature []byte, err error) {
+// pcrValues reads the SHA-256 value of each PCR, one PCR_Read each, as {"<index>": "<64 hex>"} (wire v2).
+func pcrValues(device tpmtransport.TPM, pcrs []int) (map[string]string, error) {
+	values := make(map[string]string, len(pcrs))
+	for _, pcr := range pcrs {
+		if pcr < 0 || pcr > 23 {
+			return nil, errors.New("PCRs must be 0-23")
+		}
+		selection := tpm2.TPMLPCRSelection{PCRSelections: []tpm2.TPMSPCRSelection{
+			{Hash: tpm2.TPMAlgSHA256, PCRSelect: tpm2.PCClientCompatible.PCRs(uint(pcr))}}}
+		read, err := tpm2.PCRRead{PCRSelectionIn: selection}.Execute(device)
+		if err != nil {
+			return nil, fmt.Errorf("the TPM refused to read PCR %d (%v)", pcr, err)
+		}
+		if len(read.PCRValues.Digests) != 1 || len(read.PCRValues.Digests[0].Buffer) != sha256.Size ||
+			!bytes.Equal(tpm2.Marshal(read.PCRSelectionOut), tpm2.Marshal(selection)) {
+			return nil, fmt.Errorf("the TPM did not read PCR %d of the SHA-256 bank", pcr)
+		}
+		values[strconv.Itoa(pcr)] = hex.EncodeToString(read.PCRValues.Digests[0].Buffer)
+	}
+	return values, nil
+}
+
+// pcrDigest is what a quote's pcrDigest holds when the PCRs have these values: SHA-256 over them, in index order.
+func pcrDigest(values map[string]string) []byte {
+	indices := make([]int, 0, len(values))
+	for index := range values {
+		i, _ := strconv.Atoi(index)
+		indices = append(indices, i)
+	}
+	sort.Ints(indices)
+	h := sha256.New()
+	for _, i := range indices {
+		raw, _ := hex.DecodeString(values[strconv.Itoa(i)])
+		h.Write(raw)
+	}
+	return h.Sum(nil)
+}
+
+// tpmQuote asks the TPM for a quote by its attestation key, and reads the quoted PCRs beside it (wire v2): the
+// values must hash to the quote's own digest, or the peer refuses them. A PCR extended between the two (nothing
+// should, in the initrd) is met by quoting again, a few times.
+func tpmQuote(device tpmtransport.TPM, qualifying []byte, pcrs []int) (attest, signature []byte, values map[string]string, err error) {
+	for try := 0; try < 3; try++ {
+		attest, signature, err = tpmQuoteOnce(device, qualifying, pcrs)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		values, err = pcrValues(device, pcrs)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		quoted, err := quotedPCRDigest(attest)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if bytes.Equal(quoted, pcrDigest(values)) {
+			return attest, signature, values, nil
+		}
+	}
+	return nil, nil, nil, errors.New("the PCRs kept changing between the quote and their reading")
+}
+
+// tpmQuoteOnce asks the TPM for a quote by its attestation key.
+func tpmQuoteOnce(device tpmtransport.TPM, qualifying []byte, pcrs []int) (attest, signature []byte, err error) {
 	public, err := tpm2.ReadPublic{ObjectHandle: akHandle}.Execute(device)
 	if err != nil {
 		// e.g. TPM_RC_HANDLE: no attestation key at that handle (node-init was not run on this TPM)

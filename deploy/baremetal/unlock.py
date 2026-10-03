@@ -30,6 +30,14 @@ One JSON object each way, exact field sets, duplicate fields refused, bounded in
     a refusal is {"v": 1, "error": "DENIED" | "INVALID_REQUEST"}: the reason goes to the peer's audit
     sink, never to the requester.
 
+  VERSION 2 is version 1 with one more evidence field, required: "pcr_values": {"<index>": "<64 hex>"}, the
+  values of the quoted PCRs, read by T beside its quote (cmd/regalia-unlock). They are not signed: the
+  verifier uses them only once they hash to the quoted digest under its own selection, and then only to
+  name, in its audit, the PCR that differs from the accepted sets (attest.Verifier.verify, pcr_values=).
+  A peer answers a request in the version it was asked in, and takes both; a version 1 request with
+  pcr_values, or a version 2 one without, is refused. Peers are upgraded before nodes. The reference
+  client below speaks version 1.
+
   * The nonce is the peer's attestation verifier's (attest.Verifier.nonce: good once, two minutes). It is
     issued only to a node the peer may unlock right now, with the peer's manifest epoch.
   * P decides with replacement.may_unlock: the membership matrix, a live heartbeat, and T's fresh quote
@@ -114,7 +122,8 @@ from deploy.baremetal import attest, convergence, heartbeat, membership, replace
 
 Refused, require = membership.Refused, membership.require
 
-VERSION = 1
+VERSION = 1                 # of the LUKS2 token, and of the reference client's requests
+EXCHANGE_VERSIONS = (1, 2)  # what a peer takes
 RESPONSE_SCHEMA = "regalia.unlock-response/v1"
 ENROLMENT_SCHEMA = "regalia.unlock-enrolment/v1"
 STORE_SCHEMA = "regalia.unlock-contributions/v1"
@@ -359,8 +368,8 @@ class Peer:
         try:
             try:
                 message = membership.load(raw, MAX_BYTES)
-                require(isinstance(message, dict) and type(message.get("v")) is int and message["v"] == VERSION
-                        and isinstance(message.get("op"), str), "not a version 1 request")
+                require(isinstance(message, dict) and type(message.get("v")) is int and message["v"] in EXCHANGE_VERSIONS
+                        and isinstance(message.get("op"), str), "not a request of version %s" % " or ".join(map(str, EXCHANGE_VERSIONS)))
                 handler = {"hello": self.hello, "unlock": self.unlock}.get(message["op"])
                 require(handler is not None, "unknown operation")
             except (Refused, RecursionError):      # tens of thousands of nested brackets fit in one message
@@ -369,10 +378,10 @@ class Peer:
                 self.audit({"event": "unlock-caller", "epoch": 0, "manifest_digest": "", "subject": convergence._printable(message.get("node_id")),
                             "peer": self.peer_id, "outcome": "DENY", "reason": "the request names a node that is not the one the tunnel identified (%s)"
                             % convergence._printable(caller)})
-                return {"v": VERSION, "error": "DENIED"}
+                return {"v": message["v"], "error": "DENIED"}
             return handler(message)
         except (Refused, attest.Refused):
-            return {"v": VERSION, "error": "DENIED"}
+            return {"v": message["v"], "error": "DENIED"}
 
     def _manifest(self):
         manifest = self.store.load()
@@ -392,7 +401,7 @@ class Peer:
             nonce = self.attester_for(manifest).nonce(requester)
         except attest.Refused as refusal:
             raise Refused("no nonce for %s: %s" % (requester, refusal))
-        return {"v": VERSION, "peer_id": self.peer_id, "epoch": manifest["epoch"], "nonce": nonce.hex()}
+        return {"v": message["v"], "peer_id": self.peer_id, "epoch": manifest["epoch"], "nonce": nonce.hex()}
 
     def unlock(self, message):
         membership.exact(message, ("v", "op", "node_id", "session_id", "path_epoch", "evidence"), "unlock")
@@ -402,6 +411,9 @@ class Peer:
 
         def decide():
             evidence = message["evidence"]
+            # version 2 carries the PCR values beside the quote, version 1 does not: either way exactly
+            require(isinstance(evidence, dict) and ("pcr_values" in evidence) == (message["v"] == 2),
+                    "a version %d request %s pcr_values" % (message["v"], "without" if message["v"] == 2 else "with"))
             replacement.may_unlock(manifest, self.peer_id, requester, session_id, evidence, self.attester_for(manifest), self.freshness)
             # only now is anything in `evidence` to be believed: the quote that was just verified covers it
             ephemeral = bytes.fromhex(evidence["ephemeral_public"])

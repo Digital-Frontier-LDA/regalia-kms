@@ -18,7 +18,10 @@ import (
 // The formats below are those of deploy/baremetal/unlock.py and attest.py, which define them. Both
 // sides are held to tests/vectors/unlock-v1.json.
 const (
-	wireVersion       = 1
+	wireVersion = 1 // the LUKS2 token's version
+	// the exchange's version: 2 adds the PCR values read beside the quote (evidence.pcr_values), so that a
+	// peer can name the PCR that differs. A peer accepts 1 and 2; peers are upgraded before nodes.
+	exchangeVersion   = 2
 	responseSchema    = "regalia.unlock-response/v1"
 	responseDomain    = "regalia-unlock/v1/response\x00"
 	contributionLabel = "regalia-unlock/v1/contribution\x00"
@@ -83,10 +86,11 @@ type helloReply struct {
 }
 
 type evidence struct {
-	EphemeralPublic string `json:"ephemeral_public"`
-	Nonce           string `json:"nonce"`
-	Quote           string `json:"quote"`
-	Signature       string `json:"signature"`
+	EphemeralPublic string            `json:"ephemeral_public"`
+	Nonce           string            `json:"nonce"`
+	Quote           string            `json:"quote"`
+	Signature       string            `json:"signature"`
+	PCRValues       map[string]string `json:"pcr_values"`
 }
 
 type unlockRequest struct {
