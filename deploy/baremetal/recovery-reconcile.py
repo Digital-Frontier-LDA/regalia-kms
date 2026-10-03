@@ -264,7 +264,10 @@ def area_digest(device, keyslot):
     """The SHA-256 of a keyslot's key material, its binary area as the metadata places it: what luksKillSlot
     overwrites (with random bytes) before it removes the slot from the metadata."""
     area = keyslot.get('area') or {}
-    offset, size = int(area.get('offset', -1)), int(area.get('size', -1))
+    try:
+        offset, size = int(area.get('offset', -1)), int(area.get('size', -1))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        raise Refused('a keyslot area that cannot be read') from None
     if offset < 0 or not 0 < size <= 64 << 20:
         raise Refused('a keyslot area that cannot be read')
     fd = os.open(device, os.O_RDONLY | os.O_CLOEXEC)
