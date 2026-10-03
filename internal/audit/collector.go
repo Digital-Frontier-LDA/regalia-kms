@@ -32,6 +32,7 @@ import (
 	"bufio"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -85,6 +87,14 @@ type Collector struct {
 
 	// receiptKey signs receipts (handleReceipt); nil, and the collector signs none.
 	receiptKey ed25519.PrivateKey
+
+	// lock is the state directory's: one collector (or one operator command) at a time (#291).
+	lock *os.File
+	// clientRoots is the client CA a hand-over's old certificate must chain to (handover.go).
+	clientRoots *x509.CertPool
+	// successor maps a retired identity to the one that took over its streams; predecessor, the other
+	// way (handover.go).
+	successor, predecessor map[string]string
 
 	mu      sync.Mutex
 	streams map[string]*collectorStream
@@ -157,11 +167,22 @@ func OpenCollector(stateDir string) (*Collector, error) {
 	if err := os.MkdirAll(streamsRoot, 0o700); err != nil {
 		return nil, fmt.Errorf("collector state directory: %w", err)
 	}
+	// One holder of this state at a time: a second collector, or an operator hand-over while one runs,
+	// would each write what the other does not see.
+	lock, err := os.OpenFile(filepath.Join(stateDir, lockFileName), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("collector state lock: %w", err)
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("collector state %s is held by another collector (or command): stop it first", stateDir)
+	}
 	alarms, err := os.OpenFile(filepath.Join(stateDir, alarmsFileName), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
+		lock.Close()
 		return nil, fmt.Errorf("collector alarm log: %w", err)
 	}
-	collector := &Collector{stateDir: stateDir, alarms: alarms, streams: map[string]*collectorStream{}, reported: map[string]*reportedWindow{}}
+	collector := &Collector{stateDir: stateDir, alarms: alarms, lock: lock, streams: map[string]*collectorStream{}, reported: map[string]*reportedWindow{}}
 	identities, err := os.ReadDir(streamsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("collector state directory: %w", err)
@@ -183,9 +204,14 @@ func OpenCollector(stateDir string) (*Collector, error) {
 				return nil, fmt.Errorf("collector state holds stream file %q whose site segment is not a site this collector would have written", file.Name())
 			}
 			if err := collector.loadStream(identity.Name(), site); err != nil {
+				collector.Close()
 				return nil, err
 			}
 		}
+	}
+	if err := collector.loadHandovers(); err != nil {
+		collector.Close()
+		return nil, err
 	}
 	return collector, nil
 }
@@ -257,6 +283,10 @@ func (c *Collector) Close() error {
 	if err := c.alarms.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
+	if c.lock != nil {
+		c.lock.Close() // releases the state directory's lock
+		c.lock = nil
+	}
 	return firstErr
 }
 
@@ -268,6 +298,7 @@ func (c *Collector) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/stream-position", c.handlePosition)
 	mux.HandleFunc("POST /v1/alarms", c.handleReportedAlarm)
 	mux.HandleFunc("GET /v1/receipt", c.handleReceipt)
+	mux.HandleFunc("POST /v1/handover", c.handleHandover)
 	mux.HandleFunc("HEAD /v1/health/ready", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -413,7 +444,11 @@ func (c *Collector) handleEvent(writer http.ResponseWriter, request *http.Reques
 		c.reject(request, writer, http.StatusBadRequest, alarm.withReason("the event fails the audit contract's own field validation: "+err.Error()))
 		return
 	}
-	status, ackHash, reason := c.commit(identity, site, event)
+	streamIdentity, ok := c.resolveCaller(request, writer, identity, commonName, site)
+	if !ok {
+		return
+	}
+	status, ackHash, reason := c.commit(streamIdentity, site, event)
 	if status != http.StatusNoContent {
 		alarm.Reason = reason
 		c.reject(request, writer, status, alarm)
@@ -558,8 +593,12 @@ func (c *Collector) handlePosition(writer http.ResponseWriter, request *http.Req
 		})
 		return
 	}
+	streamIdentity, ok := c.resolveCaller(request, writer, identity, commonName, site)
+	if !ok {
+		return
+	}
 	c.mu.Lock()
-	stream := c.streams[streamKey(identity, site)]
+	stream := c.streams[streamKey(streamIdentity, site)]
 	var position struct {
 		Sequence uint64 `json:"sequence"`
 		Hash     string `json:"hash"`
@@ -652,6 +691,10 @@ func (c *Collector) handleReceipt(writer http.ResponseWriter, request *http.Requ
 		})
 		return
 	}
+	streamIdentity, ok := c.resolveCaller(request, writer, identity, commonName, site)
+	if !ok {
+		return
+	}
 	if c.receiptKey == nil {
 		http.Error(writer, "this collector signs no receipts", http.StatusNotFound)
 		return
@@ -662,7 +705,7 @@ func (c *Collector) handleReceipt(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	c.mu.Lock()
-	stream := c.streams[streamKey(identity, site)]
+	stream := c.streams[streamKey(streamIdentity, site)] // the receipt still names the caller: its prune checks its own certificate
 	var receipt Receipt
 	held := stream != nil && sequence <= uint64(len(stream.hashes))
 	if held {

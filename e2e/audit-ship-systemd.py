@@ -13,6 +13,9 @@ REGALIA_SHIP_HOST_OK.
      group) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
   1  with units/regalia-audit-ship@sync.service.d as shipped, it reads it through the group and ships it;
   2  a line appended later ships on the next pass, and the collector's stream holds every line;
+  2b the client certificate is rotated: `regalia-audit-ship handover` (the old key signs, the new certificate
+     presents it), the files swapped, the unit restarted: the same stream goes on, and the old certificate is
+     refused (#291);
   3  the trail cut short under what was shipped: the instance ends with status 3, systemd does NOT restart
      it, the collector's alarm log holds the shipper's alarm, and the metrics say tampered;
   4  a manual start repeats the refusal: it never quietly resumes.
@@ -101,6 +104,7 @@ def certificates(work):
        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
     issue("collector", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
     issue("shipper", "extendedKeyUsage=clientAuth\n")
+    issue("shipper2", "extendedKeyUsage=clientAuth\n")                # the rotation's new certificate (#291)
 
 
 def stream_lines(state):
@@ -165,6 +169,23 @@ def scenario(work, binaries):
     ok('regalia_audit_trail_committed{trail="sync"} 5' in metrics and 'regalia_audit_trail_tampered{trail="sync"} 0' in metrics,
        "the metrics say 5 committed, not tampered", metrics)
 
+    print("\n### 2b  the client certificate rotated: a hand-over, and the stream goes on (#291)")
+    done = sh(str(BIN), "handover", "-collector", "https://127.0.0.1:%d" % PORT, "-old-cert", str(work / "shipper.pem"),
+              "-old-key", str(work / "shipper.key"), "-tls-cert", str(work / "shipper2.pem"), "-tls-key", str(work / "shipper2.key"),
+              "-server-ca", str(work / "ca.pem"), check=False)
+    ok(done.returncode == 0, "regalia-audit-ship handover: the old key signs, the new certificate presents it", done.stdout + done.stderr)
+    for source, target, mode in (("shipper2.pem", "client.crt", 0o644), ("shipper2.key", "client.key", 0o640)):
+        shutil.copy(work / source, ETC / target)
+        shutil.chown(ETC / target, "root", "regalia-audit-ship")
+        os.chmod(ETC / target, mode)
+    sh("systemctl", "restart", INSTANCE)
+    append_as_writer(trail, 1, 5)
+    ok(until(lambda: stream_lines(state) == 6, 75) and 'regalia_audit_trail_tampered{trail="sync"} 0' in METRICS.read_text(),
+       "under the new certificate the same stream goes on to 6 lines, not tampered", (stream_lines(state), journal(INSTANCE, 5)))
+    refused = sh("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--cert", str(work / "shipper.pem"), "--key", str(work / "shipper.key"),
+                 "--cacert", str(work / "ca.pem"), "-H", "X-Regalia-Site: sitea.sync", "https://127.0.0.1:%d/v1/stream-position" % PORT, check=False)
+    ok(refused.stdout.strip() == "403", "the old certificate is retired: the collector refuses it", refused.stdout)
+
     print("\n### 3  the trail cut short: an alarm, status 3, and no restart")
     lines = trail.read_bytes().splitlines(keepends=True)
     trail.write_bytes(b"".join(lines[:2]))                     # root rewrites it in place: still regalia-sync's, 0640
@@ -177,7 +198,7 @@ def scenario(work, binaries):
     alarms = [json.loads(line) for line in (state / "alarms.jsonl").read_text().splitlines()]
     ours = [a for a in alarms if a.get("site") == "sitea.sync" and "reported by the client" in a.get("reason", "")]
     ok(len(ours) == 1 and "cut short" in ours[0]["reason"], "the collector's alarm log holds the shipper's alarm", alarms)
-    ok(stream_lines(state) == 5, "the collector's stream still holds the 5 committed lines", stream_lines(state))
+    ok(stream_lines(state) == 6, "the collector's stream still holds the 6 committed lines", stream_lines(state))
     ok('regalia_audit_trail_tampered{trail="sync"} 1' in METRICS.read_text(), "the metrics say tampered")
 
     print("\n### 4  a manual start repeats the refusal")
@@ -187,7 +208,7 @@ def scenario(work, binaries):
     alarms = [line for line in (state / "alarms.jsonl").read_text().splitlines() if "reported by the client" in line]
     ok(status.get("ActiveState") == "failed" and status.get("ExecMainStatus") == "3" and len(alarms) == 2,
        "started by hand, it refuses again with a second alarm", (status, len(alarms)))
-    ok(stream_lines(state) == 5, "and ships nothing", stream_lines(state))
+    ok(stream_lines(state) == 6, "and ships nothing", stream_lines(state))
     if failed:
         print(journal(INSTANCE))
         print(journal(COLLECTOR_UNIT))

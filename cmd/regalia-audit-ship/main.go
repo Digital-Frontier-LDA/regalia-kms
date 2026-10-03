@@ -13,8 +13,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -64,6 +70,9 @@ type options struct {
 }
 
 func run(arguments []string, out io.Writer) error {
+	if len(arguments) > 0 && arguments[0] == "handover" {
+		return handover(arguments[1:], out)
+	}
 	flags := flag.NewFlagSet("regalia-audit-ship", flag.ContinueOnError)
 	flags.SetOutput(out)
 	var o options
@@ -458,4 +467,61 @@ func buildSink(collector, stream, certificatePath, keyPath, caPath string) (*aud
 		return nil, err
 	}
 	return audit.NewHTTPSink(collector, client, 10*time.Second, stream)
+}
+
+// handover is `regalia-audit-ship handover`: before this host's audit client certificate is swapped,
+// the old certificate's key signs that its streams continue under the new one, and the new certificate
+// presents that to the collector (#291; internal/audit/handover.go). Then swap client.crt and
+// client.key, and restart the shippers: their streams, prune markers and receipts carry on.
+func handover(arguments []string, out io.Writer) error {
+	flags := flag.NewFlagSet("regalia-audit-ship handover", flag.ContinueOnError)
+	flags.SetOutput(out)
+	collector := flags.String("collector", "", "the audit collector's https origin")
+	oldCert := flags.String("old-cert", "", "the certificate being retired (PEM)")
+	oldKey := flags.String("old-key", "", "its private key (PEM), which signs the hand-over")
+	tlsCert := flags.String("tls-cert", "", "the new client certificate (PEM), which presents it")
+	tlsKey := flags.String("tls-key", "", "the new client key (PEM)")
+	serverCA := flags.String("server-ca", "", "PEM CA bundle the collector's certificate is verified against")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if *collector == "" || *oldCert == "" || *oldKey == "" || *tlsCert == "" || *tlsKey == "" || *serverCA == "" {
+		return errors.New("handover needs -collector, -old-cert, -old-key, -tls-cert, -tls-key and -server-ca")
+	}
+	old, err := tls.LoadX509KeyPair(*oldCert, *oldKey)
+	if err != nil {
+		return fmt.Errorf("the old certificate and key: %w", err)
+	}
+	replacement, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+	if err != nil {
+		return fmt.Errorf("the new certificate and key: %w", err)
+	}
+	oldSum, newSum := sha256.Sum256(old.Certificate[0]), sha256.Sum256(replacement.Certificate[0])
+	preimage := audit.HandoverPreimage(hex.EncodeToString(oldSum[:]), hex.EncodeToString(newSum[:]))
+	signer, ok := old.PrivateKey.(crypto.Signer)
+	if !ok {
+		return errors.New("the old key cannot sign")
+	}
+	var signature []byte
+	switch signer.Public().(type) {
+	case *ecdsa.PublicKey:
+		digest := sha256.Sum256(preimage)
+		signature, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	case ed25519.PublicKey:
+		signature, err = signer.Sign(rand.Reader, preimage, crypto.Hash(0))
+	default:
+		return errors.New("the old key is neither ECDSA nor Ed25519: the collector verifies only those")
+	}
+	if err != nil {
+		return err
+	}
+	sink, err := buildSink(*collector, "", *tlsCert, *tlsKey, *serverCA)
+	if err != nil {
+		return err
+	}
+	if err := sink.Handover(context.Background(), old.Certificate[0], signature); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "regalia-audit-ship: the collector continues %x's streams under %x; swap client.crt/client.key and restart the shippers\n", oldSum, newSum)
+	return nil
 }

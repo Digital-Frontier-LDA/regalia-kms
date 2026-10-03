@@ -810,7 +810,15 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
   disk. A compromised shipper therefore cannot get a line removed that the collector does not hold.
   `<trail>.pruned` is written first; the shipper goes on from that marker and still checks the
   collector's head, and a marker ahead of the collector raises the tamper alarm. Without a receipt key
-  nothing is pruned, and archives wait. Rotating the audit client certificate starts new streams (#291).
+  nothing is pruned, and archives wait.
+- **Rotating the audit client certificate (#291).** The collector keys a host's streams by its client
+  certificate, so a new certificate takes them over only by a hand-over: issue the new certificate, then
+  `regalia-audit-ship handover -collector … -old-cert … -old-key … -tls-cert <new> -tls-key <new>
+  -server-ca …` (the old key signs, the new certificate presents it), then swap `client.crt`/`client.key`
+  and restart the shippers. The streams, prune markers and receipts carry on, and the old certificate is
+  refused from then on. If the old key is lost: stop the collector, `regalia-audit-collector handover
+  -state … -old <fingerprint> -new <fingerprint> -reason …`, start it again. Both are records in the
+  collector's alarm log.
 - **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
   records one "alarm flood" alarm of its own and answers 429.
 

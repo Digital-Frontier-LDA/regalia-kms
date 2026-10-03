@@ -42,6 +42,9 @@ func main() {
 }
 
 func run(arguments []string, out *os.File) error {
+	if len(arguments) > 0 && arguments[0] == "handover" {
+		return operatorHandover(arguments[1:], out)
+	}
 	flags := flag.NewFlagSet("regalia-audit-collector", flag.ContinueOnError)
 	flags.SetOutput(out)
 	stateDir := flags.String("state", "", "directory holding the committed streams and the alarm log; this is the collector's durable memory, so put it on storage whose loss is its own incident")
@@ -72,6 +75,8 @@ func run(arguments []string, out *os.File) error {
 	if err != nil {
 		return err
 	}
+	// a hand-over's old certificate is held to the roots the listener holds every client to (#291)
+	collector.SetClientRoots(server.TLSConfig.ClientCAs)
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", *listen, err)
@@ -151,4 +156,33 @@ func loadReceiptKey(path string) (ed25519.PrivateKey, error) {
 		return nil, errors.New("receipt key: not an Ed25519 key")
 	}
 	return key, nil
+}
+
+// operatorHandover is `regalia-audit-collector handover`: the operator's hand-over of a retired client
+// certificate's streams to its replacement, for when the old key is lost and cannot sign one (#291;
+// internal/audit/handover.go). The collector must be stopped: opening its state takes the lock a
+// running collector holds.
+func operatorHandover(arguments []string, out *os.File) error {
+	flags := flag.NewFlagSet("regalia-audit-collector handover", flag.ContinueOnError)
+	flags.SetOutput(out)
+	stateDir := flags.String("state", "", "the collector's state directory")
+	old := flags.String("old", "", "the retired client certificate's fingerprint: SHA-256 of its DER, hex")
+	replacement := flags.String("new", "", "its replacement's fingerprint")
+	reason := flags.String("reason", "", "why the old certificate cannot sign the hand-over itself (recorded)")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if *stateDir == "" || *old == "" || *replacement == "" || *reason == "" {
+		return errors.New("handover needs -state, -old, -new and -reason")
+	}
+	collector, err := audit.OpenCollector(*stateDir)
+	if err != nil {
+		return err
+	}
+	defer collector.Close()
+	if err := collector.RecordOperatorHandover(*old, *replacement, *reason); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "regalia-audit-collector: the streams of %s now continue under %s; %s is retired\n", *old, *replacement, *old)
+	return nil
 }
