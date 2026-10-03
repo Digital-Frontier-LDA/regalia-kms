@@ -1,7 +1,9 @@
 # Explicit recovery reconciliation
 
 `recovery-reconcile.py` is an opt-in console repair tool for interrupted disk
-recovery enrollment/replacement. Existing `recovery-key.sh` behavior is unchanged.
+recovery enrollment/replacement. `recovery-key.sh` repairs only what the header marks (the same
+keys typed again, a marked replace pair, empty recovery tokens) and reports every other header as
+`STATE: unknown`, changing nothing: this tool is the way forward from that state.
 Stop other header writers and use a trusted, serialized root console.
 
 Inspect without changing keyslots:

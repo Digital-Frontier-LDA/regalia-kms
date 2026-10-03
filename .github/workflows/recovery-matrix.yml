@@ -12,7 +12,7 @@ permissions:
 jobs:
   matrix:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -20,7 +20,7 @@ jobs:
       - name: Install cryptsetup for disposable regular-file headers
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cryptsetup-bin
+          sudo apt-get install -y --no-install-recommends cryptsetup-bin strace
       - name: Verify recovery-header observer guards
         run: python3 -m unittest discover -s tests -p test_recovery_matrix_observer.py -v
       - name: Observe every successful and single-failure cleanup boundary
