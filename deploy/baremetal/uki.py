@@ -230,6 +230,12 @@ def cmdline_text(raw):
     words = text.split()
     for needed in CMDLINE_REQUIRED:
         require(needed in words, "the command line does not carry %s, which every KMS host's image must" % needed)
+        # ... and nothing that says otherwise: the kernel and systemd take the LAST value of a repeated word,
+        # so a second systemd.import_credentials= (any value, the same one included) is refused
+        key = needed.split("=", 1)[0] + "="
+        given = [w for w in words if w.startswith(key) or w.startswith("rd." + key)]
+        require(given == [needed], "the command line gives %s more than once or with another value (%s): it must say %s, once"
+                % (key[:-1], " ".join(given), needed))
     for word in words:
         if re.fullmatch(CMDLINE_HARDENING, word):
             continue

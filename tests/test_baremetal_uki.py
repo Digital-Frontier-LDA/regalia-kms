@@ -285,6 +285,13 @@ class Arithmetic(unittest.TestCase):
         for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
             with self.subTest(near=near), self.assertRaises(m.Refused):
                 uki.cmdline_text(("root=/dev/mapper/root ro %s" % near).encode())
+        # the word present, and a contradicting (or repeated) value beside it: the last one would win
+        for extra in ("systemd.import_credentials=yes", "systemd.import_credentials=1", "rd.systemd.import_credentials=yes",
+                      "systemd.import_credentials=no"):
+            with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no %s" % extra).encode())
+            self.assertIn("gives systemd.import_credentials more than once or with another value", str(caught.exception))
+
         # the forms that turn a shell OFF are what an image should carry (the unlock test boots with them)
         hardened = "root=/dev/mapper/root ro systemd.import_credentials=no rd.shell=0 rd.emergency=poweroff systemd.debug_shell=0 rd.systemd.debug-shell=off"
         self.assertEqual(uki.cmdline_text(hardened.encode()), hardened)
@@ -774,7 +781,9 @@ class Records(Case):
                 ("other phase paths", lambda r: r["phase_paths"].update(system="enter-initrd"), "phase paths are not this tool's"),
                 ("a section this tool does not measure", lambda r: r["sections"].update({".splash": "00" * 32}), "record.sections"),
                 ("an input this tool does not take", lambda r: r["inputs"].update(extra={"sha256": "00" * 32, "size": 1}), "record.inputs names an input"),
-                ("a malformed signing part", lambda r: r.update(signed={"image_sha256": "00" * 32}), "record.signed fields mismatch")):
+                ("a malformed signing part", lambda r: r.update(signed={"image_sha256": "00" * 32}), "record.signed fields mismatch"),
+                ("a command line without the import switch", lambda r: r.update(cmdline="root=/dev/mapper/root ro"), "does not carry systemd.import_credentials=no"),
+                ("a command line that is not the image's", lambda r: r.update(cmdline=r["cmdline"] + " quiet"), "record.cmdline is not the image's .cmdline section")):
             with self.subTest(label):
                 changed = json.loads(json.dumps(record))
                 change(changed)
