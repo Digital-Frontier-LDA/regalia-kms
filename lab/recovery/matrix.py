@@ -449,9 +449,10 @@ def run(script, output, mode='all', shard=(1, 1), reconciler=None):
         raise ValueError('strace is required for the faults inside a call; no skipping')
     script = script.resolve()
     reconciler = reconciler.resolve() if reconciler else None
+    source_sha256 = hashlib.sha256(script.read_bytes()).hexdigest()
     output.parent.mkdir(parents=True, exist_ok=True)
     report = {'schema':'regalia.recovery-crash-matrix/v2', 'status':'failed', 'production_approved':False,
-              'script_sha256':hashlib.sha256(script.read_bytes()).hexdigest(),
+              'script_sha256':source_sha256,
               'reconciler_sha256':hashlib.sha256(reconciler.read_bytes()).hexdigest() if reconciler else None,
               'cryptsetup':cs(executable, ['--version']).stdout.strip(),
               'strace':subprocess.run([STRACE,'-V'],capture_output=True,text=True).stdout.splitlines()[0],
@@ -463,6 +464,14 @@ def run(script, output, mode='all', shard=(1, 1), reconciler=None):
     try:
         with tempfile.TemporaryDirectory(prefix='regalia-luks-matrix-') as temp:
             directory = Path(temp)
+            # The script runs from a staged copy, with recovery_state.py and a trail writer beside it (#278): the real
+            # trails.py writes root's /var/log/regalia, which this harness (no root) does not touch. The stand-in
+            # accepts every event; the trail itself is tested in tests/test_baremetal_recovery_key.py and the e2e.
+            staged = directory/'tool'; staged.mkdir()
+            shutil.copy(script, staged/script.name)
+            shutil.copy(script.parent/'recovery_state.py', staged/'recovery_state.py')
+            (staged/'trails.py').write_text('import sys\nsys.stdin.read()\nprint(1)\n')
+            script = staged/script.name
             alphabet='cbdefghijklnrtuv'
             recovery=lambda: '-'.join(''.join(secrets.choice(alphabet) for _ in range(8)) for _ in range(8))
             values={'installer':secrets.token_hex(32), 'tpm':secrets.token_hex(32), 'old':recovery(), 'new':recovery()}

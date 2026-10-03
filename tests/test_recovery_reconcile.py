@@ -68,7 +68,7 @@ NEW = 'vvuuttrr-nnllkkjj-iihhggff-eeddccbb-cbdefghi-jklnrtuv-bcdefghi-jklnrtuc'
 WORKER = '''import importlib.util,sys
 p=sys.argv.pop(1); c=sys.argv.pop(1); l=sys.argv.pop(1)
 s=importlib.util.spec_from_file_location('reconcile',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-m.CRYPTSETUP=c; m.LOCKDIR=m.Path(l)
+m.CRYPTSETUP=c; m.LOCKDIR=m.Path(l); m.TRAIL=str(m.Path(l)/'trail.jsonl')   # the registry's path is root's: here, the test's own
 raise SystemExit(m.main())
 '''
 # KILL at the first fsync of luksKillSlot (its key material is wiped, its metadata not yet written),
@@ -150,6 +150,16 @@ class KilledInsideTheRetirement(unittest.TestCase):
         self.assertEqual(list(meta['tokens'].values()), [{'type': 'systemd-recovery', 'keyslots': ['2']}])
         self.assertEqual(self.opens(OLD), 2)
         self.assertEqual(self.opens(NEW), 0)
+        # #278: each run recorded before a card was asked for, and its outcome after: the cut one INCOMPLETE
+        with open(os.path.join(self.dir, 'trail.jsonl'), encoding='utf-8') as f:
+            events = [json.loads(line) for line in f]
+        self.assertEqual([e['outcome'] for e in events], ['REQUESTED', 'REQUESTED', 'ALLOW'])   # the killed run wrote no outcome
+        self.assertEqual((events[-1]['keep'], events[-1]['retire'], events[-1]['state_after']), ('2', ['1'], 'orphan-keyslot'))
+        with open(os.path.join(self.dir, 'trail.jsonl'), encoding='utf-8') as f:
+            text = f.read()
+        self.assertNotIn(OLD, text)
+        self.assertNotIn(NEW, text)
+        self.assertNotIn(OLD[:8], text)
 
     def test_a_wrong_card_against_a_listed_slot_with_no_mark_is_still_refused(self):
         # the same wiped-looking answer (the card opens nothing) but no mark: refused, nothing written

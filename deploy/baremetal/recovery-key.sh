@@ -72,7 +72,9 @@
 set -uo pipefail
 # Byte-wise character classes: in a UTF-8 locale a range follows the locale's collation.
 export LC_ALL=C
-fail(){ printf 'recovery-key: FAIL: %s\n' "$*" >&2; exit 1; }
+fail(){ printf 'recovery-key: FAIL: %s\n' "$*" >&2; outcome DENY "$*"; exit 1; }
+# Until the request is recorded (TRAILED) there is no outcome to record: a usage error writes nothing.
+TRAILED=""; outcome(){ :; }
 say(){ printf 'recovery-key: %s\n' "$*" >&2; }
 MODE=""; DEV=""
 while [ $# -gt 0 ]; do case "$1" in
@@ -212,15 +214,46 @@ for s in sorted(meta.get("keyslots") or {}, key=lambda s: (len(s), s)):
 # The header before this run's first write: "nothing was changed" is said only when it is still so.
 H0=""
 changed(){ [ "$(dump)" != "$H0" ]; }
-# end <status> <message>: the message, then the header as it is. A failure that left the header
-# exactly as it was says so; one that did not, says that instead.
-end(){ local rc="$1"; shift
-  if [ "$rc" != 0 ]; then
-    if [ -n "$H0" ] && ! changed; then say "FAIL: $*. The header is as it was before this run."
-    else say "FAIL: $*"; fi
-  else say "$*"; fi
+# end <status> <message>: the message, then the header as it is, then the outcome on the audit trail. A
+# failure that left the header exactly as it was says so (DENY); one that did not, says that (INCOMPLETE).
+end(){ local rc="$1" result; shift
+  if [ "$rc" = 0 ]; then result=ALLOW; say "$*"
+  elif [ -n "$H0" ] && changed; then result=INCOMPLETE; say "FAIL: $*"
+  elif [ -n "$H0" ]; then result=DENY; say "FAIL: $*. The header is as it was before this run."
+  else result=DENY; say "FAIL: $*"; fi
   report
+  outcome "$result" "$*" || rc=1
   exit "$rc"; }
+
+# THE AUDIT TRAIL (#278): /var/log/regalia/recovery-key.jsonl, hash-chained, written by trails.py beside this
+# script (python3 -Es by its path; the event on standard input; it refuses, and writes nothing, if it cannot).
+# For --enrol, --check and --replace: the request is recorded before a key is asked for (and the run refuses
+# if it cannot be), and exactly one outcome after: ALLOW, DENY (the header as it was), INCOMPLETE (the header
+# changed; run it again), or DENY "interrupted" at a prompt. Never a key: the mode, the device, the header's
+# state, its keyslots. --status writes nothing.
+TRAILS_PY="$HERE/trails.py"
+# trail <outcome> <reason>: one event, with the header's state as it is read now.
+trail(){ read_state 2>/dev/null || STATE=unreadable
+  python3 -I -c 'import json, sys
+keys = ("outcome", "reason", "mode", "device", "state", "recovery", "unnamed", "keyslots")
+event = dict(zip(keys, sys.argv[1:]))
+event["reason"] = event["reason"][:240]
+for k in ("recovery", "unnamed", "keyslots"):
+    event[k] = event[k].split()
+event["event"] = "recovery-key"
+print(json.dumps(event, sort_keys=True))' "$1" "$2" "$MODE" "$DEV" "$STATE" "$RECOVERY" "$UNNAMED" "$ALL" \
+    | python3 -Es "$TRAILS_PY" append recovery-key >/dev/null; }
+# the outcome, once: an outcome that cannot be written is said, and the run's status is a failure
+outcome(){ [ -n "$TRAILED" ] || return 0
+  TRAILED=""
+  trail "$1" "$2" && return 0
+  printf 'recovery-key: FAIL: the outcome (%s) could not be written to the audit trail (%s)\n' "$1" "$TRAILS_PY" >&2
+  return 1; }
+requested(){ [ -f "$TRAILS_PY" ] || fail "$TRAILS_PY is missing: nothing is done unrecorded"
+  trail REQUESTED "" || fail "the audit trail cannot be written: nothing was done"
+  TRAILED=1
+  # a Ctrl-C at a prompt (before any write) is recorded too; from the first write on, signals are ignored
+  trap 'outcome DENY "interrupted before any change"; exit 130' INT TERM HUP; }
 # writes: from here on the run is not stopped by INT, TERM, HUP or PIPE; it finishes and reports.
 writes(){ trap '' INT TERM HUP PIPE; H0="$(dump)"; }
 # sweep: remove recovery tokens that name no keyslot. They open nothing and mark nothing.
@@ -253,6 +286,7 @@ spent(){
   opens "$A" && end 1 "the used key STILL opens $DEV through another keyslot; look at cryptsetup luksDump $DEV"
   opens_nothing "$A" || end 1 "cannot show that the used key opens nothing (the header or the device could not be read); run --status"; }
 read_state || fail "cannot read the LUKS2 header of $DEV"
+[ "$MODE" = status ] || requested
 case "$MODE" in
 status)
   report
@@ -272,6 +306,7 @@ check)
   say "OK: that key opens the recovery keyslot ($RECOVERY) of $DEV. Nothing was unlocked."
   say "It has now been typed at a console: after a REAL use, or a rehearsal with witnesses, --replace it."
   report
+  outcome ALLOW "the key typed opens recovery keyslot $RECOVERY" || exit 1
   ;;
 enrol)
   case "$STATE" in unknown|added-unproven) end 1 "$DEV is in state $STATE; --enrol does not work beside it";; esac

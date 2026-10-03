@@ -54,6 +54,11 @@ a boot prompt opens through it, and `--wipe-slot=recovery` removes it (tested).
 `/run/lock/regalia-recovery-<device>.lock` (`recovery_state.lock_path`). They also read the header with
 the same classifier (`recovery_state.py`); the JSON this tool prints carries it as `header_state`.
 
+**Recorded.** A reconciliation (with --keep-slot) is on the audit trail
+/var/log/regalia/recovery-reconcile.jsonl (#278): the selection before a card is asked for (no trail, no
+run), then the outcome, ALLOW, DENY (the header byte for byte as it was) or INCOMPLETE, with the header's
+state. Never a card's key. A status read writes nothing.
+
 There is no undo. A failure reports the observed header; repeating the same
 explicit selections/cards handles slots that were already retired. A pending
 read or write can fail again, and no success is reported without its checks.

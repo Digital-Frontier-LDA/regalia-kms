@@ -102,10 +102,23 @@ else F "5: the new key did not open the volume"; fi
 mountpoint -q "$W/mnt" && umount "$W/mnt"; [ -e "/dev/mapper/$NAME" ] && cryptsetup close "$NAME"
 why="$(judge)" && P "5: the probe still measures one recovery keyslot: $why" || F "5: after --replace the probe refuses: $why"
 
+# 6 ------------------------------------------------------------------------------------------------
+# #278: every run above that took a key is on the real audit trail, hash-chained, and no key is in it.
+TRAIL=/var/log/regalia/recovery-key.jsonl
+if [ -f "$TRAIL" ] && python3 -Es deploy/baremetal/trails.py verify "$TRAIL" >"$W/verify.json" 2>&1; then
+  P "6: the recovery-key trail's chain verifies ($(cat "$W/verify.json"))"
+else F "6: the recovery-key trail does not verify: $(cat "$W/verify.json" 2>/dev/null)"; fi
+ok=1; for k in "$KEY" "$NEW_KEY" "$INSTALLER"; do grep -qF -- "$k" "$TRAIL" 2>/dev/null && ok=0; done
+[ "$ok" = 1 ] && P "6: no key and no passphrase is in the trail" || F "6: a secret is in $TRAIL"
+outcomes="$(python3 -I -c 'import json, sys
+print(" ".join("%s:%s" % (e["mode"], e["outcome"]) for e in map(json.loads, open(sys.argv[1])) if e.get("device") == sys.argv[2]))' "$TRAIL" "$LOOP")"
+[ "$outcomes" = "enrol:REQUESTED enrol:ALLOW check:REQUESTED check:ALLOW replace:REQUESTED replace:ALLOW" ] \
+  && P "6: each run is on the trail, requested before and its outcome after: $outcomes" || F "6: the trail for $LOOP reads: $outcomes"
+
 # the file-backed half, where a skip is a failure
 out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -BEs -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
-[ "$rc" = 0 ] && grep -q '^Ran 33 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
-  && P "the 33 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
+[ "$rc" = 0 ] && grep -q '^Ran 37 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
+  && P "the 37 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
 
 echo "luks-recovery-key: $pass passed, $failed failed"
 [ "$failed" = 0 ]

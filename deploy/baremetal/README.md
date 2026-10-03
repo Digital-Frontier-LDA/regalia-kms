@@ -95,6 +95,9 @@ Commissioning has two halves:
   anywhere, killed included, is finished by the same command with the same keys; `unknown` is left
   to the custodian (`recovery-reconcile.py`, RECOVERY-RECONCILIATION.md). The key is always the
   ceremony's (#175): there is no host-generated mode.
+  Every --enrol, --check and --replace is on the audit trail /var/log/regalia/recovery-key.jsonl (#278):
+  the request before a key is asked for (no trail, no run), then its outcome (ALLOW, DENY, INCOMPLETE) with
+  the header's state. Never a key.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
