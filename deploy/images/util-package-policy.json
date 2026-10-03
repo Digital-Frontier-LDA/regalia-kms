@@ -961,6 +961,530 @@
         }
       }
     },
+    "login": {
+      "control": {
+        "Depends": "libpam-modules, libpam-runtime, libaudit1 (>= 1:2.2.1), libc6 (>= 2.38), libcrypt1 (>= 1:4.1.0), libpam0g (>= 0.99.7.1)",
+        "Description": "system login tools\nThis package provides support for console-based logins and for\nchanging effective user or group IDs, including:\n * login, the program that invokes a user shell on a virtual terminal,\n * nologin, a dummy shell for disabled user accounts,\n * newgrp, a program to change the effective group IDs.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "login",
+        "Pre-Depends": "login.defs (>= 1:4.16.0-1~)",
+        "Priority": "required",
+        "Protected": "yes",
+        "Section": "admin",
+        "Source": "util-linux (2.42.4-0+regalia1)",
+        "Version": "1:4.16.0-2+really2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "conffiles": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "1add4bb364d88b6cd1b4a119fad2e202c12b9c262c4ff54c6d1ae513f9dc56af"
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "postinst": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "d5ffa198cd5179281833da9ac72160c45c979644c111e90f9062ed7b4aa9fdd3"
+        },
+        "postrm": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "d5ffa198cd5179281833da9ac72160c45c979644c111e90f9062ed7b4aa9fdd3"
+        },
+        "preinst": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "d5ffa198cd5179281833da9ac72160c45c979644c111e90f9062ed7b4aa9fdd3"
+        },
+        "prerm": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "d5ffa198cd5179281833da9ac72160c45c979644c111e90f9062ed7b4aa9fdd3"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "etc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "etc/pam.d": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "etc/pam.d/login": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/login": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/newgrp": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 2541
+        },
+        "usr/bin/sg": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "newgrp",
+          "mode": 511
+        },
+        "usr/sbin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/nologin": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions/newgrp": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/login": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/login/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/login/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/login/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/login/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/lintian": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides/login": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/ar": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/ar/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/ar/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/ar/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/ar/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/ar/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/de": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/de/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/de/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/de/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/de/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/de/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/fr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/fr/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/fr/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/sg.1.gz": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "newgrp.1.gz",
+          "mode": 511
+        },
+        "usr/share/man/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/pl": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/pl/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/pl/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/pl/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/pl/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/pl/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/ro": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/ro/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/ro/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/ro/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/ro/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/ro/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/sr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/sr/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/sr/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/sr/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/sr/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/sr/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/sv": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/sv/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/sv/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/sv/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/sv/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/sv/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/uk": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/uk/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/uk/man1/login.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/uk/man1/newgrp.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/uk/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/uk/man8/nologin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
     "mount": {
       "control": {
         "Description": "tools for mounting and manipulating filesystems\nThis package provides the mount(8), umount(8), swapon(8),\nswapoff(8), and losetup(8) commands.",

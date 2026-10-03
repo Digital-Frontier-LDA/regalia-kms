@@ -15,6 +15,57 @@ from lab.appliance import util_profile
 
 @unittest.skipUnless(shutil.which("dpkg-deb"), "dpkg-deb required")
 class UtilityPackageBoundaries(unittest.TestCase):
+    def test_login_protection_and_pam_members_are_mandatory(self):
+        original = json.loads(util_package.POLICY.read_text())
+        reviewed = original["packages"]["login"]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            policy = root / "policy.json"
+            conffiles = b"/etc/pam.d/login\n"
+            reviewed["control_members"] = {
+                ".": {"kind": "directory", "mode": 0o755, "link": None, "sha256": None},
+                "control": {"kind": "file", "mode": 0o644, "link": None, "sha256": None},
+                "conffiles": {"kind": "file", "mode": 0o644, "link": None,
+                              "sha256": hashlib.sha256(conffiles).hexdigest()}}
+            reviewed["payload_members"] = {
+                path: {"kind": "directory", "mode": 0o755, "link": None, "elf": False}
+                for path in (".", "etc", "etc/pam.d", "usr", "usr/bin")}
+            reviewed["payload_members"].update({
+                "usr/bin/login": {"kind": "file", "mode": 0o755, "link": None, "elf": True},
+                "etc/pam.d/login": {"kind": "file", "mode": 0o644, "link": None, "elf": False}})
+            original["packages"] = {"login": reviewed}
+            policy.write_text(json.dumps(original))
+            def candidate(attack):
+                stage = root / attack
+                for path in ("DEBIAN", "etc/pam.d", "usr/bin"):
+                    (stage / path).mkdir(parents=True)
+                for path in (stage, *[p for p in stage.rglob("*") if p.is_dir()]):
+                    path.chmod(0o755)
+                fields = dict(reviewed["control"], Architecture="amd64", **{"Installed-Size": "1"})
+                if attack == "unprotected": fields["Protected"] = "no"
+                if attack == "missing-protection": fields.pop("Protected")
+                if attack == "old-version": fields["Version"] = "1:4.16.0-2+really2.41.5-0+deb13u1"
+                (stage / "DEBIAN/control").write_text("\n".join(k + ": " + v.replace("\n", "\n ") for k,v in fields.items()) + "\n")
+                (stage / "DEBIAN/conffiles").write_bytes(b"/etc/shadow\n" if attack == "redirected-conffile" else conffiles)
+                elf = bytearray(20)
+                elf[:6] = b"\x7fELF\x02\x01"
+                elf[18:20] = (62).to_bytes(2, "little")
+                (stage / "usr/bin/login").write_bytes(elf)
+                (stage / "usr/bin/login").chmod(0o755)
+                if attack != "missing-pam": (stage / "etc/pam.d/login").write_text("fixture PAM configuration\n")
+                output = root / (attack + ".deb")
+                # Create malformed conffile fixtures that dpkg's own builder
+                # otherwise rejects, so our independent parser must refuse.
+                options = ["--nocheck"] if attack in ("redirected-conffile", "missing-pam") else []
+                subprocess.run(["dpkg-deb", *options, "--root-owner-group", "--build", str(stage), str(output)],
+                               check=True, capture_output=True)
+                return output
+            with patch.object(util_package, "POLICY", policy):
+                self.assertFalse(util_package.inspect(candidate("good"), "amd64")["package_admitted"])
+                for attack in ("unprotected", "missing-protection", "old-version", "redirected-conffile", "missing-pam"):
+                    with self.subTest(attack=attack), self.assertRaises(VerificationError):
+                        util_package.inspect(candidate(attack), "amd64")
+
     def test_package_substitution_and_privilege_boundaries(self):
         original = json.loads(util_package.POLICY.read_text())
         control = dict(original["packages"]["mount"]["control"], Architecture="amd64", **{"Installed-Size": "1"})

@@ -47,6 +47,9 @@ for package in mount util-linux util-linux-extra libmount1 libblkid1 libuuid1 li
   check test "$(dpkg-query -W -f='${Version}' "$package")" = 2.42.4-0+regalia1
 done
 check test "$(dpkg-query -W -f='${Version}' bsdutils)" = 1:2.42.4-0+regalia1
+check test "$(dpkg-query -W -f='${Version}' login)" = 1:4.16.0-2+really2.42.4-0+regalia1
+check test "$(dpkg-query -W -f='${Protected}' login)" = yes
+check login --help
 for tool in mount umount findmnt lsblk su sulogin; do
   check "$tool" --help
 done

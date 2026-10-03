@@ -24,8 +24,7 @@ BUILD_PACKAGES = ("build-essential", "debhelper", "dh-exec", "dh-package-notes",
                   "libpam0g-dev", "libreadline-dev", "libselinux1-dev", "libsqlite3-dev",
                   "libsystemd-dev", "libtool", "libudev-dev", "netbase", "pkgconf",
                   "po-debconf", "po4a", "socat", "systemd-dev", "zlib1g-dev")
-PACKAGES = ("bsdutils", "mount", "util-linux", "util-linux-extra", "libmount1", "libblkid1",
-            "libuuid1", "libsmartcols1", "liblastlog2-2")
+PACKAGES = util_package.PACKAGES
 USER = "regalia-util-build"
 UID = 61001
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C",
@@ -91,7 +90,10 @@ def build(bundle, output):
             destination = output / (label + "-packages")
             destination.mkdir(mode=0o700)
             for name in PACKAGES:
-                candidates = list(root.glob(name + "_" + util_package.VERSION + "_" + architecture + ".deb"))
+                # Debian filenames omit epochs; login also preserves the
+                # transition from shadow's historical version numbering.
+                file_version = util_package.package_version(name).split(":", 1)[-1]
+                candidates = list(root.glob(name + "_" + file_version + "_" + architecture + ".deb"))
                 require(len(candidates) == 1, "missing or ambiguous utility package: " + name)
                 package = destination / (name + ".deb")
                 shutil.copyfile(candidates[0], package)
@@ -144,7 +146,7 @@ def install(output):
     command(["apt-get", "check"])
     command(["apt-mark", "manual", *PACKAGES])
     for name in PACKAGES:
-        expected = ("1:" if name == "bsdutils" else "") + util_package.VERSION
+        expected = util_package.package_version(name)
         require(command(["dpkg-query", "-W", "-f=${Version}", name]) == expected,
                 "utility installed version differs: " + name)
     report["status"] = "installed"

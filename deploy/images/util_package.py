@@ -16,8 +16,17 @@ from .verify import VerificationError, hash_regular, read_regular, require
 
 POLICY = Path(__file__).with_name("util-package-policy.json")
 VERSION = "2.42.4-0+regalia1"
+PACKAGES = ("bsdutils", "mount", "util-linux", "util-linux-extra", "libmount1", "libblkid1",
+            "libuuid1", "libsmartcols1", "liblastlog2-2", "login")
 TRIPLETS = {"amd64": "x86_64-linux-gnu", "arm64": "aarch64-linux-gnu"}
-PRIVILEGED_MODES = {"usr/bin/mount": 0o4755, "usr/bin/umount": 0o4755, "usr/bin/su": 0o4755}
+PRIVILEGED_MODES = {"usr/bin/mount": 0o4755, "usr/bin/umount": 0o4755, "usr/bin/su": 0o4755,
+                    "usr/bin/newgrp": 0o4755}
+
+
+def package_version(name):
+    require(name in PACKAGES, "unreviewed utility package version")
+    prefix = "1:4.16.0-2+really" if name == "login" else "1:" if name == "bsdutils" else ""
+    return prefix + VERSION
 
 
 def payload_members(reviewed, architecture):

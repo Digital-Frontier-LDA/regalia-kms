@@ -13,7 +13,7 @@ CANDIDATES = ('locales', 'libc-l10n', 'util-linux-locales', 'eject', 'fdisk', 't
               'bzip2', 'xz-utils', 'bsdextrautils')
 REQUIRED = ('linux-image-amd64', 'systemd-sysv', 'cryptsetup-initramfs', 'wireguard-tools',
             'nftables', 'apparmor', 'apparmor-utils', 'tpm2-tools', 'opensc', 'pcscd',
-            'python3', 'ca-certificates', 'util-linux', 'mount', 'perl-base')
+            'python3', 'ca-certificates', 'util-linux', 'mount', 'login', 'perl-base')
 
 
 def installed(name):

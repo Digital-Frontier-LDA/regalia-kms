@@ -1,4 +1,4 @@
-"""Bind the nine reviewed utility packages to source, reproduction and rootfs.
+"""Bind the ten reviewed utility packages to source, reproduction and rootfs.
 
 This development admission is independent of signed archive packages and does
 not change vulnerability matching or authorize a production release.
@@ -13,12 +13,11 @@ from . import util_package, util_source
 from .snapshot import check_installed
 from .verify import hash_regular, read_regular, require
 
-PACKAGES = ("bsdutils", "mount", "util-linux", "util-linux-extra", "libmount1", "libblkid1",
-            "libuuid1", "libsmartcols1", "liblastlog2-2")
+PACKAGES = util_package.PACKAGES
 
 
 def versions():
-    return {name: ("1:" if name == "bsdutils" else "") + util_package.VERSION for name in PACKAGES}
+    return {name: util_package.package_version(name) for name in PACKAGES}
 
 
 def installed_payload(rootfs, inspected):

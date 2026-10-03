@@ -52,7 +52,7 @@ class InstalledUtilityPayload(unittest.TestCase):
 
 
 class UtilityInventoryBinding(unittest.TestCase):
-    def test_nine_reviewed_local_rows_do_not_exempt_any_other_package(self):
+    def test_reviewed_local_rows_do_not_exempt_any_other_package(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "packages.tsv"
             tpm = {"schema": "regalia.source-package-binding/v1", "status": "verified",
@@ -64,10 +64,11 @@ class UtilityInventoryBinding(unittest.TestCase):
             inventory = [{"Package": "libc6", "Version": "1.0"}]
             path.write_text("\n".join(rows) + "\n")
             result = source_package.installed_binding(path, inventory, tpm, util)
-            self.assertEqual((result["source_built_packages"], result["archive_packages"]), (10, 1))
+            self.assertEqual((result["source_built_packages"], result["archive_packages"]), (11, 1))
             for mutation in (rows + ["unsigned\t1"], rows + [rows[-1]],
                              [row.replace("libc6\t1.0", "libc6\t2.0") for row in rows],
-                             [row.replace("mount\t2.42.4", "mount\t2.42.5") for row in rows]):
+                             [row.replace("mount\t2.42.4", "mount\t2.42.5") for row in rows],
+                             [row.replace("login\t1:4.16.0-2+really2.42.4", "login\t1:4.16.0-2+really2.41.5") for row in rows]):
                 path.write_text("\n".join(mutation) + "\n")
                 with self.assertRaises(VerificationError):
                     source_package.installed_binding(path, inventory, tpm, util)

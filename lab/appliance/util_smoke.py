@@ -11,12 +11,8 @@ import subprocess
 import tempfile
 import uuid
 
-from deploy.images.util_package import VERSION
+from deploy.images.util_package import PACKAGES, package_version
 from deploy.images.verify import require
-
-PACKAGES = ("bsdutils", "mount", "util-linux", "util-linux-extra", "libmount1", "libblkid1",
-            "libuuid1", "libsmartcols1", "liblastlog2-2")
-
 
 def command(args):
     result = subprocess.run(args, capture_output=True, text=True, timeout=60,
@@ -29,7 +25,7 @@ def smoke():
     controls = {}
     for name in PACKAGES:
         version = command(["dpkg-query", "-W", "-f=${Version}", name])
-        require(version == ("1:" if name == "bsdutils" else "") + VERSION,
+        require(version == package_version(name),
                 "installed utility version differs: " + name)
         controls[name] = version
     library_names = ("libmount.so.1", "libblkid.so.1", "libuuid.so.1", "libsmartcols.so.1", "liblastlog2.so.2")
@@ -70,10 +66,14 @@ def smoke():
                 "candidate mount-table parser returned the wrong record")
     for tool in ("mount", "umount", "findmnt", "lsblk", "su", "sulogin"):
         command([tool, "--help"])
+    command(["login", "--help"])
+    denied_shell = subprocess.run(["/usr/sbin/nologin"], capture_output=True, text=True, timeout=10)
+    require(denied_shell.returncode == 1, "nologin no longer refuses a login shell")
     return {"schema": "regalia.util-linux-native-smoke/v1", "status": "passed",
             "production_approved": False, "packages": controls, "loaded_libraries": list(libraries),
             "checks": ["UUID API", "LUKS2 header creation", "valid LUKS key", "wrong LUKS key rejected",
-                       "blkid LUKS type/UUID", "findmnt fstab parser", "six CLI load checks"],
+                       "blkid LUKS type/UUID", "findmnt fstab parser", "six CLI load checks",
+                       "login CLI load", "nologin denies a login shell"],
             "limits": ["No dm-crypt mapping, actual mount, measured boot, PAM login or hardware operations."]}
 
 

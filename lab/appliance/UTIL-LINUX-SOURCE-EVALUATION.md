@@ -223,6 +223,41 @@ recipe. This uses previously reproduced packages and an unsigned cached base;
 the updated complete AMD64 image still needs boot, confinement, rootfs admission
 and the unchanged scanner gate. All last measured findings remain open.
 
+### Include the required login package
+
+Review of the last qualified SBOM identifies another installed util-linux
+binary: `login`, with four retained High matches. The previous nine-package
+candidate replaces eight original packages and adds `util-linux-extra`; it
+does not upgrade `login`. The current candidate therefore selects **ten**
+outputs and preserves login's version transition:
+`1:4.16.0-2+really2.42.4-0+regalia1`, from source `util-linux` at
+`2.42.4-0+regalia1`. Its `Protected: yes`, complete Pre-Depends/Depends,
+eight control members and 76 payload members are now pinned. Four exact Debian
+maintainer scripts remove historical obsolete conffiles. The only additional
+permitted privileged path is the existing `newgrp` at 04755; `login` and
+`nologin` are 0755. The separate TPM parser's privilege restrictions remain.
+
+Both previously reproduced login packages have SHA-256
+`11818a632b8145ea7ab31eb0e545613beade12a3a56ddfa63a72a02dea8e1781`.
+Fresh source verification confirms `/etc/pam.d/login` is byte-identical to
+authenticated Debian `debian/login.pam`, SHA-256
+`71b58114fcdc0e037b9700a92f14638a4a24f8480f23b03cc26740511fdd56dc`.
+All ten actual package pairs pass the extended exact policy. A disposable
+network-isolated native installation passes ordinary dependency checks, retains
+login's Protected flag and passes the extended smoke checks, including login's
+CLI and nologin's shell refusal. Reading the actual exported development rootfs
+verifies **424 regular files and 15 symlinks**, including the PAM configuration,
+ownership, modes and package bytes. This is not a PAM authentication rehearsal.
+
+The [login review receipt](evidence/util-linux-login-review-20261003.json)
+binds those actual bytes, source signatures, reproduction origin and installation
+logs. All 112 image guards pass. New rejection cases cover missing/changed
+Protected flags, the old version, redirected conffile metadata and missing PAM
+configuration. The inventory gate admits exactly ten reviewed utility versions
+plus the separate TPM package; an old or unreviewed login row refuses. Full AMD64
+boot, confinement, rootfs admission and scanner qualification remain required.
+No old or new scanner finding is suppressed or claimed cleared by this review.
+
 ## Residual Risk
 
 The initial 2.41.6 evaluation built no Debian packages. The 2.42.4 evaluation
