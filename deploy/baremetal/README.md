@@ -544,10 +544,29 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   (`fstab.extra`; it mounts the root), the network generator and PID 1 itself are covered by the
   first layer only. A PE addon on the ESP could add a command line (systemd-stub appends it, and only
   PCR 12 changes); with Secure Boot on, the stub loads only addons signed by a key in db, and the
-  peers refuse any changed PCR 12, so it gains no contribution. Enforcement of the switch in
-  `uki.py build` is d9's follow-up. The boot test reads systemd's own message ("systemd.import_credentials=no
+  peers refuse any changed PCR 12, so it gains no contribution. `uki.py build` refuses an image
+  whose command line lacks the switch. The boot test reads systemd's own message ("systemd.import_credentials=no
   is set") from the booted journal, and passes an extra unit through SMBIOS that is never started.
   The machine that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+
+  **What the unlock client erases, and what it cannot (#221).** For the whole initrd phase the client
+  holds the local half (32 bytes), the boot session's RSA-3072 private key, and, once a peer has
+  answered, the volume's key. All three are byte slices, never strings. As soon as the boot's one
+  response is used, the client zeroes the local half and the private key's numbers and drops every
+  reference to the key; it keeps only the volume's key, for any later asker in this boot. When systemd
+  stops it at switch-root, it zeroes the volume's key too. The relay zeroes its copy of the key after the
+  write. **What this cannot do:** Go's `crypto/rsa` keeps its own internal copy of the private key,
+  which no program can reach (an independent read decrypted with it after the zeroing); the garbage
+  collector moves and frees memory without clearing it; and slices copied by the runtime or the
+  standard library are not tracked. That is why the image's signed command line also carries
+  `init_on_free=1 init_on_alloc=1` (required by `uki.py build`): the kernel zeroes every page when it is
+  freed and when it is handed out, so nothing the client held survives the process in memory the booted
+  system can reuse. The boot test checks the kernel's own boot message ("mem auto-init: … heap
+  alloc:on, heap free:on"), since a kernel built without the options would ignore the words. The client
+  does not mlock its memory: its unit has no capabilities, so locking is bounded by RLIMIT_MEMLOCK (8 MiB),
+  which a Go process exceeds, and granting CAP_IPC_LOCK would widen the unit for a client that holds no
+  swap-backed memory in the initrd. The volume key also lives, by design, in dm-crypt in the kernel and
+  briefly in systemd-cryptsetup.
 
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a

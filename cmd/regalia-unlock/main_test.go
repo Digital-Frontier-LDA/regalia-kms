@@ -1031,6 +1031,9 @@ func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 		return noQuote(qualifying)
 	}
 	mine := hex.EncodeToString(u.boot.id)
+	// The session's private key, as hex, before anything happens to it: what must not be written out.
+	secrets := []string{hex.EncodeToString(u.boot.key.D.Bytes()), hex.EncodeToString(u.boot.key.Primes[0].Bytes()), "PRIVATE"}
+	private := u.boot.key
 	done := make(chan error, 1)
 	go func() { done <- u.serve(listener) }() // the real loop: no -once
 	set := func(change func()) { l.Lock(); change(); l.Unlock() }
@@ -1072,6 +1075,14 @@ func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 	if again, _ := recordOf(t, directory); again != id {
 		t.Fatalf("the record changed within the boot: %q", again)
 	}
+	// the one response is used: the local half and the session key are spent. The key is zeroed where
+	// this package reaches it and no longer referenced (crypto/rsa's own copy is not reachable: #221).
+	if !bytes.Equal(u.local, make([]byte, 32)) {
+		t.Fatal("the local half outlived the boot's one response")
+	}
+	if u.boot.key != nil {
+		t.Fatal("the session's private key is still referenced after the boot's one response")
+	}
 	through, _ := os.ReadFile(filepath.Join(directory, "key-given-through"))
 	if string(through) != "porto 1\n" {
 		t.Fatalf("key-given-through is %q", through)
@@ -1090,7 +1101,7 @@ func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 	entries, _ := os.ReadDir(directory)
 	for _, entry := range entries {
 		content, _ := os.ReadFile(filepath.Join(directory, entry.Name()))
-		for _, secret := range []string{hex.EncodeToString(u.boot.key.D.Bytes()), hex.EncodeToString(u.boot.key.Primes[0].Bytes()), "PRIVATE"} {
+		for _, secret := range secrets {
 			if strings.Contains(string(content), secret) {
 				t.Fatalf("%s holds private key material", entry.Name())
 			}
@@ -1116,8 +1127,8 @@ func TestOneBootSessionServesEveryConnectionOfTheBoot(t *testing.T) {
 	if !bytes.Equal(u.local, make([]byte, 32)) || !bytes.Equal(u.key, make([]byte, len(want))) || len(want) == 0 {
 		t.Fatal("forget left the local half or the key")
 	}
-	if !zero(u.boot.key.D) || !zero(u.boot.key.Primes[0]) || !zero(u.boot.key.Primes[1]) || !zero(u.boot.key.Precomputed.Dp) {
-		t.Fatal("forget left the session's private key")
+	if !zero(private.D) || !zero(private.Primes[0]) || !zero(private.Primes[1]) || !zero(private.Precomputed.Dp) || !zero(private.Precomputed.Qinv) {
+		t.Fatal("the session's private key was not zeroed")
 	}
 }
 
