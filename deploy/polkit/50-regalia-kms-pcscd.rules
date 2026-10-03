@@ -1,0 +1,38 @@
+// pcscd access for the Regalia KMS: the KMS user and root, and nobody else.
+//
+// Install as /etc/polkit-1/rules.d/50-regalia-kms-pcscd.rules (root:root, 0644: polkitd reads it as
+// its own user, so a file only root can read is silently not loaded). Install it byte for byte: the
+// host probe (kms_pcscd_access_rule) compares the installed file with this one.
+//
+// WHY IT IS NEEDED. Debian's pcscd asks polkit before it lets a client in
+// (org.debian.pcsc-lite.access_pcsc) and before it lets it use a card (…access_card), and its policy
+// allows only a user with an ACTIVE LOCAL SESSION. The KMS daemon is a system service: its user has
+// no session, so without a rule pcscd refuses it, and the daemon reaches neither the HSM nor the
+// YubiKey (measured with pcscd 2.3.3 on Debian 13: every key "unavailable", regalia#541).
+//
+// WHY IT ALSO REFUSES. Whoever can talk to pcscd can talk to the tokens: present PINs, spend the
+// retry counters, select applets under the daemon's feet. On a KMS host only the daemon and root
+// have any business there (deploy/baremetal/README.md, "token clients"), so every other user is
+// refused, an operator with a console session included. root is allowed by polkit before any rule.
+//
+// WHAT IT CANNOT DO. polkit runs rules files in file-name order and the first definite answer wins,
+// and every rules file runs in one shared JavaScript context: any other rules file can grant first,
+// or change polkit's own objects. This file keeps its setting inside a function and returns literal
+// answers rather than reading polkit.Result, so it does not depend on those objects; but it cannot
+// defend against another rules file. That is why the host probe accepts no rules file on a KMS
+// host except this one and the distribution's own, which it knows by digest.
+//
+// ONLY_THE_KMS = false keeps the grant and drops the refusal: for a bench or a workstation where
+// other users must still reach pcscd. A KMS host keeps it true; the host probe checks that.
+(function () {
+    var ONLY_THE_KMS = true;
+    polkit.addRule(function (action, subject) {
+        if (action.id != "org.debian.pcsc-lite.access_pcsc" && action.id != "org.debian.pcsc-lite.access_card") {
+            return null; // not handled: another rule, or the default policy, decides
+        }
+        if (subject.user == "regalia-kms" || subject.user == "root") {
+            return "yes";
+        }
+        return ONLY_THE_KMS ? "no" : null;
+    });
+})();

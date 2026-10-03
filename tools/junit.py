@@ -14,8 +14,8 @@ tests/test_ci_tiers.py::ArtifactTests.
 
 Two modes, because the two suites emit different things and neither emits JUnit:
 
-    python3 -m tools.junit --gotest gotest.json --out junit.xml
-    python3 -m tools.junit --unittest kms/tests --out junit-python.xml
+    python3 -Es -m tools.junit --gotest gotest.json --out junit.xml
+    python3 -Es -m tools.junit --unittest kms/tests --out junit-python.xml
 
 THE EXIT CODE IS THE VERDICT AND IT IS NOT SWALLOWED. Both modes exit non-zero when the run
 failed, so a step that produces a report cannot turn a red suite green -- the failure this

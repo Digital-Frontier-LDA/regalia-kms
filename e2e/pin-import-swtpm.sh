@@ -37,6 +37,9 @@ TA="swtpm:path=$W/A.sock"; TB="swtpm:path=$W/B.sock"
 # In CI there is no reader; on a machine with tokens attached, a default OpenSC config would enumerate
 # every card as root and leave a YubiKey's PIV applet selected (that cost three PIV PIN tries on
 # 2026-10-02 elsewhere). Every reader is ignored (every PC/SC reader name contains a space).
+# OpenSC ignores a reader whose name CONTAINS an ignored_readers entry: the match is by SUBSTRING,
+# so the single space below matches every reader name. If OpenSC ever matched by equality, this would
+# ignore nothing and the cards would be enumerated again (regalia-kms#174).
 printf 'app default {\n  ignored_readers = " ";\n}\n' > "$W/opensc-none.conf"
 seal(){ local tcti="$1"; shift; sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$W/cred" OPENSC_CONF="$W/opensc-none.conf" "$SEAL" "$@" 2>&1; }
 fp(){ openssl pkey -pubin -in "$1" -outform der | sha256sum | cut -d' ' -f1; }
@@ -68,7 +71,7 @@ hdr "3  wrong or altered blobs are refused before any card is looked at"
 enc "$W/B.pem" "$W/b.blob"
 out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/b.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "a blob for TPM B is refused on A, before the card check (exit $rc)" || F "B's blob: $out"
-python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/a.blob" "$W/bad.blob"
+python3 -I -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/a.blob" "$W/bad.blob"
 out="$(seal "$TA" --id t --serial DENK0000001 --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && ! grep -q 'no card' <<< "$out" && P "an altered blob is refused before the card check (exit $rc)" || F "altered blob: $out"
 

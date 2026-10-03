@@ -81,7 +81,8 @@ wg genkey > "$T/outsider.key"; wg genkey > "$T/wrong.key"
 # The manifests (epoch 1: all ACTIVE; epoch 2: lisbon REVOKED_STOLEN), the three site configs, and
 # everything rendered from them. The manifest is built here as a fixture; on a host it is the verified
 # one from membership.Store.
-python3 - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
+python3 -IB - "$HERE" "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
+import sys; sys.path.append(sys.argv.pop(1))
 import base64, json, sys
 from deploy.baremetal import bootnet, firewall, sitecfg
 from deploy.baremetal import membership as m
@@ -123,10 +124,10 @@ PY
 # WireGuard. The running peers: wg-unlock, WG-SERVICE key. The booting node: wg-boot, WG-BOOT key.
 # apply <namespace> <interface> <rendered configuration> <private key file>: the key is added in memory
 # and the whole thing piped to wg (bootnet.with_key): a configuration applied WITHOUT its key unsets it.
-apply(){ python3 -c '
+apply(){ python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1))
 import sys
 from deploy.baremetal import bootnet
-sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
+sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$HERE" "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
 for h in porto faro; do
   x "$h" ip link add wg-unlock type wireguard || { echo "wg-boot-netns: this kernel has no WireGuard"; exit 2; }
   apply "$h" wg-unlock "$T/$h.unlock.conf" "$T/$h.service.key"
@@ -167,9 +168,9 @@ for other in (8443, 22, 9999):
 cfg, manifest = json.load(open("%s/%s.site.json" % (T, name))), json.load(open(T + "/m1.json"))
 unlock.serve(StandIn(), socket.create_server(("0.0.0.0", port)), caller=bootnet.caller_of(cfg, manifest))
 PY
-for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
+for h in porto faro; do x "$h" env PYTHONPATH="$HERE" python3 -s "$T/serve.py" "$T" "$h" "$UNLOCK" & disown; done
 for h in outsider:443 lisbon:22; do
-  x "${h%%:*}" python3 -c "
+  x "${h%%:*}" python3 -I -c "
 import socket
 s = socket.create_server(('0.0.0.0', ${h##*:}))
 while True:
@@ -179,7 +180,7 @@ sleep 1
 
 # asked <namespace> <address> [timeout] [node]: an unlock request in `node`'s name (lisbon's) is answered
 # by the peer with a nonce. Exit 3 when the peer answers with a refusal instead.
-asked(){ x "$1" env PYTHONPATH="$HERE" python3 -c "
+asked(){ x "$1" python3 -IB -c "import sys; sys.path.append(sys.argv.pop(1))
 import json, sys
 from deploy.baremetal import unlock
 unlock.IO_TIMEOUT = float(sys.argv[2])
@@ -187,8 +188,8 @@ try:
     reply = json.loads(unlock.tcp_transport(sys.argv[1] + ':$UNLOCK')(json.dumps({'v': 1, 'op': 'hello', 'node_id': sys.argv[3]}).encode()))
 except (OSError, ValueError):
     sys.exit(1)
-sys.exit(0 if reply.get('nonce') else 3 if reply == {'v': 1, 'error': 'DENIED'} else 1)" "$2" "${3:-3}" "${4:-lisbon}"; }
-tcpok(){ x "$1" python3 -c "
+sys.exit(0 if reply.get('nonce') else 3 if reply == {'v': 1, 'error': 'DENIED'} else 1)" "$HERE" "$2" "${3:-3}" "${4:-lisbon}"; }
+tcpok(){ x "$1" python3 -I -c "
 import socket, sys
 try:
     socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2).close()
@@ -196,7 +197,7 @@ except OSError:
     sys.exit(1)" "$2" "$3"; }
 # stray <namespace> <address> <port>: a lone ACK segment, belonging to no connection, sent to that port.
 # Exit 0 when the host's TCP answered it (a RST): the segment reached the stack. Exit 1 when nothing came.
-stray(){ x "$1" python3 -c "
+stray(){ x "$1" python3 -I -c "
 import os, socket, struct, sys, time
 there, port = sys.argv[1], int(sys.argv[2])
 probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); probe.connect((there, port)); here = probe.getsockname()[0]; probe.close()
@@ -245,7 +246,7 @@ for h in porto faro; do
   x "$h" nft -c -f "$T/$h.nft" && x "$h" nft -f "$T/$h.nft" && P "$h: the host firewall with the boot mesh loads" || F "$h: the host firewall does not load"
 done
 x lisbon nft -c -f "$T/lisbon.boot.nft" && x lisbon nft -f "$T/lisbon.boot.nft" && P "lisbon: the initrd ruleset loads" || F "lisbon: the initrd ruleset does not load"
-pol="$(x lisbon nft -j list table inet regalia_boot | python3 -c '
+pol="$(x lisbon nft -j list table inet regalia_boot | python3 -I -c '
 import json, sys
 d = json.load(sys.stdin)["nftables"]
 print(" ".join(sorted("%s=%s" % (c["chain"]["name"], c["chain"].get("policy")) for c in d if "chain" in c)))')"
@@ -273,28 +274,40 @@ hdr "3  PoC 6.1: the node boots and reaches both peers' unlock port through the 
 # from the credentials directory. A boot starts with a handshake. (A node whose session a peer has
 # replaced, as `away` did to lisbon's here, otherwise waits out WireGuard's own timers, some 15 s.)
 x lisbon ip addr flush dev eth0; x lisbon nft delete table inet regalia_boot
-mkdir "$T/etc" "$T/creds"; cp "$T/lisbon.boot.conf" "$T/etc/wg-boot.conf"; cp "$T/lisbon.boot.nft" "$T/etc/boot.nft"; cp "$T/lisbon.boot.key" "$T/creds/regalia-wg-boot-key"
+C="$T/creds"; mkdir "$C"; cp "$T/lisbon.boot.conf" "$C/regalia.wg-boot-conf"; cp "$T/lisbon.boot.nft" "$C/regalia.boot-nft"; cp "$T/lisbon.boot.key" "$C/regalia.wg-boot-key"
 # boot.env is data to the script, not its environment: a line that would be code if it were sourced or
 # exported (LD_PRELOAD, a command substitution) is in it, and must change nothing.
 printf 'BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_PRELOAD=%s/evil.so\nBOOT_EXTRA=$(touch %s/sourced)\n' \
-  "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$T/etc/boot.env"
-initrd(){ x lisbon env REGALIA_ETC="$T/etc" CREDENTIALS_DIRECTORY="$T/creds" sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
+  "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$C/regalia.boot-env"
+R="$T/run-wg-boot"; mkdir "$R"
+# the script runs with only the programs the dracut module puts in the image on its PATH, as in the initrd
+mkdir "$T/initrd-bin"; for t in ip wg nft sed cat sleep; do ln -s "$(command -v "$t")" "$T/initrd-bin/$t"; done
+initrd(){ x lisbon env PATH="$T/initrd-bin" CREDENTIALS_DIRECTORY="$C" RUNTIME_DIRECTORY="$R" /bin/sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
 initrd up && P "the initrd's script brings the boot mesh up" || F "deploy/baremetal/initrd/wg-boot up failed"
 [ "$(x lisbon wg show wg-boot private-key)" = "$(cat "$T/lisbon.boot.key")" ] && [ "$(x lisbon wg show wg-boot peers | wc -l)" = 2 ] \
   && P "wg-boot has the node's key and its two peers" || F "wg-boot is not configured as rendered"
 [ ! -e "$T/sourced" ] && P "boot.env was read as data: nothing in it ran" || F "a line of boot.env was executed"
 # a start that fails part-way leaves nothing behind: here the key is not a key, after the ruleset would have loaded
-cp "$T/creds/regalia-wg-boot-key" "$T/creds/good"; echo "not-a-wireguard-key" > "$T/creds/regalia-wg-boot-key"
+cp "$C/regalia.wg-boot-key" "$T/good"; echo "not-a-wireguard-key" > "$C/regalia.wg-boot-key"
 initrd up 2>"$T/up.err" && F "the script accepted a credential that is not a key" || P "a credential that is not a key is refused"
 grep -q "not-a-wireguard-key" "$T/up.err" && F "the refused credential was printed" || P "and it is not printed"
-cp "$T/creds/good" "$T/creds/regalia-wg-boot-key"; printf '# a comment first\n' | cat - "$T/lisbon.boot.conf" > "$T/etc/wg-boot.conf"
+cp "$T/good" "$C/regalia.wg-boot-key"; printf '# a comment first\n' | cat - "$T/lisbon.boot.conf" > "$C/regalia.wg-boot-conf"
 initrd up 2>"$T/up.err" && F "the script accepted a configuration it did not render" || P "a configuration that does not begin with [Interface] is refused"
 grep -q "$(cat "$T/lisbon.boot.key")" "$T/up.err" && F "the key was printed" || P "and the key is not printed"
-cp "$T/lisbon.boot.conf" "$T/etc/wg-boot.conf"; sed -i 's|^BOOT_TUNNEL=.*|BOOT_TUNNEL=not-an-address|' "$T/etc/boot.env"
+cp "$T/lisbon.boot.conf" "$C/regalia.wg-boot-conf"
+# the ruleset is a credential from the ESP: it may read no other file (nft would print it, key and all) and
+# make no other table (one that outlived the boot would be in the running host's path)
+cp "$C/regalia.boot-nft" "$T/good.nft"; printf 'include "%s"\n' "$C/regalia.wg-boot-key" >> "$C/regalia.boot-nft"
+initrd up 2>"$T/up.err" && F "a ruleset that includes a file was loaded" || P "a ruleset that includes another file is refused"
+grep -q "$(cat "$T/lisbon.boot.key")" "$T/up.err" && F "the included key was printed" || P "and the key it named is not printed"
+cp "$T/good.nft" "$C/regalia.boot-nft"; printf 'table netdev extra {\n}\n' >> "$C/regalia.boot-nft"
+initrd up 2>/dev/null && F "a ruleset with another table was loaded" || P "a ruleset that makes another table is refused"
+[ "$(x lisbon nft list tables)" = "" ] && P "and no table at all is left" || F "tables left: $(x lisbon nft list tables | tr '\n' ' ')"
+cp "$T/good.nft" "$C/regalia.boot-nft"; sed -i 's|^BOOT_TUNNEL=.*|BOOT_TUNNEL=not-an-address|' "$C/regalia.boot-env"
 initrd up 2>/dev/null && F "the script succeeded with an impossible tunnel address" || P "a start that fails after the ruleset loaded"
 x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
   && F "the failed start left the interface, the ruleset or the address behind" || P "leaves no interface, no ruleset and no address behind"
-sed -i "s|^BOOT_TUNNEL=.*|BOOT_TUNNEL=${TUN[lisbon]}|" "$T/etc/boot.env"
+sed -i "s|^BOOT_TUNNEL=.*|BOOT_TUNNEL=${TUN[lisbon]}|" "$C/regalia.boot-env"
 initrd up && P "and the next start succeeds" || F "the start after a failed one does not succeed"
 for h in porto faro; do
   asked lisbon "${TUN[$h]}" && P "lisbon is answered by $h on the unlock port, inside the tunnel" || F "lisbon is not answered by $h"
@@ -372,9 +385,11 @@ x faro wg syncconf wg-unlock "$T/faro.unlock.conf"
 boot_up lisbon "$T/wrong.key"
 timed asked lisbon "${TUN[porto]}" 3; rc=$?
 [ "$rc" != 0 ] && [ "$took" -le 10 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
-initrd down
+initrd up >/dev/null 2>&1
+# as ExecStopPost runs it: the credentials are gone, the runtime directory is still there
+x lisbon env PATH="$T/initrd-bin" RUNTIME_DIRECTORY="$R" /bin/sh "$HERE/deploy/baremetal/initrd/wg-boot" down
 x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
-  && F "the boot interface, its ruleset or its address is still there" || P "the script takes the interface, the ruleset and the address down, as it does when the root filesystem takes over"
+  && F "the boot interface, its ruleset or its address is still there" || P "without its credentials, as at switch-root, the script takes the interface, the ruleset and the address down"
 
 echo; echo "wg-boot-netns: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

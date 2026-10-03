@@ -2,7 +2,7 @@
 """Render the bare-metal KMS host's nftables ruleset from its site config (deploy/baremetal/sitecfg.py).
 
     tmp="$(mktemp /etc/nftables.d/.regalia-kms.XXXXXX)"      # not *.nft: never included half-written
-    python3 deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp" \
+    python3 -Es deploy/baremetal/firewall.py site.json > "$tmp" && nft -c -f "$tmp" && nft -f "$tmp" \
       && mv -f "$tmp" /etc/nftables.d/regalia-kms.nft || rm -f "$tmp"      (README.md: the full sequence)
 
 One table, `inet regalia_kms`, default-deny in BOTH directions:

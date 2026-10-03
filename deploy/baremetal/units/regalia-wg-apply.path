@@ -1,0 +1,11 @@
+# Re-run regalia-wg-apply whenever regalia-sync publishes a new chain: a node revoked or retired leaves
+# every interface's peer list with the manifest that says so.
+[Unit]
+Description=Regalia KMS: re-apply the tunnels when the membership chain changes
+
+[Path]
+PathChanged=/var/lib/regalia-sync/chain.json
+Unit=regalia-wg-apply.service
+
+[Install]
+WantedBy=multi-user.target

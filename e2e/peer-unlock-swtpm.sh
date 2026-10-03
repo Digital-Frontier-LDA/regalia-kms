@@ -65,7 +65,7 @@ SYSTEMD=0
 if [ "$(systemctl is-system-running 2>/dev/null)" != offline ] && [ -d /run/systemd/system ] && { [ -x /usr/lib/systemd/systemd-cryptsetup ] || command -v systemd-cryptsetup >/dev/null; }; then SYSTEMD=1; fi
 [ "$SYSTEMD" = 1 ] || [ "${REGALIA_EXPECT_SYSTEMD:-0}" != 1 ] || { echo "peer-unlock-swtpm: a running systemd with systemd-cryptsetup is expected here"; exit 2; }
 
-out="$(REGALIA_EXPECT_SWTPM=1 REGALIA_EXPECT_CRYPTSETUP=1 REGALIA_UNLOCK_SYSTEMD="$SYSTEMD" REGALIA_UNLOCK_DEVICE="$LOOP" python3 -m unittest -v tests.test_baremetal_unlock </dev/null 2>&1)"; rc=$?
+out="$(REGALIA_EXPECT_SWTPM=1 REGALIA_EXPECT_CRYPTSETUP=1 REGALIA_UNLOCK_SYSTEMD="$SYSTEMD" REGALIA_UNLOCK_DEVICE="$LOOP" python3 -BEs -m unittest -v tests.test_baremetal_unlock </dev/null 2>&1)"; rc=$?
 printf '%s\n' "$out"
 [ "$rc" = 0 ] || { echo "peer-unlock-swtpm: FAILED"; exit 1; }
 ran="$(grep -oE '^Ran [0-9]+ tests?' <<< "$out" | grep -oE '[0-9]+')"

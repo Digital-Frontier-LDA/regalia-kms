@@ -1,11 +1,16 @@
-"""A KMS host BOOTS through a peer (regalia-kms#66 PoC 6.1, 6.2, 6.5; #67 PoC 7.1, 7.4): a QEMU guest with a
-software TPM, a real initrd built by dracut with deploy/baremetal/initrd/dracut/90regalia-unlock, and its
-whole disk a LUKS2 volume. Run by e2e/unlock-boot-qemu.sh, which builds the guest and names its directory
+"""A KMS host BOOTS through a peer (regalia-kms#66 PoC 6.1, 6.2, 6.5; #67 PoC 7.1, 7.4): a QEMU guest under
+UEFI (OVMF) with a software TPM, MEASURED BOOT of a unified kernel image built and signed by
+deploy/baremetal/uki.py, whose initrd is built by dracut with deploy/baremetal/initrd/dracut/90regalia-unlock
+(the same for every host). Its disk: an ESP with the image and the host's credentials (loader/credentials,
+measured by systemd-stub into PCR 12) and a GPT partition labelled regalia-root, a LUKS2 volume. The peers
+expect PCR 7, PCR 11 per boot phase (the build record) and PCR 12 (deploy/baremetal/espcreds.py). Run by e2e/unlock-boot-qemu.sh, which builds the guest and names its directory
 in REGALIA_BOOT_DIR. Nowhere else: it needs root, QEMU, and network namespaces.
 
 The peers are those of tests/test_baremetal_unlock.py's OnSwtpm (real EKs and AKs, responses signed by
 their software TPMs), here each in a network namespace of its own with the host firewall and the boot
 mesh of e2e/wg-boot-netns.sh. The guest's TPM is the software TPM `a`, handed to QEMU."""
+import base64
+import hashlib
 import json
 import os
 import re
@@ -18,17 +23,17 @@ import threading
 import time
 import unittest
 
-from deploy.baremetal import attest, bootnet, firewall, sitecfg, unlock
+from deploy.baremetal import attest, bootnet, espcreds, firewall, sitecfg, unlock
 import tests.test_baremetal_unlock as tub
 
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
-# systemd sees the systemd-recovery token in the header and asks for the recovery key by that name
+# systemd sees the systemd-recovery token in the header and asks for the recovery key by that name, naming
+# the disk by its label when it has one ("for disk regalia-root (root)")
 # ("recovery key" when that is the only kind of keyslot it knows of, "passphrase or recovery key" otherwise)
-PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk root")
-CMDLINE = ("root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 "
-           "rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4")
+PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk (?:root|regalia-root \(root\))")
+OVMF = os.environ.get("REGALIA_OVMF", "/usr/share/OVMF")
 run = tub.run
 
 
@@ -45,11 +50,10 @@ class OnQemu(tub.OnSwtpm):
             for kind in ("boot", "service"):
                 private = run(["wg", "genkey"], capture_output=True, text=True, check=True).stdout.strip()
                 public = run(["wg", "pubkey"], input=private.encode(), capture_output=True, check=True).stdout.strip()
-                self.keys[node, kind] = (private, __import__("base64").b64decode(public).hex())
+                self.keys[node, kind] = (private, base64.b64decode(public).hex())
         super().setUp()                                     # the three TPMs with their AKs, the manifest, the peers b and c
-        with open(BOOT + "/uuid") as f:
-            self.uuid = f.read().strip()
-        self.disk = BOOT + "/disk.img"
+        self.image = BOOT + "/disk.img"
+        self.disk = None                                    # the LUKS2 partition, through a loop device while the guest is off
         # the guest's TPM is `a`: provisioned above through its socket, from here on QEMU's
         self.on("a", attest.tpm2, "shutdown", "-c")
         os.kill(self.pids.pop("a"), 15)
@@ -143,28 +147,48 @@ class OnQemu(tub.OnSwtpm):
             run(["ip", "netns", "del", ns], capture_output=True)
 
     # -- the guest --
-    def initrd(self, label, files):
-        """The initrd dracut built, with the files that differ per host and per manifest appended as a
-        second archive (on a host they are under /etc/regalia when the initrd is built)."""
-        tree = "%s/cpio-%s" % (self.d, label)
-        for path, content in files.items():
-            os.makedirs(os.path.dirname(tree + "/" + path), exist_ok=True)
-            with open(os.open(tree + "/" + path, os.O_WRONLY | os.O_CREAT, 0o600), "w") as f:
-                f.write(content)
-        names = run(["find", ".", "-mindepth", "1", "-print0"], cwd=tree, capture_output=True, check=True).stdout
-        archive = run(["cpio", "--null", "-o", "-H", "newc", "--owner", "0:0", "--quiet"], cwd=tree, input=names, capture_output=True, check=True).stdout
-        out = "%s/initrd-%s" % (self.d, label)
-        with open(BOOT + "/initrd", "rb") as base, open(out, "wb") as f:
-            shutil.copyfileobj(base, f)
-            # the kernel looks for the next archive at a 4-byte boundary and skips zeros before it: without
-            # the padding it reads "invalid magic at start of compressed archive" and drops the second one
-            f.write(bytes(-f.tell() % 4))
-            f.write(archive)
-        return out
+    def partition(self, number):
+        """A partition of the guest's disk as a block device on this machine, while the guest is off. The caller
+        detaches it; a cleanup does too, only if it is still this image's (a freed loop name may be another's)."""
+        loop = run(["losetup", "--find", "--show", "--partscan", self.image], capture_output=True, text=True, check=True).stdout.strip()
+        def detach():
+            if os.path.realpath(run(["losetup", "-n", "-O", "BACK-FILE", loop], capture_output=True, text=True).stdout.strip() or "/") == os.path.realpath(self.image):
+                run(["losetup", "-d", loop], capture_output=True)
+        self.addCleanup(detach)
+        for _ in range(50):
+            if os.path.exists("%sp%d" % (loop, number)):
+                break
+            time.sleep(0.1)
+        return loop, "%sp%d" % (loop, number)
 
-    def boot(self, label, initrd, enrol_disk=None, recovery=False, timeout=None):
-        """One boot of the guest, to power-off. Returns what its console said. With `recovery`, the recovery
-        key is typed whenever the console asks for a passphrase."""
+    def esp(self, named):
+        """Puts exactly these credentials ({name: bytes}) in the ESP's loader/credentials, as <name>.cred, and
+        returns the files as systemd-stub will read them. Nothing else changes on the ESP."""
+        loop, part = self.partition(1)
+        mnt = self.d + "/esp"
+        os.makedirs(mnt, exist_ok=True)
+        mounted = run(["mount", "-t", "vfat", part, mnt], capture_output=True).returncode == 0
+        try:
+            self.assertTrue(mounted, "the ESP did not mount")
+            where = mnt + "/loader/credentials"
+            for name in os.listdir(where):
+                os.unlink(os.path.join(where, name))
+            files = {name + ".cred": content for name, content in named.items()}
+            for name, content in files.items():
+                with open(os.path.join(where, name), "wb") as f:
+                    f.write(content)
+        finally:
+            unmounted = not mounted or run(["umount", mnt], capture_output=True).returncode == 0
+            run(["losetup", "-d", loop], capture_output=True)
+        self.assertTrue(unmounted, "the ESP did not unmount")
+        return files
+
+    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None):
+        """One boot of the guest under OVMF, to power-off, with `credentials` on its ESP. Returns what its
+        console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase."""
+        self.on_esp = self.esp(credentials or {})
+        variables = "%s/vars-%s.fd" % (self.d, label)
+        shutil.copyfile(OVMF + "/OVMF_VARS_4M.fd", variables)
         kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
         timeout = timeout or (600 if kvm else 2400)
         ctrl = self.d + "/a.ctrl"
@@ -179,8 +203,9 @@ class OnQemu(tub.OnSwtpm):
             time.sleep(0.1)
         argv = ["ip", "netns", "exec", self.switch, "qemu-system-x86_64", "-machine", "q35,accel=" + ("kvm" if kvm else "tcg"),
                 "-cpu", "host" if kvm else "max", "-m", "1536", "-smp", "2", "-display", "none", "-no-reboot", "-serial", "stdio",
-                "-kernel", BOOT + "/vmlinuz", "-initrd", initrd, "-append", CMDLINE,
-                "-drive", "file=%s,format=raw,if=virtio" % self.disk,
+                "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=%s/OVMF_CODE_4M.fd" % OVMF,
+                "-drive", "if=pflash,format=raw,unit=1,file=" + variables,
+                "-drive", "file=%s,format=raw,if=virtio" % self.image,
                 "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0",
                 "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
         if enrol_disk:
@@ -229,21 +254,22 @@ class OnQemu(tub.OnSwtpm):
         self.addCleanup(lambda: run(["umount", mnt], capture_output=True))     # if a failure leaves it mounted
         for argv in (["mkfs.ext4", "-q", image], ["mount", "-o", "loop", image, mnt]):
             self.assertEqual(run(argv, capture_output=True).returncode, 0, argv)
-        for name, content in (("local.bin", local), ("wg-boot.key", wg_private.encode() + b"\n")):
+        with open(BOOT + "/initrd.pub", "rb") as f:
+            initrd_public = f.read()
+        for name, content in (("local.bin", local), ("wg-boot.key", wg_private.encode() + b"\n"), ("initrd.pub", initrd_public)):
             with open(os.open("%s/%s" % (mnt, name), os.O_WRONLY | os.O_CREAT, 0o600), "wb") as f:
                 f.write(content)
         self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
         return image, mnt
 
     def test_a_host_boots_through_a_peer_and_with_no_peer_it_asks_for_the_recovery_key(self):
-        crypttab = "root UUID=%s %%s luks,x-initrd.attach\n" % self.uuid
-
-        # boot 1, ENROLMENT: nothing is enrolled. The console asks, the recovery key opens the volume
-        # (PoC 6.5: the manual path needs no peer and no credential), and the running guest seals the two
-        # boot credentials to its own TPM and reports the PCRs this image boots with.
+        # boot 1, ENROLMENT: nothing is enrolled and no credential is given. The client has no configuration and
+        # gives nothing, the console asks, the recovery key opens the volume (PoC 6.5: the manual path needs no
+        # peer and no credential), and the running guest seals the two boot credentials to its own TPM and
+        # reports the PCRs this image boots with.
         local = os.urandom(32)
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0])
-        said = self.boot("1-enrolment", self.initrd("1", {"etc/crypttab": crypttab % "none"}), enrol_disk=image, recovery=True)
+        said = self.boot("1-enrolment", enrol_disk=image, recovery=True)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
@@ -252,13 +278,24 @@ class OnQemu(tub.OnSwtpm):
             with open("%s/%s" % (mnt, name)) as f:
                 return "".join(f.read().split())
         sealed = {name: text(name) for name in ("unlock-local.cred", "wg-boot.cred")}
-        pcrs = {str(i): text("pcr%d" % i).lower() for i in (7, 11)}
+        pcrs = {str(i): text("pcr%d" % i).lower() for i in (7, 11, 12)}
         self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
-        self.assertEqual(unlock.local_key_type(sealed["unlock-local.cred"]), "tpm2")
-        print("the guest's PCRs: 7=%s 11=%s" % (pcrs["7"], pcrs["11"]), file=sys.stderr)
+        # sealed to PCR 7 and to the image's signed PCR 11 policy: systemd's key type for the TPM with a public key
+        self.assertEqual(unlock.local_key_type(sealed["unlock-local.cred"]), "tpm2-with-public-key")
+        print("the guest's PCRs once booted: 7=%s 11=%s 12=%s" % (pcrs["7"], pcrs["11"], pcrs["12"]), file=sys.stderr)
+        # MEASURED BOOT: the stub and systemd measured what the build record says, and an empty ESP left PCR 12 alone
+        with open(BOOT + "/e2e.record.json") as f:
+            record = json.load(f)
+        self.assertEqual(pcrs["11"], record["pcr11"]["system"])
+        self.assertEqual(pcrs["12"], espcreds.ZERO)
 
-        # the peers take the guest's real measurements as reference, and each gives a path its half
-        self.reference = {"tpm_firmware_version": self.reference["tpm_firmware_version"], "pcrs": pcrs}
+        # the peers take the guest's PCR 7, the image's PCR 11 per phase and the PCR 12 of the host's credentials
+        # as reference, and each gives a path its half
+        def reference(pcr12):
+            # one accepted set, as measurements.bind() gives it: PCR 7 and 12 in every phase, PCR 11 per phase
+            return {"accepted": [{"label": "e2e", "tpm_firmware_version": self.reference["tpm_firmware_version"],
+                                  "pcrs": {"7": pcrs["7"], "12": pcr12}, "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}]}
+        loop, self.disk = self.partition(2)
         for peer in ("b", "c"):
             enrolment = unlock.Enrolment("a")
             wrapped = unlock.contribute(self.contributions[peer], self.m1, peer, "a", enrolment.public, enrolment.fingerprint)
@@ -266,30 +303,74 @@ class OnQemu(tub.OnSwtpm):
             unlock.enrol_path(self.disk, "a", peer, epoch, local, sealed["unlock-local.cred"], secret, tub.RECOVERY, run)
         del local, secret
         self.assertTrue(unlock.judge_tokens(unlock.luks_meta(self.disk, run), "a", ["b", "c"])[0])
+        run(["losetup", "-d", loop], capture_output=True)
 
-        # what the initrd holds from now on (on a host: /etc/regalia, written after each accepted manifest)
+        # what the host gives its initrd from now on, as system credentials (on a host: on the ESP, written
+        # after each accepted manifest; the image itself is unchanged)
         cfg = self.site("a")
-        files = {"etc/crypttab": crypttab % unlock.KEY_SOCKET,
-                 "etc/regalia/unlock.json": json.dumps(unlock.boot_config(self.m1, "a", "/dev/vda", [7, 11], bootnet.unlock_endpoints(cfg, self.m1))),
-                 "etc/regalia/unlock-local.cred": sealed["unlock-local.cred"] + "\n", "etc/regalia/wg-boot.cred": sealed["wg-boot.cred"] + "\n",
-                 "etc/regalia/wg-boot.conf": bootnet.boot_wg_conf(cfg, self.m1), "etc/regalia/boot.nft": bootnet.boot_ruleset(cfg, self.m1),
-                 "etc/regalia/boot.env": "BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\n" % (UNDERLAY["a"], TUNNEL["a"])}
-        initrd = self.initrd("2", files)
+        device = "/dev/disk/by-partlabel/regalia-root"
+        credentials = {
+            "regalia.unlock-local": sealed["unlock-local.cred"].encode() + b"\n", "regalia.wg-boot-key": sealed["wg-boot.cred"].encode() + b"\n",
+            "regalia.unlock-config": json.dumps(unlock.boot_config(self.m1, "a", device, [7, 11, 12], bootnet.unlock_endpoints(cfg, self.m1))).encode(),
+            "regalia.wg-boot-conf": bootnet.boot_wg_conf(cfg, self.m1).encode(), "regalia.boot-nft": bootnet.boot_ruleset(cfg, self.m1).encode(),
+            "regalia.boot-env": ("BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\n" % (UNDERLAY["a"], TUNNEL["a"])).encode()}
+
+        expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
+        self.reference = reference(expected["pcr12"])
 
         # boot 2, UNATTENDED: nobody types anything
         since = len(self.events)
-        said = self.boot("2-unattended", initrd)
+        said = self.boot("2-unattended", credentials)
         self.assertNotRegex(said, PROMPT.pattern.decode())
-        self.assertRegex(said, r"regalia-unlock: gave the key of /dev/vda for keyslot [12], through [bc]")
+        gave = re.search(r"regalia-unlock: gave the key of %s for keyslot ([12]), through ([bc])" % re.escape(device), said)
+        self.assertIsNotNone(gave, "the client did not give the key")
+        slot, through = gave.group(1), gave.group(2)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         allowed = [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:] if e["event"] == "unlock"]
         self.assertEqual(allowed, [("unlock", "a", "ALLOW")])
+        # after switch-root the running system finds the session the peer recorded, in a directory only root writes
+        left = re.search(r"REGALIA-E2E-SESSION dir=(\S+) id=([0-9a-f]{64}) through=(\S+) (\d+)", said)
+        self.assertIsNotNone(left, "the booted guest did not report the boot session")
+        self.assertEqual((left.group(1), left.group(3), left.group(4)), ("root:root:755", through, slot))
+        self.assertEqual(hashlib.sha256(bytes.fromhex(left.group(2))).hexdigest(), self.recorded_session(through)[0])
+        # the long-running client did not outlive the initrd: systemd stopped it (the unit's Conflicts=), before the socket closed
+        self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
+        stopped, closed = said.find("Stopped regalia-unlock.service"), said.find("Closed regalia-unlock.socket")
+        self.assertTrue(0 <= stopped < closed, "the client was not stopped before the root filesystem took over")
+        # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
+        booted = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+        self.assertIsNotNone(booted)
+        self.assertEqual([v.lower() for v in booted.groups()], [pcrs["7"], record["pcr11"]["system"], expected["pcr12"]])
+        print("PCR 12 with the host's six credentials: %s, as espcreds computes it" % expected["pcr12"], file=sys.stderr)
 
-        # boot 3, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
+        # boots 3-5, A PLANTED CREDENTIAL: each adds one file to the ESP under a name systemd in the initrd acts on
+        # (these are plain, so systemd ignores them as undecryptable; what matters here is that ANY extra file
+        # changes PCR 12). PCR 7 and 11 are unchanged, PCR 12 is what espcreds computes for the seven files, every
+        # peer refuses the quote, nothing is given, the console asks.
+        planted = {"systemd.unit-dropin.regalia-unlock.service": b"[Service]\nEnvironment=PLANTED=1\n",
+                   "systemd.extra-unit.regalia-planted.service": b"[Service]\nExecStart=/bin/true\n",
+                   "tmpfiles.extra": b"f /run/regalia-planted - - - - planted\n"}
+        for n, (name, content) in enumerate(sorted(planted.items()), 3):
+            with self.subTest(planted=name):
+                since = len(self.events)
+                said = self.boot("%d-planted" % n, dict(credentials, **{name: content}), recovery=True)
+                self.assertIn("the disk stays locked", said)
+                shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+                self.assertIsNotNone(shown)
+                self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], record["pcr11"]["system"], espcreds.pcr12(self.on_esp)])
+                self.assertNotEqual(shown.group(3).lower(), expected["pcr12"])
+                self.assertRegex(said, PROMPT.pattern.decode())
+                outcomes = {(e["event"], e["outcome"]) for e in self.events[since:]}
+                self.assertNotIn(("unlock", "ALLOW"), outcomes)
+                refusals = [e["reason"] for e in self.events[since:] if e["outcome"] == "DENY"]
+                self.assertTrue(refusals and all("PCR" in r for r in refusals), refusals)
+                print("planted %s: refused (%s)" % (name, refusals[0]), file=sys.stderr)
+
+        # boot 6, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
         for peer in ("b", "c"):
             self.ip("ip", "link", "set", "eth0", "down", ns=self.peer_ns[peer])
         since = len(self.events)
-        said = self.boot("3-no-peer", initrd, recovery=True)
+        said = self.boot("6-no-peer", credentials, recovery=True)
         self.assertIn("the disk stays locked: no peer helped in 5 rounds", said)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())

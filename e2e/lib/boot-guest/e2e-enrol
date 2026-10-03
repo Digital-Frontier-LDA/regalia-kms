@@ -1,14 +1,18 @@
 #!/bin/sh
 # Inside the test guest, on the boot where a second disk is attached: what an operator does at enrolment,
-# on the running host. Seal the two boot credentials to THIS machine's TPM under PCR 7 (systemd-creds, as
-# deploy/baremetal/unlock.py's seal_local does), and say which PCR values this image boots with, so the
-# peers' reference measurements are this machine's real ones.
+# on the running host. Seal the two boot credentials to THIS machine's TPM: PCR 7 directly, and PCR 11
+# through the image's INITRD-phase signature (the public key is on the enrolment disk), so they open in
+# the initrd of an approved image and nowhere else. Say which PCR values this boot shows.
 set -eu
 mkdir -p /mnt/enrol
 mount /dev/vdb /mnt/enrol
-systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=regalia-unlock-local /mnt/enrol/local.bin /mnt/enrol/unlock-local.cred
-systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=regalia-wg-boot-key /mnt/enrol/wg-boot.key /mnt/enrol/wg-boot.cred
-for pcr in 7 11; do cat "/sys/class/tpm/tpm0/pcr-sha256/$pcr" > "/mnt/enrol/pcr$pcr"; done
+seal() {  # seal <credential name> <input> <output>
+  systemd-creds encrypt --with-key=tpm2-with-public-key --tpm2-pcrs=7 --tpm2-public-key=/mnt/enrol/initrd.pub \
+    --tpm2-public-key-pcrs=11 --name="$1" "$2" "$3"
+}
+seal regalia.unlock-local /mnt/enrol/local.bin /mnt/enrol/unlock-local.cred
+seal regalia.wg-boot-key /mnt/enrol/wg-boot.key /mnt/enrol/wg-boot.cred
+for pcr in 7 11 12; do cat "/sys/class/tpm/tpm0/pcr-sha256/$pcr" > "/mnt/enrol/pcr$pcr"; done
 sync
 umount /mnt/enrol
 echo "REGALIA-E2E-ENROLLED" > /dev/console

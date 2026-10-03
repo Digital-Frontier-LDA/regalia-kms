@@ -9,8 +9,8 @@ probes (core dumps, hibernation, swap, an unprivileged service) are deploy/barem
 Token clients are checked by token_clients_root_only (below): on bare metal the host itself seals and
 re-seals the PINs and so needs opensc-tool and pkcs11-tool.
 
-    sudo python3 deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
-    sudo python3 deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
+    sudo python3 -Es deploy/baremetal/host_probe.py --import-key-sha256 HEX     # exit 1 unless every control is true
+    sudo python3 -Es deploy/baremetal/host_probe.py --evidence E.json --signature E.json.sig \
         --evidence-key commissioning-p256.pem --evidence-key-sha256 HEX      # the commissioning pass criterion
 
 PLATFORM AND TPM, measured:
@@ -113,7 +113,8 @@ ATTESTED, NOT MEASURED (what the OS cannot read; in the signed evidence, deploy/
   ilo_isolated_or_disabled, ac_power_recovery, chassis_intrusion_armed, used_hardware_intake,
   runtime_credentials_excluded_from_backup; and the records the measurements are checked against:
   pin_import_key_sha256, hsm_usb_path, credential_tpm2_pcrs (never PCR 10, never PCR 11 directly),
-  credential_tpm2_signed_pcrs and credential_tpm2_pcr_key_pkfp (the signed PCR 11 policy, #57).
+  credential_tpm2_signed_pcrs and credential_tpm2_pcr_key_pkfp (the signed PCR 11 policy, #57),
+  node_id and unlock_peers (what a root disk enrolled for peer-assisted unlock is judged against, #67).
 
 The KMS unit's sandbox, capabilities and AppArmor confinement (#61) are os_probe.py's too.
 
@@ -383,6 +384,11 @@ def root_unlock(host, unlock_record=None, binding=None):
                 return False, why
             how.append("%s unlocks with the TPM and a peer (%s)" % (name, why))
             continue
+        # The record says this host's root disk is opened with its peers: a disk without peer paths is not
+        # the disk the record describes, however well it is enrolled otherwise.
+        if unlock_record is not None and unlock_record[1]:
+            return False, "%s (%s) carries no %s token, but the unlock record names the peers %s: the root disk is not " \
+                "enrolled as recorded" % (name, dev, PEER_TOKEN, ", ".join(unlock_record[1]))
         if name not in entries:
             return False, "%s (under the root filesystem) is not listed in /etc/crypttab" % name
         if not opts.get("tpm2-device"):
@@ -515,6 +521,12 @@ def unlock_revocable(host, unlock_record=None, binding=None):
         if dev is None:
             return False, meta
         where = "%s (%s, under %s)" % (name, dev, ", ".join(paths)) if paths != ["/"] and set(paths) != set(SECRET_PATHS) else "%s (%s)" % (name, dev)
+        # as root_unlock: a root volume recorded as opened with peers, and carrying no peer path, is not the
+        # recorded disk, whatever else would release it
+        if "/" in paths and unlock_record is not None and unlock_record[1] \
+                and not any(t.get("type") == PEER_TOKEN for t in meta["tokens"].values()):
+            return False, "%s carries no %s token, but the unlock record names the peers %s: the root disk is not enrolled " \
+                "as recorded. BLOCKING FOR PRODUCTION (#135)" % (where, PEER_TOKEN, ", ".join(unlock_record[1]))
         nv, fixed, named, recovery = 0, [], {}, 0
         for token_id, token in sorted(meta["tokens"].items()):
             if token.get("keyslots") and token_keyslots(token, meta) is None:
@@ -1045,23 +1057,23 @@ def main(argv=None, host=None, run=None):
                     "--tpm2-public-key-pcrs 11")
     ap.add_argument("--credential-pcr-key-pkfp", default="", help="without evidence: the PCR-signing key's pkfp, "
                     "from seal-hsm-pin.sh's record")
-    ap.add_argument("--node-id", help="this host's node ID in the membership manifest: needed to judge a root disk "
-                    "enrolled for peer-assisted unlock (deploy/baremetal/unlock.py)")
+    ap.add_argument("--node-id", help="without evidence: this host's node ID in the membership manifest, needed to judge "
+                    "a root disk enrolled for peer-assisted unlock (deploy/baremetal/unlock.py); with evidence it comes "
+                    "from host.node_id, and an argument must agree with it")
     ap.add_argument("--unlock-peer", action="append", default=[], metavar="NODE_ID",
                     help="a peer that holds an unlock path for this host; repeat for each. With --node-id")
     args = ap.parse_args(argv)
     host = host or Host()
     report = {"attested_not_measured": list(UNMEASURED)}
     problems, want, binding = [], args.import_key_sha256, None
-    node_form = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
     if args.unlock_peer and not args.node_id:
         ap.error("--unlock-peer needs --node-id")
-    for value in ([args.node_id] if args.node_id else []) + args.unlock_peer:
-        if not node_form.fullmatch(value):
-            ap.error("%r is not a node ID" % value)
-    if len(set(args.unlock_peer)) != len(args.unlock_peer) or args.node_id in args.unlock_peer:
-        ap.error("--unlock-peer names each peer once, and never this node")
-    unlock_record = (args.node_id, tuple(args.unlock_peer)) if args.node_id else None
+    unlock_record = None
+    if args.node_id:
+        try:
+            unlock_record = evidence_mod.unlock_record(args.node_id, list(args.unlock_peer), label="--")
+        except evidence_mod.InvalidEvidence as error:
+            ap.error(str(error))
     if args.credential_pcrs is not None and not args.evidence:
         try:
             binding = evidence_mod.credential_binding(args.credential_pcrs, args.credential_signed_pcrs,
@@ -1080,6 +1092,16 @@ def main(argv=None, host=None, run=None):
             want = ev_host["pin_import_key_sha256"]
             binding = evidence_mod.credential_binding(ev_host["credential_tpm2_pcrs"], ev_host["credential_tpm2_signed_pcrs"],
                                                       ev_host["credential_tpm2_pcr_key_pkfp"])
+            # The root disk is judged against the SIGNED record of which node this is and who its peers are
+            # (the signature was verified just above). Arguments may repeat it; they never replace it. When
+            # the evidence is refused, the disk is judged against the arguments, and the run still fails on
+            # "evidence REFUSED": the disk controls in the report may pass while the run does not.
+            recorded = evidence_mod.unlock_record(ev_host["node_id"], ev_host["unlock_peers"])
+            if unlock_record is not None and (unlock_record[0], sorted(unlock_record[1])) != (recorded[0], sorted(recorded[1])):
+                problems.append("the arguments say node %s with unlock peers %s, the evidence node %s with %s: they disagree, "
+                                "and the root disk is judged against the evidence" % (
+                                    unlock_record[0], ", ".join(unlock_record[1]) or "none", recorded[0], ", ".join(recorded[1]) or "none"))
+            unlock_record = recorded
         except (OSError, evidence_mod.InvalidEvidence) as error:
             problems.append("evidence REFUSED: %s" % error)
             ev_host = None

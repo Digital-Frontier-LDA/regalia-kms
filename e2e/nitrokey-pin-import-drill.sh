@@ -12,6 +12,9 @@
 #   C  an altered blob is refused, and no card try is spent
 #   D  --init-import-key refuses to replace an existing key without --replace-import-key
 # The card keeps its PIN and contents; its counter is checked at full before and after.
+# A Nitrokey is the ONLY card OpenSC sees during the drill, and every step that can present the PIN is
+# gated on its serial (e2e/lib/bench_cards.sh, regalia-kms#174). A YubiKey is reached by ykman --device
+# <serial>, which is gated by construction.
 set -uo pipefail
 SERIAL="${1:?serial: a Nitrokey (DENK0404144) or a YubiKey (36345471)}"; RETRIES="${2:?the full PIN counter of the device, e.g. 3}"
 # A Nitrokey serial selects the HSM path; a numeric one selects a YubiKey's PIV PIN (--yubikey).
@@ -35,7 +38,18 @@ tpm(){ local name="$1"; mkdir -p "$W/$name"
     --flags not-need-init,startup-clear --daemon --pid "file=$W/swtpm-$name.pid" || die "swtpm $name did not start"; }
 tpm A; tpm B; sleep 1
 TA="swtpm:path=$W/A.sock"; TB="swtpm:path=$W/B.sock"
-seal(){ local tcti="$1"; shift; sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$CRED" "$SEAL" "$@" 2>&1; }
+# shellcheck source=lib/bench_cards.sh
+. "$HERE/e2e/lib/bench_cards.sh"
+if [ "${DEV[0]}" = --serial ]; then
+  bench_isolate "$W/opensc.conf" "${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}" "$SERIAL" || die "cannot isolate $SERIAL in OpenSC"
+fi
+# seal-hsm-pin.sh presents the PIN to the card (it tests it before sealing). Under sudo it gets the
+# isolated OpenSC configuration, and it is not run unless the one card visible is this serial.
+seal(){ local tcti="$1"; shift
+  if [ "${DEV[0]}" = --serial ]; then bench_gate "$SERIAL" || { echo "drill: $SERIAL is not the one card visible: seal-hsm-pin.sh not run"; return 97; }; fi
+  # The same module and configuration the gate looked through.
+  sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$CRED" ${OPENSC_CONF:+OPENSC_CONF="$OPENSC_CONF"} \
+    ${HSM_PKCS11_MODULE:+HSM_PKCS11_MODULE="$HSM_PKCS11_MODULE"} "$SEAL" "$@" 2>&1; }
 tries(){ local r
   if [ "${DEV[0]}" = --yubikey ]; then ykman --device "$SERIAL" piv info 2>/dev/null | sed -n 's/^PIN tries remaining: *\([0-9]*\)\/.*/\1/p'; return; fi
   r="$(opensc-tool -l 2>/dev/null | awk -v s="($SERIAL" 'index($0,s){print $1; exit}')"
@@ -65,7 +79,7 @@ out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-hos
 
 hdr "C: an altered blob is refused"
 # Flip one byte unconditionally (XOR with 0xFF), and prove the copy now differs.
-python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
+python3 -I -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
 cmp -s "$W/pin-A.blob" "$W/bad.blob" && F "the altered blob is identical to the original"
 out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && P "an altered blob is refused" || F "an altered blob was accepted: $out"
