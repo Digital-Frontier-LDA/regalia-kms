@@ -81,7 +81,10 @@ digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
 json.dump({"schema": "regalia.initrd-build/v1", "commit": "0" * 40, "go": "go1.26.6", "snapshot": "20261003T121500Z",
            "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
            "client_sha256": digest(sys.argv[2]), "repository_files": {}, "packages_sha256": "0" * 64, "packages": [],
-           "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0}, open(sys.argv[3], "w"))
+           "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0,
+           # the stand-in's inventory names no package: the builder verified none (#246)
+           "verified_packages": {"schema": "regalia.initrd-packages/v1", "packages": {}, "releases": {}, "keyring_sha256": "0" * 64,
+                                 "entries": 0}}, open(sys.argv[3], "w"))
 PY
 printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"

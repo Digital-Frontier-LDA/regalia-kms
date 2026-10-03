@@ -31,7 +31,8 @@
 # OUT, written last and all together: DIR/initrd.img, DIR/regalia-unlock (the client it compiled, which
 # `uki.py build --unlock-client` takes), DIR/initrd-listing.txt (one line per entry: path,
 # type, mode, uid, gid, size, sha256, link) and DIR/initrd-build.json (regalia.initrd-build/v1: the inputs
-# and the result), the record moved in last; a refusal leaves DIR empty.
+# and the result, and verified_packages: every package file of the initrd checked against its .deb along
+# Debian's signed chain by deploy/baremetal/debverify.py, #246), the record moved in last; a refusal leaves DIR empty.
 # Measured on two runners and a Debian 13 container, in two directories and in a hostile environment
 # (e2e/initrd-reproducible.sh): byte-identical.
 set -euo pipefail
@@ -45,7 +46,7 @@ SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
 SUITE=trixie
 PACKAGES="systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,libtss2-tcti-device0t64"
-REPO_FILES=("$SCRIPT" go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
+REPO_FILES=("$SCRIPT" deploy/baremetal/debverify.py deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
             deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
@@ -147,6 +148,17 @@ inroot sh -c 'cd /tmp/unpacked && lsinitrd --unpack /tmp/initrd.img' >/dev/null 
    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$y" "$m" "$u" "$g" "$s" "$h" "$l"
  done) > "$W/stage/initrd-listing.txt"
 inroot dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
+# #246: every file the initrd holds that a package owns, checked against that package's .deb along Debian's signed
+# chain (InRelease by the keyring, Packages by its hash, the .deb by its hash), on this builder, by this builder.
+# The inventory is this initrd's, classed against this root tree (a path dracut overwrote is "generated").
+echo "### every package file of the initrd, against its .deb (#246)"
+python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.img" --root "$ROOT" > "$W/inventory.txt" \
+  || die "the initrd's inventory could not be written"
+python3 -Es -m deploy.baremetal.debverify --inventory "$W/inventory.txt" --keyring "$KEYRING" --cache "$W/debs" --out "$W/verified.json" \
+  --source "$MAIN" "$SUITE" --source "$MAIN" "$SUITE-updates" --source "$SECURITY" "$SUITE-security" >"$W/debverify.log" 2>&1 \
+  || { tail -40 "$W/debverify.log"; die "a package file of the initrd is not what its .deb holds"; }
+tail -1 "$W/debverify.log"
+rm -rf "$W/debs"
 DRACUT_VERSION="$(inroot dpkg-query -W -f '${Version}' dracut)"
 for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
@@ -161,7 +173,7 @@ for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
   echo "initrd_size=$(stat -c %s "$W/stage/initrd.img")"
   echo "initrd_entries=$(wc -l < "$W/stage/initrd-listing.txt")"
 } > "$W/record.txt"
-python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/initrd-build.json" <<'PY'
+python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/initrd-build.json" "$W/verified.json" <<'PY'
 import json, sys
 record, files = {}, {}
 for line in open(sys.argv[1]):
@@ -174,6 +186,7 @@ for line in open(sys.argv[1]):
 record["packages_requested"] = record["packages_requested"].split(",")
 record["repository_files"] = files
 record["packages"] = [l.strip() for l in open(sys.argv[2]) if l.strip()]
+record["verified_packages"] = json.load(open(sys.argv[4]))
 with open(sys.argv[3], "w") as f:
     json.dump(record, f, indent=1, sort_keys=True)
     f.write("\n")

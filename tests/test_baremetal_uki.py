@@ -253,7 +253,10 @@ class Case(unittest.TestCase):
                   "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "6.12.111+deb13-amd64", "dracut": "106-6",
                   "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "repository_files": {},
                   "packages_sha256": "cd" * 32, "packages": ["dracut=106-6"], "initrd_sha256": initrd_sha256,
-                  "initrd_size": 1, "initrd_entries": 1}
+                  "initrd_size": 1, "initrd_entries": 1,
+                  # #246: what the builder verified against the archive, exactly the inventory's packages (none in the fixture's)
+                  "verified_packages": {"schema": uki.VERIFIED_SCHEMA, "packages": {}, "releases": {"https://snapshot.example trixie": "ef" * 32},
+                                        "keyring_sha256": "12" * 32, "entries": 0}}
         record.update(change)
         for key in [k for k, v in change.items() if v is None]:
             del record[key]
@@ -928,6 +931,14 @@ class InitrdBuildRecord(Case):
             "the initrd's build record names no archive snapshot": self.initrd_build("f.json", snapshot="latest"),
             "the initrd's build record has no packages_sha256": self.initrd_build("g.json", packages_sha256="x"),
             "the initrd's build record": self.initrd_build("h.json", packages=None),          # a field missing
+            # #246: the verified set must be exactly the inventory's packages
+            "verified other packages than the inventory names (not verified: none; not in the inventory: zlib1g=1:1.3-1)":
+                self.initrd_build("v1.json", verified_packages={"schema": uki.VERIFIED_SCHEMA, "releases": {}, "keyring_sha256": "12" * 32, "entries": 1,
+                                                               "packages": {"zlib1g": {"version": "1:1.3-1", "deb_sha256": "34" * 32}}}),
+            "verified_packages is not a regalia.initrd-packages/v1":
+                self.initrd_build("v2.json", verified_packages={"schema": uki.VERIFIED_SCHEMA, "releases": {}, "keyring_sha256": "12" * 32, "entries": 1,
+                                                               "packages": {"zlib1g": "1:1.3-1"}}),
+            "missing=['verified_packages']": self.initrd_build("v3.json", verified_packages=None),
             "not valid JSON": self.write("i.json", b"{"),
         }
         for reason, path in cases.items():
@@ -1250,6 +1261,20 @@ class InitrdReview(Case):
         # the same spelling twice is the kernel's own rule: the later file replaces the earlier
         later = base + raw([(b"etc/crypttab", 0o100644, b"root /dev/sda3 none luks\n")])
         self.assertTrue(any("etc/crypttab must hold exactly" in f for f in uki.review_initrd_data(later)["findings"]))
+
+    def test_the_verified_packages_must_be_the_inventory_s_packages(self):
+        """#246: a build record whose verified set misses a package the inventory names is refused (and one that
+        names it passes): the builder verified exactly what the inventory pins."""
+        inventory = self.write("inv-pkg.txt", ("\n".join(uki.initrd_inventory_lines(uki.read(self.inputs["initrd"])))
+                                               + "\npackage zlib1g=1:1.3-1 f 0644 0:0 usr/lib/libz.so.1 " + "56" * 32 + "\n").encode())
+        self.assertEqual(uki.inventory_package_origins(inventory), {"zlib1g=1:1.3-1"})
+        missing = {"initrd_build": self.initrd_build("m.json")}
+        with self.assertRaisesRegex(m.Refused, "not verified: zlib1g=1:1.3-1; not in the inventory: none"):
+            uki.check_initrd_build(dict(self.inputs, **missing), uki.sha256(CLIENT), inventory)
+        named = {"schema": uki.VERIFIED_SCHEMA, "releases": {}, "keyring_sha256": "12" * 32, "entries": 1,
+                 "packages": {"zlib1g": {"version": "1:1.3-1", "deb_sha256": "34" * 32}}}
+        self.assertIsNotNone(uki.check_initrd_build(dict(self.inputs, initrd_build=self.initrd_build("n.json", verified_packages=named)),
+                                                    uki.sha256(CLIENT), inventory))
 
     def test_sign_refuses_an_image_whose_initrd_did_not_pass(self):
         bad = self.write("initrd-bad", unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, b"rd.luks.uuid=1\n")}))

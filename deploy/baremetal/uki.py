@@ -926,10 +926,23 @@ OPTIONAL_INPUTS = ("microcode",)
 # initrd and THIS client, or the image is not built and not signed.
 INITRD_BUILD_SCHEMA = "regalia.initrd-build/v1"
 INITRD_BUILD_KEYS = ("schema", "commit", "go", "snapshot", "source_date_epoch", "suite", "kernel", "dracut", "packages_requested",
-                     "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries")
+                     "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries",
+                     "verified_packages")
+VERIFIED_SCHEMA = "regalia.initrd-packages/v1"
 
 
-def check_initrd_build(inputs, client_sha256):
+def inventory_package_origins(path=None):
+    """{"name=version"} of the inventory's "package" entries: what the build record's verified_packages must name."""
+    origins = set()
+    with open(path or INVENTORY) as f:
+        for line in f:
+            words = line.rstrip("\n").split(" ")
+            if not line.startswith("#") and len(words) == 7 and words[0] == "package":
+                origins.add(words[1])
+    return origins
+
+
+def check_initrd_build(inputs, client_sha256, inventory=None):
     """The initrd's build record, read and held to the initrd and the client given; None when there is none
     (a library caller's test fixture: the build and sign commands require one)."""
     if not inputs.get("initrd_build"):
@@ -949,6 +962,20 @@ def check_initrd_build(inputs, client_sha256):
             "the initrd's build record is for another initrd (%s, not --initrd's %s)" % (built["initrd_sha256"], sha256(read(inputs["initrd"]))))
     require(client_sha256 is not None and built["client_sha256"] == client_sha256,
             "the initrd's build record names another unlock client (%s, not %s)" % (built["client_sha256"], client_sha256))
+    # #246: every package the inventory names was checked by the builder against its .deb along Debian's signed chain
+    # (deploy/baremetal/debverify.py): exactly those packages, at those versions, no more and no fewer
+    verified = built["verified_packages"]
+    membership.exact(verified, ("schema", "packages", "releases", "keyring_sha256", "entries"), "the initrd's build record's verified_packages")
+    require(verified["schema"] == VERIFIED_SCHEMA and isinstance(verified["packages"], dict) and isinstance(verified["releases"], dict)
+            and attest.is_hex(verified["keyring_sha256"], 64) and isinstance(verified["entries"], int)
+            and all(isinstance(v, dict) and set(v) == {"version", "deb_sha256"} and isinstance(v["version"], str)
+                    and attest.is_hex(v["deb_sha256"], 64) for v in verified["packages"].values())
+            and all(attest.is_hex(v, 64) for v in verified["releases"].values()),
+            "the initrd's build record's verified_packages is not a %s" % VERIFIED_SCHEMA)
+    named = {"%s=%s" % (name, v["version"]) for name, v in verified["packages"].items()}
+    want = inventory_package_origins(inventory)
+    require(named == want, "the initrd's build record verified other packages than the inventory names (not verified: %s; not in the "
+            "inventory: %s)" % (", ".join(sorted(want - named)) or "none", ", ".join(sorted(named - want)) or "none"))
     return built
 
 
@@ -1051,7 +1078,7 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS, invento
         values, _ = _predict(parts, run, tools, work)
         # the staged copy: the bytes just measured
         review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None)
-        check_initrd_build(inputs, sha256(read(unlock_client)) if unlock_client else None)
+        check_initrd_build(inputs, sha256(read(unlock_client)) if unlock_client else None, inventory)
         record = {
             "schema": SCHEMA, "name": name, "uname": uname,
             "inputs": {k: {"sha256": sha256(read(inputs[k])), "size": os.path.getsize(inputs[k])} for k in INPUTS if inputs.get(k)},
@@ -1230,7 +1257,7 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
         require(mine == record["initrd_review"],
                 "this machine's review of the initrd is not the record's: nothing is signed")
-        check_initrd_build(inputs, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
+        check_initrd_build(inputs, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]), inventory)
         # the third build: this machine must get the bytes the record names before it signs anything
         data = _ukify(inputs, uname, os.path.join(work, "unsigned.efi"), run, tools)
         require(sha256(data) == record["unsigned_sha256"], "this machine built another image than the record's (%s, not %s): "

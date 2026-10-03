@@ -109,7 +109,8 @@ class Archive(unittest.TestCase):
             self.line("udev=257.13-1", "f", "usr/lib/udev/rules.d/60-block.rules", sha(b"rules")),
             "generated dracut f 0644 0:0 etc/initrd-release " + "0" * 64])
         self.assertEqual(findings, [])
-        self.assertEqual(verified, {"zlib1g": "1:1.3-1", "udev": "257.13-1"})
+        self.assertEqual({k: v["version"] for k, v in verified.items()}, {"zlib1g": "1:1.3-1", "udev": "257.13-1"})
+        self.assertTrue(all(len(v["deb_sha256"]) == 64 for v in verified.values()))
 
     def test_a_file_that_is_not_the_package_s_is_refused(self):
         self.publish("zlib1g", "1:1.3-1", {"usr/lib/libz.so.1.3": b"genuine"})

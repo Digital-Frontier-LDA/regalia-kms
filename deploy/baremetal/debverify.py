@@ -16,8 +16,10 @@ archive's, along the chain Debian signs:
               a directory's presence. Merged /usr: a package may ship /lib/x for the image's usr/lib/x.
 
 Any mismatch, and any package or file that cannot be found or fetched, is a refusal: exit 1, every finding
-printed. Exit 0 writes VERIFIED.json: {"schema", "packages": {name: version}, "sources": [...], "entries": N},
-which `uki build --verified-packages` records and `uki sign` requires (#246). What it does NOT check: the
+printed. Exit 0 writes VERIFIED.json: {"schema", "packages": {name: {"version", "deb_sha256"}}, "releases": {"URL SUITE":
+InRelease sha256}, "keyring_sha256", "entries": N},
+which build-initrd.sh puts in the initrd's build record as verified_packages, and uki build and sign require to
+name exactly the inventory's packages (#246). What it does NOT check: the
 files dracut generated (the inventory's "generated" lines, read by a reviewer) and our own (pinned in uki.py).
 Standard library, plus gpgv and, for a .deb compressed with zstd, the zstd tool.
 """
@@ -105,10 +107,14 @@ def packages_index(text):
     return found
 
 
-def source_index(base, suite, keyring, cache, opener=urllib.request.urlopen, run=subprocess.run):
-    """One source's packages, every step checked: InRelease by signature, Packages.xz by the hash it states."""
+def source_index(base, suite, keyring, cache, opener=urllib.request.urlopen, run=subprocess.run, releases=None):
+    """One source's packages, every step checked: InRelease by signature, Packages.xz by the hash it states.
+    `releases`, when given, collects {"BASE SUITE": the InRelease's sha256}."""
     base = base.rstrip("/")
-    release = release_hashes(verified_release(fetch("%s/dists/%s/InRelease" % (base, suite), cache, opener), keyring, run))
+    inrelease = fetch("%s/dists/%s/InRelease" % (base, suite), cache, opener)
+    release = release_hashes(verified_release(inrelease, keyring, run))
+    if releases is not None:
+        releases["%s %s" % (base, suite)] = sha256(inrelease)
     path = "main/binary-%s/Packages.xz" % ARCH
     require(path in release, "%s %s's Release names no %s" % (base, suite, path))
     data = fetch("%s/dists/%s/%s" % (base, suite, path), cache, opener)
@@ -179,7 +185,7 @@ def _unescape(text):
 
 
 def verify(owned, index, cache, opener=urllib.request.urlopen, run=subprocess.run):
-    """(findings, {name: version}). `index`: {(package, version): (base, (Filename, sha256, size))}."""
+    """(findings, {name: {"version", "deb_sha256"}}). `index`: {(package, version): (base, (Filename, sha256, size))}."""
     findings, verified = [], {}
     for origin in sorted(owned):
         name, _, version = origin.partition("=")
@@ -214,8 +220,13 @@ def verify(owned, index, cache, opener=urllib.request.urlopen, run=subprocess.ru
             elif kind == "d" and shipped[0] != "d":
                 findings.append("%s %s: %s is a directory in the image, not in the package" % (name, version, path))
         if len(findings) == before:
-            verified[name] = version
+            verified[name] = {"version": version, "deb_sha256": digest}
     return findings, verified
+
+
+def result(verified, releases, keyring_sha256, entries):
+    """What the initrd's build record carries as verified_packages (build-initrd.sh; uki.check_initrd_build)."""
+    return {"schema": SCHEMA, "packages": verified, "releases": releases, "keyring_sha256": keyring_sha256, "entries": entries}
 
 
 def main(argv=None):
@@ -229,10 +240,12 @@ def main(argv=None):
     try:
         with open(args.inventory) as f:
             owned = inventory_packages(f)
-        index = {}
+        index, releases = {}, {}
         for base, suite in args.source:
-            for key, value in source_index(base, suite, args.keyring, args.cache).items():
+            for key, value in source_index(base, suite, args.keyring, args.cache, releases=releases).items():
                 index.setdefault(key, value)
+        with open(args.keyring, "rb") as f:
+            keyring_sha256 = sha256(f.read())
         findings, verified = verify(owned, index, args.cache)
     except (Refused, OSError, ValueError) as error:
         print("REFUSED: %s" % error, file=sys.stderr)
@@ -244,8 +257,7 @@ def main(argv=None):
         return 1
     entries = sum(len(v) for v in owned.values())
     with open(args.out, "w") as f:
-        json.dump({"schema": SCHEMA, "packages": verified, "sources": [" ".join(s) for s in args.source], "entries": entries},
-                  f, indent=2, sort_keys=True)
+        json.dump(result(verified, releases, keyring_sha256, entries), f, indent=2, sort_keys=True)
         f.write("\n")
     print("debverify: %d packages, %d entries, each as the archive's signed chain gives it" % (len(verified), entries))
     return 0
