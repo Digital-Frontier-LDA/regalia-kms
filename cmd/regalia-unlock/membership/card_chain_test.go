@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,7 +59,11 @@ func TestACardSignedChainIsAcceptedFromItsRoot(t *testing.T) {
 }
 
 func TestEachCardSignatureAlteredOrHighSIsRefused(t *testing.T) {
-	for i := range 2 {
+	_, all, expected := cardChain(t)
+	if int64(len(all)) != expected {
+		t.Fatalf("%d envelopes for an expected epoch of %d", len(all), expected)
+	}
+	for i := range all {
 		for name, change := range map[string]func([]byte){
 			"a flipped byte": func(sig []byte) { sig[10] ^= 1 },
 			// the same signature with s replaced by n - s: valid ECDSA, and refused (low-S only)
@@ -72,8 +77,9 @@ func TestEachCardSignatureAlteredOrHighSIsRefused(t *testing.T) {
 			sig, _ := hex.DecodeString(signature["sig"].(string))
 			change(sig)
 			signature["sig"] = hex.EncodeToString(sig)
-			if _, err := AcceptChain(nil, envelopes, root); err == nil {
-				t.Errorf("epoch %d, %s: accepted", i+1, name)
+			// the signature check itself refuses both (low-S is part of it), not an earlier shape error
+			if _, err := AcceptChain(nil, envelopes, root); err == nil || !strings.Contains(err.Error(), "the manifest signature does not verify") {
+				t.Errorf("epoch %d, %s: %v", i+1, name, err)
 			}
 		}
 	}
