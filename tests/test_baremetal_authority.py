@@ -68,6 +68,16 @@ class Configuration(unittest.TestCase):
         with self.assertRaises(m.Refused):
             authority.validate(config(d, interval_s=599))
 
+    def test_the_anchor_and_the_sequence_counter_take_disjoint_indices(self):
+        """#244: the anchor at C takes C, C+1, C+4, C+5; the sequence counter at S takes S, S+1."""
+        base = int(config("/x")["nv_epoch"], 16)
+        for offset in (-1, 0, 1, 3, 4, 5):
+            with self.subTest(offset=offset), self.assertRaises(m.Refused) as caught:
+                authority.validate(config("/x", nv_sequence="0x%08x" % (base + offset)))
+            self.assertIn("must not overlap", str(caught.exception))
+        for offset in (2, 6, 10):
+            authority.validate(config("/x", nv_sequence="0x%08x" % (base + offset)))
+
     def test_one_authority_until_takeover_exists(self):
         with self.assertRaises(m.Refused) as caught:
             authority.validate(config("/x", interval_s=1200, sequence_stride=2, sequence_offset=1))

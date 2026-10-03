@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from deploy.baremetal import convergence, reanchor
+from deploy.baremetal import convergence, reanchor, trails
 from deploy.baremetal import membership as m
 from tests.test_baremetal_heartbeat import FakeTpm
 from tests.test_baremetal_membership import ROOT, ROOT_PUB, _Swtpm, manifest, sign, three
@@ -530,6 +530,8 @@ class Command(Case):
             self.assertEqual((entry["epoch"], entry["manifest_digest"], entry["sources"], entry["subject"]), (3, self.digest(3), [AUTHORITY, "c"], "b"))
             self.assertRegex(entry["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(os.stat(self.d + "/audit.jsonl").st_mode & 0o777, 0o600)
+        self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 2)            # #278: a hash-chained trail
+        self.assertEqual(trails.where("reanchor"), "/var/log/regalia/reanchor.jsonl")     # --audit-log's default
 
     def test_the_program_refuses_and_records_the_refusal(self):
         self.lose_record()
