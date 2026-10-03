@@ -688,6 +688,19 @@ def part2(work, binaries, user, ctx, servers, status):
         save()
     events = []
     server = sync.Server("b", store, freshness, verifier, lease.TpmSigner(b_tcti), wgsvc.key_at, events.append)
+    # b's trail names a refused caller before it parses the request ("event": "sync"), so the test also
+    # notes each request's operation and b's answer, to tell a's renewals from its pulls
+    requests, answer = [], server.handle
+
+    def handle(raw, address):
+        out = answer(raw, address)
+        try:
+            op = json.loads(raw).get("op")
+        except (ValueError, AttributeError):
+            op = None
+        requests.append((op, address[0] if isinstance(address, tuple) else address, out))
+        return out
+    server.handle = handle
     listener = inside(lambda: socket.create_server((address["b"], cfg_port(ctx)), family=socket.AF_INET6))
     listener.settimeout(0.5)
     inside(lambda: threading.Thread(target=sync.serve, args=(server, listener, lambda: bool(STOP)), daemon=True).start())
@@ -742,18 +755,19 @@ def part2(work, binaries, user, ctx, servers, status):
               nodes=[dict(n, state="REVOKED_STOLEN") if n["node_id"] == "a" else n for n in m2["nodes"]])
     store.commit(signed(m3, hbt.REVOKE, "revocation"))
     freshness.accept(hbt.beat(m3, 3, issued=int(time.time())), m3)
-    mark = len(events)                   # from here b refuses; a lease it granted just before may still be landing
+    mark, marked = len(events), len(requests)   # from here b refuses; a lease it granted just before may still be landing
 
-    def lease_refusals():
-        return [e for e in events[mark:] if e.get("subject") == "a" and e.get("outcome") == "DENY"
-                and e.get("event") in ("sync-lease-nonce", "sync-lease")]
-    asked = until(lambda: lease_refusals(), lease.MAX_LIFETIME, 2)
+    def from_a(ops):
+        return [r for r in requests[marked:] if r[0] in ops and r[1] == address["a"]]
+    renewals = until(lambda: from_a(("lease-nonce", "lease")), lease.MAX_LIFETIME, 2)
+    denied = [e for e in events[mark:] if e.get("subject") == "a" and e.get("outcome") == "DENY"]
     # b refuses a when it identifies the caller (sync.py, peer_of), before any lease policy runs: the
     # transport's refusal. The lease policy's own refusal of a revoked subject is #199's revoke e2e.
-    ok(bool(asked) and any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in asked),
-       "a asks b to renew; b refuses the caller by name, as REVOKED_STOLEN under epoch 3 (the transport, before the lease code)", events[-4:])
-    pulls = [e for e in events[mark:] if e.get("subject") == "a" and e.get("event") == "sync-pull"]
-    ok(bool(pulls) and all(e.get("outcome") == "DENY" for e in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:])
+    ok(bool(renewals) and all(b'"refused"' in r[2] for r in renewals) and any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in denied),
+       "a asks b to renew (%s); b refuses the caller by name, as REVOKED_STOLEN under epoch 3 (the transport, before the lease code)"
+       % (renewals[0][0] if renewals else "no request"), (renewals[-1:] if renewals else requests[-3:], denied[-1:]))
+    pulls = from_a(("pull",))
+    ok(bool(pulls) and all(b'"refused"' in r[2] for r in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:] or requests[-3:])
     # from here nothing writes the admission file: the daemon must stop on its own CLOCK_BOOTTIME
     sh("systemctl", "stop", "regalia-admission.service")
     frozen = pathlib.Path("/run/regalia/admission.json").read_bytes()
