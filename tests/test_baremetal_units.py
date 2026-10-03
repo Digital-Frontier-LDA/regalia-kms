@@ -53,7 +53,8 @@ class Units(unittest.TestCase):
         self.assertEqual(self.service("regalia-authtime")["SupplementaryGroups"], "_chrony")
         authtime_unit = self.service("regalia-authtime")
         # the one capability it holds could read any file: it is shown almost none
-        self.assertEqual((authtime_unit["TemporaryFileSystem"], authtime_unit["ProtectProc"]), ("/etc:ro /var:ro", "invisible"))
+        self.assertEqual((authtime_unit["TemporaryFileSystem"], authtime_unit["ProtectProc"]), ("/etc:ro /var:ro /run:ro", "invisible"))
+        self.assertEqual(authtime_unit["BindPaths"], "/run/regalia /run/chrony")
         self.assertEqual(authtime_unit["BindReadOnlyPaths"].split()[0], "/etc/regalia/node.json")
         self.assertNotIn("site.json", authtime_unit["BindReadOnlyPaths"])
         self.assertNotIn("wg-service", authtime_unit["BindReadOnlyPaths"])

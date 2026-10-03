@@ -31,7 +31,10 @@ ReadWritePaths=/run/regalia /run/chrony
 # read-only tmpfs with only its own configuration and what the C library needs bound into it, /var is
 # empty, and other processes are invisible under /proc. (Not ProcSubset=pid: the kernel's boot ID,
 # under /proc/sys, is part of the status it writes.)
-TemporaryFileSystem=/etc:ro /var:ro
+TemporaryFileSystem=/etc:ro /var:ro /run:ro
+# /run likewise: other units' credentials (/run/credentials) and whatever else is staged there stay out
+# of sight; only the two directories it writes are bound back
+BindPaths=/run/regalia /run/chrony
 BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime
 ProtectProc=invisible
 ProtectHome=yes
