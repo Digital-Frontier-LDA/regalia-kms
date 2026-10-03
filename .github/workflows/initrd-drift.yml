@@ -66,15 +66,17 @@ jobs:
           report="$RUNNER_TEMP/report.md"
           printf '\n_Found by %s._\n' "$RUN_URL" >> "$report"
           gh label create initrd-drift --color B60205 --description "The initrd moved since its inventory was reviewed (#198)" 2>/dev/null || true
-          issue="$(gh issue list --state open --label initrd-drift --json number --jq '.[0].number // empty')"
+          # ONE issue, found by its label: a rerun edits it, never opens a second
+          issue="$(gh issue list --state open --label initrd-drift --limit 1 --json number --jq '.[0].number // empty')"
           if [ -z "$issue" ]; then
             gh issue create --title "The initrd has moved since its inventory was reviewed (#198)" --label initrd-drift --body-file "$report"
             exit 0
           fi
-          # the same findings as last time: nothing to add (the report ends with a digest of its findings)
+          # the same findings as the body already states: nothing to change (the report ends with their digest)
           digest="$(grep -o 'initrd-drift [0-9a-f]*' "$report" | head -1)"
-          if gh issue view "$issue" --json body,comments --jq '[.body] + [.comments[].body] | join("\n")' | grep -qF "$digest"; then
-            echo "issue #$issue already says this"
+          if gh issue view "$issue" --json body --jq .body | grep -qF "$digest"; then
+            echo "issue #$issue already states these findings"
           else
-            gh issue comment "$issue" --body-file "$report"
+            gh issue edit "$issue" --body-file "$report"
+            gh issue comment "$issue" --body "The findings changed; the description now states today's."
           fi

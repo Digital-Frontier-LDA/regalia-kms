@@ -29,9 +29,9 @@ class Report(unittest.TestCase):
         today = BASE[:3] + ["package libssl3t64=3.5.1-1+deb13u1 f 0644 0:0 usr/lib/x86_64-linux-gnu/libssl.so.3 " + "d" * 64]
         changed, body = initrd_drift.report(parsed(BASE), parsed(today), {"libssl3t64": "3.5.1-1+deb13u1"})
         self.assertTrue(changed)
-        self.assertIn("| libssl3t64 | 3.5.1-1 | 3.5.1-1+deb13u1 | **3.5.1-1+deb13u1** |", body)
+        self.assertIn(r"| libssl3t64 | 3\.5\.1\-1 | 3\.5\.1\-1\+deb13u1 | **3\.5\.1\-1\+deb13u1** |", body)
         self.assertIn("A package of the inventory has a security update", body)
-        self.assertIn("`usr/lib/x86_64-linux-gnu/libssl.so.3` changed (libssl3t64=3.5.1-1+deb13u1)", body)
+        self.assertIn(r"usr/lib/x86\_64\-linux\-gnu/libssl\.so\.3 changed (libssl3t64=3\.5\.1\-1\+deb13u1)", body)
         # without the security archive's word, the update is listed and not marked
         _, plain = initrd_drift.report(parsed(BASE), parsed(today))
         self.assertNotIn("security update", plain)
@@ -45,6 +45,19 @@ class Report(unittest.TestCase):
         self.assertIn("- generated dracut f 0644 0:0 etc/initrd-release " + "a" * 64, body)
         self.assertIn("+ generated dracut f 0644 0:0 etc/initrd-release " + "e" * 64, body)
         self.assertIn("+ generated dracut f 0755 0:0 var/lib/dracut/hooks/pre-mount/10-new.sh", body)
+
+    def test_archive_data_is_inert_markdown(self):
+        """Package names, versions and paths come from the archive: none of them may link, mention, format,
+        break the table or close the code fence."""
+        hostile = "package evil|pkg=1.0<img/src=x>@owner f 0644 0:0 usr/lib/[x](http://e)`` " + "1" * 64
+        changed, body = initrd_drift.report(parsed(BASE), parsed(BASE + [hostile, "generated dracut f 0644 0:0 etc/``` " + "2" * 64]))
+        self.assertTrue(changed)
+        for raw in ("<img", "@owner", "[x](http://e)", "evil|pkg"):
+            self.assertNotIn(raw, body)
+        self.assertIn(r"evil\|pkg", body)
+        self.assertIn("&lt;img/src=x&gt;", body)
+        fence = body[body.index("```\n") + 4:]
+        self.assertNotIn("`", fence[:fence.index("\n```")])           # nothing inside can close the fence
 
     def test_the_same_findings_give_the_same_digest(self):
         today = BASE[:2] + ["package udev=257.14-1 f 0644 0:0 usr/lib/udev/rules.d/60-block.rules " + "9" * 64] + BASE[3:]
@@ -73,11 +86,21 @@ class Script(unittest.TestCase):
         self.assertIn("$SUITE-security", drift)
 
     def test_the_workflow_keeps_one_issue_and_writes_nothing_else(self):
-        workflow = (ROOT / ".github" / "workflows" / "initrd-drift.yml").read_text()
-        self.assertIn("issues: write", workflow)
-        self.assertNotIn("contents: write", workflow)
-        self.assertIn("--label initrd-drift", workflow)
-        self.assertIn("--body-file", workflow)
+        import yaml
+        text = (ROOT / ".github" / "workflows" / "initrd-drift.yml").read_text()
+        workflow = yaml.safe_load(text)
+        triggers = workflow.get(True, workflow.get("on"))           # YAML 1.1 reads the key `on` as True
+        self.assertEqual(sorted(triggers), ["pull_request", "schedule", "workflow_dispatch"])
+        self.assertNotIn("pull_request_target", text)
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(workflow["jobs"]["drift"]["permissions"], {"contents": "read", "issues": "write"})
+        steps = workflow["jobs"]["drift"]["steps"]
+        filing = [s for s in steps if s.get("name") == "File or update the drift issue"][0]
+        self.assertIn("github.event_name != 'pull_request'", filing["if"])
+        self.assertIn("gh issue list --state open --label initrd-drift", filing["run"])
+        self.assertIn("gh issue edit", filing["run"])
+        self.assertIn("--body-file", filing["run"])
+        self.assertEqual(workflow["concurrency"]["group"], "initrd-drift")
 
 
 if __name__ == "__main__":
