@@ -188,7 +188,7 @@ class ConcurrentService(Case):
         import threading
         self.break_counter()
         service = hb.Counter("0x1500018", lock_path=self.d + "/lock", run=self.tpm)    # the service's construction
-        real = self.counter._define_counter
+        real = self.counter._define_at
         seen = {}
 
         def define(floor):
@@ -198,7 +198,7 @@ class ConcurrentService(Case):
             seen["blocked"] = thread.is_alive()
             seen["thread"] = thread
             return real(floor)
-        self.counter._define_counter = define
+        self.counter._define_at = define
         recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append, self.floor)
         seen["thread"].join(5)
         self.assertTrue(seen["blocked"])                                       # it waited for the recount

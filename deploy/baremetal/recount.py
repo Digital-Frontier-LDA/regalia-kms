@@ -175,7 +175,7 @@ def recount(counter, manifest, documents, typed, sink, floor_path):
                     began.append(index)
                     require(counter._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
             began.append("define")
-            counter._define_counter(planned["floor"])
+            counter._define_at(planned["floor"])           # under the same lock; no increment loop up to the floor
         value = counter.value()
         require(value == planned["floor"], "the new counter reads %d, not the floor %d" % (value, planned["floor"]))
     except BaseException as failure:
