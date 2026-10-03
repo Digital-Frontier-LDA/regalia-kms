@@ -490,7 +490,95 @@ jobs:
       - name: Build the pre-root client (static, no cgo)
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: A guest boots a measured UKI through a peer (QEMU, OVMF, swtpm, dracut, LUKS2, WireGuard before root, PCR 12)
-        run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/unlock-boot-qemu.sh
+        # the archive as of the reviewed initrd's inventory (deploy/baremetal/initrd/initrd-inventory.txt, #198):
+        # moving this date is an update of that inventory, in the same pull request
+        run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
+
+  # regalia-kms#248: the KMS host initrd is REPRODUCIBLE, and stays so. deploy/baremetal/initrd/build-initrd.sh
+  # builds it from pinned inputs (one snapshot.debian.org time with the security suite, dracut --reproducible,
+  # SOURCE_DATE_EPOCH). Three builders: two Ubuntu runners, each building twice (the second in a hostile
+  # locale, time zone, umask and environment), and a Debian 13 container (another host userland, the one a
+  # real builder runs). initrd-reproducible-compare FAILS unless every initrd and build record is identical.
+  initrd-reproducible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [first, second]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the root-tree builder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
+      - name: Build the initrd twice from nothing (the second in a hostile environment, host apt configuration included); both must be identical
+        run: |
+          sudo REGALIA_GO="$(command -v go)" REGALIA_HOSTILE_APT=1 bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 2
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/repro"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: initrd-${{ matrix.builder }}
+          path: ${{ runner.temp }}/repro/build-1
+          retention-days: 7
+
+  initrd-reproducible-debian:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: debian:trixie
+      options: --privileged
+    steps:
+      - name: Install what a Debian 13 builder has
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates git mmdebstrap debian-archive-keyring python3 cpio
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Build the initrd once, on Debian 13
+        run: REGALIA_GO="$(command -v go)" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: initrd-debian
+          path: ${{ runner.temp }}/repro/build-1
+          retention-days: 7
+
+  initrd-reproducible-compare:
+    needs: [initrd-reproducible, initrd-reproducible-debian]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/builds
+      - name: Every builder's initrd and build record are identical
+        run: |
+          cd "$RUNNER_TEMP/builds"
+          for b in initrd-first initrd-second initrd-debian; do
+            echo "$b: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_entries"], "entries, commit", r["commit"][:12], r["go"], "client", r["client_sha256"])' "$b/initrd-build.json")"
+          done
+          bad=0
+          for b in initrd-second initrd-debian; do
+            if ! cmp -s initrd-first/initrd.img "$b/initrd.img"; then
+              bad=1; echo "::error::$b's initrd differs from initrd-first's"
+              diff initrd-first/initrd-listing.txt "$b/initrd-listing.txt" | head -200 || true
+            fi
+            if ! cmp -s initrd-first/initrd-build.json "$b/initrd-build.json"; then
+              bad=1; echo "::error::$b's build record differs from initrd-first's"
+              diff initrd-first/initrd-build.json "$b/initrd-build.json" | head -60 || true
+            fi
+          done
+          [ "$bad" = 0 ] || exit 1
+          echo "initrd-reproducible: IDENTICAL on three builders: $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["initrd_sha256"])' initrd-first/initrd-build.json)"
 
   # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
   # servers and a client on the loopback, none allowed to touch the runner's clock. The clock counts
