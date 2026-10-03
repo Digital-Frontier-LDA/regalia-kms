@@ -114,7 +114,13 @@ CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off
 # into PCR 12, which the peers attest (#218), so an appended systemd.import_credentials=yes changes PCR 12
 # and the peers refuse the unlock; and `set --esp` refuses an ESP that holds addons at all. The SMBIOS
 # case is stated from the documentation, not yet shown by a boot.
-CMDLINE_REQUIRED = ("systemd.import_credentials=no",)
+# init_on_free=1 and init_on_alloc=1: the kernel zeroes every page when it is freed and when it is handed
+# out (#221). The pre-root unlock client holds the local half, the boot session's RSA key and the volume's
+# key through the initrd phase; Go cannot erase crypto/rsa's internal copy of the key, and the Go runtime
+# does not clear memory it frees. With these words nothing the client held survives the process in RAM
+# the booted system can reuse. The boot test checks the kernel actually enabled them (its boot log), since
+# a kernel built without the options ignores the words.
+CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1")
 
 
 def _cmdline_key(word):

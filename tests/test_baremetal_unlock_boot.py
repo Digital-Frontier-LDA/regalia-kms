@@ -370,6 +370,16 @@ class OnQemu(tub.OnSwtpm):
         self.assertEqual(hashlib.sha256(bytes.fromhex(left.group(2))).hexdigest(), self.recorded_session(through)[0])
         # the long-running client and the relay did not outlive the initrd: systemd stopped both (their Conflicts=)
         self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
+        # and the pages it used are zeroed when freed (#221): the words are signed into the image, and the
+        # kernel says it enabled them (a kernel without the options would ignore the words)
+        with open(BOOT + "/e2e.efi", "rb") as f:
+            signed = dict(uki.sections(f.read()))[".cmdline"].decode().split()
+        self.assertIn("init_on_free=1", signed)
+        self.assertIn("init_on_alloc=1", signed)
+        meminit = next((l for l in said.splitlines() if "REGALIA-E2E-MEMINIT" in l), "")
+        print("boot 2: %s" % meminit.strip(), file=sys.stderr)
+        self.assertRegex(meminit, r"heap alloc:on")
+        self.assertRegex(meminit, r"heap free:on")
         self.assertIn("Stopped regalia-unlock.service", said)
         self.assertIn("Stopped regalia-unlock-relay.service", said)
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd

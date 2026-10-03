@@ -147,7 +147,7 @@ for k in initrd system secure-boot; do
 done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
 cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
-printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no}" > "$ROOT/tmp/uki/cmdline"
+printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"

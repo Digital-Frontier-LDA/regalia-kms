@@ -38,6 +38,7 @@
 package main
 
 import (
+	"crypto/rsa"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -49,6 +50,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -193,9 +195,10 @@ type unlocker struct {
 	out         io.Writer
 	diagnostics io.Writer
 
-	presented bool   // a quote of this session was taken, to be sent to a peer
-	earlier   bool   // ANOTHER session of this boot is on record: this process asks no peer
-	key       []byte // the volume's key, from this boot's one response; given to each later connection
+	presented bool       // a quote of this session was taken, to be sent to a peer
+	earlier   bool       // ANOTHER session of this boot is on record: this process asks no peer
+	key       []byte     // the volume's key, from this boot's one response; given to each later connection
+	secrets   sync.Mutex // spent (the serving loop) and forget (the signal goroutine) zero the same memory
 	peer      string
 	slot      string
 }
@@ -268,6 +271,7 @@ func (u *unlocker) answer(connection *net.UnixConn) error {
 		// This boot's one response is used. The key is kept until the process ends, so that an asker who
 		// left meanwhile does not cost the boot its unlock: the next one gets the same key.
 		u.key, u.peer, u.slot = key, peer, slot
+		u.spent()
 	}
 	_ = connection.SetDeadline(time.Now().Add(ioTimeout))
 	if _, err := connection.Write(u.key); err != nil {
@@ -332,19 +336,43 @@ func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, error) {
 // expose and which ends with the process. Called from the signal handler, it can race an answer in
 // progress; that answer then gives a zeroed key, which the volume refuses: a failed attempt, never a
 // secret written anywhere.
+// spent drops what only served to obtain this boot's one response: the local half is zeroed, and the
+// session's private key is zeroed where this package can reach it and then let go, so nothing in the
+// process refers to it any more. That does NOT erase it: crypto/rsa keeps an internal copy this code
+// cannot reach, and the Go runtime does not clear memory it frees. What it does is shorten how long the
+// key is reachable, and leave its pages to be cleared when the process ends, by the kernel's
+// init_on_free=1 on the signed command line (#221). The key the boot was given stays: the next asker
+// in this boot gets it.
+func (u *unlocker) spent() {
+	u.secrets.Lock()
+	defer u.secrets.Unlock()
+	wipe(u.local)
+	if u.boot != nil && u.boot.key != nil {
+		zeroPrivate(u.boot.key)
+		u.boot.key = nil
+	}
+}
+
+// zeroPrivate zeroes the private numbers of an RSA key in place.
+func zeroPrivate(key *rsa.PrivateKey) {
+	numbers := append([]*big.Int{key.D, key.Precomputed.Dp, key.Precomputed.Dq, key.Precomputed.Qinv}, key.Primes...)
+	for _, number := range numbers {
+		if number != nil {
+			words := number.Bits()
+			for i := range words {
+				words[i] = 0
+			}
+		}
+	}
+}
+
 func (u *unlocker) forget() {
+	u.secrets.Lock()
+	defer u.secrets.Unlock()
 	wipe(u.local)
 	wipe(u.key)
 	if u.boot != nil && u.boot.key != nil {
-		numbers := append([]*big.Int{u.boot.key.D, u.boot.key.Precomputed.Dp, u.boot.key.Precomputed.Dq, u.boot.key.Precomputed.Qinv}, u.boot.key.Primes...)
-		for _, number := range numbers {
-			if number != nil {
-				words := number.Bits()
-				for i := range words {
-					words[i] = 0
-				}
-			}
-		}
+		zeroPrivate(u.boot.key)
 	}
 }
 
