@@ -41,7 +41,7 @@ check sh -c 'test "$(cat /sys/module/apparmor/parameters/enabled)" = Y'
 check sh -c 'test "$(cat /proc/sys/kernel/dmesg_restrict)" = 1'
 check sh -c 'test "$(cat /proc/sys/kernel/kptr_restrict)" = 2'
 check sh -c 'test -z "$(swapon --noheadings --show)"'
-for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vim-tiny vim-common nano locales libc-l10n util-linux-locales eject fdisk task-english tasksel tasksel-data libfdisk1 liblastlog2-2 installation-report laptop-detect os-prober binutils binutils-common binutils-x86-64-linux-gnu libbinutils libctf0 libctf-nobfd0 libgprofng0 libsframe1; do
+for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vim-tiny vim-common nano locales libc-l10n util-linux-locales eject fdisk task-english tasksel tasksel-data libfdisk1 installation-report laptop-detect os-prober binutils binutils-common binutils-x86-64-linux-gnu libbinutils libctf0 libctf-nobfd0 libgprofng0 libsframe1; do
   if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -q '^installed$'; then
     fail "unexpected-package-$package"
   fi

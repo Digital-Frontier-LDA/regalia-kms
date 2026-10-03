@@ -5,12 +5,12 @@ import json
 import subprocess
 
 CANDIDATES = ('locales', 'libc-l10n', 'util-linux-locales', 'eject', 'fdisk', 'task-english', 'tasksel', 'tasksel-data',
-              'libfdisk1', 'liblastlog2-2', 'installation-report', 'laptop-detect', 'os-prober',
+              'libfdisk1', 'installation-report', 'laptop-detect', 'os-prober',
               'binutils', 'binutils-common', 'binutils-x86-64-linux-gnu', 'libbinutils',
               'libctf0', 'libctf-nobfd0', 'libgprofng0', 'libsframe1')
 REQUIRED = ('linux-image-amd64', 'systemd-sysv', 'cryptsetup-initramfs', 'wireguard-tools',
             'nftables', 'apparmor', 'apparmor-utils', 'tpm2-tools', 'opensc', 'pcscd',
-            'python3', 'ca-certificates')
+            'python3', 'ca-certificates', 'util-linux', 'mount')
 
 
 def installed(name):
@@ -46,8 +46,10 @@ def minimize(apply=False):
     plan = ''
     if selected:
         result = subprocess.run(['/usr/bin/apt-get', '--simulate', 'purge', '-y', *selected],
-                                capture_output=True, text=True, timeout=60, check=True,
+                                capture_output=True, text=True, timeout=60,
                                 env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C'})
+        if result.returncode:
+            raise ValueError('APT rejected reviewed removal: ' + result.stderr[-4000:])
         plan = result.stdout
         removal_plan(plan, selected)
         if apply:

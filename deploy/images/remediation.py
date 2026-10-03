@@ -37,10 +37,11 @@ def package_plan(packages, indexes):
                       else 'no-newer-signed-package')
         parents = []
         for other in installed:
-            for dependency in other.get('metadata', {}).get('depends', []):
-                alternatives = [part.strip().split()[0].split(':')[0] for part in dependency.split('|')]
-                if name in alternatives:
-                    parents.append({'package': other['name'], 'dependency': dependency})
+            for field, relation in [('depends', 'Depends'), ('preDepends', 'Pre-Depends')]:
+                for dependency in other.get('metadata', {}).get(field, []):
+                    alternatives = [part.strip().split()[0].split(':')[0] for part in dependency.split('|')]
+                    if name in alternatives:
+                        parents.append({'package': other['name'], 'relation': relation, 'dependency': dependency})
         result[name] = {'name': name, 'installed_version': version, 'action': action,
                         'candidate': candidate, 'declared_reverse_dependencies': parents}
     return result

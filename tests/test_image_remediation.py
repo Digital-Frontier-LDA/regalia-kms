@@ -18,7 +18,8 @@ def package(name='libexample1', version='1:2.0-1'):
 class RemediationTests(unittest.TestCase):
     def test_candidates_use_debian_ordering_and_never_propose_a_downgrade(self):
         packages = [package(), {**package('consumer'), 'metadata': {
-            'architecture': 'all', 'depends': ['libexample1 (>= 1) | another']}}]
+            'architecture': 'all', 'depends': ['libexample1 (>= 1) | another'],
+            'preDepends': ['libexample1 (>= 1:2.0)']}}]
         indexes = [{'Package': 'libexample1', 'Architecture': 'amd64', 'Version': v}
                    for v in ['9.0-1', '1:2.0-1', '1:2.0-1+deb13u1']]
         indexes.append({'Package': 'libexample1', 'Architecture': 'arm64', 'Version': '9:99'})
@@ -26,6 +27,8 @@ class RemediationTests(unittest.TestCase):
         self.assertEqual(rows['libexample1']['candidate']['Version'], '1:2.0-1+deb13u1')
         self.assertEqual(rows['libexample1']['action'], 'newer-signed-package')
         self.assertEqual(rows['libexample1']['declared_reverse_dependencies'][0]['package'], 'consumer')
+        self.assertEqual({x['relation'] for x in rows['libexample1']['declared_reverse_dependencies']},
+                         {'Depends', 'Pre-Depends'})
         self.assertEqual(rows['consumer']['action'], 'index-missing')
         rows = remediation.package_plan([package(version='1:3.0-1')], indexes)
         self.assertEqual(rows['libexample1']['action'], 'no-newer-signed-package')
