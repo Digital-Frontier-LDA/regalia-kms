@@ -1,0 +1,139 @@
+{
+ "schema": "regalia.root-card-chain-vectors/v1",
+ "about": "A membership chain (regalia.membership/v3, epochs 1 and 2) signed by a P-256 root on a real Nitrokey HSM 2, so a verifier is checked against card-made signatures, not only software ones (#156, #293). Epoch 1 was signed in process through authority.Pkcs11Signer; epoch 2 by `python3 -m deploy.baremetal.manifest sign` (typed confirmation). Both are CKM_ECDSA over SHA-256 of DOMAIN || canonical(manifest), r||s, low-S. Epoch 1 names a typed revocation key (a software test key, public only). Public keys are written by composition, as in typed-keys-p256.json: the pinned root as \"root_public\"; a typed entry as {\"alg\", \"public\"} (the reader restores \"key\"); each envelope's signing key as \"signature_public\", put back into signature.key. Expected: the chain is accepted from root_public, epoch 2.",
+ "card": {
+  "serial": "DENK0404380",
+  "firmware": "4.1",
+  "hardware": "24.13",
+  "key_id": "5c",
+  "key_origin": "staging P-256 key generated on the token on 2026-10-03, deleted afterwards (the card is staging)",
+  "opensc": "0.26, isolated to the card's reader"
+ },
+ "root_public": {
+  "alg": "ecdsa-p256",
+  "public": "04811e42aa005c58fed04acc2e9e94a117ee4b83c5d245c3f26be45df5631c8b96d9b13777c07fb727e6c48ddc9009bb765ebb66be7a437383d2d311bffa63e040"
+ },
+ "expected_epoch": 2,
+ "chain": [
+  {
+   "manifest": {
+    "epoch": 1,
+    "heartbeat_max_lifetime_s": 86400,
+    "issued_at": "2026-10-03T12:00:00Z",
+    "nodes": [
+     {
+      "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+      "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+      "hsm_serials": [
+       "DENK0404100"
+      ],
+      "node_id": "a",
+      "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+      "state": "ACTIVE",
+      "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+      "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+     },
+     {
+      "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+      "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+      "hsm_serials": [
+       "DENK0404101"
+      ],
+      "node_id": "b",
+      "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "state": "ACTIVE",
+      "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+      "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     },
+     {
+      "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+      "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+      "hsm_serials": [
+       "DENK0404102"
+      ],
+      "node_id": "c",
+      "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+      "state": "ACTIVE",
+      "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+      "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+     }
+    ],
+    "policy_version": "p1",
+    "prev_digest": "",
+    "revocation_keys": [
+     "38f91af3cf43de36ba4c97d37191589ff514eee20b1472044c94f4fe721d3a05",
+     {
+      "alg": "ecdsa-p256",
+      "public": "041a7b9abc93ffc653519293ae3ae528f7095dbd1ec5f43ece1c0de92913f8f13a06177fd30571f4c3b796913c926e4eda568e3e3cb6418d470bc649b1e0a49549"
+     }
+    ],
+    "schema": "regalia.membership/v3"
+   },
+   "signature": {
+    "sig": "a3a7e0fd0bd3aa01b74695d5e7570d07cd82824b6cebe792e38168ea22d9de0e0a447963a0ad17215c0dc4eec1f911469d3cc5be8efa1b544a6fb2cfa77d3d1a",
+    "signer": "root"
+   },
+   "signature_public": "04811e42aa005c58fed04acc2e9e94a117ee4b83c5d245c3f26be45df5631c8b96d9b13777c07fb727e6c48ddc9009bb765ebb66be7a437383d2d311bffa63e040"
+  },
+  {
+   "manifest": {
+    "epoch": 2,
+    "heartbeat_max_lifetime_s": 86400,
+    "issued_at": "2026-10-03T12:05:00Z",
+    "nodes": [
+     {
+      "ak_name": "000b4040404040404040404040404040404040404040404040404040404040404040",
+      "ek_name": "000b1010101010101010101010101010101010101010101010101010101010101010",
+      "hsm_serials": [
+       "DENK0404100"
+      ],
+      "node_id": "a",
+      "ssh_host_pub": "d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0",
+      "state": "ACTIVE",
+      "wg_boot_pub": "7070707070707070707070707070707070707070707070707070707070707070",
+      "wg_service_pub": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+     },
+     {
+      "ak_name": "000b4141414141414141414141414141414141414141414141414141414141414141",
+      "ek_name": "000b1111111111111111111111111111111111111111111111111111111111111111",
+      "hsm_serials": [
+       "DENK0404101"
+      ],
+      "node_id": "b",
+      "ssh_host_pub": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+      "state": "ACTIVE",
+      "wg_boot_pub": "7171717171717171717171717171717171717171717171717171717171717171",
+      "wg_service_pub": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+     },
+     {
+      "ak_name": "000b4242424242424242424242424242424242424242424242424242424242424242",
+      "ek_name": "000b1212121212121212121212121212121212121212121212121212121212121212",
+      "hsm_serials": [
+       "DENK0404102"
+      ],
+      "node_id": "c",
+      "ssh_host_pub": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+      "state": "MAINTENANCE",
+      "wg_boot_pub": "7272727272727272727272727272727272727272727272727272727272727272",
+      "wg_service_pub": "a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2"
+     }
+    ],
+    "policy_version": "p1",
+    "prev_digest": "91ef9f697bafb8317fee8d0d49e2453cda6b54c4a5e379f1f0ba2532264a2b8a",
+    "revocation_keys": [
+     "38f91af3cf43de36ba4c97d37191589ff514eee20b1472044c94f4fe721d3a05",
+     {
+      "alg": "ecdsa-p256",
+      "public": "041a7b9abc93ffc653519293ae3ae528f7095dbd1ec5f43ece1c0de92913f8f13a06177fd30571f4c3b796913c926e4eda568e3e3cb6418d470bc649b1e0a49549"
+     }
+    ],
+    "schema": "regalia.membership/v3"
+   },
+   "signature": {
+    "sig": "34b80cac2450b4fb03f685c9565ab24a072c50adcb5aa323f9b80ee3b01e5ab112c1a795f4984be9b5c51c8f434a7b1c25117c003b2199b036157b96ecf45349",
+    "signer": "root"
+   },
+   "signature_public": "04811e42aa005c58fed04acc2e9e94a117ee4b83c5d245c3f26be45df5631c8b96d9b13777c07fb727e6c48ddc9009bb765ebb66be7a437383d2d311bffa63e040"
+  }
+ ]
+}

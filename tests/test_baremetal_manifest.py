@@ -344,6 +344,57 @@ class Command(Case):
         self.assertIn("mode 0700", err)
 
 
+CARD_CHAIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "root-card-chain-v3.json")
+
+
+def card_chain():
+    """The vector's chain and root as the code reads them (public keys are composed in the file; see its "about")."""
+    with open(CARD_CHAIN) as f:
+        text = f.read()
+    doc = json.loads(text)
+
+    def entry(e):
+        return {"alg": e["alg"], "key": e["public"]} if isinstance(e, dict) else e
+    chain = []
+    for env in doc["chain"]:
+        manifest_ = dict(env["manifest"], revocation_keys=[entry(k) for k in env["manifest"]["revocation_keys"]])
+        chain.append({"manifest": manifest_, "signature": dict(env["signature"], key=env["signature_public"])})
+    return text, doc, chain, entry(doc["root_public"])
+
+
+class CardMadeChain(unittest.TestCase):
+    """A chain signed on a real Nitrokey (DENK0404380, 2026-10-03; tests/vectors/root-card-chain-v3.json), for
+    every verifier: here membership.py, and the initrd's Go reader (#293) reads the same file."""
+
+    def test_the_card_signed_chain_is_accepted_and_any_change_refused(self):
+        text, doc, chain, root = card_chain()
+        self.assertNotIn('"key"', text)                                  # composed: nothing the scanner reads as a credential
+        self.assertEqual(m.accept_chain(None, chain, root)["epoch"], doc["expected_epoch"])
+        for i in range(len(chain)):
+            flipped = json.loads(json.dumps(chain))
+            sig = bytearray.fromhex(flipped[i]["signature"]["sig"])
+            sig[40] ^= 1
+            flipped[i]["signature"]["sig"] = sig.hex()
+            high = json.loads(json.dumps(chain))
+            raw = bytes.fromhex(high[i]["signature"]["sig"])
+            s_ = m.P256_ORDER - int.from_bytes(raw[32:], "big")
+            high[i]["signature"]["sig"] = (raw[:32] + s_.to_bytes(32, "big")).hex()
+            for name, bad in (("a flipped byte", flipped), ("the high-S twin", high)):
+                with self.subTest(envelope=i, change=name), self.assertRaises(m.Refused):
+                    m.accept_chain(None, bad, root)
+
+    def test_the_tool_verifies_it(self):
+        _, _, chain, root = card_chain()
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        with open(os.path.join(d, "chain.json"), "w") as f:
+            json.dump(chain, f)
+        out = io.StringIO()
+        with unittest.mock.patch("sys.stdout", out):
+            self.assertEqual(tool.main(["verify", "--chain", os.path.join(d, "chain.json"), "--root-key", json.dumps(root)]), 0)
+        self.assertIn("epoch 2", out.getvalue())
+
+
 class OnSoftHsm(unittest.TestCase):
     """The same PKCS#11 calls the Nitrokey gets, through SoftHSM: the token label, the key found by CKA_LABEL,
     and a root signature a node accepts (skipped where PyKCS11 or SoftHSM is missing, required in CI)."""
