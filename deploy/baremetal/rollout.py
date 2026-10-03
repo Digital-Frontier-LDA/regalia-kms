@@ -305,7 +305,9 @@ SIMULATORS = ("swtpm", "mssim")      # accepted (the tests, a lab), and said so 
 
 def _current(args):
     """(the current manifest, whether it was checked against this host's TPM high-water)."""
-    membership.hex_field(args.root_key, 64, "--root-key")
+    if args.root_key.startswith(("{", "[")):          # a typed root (#156), as JSON
+        args.root_key = json.loads(args.root_key)
+    membership.root_entries(args.root_key, "--root-key")
     chain = membership.load(_read(args.membership), limit=membership.MAX_CHAIN_BYTES)
     require(isinstance(chain, list) and chain, "%s must hold a non-empty list of signed manifests" % args.membership)
     manifest, manifests = None, []

@@ -112,6 +112,42 @@ class FakeTpm:
         return no
 
 
+def hbt_killing(after):
+    """A FakeTpm whose `after`-th counter increment, once armed, kills the caller (raises)."""
+    tpm = FakeTpm()
+    tpm.armed, tpm.count = False, 0
+    real = tpm.__call__
+
+    class Killing(FakeTpm):
+        pass
+
+    def call(argv, input=None, **kw):
+        if tpm.armed and argv[0] == "tpm2_nvincrement":
+            tpm.count += 1
+            if tpm.count == after:
+                raise OSError("killed at increment %d" % after)
+        return real(argv, input=input, **kw)
+    tpm.call = call
+    return _Callable(tpm)
+
+
+class _Callable:
+    def __init__(self, tpm):
+        self.tpm = tpm
+
+    def __call__(self, argv, input=None, **kw):
+        return self.tpm.call(argv, input=input, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self.tpm, name)
+
+    def __setattr__(self, name, value):
+        if name == "tpm":
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.tpm, name, value)
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -210,6 +246,9 @@ class Heartbeats(Case):
                 ("sequence true", "sequence must be an integer >= 1", lambda e: e["heartbeat"].update(sequence=True)),
                 ("epoch text", "epoch must be an integer >= 1", lambda e: e["heartbeat"].update(epoch="1")),
                 ("local time", "issued_at must be UTC", lambda e: e["heartbeat"].update(issued_at="2026-09-21T13:33:20+02:00")),
+                ("Arabic-Indic digits", "issued_at must be UTC", lambda e: e["heartbeat"].update(issued_at="٢٠٢٦-٠٩-٢١T١١:٣٣:٢٠Z")),
+                ("a fullwidth year", "expires_at must be UTC", lambda e: e["heartbeat"].update(expires_at="２０２６-09-21T11:33:20Z")),
+                ("unpadded fields", "issued_at must be UTC", lambda e: e["heartbeat"].update(issued_at="2026-9-21T1:3:2Z")),
                 ("no such date", "expires_at is not a real date", lambda e: e["heartbeat"].update(expires_at="2026-02-30T00:00:00Z")),
                 ("digest", "manifest_digest must be 64 lowercase hex", lambda e: e["heartbeat"].update(manifest_digest="AB" * 32)),
                 ("signer field", "signature fields mismatch", lambda e: e["signature"].update(signer="revocation")),
@@ -321,7 +360,7 @@ class Sequence(Case):
     def test_a_crash_between_the_disk_and_the_counter_is_finished_by_the_next_check(self):
         self.f.accept(beat(self.m1, 1), self.m1)
         real = self.counter.advance
-        self.counter.advance = lambda sequence: (_ for _ in ()).throw(OSError("power lost"))
+        self.counter.advance = lambda sequence, allowance=None: (_ for _ in ()).throw(OSError("power lost"))
         with self.assertRaises(OSError):
             self.f.accept(beat(self.m1, 2), self.m1)
         self.counter.advance = real
@@ -358,6 +397,206 @@ class Sequence(Case):
             self.assertEqual(f.read(), before)
         self.f.accept(beat(self.m1, 1001), self.m1)
         self.assertEqual(self.counter.value(), 1001)
+
+    def test_a_node_back_from_a_month_away_catches_up(self):
+        """#199: an authority signing every 900 s has moved 2880 sequences in 30 days. The bound grows by one
+        per MIN_INTERVAL_S since the last accepted heartbeat, so the node accepts, and the counter steps the
+        whole distance (what it would have stepped had it stayed online)."""
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(30 * 86400)
+        sequence = 1 + 30 * 86400 // 900
+        self.assertEqual(self.f.accept(beat(self.m1, sequence, issued=T0 + 30 * 86400), self.m1), hb.MAX_LIFETIME - 60)
+        self.assertEqual(self.counter.value(), sequence)
+
+    def test_a_sequence_that_runs_faster_than_time_is_still_an_anomaly(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(3600)                                   # one hour: 1000 + 6 allowed
+        self.refused("exceeds the bound 1006: anomaly", self.f.accept, beat(self.m1, 1 + 1007, issued=T0 + 3600), self.m1)
+        self.assertEqual(self.counter.value(), 1)
+        self.f.accept(beat(self.m1, 1 + 1006, issued=T0 + 3600), self.m1)
+        self.assertEqual(self.counter.value(), 1007)
+
+    def test_a_forged_future_issue_time_buys_no_bigger_jump(self):
+        """#199 (regalia-kms-24): the issue time the allowance uses has already passed the authenticated-time
+        check, so a signer claiming a later time is refused before the bound is computed; inside the
+        FUTURE_SKEW it gains at most one step."""
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(60)                                     # now = T0 + 120
+        self.refused("issued in the future", self.f.accept, beat(self.m1, 1 + 1000 + 4320, issued=T0 + 30 * 86400), self.m1)
+        self.assertEqual(self.counter.value(), 1)
+        skew = self.now + hb.FUTURE_SKEW                   # the latest issue time accepted now
+        allowed = 1000 + -(-(skew - T0) // hb.MIN_INTERVAL_S)
+        self.assertLessEqual(allowed, 1000 + 1)
+        self.refused("exceeds the bound %d" % allowed, self.f.accept, beat(self.m1, 1 + allowed + 1, issued=skew), self.m1)
+        self.f.accept(beat(self.m1, 1 + allowed, issued=skew), self.m1)
+        self.assertEqual(self.counter.value(), 1 + allowed)
+
+    def test_a_node_killed_at_any_increment_of_a_catch_up_is_not_stranded(self):
+        """#199 (regalia-kms-51, decided by regalia-kms-24): the long advance is killed at EVERY increment; the
+        node must finish on the same heartbeat (check), or on the next one (accept)."""
+        days, interval = 12, 900
+        target = 1 + days * 86400 // interval                       # 1153: more than MAX_JUMP away
+        for kill in range(1, target):
+            for finish in ("check", "next"):
+                with self.subTest(kill=kill, finish=finish):
+                    tpm = hbt_killing(kill)
+                    counter = hb.Counter("0x1500018", lock_path=self.d + "/k.lock", run=tpm)
+                    counter.define()
+                    state = os.path.join(self.d, "k-%d-%s.json" % (kill, finish))
+                    clock = {"now": T0 + 60, "ticks": 5000}
+                    fresh = hb.Freshness(counter, lambda: (clock["now"], True), lambda: clock["ticks"], state)
+                    fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+                    clock["now"] += days * 86400
+                    clock["ticks"] += days * 86400 * 1000
+                    tpm.armed = True
+                    with self.assertRaises(OSError):
+                        fresh.accept(beat(self.m1, target, issued=T0 + days * 86400), self.m1)
+                    tpm.armed = False
+                    self.assertLess(counter.value(), target)
+                    if finish == "check":
+                        self.assertGreater(fresh.check(self.m1), 0)
+                        self.assertEqual(counter.value(), target)
+                    else:
+                        clock["now"] += interval
+                        clock["ticks"] += interval * 1000
+                        fresh.accept(beat(self.m1, target + 1, issued=T0 + days * 86400 + interval), self.m1)
+                        self.assertEqual(counter.value(), target + 1)
+                    os.unlink(state)
+
+    def test_a_node_killed_early_in_a_huge_catch_up_still_takes_a_later_heartbeat(self):
+        """#230 second read (regalia-kms-51): after 50,000 steps owed and a crash at increment 10, a heartbeat
+        13,000 further must be taken: the owed advance is finished first, and the new one measured from it."""
+        tpm = hbt_killing(10)
+        counter = hb.Counter("0x1500018", lock_path=self.d + "/k.lock", run=tpm)
+        counter.define()
+        clock = {"now": T0 + 60, "ticks": 5000}
+        fresh = hb.Freshness(counter, lambda: (clock["now"], True), lambda: clock["ticks"], self.d + "/huge.json")
+        fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+        away = 50000 * hb.MIN_INTERVAL_S
+        clock["now"] += away
+        clock["ticks"] += away * 1000
+        tpm.armed = True
+        with self.assertRaises(OSError):
+            fresh.accept(beat(self.m1, 50001, issued=T0 + away), self.m1)
+        tpm.armed = False
+        later = 13000 * hb.MIN_INTERVAL_S
+        clock["now"] += later
+        clock["ticks"] += later * 1000
+        fresh.accept(beat(self.m1, 63001, issued=T0 + away + later), self.m1)
+        self.assertEqual(counter.value(), 63001)
+
+    def test_a_planted_state_owes_nothing_and_moves_nothing(self):
+        """#230 third read (regalia-kms-51): finishing an owed advance must not trust the state file. A held
+        heartbeat that is not signed by a key the manifest names owes nothing: the genuine next one is taken
+        and the counter lands exactly on it."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        stranger = Ed25519PrivateKey.generate()
+        for label, planted, allowance in (("unsigned, huge", {"heartbeat": {"sequence": 10 ** 9}}, None),
+                                          ("signed by a stranger", beat(self.m1, 53705, issued=T0, key=stranger), hb.MAX_ALLOWANCE),
+                                          ("over its stored allowance", {"heartbeat": {"sequence": 5000}}, 1000)):
+            with self.subTest(label):
+                tpm = FakeTpm()
+                counter = hb.Counter("0x1500018", lock_path=self.d + "/p.lock", run=tpm)
+                counter.define()
+                path = os.path.join(self.d, "planted.json")
+                fresh = hb.Freshness(counter, lambda: (self.now, True), lambda: self.ticks, path)
+                fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+                with open(path) as f:
+                    state = json.load(f)
+                state["envelope"], state["allowance"] = planted, allowance
+                with open(path, "w") as f:
+                    json.dump(state, f)
+                fresh.accept(beat(self.m1, 2, issued=T0 + 60), self.m1)
+                self.assertEqual(counter.value(), 2)
+                os.unlink(path)
+
+    def test_a_key_rotation_mid_catch_up_does_not_strand_the_node(self):
+        """#230 fourth read (regalia-kms-51): killed early in a 50,000-step catch-up, then the manifest names only
+        a NEW revocation key. The held heartbeat (old key) is not finished on its word, but its gap widens the
+        bound for the new, verified heartbeat."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        tpm = hbt_killing(10)
+        counter = hb.Counter("0x1500018", lock_path=self.d + "/r.lock", run=tpm)
+        counter.define()
+        clock = {"now": T0 + 60, "ticks": 5000}
+        fresh = hb.Freshness(counter, lambda: (clock["now"], True), lambda: clock["ticks"], self.d + "/rot.json")
+        fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+        away = 50000 * hb.MIN_INTERVAL_S
+        clock["now"] += away
+        clock["ticks"] += away * 1000
+        tpm.armed = True
+        with self.assertRaises(OSError):
+            fresh.accept(beat(self.m1, 50001, issued=T0 + away), self.m1)
+        tpm.armed = False
+        newer = Ed25519PrivateKey.generate()
+        m2 = manifest(epoch=2, prev=m.digest(self.m1), keys=[pub(newer)])
+        clock["now"] += 3600
+        clock["ticks"] += 3600 * 1000
+        fresh.accept(beat(m2, 50007, issued=T0 + away + 3600, key=newer), m2)
+        self.assertEqual(counter.value(), 50007)
+
+    def test_a_genuine_held_heartbeat_beyond_its_stored_allowance_is_finished_only_that_far(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        with open(self.state) as f:
+            state = json.load(f)
+        state["envelope"], state["allowance"] = beat(self.m1, 3000, issued=T0 + 60), 1000    # genuine, but over its allowance
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        self.f.accept(beat(self.m1, 1500, issued=T0 + 120), self.m1)
+        self.assertEqual(self.counter.value(), 1500)
+
+    def test_the_widened_bound_is_capped_too(self):
+        """A gap planted at the largest stored allowance, across a rotation, still loosens the bound to at
+        most MAX_ALLOWANCE in all."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        with open(self.state) as f:
+            state = json.load(f)
+        state["envelope"], state["allowance"] = beat(self.m1, 1 + hb.MAX_ALLOWANCE, issued=T0 + 60), hb.MAX_ALLOWANCE
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        newer = Ed25519PrivateKey.generate()
+        m2 = manifest(epoch=2, prev=m.digest(self.m1), keys=[pub(newer)])
+        self.later(3600)
+        self.refused("exceeds the bound %d" % hb.MAX_ALLOWANCE, self.f.accept, beat(m2, 2 + hb.MAX_ALLOWANCE, issued=T0 + 3600, key=newer), m2)
+        self.f.accept(beat(m2, 1 + hb.MAX_ALLOWANCE, issued=T0 + 3600, key=newer), m2)
+        self.assertEqual(self.counter.value(), 1 + hb.MAX_ALLOWANCE)
+
+    def test_the_stored_allowance_never_exceeds_the_cap(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(2 * 366 * 86400)
+        self.f.accept(beat(self.m1, 2, issued=T0 + 2 * 366 * 86400), self.m1)
+        with open(self.state) as f:
+            self.assertEqual(json.load(f)["allowance"], hb.MAX_ALLOWANCE)
+
+    def test_an_issue_time_before_the_held_one_buys_nothing(self):
+        held = beat(self.m1, 1, issued=T0 + 86400)
+        self.assertEqual(hb.allowed_jump(beat(self.m1, 2, issued=T0)["heartbeat"], held, 1000), 1000)
+
+    def test_the_allowance_is_capped_however_long_the_node_was_away(self):
+        held = beat(self.m1, 1, issued=T0)
+        self.assertEqual(hb.allowed_jump(beat(self.m1, 2, issued=T0 + 10 * 366 * 86400)["heartbeat"], held, 1000), hb.MAX_ALLOWANCE)
+        self.refused("exceeds the bound", self.counter.advance, hb.MAX_ALLOWANCE + 2, hb.MAX_ALLOWANCE)
+
+    def test_a_state_written_before_the_allowance_is_still_read(self):
+        self.f.accept(beat(self.m1, 1), self.m1)
+        with open(self.state) as f:
+            state = json.load(f)
+        del state["allowance"]
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        self.assertGreater(self.f.check(self.m1), 0)
+
+    def test_without_the_held_heartbeat_the_bound_is_the_fixed_one(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        os.unlink(self.state)                              # the state is lost; the TPM counter is not
+        self.later(30 * 86400)
+        self.refused("exceeds the bound 1000: anomaly", self.f.accept, beat(self.m1, 2881, issued=T0 + 30 * 86400), self.m1)
+        self.assertEqual(self.counter.value(), 1)
+
+    def test_the_counter_alone_keeps_the_fixed_bound(self):
+        self.refused("exceeds the bound 1000: anomaly", self.counter.advance, 1001)
+        self.assertEqual(self.counter.advance(1500, allowance=1500), 1500)
 
     def test_a_tpm_failure_is_never_read_as_zero(self):
         self.f.accept(beat(self.m1, 3), self.m1)
@@ -440,11 +679,14 @@ class State(Case):
         self.f.accept(beat(self.m1, 1), self.m1)
         with open(self.state) as f:
             good = json.load(f)
-        self.assertEqual(sorted(good), ["envelope", "floor"])
+        self.assertEqual(sorted(good), ["allowance", "envelope", "floor"])
         self.assertEqual(os.stat(self.state).st_mode & 0o777, 0o600)
         for label, reason, doc in (("unknown field", "freshness state fields mismatch", dict(good, extra=1)),
                                    ("floor field", "floor fields mismatch", dict(good, floor={"time": 1})),
                                    ("negative floor", "floor must be integers", dict(good, floor={"time": -1, "tpm_clock": 0})),
+                                   ("allowance too large", "allowance is out of range", dict(good, allowance=hb.MAX_ALLOWANCE + 1)),
+                                   ("a list", "must be an object", [good]),
+                                   ("allowance zero", "allowance is out of range", dict(good, allowance=0)),
                                    ("float floor", "floats are not allowed", None)):
             with self.subTest(label):
                 with open(self.state, "w") as f:
@@ -516,7 +758,7 @@ class State(Case):
     def test_the_state_is_durable_before_the_counter_moves(self):
         order = []
         real_fsync, real_advance = os.fsync, self.counter.advance
-        self.counter.advance = lambda sequence: (order.append("counter"), real_advance(sequence))[1]
+        self.counter.advance = lambda sequence, allowance=None: (order.append("counter"), real_advance(sequence, allowance))[1]
         with unittest.mock.patch.object(hb.os, "fsync", side_effect=lambda fd: (order.append("dir" if os.path.isdir("/proc/self/fd/%d" % fd) else "file"), real_fsync(fd))[1]):
             self.f.accept(beat(self.m1, 1), self.m1)
         self.assertEqual(order, ["file", "dir", "counter"])

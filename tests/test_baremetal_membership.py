@@ -81,6 +81,20 @@ class Manifests(unittest.TestCase):
                 with self.assertRaises(m.Refused):
                     m.accept(self.m1, env, ROOT_PUB)
 
+    def test_issued_at_is_ascii_digits_at_full_width(self):
+        """Signed correctly, so only the timestamp refuses them; the pre-root Go reader refuses the same (#66).
+        strptime alone accepts each of these."""
+        for label, at in (("Arabic-Indic digits", "٢٠٢٦-١٠-٠٢T٠٩:٠٠:٠٠Z"), ("a fullwidth year", "２０２６-10-02T09:00:00Z"),
+                          ("a Devanagari year", "२०२६-10-02T09:00:00Z"), ("an unpadded month", "2026-1-02T09:00:00Z"),
+                          ("unpadded fields", "2026-10-2T9:0:0Z"), ("a one-digit second", "2026-10-02T09:00:0Z"),
+                          ("a day padded with a space", "2026-10- 2T09:00:00Z"), ("lowercase t and z", "2026-10-02t09:00:00z"),
+                          ("a trailing newline", "2026-10-02T09:00:00Z\n"), ("no such date", "2026-02-30T09:00:00Z")):
+            with self.subTest(label):
+                man = manifest(2, m.digest(self.m1), three())
+                man["issued_at"] = at
+                with self.assertRaisesRegex(m.Refused, "issued_at must be UTC"):
+                    m.accept(self.m1, sign(man, ROOT), ROOT_PUB)
+
     def test_ambiguous_encodings_are_refused_at_parse(self):
         for raw in ('{"a": 1, "a": 2}', '{"epoch": 1.0}', '{"epoch": NaN}'):
             with self.subTest(raw=raw), self.assertRaises(m.Refused):
@@ -202,12 +216,12 @@ class SchemaV2(unittest.TestCase):
         self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three())), ROOT), ROOT_PUB)["schema"], m.SCHEMA_V2)
 
     def test_an_unknown_schema_is_refused(self):
-        for bad in ("regalia.membership/v3", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
+        for bad in ("regalia.membership/v4", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
             with self.subTest(schema=bad):
-                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, dict(self.next2(v2(three())), schema=bad))
+                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, dict(self.next2(v2(three())), schema=bad))
         missing = self.next2(v2(three()))
         del missing["schema"]
-        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, missing)
+        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, missing)
         with self.assertRaisesRegex(m.Refused, "manifest must be an object"):
             m.validate([missing])
 

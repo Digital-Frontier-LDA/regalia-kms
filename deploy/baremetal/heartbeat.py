@@ -6,7 +6,7 @@ A newer manifest proves ordering, not that nothing restrictive happened since. A
 revocation authority would go on helping a node that was revoked an hour ago. So the authority signs a
 short-lived statement that a manifest is still the current one, and a peer without a live one refuses.
 
-    envelope  = {"heartbeat": {...}, "signature": {"key": "<hex Ed25519 public key>", "sig": "<hex signature>"}}
+    envelope  = {"heartbeat": {...}, "signature": {"key": "<hex revocation key, as the manifest names it>", "sig": "<hex signature>"}}
 
     heartbeat = {"schema": "regalia.heartbeat/v1", "epoch": <the manifest's epoch>, "sequence": <int >= 1>,
                  "issued_at": "YYYY-MM-DDTHH:MM:SSZ", "expires_at": "YYYY-MM-DDTHH:MM:SSZ",
@@ -57,14 +57,13 @@ clock that answers that question and refuses when the answer is no.
 import calendar
 import contextlib
 import json
+import math
 import os
 import re
 import subprocess
 import tempfile
 import time
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from deploy.baremetal import membership
 
@@ -81,11 +80,19 @@ STEP_BACK = 5              # an authenticated clock may be corrected backwards b
 # its elapsed time counts toward the floor. To be confirmed on the DL360s' TPMs.
 TPM_CLOCK_RATE = 0.85
 MAX_BYTES = 16 * 1024
+# The shortest interval an authority may sign heartbeats at (authority.py enforces it, times the number of
+# authorities sharing the sequence). A node accepts a sequence jump of Counter.MAX_JUMP plus one per
+# MIN_INTERVAL_S of issue time since the last heartbeat it accepted: a node back from a month's repair
+# catches up (the counter steps what it would have stepped online), while a sequence that runs faster
+# than real time is still an anomaly. Decided on #199.
+MIN_INTERVAL_S = 600
+# The largest allowance ever used, however long a node was away: a year of MIN_INTERVAL_S steps.
+MAX_ALLOWANCE = 1000 + math.ceil(366 * 86400 / MIN_INTERVAL_S)
 
 
 def parse_time(text, label):
     """A UTC timestamp as unix seconds; Refused unless it is exactly YYYY-MM-DDTHH:MM:SSZ and a real date."""
-    require(isinstance(text, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", text) is not None,
+    require(isinstance(text, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", text) is not None,
             "%s must be UTC, YYYY-MM-DDTHH:MM:SSZ" % label)
     try:
         return calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))
@@ -100,6 +107,35 @@ def max_lifetime(manifest):
     if manifest["schema"] == membership.SCHEMA:
         return MAX_LIFETIME
     return min(manifest["heartbeat_max_lifetime_s"], HARD_MAX_LIFETIME)
+
+
+def allowed_jump(heartbeat, held, base):
+    """How far `heartbeat`'s sequence may jump past the counter: `base` (Counter.MAX_JUMP), plus one per
+    MIN_INTERVAL_S between the issue time of `held` (the envelope last accepted, from the freshness state)
+    and this heartbeat's. Without a readable held envelope, or with an issue time not after it, just `base`:
+    the error is toward refusing. The new issue time is bounded by authenticated time (_live).
+    The held issue time comes from the freshness state ON DISK, which a restored disk can roll back. An
+    older held time only WIDENS the allowance, and the allowance is anomaly detection, not replay
+    protection: the TPM counter still requires a sequence above it, and the heartbeat is signed. A
+    rollback can loosen the bound; it never lets a replay through."""
+    try:
+        before = parse_time(held["heartbeat"]["issued_at"], "the held heartbeat's issued_at")
+    except (Refused, KeyError, TypeError):
+        return base
+    issued = parse_time(heartbeat["issued_at"], "issued_at")
+    return min(base + math.ceil((issued - before) / MIN_INTERVAL_S), MAX_ALLOWANCE) if issued > before else base
+
+
+def pending(state, held, base):
+    """How far the counter is still owed toward the held heartbeat (0 when it is not above the counter),
+    never more than the allowance that heartbeat was accepted under (`base` for a state that has none):
+    a planted state widens nothing past what a real acceptance could have."""
+    envelope = state.get("envelope")
+    try:
+        gap = envelope["heartbeat"]["sequence"] - held
+    except (KeyError, TypeError):
+        return 0
+    return max(0, min(gap, state.get("allowance") or base)) if isinstance(gap, int) else 0
 
 
 def validate(heartbeat):
@@ -117,23 +153,31 @@ def validate(heartbeat):
     return issued, expires
 
 
-def verify(envelope, manifest):
-    """The heartbeat inside an envelope, if it is signed by a revocation key the CURRENT manifest names
-    and is for that manifest. Time and sequence are Freshness's to check."""
+def signed(envelope, manifest):
+    """The heartbeat inside an envelope, if it is well formed and signed by a revocation key `manifest`
+    names, WHATEVER epoch it is for. Returns (heartbeat, issued, expires). verify() adds the rest."""
     membership.exact(envelope, ("heartbeat", "signature"), "envelope")
     sig = envelope["signature"]
     membership.exact(sig, ("key", "sig"), "signature")
-    membership.hex_field(sig["key"], 64, "signature.key")
+    require(isinstance(sig["key"], str) and re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{130}", sig["key"]) is not None,
+            "signature.key must be 64 or 130 lowercase hex")
     membership.hex_field(sig["sig"], 128, "signature.sig")
     heartbeat = envelope["heartbeat"]
     issued, expires = validate(heartbeat)
     membership.validate(manifest)
-    require(sig["key"] in manifest["revocation_keys"], "the signing key is not a revocation key named by the current manifest")
+    alg = membership.revocation_alg(manifest, sig["key"])      # the manifest's entry says how, never the signature
+    require(alg is not None, "the signing key is not a revocation key named by the current manifest")
     try:
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(sig["key"])).verify(
-            bytes.fromhex(sig["sig"]), DOMAIN + membership.canonical(heartbeat))
-    except (InvalidSignature, ValueError):
-        raise Refused("the heartbeat signature does not verify")
+        membership.verify_revocation(alg, sig["key"], DOMAIN + membership.canonical(heartbeat), sig["sig"], "heartbeat")
+    except Refused:
+        raise Refused("the heartbeat signature does not verify") from None
+    return heartbeat, issued, expires
+
+
+def verify(envelope, manifest):
+    """The heartbeat inside an envelope, if it is signed by a revocation key the CURRENT manifest names
+    and is for that manifest. Time and sequence are Freshness's to check."""
+    heartbeat, issued, expires = signed(envelope, manifest)
     require(heartbeat["epoch"] == manifest["epoch"], "the heartbeat is for epoch %d, the current manifest is epoch %d"
             % (heartbeat["epoch"], manifest["epoch"]))
     require(heartbeat["manifest_digest"] == membership.digest(manifest), "the heartbeat is for another manifest (digest mismatch)")
@@ -150,11 +194,24 @@ class Counter(membership.HighWater):
 
     RECORD = False     # a sequence has no manifest to record: membership's record index is not defined here
 
-    def _advance(self, sequence):
+    def advance(self, sequence, allowance=None):
+        """Move the counter up to `sequence`, at most `allowance` (default MAX_JUMP) above where it is."""
+        with membership._exclusive(self.lock_path):
+            return self._advance(sequence, allowance)
+
+    def _advance(self, sequence, allowance=None):
         # under HighWater's lock, with the increments: two processes given the same sequence cannot both pass
         now = self.value()
+        base = self._base()
         require(sequence > now, "REPLAY: sequence %d is not above the TPM counter %d" % (sequence, now))
-        return super()._advance(sequence)
+        bound = self.MAX_JUMP if allowance is None else allowance
+        require(sequence - now <= bound, "sequence jump %d exceeds the bound %d: anomaly" % (sequence - now, bound))
+        while now < sequence:
+            require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+            nxt = self._epoch(base)
+            require(nxt == now + 1, "the NV counter did not advance by one (%d -> %d)" % (now, nxt))
+            now = nxt
+        return now
 
 
 class TpmClock:
@@ -215,11 +272,17 @@ class Freshness:
             with open(self.state_path, "rb") as f:
                 raw = f.read(MAX_BYTES + 1)
         except FileNotFoundError:
-            return {"envelope": None, "floor": None}
+            return {"envelope": None, "floor": None, "allowance": None}
         require(len(raw) <= MAX_BYTES, "the freshness state is oversized")
         state = membership.load(raw)
-        membership.exact(state, ("envelope", "floor"), "freshness state")
+        # "allowance" (the bound the held heartbeat was accepted under) was added for #199; a state written
+        # before it has none, and is read as the fixed bound
+        require(isinstance(state, dict), "the freshness state must be an object")
+        state.setdefault("allowance", None)
+        membership.exact(state, ("envelope", "floor", "allowance"), "freshness state")
         validate_floor(state["floor"])
+        require(state["allowance"] is None or (isinstance(state["allowance"], int) and not isinstance(state["allowance"], bool)
+                                                and 1 <= state["allowance"] <= MAX_ALLOWANCE), "the stored allowance is out of range")
         return state
 
     def _write(self, state):
@@ -268,12 +331,31 @@ class Freshness:
         now = self._now(state)
         left = self._live(heartbeat, now)
         held = self.counter.value()
+        # An advance a crash interrupted (the held heartbeat is above the counter) is finished FIRST, under
+        # the allowance it was accepted under: a node that stopped at ANY increment of a long catch-up is
+        # not stranded by the counter it left behind, and the new heartbeat is measured from there. Only
+        # for a held heartbeat SIGNED by a revocation key the current manifest names (any epoch: the
+        # catch-up may span one): a file planted on the disk owes nothing and moves nothing.
+        owed = pending(state, held, self.counter.MAX_JUMP)
+        widen = 0
+        if owed:
+            try:
+                signed(state["envelope"], manifest)
+            except Refused:
+                # Not finished on the strength of the file (planted, or signed by a key a rotation has since
+                # retired). But the gap it records may be real: the bound for THIS heartbeat, which is
+                # verified, widens by it (capped), so a node caught mid catch-up by a key rotation is not
+                # stranded. The counter still lands only on a genuinely signed sequence.
+                owed, widen = 0, owed
+        if owed:
+            held = self.counter.advance(held + owed, state["allowance"] or self.counter.MAX_JUMP)
+        allowance = min(allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP) + widen, MAX_ALLOWANCE)
         require(heartbeat["sequence"] > held, "REPLAY: sequence %d is not above the TPM counter %d" % (heartbeat["sequence"], held))
-        require(heartbeat["sequence"] - held <= self.counter.MAX_JUMP, "sequence jump %d exceeds the bound %d: anomaly"
-                % (heartbeat["sequence"] - held, self.counter.MAX_JUMP))
-        state["envelope"] = envelope
-        self._write(state)                          # disk first, durably
-        self.counter.advance(heartbeat["sequence"])  # then the counter
+        require(heartbeat["sequence"] - held <= allowance, "sequence jump %d exceeds the bound %d: anomaly"
+                % (heartbeat["sequence"] - held, allowance))
+        state["envelope"], state["allowance"] = envelope, allowance
+        self._write(state)                                                # disk first, durably
+        self.counter.advance(heartbeat["sequence"], state["allowance"])  # then the counter
         return left
 
     def check(self, manifest):
@@ -321,7 +403,7 @@ class Freshness:
         # every check above (signature, a key of the current manifest, lifetime, expiry) moves the counter:
         # a file planted on the disk cannot push it forward and strand the node.
         if heartbeat["sequence"] > held:
-            self.counter.advance(heartbeat["sequence"])
+            self.counter.advance(heartbeat["sequence"], state["allowance"] or self.counter.MAX_JUMP)
         return now, heartbeat
 
 

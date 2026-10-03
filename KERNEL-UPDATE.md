@@ -127,6 +127,24 @@ For each host, in order:
 **After step 5 there is no automatic fallback.** If the new image then breaks, the root signs again:
 either the next update, or a document that re-approves the old image.
 
+## A membership format change: schema v3 and typed keys (#199, #156)
+
+Typed keys exist so that the revocation key (#199) and the root (#156) can live on Nitrokeys. A typed key is an
+`{"alg": "ecdsa-p256", "key": ...}` entry: ECDSA P-256, because the token's PKCS#11 offers no EdDSA. A typed key
+is valid **only in a `regalia.membership/v3` manifest**. A verifier that knows only Ed25519 must refuse such a
+manifest whole, never misread a key, and that includes the initrd's Go `accept()` until it is ported. The order
+is therefore fixed:
+
+1. **An image whose verifiers know v3** (the Python services and the initrd's Go `accept()`, both checked
+   against `tests/vectors/typed-keys-p256.json`) is approved, rolled out and booted on every node by the
+   procedure above.
+2. **Only then does the root sign a v3 manifest** that introduces a typed key. The schema only moves forward,
+   and only the root can move it (`membership.accept`).
+
+A v2 manifest carrying a typed key is refused everywhere (a vector checks it). Before the first ceremony there
+is no chain yet, so the **first** manifest can already be v3, provided both verifiers have merged before that
+ceremony (a ceremony prerequisite).
+
 ## If something goes wrong
 
 | Situation | What to do | Status |
