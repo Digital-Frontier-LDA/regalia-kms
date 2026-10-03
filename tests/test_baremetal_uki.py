@@ -242,6 +242,7 @@ class Case(unittest.TestCase):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
         self.inputs["root_key"] = self.write("root-key.json", ROOT_KEY)
+        self.inputs["initrd_build"] = self.initrd_build()      # #248: an image is signed only from a builder's initrd
         self.out = os.path.join(self.d, "out")
 
     def write(self, name, content):
@@ -267,8 +268,11 @@ class Case(unittest.TestCase):
 
     def build(self, **kw):
         kw.setdefault("unlock_client", self.write("regalia-unlock.compiled", CLIENT))
-        return uki.build(dict(self.inputs, **kw.pop("inputs", {})), kw.pop("uname", "6.12.41+deb13-amd64"), kw.pop("name", "image-7"), self.out,
-                         run=self.tools, **kw)
+        given = kw.pop("inputs", {})
+        inputs = dict(self.inputs, **given)
+        if "initrd_build" not in given:     # the build record for the initrd and the client this build is given
+            inputs["initrd_build"] = self.initrd_build("initrd-build-of-build.json", initrd=inputs["initrd"], client=uki.read(kw["unlock_client"]))
+        return uki.build(inputs, kw.pop("uname", "6.12.41+deb13-amd64"), kw.pop("name", "image-7"), self.out, run=self.tools, **kw)
 
     def signing_keys(self, **change):
         keys = {role: (self.key(role, "key"), self.key(role, "crt")) for role in ("initrd", "system", "secure_boot")}
@@ -412,7 +416,7 @@ class Build(Case):
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
         self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1")            # the file's newline is not in the image
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
-        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "linux", "os_release", "pcrpkey", "root_key", "stub"])
+        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "root_key", "stub"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
         self.assertEqual(record["tools"], {"ukify": "ukify 257 (stand-in)", "systemd_measure": "systemd-measure 257 (stand-in)"})
         with open(os.path.join(self.out, "image-7.record.json"), "rb") as f:
@@ -989,12 +993,24 @@ class InitrdBuildRecord(Case):
                 self.refused(reason, self.build, inputs={"initrd_build": path}, name="image-%d" % len(reason))
 
     def test_sign_holds_the_record_to_the_inputs_and_rechecks_it(self):
-        inputs = dict(self.inputs, initrd_build=self.initrd_build())
-        record = self.build(inputs={"initrd_build": inputs["initrd_build"]})
-        self.sign(record=record, inputs=inputs)
-        swapped = dict(inputs, initrd_build=self.initrd_build("swapped.json", commit="ef" * 20))
+        record = self.build()
+        swapped = dict(self.inputs, initrd_build=self.initrd_build("swapped.json", commit="ef" * 20))
         self.refused("the input --initrd-build is not the one the record was built from", self.sign, record=record, inputs=swapped)
-        self.refused("the input --initrd-build is not the one the record was built from", self.sign, record=record, inputs=self.inputs)   # left out
+        left_out = {k: v for k, v in self.inputs.items() if k != "initrd_build"}
+        self.refused("the input --initrd-build is not the one the record was built from", self.sign, record=record, inputs=left_out)
+        self.sign(record=record)
+
+    def test_sign_itself_refuses_a_record_without_one(self):
+        """Not only the command line: a caller of the library function cannot sign an image whose record names no
+        initrd build record (#248, 1e's read of #258)."""
+        bare = {k: v for k, v in self.inputs.items() if k != "initrd_build"}
+        record = uki.build(bare, "6.12.41+deb13-amd64", "image-bare", self.out, run=self.tools,
+                           unlock_client=self.write("regalia-unlock.compiled", CLIENT))
+        self.assertNotIn("initrd_build", record["inputs"])
+        self.refused("the record names no initrd build record (--initrd-build): an image is signed only from an initrd every builder "
+                     "built itself", uki.sign, bare, record, self.signing_keys(), "file", self.out, run=self.tools,
+                     second_record=json.loads(json.dumps(record)), report=lambda line: None)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "image-bare.efi")))
 
     def test_the_commands_require_it(self):
         argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.inputs["cmdline"],
@@ -1288,12 +1304,13 @@ class InitrdReview(Case):
         bad = self.write("initrd-bad", unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, b"rd.luks.uuid=1\n")}))
         record = self.build(inputs={"initrd": bad})
         self.assertFalse(record["initrd_review"]["passed"])
-        self.refused("the record's initrd review did not pass, so nothing is signed", self.sign, record=record, inputs=dict(self.inputs, initrd=bad))
+        bad_inputs = dict(self.inputs, initrd=bad, initrd_build=self.initrd_build("bad-build.json", initrd=bad))
+        self.refused("the record's initrd review did not pass, so nothing is signed", self.sign, record=record, inputs=bad_inputs)
         forged = json.loads(json.dumps(record))
         forged["initrd_review"]["passed"] = True
-        self.refused("says passed only with no finding", self.sign, record=forged, inputs=dict(self.inputs, initrd=bad))
+        self.refused("says passed only with no finding", self.sign, record=forged, inputs=bad_inputs)
         forged["initrd_review"]["findings"] = []
-        self.refused("this machine's review of the initrd is not the record's", self.sign, record=forged, inputs=dict(self.inputs, initrd=bad))
+        self.refused("this machine's review of the initrd is not the record's", self.sign, record=forged, inputs=bad_inputs)
 
 
 def newc_owned(data, path, uid):
