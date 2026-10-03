@@ -128,6 +128,7 @@ def meshed(authority=None, **service):
     doc = json.loads(EXAMPLE.read_text())
     doc["host_ipv4"] = "192.0.2.10"
     doc["boot_mesh"] = {"node_id": "a", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443,
+                        "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                         "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
                                   {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]}
     doc["service_mesh"] = dict({"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": authority}, **service)

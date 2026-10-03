@@ -21,6 +21,7 @@ def site(node="a", **mesh):
     doc = json.loads(EXAMPLE.read_text())
     doc["host_ipv4"] = WHERE[node][0]
     doc["boot_mesh"] = dict({"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": WHERE[node][1], "unlock_port": 7443,
+                             "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                              "peers": [{"node_id": n, "underlay": u, "address": t} for n, (u, t) in WHERE.items() if n != node]}, **mesh)
     return doc
 
@@ -147,6 +148,12 @@ class Mesh(Case):
 
 
 class SiteMesh(Case):
+    def test_the_initrd_card_prefix_and_gateway(self):
+        self.assertEqual({k: self.cfg["boot_mesh"][k] for k in ("nic_mac", "prefix", "gateway")}, {"nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None})
+        routed = sitecfg.validate(site(prefix=24, gateway="192.0.2.1"))["boot_mesh"]
+        self.assertEqual((routed["prefix"], routed["gateway"]), (24, "192.0.2.1"))
+        self.assertEqual(sitecfg.validate(site(prefix=31, gateway="192.0.2.11"))["boot_mesh"]["gateway"], "192.0.2.11")   # a /31: both addresses are hosts
+
     def test_the_boot_mesh_is_null_or_exact(self):
         self.assertIsNone(sitecfg.validate(json.loads(EXAMPLE.read_text()))["boot_mesh"])
         self.assertEqual(self.cfg["boot_mesh"]["peers"][0], {"node_id": "b", "underlay": "198.51.100.7", "address": "10.89.0.2"})
@@ -182,6 +189,23 @@ class SiteMesh(Case):
             "shared underlay": (lambda d: d["boot_mesh"]["peers"][1].__setitem__("underlay", "198.51.100.7"), "no two nodes share an address"),
             "the host's own underlay": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", "192.0.2.10"), "no two nodes share an address"),
             "IPv6 underlay": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", "2001:db8::7"), "underlay must be an IPv4 address"),
+            # the initrd's card, prefix and gateway (#66, regalia.boot-env)
+            "no nic_mac": (lambda d: d["boot_mesh"].pop("nic_mac"), "boot_mesh must be null or hold exactly"),
+            "a MAC in upper case": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "52:54:00:AB:CD:01"), "nic_mac must be a unicast MAC"),
+            "a MAC with dashes": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "52-54-00-12-34-56"), "nic_mac must be a unicast MAC"),
+            "an interface name": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "eno1"), "nic_mac must be a unicast MAC"),
+            "a multicast MAC": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "01:00:5e:00:00:01"), "nic_mac must be a unicast MAC"),
+            "an all-zero MAC": (lambda d: d["boot_mesh"].__setitem__("nic_mac", "00:00:00:00:00:00"), "nic_mac must be a unicast MAC"),
+            "prefix 0": (lambda d: d["boot_mesh"].__setitem__("prefix", 0), "prefix must be a prefix length from 1 to 32"),
+            "prefix 33": (lambda d: d["boot_mesh"].__setitem__("prefix", 33), "prefix must be a prefix length from 1 to 32"),
+            "prefix true": (lambda d: d["boot_mesh"].__setitem__("prefix", True), "prefix must be a prefix length from 1 to 32"),
+            "prefix as text": (lambda d: d["boot_mesh"].__setitem__("prefix", "24"), "prefix must be a prefix length from 1 to 32"),
+            "a gateway off the link": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.3.1"), "gateway must be another address inside 192.0.2.0/24"),
+            "the host as its gateway": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.10"), "gateway must be another address inside"),
+            "the network as gateway": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.0"), "not its network or broadcast address"),
+            "the broadcast as gateway": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.255"), "not its network or broadcast address"),
+            "a gateway under /32": (lambda d: d["boot_mesh"].update(gateway="192.0.2.1"), "gateway must be another address inside 192.0.2.10/32"),
+            "a gateway as a network": (lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.2.1/24"), "boot_mesh.gateway must be an IPv4 address"),
         }
         for label, (breakit, why) in cases.items():
             with self.subTest(label):
