@@ -1,0 +1,61 @@
+# Whether this host's time is authenticated (#69, #80): asks chrony every 15 s and writes
+# /run/regalia/authtime.json, which the other services believe for 60 s (deploy/baremetal/authtime.py).
+# chronyc answers `authdata` only over chrony's Unix command socket, in /run/chrony (owned by _chrony,
+# mode 0750), and binds a socket of its own there: so this runs as root in the _chrony group with ONE
+# capability, CAP_DAC_OVERRIDE, to write that directory. It writes nothing else but /run/regalia, and has
+# no network at all. (Running as _chrony instead would let a compromised chronyd, which parses NTP from
+# the network, forge the status: the readers accept it only from root.) If chronyd accepts a group-
+# writable /run/chrony, a tmpfiles line could make the capability unnecessary: to be measured on a host.
+[Unit]
+Description=Regalia KMS: is time authenticated (chrony, NTS)
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=chrony.service
+Wants=chrony.service
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip, tpm2_*, chronyc and openssl are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json authtime
+Restart=always
+RestartSec=5s
+User=root
+SupplementaryGroups=_chrony
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/regalia /run/chrony
+# CAP_DAC_OVERRIDE would let it read any file it can see, so it sees almost none: /etc is an empty
+# read-only tmpfs with only its own configuration and what the C library needs bound into it, /var is
+# empty, and other processes are invisible under /proc. (Not ProcSubset=pid: the kernel's boot ID,
+# under /proc/sys, is part of the status it writes.)
+TemporaryFileSystem=/etc:ro /var:ro /run:ro
+# /run likewise: other units' credentials (/run/credentials) and whatever else is staged there stay out
+# of sight; only the two directories it writes are bound back
+BindPaths=/run/regalia /run/chrony
+BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime
+ProtectProc=invisible
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

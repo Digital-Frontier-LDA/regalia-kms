@@ -584,3 +584,40 @@ image (a changed or retired initrd refused on a real boot), the commands an oper
 host and to write `/etc/regalia` after each manifest, the long-running peer process, and every run on
 a physical TPM, a DL360 (#65) or the real datacenter networks. Sections 3 to 5 above still describe
 the single-site baseline (initramfs-tools, TPM-only crypttab); they change when this is commissioned.
+
+## 8. The node's running services (three-site, #80): not commissioned yet
+
+Four systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
+(`deploy/baremetal/node.py`; schema `regalia.node/v1`, every field required):
+
+| Unit | Runs as | Privilege | Does |
+|---|---|---|---|
+| `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
+| `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
+| `regalia-admission` | root | none; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission.json` |
+| `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store, runs the heartbeat watch |
+
+- **One writer of the membership chain.** `regalia-sync` owns the store and publishes the verified chain
+  (`/var/lib/regalia-sync/chain.json`, 0644). The root services verify that copy themselves against the
+  root key and the TPM anchor: a `regalia-sync` that withholds or rolls back makes them refuse, so the node
+  stops serving rather than serving under an old manifest.
+- **The boot session** comes from the unlock client (`/run/regalia/boot-session` and `.pub`, #67); on a
+  boot that opened the disk with the recovery key, `regalia-admission` makes one and writes the pair.
+  Edge cases from the unlock side: an unwritable `/run` at the first quote followed by a client restart in
+  the same boot can leave a record one peer does not hold until the next boot; a kexec always ends at the
+  recovery prompt.
+- `/run/regalia` is created by `regalia.tmpfiles.conf` when the unlock client did not run, and is never
+  any unit's `RuntimeDirectory=` (systemd would remove it, boot session included, when that unit stops).
+- Each unit's sandbox is pinned by `tests/test_baremetal_units.py`, including systemd's own
+  `systemd-analyze verify` and an offline exposure score of at most 3.0.
+
+**NOT BUILT: provisioning a node (#190).** Nothing writes a node's trust anchors yet. Until the enrolment
+command exists they are placed by hand, as the end-to-end test does: the membership store's first
+manifest (`/var/lib/regalia-sync/membership.json`, through `membership.Store.commit`, which also defines
+and advances the TPM anchor), the heartbeat counter's NV index, the measurements document the manifest
+commits to, each peer's AK in the attestation state (`attest.Verifier`), the WG-SERVICE private key
+(`/etc/regalia/wg-service.key`, 0600), the site configuration with `boot_mesh` and `service_mesh`, and
+`chrony.conf` as `authtime.conf()` renders it (the whole file).
+
+**NOT BUILT: the revocation authority (#199).** Nothing signs heartbeats yet: a cluster run with these
+units stops authorizing within the heartbeat lifetime, by design, until the authority exists.
