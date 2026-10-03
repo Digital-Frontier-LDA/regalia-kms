@@ -10,7 +10,7 @@ import (
 // "All three settings or none" would leave the fail-open case standing: a production host whose
 // configuration simply lacks the block serves with no runtime lease, and nothing says so. So the
 // decision is written down. With a token configured, runtime_admission must be "required" (and then
-// its three settings must be there) or "disabled-for-lab" (and then none of them may be).
+// its four settings must be there) or "disabled-for-lab" (and then none of them may be).
 func TestRuntimeAdmissionMustBeStatedWhereThereIsAToken(t *testing.T) {
 	withToken := func(cfg *Config) {
 		cfg.PKCS11ModulePath = "/usr/lib/opensc-pkcs11.so"
@@ -31,7 +31,8 @@ func TestRuntimeAdmissionMustBeStatedWhereThereIsAToken(t *testing.T) {
 	}
 	required := func(cfg *Config) {
 		cfg.RuntimeAdmission = RuntimeAdmissionRequired
-		cfg.RuntimeAdmissionPath, cfg.NodeID, cfg.BootSessionPath = "/run/regalia/admission.json", "site-a", "/run/regalia/boot-session"
+		cfg.RuntimeAdmissionPath, cfg.NodeID, cfg.BootSessionPath = "/run/regalia/admission/admission.json", "site-a", "/run/regalia/boot-session"
+		cfg.RuntimeAdmissionOwner = "regalia-admission"
 	}
 	cases := []struct {
 		name   string
@@ -45,12 +46,21 @@ func TestRuntimeAdmissionMustBeStatedWhereThereIsAToken(t *testing.T) {
 		{"a token, disabled for the lab", []func(*Config){withToken, func(c *Config) { c.RuntimeAdmission = RuntimeAdmissionDisabledForLab }}, ""},
 		{"no token, nothing stated", nil, ""},
 		{"no token, required, complete", []func(*Config){required}, ""},
-		{"required without the admission path", []func(*Config){withToken, required, func(c *Config) { c.RuntimeAdmissionPath = "" }}, `"required" needs runtime_admission_path, node_id and boot_session_path`},
-		{"required without the node ID", []func(*Config){withToken, required, func(c *Config) { c.NodeID = "" }}, `"required" needs runtime_admission_path, node_id and boot_session_path`},
-		{"required without the boot session path", []func(*Config){withToken, required, func(c *Config) { c.BootSessionPath = "" }}, `"required" needs runtime_admission_path, node_id and boot_session_path`},
-		{"required with nothing else", []func(*Config){withToken, func(c *Config) { c.RuntimeAdmission = RuntimeAdmissionRequired }}, `"required" needs runtime_admission_path, node_id and boot_session_path`},
+		{"required without the admission path", []func(*Config){withToken, required, func(c *Config) { c.RuntimeAdmissionPath = "" }}, `"required" needs runtime_admission_path, runtime_admission_owner, node_id and boot_session_path`},
+		{"required without the node ID", []func(*Config){withToken, required, func(c *Config) { c.NodeID = "" }}, `"required" needs runtime_admission_path, runtime_admission_owner, node_id and boot_session_path`},
+		{"required without the boot session path", []func(*Config){withToken, required, func(c *Config) { c.BootSessionPath = "" }}, `"required" needs runtime_admission_path, runtime_admission_owner, node_id and boot_session_path`},
+		{"required with nothing else", []func(*Config){withToken, func(c *Config) { c.RuntimeAdmission = RuntimeAdmissionRequired }}, `"required" needs runtime_admission_path, runtime_admission_owner, node_id and boot_session_path`},
+		{"required without the lease service's user", []func(*Config){withToken, required, func(c *Config) { c.RuntimeAdmissionOwner = "" }}, `"required" needs runtime_admission_path, runtime_admission_owner, node_id and boot_session_path`},
+		{"the lease service's user as a number", []func(*Config){required, func(c *Config) { c.RuntimeAdmissionOwner = "998" }}, "runtime_admission_owner must be the name of the user"},
+		{"the lease service's user with a path in it", []func(*Config){required, func(c *Config) { c.RuntimeAdmissionOwner = "../root" }}, "runtime_admission_owner must be the name of the user"},
+		{"the lease service as root, said in so many words", []func(*Config){withToken, required, func(c *Config) { c.RuntimeAdmissionOwner = "root" }}, ""},
+		{"disabled for the lab, with only an owner", []func(*Config){func(c *Config) {
+			c.RuntimeAdmission, c.RuntimeAdmissionOwner = RuntimeAdmissionDisabledForLab, "regalia-admission"
+		}}, `"disabled-for-lab" takes no`},
 		{"a relative admission path", []func(*Config){required, func(c *Config) { c.RuntimeAdmissionPath = "admission.json" }}, "must be absolute"},
 		{"a relative boot session path", []func(*Config){required, func(c *Config) { c.BootSessionPath = "run/boot-session" }}, "must be absolute"},
+		{"an admission path with .. in it", []func(*Config){required, func(c *Config) { c.RuntimeAdmissionPath = "/run/regalia/admission/l/../admission.json" }}, "must be clean paths"},
+		{"a boot session path with a trailing slash", []func(*Config){required, func(c *Config) { c.BootSessionPath = "/run/regalia/boot-session/" }}, "must be clean paths"},
 		{"a node ID the manifest could not hold", []func(*Config){required, func(c *Config) { c.NodeID = "Site A" }}, "node_id must be this node's ID"},
 		{"disabled for the lab, with a path left in", []func(*Config){withToken, required, func(c *Config) { c.RuntimeAdmission = RuntimeAdmissionDisabledForLab }}, `"disabled-for-lab" takes no`},
 		{"disabled for the lab, with only a node ID", []func(*Config){func(c *Config) { c.RuntimeAdmission, c.NodeID = RuntimeAdmissionDisabledForLab, "site-a" }}, `"disabled-for-lab" takes no`},
@@ -88,9 +98,9 @@ func TestADocumentWithATokenAndNoRuntimeAdmissionIsRefused(t *testing.T) {
 	if _, err := Decode(strings.NewReader("{" + token + "}")); err == nil || !strings.Contains(err.Error(), "must state runtime_admission") {
 		t.Fatalf("Decode = %v, want the runtime_admission refusal", err)
 	}
-	settings, err := Decode(strings.NewReader("{" + token + `,"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission.json",` +
-		`"node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`))
-	if err != nil || settings.RuntimeAdmission != RuntimeAdmissionRequired {
+	settings, err := Decode(strings.NewReader("{" + token + `,"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission/admission.json",` +
+		`"runtime_admission_owner":"regalia-admission","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`))
+	if err != nil || settings.RuntimeAdmission != RuntimeAdmissionRequired || settings.RuntimeAdmissionOwner != "regalia-admission" {
 		t.Fatalf("Decode = %+v, %v", settings.RuntimeAdmission, err)
 	}
 	if _, err := Decode(strings.NewReader("{" + token + `,"runtime_admission":"disabled-for-lab"}`)); err != nil {

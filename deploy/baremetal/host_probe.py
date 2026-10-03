@@ -98,6 +98,19 @@ PLATFORM AND TPM, measured:
                             WHY NOT THE TPM ALONE: a signed PCR 11 policy has no counter, so every image
                             the PCR-signing key ever signed opens a TPM-only credential for ever. With
                             the host key in the seal, an image must also unlock the root disk
+                            THE SIGNED PCR 11 POLICY IS REQUIRED (#198): a binding without it fails, even
+                            sealed as recorded and opening. With it, a credential that opens is the TPM
+                            saying this boot's PCR 11 carries a signature of the system-phase key, and
+                            `uki sign` signs only an image whose initrd passed its review (the crypttab,
+                            the command line, the unlock units, nothing from outside the image). So this
+                            boot is an image whose initrd was reviewed: what /etc/crypttab and
+                            /proc/cmdline cannot show about the initrd (root_disk_unlock_revocable). TWO
+                            LIMITS: (1) it holds only if every system-phase signature comes from `uki
+                            sign`; whoever holds that offline key could sign an unreviewed image by hand,
+                            so the key's custody (the owner, #156) is part of this guarantee. (2) It shows
+                            an image that passed the review WHEN IT WAS SIGNED, not the current one: a
+                            retired image that once passed still opens until it is retired, which is
+                            #135's (pcrlock retirement)
   hsm_token_attached        a Nitrokey HSM 2 (USB 20a0:4230) is on the bus (sysfs; no token client
                             needed); its USB path is reported so the evidence can pin the INTERNAL port
   firewall_default_deny     the table `inet regalia_kms` (deploy/baremetal/firewall.py) is loaded, with its
@@ -953,6 +966,12 @@ def pin_credentials(host, expected=None):
     ok, detail = host_key_protected(host)
     if not ok:
         return False, detail
+    # #198: the boot is an image whose initrd passed review only if the TPM checked this boot's PCR 11
+    # against a signature of the system-phase key, so a binding without the signed PCR 11 policy fails
+    if 11 not in expected[1]:
+        return False, "the PIN credentials open, but under %s: with no signed PCR 11 policy nothing ties this boot to an " \
+            "image `uki sign` signed, so nothing shows its initrd was reviewed (#198). Reseal them with seal-hsm-pin.sh " \
+            "under the signed PCR 11 policy, and record credential_tpm2_signed_pcrs 11 and its key" % binding_text(*expected)
     return True, "%d PIN credential(s) open on this boot, sealed to the host key and the TPM under %s, as recorded (%s); %s" % (
         len(names), binding_text(*expected), ", ".join(names), detail)
 

@@ -148,15 +148,18 @@ disk's to enforce, in one place.
 image it was sealed on and on an updated one; with another disk's host key, or none, it does not
 open on either; and a TPM-only credential opens with no host key at all.
 
-**BLOCKING FOR PRODUCTION, not done:** this moves the question to the root disk, and today the root
-disk is unlocked by the local TPM alone, bound to PCR 7 (`root_disk_tpm_unlocked`). An old signed
-image with the same Secure Boot state unlocks it, reaches the host key, and opens the PIN. The seal
-is only as revocable as the disk unlock. The disk must need something a retired image cannot get: a
-peer's contribution, given only to an image the membership manifest currently accepts (#66, #67), or
-an NV-backed local policy. Until then a retired image is retired in name only. Tracked as #135, and
-measured on every host: `host_probe.py` (`root_disk_unlock_revocable`) fails while a keyslot of the
-root volume is released by a TPM token bound to PCR values or to a signed policy, and it cannot be
-skipped.
+**So the seal is only as revocable as the disk unlock (#135).** The root disk opens only with the TPM
+**and** a peer: each keyslot needs a half sealed to this TPM, which every signed image gets, and a half
+a peer gives only to an image its current, root-signed manifest still lists (#67, `deploy/baremetal/unlock.py`).
+A retired image therefore leaves the disk locked, cannot reach the host key, and cannot open the PIN.
+`host_probe.py` (`root_disk_unlock_revocable`) fails any host whose root volume a TPM token bound to PCR
+values or to a signed policy opens alone, and it cannot be skipped.
+
+*Verified by:* `e2e/unlock-boot-qemu.sh`, boots 2c and 2d (a real boot: QEMU, OVMF, a software TPM, a
+signed UKI, a dracut initrd). An older image signed by the same keys boots while the peers' document
+lists it. Once retired, its TPM still releases the local half, both peers refuse it naming PCR 11, and
+the disk stays locked; the current image then boots (boot 2b). Also `e2e/peer-unlock-swtpm.sh` section 4.
+**Not verified on a DL360** (the #65 checklist, section D): that run is still owed.
 
 ### Migrating a credential sealed before this change
 

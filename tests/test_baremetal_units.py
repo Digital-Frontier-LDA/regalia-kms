@@ -1,6 +1,7 @@
 """deploy/baremetal/units (#80, step 3b): what each unit may do, pinned. The processes are node.py's; a run
 of the units under a real systemd is the end-to-end step that follows."""
 import configparser
+import os
 import pathlib
 import re
 import shutil
@@ -10,7 +11,7 @@ import unittest
 from deploy.baremetal import node
 
 UNITS = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "baremetal" / "units"
-SERVICES = ("regalia-authtime", "regalia-wg-apply", "regalia-admission", "regalia-sync")
+SERVICES = ("regalia-authtime", "regalia-wg-apply", "regalia-boot-session", "regalia-admission", "regalia-sync")
 
 
 def unit(name):
@@ -33,8 +34,9 @@ class Units(unittest.TestCase):
         for name in SERVICES:
             self.assertIn('"%s"' % name[len("regalia-"):], choices)
 
-    def test_each_unit_holds_at_most_the_one_capability_it_needs_and_only_sync_is_not_root(self):
-        expected = {"regalia-authtime": "CAP_DAC_OVERRIDE", "regalia-wg-apply": "CAP_NET_ADMIN", "regalia-admission": "", "regalia-sync": ""}
+    def test_each_unit_holds_at_most_the_one_capability_it_needs_and_the_two_that_talk_to_peers_are_not_root(self):
+        expected = {"regalia-authtime": "CAP_DAC_OVERRIDE", "regalia-wg-apply": "CAP_NET_ADMIN", "regalia-boot-session": "",
+                    "regalia-admission": "", "regalia-sync": ""}
         for name, capabilities in expected.items():
             with self.subTest(name):
                 service = self.service(name)
@@ -44,8 +46,11 @@ class Units(unittest.TestCase):
                 self.assertEqual(service["ProtectSystem"], "strict")
                 self.assertEqual(service["LimitCORE"], "0")
                 self.assertEqual(service["Environment"], "PATH=/usr/sbin:/usr/bin")
-        self.assertEqual(self.service("regalia-sync")["User"], "regalia-sync")       # the one that parses what peers send
-        for name in ("regalia-authtime", "regalia-wg-apply", "regalia-admission"):
+        # the two that parse what peers send (#191 for admission); its group is its own, the TPM through tss
+        self.assertEqual(self.service("regalia-sync")["User"], "regalia-sync")
+        self.assertEqual((self.service("regalia-admission")["User"], self.service("regalia-admission")["Group"]),
+                         ("regalia-admission", "regalia-admission"))
+        for name in ("regalia-authtime", "regalia-wg-apply", "regalia-boot-session"):
             self.assertEqual(self.service(name)["User"], "root")
 
     def test_what_each_unit_may_write_and_reach(self):
@@ -61,8 +66,24 @@ class Units(unittest.TestCase):
         self.assertEqual(self.service("regalia-authtime")["PrivateNetwork"], "yes")
         self.assertEqual(self.service("regalia-authtime")["RestrictAddressFamilies"], "AF_UNIX")
         admission = self.service("regalia-admission")
+        # its own directory only, inside root's /run/regalia; the boot session beside it is not its to write
         self.assertEqual((admission["ReadWritePaths"], admission["StateDirectory"], admission["StateDirectoryMode"]),
-                         ("/run/regalia", "regalia-admission", "0700"))
+                         ("/run/regalia/admission", "regalia-admission", "0700"))
+        admission_unit = unit("regalia-admission.service")["Unit"]
+        self.assertEqual(admission_unit["Requires"], "regalia-boot-session.service")
+        self.assertIn("regalia-boot-session.service", admission_unit["After"].split())
+        boot_session = self.service("regalia-boot-session")
+        # root, to write root's /run/regalia, and nothing else: no capability, no network, no device, and an
+        # empty /etc, /var and /run around it but for its configuration and that one directory
+        self.assertEqual((boot_session["Type"], boot_session["RemainAfterExit"]), ("oneshot", "yes"))
+        self.assertEqual((boot_session["ReadWritePaths"], boot_session["BindPaths"]), ("/run/regalia", "/run/regalia"))
+        self.assertEqual(boot_session["TemporaryFileSystem"], "/etc:ro /var:ro /run:ro")
+        self.assertEqual(boot_session["BindReadOnlyPaths"].split()[0], "/etc/regalia/node.json")
+        self.assertEqual((boot_session["PrivateNetwork"], boot_session["PrivateDevices"], boot_session["RestrictAddressFamilies"]),
+                         ("yes", "yes", "AF_UNIX"))
+        self.assertIn("regalia-admission.service", unit("regalia-boot-session.service")["Unit"]["Before"].split())
+        # never in an initrd, where the unlock client owns the pair, whatever an image builder copies
+        self.assertEqual(unit("regalia-boot-session.service")["Unit"]["ConditionPathExists"], "!/etc/initrd-release")
         self.assertEqual((admission["IPAddressDeny"], admission["IPAddressAllow"]), ("any", "fd72:6567:6c61::/48"))
         wg_apply = self.service("regalia-wg-apply")
         self.assertNotIn("ReadWritePaths", wg_apply)                                 # it writes nothing but the kernel's state
@@ -78,7 +99,7 @@ class Units(unittest.TestCase):
                 # /run/regalia is shared with the unlock client and the daemon: never a unit's RuntimeDirectory,
                 # which systemd removes (boot-session included) when that unit stops
                 self.assertNotIn("RuntimeDirectory", service)
-                if name != "regalia-authtime":
+                if name not in ("regalia-authtime", "regalia-boot-session"):
                     # the device cgroup lets it through; the file's mode (tss, 0660) needs the group
                     self.assertEqual((service.get("DevicePolicy"), service.get("DeviceAllow"), service.get("SupplementaryGroups")),
                                      ("closed", "/dev/tpmrm0 rw", "tss"))
@@ -90,11 +111,15 @@ class Units(unittest.TestCase):
         example = node.validate(json.loads((UNITS.parent / "node.example.json").read_text()))
         self.assertEqual(example["state_dir"], "/var/lib/" + self.service("regalia-sync")["StateDirectory"])
         self.assertEqual(example["admission_dir"], "/var/lib/" + self.service("regalia-admission")["StateDirectory"])
-        self.assertEqual(example["run_dir"], self.service("regalia-admission")["ReadWritePaths"])
+        self.assertEqual(os.path.dirname(node.admission_file(example["run_dir"])), self.service("regalia-admission")["ReadWritePaths"])
         self.assertEqual(unit("regalia-wg-apply.path")["Path"]["PathChanged"], "/var/lib/regalia-sync/" + node.PUBLISHED)
         tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
         self.assertIn("d /run/regalia 0755 root root -", tmpfiles)
-        self.assertIn("u regalia-sync - ", (UNITS / "regalia.sysusers.conf").read_text())
+        # #191: the lease service's directory is its user's, inside root's, and no one else can write it
+        self.assertIn("d /run/regalia/admission 0755 regalia-admission regalia-admission -", tmpfiles)
+        users = (UNITS / "regalia.sysusers.conf").read_text()
+        self.assertIn("u regalia-sync - ", users)
+        self.assertIn("u regalia-admission - ", users)
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_the_units_and_scores_them_well_exposed_at_most_a_little(self):

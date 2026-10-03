@@ -1,0 +1,57 @@
+{
+  "about": "The unlock exchange's version 2 (deploy/baremetal/unlock.py): a quote from a software TPM and the values of its PCRs read beside it; the cases a peer must refuse, with attest.check_reported_values' reasons. Made by tests/vectors/make-pcr-values-v2.py.",
+  "pcr_digest": "9ec1d435f3c68f6905f629654a5da729d16c43e18456d89278729d4153e3a4d0",
+  "pcr_values": {
+    "11": "26dbd6a804b4e6311554691ba167389d409e36db5939dd8715d641d6d4251c7e",
+    "12": "3a8b40e83ccfc00a69aaf36965af8781b6f1e6a0df1ac6079cb5dd76293d978f",
+    "7": "3d42016a2de52e4be95985a06fe7d3e1ce05ee79f842b6949f8a73a3fe5d3057"
+  },
+  "quote": "ff54434780180022000baf27428783f93b52c1298a0d1f707bafe57ee3ad864ed9d7925380fac87271b60020e94dea538fe4d04c3b5625dd03b20bbf31e018ad8af59b07f079730c48bf87220000000000000202000000010000000001201910230016363600000001000b0380180000209ec1d435f3c68f6905f629654a5da729d16c43e18456d89278729d4153e3a4d0",
+  "refused": {
+    "another_spelling": {
+      "pcr_values": {
+        "07": "3d42016a2de52e4be95985a06fe7d3e1ce05ee79f842b6949f8a73a3fe5d3057",
+        "11": "26dbd6a804b4e6311554691ba167389d409e36db5939dd8715d641d6d4251c7e",
+        "12": "3a8b40e83ccfc00a69aaf36965af8781b6f1e6a0df1ac6079cb5dd76293d978f"
+      },
+      "reason": "the reported PCR values cover PCRs ['07', '11', '12'], not the quoted selection [7, 11, 12]"
+    },
+    "malformed": {
+      "pcr_values": {
+        "11": "26dbd6a804b4e6311554691ba167389d409e36db5939dd8715d641d6d4251c7e",
+        "12": "3a8b40e83ccfc00a69aaf36965af8781b6f1e6a0df1ac6079cb5dd76293d978f",
+        "7": "3D42016A2DE52E4BE95985A06FE7D3E1CE05EE79F842B6949F8A73A3FE5D3057"
+      },
+      "reason": "the reported PCR values must map PCR indices to 64 lowercase hex"
+    },
+    "missing": {
+      "pcr_values": {
+        "11": "26dbd6a804b4e6311554691ba167389d409e36db5939dd8715d641d6d4251c7e",
+        "7": "3d42016a2de52e4be95985a06fe7d3e1ce05ee79f842b6949f8a73a3fe5d3057"
+      },
+      "reason": "the reported PCR values cover PCRs ['7', '11'], not the quoted selection [7, 11, 12]"
+    },
+    "outside_the_selection": {
+      "pcr_values": {
+        "11": "26dbd6a804b4e6311554691ba167389d409e36db5939dd8715d641d6d4251c7e",
+        "12": "3a8b40e83ccfc00a69aaf36965af8781b6f1e6a0df1ac6079cb5dd76293d978f",
+        "7": "3d42016a2de52e4be95985a06fe7d3e1ce05ee79f842b6949f8a73a3fe5d3057",
+        "8": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "reason": "the reported PCR values cover PCRs ['7', '8', '11', '12'], not the quoted selection [7, 11, 12]"
+    },
+    "tampered": {
+      "pcr_values": {
+        "11": "26dbd6a804b4e6311554691ba167389d409e36db5939dd8715d641d6d4251c7f",
+        "12": "3a8b40e83ccfc00a69aaf36965af8781b6f1e6a0df1ac6079cb5dd76293d978f",
+        "7": "3d42016a2de52e4be95985a06fe7d3e1ce05ee79f842b6949f8a73a3fe5d3057"
+      },
+      "reason": "the reported PCR values do not match the quote"
+    }
+  },
+  "selection": [
+    7,
+    11,
+    12
+  ]
+}
