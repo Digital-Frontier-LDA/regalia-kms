@@ -1,0 +1,3519 @@
+{
+  "packages": {
+    "bsdutils": {
+      "control": {
+        "Description": "basic utilities from 4.4BSD-Lite\nThis package contains the bare minimum of BSD utilities needed for a Debian\nsystem: logger, renice, script, scriptlive, scriptreplay and wall. The\nremaining standard BSD utilities are provided by bsdextrautils.",
+        "Essential": "yes",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "bsdutils",
+        "Pre-Depends": "libc6 (>= 2.38), libsystemd0 (>= 254)",
+        "Priority": "required",
+        "Recommends": "bsdextrautils",
+        "Section": "utils",
+        "Source": "util-linux (2.42.4-0+regalia1)",
+        "Version": "1:2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/logger": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/renice": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/script": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/scriptlive": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/scriptreplay": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/wall": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions/logger": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/renice": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/script": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/scriptlive": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/scriptreplay": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/wall": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/bsdutils": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/bsdutils/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/bsdutils/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/bsdutils/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/bsdutils/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/lintian": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides/bsdutils": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man1/logger.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/renice.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/script.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/scriptlive.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/scriptreplay.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/wall.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "libblkid1": {
+      "control": {
+        "Depends": "libc6 (>= 2.38)",
+        "Description": "block device ID library\nThe blkid library allows system programs such as fsck and mount to\nquickly and easily find block devices by filesystem UUID or label.\nThis allows system administrators to avoid specifying filesystems by\nhard-coded device names and use a logical naming system instead.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libblkid1",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "shlibs": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "d57b22cfdf34da13b9f2bb4e475095d73569c124388614a56693d12ebfe3e64e"
+        },
+        "symbols": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "24daaadc2d5974a2a4c2df0f584f6b29423df35e655dd45fd6222fb98cce815a"
+        },
+        "triggers": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "c67ab4558a59eb1e96d899a5bdbb153d6a2ab0e580f4acf5bfb1e4e6150ad2f4"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}/libblkid.so.1": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "libblkid.so.1.1.0",
+          "mode": 511
+        },
+        "usr/lib/{triplet}/libblkid.so.1.1.0": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libblkid1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libblkid1/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libblkid1/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libblkid1/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libblkid1/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/lintian": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides/libblkid1": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "liblastlog2-2": {
+      "control": {
+        "Depends": "libc6 (>= 2.38), libsqlite3-0 (>= 3.5.9)",
+        "Description": "lastlog2 database shared library\nY2038 safe lastlog database implementation, library files.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "liblastlog2-2",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "shlibs": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "42aaa338b2da0a3f38425f691c3ce05bbac1f4fbe774ffc621c5c834c63aaa40"
+        },
+        "triggers": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "c67ab4558a59eb1e96d899a5bdbb153d6a2ab0e580f4acf5bfb1e4e6150ad2f4"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}/liblastlog2.so.2": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "liblastlog2.so.2.0.0",
+          "mode": 511
+        },
+        "usr/lib/{triplet}/liblastlog2.so.2.0.0": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/liblastlog2-2": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/liblastlog2-2/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/liblastlog2-2/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/liblastlog2-2/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/liblastlog2-2/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "libmount1": {
+      "control": {
+        "Depends": "libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.38), libselinux1 (>= 3.1~), libsystemd0 (>= 251)",
+        "Description": "device mounting library\nThis device mounting library is used by mount and umount helpers.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libmount1",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Suggests": "cryptsetup-bin",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "shlibs": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "e80f884f534da52064e7603bdefd6c5549950a79808f6cd74d455d424797add6"
+        },
+        "symbols": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "dab79b4e34c41e721a0104746ac18890bfc456d521cfb87e3202089f816aa7b1"
+        },
+        "triggers": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "c67ab4558a59eb1e96d899a5bdbb153d6a2ab0e580f4acf5bfb1e4e6150ad2f4"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}/libmount.so.1": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "libmount.so.1.1.0",
+          "mode": 511
+        },
+        "usr/lib/{triplet}/libmount.so.1.1.0": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libmount1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libmount1/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libmount1/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libmount1/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libmount1/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/lintian": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides/libmount1": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "libsmartcols1": {
+      "control": {
+        "Depends": "libc6 (>= 2.38)",
+        "Description": "smart column output alignment library\nThis smart column output alignment library is used by fdisk utilities.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libsmartcols1",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "shlibs": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "bab39b1097a8fd40d5acecf6dc40b792bc625d2b23510be4c2c24f2ea6b3472a"
+        },
+        "symbols": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "523a39e0c100936b4ad06c2af43b098ac59d2cd4589c6f4cb5fb6a889145af16"
+        },
+        "triggers": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "c67ab4558a59eb1e96d899a5bdbb153d6a2ab0e580f4acf5bfb1e4e6150ad2f4"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}/libsmartcols.so.1": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "libsmartcols.so.1.1.0",
+          "mode": 511
+        },
+        "usr/lib/{triplet}/libsmartcols.so.1.1.0": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libsmartcols1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libsmartcols1/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libsmartcols1/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libsmartcols1/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libsmartcols1/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/lintian": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides/libsmartcols1": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "libuuid1": {
+      "control": {
+        "Breaks": "libuuid1t64 (<< 2.42.4-0+regalia1)",
+        "Depends": "libc6 (>= 2.38)",
+        "Description": "Universally Unique ID library\nThe libuuid library generates and parses 128-bit Universally Unique\nIDs (UUIDs). A UUID is an identifier that is unique within the space\nof all such identifiers across both space and time. It can be used for\nmultiple purposes, from tagging objects with an extremely short lifetime\nto reliably identifying very persistent objects across a network.\n.\nSee RFC 4122 for more information.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libuuid1",
+        "Priority": "optional",
+        "Provides": "libuuid1t64 (= 2.42.4-0+regalia1)",
+        "Replaces": "libuuid1t64",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Suggests": "uuid-runtime",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "shlibs": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "40369661b5f36e35364402a3edb54aee2adf400c733e233beb466ff267588b60"
+        },
+        "symbols": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "d8bce81d1b31adc5d5bcd5ebfac4b31760851ff7a3785689e956e0b024570264"
+        },
+        "triggers": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "c67ab4558a59eb1e96d899a5bdbb153d6a2ab0e580f4acf5bfb1e4e6150ad2f4"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/{triplet}/libuuid.so.1": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "libuuid.so.1.3.0",
+          "mode": 511
+        },
+        "usr/lib/{triplet}/libuuid.so.1.3.0": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libuuid1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/libuuid1/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libuuid1/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libuuid1/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/libuuid1/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "mount": {
+      "control": {
+        "Description": "tools for mounting and manipulating filesystems\nThis package provides the mount(8), umount(8), swapon(8),\nswapoff(8), and losetup(8) commands.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "mount",
+        "Pre-Depends": "libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.38), libmount1 (= 2.42.4-0+regalia1), libselinux1 (>= 3.1~), libsmartcols1 (= 2.42.4-0+regalia1)",
+        "Priority": "required",
+        "Section": "admin",
+        "Source": "util-linux",
+        "Suggests": "nfs-common",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/mount": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 2541
+        },
+        "usr/bin/umount": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 2541
+        },
+        "usr/sbin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/losetup": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/swapoff": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/swapon": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions/losetup": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mount": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/swapoff": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/swapon": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/umount": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/mount": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/mount/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/mount/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/mount/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/mount/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/mount/examples": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/mount/examples/filesystems": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/mount/examples/fstab": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/mount/examples/mount.fstab": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/mount/mount.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/lintian": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides/mount": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man5": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man5/fstab.5.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man8/losetup.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/mount.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/swapoff.8.gz": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "swapon.8.gz",
+          "mode": 511
+        },
+        "usr/share/man/man8/swapon.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/umount.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "util-linux": {
+      "control": {
+        "Conflicts": "hardlink",
+        "Description": "miscellaneous system utilities\nThis package contains a number of important utilities, most of which\nare oriented towards maintenance of your system. Some of the more\nimportant utilities included in this package allow you to view kernel\nmessages, create new filesystems, view block device information,\ninterface with real time clock, etc.",
+        "Essential": "yes",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "util-linux",
+        "Pre-Depends": "libpam-modules, libpam-runtime, libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.41), libcap-ng0 (>= 0.7.9), libcrypt1 (>= 1:4.1.0), liblastlog2-2 (= 2.42.4-0+regalia1), libmount1 (= 2.42.4-0+regalia1), libpam0g (>= 0.99.7.1), libselinux1 (>= 3.1~), libsmartcols1 (= 2.42.4-0+regalia1), libsystemd0 (>= 251), libtinfo6 (>= 6), libudev1 (>= 183), libuuid1 (= 2.42.4-0+regalia1)",
+        "Priority": "required",
+        "Provides": "hardlink",
+        "Recommends": "sensible-utils",
+        "Replaces": "hardlink",
+        "Section": "utils",
+        "Suggests": "dosfstools, kbd, util-linux-extra, util-linux-locales, wtmpdb",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "conffiles": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": "170e6f090a9230a270257d089d5db9c892600f9b7d5759cc849dff2ca5834622"
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "postinst": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "d781477cac1b221378593aaacc180228b91cc8e17196a6f898e141b48dbd3109"
+        },
+        "postrm": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "2efc44d2e18be2e3ec85e8e37d9be9e97c98ed77df801da6919ce2860bf68e1e"
+        },
+        "prerm": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "f1a8b21d03cb61a1d02630d8337bfcc8c98c4115a714115188145510bfe2864a"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "etc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "etc/pam.d": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "etc/pam.d/runuser": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "etc/pam.d/runuser-l": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "etc/pam.d/su": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "etc/pam.d/su-l": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/choom": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/chrt": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/dmesg": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/fallocate": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/findmnt": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/flock": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/getopt": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/hardlink": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/ionice": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/ipcmk": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/ipcrm": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/ipcs": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/linux32": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "setarch",
+          "mode": 511
+        },
+        "usr/bin/linux64": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "setarch",
+          "mode": 511
+        },
+        "usr/bin/lsblk": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lscpu": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lsipc": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lslocks": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lslogins": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lsmem": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lsns": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/mcookie": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/more": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/mountpoint": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/namei": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/nsenter": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/partx": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/prlimit": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/rename.ul": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/rev": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/setarch": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/setpriv": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/setsid": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/setterm": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/su": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 2541
+        },
+        "usr/bin/taskset": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/uclampset": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/unshare": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/wdctl": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/whereis": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/mime": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/mime/packages": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/mime/packages/util-linux": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/lib/systemd": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/systemd/system": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/lib/systemd/system/fstrim.service": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/lib/systemd/system/fstrim.timer": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/sbin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/agetty": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/blkdiscard": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/blkid": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/blkzone": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/blockdev": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/chcpu": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/chmem": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/findfs": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/fsck": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/fsfreeze": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/fstrim": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/getty": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "agetty",
+          "mode": 511
+        },
+        "usr/sbin/isosize": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/ldattach": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/mkfs": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/mkswap": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/pivot_root": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/readprofile": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/rtcwake": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/runuser": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/sulogin": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/swaplabel": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/switch_root": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/wipefs": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/zramctl": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions/blkdiscard": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/blkid": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/blkzone": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/blockdev": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/chcpu": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/chmem": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/chrt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/dmesg": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fallocate": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/findfs": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/findmnt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/flock": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fsck": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fsfreeze": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fstrim": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/getopt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/hardlink": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/ionice": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/ipcmk": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/ipcrm": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/ipcs": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/isosize": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/ldattach": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lsblk": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lscpu": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lsipc": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lslocks": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lslogins": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lsmem": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lsns": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mcookie": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mkfs": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mkswap": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/more": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mountpoint": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/namei": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/nsenter": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/partx": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/pivot_root": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/prlimit": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/readprofile": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/rename.ul": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/rev": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/rtcwake": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/runuser": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "su",
+          "mode": 511
+        },
+        "usr/share/bash-completion/completions/setarch": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/setpriv": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/setsid": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/setterm": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/su": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/swaplabel": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/taskset": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/uclampset": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/unshare": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/wdctl": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/whereis": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/wipefs": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/zramctl": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/util-linux": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/util-linux/00-about-docs.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/AUTHORS.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/PAM-configuration.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/README.Debian": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/blkid.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/cal.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/col.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/deprecated.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/examples": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/util-linux/examples/getopt-example.bash": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/util-linux/getopt.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/getopt_changelog.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-build-sys.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-compilation.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-contribute.txt.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-debug.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-man-page.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-pull-request.txt.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-tests.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/howto-usage-function.txt.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/hwclock.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/modems-with-agetty.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/mount.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/parse-date.txt.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/pg.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/poeigl.txt.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/release-schedule.txt": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/util-linux/releases/v2.13-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.14-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.15-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.16-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.17-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.18-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.19-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.20-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.21-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.22-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.23-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.24-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.25-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.26-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.27-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.28-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.29-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.30-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.31-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.32-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.33-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.34-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.35-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.36-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.37-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.38-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.39-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.40-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.41-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.42-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.42.1-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.42.2-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.42.3-ReleaseNotes.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux/releases/v2.42.4-ReleaseNotes": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/lintian": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/lintian/overrides/util-linux": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man1/choom.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/chrt.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/dmesg.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/fallocate.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/flock.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/getopt.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/hardlink.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/ionice.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/ipcmk.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/ipcrm.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/ipcs.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/lscpu.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/lsipc.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/lslogins.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/lsmem.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/mcookie.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/more.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/mountpoint.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/namei.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/nsenter.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/prlimit.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/rename.ul.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/rev.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/runuser.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/setpriv.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/setsid.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/setterm.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/su.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/taskset.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/uclampset.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/unshare.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/whereis.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man5": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man5/adjtime_config.5.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man5/scols-filter.5.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man5/terminal-colors.d.5.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man8/agetty.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/blkdiscard.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/blkid.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/blkzone.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/blockdev.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/chcpu.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/chmem.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/findfs.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/findmnt.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/fsck.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/fsfreeze.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/fstrim.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/getty.8.gz": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "agetty.8.gz",
+          "mode": 511
+        },
+        "usr/share/man/man8/isosize.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/ldattach.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/linux32.8.gz": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "setarch.8.gz",
+          "mode": 511
+        },
+        "usr/share/man/man8/linux64.8.gz": {
+          "elf": false,
+          "kind": "symlink",
+          "link": "setarch.8.gz",
+          "mode": 511
+        },
+        "usr/share/man/man8/lsblk.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/lslocks.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/lsns.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/mkfs.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/mkswap.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/partx.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/pivot_root.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/readprofile.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/rtcwake.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/setarch.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/sulogin.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/swaplabel.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/switch_root.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/wdctl.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/wipefs.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/zramctl.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/util-linux": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/util-linux/logcheck": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/util-linux/logcheck/ignore.d.server": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/util-linux/logcheck/ignore.d.server/util-linux": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    },
+    "util-linux-extra": {
+      "control": {
+        "Breaks": "initscripts (<< 3.08-2~), util-linux (<< 2.40.4-4~)",
+        "Depends": "libaudit1 (>= 1:2.2.1), libc6 (>= 2.38), libsmartcols1 (= 2.42.4-0+regalia1), zlib1g (>= 1:1.1.4)",
+        "Description": "interactive login tools\nTools commonly found on systems where humans login interactively,\nor are needed with non-standard system configurations.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "util-linux-extra",
+        "Priority": "standard",
+        "Replaces": "util-linux (<< 2.40.4-4~)",
+        "Section": "utils",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "control_members": {
+        ".": {
+          "kind": "directory",
+          "link": null,
+          "mode": 493,
+          "sha256": null
+        },
+        "control": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "md5sums": {
+          "kind": "file",
+          "link": null,
+          "mode": 420,
+          "sha256": null
+        },
+        "postrm": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "f07287ece4afdd8c979647ec1e9b6548b151b1a035eddeaab88425380a13785a"
+        },
+        "preinst": {
+          "kind": "file",
+          "link": null,
+          "mode": 493,
+          "sha256": "431b6725b169374f87dc76833d1aa63fa427571e2ef1936c51b827b342bc7a5c"
+        }
+      },
+      "payload_members": {
+        ".": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/bits": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/coresched": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/enosys": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/exch": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/fadvise": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/fincore": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lsfd": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/lsirq": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/pipesz": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/resizepart": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/bin/waitpid": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/blkpr": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/ctrlaltdel": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/fsck.cramfs": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/fsck.minix": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/hwclock": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/mkfs.bfs": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/mkfs.cramfs": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/sbin/mkfs.minix": {
+          "elf": true,
+          "kind": "file",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/bash-completion/completions/ctrlaltdel": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/enosys": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/exch": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fadvise": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fincore": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fsck.cramfs": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/fsck.minix": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/hwclock": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/lsirq": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mkfs.bfs": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mkfs.cramfs": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/mkfs.minix": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/pipesz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/resizepart": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/bash-completion/completions/waitpid": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/util-linux-extra": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/doc/util-linux-extra/NEWS.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux-extra/changelog.Debian.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux-extra/changelog.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/doc/util-linux-extra/copyright": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man1": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man1/bits.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/coresched.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/enosys.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/exch.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/fadvise.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/fincore.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/lsfd.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/lsirq.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/pipesz.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man1/waitpid.1.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8": {
+          "elf": false,
+          "kind": "directory",
+          "link": null,
+          "mode": 493
+        },
+        "usr/share/man/man8/blkpr.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/ctrlaltdel.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/fsck.cramfs.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/fsck.minix.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/hwclock.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/mkfs.bfs.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/mkfs.cramfs.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/mkfs.minix.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        },
+        "usr/share/man/man8/resizepart.8.gz": {
+          "elf": false,
+          "kind": "file",
+          "link": null,
+          "mode": 420
+        }
+      }
+    }
+  },
+  "schema": "regalia.util-linux-package-structure-policy/v1",
+  "version": "2.42.4-0+regalia1"
+}

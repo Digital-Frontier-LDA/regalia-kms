@@ -23,7 +23,7 @@ DEPENDENCIES = {"libc6", "libssl3t64", "libtss2-esys-3.0.2-0t64", "libtss2-mu-4.
                 "libtss2-rc0t64", "libtss2-sys1t64", "libtss2-tctildr0t64", "libtss2-tcti-device0t64"}
 
 
-def deb_archive(package, option, limit):
+def deb_archive(package, option, limit, *, privileged_modes=None):
     # Bound both disk output and wall time while a trusted dpkg parser expands
     # an untrusted package. Never execute its binary or maintainer scripts.
     def bounds():
@@ -41,7 +41,9 @@ def deb_archive(package, option, limit):
             name = item.name.removeprefix("./").rstrip("/")
             require(not name.startswith("/") and ".." not in name.split("/") and name not in members,
                     "unsafe or duplicate package path")
-            require(item.uid == item.gid == 0 and not item.mode & 0o7000
+            allowed_privilege = (item.isfile() and privileged_modes is not None
+                                 and privileged_modes.get(name) == item.mode)
+            require(item.uid == item.gid == 0 and (not item.mode & 0o7000 or allowed_privilege)
                     and (item.issym() or not item.mode & 0o022)
                     and (item.isdir() or item.isfile() or item.issym()), "unsafe package ownership/type/mode")
             content = archive.extractfile(item).read() if item.isfile() else None

@@ -93,6 +93,47 @@ probe is the available personality evidence. Root mount/cgroup operations,
 PAM integration and real initramfs recovery remain unproved for these packages.
 No test or vulnerability exception was added to the repository's gates.
 
+### Package structure and native installation
+
+`util_profile.py` now performs the reviewed packaging transformation: it checks
+all eight edited/security-relevant inputs before changing anything, keeps the
+nine downstream patches, omits only the two fixes already present in the exact
+authenticated upstream files, and retains Debian's tests. Reapplication and
+modified inputs refuse. The resulting four packaging edits match the native
+reproduction recipe.
+
+`util_package.py` checks the nine package identities against
+`util-package-policy.json`: full control relationships and Essential flags,
+maintainer-script hashes, 509 payload member descriptors, symlinks, modes and
+ELF architecture. It parses a private copy of candidate bytes. The shared TPM
+archive parser retains its no-privileged-files default; only this reviewed
+utility profile permits the existing SUID `mount`, `umount` and `su` paths.
+Structure success explicitly grants no package admission or release approval.
+
+All nine native packages install together through APT with no network access,
+no forced Essential-package changes and no dependency exception. The first
+installed-file audit discovered the Docker slim base's documentation exclusions.
+The final test image removes that configuration and its unsafe-I/O setting before
+installation. All **389 declared regular files** then match candidate package
+hashes, and mount/umount have the same persistent 0755 overrides as the appliance.
+
+In a readonly, network-isolated container, an ordinary UID with no capabilities
+and NoNewPrivileges passes `util_smoke.py`: five libraries load, UUID generation
+works, cryptsetup creates a private LUKS2 header, accepts its generated test key
+and specifically rejects a different key, blkid reports the same LUKS UUID/type,
+findmnt parses a private fstab, and six CLI help/load checks pass. The low KDF
+cost applies only to the disposable test fixture. All **733 baseline dynamic
+exports** retain their names, symbol versions and types in the five libraries;
+17 exports are added. This is not a complete structure/calling-convention proof.
+
+The [native installation receipt](evidence/util-linux-native-installed-20261003.json)
+binds the source, package hashes/controls, tested recipe, file checks, ABI counts
+and smoke result. Adversarial fixtures refuse altered source/version/flags,
+architecture, links, privilege modes, extra executables and injected scripts;
+inspection never executes those scripts. Replacing the caller's package between
+parser calls cannot change the frozen inspected bytes. The full image guard
+collection passes 109 tests; Python isolation/documented-invocation guards pass.
+
 ## Residual Risk
 
 The initial 2.41.6 evaluation built no Debian packages. The 2.42.4 evaluation
@@ -103,9 +144,11 @@ development builder with an unsigned cached base, not independent reproduction
 or complete signed compiler payload admission.
 Version/load checks and symbol equality do not prove structure/calling ABI,
 mount security, PAM/login, initramfs recovery, cgroup descriptor behavior or
-actual exploit resistance. Debian downstream patches and package scripts still
-need explicit review. The existing source-package verifier admits only the
-reviewed TPM package and cannot admit this candidate.
+actual exploit resistance. The retained downstream patches, exact scripts and
+native file layout are reviewed, but AMD64 outputs, boot/recovery integration
+and a complete signed compiler/payload admission path remain unproved. The
+existing appliance admission still accepts only the reviewed TPM package;
+the new structure gate cannot substitute for candidate source/build admission.
 
 The repeatable source verifier is now `deploy.images.util_source`. It freshly
 verified upstream 2.42.4's tar, changelog and release notes using the same pinned
