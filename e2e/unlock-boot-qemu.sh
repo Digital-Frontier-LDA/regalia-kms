@@ -24,8 +24,11 @@
 #           interface, its ruleset and its address are gone.
 #   boot 2b A CREDENTIAL FROM SMBIOS (a unit drop-in, as the firmware could pass one): not acted on, since
 #           the image's command line stops systemd importing credentials; the unlock goes on.
-#   boots 3-5  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line): PCR 12
-#           is not the one the peers expect, and they refuse the quote.
+#   boots 3-6  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line, an empty
+#           file): PCR 12 is not the one the peers expect, and they refuse the quote.
+#   boot 7  A COMMAND LINE FROM SMBIOS (io.systemd.stub.kernel-cmdline-extra, switching credential import
+#           back on, and an extra unit): either the stub ignores it, or PCR 12 moves and the peers refuse;
+#           nothing planted runs.
 #   boot 6  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
 #           console asks for the recovery key, and the key opens the volume.
 #
@@ -183,7 +186,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### eight boots"
+echo "### ten boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
@@ -194,4 +197,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 8 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, three planted ESP credentials refused, no peer and the recovery key)"
+echo "unlock-boot-qemu: 10 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer and the recovery key)"
