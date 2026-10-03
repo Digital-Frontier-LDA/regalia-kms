@@ -735,6 +735,12 @@ jobs:
       image: debian:13
       options: --privileged
     steps:
+      # git BEFORE the checkout: without it actions/checkout downloads a tarball, and uki.py holds the initrd
+      # build record's provenance to a git checkout (#266: a clean tree at the record's commit)
+      - name: git, so the checkout is a clone
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends git ca-certificates
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
