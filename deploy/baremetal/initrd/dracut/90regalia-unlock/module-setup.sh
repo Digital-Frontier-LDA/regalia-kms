@@ -2,7 +2,9 @@
 # dracut module: the pre-root disk unlock of a KMS host (regalia-kms#66, #67).
 #
 # What it puts in the initrd: the unlock client and its socket-activated unit, the boot mesh unit and
-# its script, the three tools the script runs (ip, wg, nft), and one crypttab line. The image is the
+# its script, the three tools the script runs (ip, wg, nft), one crypttab line, and the membership root
+# it trusts (/usr/lib/regalia/root-key.json, a build input: deploy/baremetal/initrd/build-initrd.sh
+# --root-key, #156). The image is the
 # same for every host: what differs per host and per manifest (the boot configuration, the two
 # TPM-sealed credentials, the WireGuard configuration, the ruleset, boot.env) comes at boot as system
 # credentials, from the ESP through systemd-stub.
@@ -39,6 +41,10 @@ check() {
         derror "regalia-unlock: $moddir/crypttab is missing: install the whole module directory"
         return 1
     fi
+    if [ ! -s "${dracutsysrootdir-}/usr/lib/regalia/root-key.json" ]; then
+        derror "regalia-unlock: /usr/lib/regalia/root-key.json is missing: the image would trust no membership root"
+        return 1
+    fi
     # The client and its unit come from the host separately. The client stays for the whole initrd phase
     # and records the boot session: under a unit that gives it nowhere to write, or does not stop it before
     # the root filesystem takes over, the host would boot with its leases refused or the client left behind.
@@ -72,6 +78,7 @@ installkernel() {
 install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
+    inst_simple /usr/lib/regalia/root-key.json
     for unit in regalia-unlock-relay.service regalia-unlock-core.socket regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done

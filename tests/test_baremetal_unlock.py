@@ -955,8 +955,9 @@ class Units(unittest.TestCase):
             module = f.read()
         install = module[module.index("install() {"):]
         installed = re.findall(r"inst_(?:simple|multiple)\s+(?:-\S+\s+)?([^\n]+)", install)
-        # from the build machine: programs, the module's own units and script, and the crypttab line IN THE MODULE
-        self.assertEqual(installed, ["regalia-unlock wg nft ip sed cat sleep", "/usr/lib/regalia/wg-boot",
+        # from the build machine: programs, the module's own units and script, the membership root (a build input,
+        # #156: the same for every host of a deployment, not per host), and the crypttab line IN THE MODULE
+        self.assertEqual(installed, ["regalia-unlock wg nft ip sed cat sleep", "/usr/lib/regalia/wg-boot", "/usr/lib/regalia/root-key.json",
                                      '"${systemdsystemunitdir:?}/$unit"', '"${moddir:?}/crypttab" /etc/crypttab'])
         check = module[module.index("check() {"):module.index("depends() {")]
         self.assertIn('if [ -n "${hostonly-}" ]; then', check)
