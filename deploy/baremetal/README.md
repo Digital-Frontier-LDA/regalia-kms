@@ -810,7 +810,24 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
   disk. A compromised shipper therefore cannot get a line removed that the collector does not hold.
   `<trail>.pruned` is written first; the shipper goes on from that marker and still checks the
   collector's head, and a marker ahead of the collector raises the tamper alarm. Without a receipt key
-  nothing is pruned, and archives wait. Rotating the audit client certificate starts new streams (#291).
+  nothing is pruned, and archives wait.
+- **Rotating the audit client certificate (#291).** The collector keys a host's streams by its client
+  certificate, so a new certificate takes them over only by a hand-over. Rotate **before** the old
+  certificate's NotAfter (the collector checks it against the client CA), in this order:
+  1. issue the new certificate;
+  2. `regalia-audit-ship handover -collector … -old-cert … -old-key … -tls-cert <new> -tls-key <new>
+     -server-ca …` (the old key signs, the new certificate presents it);
+  3. swap `client.crt`/`client.key` and restart **every** `regalia-audit-ship@` instance at once.
+
+  The streams, prune markers and receipts carry on; the old certificate is refused from then on (one
+  403 alarm a pass from any instance still on it). A shipper started on the new certificate before the
+  hand-over refuses to send ("hand-over pending"), and prune waits on a head file of the old one.
+  **A 409 from `handover` means another certificate already took these streams: treat it as a
+  compromise of the old key.** If the old key is lost: stop the collector, `regalia-audit-collector
+  handover -state … -old <fingerprint> -new <fingerprint> -reason …`, start it again. If the new
+  certificate shipped before its hand-over anyway (no head file to stop it), add
+  `-discard-new-streams`: allowed only when its streams are a prefix of the old one's, moved to
+  `discarded/`, kept. Every hand-over is a record in the collector's alarm log.
 - **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
   records one "alarm flood" alarm of its own and answers 429.
 

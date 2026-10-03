@@ -428,7 +428,7 @@ class Rotation(Case):
         entries = entries[:upto]
         path = os.path.join(self.d, "head.json")
         with open(path, "w") as f:
-            json.dump({"trail": self.TRAIL, "committed": committed, "archives": entries}, f)
+            json.dump({"identity": self.IDENTITY, "trail": self.TRAIL, "committed": committed, "archives": entries}, f)
         return path, entries
 
     def placeholder_chain(self, sequence, last_line_sha256):
@@ -480,6 +480,20 @@ class Rotation(Case):
                 self.refused("does not hold", self.prune, head)
                 self.assertEqual(self.archives(), before)
                 self.assertFalse(os.path.exists(self.path + ".pruned"))
+        os.unlink(head)
+
+    def test_a_head_file_of_another_certificate_waits_and_refuses_nothing(self):
+        """#296 (regalia-kms-51): after a client certificate rotation, the head file still holds the old
+        certificate's receipts until the shipper's next pass. prune waits; it does not call them forged."""
+        for i in range(12):
+            trails.append(self.path, {"event": "e", "i": i})
+        before = self.archives()
+        head, _ = self.head(10 ** 6)
+        rotated = dict(json.load(open(head)), identity="cd" * 32)
+        with open(head, "w") as f:
+            json.dump(rotated, f)
+        self.assertEqual(self.prune(head), 0)
+        self.assertEqual(self.archives(), before)
         os.unlink(head)
 
     def test_the_receipt_key_can_rotate_with_an_overlap(self):

@@ -178,7 +178,7 @@ func TestARotatedAndPrunedTrailShipsTheSameEvents(t *testing.T) {
 	identity := strings.Repeat("cd", 32)
 	sink := &receiptSink{fakeSink: fakeSink{head: committed, hash: events[committed-1].Hash}, key: private, identity: identity,
 		stream: "sitea.sync", events: events, refuseSends: true}
-	o := options{trail: "sync", path: path, site: "sitea", head: head, interval: time.Hour, once: true}
+	o := options{trail: "sync", path: path, site: "sitea", head: head, identity: identity, interval: time.Hour, once: true}
 	if err := loop(context.Background(), sink, o, &bytes.Buffer{}); err == nil {
 		t.Fatal("a pass whose sends all fail reported success")
 	}
@@ -343,5 +343,39 @@ func TestAMarkerThatIsNotOneRaisesTheAlarm(t *testing.T) {
 	err := loop(context.Background(), sink, options{trail: "sync", path: path, site: "sitea", interval: time.Hour}, &bytes.Buffer{})
 	if !errors.Is(err, audit.ErrTrailTampered) || len(sink.alarms) != 1 || sink.sends != 0 {
 		t.Fatalf("a forged marker: %v, %d alarms, %d sends", err, len(sink.alarms), sink.sends)
+	}
+}
+
+// TestShippingAsANewCertificateWaitsForTheHandover: #296 (regalia-kms-51). The head file says the trail
+// shipped 5 lines under certificate A; this shipper is B, and the collector knows nothing for B. Shipping
+// would start B's own stream, and the collector would then refuse every hand-over to B: so nothing is
+// sent until the hand-over is made (the collector then answers B with A's head).
+func TestShippingAsANewCertificateWaitsForTheHandover(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sync-audit.jsonl")
+	if err := os.WriteFile(path, []byte(`{"at":1,"event":"e","prev":"","seq":1}`+"\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	head := filepath.Join(dir, "sync.head.json")
+	if err := os.WriteFile(head, []byte(`{"identity":"`+strings.Repeat("aa", 32)+`","trail":"sync","stream":"sitea.sync","committed":5,"archives":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := options{trail: "sync", path: path, site: "sitea", head: head, identity: strings.Repeat("bb", 32), interval: time.Hour, once: true}
+	sink := &fakeSink{}
+	if err := loop(context.Background(), sink, o, &bytes.Buffer{}); !errors.Is(err, errHandoverPending) || sink.sends != 0 || len(sink.alarms) != 0 {
+		t.Fatalf("before the hand-over: %v, %d sends, %d alarms", err, sink.sends, len(sink.alarms))
+	}
+	events, _ := audit.TrailEvents("sync", []byte(`{"at":1,"event":"e","prev":"","seq":1}`+"\n"))
+	sink = &fakeSink{head: 1, hash: events[0].Hash} // after the hand-over the collector answers B with A's stream
+	if err := loop(context.Background(), sink, o, &bytes.Buffer{}); err != nil {
+		t.Fatalf("after the hand-over: %v", err)
+	}
+	var written struct{ Identity string }
+	if raw, _ := os.ReadFile(head); json.Unmarshal(raw, &written) != nil || written.Identity != o.identity {
+		t.Fatalf("the pass under B did not write B's head file: %+v", written)
+	}
+	o.identity = written.Identity // the same certificate as the head file: never in the way
+	if err := loop(context.Background(), &fakeSink{head: 1, hash: events[0].Hash}, o, &bytes.Buffer{}); err != nil {
+		t.Fatalf("the head file's own certificate: %v", err)
 	}
 }

@@ -13,9 +13,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -59,11 +66,15 @@ func main() {
 
 type options struct {
 	trail, path, collector, site, metrics, head string
+	identity                                    string // this host's client certificate: SHA-256 of its DER, hex
 	interval                                    time.Duration
 	once                                        bool
 }
 
 func run(arguments []string, out io.Writer) error {
+	if len(arguments) > 0 && arguments[0] == "handover" {
+		return handover(arguments[1:], out)
+	}
 	flags := flag.NewFlagSet("regalia-audit-ship", flag.ContinueOnError)
 	flags.SetOutput(out)
 	var o options
@@ -90,6 +101,10 @@ func run(arguments []string, out io.Writer) error {
 	if o.interval < time.Second {
 		return errors.New("-interval must be at least a second")
 	}
+	var err error
+	if o.identity, err = certificateIdentity(*tlsCert); err != nil {
+		return err
+	}
 	sink, err := buildSink(o.collector, o.site+"."+o.trail, *tlsCert, *tlsKey, *serverCA)
 	if err != nil {
 		return err
@@ -106,6 +121,9 @@ func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) e
 		var boundaries []boundary
 		trail, err := openSegments(o.path)
 		if err == nil {
+			err = handoverPending(ctx, sink, o)
+		}
+		if err == nil {
 			committed, total, err = audit.ShipTrailLines(ctx, sink, stream, o.trail, trail.start, func(walker *audit.TrailWalker, each func(audit.Event) error) error {
 				for _, archive := range trail.archives {
 					if err := walker.Feed(archive.file, true, each); err != nil {
@@ -121,7 +139,7 @@ func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) e
 			trail.close()
 		}
 		if err == nil {
-			if headErr := writeHead(ctx, sink, o.head, o.site+"."+o.trail, o.trail, boundaries, committed); headErr != nil {
+			if headErr := writeHead(ctx, sink, o.head, o.identity, o.site+"."+o.trail, o.trail, boundaries, committed); headErr != nil {
 				fmt.Fprintf(out, "regalia-audit-ship: the head file could not be written: %v\n", headErr)
 			}
 		}
@@ -341,7 +359,7 @@ type receipter interface {
 // receipt, verified against the keys it pins, and its own count of positions, never this file's
 // word: a compromised shipper cannot make it remove a line the collector does not hold. An archive
 // whose receipt cannot be had is left out, and waits.
-func writeHead(ctx context.Context, sink audit.TrailSink, path, stream, trail string, boundaries []boundary, committed uint64) error {
+func writeHead(ctx context.Context, sink audit.TrailSink, path, identity, stream, trail string, boundaries []boundary, committed uint64) error {
 	if path == "" {
 		return nil
 	}
@@ -352,11 +370,12 @@ func writeHead(ctx context.Context, sink audit.TrailSink, path, stream, trail st
 		Receipt   audit.Receipt `json:"receipt"`
 	}
 	record := struct {
+		Identity  string  `json:"identity"` // the certificate these receipts name: prune waits when it is not its own
 		Trail     string  `json:"trail"`
 		Stream    string  `json:"stream"`
 		Committed uint64  `json:"committed"`
 		Archives  []entry `json:"archives"`
-	}{Trail: trail, Stream: stream, Committed: committed, Archives: []entry{}}
+	}{Identity: identity, Trail: trail, Stream: stream, Committed: committed, Archives: []entry{}}
 	receipts, ok := sink.(receipter)
 	for _, b := range boundaries {
 		if !ok || b.at.Sequence == 0 || b.at.Sequence > committed {
@@ -458,4 +477,113 @@ func buildSink(collector, stream, certificatePath, keyPath, caPath string) (*aud
 		return nil, err
 	}
 	return audit.NewHTTPSink(collector, client, 10*time.Second, stream)
+}
+
+// handover is `regalia-audit-ship handover`: before this host's audit client certificate is swapped,
+// the old certificate's key signs that its streams continue under the new one, and the new certificate
+// presents that to the collector (#291; internal/audit/handover.go). Then swap client.crt and
+// client.key, and restart the shippers: their streams, prune markers and receipts carry on.
+func handover(arguments []string, out io.Writer) error {
+	flags := flag.NewFlagSet("regalia-audit-ship handover", flag.ContinueOnError)
+	flags.SetOutput(out)
+	collector := flags.String("collector", "", "the audit collector's https origin")
+	oldCert := flags.String("old-cert", "", "the certificate being retired (PEM)")
+	oldKey := flags.String("old-key", "", "its private key (PEM), which signs the hand-over")
+	tlsCert := flags.String("tls-cert", "", "the new client certificate (PEM), which presents it")
+	tlsKey := flags.String("tls-key", "", "the new client key (PEM)")
+	serverCA := flags.String("server-ca", "", "PEM CA bundle the collector's certificate is verified against")
+	if err := flags.Parse(arguments); err != nil {
+		return err
+	}
+	if *collector == "" || *oldCert == "" || *oldKey == "" || *tlsCert == "" || *tlsKey == "" || *serverCA == "" {
+		return errors.New("handover needs -collector, -old-cert, -old-key, -tls-cert, -tls-key and -server-ca")
+	}
+	old, err := tls.LoadX509KeyPair(*oldCert, *oldKey)
+	if err != nil {
+		return fmt.Errorf("the old certificate and key: %w", err)
+	}
+	replacement, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+	if err != nil {
+		return fmt.Errorf("the new certificate and key: %w", err)
+	}
+	oldSum, newSum := sha256.Sum256(old.Certificate[0]), sha256.Sum256(replacement.Certificate[0])
+	preimage := audit.HandoverPreimage(hex.EncodeToString(oldSum[:]), hex.EncodeToString(newSum[:]))
+	signer, ok := old.PrivateKey.(crypto.Signer)
+	if !ok {
+		return errors.New("the old key cannot sign")
+	}
+	var signature []byte
+	switch signer.Public().(type) {
+	case *ecdsa.PublicKey:
+		digest := sha256.Sum256(preimage)
+		signature, err = signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	case ed25519.PublicKey:
+		signature, err = signer.Sign(rand.Reader, preimage, crypto.Hash(0))
+	default:
+		return errors.New("the old key is neither ECDSA nor Ed25519: the collector verifies only those")
+	}
+	if err != nil {
+		return err
+	}
+	sink, err := buildSink(*collector, "", *tlsCert, *tlsKey, *serverCA)
+	if err != nil {
+		return err
+	}
+	if err := sink.Handover(context.Background(), old.Certificate[0], signature); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "regalia-audit-ship: the collector continues %x's streams under %x; swap client.crt/client.key and restart the shippers\n", oldSum, newSum)
+	return nil
+}
+
+// errHandoverPending: this host's certificate changed, and the collector holds nothing for the new one.
+var errHandoverPending = errors.New("hand-over pending: this trail shipped under another client certificate, " +
+	"and the collector knows nothing for this one; run `regalia-audit-ship handover` first (#291)")
+
+// handoverPending refuses to ship as a new certificate before the hand-over (regalia-kms-51 on #296).
+// Shipping first would start the new certificate's own stream, and the collector then refuses every
+// hand-over to it. The head file says under which certificate this trail last shipped and how far: if
+// that is another certificate, with lines shipped, while the collector has nothing for this one, the
+// hand-over has not happened. Nothing is sent; the next pass asks again. (Without a head file there is
+// nothing to compare: the operator's `regalia-audit-collector handover -discard-new-streams` recovers.)
+func handoverPending(ctx context.Context, sink audit.TrailSink, o options) error {
+	if o.head == "" || o.identity == "" {
+		return nil
+	}
+	raw, err := readRegular(o.head, 1<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var head struct {
+		Identity  string `json:"identity"`
+		Committed uint64 `json:"committed"`
+	}
+	if json.Unmarshal(raw, &head) != nil || head.Identity == "" || head.Identity == o.identity || head.Committed == 0 {
+		return nil
+	}
+	position, _, err := sink.CommittedHead(ctx, o.site+"."+o.trail)
+	if err != nil {
+		return err
+	}
+	if position == 0 {
+		return errHandoverPending
+	}
+	return nil
+}
+
+// certificateIdentity is how the collector names this host: the SHA-256 of its client certificate's DER.
+func certificateIdentity(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("client certificate: %w", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return "", errors.New("client certificate: not a PEM certificate")
+	}
+	sum := sha256.Sum256(block.Bytes)
+	return hex.EncodeToString(sum[:]), nil
 }
