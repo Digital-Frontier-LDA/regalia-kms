@@ -439,8 +439,9 @@ class Verifier:
         require(hmac.compare_digest(ek_name.hex(), expected["ek_name"]), "the EK is not the one recorded for this node at intake")
         ak_name_offered, _ = ak_identity(ak_public)
         if ak_name is not None:
-            require(isinstance(ak_name, str) and hmac.compare_digest(ak_name_offered.hex(), ak_name.lower()),
-                    "the AK offered is not the one the manifest names for this node")
+            # the manifest's one spelling (68 lowercase hex, as membership and lease.py hold it), checked before comparing
+            require(is_hex(ak_name, 68), "the manifest's ak_name must be 68 lowercase hex")
+            require(hmac.compare_digest(ak_name_offered.hex(), ak_name), "the AK offered is not the one the manifest names for this node")
         ak_name = ak_name_offered
         secret = self.rand(32)
         credential = make_credential(ek_public, ak_name, secret, self.run)
