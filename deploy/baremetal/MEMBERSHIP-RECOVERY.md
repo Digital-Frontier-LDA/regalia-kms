@@ -52,7 +52,7 @@ believes the chain it was given, exactly as a newly enrolled node does. So:
   without a writable log nothing is done.
 
 ```sh
-python3 -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key "$ROOT_KEY_HEX" \
+python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key "$ROOT_KEY_HEX" \
     --tpm-index 0x1500016 --node-id b --authority authority-chain.json --peer c=c-chain.json \
     --audit-log /var/log/regalia/reanchor.jsonl
 ```
@@ -80,7 +80,7 @@ are what the authority and the peer really hold. That is the operator's part, be
    take both files from one place, and never from the node being re-anchored. The command refuses the
    node as its own peer by name; it cannot tell that two files with different names came from one place.
 2. **Compare the epoch and digest the command prints with what a healthy peer reports for itself**
-   (`python3 -m deploy.baremetal.rollout epoch --membership … --root-key … --tpm-index 0x1500016` on that
+   (`python3 -Es -m deploy.baremetal.rollout epoch --membership … --root-key … --tpm-index 0x1500016` on that
    peer: it checks the peer's chain against the peer's own TPM). The digest must be the same.
 3. **Compare with the last signing record** for the root or revocation key: the newest epoch signed is
    the epoch you expect. A chain that ends below it is old.

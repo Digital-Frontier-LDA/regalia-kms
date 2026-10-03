@@ -37,7 +37,7 @@ so it is the one an attacker would want, and it is fenced accordingly:
     asked or changed (without a writable log nothing is done); then the outcome: ALLOW, DENY (nothing
     changed), or INCOMPLETE (the anchor was being replaced and it did not finish: run it again).
 
-    python3 -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key HEX \\
+    python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key HEX \\
         --tpm-index 0x1500016 --node-id b --authority authority-chain.json --peer c=c-chain.json \\
         --audit-log /var/log/regalia/reanchor.jsonl
 
@@ -153,7 +153,7 @@ def _highwater(index, tcti):
 def main(argv=None, ask=None, highwater=_highwater, tty=None):
     """Exit status: 0 done; 1 refused, nothing changed; 2 usage; 3 INCOMPLETE, the anchor was being replaced:
     run it again; 4 done, but the outcome could not be written to the audit log."""
-    ap = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.reanchor", description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.reanchor", description=__doc__.splitlines()[0])
     ap.add_argument("--membership", required=True, help="this node's membership file")
     ap.add_argument("--root-key", required=True, help="the pinned membership root key, 64 hex")
     ap.add_argument("--tpm-index", required=True, help="the NV index of this node's epoch counter (0x1500016)")
