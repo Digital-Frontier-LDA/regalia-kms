@@ -160,8 +160,8 @@ def recount(counter, manifest, documents, typed, sink, floor_path):
 
     try:
         planned = plan(counter, manifest, documents, carried(floor_path))
-    except Refused as refusal:
-        sink(event("recount", {}, outcome="DENY", reason=str(refusal)[:240]))
+    except BaseException as refusal:              # any failure to plan is recorded, an OSError on the floor file too
+        sink(event("recount", {}, outcome="DENY", reason=str(refusal)[:240] or type(refusal).__name__))
         raise
     sink(event("recount-requested", planned))
     began = []

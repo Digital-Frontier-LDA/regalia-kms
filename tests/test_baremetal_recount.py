@@ -147,6 +147,16 @@ class AcrossACut(Case):
         with open(self.floor, "w") as f:
             f.write("{")
         self.refused("not valid JSON", recount.recount, self.counter, self.m1, [self.state()], lambda p: "", self.events.append, self.floor)
+        self.assertEqual(self.events[-1]["outcome"], "DENY")
+
+    def test_a_floor_file_that_cannot_be_read_is_recorded_as_a_refusal(self):
+        """#261 (CodeRabbit): an OSError on the floor file is recorded as DENY before it propagates."""
+        self.break_counter()
+        os.mkdir(self.floor)                                                      # a directory where the floor goes
+        with self.assertRaises(OSError):
+            recount.recount(self.counter, self.m1, [self.state()], lambda p: "", self.events.append, self.floor)
+        self.assertEqual([(e["event"], e["outcome"]) for e in self.events], [("recount", "DENY")])
+        self.assertNotIn(self.counter.index, self.tpm.nv)                        # untouched
 
 
 def counter_unusable(counter):
