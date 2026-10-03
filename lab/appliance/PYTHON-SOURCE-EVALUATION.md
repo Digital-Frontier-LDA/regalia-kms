@@ -114,7 +114,7 @@ python3 -I tools/lab_cli.py appliance-python-profile EXTRACTED_CANDIDATE_SOURCE
 Prepare a freshly extracted upstream/packaging tree. The profile changes local
 version/maintainer metadata truthfully and grants no package admission.
 The [newer-packaging review receipt](evidence/python-newer-packaging-review-20261003.json)
-binds signed inputs, the three reviewed patch edits and the exact profile.
+at `64f18f4` binds signed inputs, the three reviewed patch edits and that profile.
 The earlier 62-patch receipt remains historical evidence.
 
 The SSL rebase preserves Debian's `_ssl_data_34.h` path. Upstream's newer 3.6
@@ -124,6 +124,28 @@ error-mapping and SSL regression checks with the actual Debian runtime library.
 A native package compilation trial has started with pinned trixie/security apt
 authorities and a dedicated non-root build UID. Its cached base is unsigned,
 so it cannot qualify production compiler payloads or an appliance image.
+
+### Documentation compatibility and runtime package target
+
+The native `dpkg-buildpackage -b` trial exposed an OpenGraph extension error:
+trixie's extension concatenates a list with custom tags, whereas upstream's
+configuration provides a tuple. The profile now pins the signed `Doc/conf.py`
+input and converts the completed tuple to a list, retaining every tag value.
+Both social-card configuration branches are verified against the original
+source, and all 26 patches still apply sequentially with zero fuzz. The
+[documentation profile receipt](evidence/python-doc-profile-review-20261003.json)
+binds this additional edit and the source tar used by the native builder.
+
+The corrected documentation build no longer raises that TypeError, but still
+fails on **199 warnings treated as errors**. No warning policy is relaxed, and
+the separate documentation package remains unqualified. The appliance needs
+runtime packages, so the current trial uses Debian's `dpkg-buildpackage -B`
+binary-arch target. The vendor runtime test/mincheck policy, benchmark settings
+and full patch series are unchanged. Those vendor rules exclude the full SSL
+suite and disable pybench, so package-build success alone cannot qualify the
+SSL fixes or performance. Explicit SSL regressions and inspection of actual
+test results remain required. This target selection is not evidence that the
+full documentation package builds.
 
 ## Residual Risk
 

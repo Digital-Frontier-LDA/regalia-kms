@@ -51,6 +51,11 @@ def prepare(root):
     # the actual Debian runtime library remains a required qualification gate.
     edits[name] = (original[:start] + diff(frozen['Modules/_ssl_data_31.h'], '',
                                          'Modules/_ssl_data_31.h', '/dev/null') + original[end:])
+    # The trixie OpenGraph extension concatenates a list with custom tags.
+    # Preserve every tag while adapting upstream's tuple to that API.
+    edits['Doc/conf.py'] = (frozen['Doc/conf.py']
+                            + '\n# Compatibility with Debian trixie sphinxext.opengraph.\n'
+                            + 'ogp_custom_meta_tags = list(ogp_custom_meta_tags)\n')
     name = 'debian/control'
     original = frozen[name]
     maintainer = 'Maintainer: Matthias Klose <doko@debian.org>'
