@@ -325,7 +325,7 @@ def wg_key(journal, step, path, run):
     private, public = _wg_pair(run)
     journal.doc["steps"][step] = {"state": "started", "at": int(time.time()), "public": public}
     _atomic_json(journal.path, journal.doc)                     # one write: recorded BEFORE the private file exists
-    os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+    _ensure_trusted_dir(os.path.dirname(path))
     _write_private(path, (private + "\n").encode())
     journal.done(step, public=public, path=path)
     return public
@@ -340,35 +340,88 @@ def firmware_version(run):
     return "%08x%08x" % tuple(words) if None not in words else None
 
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _check_ancestor(name, st, child_uid):
+    """One directory on the way down: owned by root (or this user) and closed to group and others, OR sticky
+    (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's owner
+    can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
+    (#233, Go); kept identical by hand until one shared helper exists."""
+    me = os.geteuid()                    # root, in production: main() refuses anything else
+    open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
+            and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_uid in (0, me))),
+            "%s is not a root-owned directory closed to group and others (nor a sticky one): what enrolment puts "
+            "under it could be replaced" % name)
+
+
+def _open_trusted(path, create=None):
+    """A descriptor on the directory `path`, reached from / one component at a time, each opened without
+    following a link (O_NOFOLLOW at EVERY level, not only the last) and each checked by _check_ancestor before
+    anything is made in it or below it. With `create`, a missing component is made with that mode, inside the
+    descriptor of the one above (never os.makedirs, which follows links). The last directory is checked as an
+    ancestor of what will be put in it, by this user."""
+    path = os.path.abspath(path)
+    fd, name, st = os.open("/", _DIR_FLAGS), "/", None
+    try:
+        st = os.fstat(fd)
+        for part in [p for p in path.split("/") if p]:
+            below = os.path.join(name, part)
+            try:
+                child = os.open(part, _DIR_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                require(create is not None, "%s does not exist" % below)
+                _check_ancestor(name, st, os.geteuid())        # before anything is made in it
+                os.mkdir(part, create, dir_fd=fd)
+                child = os.open(part, _DIR_FLAGS, dir_fd=fd)
+                os.fchmod(child, create)                        # the mode asked for, whatever the umask
+            except OSError as error:                            # ELOOP: a link; ENOTDIR: not a directory
+                raise Refused("%s is not a real directory (%s): enrolment does not follow it" % (below, error.strerror))
+            child_st = os.fstat(child)
+            _check_ancestor(name, st, child_st.st_uid)
+            os.close(fd)
+            fd, name, st = child, below, child_st
+        _check_ancestor(name, st, os.geteuid())
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _ensure_trusted_dir(path, mode=0o755):
+    """`path` and every directory above it trusted (see _open_trusted), missing ones made with `mode`. Only root
+    can then change what lies there, so the path-based writes after it cannot be redirected."""
+    os.close(_open_trusted(path, create=mode))
+
+
 def _safe_directory(directory):
     """The enrolment directory holds the journal and, between the phases, the WG-BOOT private key: it must be a
-    real directory (not a link), owned by root, 0700, and every directory above it root's and not writable by
-    group or others (otherwise someone could swap it). Created if absent; never trusted if it is not so."""
+    real directory (not a link), owned by root, 0700, and every directory above it trusted (_check_ancestor:
+    otherwise someone could swap it). Created if absent; never trusted if it is not so."""
     directory = os.path.abspath(directory)
-    me = os.geteuid()                    # root, in production: main() refuses anything else
-    # Every directory above it is owned by root (or this user) and closed to group and others, OR is sticky
-    # (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's
-    # owner can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
-    # (#233, Go); kept identical by hand until one shared helper exists.
-    below, walk = directory, os.path.dirname(directory)
-    while True:
-        st = os.lstat(walk)
-        open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-        child_owner = os.lstat(below).st_uid if os.path.lexists(below) else me
-        require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
-                and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_owner in (0, me))),
-                "%s is not a root-owned directory closed to group and others (nor a sticky one): the enrolment "
-                "directory under it could be replaced" % walk)
-        if walk == "/":
-            break
-        below, walk = walk, os.path.dirname(walk)
-    if not os.path.lexists(directory):
-        os.mkdir(directory, 0o700)
-    st = os.lstat(directory)
-    require(stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode) and st.st_uid == me,
-            "%s is not a real directory owned by this user (root)" % directory)
-    os.chmod(directory, 0o700)
-    require(stat.S_IMODE(os.lstat(directory).st_mode) == 0o700, "%s could not be made 0700" % directory)
+    parent = _open_trusted(os.path.dirname(directory))
+    try:
+        base = os.path.basename(directory)
+        try:
+            os.mkdir(base, 0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(base, _DIR_FLAGS, dir_fd=parent)
+        except OSError as error:
+            raise Refused("%s is not a real directory (%s)" % (directory, error.strerror))
+        try:
+            st = os.fstat(fd)
+            _check_ancestor(os.path.dirname(directory), os.fstat(parent), st.st_uid)
+            require(stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid(),
+                    "%s is not a real directory owned by this user (root)" % directory)
+            os.fchmod(fd, 0o700)
+            require(stat.S_IMODE(os.fstat(fd).st_mode) == 0o700, "%s could not be made 0700" % directory)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
 
 
 def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
@@ -417,11 +470,7 @@ def check_manifest(directory, chain, root_key, typed, document):
     require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
     require(typed == fingerprint(root_key), "the root key's fingerprint is not the one typed: this is not the root "
             "key the ceremony made. Nothing was written")
-    with open(os.path.join(directory, "bundle.json")) as f:
-        bundle = json.load(f)
-    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE
-            and all(isinstance(bundle.get(k), str) for k in ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub")),
-            "bundle.json is not a complete identity bundle")
+    bundle = _bundle(directory)
     envelopes = chain if isinstance(chain, list) else [chain]
     require(envelopes, "the chain is empty")
     try:
@@ -491,7 +540,7 @@ def _install(journal, step, path, data, prefix=""):
         existing()
     else:
         directory = os.path.dirname(target)
-        os.makedirs(directory, mode=0o755, exist_ok=True)
+        _ensure_trusted_dir(directory)
         facts["tmp:" + path] = os.path.basename(tmp)
         journal.done(step, **facts)       # the temporary name, recorded before the file exists
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
@@ -605,34 +654,69 @@ def run_as_sync(config_path, chain, run=subprocess.run):
     return int(m.group(1)), m.group(2)
 
 
+def _hand_over(state, chown=True):
+    """The state directory, made regalia-sync's: every directory above it trusted and made one level at a time
+    (_open_trusted), then the directory itself opened without following a link and judged by descriptor, so what
+    is checked is what is changed. Taken over only when it is root's and empty; one that is regalia-sync's
+    already (an enrolment resumed) only at 0755, the mode this step gives it. `chown` False (tests, which
+    cannot change an owner): the user that owns it is taken to be regalia-sync."""
+    if chown:
+        import pwd
+        user = pwd.getpwnam(SYNC_USER)
+        uid, gid = user.pw_uid, user.pw_gid
+    else:
+        uid, gid = os.geteuid(), os.getegid()
+    parent = _open_trusted(os.path.dirname(os.path.abspath(state)), create=0o755)
+    try:
+        base, created = os.path.basename(state), False
+        try:
+            os.mkdir(base, 0o700, dir_fd=parent)
+            created = True
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(base, _DIR_FLAGS, dir_fd=parent)
+        except OSError as error:
+            raise Refused("%s is not a real directory (%s): enrolment does not follow it" % (state, error.strerror))
+    finally:
+        os.close(parent)
+    try:
+        st = os.fstat(fd)
+        if created:                                      # ours, just made (root's on a host): handed over below
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o755)
+        elif (st.st_uid, st.st_gid) == (uid, gid):
+            require(stat.S_IMODE(st.st_mode) == 0o755, "%s is %s's but mode %o, not 0755: enrolment did not leave it so, "
+                    "and does not take it over" % (state, SYNC_USER, stat.S_IMODE(st.st_mode)))
+        else:
+            require(st.st_uid == 0 and not os.listdir(fd), "%s is neither %s's nor an empty directory of root's: "
+                    "enrolment does not take it over" % (state, SYNC_USER))
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o755)
+    finally:
+        os.close(fd)
+
+
+def _bundle(directory):
+    with open(os.path.join(directory, "bundle.json"), "rb") as f:
+        bundle = membership.load(f.read(membership.MAX_BYTES + 1))
+    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE
+            and all(isinstance(bundle.get(k), str) for k in ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub")),
+            "bundle.json is not a complete identity bundle")
+    return bundle
+
+
 def commit(directory, chain, root_key, typed, document, site, example, run=subprocess.run, prefix="", as_sync=None, out=sys.stdout):
     """Phase 2, as far as the trust anchors (#190): this host's TPM identity re-checked by Name, the manifest
     chain checked again (never trusted from an earlier `check`), the configuration installed, the state
     directory made regalia-sync's, and the anchor, the store and the heartbeat counter set up AS regalia-sync.
     The ESP credentials and the enrolment record follow in later steps."""
-    journal = Journal(directory, json.load(open(os.path.join(directory, "bundle.json")))["node_id"])
+    journal = Journal(directory, _bundle(directory)["node_id"])
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
     manifest = check_manifest(directory, chain, root_key, typed, document)
     config = install_config(journal, journal.doc["node_id"], root_key, example, site, document, prefix)
-    state = prefix + config["state_dir"]
-    if not os.path.lexists(state):
-        os.makedirs(os.path.dirname(state), 0o755, exist_ok=True)
-        os.mkdir(state, 0o755)
-    if as_sync is None:
-        import pwd
-        user = pwd.getpwnam(SYNC_USER)
-        # by descriptor, on a directory opened without following a link: what is checked is what is changed
-        fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            st = os.fstat(fd)
-            if (st.st_uid, st.st_gid) != (user.pw_uid, user.pw_gid):
-                require(st.st_uid == 0 and not os.listdir(fd), "%s is neither %s's nor an empty directory of root's: "
-                        "enrolment does not take it over" % (state, SYNC_USER))
-                os.fchown(fd, user.pw_uid, user.pw_gid)
-                os.fchmod(fd, 0o755)
-        finally:
-            os.close(fd)
+    _hand_over(prefix + config["state_dir"], as_sync is None)
     journal.started("anchor")
     epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
@@ -666,15 +750,11 @@ def main(argv=None):
     k.add_argument("--enrol-dir", default=ENROL_DIR)
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
-    a.add_argument("--chain", required=True)
+    a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
     if args.command == "_anchor":                    # run by commit, as regalia-sync
         try:
-            if args.chain == "-":
-                chain = membership.load(sys.stdin.buffer.read())
-            else:
-                with open(args.chain, "rb") as f:
-                    chain = membership.load(f.read())
+            chain = membership.load(sys.stdin.buffer.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
             epoch, digest = anchor_and_store(args.config, chain)
         except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)

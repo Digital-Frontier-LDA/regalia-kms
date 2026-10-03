@@ -23,6 +23,9 @@ class Crash(BaseException):
 
 class InitOnSwtpm(unittest.TestCase):
     def setUp(self):
+        # root's umask on a host; under a looser one the directories the tests make would be group-writable,
+        # and enrolment refuses to write below those (_check_ancestor)
+        self.addCleanup(os.umask, os.umask(0o022))
         if not all(shutil.which(t) for t in ("swtpm", "tpm2_createek", "wg", "openssl")):
             if os.environ.get("REGALIA_EXPECT_SWTPM") == "1":
                 self.fail("swtpm, tpm2-tools, wireguard-tools and openssl are expected here and were not found")
@@ -311,15 +314,15 @@ class InitOnSwtpm(unittest.TestCase):
         os.mkdir(self.dir, 0o700)
         os.chmod(self.d, 0o1777)
         self.addCleanup(os.chmod, self.d, 0o700)
-        real = os.lstat
+        real, ino = os.fstat, os.lstat(self.dir).st_ino
 
-        def foreign_child(path, *a, **k):
-            st = real(path, *a, **k)
-            if os.path.abspath(path) == os.path.abspath(self.dir):
+        def foreign_child(fd):
+            st = real(fd)
+            if st.st_ino == ino:
                 return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, 65534, st.st_gid,
                                        st.st_size, int(st.st_atime), int(st.st_mtime), int(st.st_ctime)))
             return st
-        with unittest.mock.patch.object(enrol.os, "lstat", foreign_child):
+        with unittest.mock.patch.object(enrol.os, "fstat", foreign_child):
             with self.assertRaisesRegex(enrol.Refused, "nor a sticky one|not a real directory owned"):
                 enrol._safe_directory(self.dir)
         enrol._safe_directory(self.dir)          # our own entry under the sticky parent: trusted
