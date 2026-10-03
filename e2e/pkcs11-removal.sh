@@ -24,7 +24,8 @@ case " $STAGING_SERIALS " in *" $SERIAL "*) ;; *) die "$SERIAL is not a staging 
 sudo -n true 2>/dev/null || die "needs passwordless sudo (USB unbind/bind)"
 [ -z "${HSM_PIN_FILE:-}" ] || HSM_USER_PIN="$(sed -n 's/^HSM_USER_PIN=//p' "$HSM_PIN_FILE" | head -1)"
 [ -n "${HSM_USER_PIN:-}" ] || die "no user PIN (HSM_PIN_FILE or HSM_USER_PIN)"
-export REGALIA_Q_PIN="$HSM_USER_PIN"; unset HSM_USER_PIN
+# Not exported (#225): the PIN reaches only the gated login that uses it (p11l), and the log's redaction on fd 3.
+Q_PIN="$HSM_USER_PIN"; unset HSM_USER_PIN
 
 USBDEV=""   # resolved from the token itself below, once its slot is known
 UTC="$(date -u +%Y%m%dT%H%M%SZ)"; EVID="${EVIDENCE_DIR:-.}/evidence-removal-$SERIAL-$UTC.log"
@@ -40,7 +41,7 @@ fi
 pass=0; fail=0
 # Literal redaction, the PIN read from the environment by Python: never on any command line (a sed
 # program would carry it in argv) and never interpreted as regex syntax.
-log(){ printf '%s\n' "$*" | python3 -I -c 'import os, sys; p = os.environ.get("REGALIA_Q_PIN", ""); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' >> "$EVID"; }
+log(){ printf '%s\n' "$*" | python3 -I -c 'import os, sys; p = os.fdopen(3).read().rstrip("\n"); t = sys.stdin.read(); sys.stdout.write(t.replace(p, "<pin>") if p else t)' 3<<< "$Q_PIN" >> "$EVID"; }
 P(){ printf '  \033[32mPASS\033[0m %s\n' "$1"; log "PASS $1"; pass=$((pass+1)); }
 F(){ printf '  \033[31mFAIL\033[0m %s\n' "$1"; log "FAIL $1"; fail=$((fail+1)); }
 hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; log "### $1"; }
@@ -83,7 +84,7 @@ ok = hits == [slot] and (slots == 1 or not isolated)
 sys.exit(0 if ok else 1)' "$SLOT" "$SERIAL" "${OWN_OPENSC_CONF:-0}"; }
 p11(){ timeout 60 pkcs11-tool --module "$MODULE" --slot "$SLOT" "$@"; }
 p11l(){ target_ok || { echo "p11l: slot $SLOT does not hold $SERIAL alone right now: no login, no PIN" >&2; return 97; }
-  p11 --login --pin env:REGALIA_Q_PIN "$@"; }
+  REGALIA_Q_PIN="$Q_PIN" p11 --login --pin env:REGALIA_Q_PIN "$@"; }
 SLOT="$(slot_of)"; [ -n "$SLOT" ] || die "no single token with serial $SERIAL"
 # ONE READER ONLY from here on (e2e/lib/opensc_isolate.py): another token can no longer take this
 # token's slot ID when its reader disappears, and OpenSC stops probing the other cards.
