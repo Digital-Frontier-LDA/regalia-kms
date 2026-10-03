@@ -161,9 +161,10 @@ class OnQemu(tub.OnSwtpm):
             time.sleep(0.1)
         return loop, "%sp%d" % (loop, number)
 
-    def esp(self, named):
+    def esp(self, named, image="e2e"):
         """Puts exactly these credentials ({name: bytes}) in the ESP's loader/credentials, as <name>.cred, and
-        returns the files as systemd-stub will read them. Nothing else changes on the ESP."""
+        `image` (<image>.efi of REGALIA_BOOT_DIR, signed by e2e/unlock-boot-qemu.sh) as the one boot image, and
+        returns the credential files as systemd-stub will read them. Nothing else changes on the ESP."""
         loop, part = self.partition(1)
         mnt = self.d + "/esp"
         os.makedirs(mnt, exist_ok=True)
@@ -177,16 +178,17 @@ class OnQemu(tub.OnSwtpm):
             for name, content in files.items():
                 with open(os.path.join(where, name), "wb") as f:
                     f.write(content)
+            shutil.copyfile("%s/%s.efi" % (BOOT, image), mnt + "/EFI/BOOT/BOOTX64.EFI")
         finally:
             unmounted = not mounted or run(["umount", mnt], capture_output=True).returncode == 0
             run(["losetup", "-d", loop], capture_output=True)
         self.assertTrue(unmounted, "the ESP did not unmount")
         return files
 
-    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=()):
-        """One boot of the guest under OVMF, to power-off, with `credentials` on its ESP. Returns what its
+    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=(), image="e2e"):
+        """One boot of the guest under OVMF, to power-off, with `credentials` and `image` on its ESP. Returns what its
         console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase."""
-        self.on_esp = self.esp(credentials or {})
+        self.on_esp = self.esp(credentials or {}, image)
         variables = "%s/vars-%s.fd" % (self.d, label)
         shutil.copyfile(OVMF + "/OVMF_VARS_4M.fd", variables)
         kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
@@ -314,10 +316,15 @@ class OnQemu(tub.OnSwtpm):
         # as reference, and each gives a path its half
         firmware = self.reference["tpm_firmware_version"]          # (the reference is replaced below; its firmware stays)
 
-        def reference(pcr12):
-            # one accepted set, as measurements.bind() gives it: PCR 7 and 12 in every phase, PCR 11 per phase
-            return {"accepted": [{"label": "e2e", "tpm_firmware_version": firmware,
-                                  "pcrs": {"7": pcrs["7"], "12": pcr12}, "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}]}
+        with open(BOOT + "/e2e-old.record.json") as f:
+            older = json.load(f)                                    # the second signed image of the same build (#135)
+        self.assertNotEqual(older["pcr11"], record["pcr11"])
+
+        def reference(pcr12, images=(("e2e", record),)):
+            # an accepted set per image, as measurements.bind() gives it: PCR 7 and 12 in every phase, PCR 11 per phase
+            return {"accepted": [{"label": label, "tpm_firmware_version": firmware,
+                                  "pcrs": {"7": pcrs["7"], "12": pcr12}, "phases": {phase: {"11": built["pcr11"][phase]} for phase in attest.PHASES}}
+                                 for label, built in images]}
         loop, self.disk = self.partition(2)
         for peer in ("b", "c"):
             enrolment = unlock.Enrolment("a")
@@ -388,10 +395,44 @@ class OnQemu(tub.OnSwtpm):
         self.assertEqual([v.lower() for v in booted.groups()], [pcrs["7"], record["pcr11"]["system"], expected["pcr12"]])
         print("PCR 12 with the host's six credentials: %s, as espcreds computes it" % expected["pcr12"], file=sys.stderr)
 
+        # boot 2c, AN OLDER SIGNED IMAGE, APPROVED (#135): the same build with one word more on its command line, so
+        # another PCR 11, signed by the same keys. The peers' document lists both images; it boots unattended.
+        self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-old", older)))
+        since = len(self.events)
+        said = self.boot("2c-older-approved", credentials, image="e2e-old")
+        self.assertNotRegex(said, PROMPT.pattern.decode())
+        self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
+        self.assertIn("regalia.e2e-image=old", re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1).split())
+        shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+        self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], older["pcr11"]["system"], expected["pcr12"]])
+        self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
+
+        # boot 2d, THE SAME IMAGE, RETIRED (#135): the document lists the current image only. The guest's TPM still
+        # releases the local half, as it does for every image the PCR-signing key signed (a signed policy has no
+        # counter): the client starts, which it cannot without that half (boot 1b), and asks both peers. Both refuse
+        # the quote, each naming PCR 11 and nothing else; nothing is given; the disk stays locked.
+        self.reference = reference(expected["pcr12"])
+        since = len(self.events)
+        said = self.boot("2d-older-retired", credentials, recovery=True, image="e2e-old")
+        self.assertIn("the disk stays locked", said)
+        self.assertRegex(said, PROMPT.pattern.decode())
+        self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())
+        shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+        self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], older["pcr11"]["system"], expected["pcr12"]])
+        events = self.events[since:]
+        self.assertNotIn(("unlock", "ALLOW"), {(e["event"], e["outcome"]) for e in events})
+        refused = {e["peer"]: e["reason"] for e in events if e["event"] == "unlock" and e["outcome"] == "DENY"}
+        self.assertEqual(sorted(refused), ["b", "c"], events)
+        for peer, reason in refused.items():
+            self.assertIn("PCR 11 is %s, expected %s" % (older["pcr11"]["initrd"], record["pcr11"]["initrd"]), reason)
+            self.assertNotRegex(reason, r"PCR (7|12) is")
+            print("boot 2d: %s refused the retired image: %s" % (peer, reason), file=sys.stderr)
+
         # boot 2b, CREDENTIALS FROM SMBIOS (which the firmware owns, and nothing the peers attest measures): an extra
         # unit that would print a marker on the console, and a drop-in that makes the initrd want it. systemd imports
         # no credential (it says so in the journal, reported once booted), so neither is acted on, and the unlock
-        # goes on as in boot 2 (PCR 12 does not see SMBIOS: this boot is NOT refused by the peers).
+        # goes on as in boot 2 (PCR 12 does not see SMBIOS: this boot is NOT refused by the peers). It is also the
+        # current image's first boot after 2d retired the older one: retiring an image strands nothing (#135).
         planted = {"systemd.extra-unit.regalia-planted.service":
                    b"[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nExecStart=/bin/sh -c 'echo \"<2>REGALIA-E2E-PLANTED-RAN\" > /dev/kmsg'\n",
                    "systemd.unit-dropin.initrd.target": b"[Unit]\nWants=regalia-planted.service\n"}
