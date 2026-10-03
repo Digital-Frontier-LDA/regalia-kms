@@ -146,7 +146,8 @@ def tpm(work):
 def chrony(work):
     """Two NTS servers on the loopback (each with its own certificate), and the system chrony configured as
     authtime.conf() renders it, pointed at them."""
-    servers = []
+    servers, copy = [], work / "chronyd-server"
+    shutil.copy(shutil.which("chronyd") or "/usr/sbin/chronyd", copy)           # unconfined by the distribution's profile
     for n, address in enumerate(("127.0.0.2", "127.0.0.3"), 1):
         sh("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2",
            "-keyout", str(work / ("s%d.key" % n)), "-out", str(work / ("s%d.crt" % n)), "-subj", "/CN=" + address,
@@ -156,8 +157,6 @@ def chrony(work):
                         "cmdport 0\nbindcmdaddress %s\npidfile %s\nntsdumpdir %s\n"
                         % (21120 + n, 21460 + n, address, work / ("s%d.key" % n), work / ("s%d.crt" % n), work / ("s%d.sock" % n),
                            work / ("s%d.pid" % n), work))
-        copy = work / "chronyd-server"
-        shutil.copy(shutil.which("chronyd") or "/usr/sbin/chronyd", copy)       # unconfined by the distribution's profile
         servers.append(subprocess.Popen([str(copy), "-x", "-n", "-f", str(conf)], stdout=open(work / ("s%d.log" % n), "w"), stderr=subprocess.STDOUT))
     text = authtime.conf(["127.0.0.2", "127.0.0.3"])
     for n, address in enumerate(("127.0.0.2", "127.0.0.3"), 1):
