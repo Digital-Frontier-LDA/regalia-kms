@@ -138,20 +138,30 @@ def diff(current, candidate):
 
 # ---- signing ----
 
+def _write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
 def _write_new(path, data, mode=0o644):
-    """A new file, never an existing one replaced, flushed to disk."""
+    """A new file, never an existing one replaced, flushed to disk. A write that fails part way (a full disk)
+    removes the file, so no truncated envelope is left that a later run could not replace (regalia-kms-48)."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, mode)
     try:
-        os.write(fd, data)
+        _write_all(fd, data)
         os.fsync(fd)
-    finally:
+    except BaseException:
         os.close(fd)
+        os.unlink(path)
+        raise
+    os.close(fd)
 
 
 def _append_record(state_dir, line):
     fd = os.open(os.path.join(state_dir, RECORD), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
     try:
-        os.write(fd, (json.dumps(line, sort_keys=True) + "\n").encode())
+        _write_all(fd, (json.dumps(line, sort_keys=True) + "\n").encode())
         os.fsync(fd)
     finally:
         os.close(fd)

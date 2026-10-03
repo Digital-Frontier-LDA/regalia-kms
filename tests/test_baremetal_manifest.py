@@ -233,6 +233,28 @@ class Pin(Case):
         self.assertIn("pkcs11", tool.token_signer.__code__.co_names + tool.token_signer.__code__.co_varnames)
 
 
+class Writing(Case):
+    def test_a_write_that_fails_part_way_leaves_no_file(self):
+        path, real, calls = os.path.join(self.d, "e2.json"), os.write, []
+
+        def short(fd, data):                     # ten bytes land, then the disk is full
+            calls.append(1)
+            if len(calls) > 1:
+                raise OSError(28, "No space left on device")
+            return real(fd, bytes(data[:10]))
+        with unittest.mock.patch("os.write", short), self.assertRaises(OSError):
+            tool._write_new(path, b"x" * 100)
+        self.assertFalse(os.path.exists(path))
+
+    def test_short_writes_are_finished(self):
+        path = os.path.join(self.d, "e2.json")
+        real = os.write
+        with unittest.mock.patch("os.write", lambda fd, data: real(fd, bytes(data[:7]))):
+            tool._write_new(path, b"y" * 100)
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"y" * 100)
+
+
 class Proposing(Case):
     def test_a_state_change_chains_to_the_current_manifest(self):
         candidate = self.proposal()
