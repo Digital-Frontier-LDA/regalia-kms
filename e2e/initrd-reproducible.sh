@@ -41,7 +41,7 @@ for n in $(seq 2 "$BUILDS"); do
     diff "$OUT/build-1/initrd-build.json" "$OUT/build-$n/initrd-build.json" | grep -v '^[<>] *"[a-z0-9.+~-]*=' | head -40 || true
   fi
 done
-sha="$(python3 -Es -c 'import json,sys; print(json.load(open(sys.argv[1]))["initrd_sha256"])' "$OUT/build-1/initrd-build.json")"
+sha="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["initrd_sha256"])' "$OUT/build-1/initrd-build.json")"
 if [ "$same" = yes ]; then
   echo "initrd-reproducible: IDENTICAL, $BUILDS builds on this machine: $sha"
 else

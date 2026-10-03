@@ -122,7 +122,7 @@ for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
   echo "initrd_size=$(stat -c %s "$OUT/initrd.img")"
   echo "initrd_entries=$(wc -l < "$OUT/initrd-listing.txt")"
 } > "$W/record.txt"
-python3 -Es - "$W/record.txt" "$W/packages.txt" "$OUT/initrd-build.json" <<'PY'
+python3 -I - "$W/record.txt" "$W/packages.txt" "$OUT/initrd-build.json" <<'PY'
 import json, sys
 record, files = {}, {}
 for line in open(sys.argv[1]):
@@ -139,4 +139,4 @@ with open(sys.argv[3], "w") as f:
     json.dump(record, f, indent=1, sort_keys=True)
     f.write("\n")
 PY
-echo "build-initrd: $(python3 -Es -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_size"], "bytes,", r["initrd_entries"], "entries, dracut", r["dracut"], "kernel", r["kernel"])' "$OUT/initrd-build.json")"
+echo "build-initrd: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_size"], "bytes,", r["initrd_entries"], "entries, dracut", r["dracut"], "kernel", r["kernel"])' "$OUT/initrd-build.json")"

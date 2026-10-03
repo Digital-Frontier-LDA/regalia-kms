@@ -566,7 +566,7 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/builds"
           for b in initrd-first initrd-second initrd-debian; do
-            echo "$b: $(python3 -Es -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_entries"], "entries, client", r["client_sha256"])' "$b/initrd-build.json")"
+            echo "$b: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_entries"], "entries, client", r["client_sha256"])' "$b/initrd-build.json")"
           done
           bad=0
           for b in initrd-second initrd-debian; do
@@ -580,7 +580,7 @@ jobs:
             fi
           done
           [ "$bad" = 0 ] || exit 1
-          echo "initrd-reproducible: IDENTICAL on three builders: $(python3 -Es -c 'import json,sys; print(json.load(open(sys.argv[1]))["initrd_sha256"])' initrd-first/initrd-build.json)"
+          echo "initrd-reproducible: IDENTICAL on three builders: $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["initrd_sha256"])' initrd-first/initrd-build.json)"
 
   # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
   # servers and a client on the loopback, none allowed to touch the runner's clock. The clock counts
