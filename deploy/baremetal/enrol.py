@@ -925,38 +925,69 @@ def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):
     return files
 
 
+RENDERED_DIRS = ("loader/credentials/", "EFI/regalia/")   # where bootcreds.esp_files may write or remove, at any B3 stage
+
+
+def _rendered_path(path):
+    """`path` from esp_files, normalized and confined: under loader/credentials/ or EFI/regalia/ (FAT compares names
+    without case), never absolute, never climbing out."""
+    require(isinstance(path, str) and path and "\0" not in path, "bootcreds named %r" % (path,))
+    relative = os.path.normpath(path.lstrip("/"))
+    require(not os.path.isabs(relative) and relative != ".." and not relative.startswith("../")
+            and any(relative.lower().startswith(d.lower()) and len(relative) > len(d) for d in RENDERED_DIRS),
+            "bootcreds named %r, outside %s" % (path, " and ".join(RENDERED_DIRS)))
+    return relative
+
+
+def _replace_esp(directory, filename, data):
+    """A RENDERED file (public, re-derivable from the anchored chain) written over whatever is there: a temporary
+    file in the same directory, fsynced, renamed onto the name, the directory fsynced. The sealed files are never
+    replaced (_publish_esp); a rendered one must be, after every manifest change (regalia-kms-ed on #276)."""
+    target, tmp = os.path.join(directory, filename), os.path.join(directory, "." + filename + ".enrol-new")
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, target)
+    dfd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def render_credentials(journal, esp, site, chain, root_key, anchor, device=None):
-    """The ESP files rendered from the manifest and the site (bootcreds.esp_files, #271: the ONE call enrol and the
-    update path make; what it returns depends on #66's B3 stage, so its paths are taken as they come), published
-    under the same rules as the sealed ones: never replacing a file, journalled, resumable. A file already there
-    with exactly the rendered bytes is accepted (they are public and deterministic). Then the record of EVERY
-    credential the stub will measure (espcreds.record over the ESP's loader/credentials as uki reads it): the PCR 12
-    the peers must expect, journalled as "espcreds". Returns that record."""
+    """The ESP files rendered from the anchored chain and the site (bootcreds.esp_files, #271: the ONE call enrol and
+    the update path make; what it returns depends on #66's B3 stage, so its paths are taken as they come, confined
+    to RENDERED_DIRS). {path: bytes} is written, replacing what is there (public, re-derivable: a resumed enrolment
+    whose manifest moved on is not stranded); {path: None} is removed if present (the B3 switch retires files the
+    peers no longer expect). Each is journalled. Then the record of EVERY credential the stub will measure
+    (espcreds.record over loader/credentials as uki reads it): the PCR 12 the peers must expect, journalled as
+    "espcreds". A chain the TPM did not anchor is refused by esp_files before anything is written."""
     from deploy.baremetal import bootcreds, uki
     envelopes = chain if isinstance(chain, list) else [chain]
     files = bootcreds.esp_files(site, envelopes, root_key, device or "/dev/disk/by-partlabel/regalia-root", anchor)
-    if journal.state("render") is None:
-        _journal_facts(journal, "render", {})
-    written = {}
-    for path, data in sorted(files.items()):
-        relative = os.path.normpath(path.lstrip("/"))
-        require(not relative.startswith("..") and "\0" not in relative, "bootcreds named %r, outside the ESP" % path)
+    planned = sorted((_rendered_path(path), data) for path, data in files.items())
+    require(all(data is None or isinstance(data, bytes) for _, data in planned), "bootcreds gave something that is neither bytes nor None")
+    journal.started("render")
+    done = {}
+    for relative, data in planned:
         directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
         _ensure_trusted_dir(directory)
         target = os.path.join(directory, filename)
-        digest = hashlib.sha256(data).hexdigest()
-        if os.path.isfile(target) and not os.path.islink(target):
-            with open(target, "rb") as f:
-                same = hashlib.sha256(f.read(len(data) + 1)).hexdigest() == digest
-            if same:                                  # the rendered bytes, already there: nothing to replace
-                facts = {k: v for k, v in journal.get("render").items() if k not in ("state", "at")}
-                facts[filename] = digest
-                _journal_facts(journal, "render", facts)
-                written[relative] = {"sha256": digest, "size": len(data)}
-                continue
-        _publish_esp(journal, "render", directory, filename, data)     # anything else there is refused and left
-        written[relative] = {"sha256": digest, "size": len(data)}
-    journal.done("render", files=written)
+        if data is None:
+            if os.path.lexists(target):
+                require(not os.path.islink(target) and os.path.isfile(target), "%s is not a regular file" % target)
+                os.unlink(target)
+            done[relative] = None
+        else:
+            _replace_esp(directory, filename, data)
+            done[relative] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    journal.done("render", files=done)
     record = espcreds.record(uki.credential_files(esp))
     journal.done("espcreds", **record)
     return record

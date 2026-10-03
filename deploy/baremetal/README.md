@@ -743,8 +743,10 @@ removing only what it can prove it made.
   - the TPM anchor, the store and the heartbeat counter, as `regalia-sync`;
   - `regalia.unlock-local` and `regalia.wg-boot-key`, sealed to this TPM (PCR 7, and PCR 11 through the
     initrd key) into the ESP's `loader/credentials`. Their SHA-256 and size are journalled for PCR 12.
-  - the files `bootcreds.esp_files` renders from the anchored chain and the site (#271), under the same
-    rules. Then the `espcreds` record of every credential on the ESP: the PCR 12 the peers must expect.
+  - the files `bootcreds.esp_files` renders from the anchored chain and the site (#271), confined to
+    `loader/credentials/` and `EFI/regalia/`. These are public and re-derivable, so they are replaced
+    atomically; a file it names as None is removed. Then the `espcreds` record of every credential on the
+    ESP: the PCR 12 the peers must expect.
   No directory on the way is followed through a link or is writable by others, and no file is replaced.
   The initrd key is taken only from the root's chain: the approved set must name the image's signing
   keys (`"signing"`, #267), so a re-signed copy of an approved image is refused.
