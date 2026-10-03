@@ -186,7 +186,8 @@ Two limits, so this is not read as more than it is:
 
 `uki build`, `sign` and `verify` compare every entry of the initrd with
 `deploy/baremetal/initrd/initrd-inventory.txt` and refuse any difference, so the image is built from a pinned
-snapshot of the Debian archive (`REGALIA_BOOT_MIRROR`, the date in `.github/workflows/ci.yml`).
+snapshot of the Debian archive, its updates and its security suite (`REGALIA_BOOT_MIRROR` and
+`REGALIA_BOOT_SECURITY_MIRROR`, one date for both in `.github/workflows/ci.yml`).
 
 **Every image update starts by moving the snapshot date and refreshing the inventory**, in one pull request:
 
