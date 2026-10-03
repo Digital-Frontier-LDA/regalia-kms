@@ -1,6 +1,6 @@
-# OpenBao seal proof of concept
+# OpenBao development adapter
 
-Tracks #120, #121 and #123. This is an isolated development experiment, not a
+Tracks #120, #121, #122 and #123. This is an isolated development experiment, not a
 supported production plugin. It uses the official OpenBao Wrapper/plugin SDK
 and existing Regalia HTTP operations; it adds no daemon endpoint. Default frame
 1 uses raw wrap/unwrap. Opt-in frame 2 uses generation-aware seal-envelope and
@@ -51,10 +51,17 @@ response fields are ignored; duplicate keys and trailing documents are refused.
 Across the SDK RPC boundary, error code/correlation text survives, while the
 concrete Go error type does not.
 
-Remaining #121 work includes plugin-crash reconciliation, release packaging
-and production environment qualification.
-The native entrypoint has no External Keys factory. Physical custody, HA,
-upgrades and migration from the experimental outer frames remain unqualified.
+The real-server crash drill kills the plugin after a successful audited seal
+while withholding its response. OpenBao respawns it, resumes health checks with
+new nonces, keeps KV readable and unseals after restart. This proves recovery;
+it also proves a lost response does not imply an unexecuted operation.
+
+The native entrypoint also serves the separate External Keys factory described
+in [EXTERNAL-KEYS.md](EXTERNAL-KEYS.md). Versioned development packages and
+checksums are described in [PACKAGING.md](PACKAGING.md). The
+[hardware qualification procedure](HARDWARE-QUALIFICATION.md) requires an
+operator and witness. Physical custody, fencing, HA, supported upgrades and
+migration from the experimental outer frames remain unqualified.
 
 ## Contract
 
@@ -76,8 +83,8 @@ KMS registry's generation states. Hardware immutability and production
 ciphertext migration remain unqualified.
 The PoC permits development bindings only and rejects unsupported key IDs,
 oversized inputs, alternate formats and configuration changes after setup.
-It never discovers credentials from environment variables or retries a KMS
-operation automatically. Network errors are redacted. KMS requests use fresh
+The legacy entrypoint never discovers credentials from environment variables
+or retries a KMS operation automatically. Network errors are redacted. KMS requests use fresh
 request IDs/nonces, direct TLS 1.3 mutual authentication, a pinned CA and bounded
 timeouts, reusing the existing SOPS transport/client.
 
@@ -97,8 +104,9 @@ hardware key attributes and physical recovery are not exercised. Its software
 provider is test-only and is never linked into the plugin executable.
 Listener recovery reuses the fixture's in-memory RSA key; it does not prove KMS
 process recovery, custody persistence or recovery with missing historical keys.
-OpenBao's plugin manager may respawn/retry a crashed plugin; ambiguous-operation
-reconciliation across that boundary remains unqualified.
+The native crash drill proves respawn after an already-executed seal with a
+lost response; physical execution and off-host audit reconciliation remain
+separate qualification.
 
 The recovery drill takes a real Raft snapshot, stops the source process and
 restores through the normal snapshot endpoint onto separately initialized, empty
@@ -120,8 +128,9 @@ These are single-node software fixtures, not a hardware rotation procedure or
 an automatic migration from frame 1.
 
 Initial target: OpenBao 2.7.1, wrapping SDK 2.9.0, plugin SDK 2.4.0.
-External Keys, PKI, Transit, namespace grants, upgrades and production deployment
-remain separate qualification work.
+Native External Keys/Transit and namespace/mount refusals are exercised on the
+pinned real server. PKI, upgrades and production deployment remain separate
+qualification work.
 
 ## Run
 
