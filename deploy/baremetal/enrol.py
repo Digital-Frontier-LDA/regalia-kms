@@ -934,7 +934,7 @@ def _rendered_path(path):
     require(isinstance(path, str) and path and "\0" not in path, "bootcreds named %r" % (path,))
     relative = os.path.normpath(path.lstrip("/"))
     require(not os.path.isabs(relative) and relative != ".." and not relative.startswith("../")
-            and any(relative.lower().startswith(d.lower()) and len(relative) > len(d) for d in RENDERED_DIRS),
+            and any((os.path.dirname(relative) + "/").lower() == d.lower() for d in RENDERED_DIRS),   # one level, no deeper
             "bootcreds named %r, outside %s" % (path, " and ".join(RENDERED_DIRS)))
     return relative
 
@@ -980,9 +980,18 @@ def render_credentials(journal, esp, site, chain, root_key, anchor, device=None)
         _ensure_trusted_dir(directory)
         target = os.path.join(directory, filename)
         if data is None:
-            if os.path.lexists(target):
-                require(not os.path.islink(target) and os.path.isfile(target), "%s is not a regular file" % target)
-                os.unlink(target)
+            removed = False
+            for name in (target, os.path.join(directory, "." + filename + ".enrol-new")):    # and a crash's leftover
+                if os.path.lexists(name):
+                    require(not os.path.islink(name) and os.path.isfile(name), "%s is not a regular file" % name)
+                    os.unlink(name)
+                    removed = True
+            if removed:                                 # durable: a retired credential must not come back after a power cut
+                dfd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
             done[relative] = None
         else:
             _replace_esp(directory, filename, data)

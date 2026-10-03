@@ -59,6 +59,8 @@ class Render(unittest.TestCase):
             f.write(b"an earlier manifest's config")
         with open(self.esp + "/loader/credentials/regalia.boot-nft.cred", "wb") as f:
             f.write(b"retired at B3")
+        with open(self.esp + "/loader/credentials/.regalia.boot-nft.cred.enrol-new", "wb") as f:
+            f.write(b"a crash's leftover")
         self.files["loader/credentials/regalia.boot-nft.cred"] = None
         self.files["loader/credentials/regalia.wg-boot-conf.cred"] = None          # absent already: nothing to do
         record = self.render()
@@ -71,7 +73,7 @@ class Render(unittest.TestCase):
 
     def test_only_under_loader_credentials_or_efi_regalia(self):
         for path in ("../../etc/passwd", "/../x", "EFI/BOOT/BOOTX64.EFI", "loader/loader.conf", "loader/credentials",
-                     "loader/credentials/../../x.cred", "..foo/x"):
+                     "loader/credentials/../../x.cred", "..foo/x", "loader/credentials/sub/x.cred", "EFI/regalia/a/b.json"):
             with self.subTest(path):
                 self.files = {path: b"x"}
                 with self.assertRaisesRegex(enrol.Refused, "outside loader/credentials/ and EFI/regalia/"):
