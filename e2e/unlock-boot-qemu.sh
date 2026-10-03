@@ -79,13 +79,15 @@ else
   # snapshot at the same time in CI): a reviewed baseline without security updates is not one to ship (#198)
   MIRROR="${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}"
   # (explicit lines name their keyring: mmdebstrap only picks one by itself for a bare mirror URL)
-  KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
+  KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"      # Debian's own, pinned: the runner's predates trixie's keys
   SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
            "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
   mmdebstrap --variant=minbase "${APTOPT[@]}" \
     --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
     "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
+  # the guest's own apt reads the same lines: the keyring at the same path inside it
+  install -D -m 0644 "$KEYRING" "$ROOT$KEYRING"
 fi
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
