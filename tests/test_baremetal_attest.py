@@ -16,6 +16,7 @@ import unittest
 from unittest import mock
 
 from deploy.baremetal import attest
+from deploy.baremetal import membership as m
 
 # Captured from swtpm (tpm2-tools 5.7): an AK made by tpm2_createak under the EK, a quote it signed over
 # PCRs 0 and 7, and the names tpm2-tools printed for them.
@@ -676,6 +677,30 @@ class ReportedValues(Verification):
         self.assertEqual(str(caught.exception), "the quoted PCR digest is none of the accepted measurement sets (image-1, image-2). "
                          "image-1: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s | image-2: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s"
                          % ("10" * 32, "11" * 32, "99" * 32, "77" * 32, "10" * 32, "11" * 32, "99" * 32, "88" * 32))
+
+    def test_the_whole_refusal_reaches_the_audit_trail(self):
+        """The names are for the operator: a two-set, two-PCR refusal must reach the audit event whole, not cut
+        at the 240 characters a name is allowed (convergence.audited, regalia-kms-24's read)."""
+        from deploy.baremetal import convergence
+        self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
+        third = {"0": "10" * 32, "7": "99" * 32}
+        events = []
+        def decide():                       # as lease.reattest hands an attestation refusal on
+            try:
+                self.attempt(digest=attest.expected_pcr_digest(third), pcr_values=dict(third))
+            except attest.Refused as refusal:
+                raise m.Refused("the subject's attestation is refused: %s" % refusal)
+        with self.assertRaises(m.Refused) as caught:
+            convergence.audited(events.append, "unlock", None, "site-a", "b", decide)
+        self.assertGreater(len(str(caught.exception)), 240)
+        self.assertEqual(events[-1]["outcome"], "DENY")
+        self.assertEqual(events[-1]["reason"], str(caught.exception))
+        self.assertTrue(events[-1]["reason"].endswith("image-2: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s"
+                                                       % ("10" * 32, "11" * 32, "99" * 32, "88" * 32)))
+        # names stay short, and a reason is still one printable line, and still bounded
+        self.assertEqual(len(convergence._printable("x" * 1000)), 240)
+        self.assertEqual(len(convergence._printable("x" * 10000, m.REASON_LIMIT)), 4096)
+        self.assertEqual(convergence._printable("a\nb\x1b[31m"), "a?b?[31m")
 
     def test_values_that_do_not_match_the_quote_are_refused_and_never_used(self):
         tampered = dict(PCRS, **{"7": "78" * 32})                   # the quote is of PCRS, the values say otherwise

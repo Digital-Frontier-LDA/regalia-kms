@@ -110,8 +110,8 @@ def unit_started(unit="regalia-kms.service", run=subprocess.run, proc="/proc"):
     return started
 
 
-def _printable(text):
-    return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:240]
+def _printable(text, limit=membership.NAME_LIMIT):
+    return membership.printable(text, limit)
 
 
 def write(path, document):
@@ -168,7 +168,7 @@ class Service:
                 "manifest_digest": membership.digest(manifest) if manifest else "00" * 32,
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
-                "serve_until_boottime_ms": serve_until, "reason": _printable(reason)}
+                "serve_until_boottime_ms": serve_until, "reason": _printable(reason, membership.REASON_LIMIT)}
 
     def _daemon_waits(self):
         """Whether the daemon started after the held lease was asked for: it will not serve on that lease,

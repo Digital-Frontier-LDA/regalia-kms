@@ -118,7 +118,7 @@ class Admission(Case):
         self.manifest_now = None
         self.service.manifest = lambda: (_ for _ in ()).throw(m.Refused("bad\x00\n\x1b[31m" + "x" * 500))
         reason = self.service.step()["reason"]
-        self.assertEqual(reason, "bad???[31m" + "x" * 230)
+        self.assertEqual(reason, "bad???[31m" + "x" * 500)
 
     def test_if_the_service_stops_the_file_runs_out_by_itself(self):
         document = self.service.step()
