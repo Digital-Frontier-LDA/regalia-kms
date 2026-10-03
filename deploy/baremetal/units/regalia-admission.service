@@ -1,0 +1,53 @@
+# This node's runtime lease, and the admission file the KMS daemon reads (deploy/baremetal/admission.py).
+# Root, because the daemon accepts that file only from root (a dedicated user is #191); and nothing
+# else: no capability. It asks the peers for a lease over the service tunnel and nowhere else.
+[Unit]
+Description=Regalia KMS: the runtime lease and the admission file
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=regalia-wg-apply.service regalia-authtime.service
+Wants=regalia-wg-apply.service regalia-authtime.service
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip, tpm2_*, chronyc and openssl are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json admission
+Restart=always
+RestartSec=5s
+User=root
+# the TPM (its quotes, the anchor) is the tss group's: root without capabilities is held to file modes
+SupplementaryGroups=tss
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+# /run/regalia is shared with the unlock client and the KMS daemon: written into, never declared as
+# this unit's RuntimeDirectory (systemd would remove it, boot-session included, when this unit stops).
+ReadWritePaths=/run/regalia
+StateDirectory=regalia-admission
+StateDirectoryMode=0700
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+RestrictAddressFamilies=AF_UNIX AF_INET6
+IPAddressDeny=any
+IPAddressAllow=fd72:6567:6c61::/48
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

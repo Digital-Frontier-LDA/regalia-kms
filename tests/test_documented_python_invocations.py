@@ -31,7 +31,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # The packages this repository documents invocations of. `deploy` and `tools` are the two
 # with runnable entry points; a name outside this list is somebody else's python3.
 REPOSITORY_PACKAGES = ("deploy", "tools", "tests")
-INVOCATION = re.compile(r"(?:^|[\s`$(])(?:sudo\s+(?:-\S+\s+)*)?python3\s+(-m\s+)?([A-Za-z0-9_./-]+)")
+# The isolation flags the documentation now carries (-Es, or -I: tests/test_python_isolation.py) stand
+# between python3 and what it runs; they are part of the command as written, and are run with it.
+INVOCATION = re.compile(r"(?:^|[\s`$(])(?:sudo\s+(?:-\S+\s+)*)?python3\s+(?:-(?:Es|I)\s+)?(-m\s+)?([A-Za-z0-9_./-]+)")
 EXECUTED_AT_LEAST = {"deploy/baremetal/firewall.py", "deploy/baremetal/host_probe.py",
                      "deploy/baremetal/network_probe.py"}
 IMPORTS_REPOSITORY_PACKAGE = re.compile(
@@ -112,7 +114,7 @@ class DocumentedPythonInvocationTests(unittest.TestCase):
         for (form, target, script), sites in sorted(self.invocations.items()):
             if not parses_arguments_safely(script):
                 continue
-            command = [sys.executable, "-m", target] if form == "module" else [sys.executable, target]
+            command = [sys.executable, "-Es", "-m", target] if form == "module" else [sys.executable, "-Es", target]
             result = subprocess.run(command + ["--help"], cwd=ROOT, env=environment,
                                     capture_output=True, text=True, timeout=60)
             executed.add(script)
