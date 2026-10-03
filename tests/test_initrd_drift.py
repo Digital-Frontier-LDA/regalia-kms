@@ -110,7 +110,8 @@ class Script(unittest.TestCase):
         # what can write issues runs no checkout and nothing from the archive: it downloads the report and calls gh
         self.assertEqual(file_["permissions"], {"issues": "write"})
         self.assertEqual(file_["needs"], "build")
-        self.assertEqual(file_["if"], "github.event_name != 'pull_request'")
+        self.assertEqual(file_["if"], "always() && github.event_name != 'pull_request'")
+        self.assertTrue(file_["steps"][0]["continue-on-error"])
         self.assertEqual([s.get("uses", "").split("@")[0] for s in file_["steps"]], ["actions/download-artifact", ""])
         filing = file_["steps"][1]["run"]
         self.assertNotIn("checkout", filing)
@@ -127,6 +128,8 @@ class Script(unittest.TestCase):
         self.assertNotIn("urlopen", script)
         self.assertIn('/var/lib/apt/lists/*_dists_"$SUITE"-security_main_binary-amd64_Packages', script)
         self.assertEqual(script.count("[signed-by=$KEYRING]"), 3)
+        self.assertIn("e2e/lib/debian-keyring.sh", script)
+        self.assertIn("--skip=cleanup/apt/lists", script)
 
 if __name__ == "__main__":
     unittest.main()

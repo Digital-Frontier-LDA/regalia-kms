@@ -33,11 +33,13 @@ trap cleanup EXIT
 # THE SAME PACKAGES as e2e/unlock-boot-qemu.sh (tests/test_initrd_drift.py holds the two lists together)
 INCLUDE=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography
 echo "### today's archive: $SUITE, $SUITE-updates, $SUITE-security"
-KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
-mmdebstrap --variant=minbase --include="$INCLUDE" "$SUITE" "$ROOT" \
+KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"      # Debian's own, pinned: the runner's predates trixie's keys
+# (apt's lists are kept: the security suite's verified package list is read from them below)
+mmdebstrap --variant=minbase --skip=cleanup/apt/lists --include="$INCLUDE" "$SUITE" "$ROOT" \
   "deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main" \
   "deb [signed-by=$KEYRING] $SECURITY $SUITE-security main" >"$W/mmdebstrap.log" 2>&1 \
   || { tail -40 "$W/mmdebstrap.log"; echo "initrd-drift: mmdebstrap failed"; exit 2; }
+install -D -m 0644 "$KEYRING" "$ROOT$KEYRING"      # the guest's own apt reads the same lines
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
 chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-device0*' >"$W/apt.log" 2>&1 \
