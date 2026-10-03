@@ -21,6 +21,7 @@ type fixturePKI struct {
 	config         map[string]string
 	strangerConfig map[string]string
 	restoreConfig  map[string]string
+	keysConfig     map[string]string
 }
 
 func newFixturePKI(t *testing.T) fixturePKI {
@@ -92,12 +93,15 @@ func newFixturePKI(t *testing.T) fixturePKI {
 	_, clientPath, keyPath := issue("client", "spiffe://regalia/workload/openbao-poc", false)
 	_, strangerPath, strangerKeyPath := issue("stranger", "spiffe://regalia/workload/unauthorized", false)
 	_, restorePath, restoreKeyPath := issue("restore", "spiffe://regalia/workload/openbao-poc", false)
+	_, keysPath, keysKeyPath := issue("keys", "spiffe://regalia/workload/openbao-keys-poc", false)
 	c := map[string]string{"kms_url": "https://127.0.0.1:1", "server_name": "kms.poc.test", "ca_path": caPath, "certificate_path": clientPath, "private_key_path": keyPath, "object_id": "poc-seal-key", "repository": "example/poc", "path": "fixtures/seal", "environment": "development", "kms_purpose": "openbao-seal", "timeout": "2s"}
 	stranger := cloneConfig(c)
 	stranger["certificate_path"], stranger["private_key_path"] = strangerPath, strangerKeyPath
 	restore := cloneConfig(c)
 	restore["certificate_path"], restore["private_key_path"] = restorePath, restoreKeyPath
-	return fixturePKI{server: server, roots: roots, config: c, strangerConfig: stranger, restoreConfig: restore}
+	keys := cloneConfig(c)
+	keys["certificate_path"], keys["private_key_path"] = keysPath, keysKeyPath
+	return fixturePKI{keysConfig: keys, server: server, roots: roots, config: c, strangerConfig: stranger, restoreConfig: restore}
 }
 
 func cloneConfig(c map[string]string) map[string]string {

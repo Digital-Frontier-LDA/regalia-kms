@@ -132,9 +132,10 @@ func baoConfig(t *testing.T, dir, address, cluster, pluginDigest string, c map[s
 }
 
 type baoAPI struct {
-	base   string
-	token  string
-	client *http.Client
+	base      string
+	namespace string
+	token     string
+	client    *http.Client
 }
 
 func (b baoAPI) call(method, path string, input any) (int, []byte, error) {
@@ -157,6 +158,9 @@ func (b baoAPI) callBody(method, path string, body io.Reader, contentType string
 	}
 	if b.token != "" {
 		req.Header.Set("X-Vault-Token", b.token)
+	}
+	if b.namespace != "" {
+		req.Header.Set("X-Vault-Namespace", b.namespace)
 	}
 	req.Header.Set("Content-Type", contentType)
 	response, err := b.client.Do(req)

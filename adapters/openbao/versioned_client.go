@@ -11,15 +11,17 @@ import (
 	"time"
 
 	sops "github.com/Digital-Frontier-LDA/regalia-kms/adapters/sops"
+	"github.com/hashicorp/go-hclog"
 )
 
-// This client protects only the outer envelope's 32-byte data key. The existing
-// KMS APIs own generation selection, policy and inner-envelope authentication.
+// This client carries envelope and signing requests. The existing KMS APIs
+// own generation selection, policy, custody and envelope authentication.
 type versionedClient struct {
 	base    string
 	http    *http.Client
 	binding binding
 	native  bool
+	logger  hclog.Logger
 }
 
 type versionedRequest struct {
@@ -30,11 +32,12 @@ type versionedRequest struct {
 		ExpiresAt   string `json:"expires_at"`
 		Nonce       string `json:"nonce"`
 	} `json:"context"`
-	Format     string `json:"format"`
-	Payload    []byte `json:"payload_base64,omitempty"`
-	Ciphertext []byte `json:"ciphertext_base64,omitempty"`
-	Nonce      []byte `json:"nonce_base64,omitempty"`
-	DataKey    []byte `json:"data_key_base64,omitempty"`
+	Format      string `json:"format,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Payload     []byte `json:"payload_base64,omitempty"`
+	Ciphertext  []byte `json:"ciphertext_base64,omitempty"`
+	Nonce       []byte `json:"nonce_base64,omitempty"`
+	DataKey     []byte `json:"data_key_base64,omitempty"`
 }
 
 func (c *versionedClient) Wrap(ctx context.Context, req sops.Request) ([]byte, error) {

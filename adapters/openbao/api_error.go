@@ -17,6 +17,9 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	if e.RequestID == "" {
+		return "Regalia " + e.Code
+	}
 	return fmt.Sprintf("Regalia %s (request %s)", e.Code, e.RequestID)
 }
 

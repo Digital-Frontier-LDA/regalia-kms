@@ -48,7 +48,20 @@ func (c *versionedClient) nativeCall(ctx context.Context, req sops.Request, oper
 	return nil, errOperation
 }
 
-func (c *versionedClient) nativeAttempt(ctx context.Context, req sops.Request, operation string, doc versionedRequest, contentType string, limit int) ([]byte, error) {
+func (c *versionedClient) nativeAttempt(ctx context.Context, req sops.Request, operation string, doc versionedRequest, contentType string, limit int) (result []byte, callErr error) {
+	started := time.Now()
+	defer func() {
+		if c.logger != nil {
+			code := "OK"
+			var apiErr *APIError
+			if errors.As(callErr, &apiErr) {
+				code = apiErr.Code
+			} else if callErr != nil {
+				code = "LOCAL_REFUSAL"
+			}
+			c.logger.Info("KMS operation", "operation", operation, "object_id", req.ObjectID, "code", code, "request_id", req.RequestID, "duration_ms", time.Since(started).Milliseconds())
+		}
+	}()
 	protocol := &APIError{Code: "PROTOCOL_ERROR", RequestID: req.RequestID}
 	if ctx.Err() != nil {
 		return nil, contextError(ctx.Err(), req.RequestID)

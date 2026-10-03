@@ -69,7 +69,7 @@ func TestNativeCancellationInterruptsBackoff(t *testing.T) {
 	calls := 0
 	w.client.http.Transport = responseTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
-		cancel()
+		time.AfterFunc(10*time.Millisecond, cancel)
 		return transportResponse(r, 503, "BACKEND_UNAVAILABLE", true), nil
 	})
 	started := time.Now()
