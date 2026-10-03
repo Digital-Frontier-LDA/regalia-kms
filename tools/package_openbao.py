@@ -36,9 +36,15 @@ def verify(output):
         if Path(name).name != name or digest((output / name).read_bytes()) != expected:
             raise SystemExit("Package checksum verification failed")
     manifest = json.loads((output / "manifest.json").read_bytes())
+    expected_names = {"manifest.json"} | {a["archive"] for a in manifest["artifacts"]}
+    checked_names = [line.split("  ", 1)[1] for line in checks]
+    if len(checked_names) != len(expected_names) or set(checked_names) != expected_names:
+        raise SystemExit("Incomplete or duplicate package checksum list")
+    if manifest["schema_version"] != 1:
+        raise SystemExit("Unsupported package manifest version")
     if manifest["qualification"] != "development-only":
         raise SystemExit("This packager does not create production releases")
-    if len(manifest["artifacts"]) != len(TARGETS):
+    if len(manifest["artifacts"]) != len(TARGETS) or {a["target"] for a in manifest["artifacts"]} != set(TARGETS):
         raise SystemExit("Unexpected target count")
     for artifact in manifest["artifacts"]:
         if Path(artifact["archive"]).name != artifact["archive"] or artifact["target"] not in TARGETS:
