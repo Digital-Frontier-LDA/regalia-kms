@@ -40,7 +40,7 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest
+from deploy.baremetal import attest, measurements, membership
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
@@ -398,6 +398,47 @@ def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subpro
     return bundle
 
 
+def fingerprint(root_key):
+    """The root key's fingerprint as the ceremony prints it and the operator types it: SHA-256 of the raw
+    Ed25519 public key, hex."""
+    return hashlib.sha256(bytes.fromhex(root_key)).hexdigest()
+
+
+def check_manifest(directory, envelope, root_key, typed, document):
+    """Phase 2's first step, and the only one before anything is written: the manifest is the root-signed
+    epoch 1, its root key is the one whose fingerprint the operator typed by hand (a file alone never sets a
+    trust anchor, ADR-0002 D21.2), it names THIS host exactly as its identity bundle says, and it commits to
+    the measurements document given. Returns the manifest; writes nothing."""
+    require(isinstance(root_key, str) and re.fullmatch(r"[0-9a-f]{64}", root_key), "the root key is 64 lower-case hex")
+    typed = re.sub(r"[\s:]", "", (typed or "").lower())
+    require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
+    require(typed == fingerprint(root_key), "the root key's fingerprint is not the one typed: this is not the root "
+            "key the ceremony made. Nothing was written")
+    with open(os.path.join(directory, "bundle.json")) as f:
+        bundle = json.load(f)
+    require(bundle.get("schema") == SCHEMA_BUNDLE, "bundle.json is not an identity bundle")
+    try:
+        manifest = membership.accept(None, envelope, root_key)
+    except membership.Refused as refusal:
+        raise Refused("the manifest is refused: %s" % refusal)
+    nodes = membership.validate(manifest)
+    node_id = bundle["node_id"]
+    require(node_id in nodes, "the manifest does not name this host (%s)" % node_id)
+    node = nodes[node_id]
+    require(membership.CAPABILITIES[node["state"]] & {"request", "serve"},
+            "the manifest names %s %s: a node in that state is not enrolled" % (node_id, node["state"]))
+    wg = {k: base64.b64decode(bundle[k]).hex() for k in ("wg_service_pub", "wg_boot_pub")}
+    for field, mine in (("ek_name", bundle["ek_name"]), ("ak_name", bundle["ak_name"]),
+                        ("wg_service_pub", wg["wg_service_pub"]), ("wg_boot_pub", wg["wg_boot_pub"])):
+        require(node[field] == mine, "the manifest's %s for %s is not this host's: it was made from another bundle, or "
+                "for another host. Nothing was written" % (field, node_id))
+    try:
+        measurements.bind(manifest, document)
+    except membership.Refused as refusal:            # measurements raises the same class
+        raise Refused("the measurements are refused: %s" % refusal)
+    return manifest
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -405,7 +446,27 @@ def main(argv=None):
     p.add_argument("--node-id", required=True)
     p.add_argument("--enrol-dir", default=ENROL_DIR)
     p.add_argument("--wg-service-key", default=WG_SERVICE_KEY)
+    c = sub.add_parser("check", help="check the root-signed manifest against this host, writing nothing")
+    c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, from the ceremony")
+    c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
+    c.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
+    c.add_argument("--enrol-dir", default=ENROL_DIR)
     args = ap.parse_args(argv)
+    if args.command == "check":
+        try:
+            with open(args.manifest) as f:
+                envelope = membership.load(f.read())
+            with open(args.measurements) as f:
+                document = json.load(f)
+            typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
+            manifest = check_manifest(args.enrol_dir, envelope, args.root_key, typed, document)
+        except (Refused, membership.Refused, OSError, ValueError, EOFError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        print("OK: the manifest (epoch %d, %s) is root-signed by the key whose fingerprint was typed, names this host "
+              "as its bundle says, and commits to these measurements. Nothing was written." % (manifest["epoch"],
+              membership.digest(manifest)[:16]))
+        return 0
     if os.geteuid() != 0:
         print("REFUSED: enrolment runs as root, at the host's console", file=sys.stderr)
         return 2
