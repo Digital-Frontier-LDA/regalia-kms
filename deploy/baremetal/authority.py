@@ -197,16 +197,33 @@ class Pkcs11Signer:
         before the module is loaded.
       * The signature is CKM_ECDSA over SHA-256 of the message, r || s, normalised to low-S (the
         verifiers refuse high-S), and verified against the token's public key before it is returned.
+
+    THE PIN IS NEVER SPENT BY RETRYING (regalia-kms-d9, decided by regalia-kms-24; the Go daemon's PIN
+    latch, request-context-is-not-token-evidence). The beat loop retries a failed signature, and a
+    restart retries too, so a wrong PIN credential would lock the token within three tries, and the
+    revocation key with it until an SO-PIN ceremony.
+      * The token refuses the PIN (CKR_PIN_INCORRECT, CKR_PIN_INVALID, CKR_PIN_LEN_RANGE,
+        CKR_PIN_LOCKED from C_Login): the signer LATCHES. It never calls C_Login again, writes
+        <state_dir>/pin-latch.json (0600, read at every start), and the event goes to the trail once.
+        Only `authority.py clear-pin-latch`, run as root, removes it. Fix the credential first.
+      * Before every C_Login the token's flags are read, and a token with CKF_USER_PIN_COUNT_LOW,
+        FINAL_TRY or LOCKED set is refused with no login: its last tries are kept for a human.
+      * Nothing else latches. A token pulled out, a session ended, or any other error refuses that
+        signature and the next one tries again.
     `pkcs11` is the PyKCS11 module (Debian: python3-pykcs11); a test passes a stand-in."""
     kind, alg = "pkcs11", "ecdsa-p256"
     P256_PARAMS = bytes.fromhex("06082a8648ce3d030107")   # DER OID prime256v1
+    PIN_REFUSALS = ("CKR_PIN_INCORRECT", "CKR_PIN_INVALID", "CKR_PIN_LEN_RANGE", "CKR_PIN_LOCKED")
+    PIN_LOW = ("CKF_USER_PIN_COUNT_LOW", "CKF_USER_PIN_FINAL_TRY", "CKF_USER_PIN_LOCKED")
 
-    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, credentials=None, pkcs11=None):
+    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, credentials=None, pkcs11=None, latch_path=None):
         if pkcs11 is None:
             import PyKCS11 as pkcs11
         self.pkcs11, self.serial, self.key_id = pkcs11, serial, bytes.fromhex(key_id)
         self.credentials = credentials or os.environ.get("CREDENTIALS_DIRECTORY")
         self.pin_credential = pin_credential
+        self.latch_path, self.on_latch = latch_path, None
+        self.latched = _read_latch(latch_path)
         if opensc_conf:
             os.environ["OPENSC_CONF"] = opensc_conf         # read by OpenSC when the module loads, below
         self.lib = pkcs11.PyKCS11Lib()
@@ -263,11 +280,34 @@ class Pkcs11Signer:
     def public(self):
         return self._public
 
+    def _latch(self, reason):
+        self.latched = {"reason": reason, "serial": self.serial, "at": int(time.time())}
+        if self.latch_path:
+            _write_latch(self.latch_path, self.latched)
+        if self.on_latch:
+            self.on_latch(self.latched)
+
+    def _login(self, session, slot, pin):
+        flags = int(self.lib.getTokenInfo(slot).flags)
+        low = [name for name in self.PIN_LOW if flags & getattr(self.pkcs11, name)]
+        require(not low, "the token reports %s: no login is tried, its last tries are kept for a human" % ", ".join(low))
+        try:
+            session.login(pin)
+        except self.pkcs11.PyKCS11Error as error:
+            refused = [name for name in self.PIN_REFUSALS if getattr(error, "value", None) == getattr(self.pkcs11, name)]
+            if refused:
+                self._latch(refused[0])
+                raise Refused("the token refused the PIN (%s): latched, no further attempt is made; fix the credential, "
+                              "then `authority.py clear-pin-latch` as root and restart" % refused[0]) from error
+            raise
+
     def sign(self, message):
+        require(not self.latched, "the token refused the PIN (%s) and the signer is latched: fix the credential, then "
+                "`authority.py clear-pin-latch` as root and restart; no further attempt is made" % (self.latched or {}).get("reason"))
         pin = self._pin()                                # before any session: a missing PIN touches no token
         session, slot = self._session()
         try:
-            session.login(pin)
+            self._login(session, slot, pin)
             try:
                 raw = bytes(session.sign(self._object(session, self.pkcs11.CKO_PRIVATE_KEY), hashlib.sha256(message).digest(),
                                          self.pkcs11.Mechanism(self.pkcs11.CKM_ECDSA)))
@@ -284,11 +324,47 @@ class Pkcs11Signer:
         return signature
 
 
+PIN_LATCH = "pin-latch.json"
+
+
+def _read_latch(path):
+    """The persisted PIN latch, or None. One that cannot be read as a latch is treated as one: a damaged
+    file never re-opens the way to the PIN."""
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as f:
+            latch = json.loads(f.read(4096))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        return {"reason": "an unreadable pin-latch.json"}
+    return latch if isinstance(latch, dict) else {"reason": "an unreadable pin-latch.json"}
+
+
+def _write_latch(path, latch):
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".pin-latch-")
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, json.dumps(latch, sort_keys=True).encode())
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def signer_for(cfg):
     signer = cfg["signer"]
     if signer["kind"] == "file":
         return FileSigner(signer["path"])
-    return Pkcs11Signer(signer["module"], signer["serial"], signer["key_id"], signer["pin_credential"], signer["opensc_conf"])
+    return Pkcs11Signer(signer["module"], signer["serial"], signer["key_id"], signer["pin_credential"], signer["opensc_conf"],
+                        latch_path=os.path.join(cfg["state_dir"], PIN_LATCH))
 
 
 # ---- the authority ----
@@ -308,6 +384,9 @@ class Authority:
         self.signer = signer or signer_for(cfg)
         self.clock = clock or authtime.clock(os.path.join(cfg["run_dir"], "authtime.json"))
         self.trail = trail or node.Trail(self.path("audit.jsonl"))
+        if getattr(self.signer, "on_latch", "none") is None:   # a PIN latch is recorded once, when it is set
+            self.signer.on_latch = lambda latch: self.trail({"event": "pin-latch", "outcome": "DENY", "reason": latch["reason"],
+                                                             "serial": latch["serial"], "signer": self.signer.kind})
         tcti = cfg["tcti"]
         self.anchor = membership.HighWater(cfg["nv_epoch"], tcti, self.run, lock_path=self.path("highwater.lock"))
         self.counter = sequence_counter(cfg, self.run)
@@ -697,6 +776,7 @@ def main(argv=None):
     sub.add_parser("serve")
     sub.add_parser("status")
     sub.add_parser("wg-apply")
+    sub.add_parser("clear-pin-latch", help="after fixing the PIN credential: let the token signer log in again (then restart)")
     revoke = sub.add_parser("revoke")
     revoke.add_argument("--node", required=True)
     revoke.add_argument("--state", required=True, choices=RESTRICTIVE)
@@ -720,6 +800,14 @@ def main(argv=None):
             require(os.geteuid() == owner, "run as the authority's own user (uid %d), e.g. runuser -u regalia-authority -- ...: "
                     "files written as anyone else would lock the service out" % owner)
             _writer = one_writer(cfg["state_dir"])         # after the uid check; held for the life of this process
+        if args.command == "clear-pin-latch":
+            require(os.geteuid() == 0, "clear-pin-latch is the operator's, as root")
+            latch = os.path.join(cfg["state_dir"], PIN_LATCH)
+            print("was latched: %s" % json.dumps(_read_latch(latch)) if os.path.exists(latch) else "not latched")
+            if os.path.exists(latch):
+                os.unlink(latch)
+                print("cleared: restart regalia-authority to sign again")
+            return 0
         if args.command == "wg-apply":
             print("wg-svc applied: %s" % wg_apply(cfg))    # as root: a reader, never the Authority (no key, no lock files)
             return 0

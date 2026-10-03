@@ -436,7 +436,11 @@ class Pkcs11(unittest.TestCase):
     """Pkcs11Signer against SoftHSM: the same PKCS#11 calls the Nitrokey gets, in this process."""
 
     def setUp(self):
+        import gc
         import subprocess
+        # A signer an Authority held (they reference each other through on_latch) keeps its PyKCS11 library,
+        # and so SoftHSM, initialised on the last test's token directory until it is collected: collect it.
+        gc.collect()
         if not (PyKCS11 and SOFTHSM and shutil.which("pkcs11-tool") and shutil.which("softhsm2-util")):
             if EXPECT_PKCS11:
                 self.fail("REGALIA_EXPECT_PYKCS11 is set, but PyKCS11, SoftHSM or pkcs11-tool is missing")
@@ -518,17 +522,25 @@ class FakeToken:
     """A stand-in for PyKCS11 with one or more tokens, whose serials a test changes at a chosen call."""
     CKA_CLASS, CKA_ID, CKA_EC_POINT, CKA_EC_PARAMS = "class", "id", "point", "params"
     CKO_PUBLIC_KEY, CKO_PRIVATE_KEY, CKM_ECDSA = "public", "private", "ecdsa"
+    CKR_PIN_INCORRECT, CKR_PIN_INVALID, CKR_PIN_LEN_RANGE, CKR_PIN_LOCKED, CKR_DEVICE_REMOVED = 0xA0, 0xA1, 0xA2, 0xA4, 0x32
+    CKF_USER_PIN_COUNT_LOW, CKF_USER_PIN_FINAL_TRY, CKF_USER_PIN_LOCKED = 0x10000, 0x20000, 0x40000
+
+    class PyKCS11Error(Exception):
+        def __init__(self, value):
+            super().__init__("PKCS#11 error 0x%x" % value)
+            self.value = value
 
     def __init__(self, serials, point):
         from cryptography.hazmat.primitives.asymmetric import ec as _ec
         self.serials, self.point, self.calls, self.logins = dict(serials), point, [], []
         self.swap_at, self.removed = None, False
+        self.flags, self.login_error = 0, None
         self.key = _ec.generate_private_key(_ec.SECP256R1())
         fake = self
 
         class Info:
             def __init__(self, serial):
-                self.serialNumber, self.slotID = serial, None
+                self.serialNumber, self.slotID, self.flags = serial, None, fake.flags
 
         class Session:
             def __init__(self, slot):
@@ -557,6 +569,8 @@ class FakeToken:
             def login(self, pin):
                 self._step("login")
                 fake.logins.append((self.slot, pin))
+                if fake.login_error is not None:
+                    raise FakeToken.PyKCS11Error(fake.login_error)
 
             def sign(self, key, digest, mechanism):
                 self._step("sign")
@@ -660,6 +674,93 @@ class TokenChosenInItsSession(unittest.TestCase):
             self.signer()
         self.assertIn("more than one", str(caught.exception))
         self.assertNotIn("open", self.fake.calls)
+
+
+class PinLatch(unittest.TestCase):
+    """#262 (regalia-kms-d9, decided by regalia-kms-24): a PIN the token refuses is never presented again,
+    across beats and restarts, and the token's last tries are left for a human."""
+
+    def setUp(self):
+        from cryptography.hazmat.primitives import serialization as _s
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        os.makedirs(self.d + "/credentials")
+        with open(self.d + "/credentials/pin", "w") as f:
+            f.write("648219\n")
+        self.fake = FakeToken({0: "DENK0404144"}, b"")
+        self.fake.point = b"\x04\x41" + self.fake.key.public_key().public_bytes(_s.Encoding.X962, _s.PublicFormat.UncompressedPoint)
+        self.latch = self.d + "/pin-latch.json"
+
+    def signer(self):
+        return authority.Pkcs11Signer("module.so", "DENK0404144", "51", "pin", credentials=self.d + "/credentials", pkcs11=self.fake,
+                                      latch_path=self.latch)
+
+    def test_a_refused_pin_is_presented_once_across_many_beats_and_a_restart(self):
+        for code in ("CKR_PIN_INCORRECT", "CKR_PIN_INVALID", "CKR_PIN_LEN_RANGE", "CKR_PIN_LOCKED"):
+            with self.subTest(code):
+                if os.path.exists(self.latch):
+                    os.unlink(self.latch)
+                self.fake.logins, self.fake.login_error = [], getattr(FakeToken, code)
+                signer, latched = self.signer(), []
+                signer.on_latch = latched.append
+                for _ in range(6):
+                    with self.assertRaises(m.Refused):
+                        signer.sign(b"beat")
+                restarted = self.signer()
+                with self.assertRaises(m.Refused) as caught:
+                    restarted.sign(b"beat")
+                self.assertIn("clear-pin-latch", str(caught.exception))
+                self.assertEqual((len(self.fake.logins), len(latched)), (1, 1))
+                self.assertEqual(json.load(open(self.latch))["reason"], code)
+                self.assertEqual(os.stat(self.latch).st_mode & 0o777, 0o600)
+
+    def test_a_token_with_its_tries_running_low_is_not_logged_in_to(self):
+        for flag in ("CKF_USER_PIN_COUNT_LOW", "CKF_USER_PIN_FINAL_TRY", "CKF_USER_PIN_LOCKED"):
+            with self.subTest(flag):
+                self.fake.logins, self.fake.flags = [], getattr(FakeToken, flag)
+                with self.assertRaises(m.Refused) as caught:
+                    self.signer().sign(b"beat")
+                self.assertIn("kept for a human", str(caught.exception))
+                self.assertEqual(self.fake.logins, [])
+                self.assertFalse(os.path.exists(self.latch))                         # not ours to latch: no PIN was refused
+
+    def test_a_transient_error_does_not_latch(self):
+        self.fake.login_error = FakeToken.CKR_DEVICE_REMOVED
+        signer = self.signer()
+        for _ in range(2):
+            with self.assertRaises(FakeToken.PyKCS11Error):
+                signer.sign(b"beat")
+        self.assertEqual((len(self.fake.logins), signer.latched, os.path.exists(self.latch)), (2, None, False))
+        self.fake.login_error = None
+        m.verify_revocation("ecdsa-p256", signer.public(), b"beat", signer.sign(b"beat").hex(), "test")
+
+    def test_a_damaged_latch_file_still_latches(self):
+        with open(self.latch, "w") as f:
+            f.write("{not json")
+        with self.assertRaises(m.Refused):
+            self.signer().sign(b"beat")
+        self.assertEqual(self.fake.logins, [])
+
+    def test_the_authority_records_the_latch_once_and_only_root_clears_it(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        cfg = authority.validate(config(d))
+        self.latch = os.path.join(cfg["state_dir"], authority.PIN_LATCH)
+        self.fake.login_error, events = FakeToken.CKR_PIN_INCORRECT, []
+        a = authority.Authority(cfg, signer=self.signer(), clock=lambda: (T0, True), run=hbt.FakeTpm(), trail=events.append)
+        for _ in range(3):
+            with self.assertRaises(m.Refused):
+                a.signer.sign(b"beat")
+        self.assertEqual([e["event"] for e in events].count("pin-latch"), 1)
+        path = d + "/authority.json"
+        with open(path, "w") as f:
+            json.dump(config(d), f)
+        with unittest.mock.patch.object(authority.os, "geteuid", return_value=1000):
+            self.assertEqual(authority.main(["--config", path, "clear-pin-latch"]), 2)
+        self.assertTrue(os.path.exists(self.latch))
+        with unittest.mock.patch.object(authority.os, "geteuid", return_value=0), unittest.mock.patch("sys.stdout"):
+            self.assertEqual(authority.main(["--config", path, "clear-pin-latch"]), 0)
+        self.assertFalse(os.path.exists(self.latch))
 
 
 class Control(Case):

@@ -837,7 +837,10 @@ it (`service_mesh.authority`).
   - `signer.kind`: `file` now, a stopgap recorded on every trail line and in `status`; `pkcs11` once a
     token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19). The `pkcs11` signer signs in
     process with PyKCS11 (Debian `python3-pykcs11`), choosing the token by serial and reading that serial in
-    the very session that logs in, so its PIN reaches no other card (#262);
+    the very session that logs in, so its PIN reaches no other card (#262). A PIN the token refuses is
+    never presented again: the signer latches (`<state_dir>/pin-latch.json`, read at every start, one
+    `pin-latch` line in the trail), and logs in to no token whose PIN tries are running low. Fix the
+    credential, then `authority.py clear-pin-latch` as root and restart the service;
   - `sequence_offset`/`sequence_stride`: kept for several authorities, refused above one until a second can
     take over (#231);
   - `interval_s`, `lifetime_s`;
