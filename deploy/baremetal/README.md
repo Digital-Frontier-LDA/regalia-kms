@@ -476,8 +476,9 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 - **The relay** (`regalia-unlock-relay.service`, behind `regalia-unlock.socket`): the key socket's own
   service holds no credential, no TPM and no network, and depends on nothing, so it always starts. It
   asks the real client on its own socket (`regalia-unlock-core.socket`) and passes on exactly one whole
-  key, or gives nothing after any failure or after 150 s; with nothing, systemd-cryptsetup asks for
-  the recovery key. Before it, a real client that could not start (a sealed credential that did not
+  key, or gives nothing after any failure or after 330 s (the real client ends its own attempt within
+  240 s, so its answer comes first; a client that hangs yields the prompt). With nothing,
+  systemd-cryptsetup asks for the recovery key. Stopped, it exits at once. Before it, a real client that could not start (a sealed credential that did not
   decrypt) left systemd-cryptsetup with a reset connection, and it failed without asking (#66). Shown
   with the real systemd and systemd-cryptsetup: a client that hangs, one that crashes mid-answer, an
   undecryptable credential and an absent one each end with no key and the prompt.
@@ -532,8 +533,10 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   one is refused), the four others as data. A missing file keeps its unit from starting, and the
   console asks for the recovery key (within seconds in the boot test). Second layer, for an image built
   without that switch: the dracut module leaves out systemd-debug-generator (which makes units and
-  drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles and sysctl services.
-  `fstab.extra` (read by fstab-generator, which mounts the root) is covered by the first layer only.
+  drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles, sysctl, journald and
+  sysusers services. fstab-generator (`fstab.extra`; it mounts the root) and PID 1 itself are covered
+  by the first layer only. The boot test reads systemd's own message ("systemd.import_credentials=no
+  is set") from the booted journal, and passes an extra unit through SMBIOS that is never started.
   The machine that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
 
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the

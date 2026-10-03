@@ -13,15 +13,17 @@ Before=initrd-switch-root.target shutdown.target
 
 [Service]
 Type=exec
-# The wait covers the real client's rounds (five rounds of two peers, about two minutes with every peer
-# unreachable); a client that hangs beyond it yields the prompt.
-ExecStart=/usr/bin/regalia-unlock -relay /run/regalia-unlock-core/core.sock -relay-wait 150s
+# The wait covers the real client's start (the boot mesh may take up to its own 60 s start limit) and its
+# attempt, which the client itself ends within its -budget of 240 s; a client that hangs beyond it yields
+# the prompt.
+ExecStart=/usr/bin/regalia-unlock -relay /run/regalia-unlock-core/core.sock -relay-wait 330s
 LimitCORE=0
 CapabilityBoundingSet=
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-PrivateTmp=yes
+# (no PrivateTmp=: it would add dependencies on the /tmp mounts, and a failing one would keep this unit, and
+# with it the recovery prompt, from starting)
 PrivateNetwork=yes
 PrivateDevices=yes
 DevicePolicy=closed

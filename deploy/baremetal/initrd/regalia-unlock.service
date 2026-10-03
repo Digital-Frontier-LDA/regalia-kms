@@ -39,7 +39,7 @@ Type=exec
 #   regalia.unlock-config  the boot configuration (unlock.boot_config): not secret
 # With a path, a missing file is fatal: the unit does not start, and systemd-cryptsetup asks at the
 # console (the boot test times it).
-ExecStart=/usr/bin/regalia-unlock -config %d/regalia.unlock-config
+ExecStart=/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 240s
 LoadCredentialEncrypted=regalia.unlock-local:/.extra/global_credentials/regalia.unlock-local.cred
 LoadCredential=regalia.unlock-config:/.extra/global_credentials/regalia.unlock-config.cred
 # What it leaves for the running system: the boot session's ID and public key, and who opened the disk,

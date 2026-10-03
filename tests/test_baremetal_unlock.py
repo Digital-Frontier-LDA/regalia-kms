@@ -872,7 +872,13 @@ class Units(unittest.TestCase):
         relay = self.unit("regalia-unlock-relay.service")
         service, unit = relay["Service"], relay["Unit"]
         values = dict(service)
-        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -relay %s -relay-wait 150s" % core["ListenStream"])
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -relay %s -relay-wait 330s" % core["ListenStream"])
+        # the client's own budget ends its attempt before the relay stops waiting
+        client = dict(self.unit("regalia-unlock.service")["Service"])["ExecStart"]
+        self.assertTrue(client.endswith(" -budget 240s"), client)
+        # no setting that adds dependencies on mounts or other units (systemd.exec: PrivateTmp, JoinsNamespaceOf, ...)
+        for adds in ("PrivateTmp", "JoinsNamespaceOf", "RequiresMountsFor", "ReadWritePaths", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem"):
+            self.assertNotIn(adds, values)
         self.assertFalse([k for k, _ in service if "Credential" in k or k in ("DeviceAllow", "Environment", "EnvironmentFile", "User")])
         self.assertEqual((values["RestrictAddressFamilies"], values["PrivateNetwork"], values["DevicePolicy"], values["PrivateDevices"]),
                          ("AF_UNIX", "yes", "closed", "yes"))
@@ -914,9 +920,9 @@ class Units(unittest.TestCase):
         self.assertIn('if [ -n "${hostonly-}" ]; then', check)
         # the second layer: no generator of units from credentials, and no credential imported by tmpfiles or sysctl
         self.assertIn('rm -f -- "${initdir:?}${systemdutildir:?}/system-generators/systemd-debug-generator"', install)
-        for service in ("systemd-tmpfiles-setup.service", "systemd-tmpfiles-setup-dev-early.service", "systemd-tmpfiles-setup-dev.service",
-                        "systemd-sysctl.service"):
-            self.assertIn(service, install)
+        loop = re.search(r"for service in ([^;]+); do", install).group(1).replace("\\\n", " ").split()
+        self.assertEqual(loop, ["systemd-tmpfiles-setup.service", "systemd-tmpfiles-setup-dev-early.service", "systemd-tmpfiles-setup-dev.service",
+                                "systemd-sysctl.service", "systemd-journald.service", "systemd-sysusers.service"])
         self.assertIn("printf '[Service]\\nImportCredential=\\n'", install)
         with open(os.path.join(here, "dracut/90regalia-unlock/crypttab")) as f:
             lines = [l.split() for l in f if l.strip() and not l.startswith("#")]
@@ -949,7 +955,7 @@ class Units(unittest.TestCase):
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]
         values = dict(service)
-        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config")
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 240s")
         # the one place it may write: root's, 0755, kept after the unit ends (the lease service and the daemon use it)
         self.assertEqual((values["RuntimeDirectory"], values["RuntimeDirectoryMode"], values["RuntimeDirectoryPreserve"]), ("regalia", "0755", "yes"))
         self.assertNotIn("ReadWritePaths", values)

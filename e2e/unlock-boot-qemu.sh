@@ -108,7 +108,7 @@ done
 if grep -q 'etc/regalia' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds files under /etc/regalia"; exit 2; fi
 # nothing in it acts on a credential by name: no generator of units from credentials, the imports reset
 if grep -q 'systemd-debug-generator' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds systemd-debug-generator"; exit 2; fi
-for s in systemd-tmpfiles-setup systemd-sysctl; do
+for s in systemd-tmpfiles-setup systemd-tmpfiles-setup-dev-early systemd-tmpfiles-setup-dev systemd-sysctl systemd-journald systemd-sysusers; do
   grep -q "$s.service.d/50-regalia-no-credentials.conf" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: no credential reset for $s"; exit 2; }
 done
 chroot "$ROOT" lsinitrd -f etc/crypttab /boot/initrd.e2e | grep -v '^#' > "$W/crypttab.txt"

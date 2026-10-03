@@ -76,6 +76,7 @@ type options struct {
 	tpm        string
 	sessionDir string
 	once       bool
+	budget     time.Duration // the longest one attempt may take, all rounds together (0: no limit)
 	rounds     int
 	wait       time.Duration
 }
@@ -104,11 +105,12 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	relayTo := flags.String("relay", "", "serve the key socket as a relay to the real client on this socket: no credential, no TPM, no network")
 	relayWait := flags.Duration("relay-wait", 150*time.Second, "with -relay: the longest wait for the real client's answer")
 	flags.IntVar(&o.rounds, "rounds", 5, "how many times to go round the peers before giving up")
+	flags.DurationVar(&o.budget, "budget", 240*time.Second, "the longest one attempt may take, all rounds together: less than the relay's wait")
 	flags.DurationVar(&o.wait, "wait", 5*time.Second, "pause between rounds")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 {
+	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 || o.budget < 0 {
 		return errors.New("usage: regalia-unlock [-config FILE] [-tpm DEVICE] [-session-dir DIR] [-once] [-rounds N] [-wait DURATION]")
 	}
 	if listenerError != nil {
@@ -119,11 +121,13 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 			return errors.New("-relay-wait must be positive and at most 30m")
 		}
 		serving = true
+		// Stopped (shutdown, or switch-root): at once, whatever it waits on. An asker in progress reads
+		// nothing, which is the relay's answer for every failure.
 		stopped := make(chan os.Signal, 1)
 		signal.Notify(stopped, syscall.SIGTERM, syscall.SIGINT)
 		go func() {
 			<-stopped
-			listener.Close()
+			os.Exit(0)
 		}()
 		return relay(listener, *relayTo, *relayWait, diagnostics)
 	}
@@ -471,10 +475,14 @@ func tcpTransport(endpoint string) transport {
 // systemd-cryptsetup's to find out: this boot's one response is spent either way.
 func deriveKey(config *bootConfig, o options, paths map[string][]pathToken, local []byte, boot *session, dial func(string) transport,
 	quote quoter, sleep func(time.Duration), diagnostics io.Writer) (key []byte, peerID, slot string, err error) {
-	asked := false
+	asked, started := false, time.Now()
 	for round := 1; round <= o.rounds; round++ {
 		for _, peer := range config.Peers {
 			for _, token := range paths[peer.NodeID] {
+				// the relay in front waits a bounded time: an answer after it would come too late for anyone
+				if o.budget > 0 && time.Since(started) >= o.budget {
+					return nil, "", "", fmt.Errorf("the disk stays locked: no peer helped within %s", o.budget)
+				}
 				asked = true
 				contribution, err := boot.ask(peer, token.PathEpoch, dial(peer.Endpoint), quote)
 				if err != nil {

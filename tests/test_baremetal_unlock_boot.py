@@ -355,6 +355,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertIsNotNone(gave, "the client did not give the key")
         slot, through = gave.group(1), gave.group(2)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
+        self.assertIn("REGALIA-E2E-IMPORT credentials-imported=no", said)      # the first layer, seen working
         allowed = [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:] if e["event"] == "unlock"]
         self.assertEqual(allowed, [("unlock", "a", "ALLOW")])
         # after switch-root the running system finds the session the peer recorded, in a directory only root writes
@@ -372,12 +373,16 @@ class OnQemu(tub.OnSwtpm):
         self.assertEqual([v.lower() for v in booted.groups()], [pcrs["7"], record["pcr11"]["system"], expected["pcr12"]])
         print("PCR 12 with the host's six credentials: %s, as espcreds computes it" % expected["pcr12"], file=sys.stderr)
 
-        # boot 2b, A CREDENTIAL FROM SMBIOS (which the firmware owns, and nothing the peers attest measures): a drop-in
-        # for the unlock client that would print a marker. systemd imports no credential, so it is not acted on, and
-        # the unlock goes on as in boot 2 (PCR 12 does not see SMBIOS: this boot is NOT refused by the peers).
-        dropin = b"[Service]\nExecStartPre=/bin/sh -c 'echo REGALIA-E2E-PLANTED-RAN > /dev/console'\n"
-        said = self.boot("2b-smbios", credentials, smbios={"systemd.unit-dropin.regalia-unlock.service": dropin})
+        # boot 2b, CREDENTIALS FROM SMBIOS (which the firmware owns, and nothing the peers attest measures): an extra
+        # unit that would print a marker on the console, and a drop-in that makes the initrd want it. systemd imports
+        # no credential (it says so in the journal, reported once booted), so neither is acted on, and the unlock
+        # goes on as in boot 2 (PCR 12 does not see SMBIOS: this boot is NOT refused by the peers).
+        planted = {"systemd.extra-unit.regalia-planted.service":
+                   b"[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nExecStart=/bin/sh -c 'echo \"<2>REGALIA-E2E-PLANTED-RAN\" > /dev/kmsg'\n",
+                   "systemd.unit-dropin.initrd.target": b"[Unit]\nWants=regalia-planted.service\n"}
+        said = self.boot("2b-smbios", credentials, smbios=planted)
         self.assertNotIn("REGALIA-E2E-PLANTED-RAN", said)
+        self.assertIn("REGALIA-E2E-IMPORT credentials-imported=no", said)
         self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
         self.assertNotRegex(said, PROMPT.pattern.decode())
         if "skipping importing of credentials" in said:

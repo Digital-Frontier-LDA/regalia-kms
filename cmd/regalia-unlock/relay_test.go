@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 )
+
+var errNoConnection = errors.New("no connection")
 
 // The relay in front of the real client: one whole key passes; anything else (no client, nothing, part of a
 // key, more than a key, no answer in time) becomes nothing, so systemd-cryptsetup asks for the recovery key.
@@ -71,5 +74,24 @@ func TestTheRelayPassesOneWholeKeyOrNothing(t *testing.T) {
 				t.Fatalf("the relay said %q", said)
 			}
 		})
+	}
+}
+
+// The client's attempt ends within its budget, so its answer, or its nothing, reaches the relay before the
+// relay's own wait runs out: a slow round of peers does not turn an unlock into a recovery prompt silently.
+func TestAnAttemptEndsWithinItsBudget(t *testing.T) {
+	porto := newFakePeer(t, "porto")
+	paths, _ := pathsOf(t, tokensFor(porto))
+	slow := func(string) transport {
+		return func([]byte) ([]byte, error) { time.Sleep(40 * time.Millisecond); return nil, errNoConnection }
+	}
+	var log bytes.Buffer
+	boot := testSession(t) // (an RSA key: made before the clock starts)
+	started := time.Now()
+	_, _, _, err := deriveKey(configFor(porto), options{rounds: 100, budget: 150 * time.Millisecond}, paths, bytes.Repeat([]byte{1}, 32),
+		boot, slow, noQuote, func(time.Duration) {}, &log)
+	wantError(t, err, "no peer helped within 150ms")
+	if took := time.Since(started); took > 400*time.Millisecond {
+		t.Fatalf("the attempt took %s with a budget of 150ms", took)
 	}
 }
