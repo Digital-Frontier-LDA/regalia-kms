@@ -157,9 +157,9 @@ KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/u
 if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e" >"$W/review.json" 2>&1; then
   cat "$W/review.json"
   echo "### the inventory lines this initrd needs that the allowlist does not hold:"
-  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e" > "$W/inventory.txt" 2>&1
-  grep -v '^#' deploy/baremetal/initrd/initrd-allowlist.txt | sed '/^$/d' | sort > "$W/listed.txt"
-  sort "$W/inventory.txt" | comm -23 - "$W/listed.txt" | sed 's/^/INVENTORY /'
+  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e" > "$W/inventory.txt" 2>&1 || true
+  { grep -v '^#' deploy/baremetal/initrd/initrd-allowlist.txt || true; } | sed '/^$/d' | sort > "$W/listed.txt"
+  sort "$W/inventory.txt" | comm -23 - "$W/listed.txt" | sed 's/^/INVENTORY /' || true
   echo "unlock-boot-qemu: the image's initrd does not pass uki.py's review"; exit 2
 fi
 echo "the initrd passes uki.py's review (#198): $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(len(r["generators"]), "generators, inventory", r["inventory_sha256"][:16])' "$W/review.json")"

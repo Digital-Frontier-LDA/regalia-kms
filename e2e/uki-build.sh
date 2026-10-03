@@ -64,6 +64,8 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   install -m 0755 deploy/baremetal/initrd/wg-boot "$I/usr/lib/regalia/wg-boot"
   ln -s /usr/lib/systemd/system/regalia-unlock-core.socket "$E/sockets.target.wants/regalia-unlock-core.socket"
   ln -s /usr/lib/systemd/system/regalia-unlock-relay.service "$E/cryptsetup.target.wants/regalia-unlock-relay.service"
+  mkdir "$U/systemd-cryptsetup@.service.d"   # the module's relay ordering, its bytes
+  printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' > "$U/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
 printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
