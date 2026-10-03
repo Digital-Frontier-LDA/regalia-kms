@@ -565,7 +565,7 @@ class Records(Case):
         os.rmdir(os.path.join(d, "sub"))
         # per-image credentials are measured into PCR 12 too: refused
         os.makedirs(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
-        self.refused("the ESP holds per-image credentials (EFI/Linux/regalia.efi.extra.d)", uki.credential_files, esp)
+        self.refused("the ESP holds per-image credentials or addons (EFI/Linux/regalia.efi.extra.d)", uki.credential_files, esp)
         os.rmdir(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
         self.refused("is not a directory", uki.credential_files, os.path.join(self.d, "no-esp"))
         # global addons are measured into PCR 12 too: refused; an empty addons directory is fine
