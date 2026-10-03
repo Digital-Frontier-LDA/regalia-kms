@@ -6,6 +6,7 @@
     "Tools/freeze/test/freeze.py": "7befdc280952b680346353022289acc3a6dae04c81be919b205f9acb34868915",
     "debian/changelog": "7363818105c6ca4f4044b95a5c029e3b2d301136fab384b81f0a0402b72a08c6",
     "debian/control": "09e51b50845a09cbbf38ddc628b8ee5014be9629ea533d44732d3c0ec4d24e9f",
+    "debian/imp.py": "3c64d27e656df0baaefb1f0953e25a865d18085b07422fdcfba8705c7b3893be",
     "debian/patches/issue127330.diff": "35af77eeed62797304d0f21da18c32bb18c8dc125993d7cc66383623dc4c5011",
     "debian/patches/series": "e5b0c8d330310cf998b78f4f31d624aeccd947bbf687d5ee29bea65cbed80e76",
     "debian/patches/test-freeze-strip-libdir.diff": "6f57941b860246cf64eaef8fd9fe818079757ff057a39fd6871fe2ba8fa7ef77",

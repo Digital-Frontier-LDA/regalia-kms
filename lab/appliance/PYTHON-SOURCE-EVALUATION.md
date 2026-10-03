@@ -130,6 +130,16 @@ The trial uses pinned trixie/security apt authorities and a dedicated non-root
 build UID. Its cached base is unsigned, so it cannot qualify production
 compiler payloads or an appliance image.
 
+The subsequent profile pins `debian/imp.py` and replaces only its private
+constant import and use with the original `No module named {name!r}` diagnostic.
+Builtin/source lookup and the missing-module message/`ImportError.name` are
+preserved. With `_ERR_MSG` deliberately absent, the original helper refuses
+and the corrected helper loads successfully. All 26 patches still apply with
+zero fuzz. The [helper profile receipt](evidence/python-imp-profile-review-20261004.json)
+binds this edit and the clean source tar for the next native trial; host-generated
+bytecode is excluded. The full 3.13.16 minimal-module check and package build
+still need to pass. No vendor test target is disabled.
+
 ### Documentation compatibility and runtime package target
 
 The native `dpkg-buildpackage -b` trial exposed an OpenGraph extension error:

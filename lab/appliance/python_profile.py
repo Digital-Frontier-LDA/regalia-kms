@@ -56,6 +56,16 @@ def prepare(root):
     edits['Doc/conf.py'] = (frozen['Doc/conf.py']
                             + '\n# Compatibility with Debian trixie sphinxext.opengraph.\n'
                             + 'ogp_custom_meta_tags = list(ogp_custom_meta_tags)\n')
+    # Debian's dependency checker still uses its legacy imp helper. Preserve
+    # the old diagnostic without importing a removed private bootstrap name.
+    name = 'debian/imp.py'
+    original = frozen[name]
+    imports = 'from importlib._bootstrap import _ERR_MSG, _exec, _load, _builtin_from_name\n'
+    diagnostic = 'raise ImportError(_ERR_MSG.format(name), name=name)'
+    require(original.count(imports) == original.count(diagnostic) == 1,
+            'legacy Debian import helper differs')
+    edits[name] = original.replace(imports, imports.replace('_ERR_MSG, ', '')).replace(
+        diagnostic, 'raise ImportError(f"No module named {name!r}", name=name)')
     name = 'debian/control'
     original = frozen[name]
     maintainer = 'Maintainer: Matthias Klose <doko@debian.org>'
