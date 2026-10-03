@@ -10,7 +10,8 @@ The reasons are Python's words, kept for a reader; the Go test compares the outc
 by its digest, or a refusal), not the wording. A signature's public key is stored beside its envelope, as
 "signature_public", and put back into envelope.signature.key by the reader; the root's as "root_public". A
 public key written as `"key": "<hex>"` reads as a credential to the secret scanner (it is not one), and the
-repository fixes such findings by composition, never by an allowlist.
+repository fixes such findings by composition, never by an allowlist. Every other "key" field (a typed key entry,
+{"alg", "key"}, in a manifest's revocation_keys or a typed root) is written "public" for the same reason.
 """
 import json
 import os
@@ -51,8 +52,30 @@ def recording(current, envelope, root_key):
     return result
 
 
-membership.accept = recording
-suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_baremetal_membership")
+real_verify, verified, seen_verified = membership.verify_envelope, [], set()
+
+
+def recording_verify(envelope, root_key, current=None):
+    """verify_envelope as the tests call it (accept() calls it too): the manifest and the signer, or the refusal."""
+    try:
+        manifest, signer = real_verify(envelope, root_key, current)
+    except membership.Refused as refusal:
+        outcome = {"refused": str(refusal)}
+    else:
+        outcome = {"verified": membership.digest(manifest), "signer": signer}
+    record = {"current": current, "envelope": as_hex(envelope), "root_public": root_key, **outcome}
+    key = json.dumps(record, sort_keys=True)
+    if key not in seen_verified:                # apart from accept()'s: a refusal there can read the same
+        seen_verified.add(key)
+        verified.append(record)
+    if "refused" in outcome:
+        raise membership.Refused(outcome["refused"])
+    return manifest, signer
+
+
+membership.accept, membership.verify_envelope = recording, recording_verify
+# the membership tests, and the typed-key tests (#156, #199: P-256 roots and revocation keys, schema v3)
+suite = unittest.defaultTestLoader.loadTestsFromNames(["tests.test_baremetal_membership", "tests.test_baremetal_revocation_keys"])
 result = unittest.TextTestRunner(stream=open(os.devnull, "w")).run(suite)
 if not result.wasSuccessful():
     raise SystemExit("the membership tests failed: no vector is written")
@@ -177,6 +200,87 @@ for name, change in (("a revocation key quarantines a node", lambda m: m["nodes"
     crafted.append({"name": name, "current": named, "envelope": as_hex(envelope(following, "revocation", revoker)),
                     "root_public": root_pub, "valid": True, **outcome})
 
+# Typed keys (#156, #199): ECDSA P-256 roots and revocation keys, only under schema v3. Fixed test scalars,
+# deterministic signatures (RFC 6979), normalised to low-S as the signer does: the vector is reproducible.
+from cryptography.hazmat.primitives import hashes  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature  # noqa: E402
+
+p256_root, p256_revoker = ec.derive_private_key(0x5EED1, ec.SECP256R1()), ec.derive_private_key(0x5EED2, ec.SECP256R1())
+
+
+def p256_entry(key):
+    return {"alg": "ecdsa-p256", "key": key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()}
+
+
+def p256_envelope(manifest, signer, key, high_s=False):
+    r, s = decode_dss_signature(key.sign(membership.DOMAIN + membership.canonical(manifest), ec.ECDSA(hashes.SHA256(), deterministic_signing=True)))
+    s = min(s, membership.P256_ORDER - s)
+    if high_s:
+        s = membership.P256_ORDER - s                     # the same signature, made high-S: refused
+    return {"manifest": manifest, "signature": {"signer": signer, "key": p256_entry(key)["key"],
+                                                "sig": (r.to_bytes(32, "big") + s.to_bytes(32, "big")).hex()}}
+
+
+def typed(name, current, env, root):
+    try:
+        outcome = {"accepted": membership.digest(real(current, env, root))}
+    except membership.Refused as refusal:
+        outcome = {"refused": str(refusal)}
+    try:
+        membership.validate(env["manifest"])
+        valid = True
+    except (membership.Refused, Exception):  # noqa: BLE001
+        valid = False
+    crafted.append({"name": name, "current": current, "envelope": as_hex(env), "root_public": root, "valid": valid, **outcome})
+
+
+def v3(**changes):
+    nodes = [dict(n, ssh_host_pub="%02x" % (i + 90) * 32) for i, n in enumerate(base["nodes"])]
+    return dict(copy.deepcopy(base), schema=membership.SCHEMA_V3, heartbeat_max_lifetime_s=86400, nodes=nodes, **changes)
+
+
+p256_root_entry, p256_revoker_entry = p256_entry(p256_root), p256_entry(p256_revoker)
+typed("v3, Ed25519 root, a P-256 revocation key", None, envelope(v3(revocation_keys=[p256_revoker_entry])), root_pub)
+typed("v2 carrying a P-256 revocation key", None, envelope(dict(v3(revocation_keys=[p256_revoker_entry]), schema=membership.SCHEMA_V2)), root_pub)
+typed("v3 under a P-256 root", None, p256_envelope(v3(), "root", p256_root), p256_root_entry)
+typed("v3 under a P-256 root, high-S", None, p256_envelope(v3(), "root", p256_root, high_s=True), p256_root_entry)
+typed("v2 under a P-256 root", None, p256_envelope(dict(v3(), schema=membership.SCHEMA_V2), "root", p256_root), p256_root_entry)
+typed("v1 under a P-256 root", None, p256_envelope(copy.deepcopy(base), "root", p256_root), p256_root_entry)
+typed("v3 under a root set, by its P-256 key", None, p256_envelope(v3(), "root", p256_root), [root_pub, p256_root_entry])
+typed("v3 under a root set, by its Ed25519 key", None, envelope(v3()), [root_pub, p256_root_entry])
+typed("a root set naming one key twice", None, envelope(v3()), [root_pub, root_pub])
+typed("an empty root set", None, envelope(v3()), [])
+typed("a root set of eight", None, envelope(v3()), [root_pub] + [p256_entry(ec.derive_private_key(0x5EED10 + i, ec.SECP256R1())) for i in range(7)])
+typed("a root set of nine", None, envelope(v3()), [root_pub] + [p256_entry(ec.derive_private_key(0x5EED10 + i, ec.SECP256R1())) for i in range(8)])
+typed("an Ed25519 signature under a P-256 root's hex", None, envelope(v3()), p256_root_entry)
+typed("a P-256 root named as a bare Ed25519 key", None, p256_envelope(v3(), "root", p256_root), p256_root_entry["key"][:64])
+# each malformed entry is beside a valid one with ANOTHER key, so only the rule it is about can refuse it
+other = p256_entry(ec.derive_private_key(0x5EED3, ec.SECP256R1()))
+for label, entry in (("an unknown alg", dict(other, alg="ecdsa-p384")), ("an Ed25519 alg spelt out", dict(other, alg="ed25519")),
+                     ("a compressed point", dict(other, key="03" + other["key"][2:66] + "00" * 32)),
+                     ("a point off the curve", dict(other, key=other["key"][:-2] + ("00" if other["key"][-2:] != "00" else "01"))),
+                     ("a 128-hex key", dict(other, key=other["key"][2:])), ("an extra field", dict(other, usage="revocation")),
+                     ("no alg", {"key": other["key"]}), ("an uppercase key", dict(other, key=other["key"].upper())),
+                     ("another valid P-256 key", other), ("the same key twice", p256_revoker_entry),
+                     ("the same key bare and typed", None)):
+    keys = [p256_revoker_entry, entry] if entry is not None else [p256_revoker_entry, p256_revoker_entry["key"][2:66]]
+    typed("a typed revocation key: %s" % label, None, envelope(v3(revocation_keys=keys)), root_pub)
+# a chain: the root introduces a P-256 revocation key under v3; that key then restricts, or tries to do more
+first_v3 = membership.load(json.dumps(v3(revocation_keys=[p256_revoker_entry])))
+for name, change, high_s in (("a P-256 revocation key quarantines a node", lambda m: m["nodes"][0].update(state="QUARANTINED"), False),
+                             ("a P-256 revocation key quarantines a node, high-S", lambda m: m["nodes"][0].update(state="QUARANTINED"), True),
+                             ("a P-256 revocation key changes the policy version", lambda m: m.update(policy_version="p2"), False),
+                             ("a P-256 revocation key drops itself", lambda m: m.update(revocation_keys=[]), False)):
+    following = dict(copy.deepcopy(first_v3), epoch=2, prev_digest=membership.digest(first_v3))
+    change(following)
+    typed(name, first_v3, p256_envelope(following, "revocation", p256_revoker, high_s), root_pub)
+v2_first = membership.load(json.dumps(dict(v3(), schema=membership.SCHEMA_V2)))
+typed("the root moves a v2 chain to v3 with a P-256 revocation key", v2_first,
+      envelope(dict(v3(revocation_keys=[p256_revoker_entry]), epoch=2, prev_digest=membership.digest(v2_first))), root_pub)
+typed("a P-256 key not in the current manifest signs", first_v3,
+      p256_envelope(dict(copy.deepcopy(first_v3), epoch=2, prev_digest=membership.digest(first_v3)), "revocation", p256_root), root_pub)
+
 # Documents as bytes: what the reader itself must refuse (or take), before any rule.
 raw = [
     ("duplicate key", b'{"a":1,"a":2}', False),
@@ -198,5 +302,19 @@ for name, data, ok in raw:
     documents.append({"name": name, "hex": data.hex(), "taken": ok,
                       "canonical": membership.canonical(membership.load(data)).decode() if ok else None})
 
-print(json.dumps({"about": __doc__.strip().split("\n\n")[0], "domain": membership.DOMAIN.decode("ascii"), "calls": calls,
-                  "crafted": crafted, "documents": documents}, indent=1, sort_keys=True))
+
+
+def compose(value):
+    """Every "key" field (a typed key entry, {"alg", "key"}, and the malformed ones the crafted cases hold)
+    written "public": the reader puts "key" back before anything is canonicalised (the signatures cover that
+    spelling). No document here has a field named "public" of its own; signatures' keys are already apart."""
+    if isinstance(value, dict):
+        assert "public" not in value, value
+        return {("public" if k == "key" else k): compose(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [compose(v) for v in value]
+    return value
+
+
+print(json.dumps(compose({"about": __doc__.strip().split("\n\n")[0], "domain": membership.DOMAIN.decode("ascii"), "calls": calls,
+                          "verified": verified, "crafted": crafted, "documents": documents}), indent=1, sort_keys=True))

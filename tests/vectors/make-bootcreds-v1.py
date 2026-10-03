@@ -39,12 +39,12 @@ def node(i, nid, state):
             "wg_boot_pub": ("%02x" % (0x70 + i)) * 32, "wg_service_pub": ("%02x" % (0xfb + i)) * 32, "hsm_serials": ["DENK04041%02d" % i]}
 
 
-def manifest(epoch=1, v2=False, order=("a", "b", "c"), **states):
+def manifest(epoch=1, v2=False, order=("a", "b", "c"), v3=False, **states):
     nodes = [node(i, n, states.get(n, "ACTIVE")) for i, n in enumerate(order)]
     man = {"schema": membership.SCHEMA, "epoch": epoch, "prev_digest": "" if epoch == 1 else "ab" * 32, "policy_version": "p1",
            "issued_at": "2026-10-03T12:00:00Z", "revocation_keys": ["5e" * 32], "nodes": nodes}
-    if v2:
-        man.update(schema=membership.SCHEMA_V2, heartbeat_max_lifetime_s=86400)
+    if v2 or v3:
+        man.update(schema=membership.SCHEMA_V3 if v3 else membership.SCHEMA_V2, heartbeat_max_lifetime_s=86400)
         for i, n in enumerate(man["nodes"]):
             n["ssh_host_pub"] = ("%02x" % (0xd0 + i)) * 32
     membership.validate(man)
@@ -67,7 +67,7 @@ MANIFESTS = {
     "b and c quarantined": manifest(b="QUARANTINED", c="QUARANTINED"),
     "a in maintenance": manifest(a="MAINTENANCE"), "a quarantined": manifest(a="QUARANTINED"),
     "nodes listed c, b, a": manifest(order=("c", "b", "a")),
-    "v2": manifest(v2=True), "a large epoch": manifest(epoch=123456789012),
+    "v2": manifest(v2=True), "v3": manifest(v3=True), "a large epoch": manifest(epoch=123456789012),
     "with d active": manifest(order=("a", "b", "c", "d")), "with d quarantined": manifest(order=("a", "b", "c", "d"), d="QUARANTINED"),
     "without a": manifest(order=("b", "c", "d")),
     "b's EK Name not a SHA-256 Name": dict(manifest(), nodes=[dict(n, ek_name="000c" + n["ek_name"][4:]) if n["node_id"] == "b" else n
