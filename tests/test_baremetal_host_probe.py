@@ -1295,6 +1295,9 @@ class SignedEvidence(unittest.TestCase):
             "a peer twice": (self.doc(unlock_peers=["b", "b"]), "each peer once"),
             "peers as a string": (self.doc(unlock_peers="b,c"), "must be a list"),
             "evidence older than 24 hours": (dict(full, captured_at="2026-01-01T00:00:00Z"), "older than 24 hours"),
+            "captured_at in Arabic-Indic digits": (dict(full, captured_at="٢٠٢٦-٠١-٠١T٠٠:٠٠:٠٠Z"), "captured_at must be UTC"),
+            "captured_at with a fullwidth year": (dict(full, captured_at="２０２６" + full["captured_at"][4:]), "captured_at must be UTC"),
+            "captured_at unpadded": (dict(full, captured_at="2026-1-1T0:0:0Z"), "captured_at must be UTC"),
         }
         for label, (doc, why) in cases.items():
             with self.subTest(label):
