@@ -51,9 +51,10 @@ jobs:
           test -z "$(gofmt -l .)"
           go vet ./...
           go build ./cmd/openbao-plugin-kms-regalia-poc
+          go build ./cmd/openbao-plugin-kms-regalia
       - name: Unit and real-server tests (absence is a failure)
         env:
           OPENBAO_POC_REQUIRE_E2E: '1'
         run: |
           umask 002
-          OPENBAO_POC_BAO="$RUNNER_TEMP/bao" go test -race -count=1 -v -timeout 4m ./...
+          OPENBAO_POC_BAO="$RUNNER_TEMP/bao" go test -race -count=1 -v -timeout 6m ./...

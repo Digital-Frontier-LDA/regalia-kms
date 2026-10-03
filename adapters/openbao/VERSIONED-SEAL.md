@@ -10,7 +10,10 @@ The project's accepted design is
 introduced by merged #134. Issue #120 is completed. This separate experiment
 does **not** replace that design or qualify its full production mapping.
 Both use generation-aware seal-envelope/release-secret, and this fixture proves
-OpenBao's rewrap and historical recovery behavior. These differences remain:
+OpenBao's rewrap and historical recovery behavior. The following differences
+describe frame 2. The separate [native path](README.md#native-seal-path) now
+implements the accepted blob, KeyId, metadata, AAD, size and promotion mapping;
+it still requires production transport/packaging and physical qualification.
 
 | Area | This development experiment | Accepted plugin design |
 | --- | --- | --- |
@@ -22,10 +25,9 @@ OpenBao's rewrap and historical recovery behavior. These differences remain:
 | Payload | 1 MiB outer bound; only 32-byte outer key sent as inner secret | 32 KiB seal plaintext bound to fit release-secret |
 | Promotion | Explicit coordinated registry/configuration changes | Server-selected generation drives KeyId and rewrap |
 
-Configuration names, typed provider errors/retries and production environment
-policy also need alignment in #121. OpenBao consumes reserved `purpose` before
-forwarding seal fields, so the accepted example needs a plugin-specific purpose
-field proven on 2.7.1. No experimental blob is a previously released production
+The native path uses the accepted configuration names with required `kms_purpose`
+(the reserved-field correction is PR #200). Typed provider errors/retries and
+production environment policy remain open in #121. No experimental blob is a previously released production
 format. Passing these fixtures is behavioral evidence for #123, not full
 conformance to every row of the accepted contract.
 

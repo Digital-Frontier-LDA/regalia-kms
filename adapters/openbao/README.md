@@ -5,9 +5,47 @@ supported production plugin. It uses the official OpenBao Wrapper/plugin SDK
 and existing Regalia HTTP operations; it adds no daemon endpoint. Default frame
 1 uses raw wrap/unwrap. Opt-in frame 2 uses generation-aware seal-envelope and
 release-secret; see [the versioned seal contract](VERSIONED-SEAL.md).
-The accepted production design was documented separately in merged #134;
-[the experiment's differences](VERSIONED-SEAL.md#relationship-to-the-accepted-design)
-remain alignment work for #121. This PoC does not replace that contract.
+The accepted production design is [the root compatibility contract](../../OPENBAO-COMPATIBILITY.md).
+A separate native entrypoint now experiments with its seal blob mapping (below).
+The [older frame-2 differences](VERSIONED-SEAL.md#relationship-to-the-accepted-design)
+remain documented for comparison; neither entrypoint claims production support.
+
+## Native seal path
+
+`NewNative` and `cmd/openbao-plugin-kms-regalia` use Type `regalia` and the native
+Regalia envelope directly as BlobInfo.Ciphertext, with an empty IV. The envelope
+protects the actual seal plaintext, bounded to **1–32768 bytes**; empty secrets
+are refused, matching the KMS envelope API. Non-empty caller AAD and a requested
+KeyId naming another object are refused before a KMS call. KeyInfo is informational;
+the native envelope and KMS registry select the historical generation.
+
+KeyId starts empty until Encrypt and then identifies `object@generation` from
+the KMS response. No current-generation setting or historical allowlist is used.
+Historical decrypt does not change this sealing KeyId. Encrypt responses must
+carry the exact ciphertext and nonce submitted by the plugin. Mutable DEK and
+serialization buffers are cleared; plaintext returned to OpenBao belongs to its
+caller and must remain usable.
+
+Configuration requires `address`, `server_name`, `ca_path`, `cert_path`,
+`key_path`, `object_id`, `kms_purpose`, `environment` and `timeout`. These are the
+production design's names with `kms_purpose` correcting the reserved-field
+collision described in PR #200. Only `environment=development` is admitted by
+this experiment; it is configured once, never reads environment variables and
+uses protected credential paths, a pinned CA and TLS 1.3 mTLS. Each call respects
+the earlier of the caller's deadline and the configured timeout; request expiry
+also respects that deadline, capped at one minute.
+
+The native real-server drill promotes g1 to g2 using the **same plugin config**,
+observes stored/recovery-key rewrap, restores an old snapshot to independently
+issued credentials, and refuses that snapshot after g1 revocation while current
+storage and the original recovery share still work. Fixtures use software RSA.
+The fixture builds both entrypoints under its temporary `openbao-plugin-kms-regalia-poc`
+filename; the native plugin/seal Type remains `regalia`.
+
+Remaining #121 work includes typed KMS errors/retry semantics, plugin-crash
+reconciliation, release packaging and production environment qualification.
+The native entrypoint has no External Keys factory. Physical custody, HA,
+upgrades and migration from the experimental outer frames remain unqualified.
 
 ## Contract
 
@@ -78,8 +116,10 @@ remain separate qualification work.
 
 ## Run
 
-Use Go 1.26.6 or newer, and a checkout containing the sibling SOPS and root
+Use Linux and Go 1.26.6 or newer, and a checkout containing the sibling SOPS and root
 modules (the replacements in go.mod are intentionally local for this PoC).
+The HTTP fixtures import the daemon's Linux-specific admission code. The plugin
+entrypoints themselves do not import the admission or hardware implementations.
 
 ```sh
 cd adapters/openbao
@@ -88,7 +128,7 @@ go vet ./...
 
 # Requires the official 2.7.1 release binary, checked against its release checksum.
 OPENBAO_POC_BAO=/absolute/path/to/bao OPENBAO_POC_REQUIRE_E2E=1 \
-  go test -race -count=1 -run TestOpenBao271 -v -timeout 4m
+  go test -race -count=1 -run TestOpenBao271 -v -timeout 6m
 ```
 
 The default tests skip the real-server drill if the executable is absent;
@@ -99,7 +139,7 @@ a KMS listener outage, refuses offline and unauthorized restarts, then restores
 authorized access and checks that plaintext and the root token are absent from
 Raft storage and captured logs. It also exercises fresh-node snapshot restore,
 restored-node identity enforcement and rejection with different KMS key material.
-The generation drill is also mandatory when the real-server executable is set.
+The frame-2 and native generation drills are also mandatory when the real-server executable is set.
 All fixture identities/state are temporary.
 `OPENBAO_POC_KEEP_FAILURE=1` optionally retains **synthetic** private debug
 artifacts on failure; remove the reported directory after inspection.
@@ -109,6 +149,7 @@ Pinned release archive hashes:
 | Archive | SHA-256 |
 | --- | --- |
 | openbao_2.7.1_linux_amd64.tar.gz | `0e2f1ce10d124e03112b50dd2fbec6b78003783253bc3a91587938f39d1e2243` |
+| openbao_2.7.1_linux_arm64.tar.gz | `2b3807d90f224df05d4fe1fdede7f052d2227596c648a56bd291381f8fd01840` |
 | openbao_2.7.1_darwin_arm64.tar.gz | `15625b5f69aee5bb4578b4e76e856a2141647342b0f8e5969a8875b44e0fbf91` |
 
 These were checked against the official v2.7.1 release's checksums.txt. CI pins

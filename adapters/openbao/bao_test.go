@@ -100,8 +100,15 @@ func baoConfig(t *testing.T, dir, address, cluster, pluginDigest string, c map[s
 	var text strings.Builder
 	fmt.Fprintf(&text, "api_addr = %q\ncluster_addr = %q\nplugin_directory = %q\nlog_level = \"warn\"\n", "http://"+address, "https://"+cluster, dir)
 	fmt.Fprintf(&text, "storage \"raft\" {\n path = %q\n node_id = %q\n}\nlistener \"tcp\" {\n address = %q\n cluster_address = %q\n tls_disable = true\n}\n", filepath.Join(dir, "storage"), filepath.Base(dir), address, cluster)
-	fmt.Fprintf(&text, "plugin \"kms\" \"regalia-poc\" {\n command = \"openbao-plugin-kms-regalia-poc\"\n version = \"v0.0.1\"\n sha256sum = %q\n}\nseal \"regalia-poc\" {\n", pluginDigest)
-	for _, key := range []string{"kms_url", "server_name", "ca_path", "certificate_path", "private_key_path", "object_id", "repository", "path", "environment", "kms_purpose", "timeout", "key_version", "historical_key_versions"} {
+	pluginType := "regalia-poc"
+	keys := []string{"kms_url", "server_name", "ca_path", "certificate_path", "private_key_path", "object_id", "repository", "path", "environment", "kms_purpose", "timeout", "key_version", "historical_key_versions"}
+	if _, native := c["address"]; native {
+		pluginType = "regalia"
+		keys = []string{"address", "server_name", "ca_path", "cert_path", "key_path", "object_id", "environment", "kms_purpose", "timeout"}
+	}
+	// Both entrypoints are built/copied under this fixture-only executable name.
+	fmt.Fprintf(&text, "plugin \"kms\" %q {\n command = \"openbao-plugin-kms-regalia-poc\"\n version = \"v0.0.1\"\n sha256sum = %q\n}\nseal %q {\n", pluginType, pluginDigest, pluginType)
+	for _, key := range keys {
 		if c[key] == "" {
 			continue
 		}
@@ -257,6 +264,10 @@ func (b baoAPI) assertBlocked(t *testing.T, p *baoProcess) {
 }
 
 func baoTestEnvironment(t *testing.T) (string, string, []byte, [32]byte) {
+	return baoTestEnvironmentFor(t, "openbao-plugin-kms-regalia-poc")
+}
+
+func baoTestEnvironmentFor(t *testing.T, entrypoint string) (string, string, []byte, [32]byte) {
 	t.Helper()
 	binary := os.Getenv("OPENBAO_POC_BAO")
 	if binary == "" {
@@ -284,7 +295,7 @@ func baoTestEnvironment(t *testing.T) (string, string, []byte, [32]byte) {
 		_ = os.RemoveAll(dir)
 	})
 	pluginPath := filepath.Join(dir, "openbao-plugin-kms-regalia-poc")
-	build := exec.Command("go", "build", "-o", pluginPath, "./cmd/openbao-plugin-kms-regalia-poc")
+	build := exec.Command("go", "build", "-o", pluginPath, "./cmd/"+entrypoint)
 	build.Env = isolatedEnv(dir)
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build plugin: %v\n%s", err, output)
