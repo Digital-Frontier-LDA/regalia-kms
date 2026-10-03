@@ -206,8 +206,8 @@ def exposure(store, freshness, running=False):
     return left + (lease.MAX_LIFETIME if running else 0)
 
 
-def _printable(text):
-    return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:240]
+def _printable(text, limit=membership.NAME_LIMIT):
+    return membership.printable(text, limit)
 
 
 def audited(sink, kind, manifest, subject, peer, decide):
@@ -219,7 +219,7 @@ def audited(sink, kind, manifest, subject, peer, decide):
     try:
         result = decide()
     except Refused as refusal:
-        sink(dict(event, outcome="DENY", reason=_printable(refusal)))
+        sink(dict(event, outcome="DENY", reason=_printable(refusal, membership.REASON_LIMIT)))
         raise
     sink(dict(event, outcome="ALLOW", reason=""))
     return result

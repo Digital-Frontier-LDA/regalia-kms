@@ -183,7 +183,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertTrue(unmounted, "the ESP did not unmount")
         return files
 
-    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None):
+    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=()):
         """One boot of the guest under OVMF, to power-off, with `credentials` on its ESP. Returns what its
         console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase."""
         self.on_esp = self.esp(credentials or {})
@@ -214,6 +214,11 @@ class OnQemu(tub.OnSwtpm):
             path = "%s/smbios-%s-%s" % (self.d, label, name)
             with open(path, "w") as f:
                 f.write("io.systemd.credential.binary:%s=%s" % (name, base64.b64encode(content).decode()))
+            argv += ["-smbios", "type=11,path=" + path]
+        for n, string in enumerate(smbios_strings):                  # SMBIOS type 11 strings as they are, e.g. for systemd-stub
+            path = "%s/smbios-%s-string-%d" % (self.d, label, n)
+            with open(path, "w") as f:
+                f.write(string)
             argv += ["-smbios", "type=11,path=" + path]
         qemu = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.processes.append(qemu)
@@ -365,6 +370,16 @@ class OnQemu(tub.OnSwtpm):
         self.assertEqual(hashlib.sha256(bytes.fromhex(left.group(2))).hexdigest(), self.recorded_session(through)[0])
         # the long-running client and the relay did not outlive the initrd: systemd stopped both (their Conflicts=)
         self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
+        # and the pages it used are zeroed when freed (#221): the words are signed into the image, and the
+        # kernel says it enabled them (a kernel without the options would ignore the words)
+        with open(BOOT + "/e2e.efi", "rb") as f:
+            signed = dict(uki.sections(f.read()))[".cmdline"].decode().split()
+        self.assertIn("init_on_free=1", signed)
+        self.assertIn("init_on_alloc=1", signed)
+        meminit = next((l for l in said.splitlines() if "REGALIA-E2E-MEMINIT" in l), "")
+        print("boot 2: %s" % meminit.strip(), file=sys.stderr)
+        self.assertRegex(meminit, r"heap alloc:on")
+        self.assertRegex(meminit, r"heap free:on")
         self.assertIn("Stopped regalia-unlock.service", said)
         self.assertIn("Stopped regalia-unlock-relay.service", said)
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
@@ -394,7 +409,9 @@ class OnQemu(tub.OnSwtpm):
         # peer refuses the quote, nothing is given, the console asks.
         planted = {"systemd.unit-dropin.regalia-unlock.service": b"[Service]\nEnvironment=PLANTED=1\n",
                    "systemd.extra-unit.regalia-planted.service": b"[Service]\nExecStart=/bin/true\n",
-                   "tmpfiles.extra": b"f /run/regalia-planted - - - - planted\n"}
+                   "tmpfiles.extra": b"f /run/regalia-planted - - - - planted\n",
+                   # an EMPTY file: the stub packs it (systemd 257 skips no zero-length file), so PCR 12 moves too
+                   "regalia.empty": b""}
         for n, (name, content) in enumerate(sorted(planted.items()), 3):
             with self.subTest(planted=name):
                 since = len(self.events)
@@ -411,11 +428,41 @@ class OnQemu(tub.OnSwtpm):
                 self.assertTrue(refusals and all("PCR" in r for r in refusals), refusals)
                 print("planted %s: refused (%s)" % (name, refusals[0]), file=sys.stderr)
 
-        # boot 6, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
+        # boot 7, A COMMAND LINE FROM SMBIOS: systemd-stub reads io.systemd.stub.kernel-cmdline-extra from SMBIOS type 11
+        # and, where it honours it, appends it to the command line and measures it into PCR 12. Here it would switch
+        # credential import back on, with an extra unit passed beside it. Either the stub ignores it (the command line
+        # and PCR 12 are unchanged, systemd still imports nothing, and the unlock goes on), or it is appended (PCR 12
+        # moves and every peer refuses). In neither case does anything planted run: even with import switched back on,
+        # the second layer (no debug generator, every credential import reset, #219) keeps the extra unit from being
+        # made, so import=yes is not harmless by itself, the two layers are. The local half alone opens nothing (it is
+        # sealed to PCR 7 and the signed PCR 11, which this does not change).
+        since = len(self.events)
+        extra_unit = {"systemd.extra-unit.regalia-planted.service":
+                      b"[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nExecStart=/bin/sh -c 'echo \"<2>REGALIA-E2E-PLANTED-RAN\" > /dev/kmsg'\n",
+                      "systemd.unit-dropin.initrd.target": b"[Unit]\nWants=regalia-planted.service\n"}
+        said = self.boot("7-cmdline-extra", credentials, recovery=True, smbios=extra_unit,
+                         smbios_strings=["io.systemd.stub.kernel-cmdline-extra=systemd.import_credentials=yes"])
+        self.assertNotIn("REGALIA-E2E-PLANTED-RAN", said)
+        cmdline = re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1)
+        shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said).groups()
+        allowed = ("unlock", "ALLOW") in {(e["event"], e["outcome"]) for e in self.events[since:]}
+        if "systemd.import_credentials=yes" in cmdline.split():
+            self.assertNotEqual(shown[2].lower(), expected["pcr12"])             # appended: measured, and refused
+            self.assertFalse(allowed)
+            self.assertRegex(said, PROMPT.pattern.decode())
+            print("boot 7: the stub appended the SMBIOS command line; PCR 12 moved and the peers refused", file=sys.stderr)
+        else:
+            self.assertEqual(shown[2].lower(), expected["pcr12"])                # ignored: nothing changed, and still no import
+            self.assertIn("REGALIA-E2E-IMPORT credentials-imported=no", said)
+            self.assertTrue(allowed)                                             # nothing changed: the unlock goes on
+            print("boot 7: the stub ignored the SMBIOS command line; the unlock went on (%s)" % ("allowed" if allowed else "refused"),
+                  file=sys.stderr)
+
+        # boot 8, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
         for peer in ("b", "c"):
             self.ip("ip", "link", "set", "eth0", "down", ns=self.peer_ns[peer])
         since = len(self.events)
-        said = self.boot("6-no-peer", credentials, recovery=True)
+        said = self.boot("8-no-peer", credentials, recovery=True)
         self.assertIn("the disk stays locked: no peer helped in 5 rounds", said)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())

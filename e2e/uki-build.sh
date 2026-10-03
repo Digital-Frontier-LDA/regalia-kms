@@ -53,7 +53,7 @@ print(v)' "$1" "$2"; }
 UNAME="$(basename "$LINUX" | sed 's/^vmlinuz-//')"
 if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   mkdir "$W/ird"; printf '#!/bin/sh\n' > "$W/ird/init"; (cd "$W/ird" && printf 'init\n' | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no\n' > "$W/cmdline"
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
   openssl genrsa -out "$W/TEST-$k.key" 2048 2>/dev/null
@@ -75,11 +75,11 @@ REC="$W/a/test-image.record.json"
 i11="$(field "$REC" pcr11.initrd)"; s11="$(field "$REC" pcr11.system)"
 [ "${#i11}" = 64 ] && [ "${#s11}" = 64 ] && [ "$i11" != "$s11" ] && P "one image, two PCR 11 values: initrd ${i11:0:16}…, system ${s11:0:16}…" || F "the record's PCR 11 values: '$i11' '$s11'"
 # the same prediction, asked of ukify itself (its --measure runs systemd-measure over the image it builds, for every phase)
-theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no" --os-release "@$W/os-release" \
+theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1" --os-release "@$W/os-release" \
   --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub" --tools "$(dirname "$MEASURE")" --measure --output "$W/ukify-own.efi" 2>/dev/null | sed -n 's/^11:sha256=//p')"
 grep -qx "$i11" <<< "$theirs" && grep -qx "$s11" <<< "$theirs" && P "ukify --measure predicts both values for the image it builds from the same inputs" \
   || F "ukify --measure says '$(tr '\n' ' ' <<< "$theirs")', the record $i11 and $s11"
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no rd.luks.uuid=0\n' > "$W/cmdline-bad"
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.luks.uuid=0\n' > "$W/cmdline-bad"
 out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-bad" "${IN[@]:6}" --name x --out "$W/x" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && grep -q "holds 'rd.luks.uuid=0'" <<< "$out" && [ ! -e "$W/x/x.unsigned.efi" ] && P "a command line that unlocks a disk by itself is refused, nothing built" || F "bad command line: exit $rc: $out"
 
