@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import unittest
 
-from deploy.baremetal import host_probe
+from deploy.baremetal import host_probe, trails
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "deploy", "baremetal", "recovery-key.sh")
@@ -28,21 +28,20 @@ THIRD_KEY = "rtuvcbde-fghijkln-bcdefghi-jklnrtuv-vvttrrnn-llkkjjii-hhggffee-ddcc
 FAST = ["--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000"]
 
 
-# A stand-in for trails.py beside a per-test copy of the script (#278): the real one writes the fixed
-# /var/log/regalia/recovery-key.jsonl, root's, which a test does not touch, and no variable redirects it. This one
-# keeps the events in trail.jsonl beside it, and refuses (as the real one does when it cannot write) while a file
-# called "refuse" is there. e2e/luks-recovery-key.sh runs the real one, as root, and verifies its chain.
-STUB_TRAILS = """import json, os, sys
+# trails.py beside a per-test copy of the script (#278) is the REAL one (copied as trails_real.py) behind a
+# wrapper that changes only the path: the registry's /var/log/regalia/recovery-key.jsonl is root's, and no
+# variable redirects it. While a file called "refuse" is beside it, an append refuses as the real one does when
+# it cannot write. Every test that wrote a trail ends by verifying its chain (setUp's cleanup).
+STUB_TRAILS = """import os, sys
 d = os.path.dirname(os.path.abspath(__file__))
-if os.path.exists(os.path.join(d, "refuse")):
+sys.path.insert(0, d)
+import trails_real as trails
+real_where = trails.where
+trails.where = lambda name, cfg=None: real_where(name, cfg) and os.path.join(d, "trail.jsonl")
+if sys.argv[1:2] == ["append"] and os.path.exists(os.path.join(d, "refuse")):
     print("REFUSED: the test's trail refuses", file=sys.stderr)
     sys.exit(1)
-if sys.argv[1:] != ["append", "recovery-key"]:
-    sys.exit(2)
-event = json.loads(sys.stdin.read())
-with open(os.path.join(d, "trail.jsonl"), "a") as f:
-    f.write(json.dumps(event, sort_keys=True) + "\\n")
-print(1)
+sys.exit(trails.main(sys.argv[1:]))
 """
 
 
@@ -65,8 +64,10 @@ class RecoveryKey(unittest.TestCase):
         os.mkdir(self.tool)
         for name in ("recovery-key.sh", "recovery_state.py"):
             shutil.copy(os.path.join(os.path.dirname(SCRIPT), name), self.tool)
+        shutil.copy(os.path.join(os.path.dirname(SCRIPT), "trails.py"), os.path.join(self.tool, "trails_real.py"))
         with open(os.path.join(self.tool, "trails.py"), "w", encoding="ascii") as f:
             f.write(STUB_TRAILS)
+        self.addCleanup(self.verify_trail)
         self.script = os.path.join(self.tool, "recovery-key.sh")
         # REGALIA_TEST_FAIL: command-line fragments separated by "|"; a call containing one exits 1
         # without reaching cryptsetup. REGALIA_TEST_SIGNAL: "<fragment>" sends the script TERM at a
@@ -920,6 +921,21 @@ class RecoveryKey(unittest.TestCase):
         for gone in ("systemd-cryptenroll \"$DEV\" --recovery-key", "recovery-key.conf", "source=host"):
             self.assertNotIn(gone, text)
 
+    def verify_trail(self):
+        """The trail's chain, as the real trails.verify checks it; and every request answered exactly once."""
+        path = os.path.join(self.tool, "trail.jsonl")
+        if os.path.exists(path):
+            trails.verify(path)
+
+    def pairs(self):
+        """{request seq: [the outcomes naming it]} of the trail."""
+        events = self.trail()
+        answers = {e["seq"]: [] for e in events if e["outcome"] == "REQUESTED"}
+        for e in events:
+            if e["outcome"] != "REQUESTED":
+                answers.setdefault(e.get("request"), []).append(e["outcome"])
+        return answers
+
     def trail(self):
         path = os.path.join(self.tool, "trail.jsonl")
         if not os.path.exists(path):
@@ -942,6 +958,7 @@ class RecoveryKey(unittest.TestCase):
                                   ("replace", "REQUESTED"), ("replace", "DENY"), ("replace", "REQUESTED"), ("replace", "ALLOW")])
         last = self.trail()[-1]
         self.assertEqual((last["event"], last["state"], last["device"]), ("recovery-key", "clean", self.img))
+        self.assertTrue(all(len(outcomes) == 1 for outcomes in self.pairs().values()), self.pairs())
         with open(os.path.join(self.tool, "trail.jsonl"), encoding="utf-8") as f:
             text = f.read()
         for secret in (KEY, NEW_KEY, THIRD_KEY, INSTALLER, KEY[:8], NEW_KEY[:8]):
@@ -982,6 +999,23 @@ class RecoveryKey(unittest.TestCase):
         self.assertIn("could not be written to the audit trail", done.stderr)
         self.assertTrue(self.opens(NEW_KEY) and not self.opens(KEY), "the premise: the replace itself finished")
         self.assertEqual([e["outcome"] for e in self.trail()][-1], "REQUESTED")
+
+
+    def test_a_run_killed_after_its_request_is_closed_by_the_next(self):
+        """d9's read of #281: a kill -9 after REQUESTED leaves it unanswered; the next run closes it (INCOMPLETE,
+        naming its seq) before its own request, so every request has exactly one outcome."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertEqual(self.run_script("replace", KEY, NEW_KEY, kill="luksAddKey").returncode, -9)
+        killed = self.trail()[-1]
+        self.assertEqual(killed["outcome"], "REQUESTED")
+        done = self.run_script("replace", KEY, NEW_KEY)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("unanswered request (seq %d, --replace)" % killed["seq"], done.stderr)
+        closing = [e for e in self.trail() if e.get("request") == killed["seq"]]
+        self.assertEqual([(e["outcome"], e["mode"]) for e in closing], [("INCOMPLETE", "replace")])
+        self.assertEqual(self.pairs()[killed["seq"]], ["INCOMPLETE"])
+        self.assertTrue(all(len(outcomes) == 1 for outcomes in self.pairs().values()), self.pairs())
 
 
 if __name__ == "__main__":

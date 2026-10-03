@@ -232,25 +232,41 @@ end(){ local rc="$1" result; shift
 # changed; run it again), or DENY "interrupted" at a prompt. Never a key: the mode, the device, the header's
 # state, its keyslots. --status writes nothing.
 TRAILS_PY="$HERE/trails.py"
-# trail <outcome> <reason>: one event, with the header's state as it is read now.
+# trail <outcome> <reason> [<request seq> [<mode>]]: one event, with the header's state as it is read now; it
+# prints the line's seq. An outcome names the request it answers (its seq), so the two are paired on the trail.
 trail(){ read_state 2>/dev/null || STATE=unreadable
   python3 -I -c 'import json, sys
-keys = ("outcome", "reason", "mode", "device", "state", "recovery", "unnamed", "keyslots")
+keys = ("outcome", "reason", "request", "mode", "device", "state", "recovery", "unnamed", "keyslots")
 event = dict(zip(keys, sys.argv[1:]))
 event["reason"] = event["reason"][:240]
+if event["request"]:
+    event["request"] = int(event["request"])
+else:
+    del event["request"]
 for k in ("recovery", "unnamed", "keyslots"):
     event[k] = event[k].split()
 event["event"] = "recovery-key"
-print(json.dumps(event, sort_keys=True))' "$1" "$2" "$MODE" "$DEV" "$STATE" "$RECOVERY" "$UNNAMED" "$ALL" \
-    | python3 -Es "$TRAILS_PY" append recovery-key >/dev/null; }
+print(json.dumps(event, sort_keys=True))' "$1" "$2" "${3:-}" "${4:-$MODE}" "$DEV" "$STATE" "$RECOVERY" "$UNNAMED" "$ALL" \
+    | python3 -Es "$TRAILS_PY" append recovery-key; }
 # the outcome, once: an outcome that cannot be written is said, and the run's status is a failure
+REQUEST=""
 outcome(){ [ -n "$TRAILED" ] || return 0
   TRAILED=""
-  trail "$1" "$2" && return 0
+  trail "$1" "$2" "$REQUEST" >/dev/null && return 0
   printf 'recovery-key: FAIL: the outcome (%s) could not be written to the audit trail (%s)\n' "$1" "$TRAILS_PY" >&2
   return 1; }
-requested(){ [ -f "$TRAILS_PY" ] || fail "$TRAILS_PY is missing: nothing is done unrecorded"
-  trail REQUESTED "" || fail "the audit trail cannot be written: nothing was done"
+requested(){ local open seq mode
+  [ -f "$TRAILS_PY" ] || fail "$TRAILS_PY is missing: nothing is done unrecorded"
+  # A run killed after its request (SIGKILL, the OOM killer, a power cut) left it unanswered: it is closed
+  # first, under this run's lock, so every request on the trail has exactly one outcome.
+  open="$(python3 -Es "$TRAILS_PY" unanswered recovery-key "device=$DEV")" || fail "the audit trail cannot be read: nothing was done"
+  if [ -n "$open" ]; then
+    read -r seq mode <<< "$(python3 -I -c 'import json, sys; e = json.loads(sys.argv[1]); print(e["seq"], e["mode"])' "$open")"
+    trail INCOMPLETE "the previous run was killed: no outcome was recorded" "$seq" "$mode" >/dev/null \
+      || fail "the audit trail cannot be written: nothing was done"
+    say "the audit trail held an unanswered request (seq $seq, --$mode) for $DEV: it is closed as INCOMPLETE"
+  fi
+  REQUEST="$(trail REQUESTED "")" && [ -n "$REQUEST" ] || fail "the audit trail cannot be written: nothing was done"
   TRAILED=1
   # a Ctrl-C at a prompt (before any write) is recorded too; from the first write on, signals are ignored
   trap 'outcome DENY "interrupted before any change"; exit 130' INT TERM HUP; }

@@ -284,9 +284,24 @@ def main():
                 event = {'event': 'recovery-reconcile', 'device': str(args.device), 'keep': args.keep_slot,
                          'retire': list(args.retire_slot), 'state_before': describe(before)['header_state']}
                 try:
-                    trails.append(TRAIL, dict(event, outcome='REQUESTED', reason=''))
+                    # a run killed after its request left it unanswered: closed first, so every request on the
+                    # trail has exactly one outcome
+                    stale = trails.unanswered(TRAIL, event='recovery-reconcile', device=str(args.device))
+                    if stale is not None:
+                        trails.append(TRAIL, {'event': 'recovery-reconcile', 'device': str(args.device), 'keep': stale.get('keep'),
+                                              'retire': stale.get('retire'), 'outcome': 'INCOMPLETE', 'request': stale['seq'],
+                                              'reason': 'the previous run was killed: no outcome was recorded',
+                                              'state_after': describe(before)['header_state']})
+                        print('the audit trail held an unanswered request (seq %d): it is closed as INCOMPLETE' % stale['seq'], file=sys.stderr)
+                    request = trails.append(TRAIL, dict(event, outcome='REQUESTED', reason=''))
                 except (trails.Refused, OSError) as error:
                     raise Refused('the audit trail cannot be written, nothing was done: %s' % error)
+                # TERM and HUP raise, so the finally below records the outcome; from here a kill -9 is closed by the
+                # next run (above)
+                def stop(signum, frame):
+                    raise KeyboardInterrupt('signal %d' % signum)
+                for sig in (signal.SIGTERM, signal.SIGHUP):
+                    signal.signal(sig, stop)
                 outcome, reason = 'DENY', ''
                 try:
                     kept = secret('Recovery key to KEEP, read from its card: ')
@@ -307,7 +322,7 @@ def main():
                         state_after = 'unreadable'
                         outcome = 'INCOMPLETE' if outcome != 'ALLOW' else outcome
                     try:
-                        trails.append(TRAIL, dict(event, outcome=outcome, reason=reason, state_after=state_after))
+                        trails.append(TRAIL, dict(event, outcome=outcome, reason=reason, state_after=state_after, request=request))
                     except (trails.Refused, OSError) as error:
                         print('REFUSED: the outcome (%s) could not be written to the audit trail: %s' % (outcome, error), file=sys.stderr)
                         outcome = 'UNRECORDED'

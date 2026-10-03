@@ -114,11 +114,33 @@ outcomes="$(python3 -I -c 'import json, sys
 print(" ".join("%s:%s" % (e["mode"], e["outcome"]) for e in map(json.loads, open(sys.argv[1])) if e.get("device") == sys.argv[2]))' "$TRAIL" "$LOOP")"
 [ "$outcomes" = "enrol:REQUESTED enrol:ALLOW check:REQUESTED check:ALLOW replace:REQUESTED replace:ALLOW" ] \
   && P "6: each run is on the trail, requested before and its outcome after: $outcomes" || F "6: the trail for $LOOP reads: $outcomes"
+# every request answered exactly once, by an outcome naming its seq
+pairs() { python3 -I -c 'import json, sys
+events = [e for e in map(json.loads, open(sys.argv[1])) if e.get("device") == sys.argv[2]]
+asked = [e["seq"] for e in events if e["outcome"] == "REQUESTED"]
+answered = [e.get("request") for e in events if e["outcome"] != "REQUESTED"]
+sys.exit(0 if asked and sorted(answered) == sorted(asked) else 1)' "$1" "$2"; }
+pairs "$TRAIL" "$LOOP" && P "6: every request on the trail is answered exactly once" || F "6: a request on $TRAIL is unanswered or answered twice"
+
+# 7 ------------------------------------------------------------------------------------------------
+# #278: recovery-reconcile.py on the real trail. After step 3 only the recovery keyslot is left: keeping it
+# (proven with the new key's card) changes nothing, and the run is recorded, requested then ALLOW.
+RTRAIL=/var/log/regalia/recovery-reconcile.jsonl
+slot="$(cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -I -c 'import json, sys
+print(next(t["keyslots"][0] for t in json.load(sys.stdin)["tokens"].values() if t["type"] == "systemd-recovery"))')"
+out="$(printf '%s\n' "$NEW_KEY" | python3 -I deploy/baremetal/recovery-reconcile.py "$LOOP" --keep-slot "$slot" 2>&1)" \
+  && P "7: recovery-reconcile.py kept keyslot $slot with the new key's card" || F "7: recovery-reconcile.py: $out"
+if [ -f "$RTRAIL" ] && python3 -Es deploy/baremetal/trails.py verify "$RTRAIL" >"$W/rverify.json" 2>&1; then
+  P "7: the reconcile trail's chain verifies ($(cat "$W/rverify.json"))"
+else F "7: the reconcile trail does not verify: $(cat "$W/rverify.json" 2>/dev/null)"; fi
+pairs "$RTRAIL" "$LOOP" && P "7: its request is answered exactly once" || F "7: a reconcile request is unanswered or answered twice"
+grep -qF -- "$NEW_KEY" "$RTRAIL" && F "7: the card's key is in $RTRAIL" || P "7: no key is in the reconcile trail"
+
 
 # the file-backed half, where a skip is a failure
 out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -BEs -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
-[ "$rc" = 0 ] && grep -q '^Ran 37 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
-  && P "the 37 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
+[ "$rc" = 0 ] && grep -q '^Ran 38 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
+  && P "the 38 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
 
 echo "luks-recovery-key: $pass passed, $failed failed"
 [ "$failed" = 0 ]

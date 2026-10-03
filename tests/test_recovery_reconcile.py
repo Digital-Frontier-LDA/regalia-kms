@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('recovery_reconcile', Path(__file__).resolve().parents[1] / 'deploy/baremetal/recovery-reconcile.py')
 module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+from deploy.baremetal import trails  # noqa: E402
 
 
 def metadata():
@@ -153,8 +154,11 @@ class KilledInsideTheRetirement(unittest.TestCase):
         # #278: each run recorded before a card was asked for, and its outcome after: the cut one INCOMPLETE
         with open(os.path.join(self.dir, 'trail.jsonl'), encoding='utf-8') as f:
             events = [json.loads(line) for line in f]
-        self.assertEqual([e['outcome'] for e in events], ['REQUESTED', 'REQUESTED', 'ALLOW'])   # the killed run wrote no outcome
+        # the killed run's request is closed by the rerun (INCOMPLETE, naming it) before the rerun's own
+        self.assertEqual([(e['outcome'], e.get('request')) for e in events],
+                         [('REQUESTED', None), ('INCOMPLETE', events[0]['seq']), ('REQUESTED', None), ('ALLOW', events[2]['seq'])])
         self.assertEqual((events[-1]['keep'], events[-1]['retire'], events[-1]['state_after']), ('2', ['1'], 'orphan-keyslot'))
+        trails.verify(os.path.join(self.dir, 'trail.jsonl'))
         with open(os.path.join(self.dir, 'trail.jsonl'), encoding='utf-8') as f:
             text = f.read()
         self.assertNotIn(OLD, text)
