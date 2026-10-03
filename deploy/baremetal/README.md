@@ -56,26 +56,28 @@ For custom appliance/recovery images, require the same checks under the approved
 release signing key. See the [image verification contract](../images/README.md).
 An unsigned image or an image with only a checksum is not approved installation media.
 
-- **Full-disk encryption** (LUKS2), enrolled to the TPM:
-  `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
-  `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
-  - **A disk enrolled this way FAILS `root_disk_unlock_revocable`, and `host_probe.py` exits 1. That is
-    intended (#135): it is the known blocker for production.** PCR 7 does not change with the kernel, so
-    an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
-    passes only when the unlock can retire an image: a peer's contribution (#67: `regalia-peer-unlock`
+- **Full-disk encryption** (LUKS2), opened in the initrd by the host's TPM **and** one peer (#67): one
+  keyslot per peer path, each opened by a half sealed to this TPM (PCR 7 and the image's signed PCR 11
+  policy) and a half the peer gives only to an image its current, root-signed manifest still lists. A
+  retired image gets the TPM's half and nothing else, so the disk stays locked (#135: shown on a real
+  boot by `e2e/unlock-boot-qemu.sh`, boots 2c and 2d; not yet on a DL360, the #65 checklist section D).
+  The pieces: the enrolment in `deploy/baremetal/unlock.py` (run by `regalia-node enrol commit`, #190,
+  not built yet), the initrd module `deploy/baremetal/initrd/dracut/90regalia-unlock` and the boot-time
+  client `cmd/regalia-unlock`. Measured: `root_disk_unlock_revocable`, `root_disk_tpm_unlocked`.
+  - **Never enrol the TPM alone** (`systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7`). A signed PCR
+    policy has no counter and PCR 7 does not change with the kernel, so every image ever signed would
+    unlock the disk, read the host key and open the HSM PIN. Such a disk FAILS `root_disk_unlock_revocable`,
+    `host_probe.py` exits 1, and there is no option to skip it. The probe passes for `regalia-peer-unlock`
     tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
     peer that holds a path, and a crypttab entry whose key file is the unlock client's socket,
     `/run/regalia-unlock/key.sock`, with only options known to leave the unlock alone (`luks`, `x-initrd.attach`,
     `discard`, `tries=`, `timeout=`, …: no `header=`, no `headless`, no other token device) and no `rd.luks.*` on the
     kernel command line. The probe reads `/etc/crypttab`, which is what the initrd was built from, not necessarily
-    what the initrd holds: rebuild the initrd after every edit. The enrolment exists in
-    `deploy/baremetal/unlock.py`, its boot-time client
-    does not yet), or an
+    what the initrd holds; what the initrd holds is reviewed when the image is built (#198). It also passes for an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
-    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
-    A host that is otherwise commissioned shows this as its only failing control. Signed evidence
-    (section 5) records every measured control as true, so no evidence can be signed for such a host:
-    with `--evidence` the run says the evidence is refused; run it without, to see the one control.
+    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). Signed evidence (section 5) records every
+    measured control as true, so no evidence can be signed for a host that fails it: with `--evidence` the run
+    says the evidence is refused; run it without, to see the one control.
   - The probe judges every dm-crypt volume under `/`, under the host key and under the credstore, and
     every token that names a keyslot on them: a second volume, a `clevis` token or a stale token fails
     it, and so does a keyslot that no token names (a passphrase, or a key file) on any of them. For an
@@ -92,7 +94,7 @@ An unsigned image or an image with only a checksum is not approved installation 
   it is never stored on a host. In this order:
   1. `sudo deploy/baremetal/recovery-key.sh --enrol <root partition>`: asks for the installer's
      passphrase, then for the recovery key twice. Then `--check`, with the key read from the **card**.
-  2. Enrol the TPM (above) and reboot once to see the disk unlock unattended.
+  2. Enrol the peer paths (above) and reboot once to see the disk unlock unattended.
   3. Only then wipe the installer's passphrase: `systemd-cryptenroll --wipe-slot=password <root partition>`.
 
   The key is 8 groups of 8 lower-case letters with a dash between groups. **The dashes are part of
@@ -106,9 +108,9 @@ An unsigned image or an image with only a checksum is not approved installation 
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
   `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/local/sbin/regalia-kms` to
   carry the digest of the binary there now (start the service first).
-- **The PIN and the disk are sealed to PCR 7** (Secure Boot state and the keys it trusts), as
-  `systemd-cryptenroll` does by default. A kernel or KMS update does not change PCR 7, so nothing is
-  stranded; turning Secure Boot off, or enrolling other keys, does change it.
+- **The PIN, and the TPM's half of each disk path, are sealed to PCR 7** (Secure Boot state and the keys
+  it trusts). A kernel or KMS update does not change PCR 7, so nothing is stranded; turning Secure Boot
+  off, or enrolling other keys, does change it. Retiring an image is the peers' decision, not the TPM's.
   - **The PIN is sealed to the host key as well** (`/var/lib/systemd/credential.secret`, on the
     encrypted root disk): key type `host+tpm2`. A TPM policy alone cannot retire an image, so the PIN
     must also need the unlocked root disk (PIN-CUSTODY.md, "Why the host key is in the seal"). Losing
@@ -174,12 +176,18 @@ An unsigned image or an image with only a checksum is not approved installation 
   ```
   Restart regalia-kms after each load. Measured: `kms_apparmor_enforced` (enforce mode only).
 - **Runtime admission.** A production configuration states `"runtime_admission": "required"` with
-  `runtime_admission_path`, `node_id` and `boot_session_path` (`config/daemon.example.json`); with a
-  token configured the daemon refuses to start if the setting is left out, and `"disabled-for-lab"` is
-  for lab and CI hosts only. The daemon then serves key operations only while the root lease service
-  (`deploy/baremetal/admission.py`) reports that this node holds a runtime lease: without one,
-  `/v1/health/ready` is 503 and every key operation is a 503 `DEPENDENCY_UNAVAILABLE`, audited as
-  `not-admitted`. `/run/regalia` must be root's, mode 0755, and the two files in it root's, mode 0644.
+  `runtime_admission_path`, `runtime_admission_owner`, `node_id` and `boot_session_path`
+  (`config/daemon.example.json`); with a token configured the daemon refuses to start if the setting is
+  left out, and `"disabled-for-lab"` is for lab and CI hosts only. The daemon then serves key operations
+  only while the lease service (`deploy/baremetal/admission.py`) reports that this node holds a runtime
+  lease: without one, `/v1/health/ready` is 503 and every key operation is a 503
+  `DEPENDENCY_UNAVAILABLE`, audited as `not-admitted`. The lease service runs as its own user,
+  `regalia-admission`, not root (#191); `runtime_admission_owner` names it, it is resolved when the
+  daemon starts, and a name that does not resolve stops the daemon (there is no default, and no
+  fallback to root). The admission file (`/run/regalia/admission/admission.json`) and its directory
+  must be that user's or root's, with no group or other write, and nothing above them may let anyone
+  else swap them; the boot session (`/run/regalia/boot-session`) must be root's, in root's
+  `/run/regalia` (0755).
   `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
@@ -190,8 +198,11 @@ An unsigned image or an image with only a checksum is not approved installation 
   token merely refuses, or one whose caller hung up, is not an absence. A token pulled during the PIN
   login also leaves the PIN latch set: after its return it needs the fresh lease **and** an operator's
   PIN-block reset, as any failed login does. This holds for every key the daemon serves: the HSM's, a
-  YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot wait. Measured: `kms_runtime_admission_required` (the
-  configuration the unit starts the daemon with says `"required"`; `"disabled-for-lab"` fails it).
+  YubiKey's PIV slots and its OpenPGP applet; the daemon refuses to start with a provider that cannot
+  wait. Measured: `kms_runtime_admission_required` (the configuration the unit starts the daemon with
+  says `"required"`; `"disabled-for-lab"` fails it; and `regalia-admission.service` runs as the user
+  that configuration names, not root, with `NoNewPrivileges=yes` and no capability, as the kernel reports
+  for its running process).
 - **Authenticated time (`authtime.py`; the unit is NOT BUILT yet, #80).** Every expiry here (a
   heartbeat's, a lease's) is judged against the clock, so the clock itself must be vouched for. It counts
   as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
@@ -486,7 +497,21 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     names), for a bounded number of rounds;
   - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
     file (`/run/regalia-unlock/key.sock`). If no peer helps, it gives nothing.
-- **The units** (`deploy/baremetal/initrd/regalia-unlock.socket` and `.service`): systemd-cryptsetup's
+- **The relay** (`regalia-unlock-relay.service`): it makes the key socket crypttab names, holds no
+  credential, no TPM and no network, and needs nothing that can fail. It asks the real client on its
+  own socket (`regalia-unlock-core.socket`) and passes on exactly one whole key, or gives nothing after
+  any failure or after 330 s (the real client ends its own attempt within 200 s, so its answer comes
+  first; a client that hangs yields the prompt). With nothing, systemd-cryptsetup asks for the
+  recovery key. It makes the socket ITSELF, with no `.socket` unit, because systemd-cryptsetup asks for
+  the recovery key when the key file does not exist, and fails without asking when a connection is
+  refused or reset (systemd 257): so if the relay cannot start, or is gone, there is no socket, and the
+  console asks. It is restarted without limit; its runtime directory, the socket in it, goes when it
+  stops; systemd-cryptsetup is ordered after it, weakly. Before it, a real client that could not start
+  (a sealed credential that did not decrypt) left systemd-cryptsetup with a reset connection, and it
+  failed without asking (#66). Shown with the real systemd and systemd-cryptsetup: a client that hangs,
+  one that crashes mid-answer, an undecryptable credential, an absent one, and the relay unable to
+  start each end with no key and the prompt's path.
+- **The real client's units** (`deploy/baremetal/initrd/regalia-unlock-core.socket` and `regalia-unlock.service`): the relay's
   connection to the socket starts the client, sandboxed (no capability, no write anywhere but its own
   `/run/regalia`, no device but the TPM and the disks, read-only). Shown with a running systemd and
   the real systemd-cryptsetup: the volume is mapped with the key from the socket; with no peer,
@@ -529,10 +554,43 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   | `regalia.boot-nft` | `bootnet.boot_ruleset` | no |
   | `regalia.boot-env` | `BOOT_NIC`, `BOOT_ADDRESS`, `BOOT_GATEWAY`, `BOOT_TUNNEL` (read as data) | no |
 
-  The units name each without a path: systemd looks for it among the credentials it was given at
-  boot, decrypts the two sealed ones (a plain one under those names is refused), and treats a missing
-  one as absent: the client then gives nothing and the console asks for the recovery key. The machine
-  that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+  **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
+  carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
+  not SMBIOS type 11 or QEMU's fw_cfg (which nothing the peers attest measures), not the command line.
+  The stub still unpacks the ESP's files into the initrd at `/.extra/global_credentials/`, and the two
+  units read exactly their six by fixed paths there: the two sealed ones decrypted by systemd (a plain
+  one is refused), the four others as data. A missing file keeps its unit from starting, and the
+  console asks for the recovery key (within seconds in the boot test). Second layer, for an image built
+  without that switch: the dracut module leaves out systemd-debug-generator (which makes units and
+  drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles, sysctl, journald,
+  sysusers, udev rule-credential and systemd-cryptsetup services (the last imports `cryptsetup.*`: a
+  planted passphrase would be tried before the key socket). It is partial: fstab-generator
+  (`fstab.extra`; it mounts the root), the network generator and PID 1 itself are covered by the
+  first layer only. A PE addon on the ESP could add a command line (systemd-stub appends it, and only
+  PCR 12 changes); with Secure Boot on, the stub loads only addons signed by a key in db, and the
+  peers refuse any changed PCR 12, so it gains no contribution. `uki.py build` refuses an image
+  whose command line lacks the switch. The boot test reads systemd's own message ("systemd.import_credentials=no
+  is set") from the booted journal, and passes an extra unit through SMBIOS that is never started.
+  The machine that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+
+  **What the unlock client erases, and what it cannot (#221).** For the whole initrd phase the client
+  holds the local half (32 bytes), the boot session's RSA-3072 private key, and, once a peer has
+  answered, the volume's key. All three are byte slices, never strings. As soon as the boot's one
+  response is used, the client zeroes the local half and the private key's numbers and drops every
+  reference to the key; it keeps only the volume's key, for any later asker in this boot. When systemd
+  stops it at switch-root, it zeroes the volume's key too. The relay zeroes its copy of the key after the
+  write. **What this cannot do:** Go's `crypto/rsa` keeps its own internal copy of the private key,
+  which no program can reach (an independent read decrypted with it after the zeroing); the garbage
+  collector moves and frees memory without clearing it; and slices copied by the runtime or the
+  standard library are not tracked. That is why the image's signed command line also carries
+  `init_on_free=1 init_on_alloc=1` (required by `uki.py build`): the kernel zeroes every page when it is
+  freed and when it is handed out, so nothing the client held survives the process in memory the booted
+  system can reuse. The boot test checks the kernel's own boot message ("mem auto-init: … heap
+  alloc:on, heap free:on"), since a kernel built without the options would ignore the words. The client
+  does not mlock its memory: its unit has no capabilities, so locking is bounded by RLIMIT_MEMLOCK (8 MiB),
+  which a Go process exceeds, and granting CAP_IPC_LOCK would widen the unit for a client that holds no
+  swap-backed memory in the initrd. The volume key also lives, by design, in dm-crypt in the kernel and
+  briefly in systemd-cryptsetup.
 
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
@@ -544,14 +602,12 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   12 in the initrd phase**, against the value the node's credentials give: `espcreds.pcr12(files)`,
   the stub's own computation (one extend with the SHA-256 of a cpio archive of the files, sorted by
   name), shown equal to a real boot's. The boot test's peers do; a planted credential is refused.
-  **Not every credential channel is measured.** systemd in the initrd also imports credentials from
-  SMBIOS type 11 strings and from QEMU's fw_cfg, and nothing puts those in PCR 12 (SMBIOS reaches PCR
-  1 at most, through the firmware, which no peer attests). Whoever can set SMBIOS strings on a host
-  (firmware, iLO) could pass credentials the peers never see; what systemd acts on by name must
-  therefore also be restricted in the image (B2 on #66).
+  **Not every credential channel is measured**: SMBIOS type 11 strings and QEMU's fw_cfg reach PCR 1
+  at most, through the firmware, which no peer attests. That is why systemd imports none (above); the
+  boot test passes a unit drop-in through SMBIOS and it is not acted on.
   OPEN for production: the measurement set's PCR 12 per node, computed by a tool from the node's
   credentials (#66, d9), and the split decided on #66 (membership-derived data signed and verified in
-  the initrd, B3; refusal of unexpected credential names, B2).
+  the initrd, B3).
   The image must be built with `dracut --no-hostonly --no-hostonly-cmdline` (the module refuses
   hostonly mode, which copies the build machine's identity and crypt settings into the image). The
   ruleset credential may hold only `table inet regalia_boot` and include no file; `down` flushes every
@@ -644,27 +700,32 @@ the single-site baseline (initramfs-tools, TPM-only crypttab); they change when 
 
 ## 8. The node's running services (three-site, #80): not commissioned yet
 
-Four systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
+Five systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
 (`deploy/baremetal/node.py`; schema `regalia.node/v1`, every field required):
 
 | Unit | Runs as | Privilege | Does |
 |---|---|---|---|
 | `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
 | `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
-| `regalia-admission` | root | none; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission.json` |
+| `regalia-boot-session` | root | none, no network, no device; a oneshot | on a boot where the unlock client presented no session (recovery key), makes one and writes the pair in `/run/regalia` |
+| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else |
 | `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store, runs the heartbeat watch |
 
 - **One writer of the membership chain.** `regalia-sync` owns the store and publishes the verified chain
-  (`/var/lib/regalia-sync/chain.json`, 0644). The root services verify that copy themselves against the
-  root key and the TPM anchor: a `regalia-sync` that withholds or rolls back makes them refuse, so the node
+  (`/var/lib/regalia-sync/chain.json`, 0644). The other services (wg-apply, admission) verify that copy
+  themselves against the root key and the TPM anchor: a `regalia-sync` that withholds or rolls back makes them refuse, so the node
   stops serving rather than serving under an old manifest.
 - **The boot session** comes from the unlock client (`/run/regalia/boot-session` and `.pub`, #67); on a
-  boot that opened the disk with the recovery key, `regalia-admission` makes one and writes the pair.
+  boot that opened the disk with the recovery key, `regalia-boot-session` (root) makes one and writes the
+  pair, before `regalia-admission` starts (`Requires=`). `regalia-admission` only reads it: it cannot write
+  root's `/run/regalia`, and the daemon accepts the session only from root.
   Edge cases from the unlock side: an unwritable `/run` at the first quote followed by a client restart in
   the same boot can leave a record one peer does not hold until the next boot; a kexec always ends at the
   recovery prompt.
-- `/run/regalia` is created by `regalia.tmpfiles.conf` when the unlock client did not run, and is never
-  any unit's `RuntimeDirectory=` (systemd would remove it, boot session included, when that unit stops).
+- `/run/regalia` is created by `regalia.tmpfiles.conf` when the unlock client did not run, and so is
+  `/run/regalia/admission` (`regalia-admission`'s, 0755); neither is any unit's `RuntimeDirectory=`
+  (systemd would remove it when that unit stops: the boot session, or the last admission file, which must
+  stand until it runs out by itself). The two users come from `regalia.sysusers.conf`.
 - Each unit's sandbox is pinned by `tests/test_baremetal_units.py`, including systemd's own
   `systemd-analyze verify` and an offline exposure score of at most 3.0.
 

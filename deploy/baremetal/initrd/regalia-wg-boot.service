@@ -29,13 +29,13 @@ Type=oneshot
 RemainAfterExit=yes
 # No EnvironmentFile=: boot.env is read by the script as data. A file that may come from
 # storage others can write must not be able to set this process's environment (LD_PRELOAD, PATH).
-# system credentials, as for regalia-unlock.service: the key sealed to this TPM, and three that are not
-# secret (bootnet.boot_wg_conf, bootnet.boot_ruleset, and boot.env). A missing one makes the script fail
-# and leave nothing behind.
-LoadCredentialEncrypted=regalia.wg-boot-key
-LoadCredential=regalia.wg-boot-conf
-LoadCredential=regalia.boot-nft
-LoadCredential=regalia.boot-env
+# Four files from the ESP, by fixed paths, as for regalia-unlock.service: the key sealed to this TPM, and
+# three that are not secret (bootnet.boot_wg_conf, bootnet.boot_ruleset, and boot.env). A missing one
+# keeps the unit from starting, and nothing is left behind.
+LoadCredentialEncrypted=regalia.wg-boot-key:/.extra/global_credentials/regalia.wg-boot-key.cred
+LoadCredential=regalia.wg-boot-conf:/.extra/global_credentials/regalia.wg-boot-conf.cred
+LoadCredential=regalia.boot-nft:/.extra/global_credentials/regalia.boot-nft.cred
+LoadCredential=regalia.boot-env:/.extra/global_credentials/regalia.boot-env.cred
 # where `up` notes the interface for `down`, which may run without the credentials; removed after it
 RuntimeDirectory=regalia-wg-boot
 RuntimeDirectoryMode=0700

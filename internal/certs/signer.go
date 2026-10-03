@@ -8,6 +8,7 @@ package certs
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"encoding/asn1"
 	"errors"
@@ -47,15 +48,44 @@ type CardSigner struct {
 
 func (signer *CardSigner) Public() crypto.PublicKey { return signer.PublicKey }
 
+// certificateHash is the one hash a CA key signs certificates with, and for an ECDSA key the width
+// of one signature component.
+//
+// THE HASH FOLLOWS THE KEY. P-256 signs over SHA-256 and P-384 over SHA-384: the pairing RFC 5480
+// and every public CA use, and the one x509.CreateCertificate chooses for the key when the template
+// names no algorithm. This signer used to accept SHA-256 only, so a P-384 CA key, which the
+// capability matrix advertises for certificate-sign, could not issue at all (regalia-kms#169).
+// RSA stays on SHA-256 at every key size. No other pairing is accepted: a P-384 key asked for a
+// SHA-256 signature is refused, not obliged, so the strength of a certificate's signature is
+// never less than its key's.
+func certificateHash(public crypto.PublicKey) (hash crypto.Hash, width int, ok bool) {
+	switch key := public.(type) {
+	case *rsa.PublicKey:
+		return crypto.SHA256, 0, true
+	case *ecdsa.PublicKey:
+		switch key.Curve {
+		case elliptic.P256():
+			return crypto.SHA256, 32, true
+		case elliptic.P384():
+			return crypto.SHA384, 48, true
+		}
+	}
+	return 0, 0, false
+}
+
 func (signer *CardSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
 	if signer == nil || signer.Sign_ == nil || len(digest) == 0 {
 		return nil, errors.New("card signer is not configured")
 	}
-	if opts == nil || opts.HashFunc() != crypto.SHA256 {
-		return nil, errors.New("only SHA-256 certificate signatures are supported")
+	hash, width, ok := certificateHash(signer.PublicKey)
+	if !ok {
+		return nil, errors.New("unsupported certificate signing key type")
 	}
-	if len(digest) != crypto.SHA256.Size() {
-		return nil, errors.New("digest is not a SHA-256 digest")
+	if opts == nil || opts.HashFunc() != hash {
+		return nil, errors.New("the certificate signature hash is not the one this key signs with (SHA-256 for RSA and P-256, SHA-384 for P-384)")
+	}
+	if len(digest) != hash.Size() {
+		return nil, errors.New("the digest is not of the hash this key signs with")
 	}
 
 	switch public := signer.PublicKey.(type) {
@@ -74,13 +104,14 @@ func (signer *CardSigner) Sign(_ io.Reader, digest []byte, opts crypto.SignerOpt
 		if err != nil {
 			return nil, err
 		}
-		// A raw ECDSA signature is exactly two fixed-width field elements. An odd length means the
-		// card returned something else — DER already, or a truncated read — and guessing would
-		// produce a plausible-looking certificate, so refuse.
-		if len(raw) == 0 || len(raw)%2 != 0 {
+		// A raw ECDSA signature is exactly two field elements at the width of the curve order.
+		// Any other length means the card returned something else — DER already, a truncated
+		// read, a signature made with another key — and guessing would produce a plausible-looking
+		// certificate, so refuse.
+		if len(raw) != 2*width {
 			return nil, errors.New("card returned a malformed raw ECDSA signature")
 		}
-		half := len(raw) / 2
+		half := width
 		r := new(big.Int).SetBytes(raw[:half])
 		s := new(big.Int).SetBytes(raw[half:])
 		if r.Sign() == 0 || s.Sign() == 0 {

@@ -635,6 +635,12 @@ jobs:
           [ "$status" -eq 0 ] || exit "$status"
           grep -q '^tpm-attest-swtpm: 31 passed, 0 failed$' "$RUNNER_TEMP/attest.log" || {
             echo "::error::the attestation battery did not run all 31 checks" >&2; exit 1; }
+      - name: regalia-node enrol init against swtpm (keys made on the host, nothing foreign touched, a crash at every call) — may not skip
+        env:
+          REGALIA_EXPECT_SWTPM: "1"
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends wireguard-tools python3-cryptography
+          python3 -BEs -m unittest -v tests.test_baremetal_enrol
 
   # regalia-kms#61: the AppArmor profile the bare-metal unit asks for by name. The parser compiles it
   # without loading it, so this proves the profile is well-formed and says what the tests read in it;

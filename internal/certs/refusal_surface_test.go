@@ -311,7 +311,7 @@ func TestTheCardSignerRefusesANilReceiverAndAbsentOptions(t *testing.T) {
 		wants  string
 	}{
 		{"a nil card signer", nil, crypto.SHA256, "signer == nil", "card signer is not configured"},
-		{"no signer options", working, nil, "opts == nil", "only SHA-256"},
+		{"no signer options", working, nil, "opts == nil", "the certificate signature hash is not the one this key signs with"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err, panicked := callCatchingPanic(func() error {

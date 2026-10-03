@@ -405,7 +405,7 @@ class Exchange(Case):
         def refuse():
             raise m.Refused("bad\x00input\n\x1b[31m" + "x" * 500)
         self.refused("bad", convergence.audited, self.events.append, "unlock\n", None, "a\x07", "b", refuse)
-        self.assertEqual(self.events[-1]["reason"], "bad?input??[31m" + "x" * 225)
+        self.assertEqual(self.events[-1]["reason"], "bad?input??[31m" + "x" * 500)
         self.assertEqual((self.events[-1]["event"], self.events[-1]["subject"], self.events[-1]["epoch"], self.events[-1]["manifest_digest"]), ("unlock?", "a?", 0, ""))
         with self.assertRaises(ZeroDivisionError):
             convergence.audited(self.events.append, "unlock", self.m1, "a", "b", lambda: 1 / 0)

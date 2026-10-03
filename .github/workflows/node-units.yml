@@ -9,12 +9,20 @@ on:
       - deploy/baremetal/**
       - e2e/node-units-systemd.py
       - .github/workflows/node-units.yml
+      - internal/admission/**
+      - internal/config/**
+      - cmd/regalia-kms/**
+      - cmd/regalia-audit-collector/**
   push:
     branches: [main]
     paths:
       - deploy/baremetal/**
       - e2e/node-units-systemd.py
       - .github/workflows/node-units.yml
+      - internal/admission/**
+      - internal/config/**
+      - cmd/regalia-kms/**
+      - cmd/regalia-audit-collector/**
 
 permissions:
   contents: read
@@ -22,16 +30,19 @@ permissions:
 jobs:
   node-units-systemd:
     runs-on: ubuntu-24.04     # pinned: the chrony and systemd behaviour observed is 24.04's
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - name: Install the software TPM, chrony and WireGuard tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
-            openssl python3-cryptography
+            openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0
           # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel has no vTPM proxy
           # (CONFIG_TCG_VTPM_PROXY is not set), so the test makes the device with swtpm's CUSE mode.
           sudo apt-get install -y -qq --no-install-recommends tpm-udev
@@ -49,9 +60,14 @@ jobs:
           sudo ldconfig
           /usr/local/bin/swtpm --version
           /usr/local/bin/swtpm cuse --help | head -1
-      - name: The four units, as shipped, under systemd (part 1)
+          ls /usr/lib/x86_64-linux-gnu/libtss2-tcti-tabrmd*
+      - name: Build the KMS daemon and the audit collector (part 2 runs them)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          for name in regalia-kms regalia-audit-collector; do go build -o "$RUNNER_TEMP/bin/$name" "./cmd/$name"; done
+      - name: The four units, as shipped, under systemd; a peer's lease, the daemon, a revocation
         run: |
           set -o pipefail
-          sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
-          grep -q '^node-units-systemd: 23 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
-            echo "::error::the units test did not pass all 23 checks" >&2; exit 1; }
+          REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
+          grep -q '^node-units-systemd: 49 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
+            echo "::error::the units test did not pass all 49 checks" >&2; exit 1; }

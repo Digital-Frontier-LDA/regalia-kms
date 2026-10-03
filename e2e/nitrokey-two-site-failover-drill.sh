@@ -15,7 +15,7 @@
 #   - the two DKEK key check values must DIFFER (two restore domains, not one);
 #   - both cards must expose the wallet's public key;
 #   - TestCosmosSigningFailsOverBetweenTwoCards runs the promotion across them;
-#   - every card's PIN counter is read from outside before and after, and must not move.
+#   - both drill cards' PIN counters are read from outside before and after, and must not move.
 # The wallet key, its PKCS#12, both DKEK shares and every password file are deleted at the end.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,8 +29,6 @@ KEY_REF=49          # the SmartCard-HSM key reference, DECIMAL, for PKCS#11 ID 0
 OBJECT_ID=31
 STATE="$(mktemp -d "${TMPDIR:-/tmp}/regalia-2site.XXXXXX")"; chmod 700 "$STATE"
 LOG="$STATE/transcript.log"
-printf 'app default {\n}\napp opensc-pkcs11 {\n\tpkcs11 {\n\t\tmax_virtual_slots = 32;\n\t}\n}\n' > "$STATE/opensc.conf"
-export OPENSC_CONF="${OPENSC_CONF:-$STATE/opensc.conf}"
 say(){ printf '%s %s\n' "$(date -u +%T)" "$*" | tee -a "$LOG"; }
 die(){ say "FAIL: $*"; say "state kept for inspection: $STATE"; exit 1; }
 cleanup(){ rm -f "$STATE"/wallet.* "$STATE"/*.pw "$STATE"/*.pbe "$STATE"/*.pin; }
@@ -44,13 +42,26 @@ IMPORT="$CEREMONY/qubes/scripts/hsm-import-key-nojvm.sh"
 [ -x "$IMPORT" ] || die "no importer at $IMPORT"
 
 pin_of(){ case "$1:$2" in "$A:so") echo "$A_SO_PIN";; "$A:user") echo "$A_USER_PIN";; "$B:so") echo "$B_SO_PIN";; "$B:user") echo "$B_USER_PIN";; esac; }
+# OpenSC sees ONLY the two sites' cards, and every command that presents a PIN (or the SO-PIN, or
+# initialises) runs only while that card's serial is where it is expected (e2e/lib/bench_cards.sh,
+# regalia-kms#174). The ceremony importer is handed the slot and reader after the same gate.
+# shellcheck source=lib/bench_cards.sh
+. "$ROOT/e2e/lib/bench_cards.sh"
+bench_isolate "$STATE/opensc.conf" "$MODULE" "$A" "$B" || die "cannot isolate $A and $B in OpenSC"
+gate(){ bench_gate "$1" ${2:+"$2"} || die "$1 is not where it is expected: no PIN presented"; }
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
 for s in "$A" "$B"; do hsm_assert_staging_card "$s" || die "$s is not a registered staging card: refusing"; done
 # Readers resolve in the MAIN shell into $READER: a failed inline lookup passes --reader "", which
 # OpenSC reads as reader 0, another card.
 reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER" ] || die "cannot resolve $1 to a PC/SC reader"; }
 reader(){ reader_of "$1"; echo "$READER"; }
 # Secrets go into sc-hsm-tool's own prompts over a pty, never on argv (e2e/lib/sc-hsm-pty.py).
-schsm(){ local card="$1" pw="$2"; shift 2
+# sc-hsm-tool is given a READER INDEX: the reader at that index must be this card's (two isolated cards
+# can still swap places when the readers re-enumerate).
+reader_arg(){ local next=0 a; for a in "$@"; do [ "$next" = 1 ] && { echo "$a"; return; }; [ "$a" = --reader ] && next=1; done; }
+schsm(){ local card="$1" pw="$2" r; shift 2; gate "$card"
+  r="$(reader_arg "$@")"; [ -z "$r" ] || bench_reader_gate "$card" "$r" || die "reader $r is not $card's: no PIN presented"
   SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$pw" \
     python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 # Also main-shell: a slot that does not resolve stops the drill here, not as an empty --slot later.
@@ -90,9 +101,11 @@ provision(){ local card="$1" r kcv pw
   kcv="$(kcv_of "$STATE/$card.import.log" || true)"; [ -n "$kcv" ] || die "no DKEK KCV from $card"
   printf '%s' "$kcv" > "$STATE/$card.kcv"
   ( umask 077; pin_of "$card" user > "$STATE/$card.pin" )
+  gate "$card" "$s"; bench_reader_gate "$card" "$r" || die "reader $r is not $card's: no PIN presented"
   "$IMPORT" --p12 "$STATE/wallet.p12" --pw-file "$STATE/wallet.p12.pw" --id "$KEY_REF" --label two-site-wallet \
     --dkek "$STATE/$card.pbe" --dkek-pw "$STATE/$card.dkek.pw" --pin-file "$STATE/$card.pin" \
     --reader "$r" --slot "$s" --cert "$STATE/wallet.crt" >>"$LOG" 2>&1 || die "wallet import into $card failed"
+  gate "$card" "$s"
   local pub; pub="$(REGALIA_DRILL_PIN="$(pin_of "$card" user)" pkcs11-tool --module "$MODULE" --slot "$s" \
      --login --pin env:REGALIA_DRILL_PIN --read-object --type pubkey --id "$OBJECT_ID" 2>/dev/null | sha256sum | cut -d' ' -f1)"
   [ "$pub" = "$WALLET_SPKI" ] || die "$card does not expose the wallet key after the import"
@@ -109,6 +122,9 @@ BEFORE="$(counters)"; say "PIN tries before the failover test: $BEFORE"
 # Both drill cards must have a numeric counter, or an unreadable pair would compare equal.
 for s in "$A" "$B"; do [[ "$BEFORE" =~ (^| )$s=[0-9]( |$) ]] || die "no PIN counter read for $s ('$BEFORE')"; done
 say "FAILOVER — TestCosmosSigningFailsOverBetweenTwoCards"
+# The test logs in BY SLOT, with each site's PIN: each slot must hold its site's card right now.
+slot_of "$A"; SLOT_A="$SLOT"; slot_of "$B"; SLOT_B="$SLOT"
+gate "$A" "$SLOT_A"; gate "$B" "$SLOT_B"
 REGALIA_TWOSITE_MODULE="$MODULE" REGALIA_TWOSITE_OBJECT_ID="$OBJECT_ID" \
 REGALIA_TWOSITE_SLOT_A="$(slot "$A")" REGALIA_TWOSITE_PIN_A="$A_USER_PIN" \
 REGALIA_TWOSITE_SLOT_B="$(slot "$B")" REGALIA_TWOSITE_PIN_B="$B_USER_PIN" \

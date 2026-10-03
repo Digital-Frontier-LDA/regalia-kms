@@ -189,6 +189,10 @@ class TpmSigner:
 
 
 EVIDENCE_KEYS = ("ephemeral_public", "nonce", "quote", "signature")
+# Optional beside them (the unlock exchange's version 2): the PCR values the node read beside its quote,
+# {"<index>": "<64 hex>"}. Unauthenticated; attest.Verifier uses them only once they hash to the quoted
+# digest, and only to name the PCR that differs.
+PCR_VALUES = "pcr_values"
 
 
 def reattest(attester, evidence, node_id, session_id, manifest, subject, phase):
@@ -204,16 +208,24 @@ def reattest(attester, evidence, node_id, session_id, manifest, subject, phase):
     requests are told apart by it and by nothing else."""
     require(isinstance(phase, str) and phase in attest.PHASES, "the phase must be one of %s" % ", ".join(attest.PHASES))
     require(isinstance(evidence, dict), "the subject has not re-attested: no lease")
-    membership.exact(evidence, EVIDENCE_KEYS, "attestation evidence")
+    membership.exact(evidence, EVIDENCE_KEYS + ((PCR_VALUES,) if PCR_VALUES in evidence else ()), "attestation evidence")
     for k, limit in (("ephemeral_public", 512), ("nonce", 32), ("quote", 1024), ("signature", 256)):
         require(isinstance(evidence[k], str) and re.fullmatch(r"([0-9a-f]{2}){1,%d}" % limit, evidence[k]) is not None,
                 "evidence.%s must be lowercase hex, at most %d bytes" % (k, limit))
+    values = None
+    if PCR_VALUES in evidence:                     # present means given: a null is refused, not taken for absent
+        values = evidence[PCR_VALUES]
+        require(isinstance(values, dict) and 0 < len(values) <= 24 and all(
+                    isinstance(k, str) and re.fullmatch(r"0|[1-9]|1[0-9]|2[0-3]", k) and isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)
+                    for k, v in values.items()),
+                "evidence.pcr_values must map PCR indices 0-23 to 64 lowercase hex")
     policy = attester.nodes.get(node_id)
     require(policy is not None and policy["ek_name"] == subject["ek_name"],
             "the attestation policy does not pin the manifest's EK for %s" % node_id)
     try:
         verdict = attester.verify(node_id, manifest["epoch"], bytes.fromhex(session_id),
-                                  *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS), phase=phase)
+                                  *(bytes.fromhex(evidence[k]) for k in EVIDENCE_KEYS), phase=phase,
+                                  **({"pcr_values": values} if values is not None else {}))   # absent: the call of before
     except attest.Refused as refusal:
         raise Refused("the subject's attestation is refused: %s" % refusal)
     # The AK the quote was actually verified under, reported from inside the verifier's own lock: an AK
