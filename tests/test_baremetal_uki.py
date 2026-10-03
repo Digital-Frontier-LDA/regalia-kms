@@ -282,9 +282,13 @@ class Arithmetic(unittest.TestCase):
         with self.assertRaises(m.Refused) as caught:
             uki.cmdline_text(b"root=/dev/mapper/root ro quiet\n")
         self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
+        # (each case changes ONE word of a valid line, and the reason is asserted: a line can be refused for
+        # several missing words, and a case must not pass for another word's reason)
+        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1"
         for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
-            with self.subTest(near=near), self.assertRaises(m.Refused):
-                uki.cmdline_text(("root=/dev/mapper/root ro %s" % near).encode())
+            with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
+                uki.cmdline_text(full.replace("systemd.import_credentials=no", near).encode())
+            self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
         # the word present, and a contradicting (or repeated) value beside it: the last one would win
         for extra in ("systemd.import_credentials=yes", "systemd.import_credentials=1", "rd.systemd.import_credentials=yes",
                       "systemd.import_credentials=no", "systemd.import-credentials=yes", "rd.systemd.import-credentials=yes",
@@ -294,17 +298,19 @@ class Arithmetic(unittest.TestCase):
             self.assertIn("gives systemd.import_credentials more than once or with another value or spelling", str(caught.exception))
 
         # the kernel zeroes pages it frees and hands out (#221): each word must be there, exactly, once
-        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1"
         for word in ("init_on_free=1", "init_on_alloc=1"):
             with self.subTest(missing=word), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(full.replace(" " + word, "").encode())
             self.assertIn("does not carry %s" % word, str(caught.exception))
-        for extra in ("init_on_free=0", "init-on-free=0", "init_on_free=1", "init_on_alloc=0", "INIT_ON_ALLOC=0", "init_on_free=y"):
-            with self.subTest(extra=extra), self.assertRaises(m.Refused):
+        for extra, key in (("init_on_free=0", "init_on_free"), ("init-on-free=0", "init_on_free"), ("init_on_free=1", "init_on_free"),
+                           ("init_on_alloc=0", "init_on_alloc"), ("INIT_ON_ALLOC=0", "init_on_alloc"), ("init_on_free=y", "init_on_free")):
+            with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(("%s %s" % (full, extra)).encode())
+            self.assertIn("gives %s more than once or with another value or spelling" % key, str(caught.exception))
         for near in ("init_on_free=on", "init_on_free=y"):
-            with self.subTest(spelling=near), self.assertRaises(m.Refused):
+            with self.subTest(spelling=near), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(full.replace("init_on_free=1", near).encode())
+            self.assertIn("does not carry init_on_free=1", str(caught.exception))
 
         # the forms that turn a shell OFF are what an image should carry (the unlock test boots with them)
         hardened = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=poweroff systemd.debug_shell=0 rd.systemd.debug-shell=off"
