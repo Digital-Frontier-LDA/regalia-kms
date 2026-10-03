@@ -67,6 +67,7 @@ class Units(unittest.TestCase):
         wg_apply = self.service("regalia-wg-apply")
         self.assertNotIn("ReadWritePaths", wg_apply)                                 # it writes nothing but the kernel's state
         self.assertEqual((wg_apply["IPAddressDeny"], wg_apply["TimeoutStartSec"]), ("any", "60"))
+        self.assertEqual((wg_apply["Restart"], wg_apply["RestartSec"]), ("on-failure", "15s"))   # a failed run is retried
         self.assertEqual(unit("regalia-wg-apply.service")["Unit"]["StartLimitIntervalSec"], "0")
         sync = self.service("regalia-sync")
         self.assertEqual((sync["StateDirectory"], sync["SupplementaryGroups"]), ("regalia-sync", "tss"))

@@ -15,7 +15,10 @@ THE TPM is swtpm. Where the kernel has the vTPM proxy it sits behind the kernel'
 host; GitHub's Azure kernel has none, and there it is swtpm's CUSE device, which has NO resource manager:
 one command buffer, no per-connection context, so two processes using it at once could receive each
 other's responses, and sessions survive between processes (on a host the kernel flushes them when a
-connection closes). The test therefore lets one unit at a time use the TPM after the first one, and rests
+connection closes). Part 1 therefore lets one unit at a time use the TPM after the first one. Part 2 needs
+several at once (regalia-sync writes the TPM while the path unit's regalia-wg-apply reads it), and a first
+run without a resource manager showed exactly that collision: so part 2 puts tpm2-abrmd, a resource
+manager like the kernel's, in front of the device and gives the units its TCTI. The test rests
 nothing on a session kept across processes (attest.activate does that: #190; a's AK is enrolled at b by
 hand, as the rest of the provisioning is).
 
@@ -223,7 +226,7 @@ def main():
         return scenario(work, binaries, os.environ["SUDO_USER"])
     finally:
         STOP.append(True)
-        for name in DAEMON_UNITS + tuple(reversed(UNITS)):
+        for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("e2e-tabrmd.service",):
             sh("systemctl", "stop", name, check=False)
         sh("ip", "netns", "del", NS, check=False)
         sh("ip", "link", "del", "e2e-b0", check=False)
@@ -633,6 +636,12 @@ def part2(work, binaries, user, ctx, servers, status):
 
     header("6  peer b: its own namespace and TPM, its tunnel to a from the same manifest")
     sh("systemctl", "stop", "regalia-admission.service")
+    # a resource manager in front of the CUSE device, as the kernel's is on a host (see the docstring)
+    sh("systemd-run", "--unit=e2e-tabrmd", "--collect", "-p", "User=tss", "--", "tpm2-abrmd", "--tcti=device:/dev/tpmrm0")
+    managed = until(lambda: sh("tpm2_getrandom", "-T", "tabrmd:bus_type=system", "--hex", "8", check=False).returncode == 0, 30, 1)
+    ok(managed is True, "tpm2-abrmd serves a's TPM; the units use it from here", journal("e2e-tabrmd.service")[-600:])
+    cfg = dict(cfg, tcti="tabrmd:bus_type=system")
+    pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
     servers[1] = nts_server(work, 2)                     # both time sources again
     again = until(lambda: json.loads(status.read_text())["authenticated"], 120, 2)
     ok(again is True, "the stopped NTS server is back: authenticated again", status.read_text() if status.exists() else "")
@@ -709,7 +718,8 @@ def part2(work, binaries, user, ctx, servers, status):
               nodes=[dict(n, state="REVOKED_STOLEN") if n["node_id"] == "a" else n for n in m2["nodes"]])
     store.commit(signed(m3, hbt.REVOKE, "revocation"))
     freshness.accept(hbt.beat(m3, 3, issued=int(time.time())), m3)
-    end = admitted_doc.get("serve_until_boottime_ms", 0)
+    # from here b refuses: the lease a holds NOW (it may have been renewed since section 8) is its last
+    end = json.loads(pathlib.Path("/run/regalia/admission.json").read_text())["serve_until_boottime_ms"]
     seen = []
 
     def lapsed():
