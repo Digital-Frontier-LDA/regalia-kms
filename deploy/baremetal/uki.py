@@ -9,8 +9,11 @@ record of what it will measure, and signed in a separate step by keys that are o
     python3 -Es -m deploy.baremetal.uki verify  --image IMAGE --record RECORD --initrd-pub P --system-pub P --secure-boot-cert C
     python3 -Es -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
                                             --esp ROOT [--credentials-record OUT]
-    python3 -Es -m deploy.baremetal.uki initrd-review --initrd INITRD          (the review build records, #198)
-    python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD       (the allowlist lines it would need)
+    python3 -Es -m deploy.baremetal.uki initrd-review --initrd INITRD [--initrd-inventory FILE]   (the review build records, #198)
+    python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD [--root /]                (its inventory, to read in a PR)
+
+    build, sign and verify take --initrd-inventory FILE (default deploy/baremetal/initrd/initrd-inventory.txt);
+    build also takes --unlock-client FILE, the client the build compiled, which the image's must be
 
     INPUTS: --linux VMLINUZ --initrd INITRD [--microcode FILE] --cmdline FILE --os-release FILE
             --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub
@@ -281,32 +284,35 @@ def cmdline_text(raw):
 # has booted nothing on it shows what they were (#135). So they are read HERE, from the exact bytes that are
 # measured, and the result goes into the record; `sign` refuses an image whose initrd did not pass.
 #
-# AN ALLOWLIST, NOT A LIST OF WHAT IS BAD. Everything systemd and udev read in the initrd to decide what
-# runs (units, drop-ins, .wants/.requires links, generators, environment generators, udev rules, the
-# manager's own configuration), in every directory they read it from, must be on the list:
-#   OURS        the unlock client's units, its enable links and the module's two drop-ins, pinned to this
-#               repository's bytes (or link target)
-#   the list    deploy/baremetal/initrd/initrd-allowlist.txt: the distribution's files, taken from the
-#               reviewed dracut build (`uki initrd-inventory`); a path alone, a path and its sha256, or a
-#               link and its target. A file that is not on it is refused, whatever it says.
-# A drop-in that applies to a unit of the unlock path (our units, systemd-cryptsetup@, cryptsetup.target,
-# sockets.target, the initrd targets: per unit, every dash prefix, the template, the type-wide service.d,
-# socket.d, target.d) must be pinned by content: ours, or on the list WITH its sha256. So an ExecStart=
-# override anywhere systemd would read it is refused by its bytes, not looked for by its words.
-# Links are followed inside the archive only (a name is taken under "/", so ".." cannot leave it); a loop,
-# or a link whose target is not in the image (other than a mask, /dev/null), is a finding.
-# And beside the list (KERNEL-UPDATE.md step 2.2a):
+# TWO LAYERS (#198; decided by regalia-kms-24 after d9's reads).
+# 1. THE RULES, so that a refusal says why (KERNEL-UPDATE.md step 2.2a):
 #   crypttab    etc/crypttab holds exactly the one generic line of the dracut module
 #   cmdline.d   no fragment (etc/cmdline.d/*.conf, etc/cmdline) holds a word of the command line's refusal list
-#   the client  /usr/bin/regalia-unlock is there; the boot mesh script is this repository's
-#   paths       the unlock units and every script they run name no path outside the image: what they
-#               source, execute or read is in the initrd, a runtime or kernel directory, or a credential
-#               the stub unpacked from the ESP by its fixed name (/.extra/global_credentials/NAME.cred)
-# What it does NOT judge: the content of the distribution's files the list names by path alone (dracut's
-# hooks, systemd's own units), which come from the build machine's packages. A review catches what it names.
-INITRD_REVIEW = "regalia.initrd-review/v2"
+#   our files   the unlock client's units, enable links, the module's drop-ins and the boot mesh script are this
+#               repository's; the client binary is there (and is the one the build compiled, when it is given)
+#   the path    no copy of our units elsewhere in systemd's search path, and no drop-in that applies to a unit
+#               of the unlock path (per unit, every dash prefix, the template, the type-wide service.d,
+#               socket.d, target.d, cryptsetup, sockets.target, the initrd targets) other than the module's
+#   instructions  modprobe.d runs no install/remove command, sysctl.d pipes no core_pattern, tmpfiles.d
+#               touches nothing at the unlock client's paths
+#   outside     the unlock units and every script they run name no path outside the image: what they source,
+#               execute or read is in the initrd, a runtime or kernel directory (/run, /proc, /sys, /dev,
+#               /tmp), or a credential the stub unpacked from the ESP by its fixed name
+#   links       a link that loops, or leads to nothing the image holds (other than a mask, /dev/null), in the
+#               directories systemd, udev and dracut read
+# 2. THE WHOLE IMAGE, PINNED. deploy/baremetal/initrd/initrd-inventory.txt lists EVERY entry of the unpacked
+#   initrd (every cpio segment, the early microcode one included): its type, mode, owner, and its sha256 or
+#   link target. Any entry added, removed or changed is refused, with a diff naming it. The initrd is built
+#   once, on one machine (dracut is not reproducible), so this is the only check on what it holds; whatever
+#   directory the next dodge uses is covered without anyone having thought of it. The list says where each
+#   entry comes from, for whoever reads its diff: "ours" (this repository), "generated" (written by dracut:
+#   the lines a reviewer reads), "package" (with the Debian package and version that owns it, from the
+#   build machine's dpkg database). `uki initrd-inventory` writes it from a build; a dracut or distribution
+#   update is a pull request whose diff is read. (Checking every "package" file against the archive-signed
+#   .deb is a follow-up, required before the first production image.)
+INITRD_REVIEW = "regalia.initrd-review/v4"
 INITRD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initrd")
-ALLOWLIST = os.path.join(INITRD_DIR, "initrd-allowlist.txt")
+INVENTORY = os.path.join(INITRD_DIR, "initrd-inventory.txt")
 UNIT_DIR = "usr/lib/systemd/system"
 UNLOCK_UNITS = ("regalia-unlock-relay.service", "regalia-unlock-core.socket", "regalia-unlock.service", "regalia-wg-boot.service")
 UNLOCK_SCRIPTS = {"usr/lib/regalia/wg-boot": "wg-boot"}
@@ -330,9 +336,18 @@ SEARCH_DIRS = (
     "etc/systemd/system-environment-generators", "run/systemd/system-environment-generators",
     "usr/local/lib/systemd/system-environment-generators", "usr/lib/systemd/system-environment-generators",
     "etc/udev/rules.d", "run/udev/rules.d", "usr/local/lib/udev/rules.d", "usr/lib/udev/rules.d",
-    "etc/systemd/system.conf.d", "run/systemd/system.conf.d", "usr/local/lib/systemd/system.conf.d", "usr/lib/systemd/system.conf.d")
-SEARCH_FILES = ("etc/systemd/system.conf",)
-GENERATOR_DIRS = tuple(d for d in SEARCH_DIRS if d.endswith("generators"))
+    "etc/systemd/system.conf.d", "run/systemd/system.conf.d", "usr/local/lib/systemd/system.conf.d", "usr/lib/systemd/system.conf.d",
+    # dracut's hooks, which its services run as root before the root mount (hookdir: /usr/lib/dracut/hooks,
+    # /var/lib/dracut/hooks in dracut-ng), its configuration and the shell's profile
+    "usr/lib/dracut/hooks", "var/lib/dracut/hooks", "etc/conf.d", "etc/profile.d",
+    # what else the initrd takes instructions from: module options and install commands, sysctls (a piped
+    # core_pattern runs a program), tmpfiles (links and files at the socket's path), modules to load
+    "etc/modprobe.d", "run/modprobe.d", "usr/local/lib/modprobe.d", "usr/lib/modprobe.d",
+    "etc/sysctl.d", "run/sysctl.d", "usr/local/lib/sysctl.d", "usr/lib/sysctl.d",
+    "etc/tmpfiles.d", "run/tmpfiles.d", "usr/local/lib/tmpfiles.d", "usr/lib/tmpfiles.d",
+    "etc/modules-load.d", "run/modules-load.d", "usr/local/lib/modules-load.d", "usr/lib/modules-load.d")
+SEARCH_FILES = ("etc/systemd/system.conf", "etc/profile", "etc/modprobe.conf", "etc/sysctl.conf", "etc/udev/udev.conf")
+UNIT_SEARCH_DIRS = SEARCH_DIRS[:12]
 # the units whose drop-ins must be pinned by content
 CRITICAL = re.compile(r"(regalia-.*|systemd-cryptsetup@.*\.service|cryptsetup(-pre)?\.target|sockets\.target|initrd.*\.target)")
 RUNTIME_PREFIXES = ("/run", "/proc", "/sys", "/dev", "/tmp")
@@ -356,14 +371,14 @@ def stat_dir(mode):
 
 
 def _cpio(data, pos, files):
-    """Reads ONE newc archive at `pos` into `files` ({path: (mode, bytes)}, a link's bytes its target); returns
+    """Reads ONE newc archive at `pos` into `files` ({path: (mode, bytes, uid, gid, "rdev")}, a link's bytes its target); returns
     where it ends. Hard links carry their data on the last name (newc). A name is taken under "/", normalised."""
     links = {}
     while True:
         head = data[pos:pos + 110]
         require(len(head) == 110 and head[:6] in (b"070701", b"070702"), "a cpio archive in the initrd is cut short or not newc")
         try:
-            ino, mode, _, _, nlink, _, size, major, minor, _, _, namesize, _ = (int(head[i:i + 8], 16) for i in range(6, 110, 8))
+            ino, mode, uid, gid, nlink, _, size, major, minor, rmajor, rminor, namesize, _ = (int(head[i:i + 8], 16) for i in range(6, 110, 8))
         except ValueError:
             raise Refused("a cpio header in the initrd is not hexadecimal")
         name_end = pos + 110 + namesize
@@ -382,9 +397,9 @@ def _cpio(data, pos, files):
             group.append(path)
             if size:
                 for other in group:
-                    files[other] = (mode, body)
+                    files[other] = (mode, body, uid, gid, "%d:%d" % (rmajor, rminor))
                 continue
-        files[path] = (mode, body)
+        files[path] = (mode, body, uid, gid, "%d:%d" % (rmajor, rminor))
         require(len(files) <= MAX_INITRD_FILES, "the initrd holds more than %d files" % MAX_INITRD_FILES)
 
 
@@ -464,7 +479,7 @@ def _directories(files):
     cached = getattr(files, "_dirs", None)
     if cached is None or len(files) != getattr(files, "_dirs_for", -1):
         cached = set()
-        for path, (mode, _) in files.items():
+        for path, (mode, *_) in files.items():
             if stat_dir(mode):
                 cached.add(path)
             parent = os.path.dirname(path)
@@ -484,86 +499,6 @@ def _regular(files, path):
     where = _resolve(files, path)
     entry = files.get(where) if where else None
     return entry[1] if entry is not None and stat_regular(entry[0]) else None
-
-
-def inventory(files):
-    """What systemd and udev would read, as {logical path: ("file", sha256) | ("link", target) | ("dir", None)},
-    walking every search directory through the links that lead to it."""
-    children = {}
-    for path in set(files) | _directories(files):
-        children.setdefault(os.path.dirname(path), set()).add(os.path.basename(path))
-    found, findings, walked = {}, [], set()
-
-    def walk(logical, real, depth):
-        if real in walked or depth > 8:
-            return
-        walked.add(real)
-        for name in sorted(children.get(real, ())):
-            here, entry = logical + "/" + name, files.get(real + "/" + name, (0o040000, b""))   # implied: a directory
-            if stat_dir(entry[0]):
-                walk(here, real + "/" + name, depth + 1)
-            elif stat_link(entry[0]):
-                target = entry[1].decode("utf-8", "replace")
-                found[here] = ("link", target)
-                try:
-                    resolved = _resolve(files, real + "/" + name)
-                except Refused:
-                    findings.append("%s: a link loop" % here)
-                    continue
-                if resolved is None and target != "/dev/null":
-                    findings.append("%s: a link to %s, which is not in the image" % (here, target))
-                elif resolved is not None and stat_dir(files.get(resolved, (0o040000, b""))[0]) and resolved not in walked:
-                    walk(here, resolved, depth + 1)
-            elif stat_regular(entry[0]):
-                found[here] = ("file", sha256(entry[1]))
-            else:
-                findings.append("%s: neither a file, a link nor a directory" % here)
-    for logical in SEARCH_DIRS:
-        try:
-            real = _resolve(files, logical)
-        except Refused:
-            findings.append("%s: a link loop" % logical)
-            continue
-        if real is not None:
-            if real != logical:
-                found[logical] = ("link", os.path.relpath("/" + real, "/" + os.path.dirname(logical)))
-            walk(logical, real, 0)
-    for logical in SEARCH_FILES:
-        if logical in files:
-            entry = files[logical]
-            found[logical] = ("file", sha256(entry[1])) if stat_regular(entry[0]) else ("link", entry[1].decode("utf-8", "replace"))
-    return found, findings
-
-
-def load_allowlist(path=ALLOWLIST):
-    """{path: None | ("file", sha256) | ("link", target)} from the list's lines: PATH, PATH sha256:HEX, PATH -> TARGET."""
-    listed = {}
-    with open(path) as f:
-        for number, line in enumerate(f, 1):
-            line = line.split("#", 1)[0].strip()
-            if not line:
-                continue
-            words = line.split()
-            if len(words) == 1:
-                listed[words[0]] = None
-            elif len(words) == 2 and words[1].startswith("sha256:") and attest.is_hex(words[1][7:], 64):
-                listed[words[0]] = ("file", words[1][7:])
-            elif len(words) == 3 and words[1] == "->":
-                listed[words[0]] = ("link", words[2])
-            else:
-                raise Refused("%s:%d is not PATH, PATH sha256:HEX or PATH -> TARGET" % (path, number))
-    return listed
-
-
-def ours():
-    """Our pinned files: {logical path: ("file", sha256) | ("link", target)}."""
-    pinned = {}
-    for name in UNLOCK_UNITS:
-        with open(os.path.join(INITRD_DIR, name), "rb") as f:
-            pinned[UNIT_DIR + "/" + name] = ("file", sha256(f.read()))
-    pinned.update({link: ("link", target) for link, target in UNLOCK_ENABLED.items()})
-    pinned[RELAY_DROPIN[0]] = ("file", sha256(RELAY_DROPIN[1]))
-    return pinned
 
 
 def _critical_dropin(path):
@@ -630,14 +565,181 @@ def _scan_script(files, path, findings, seen):
                 findings.append("%s:%d names %s, which is not in the image" % (path, number, token))
 
 
-def review_initrd(path, run=subprocess.run, tools=TOOLS):
+def walk_search(files):
+    """What systemd, udev and dracut would read, as {logical path: ("file", sha256) | ("link", target)},
+    walking every search directory through the links that lead to it; and the link findings."""
+    children = {}
+    for path in set(files) | _directories(files):
+        children.setdefault(os.path.dirname(path), set()).add(os.path.basename(path))
+    found, findings, walked = {}, [], set()
+
+    def walk(logical, real, depth):
+        if real in walked or depth > 8:
+            return
+        walked.add(real)
+        for name in sorted(children.get(real, ())):
+            here, entry = logical + "/" + name, files.get(real + "/" + name, (0o040000, b""))   # implied: a directory
+            if stat_dir(entry[0]):
+                walk(here, real + "/" + name, depth + 1)
+            elif stat_link(entry[0]):
+                target = entry[1].decode("utf-8", "replace")
+                found[here] = ("link", target)
+                try:
+                    resolved = _resolve(files, real + "/" + name)
+                except Refused:
+                    findings.append("%s: a link loop" % here)
+                    continue
+                if resolved is None and target != "/dev/null":
+                    findings.append("%s: a link to %s, which is not in the image" % (here, target))
+                elif resolved is not None and stat_dir(files.get(resolved, (0o040000, b""))[0]) and resolved not in walked:
+                    walk(here, resolved, depth + 1)
+            elif stat_regular(entry[0]):
+                found[here] = ("file", sha256(entry[1]))
+    for logical in SEARCH_DIRS:
+        try:
+            real = _resolve(files, logical)
+        except Refused:
+            findings.append("%s: a link loop" % logical)
+            continue
+        if real is not None:
+            walk(logical, real, 0)
+    for logical in SEARCH_FILES:
+        if logical in files and stat_regular(files[logical][0]):
+            found[logical] = ("file", sha256(files[logical][1]))
+    return found, findings
+
+
+def entries(files):
+    """Every entry of the unpacked image, as the inventory states it: {path: "TYPE MODE UID:GID VALUE"}, VALUE
+    the sha256 of a regular file, a link's target, a device's numbers, "-" otherwise."""
+    kinds = {0o100000: "f", 0o120000: "l", 0o040000: "d", 0o020000: "c", 0o060000: "b", 0o010000: "p", 0o140000: "s"}
+    out = {}
+    for path, (mode, body, uid, gid, rdev) in files.items():
+        kind = kinds.get(mode & 0o170000, "?")
+        value = sha256(body) if kind == "f" else _escape(body.decode("utf-8", "replace")) if kind == "l" else rdev if kind in "cb" else "-"
+        out[_escape(path)] = "%s %04o %d:%d %s" % (kind, mode & 0o7777, uid, gid, value)
+    return out
+
+
+def _escape(text):
+    """A path or link target as one word: whitespace, backslash and anything unprintable as \\ooo."""
+    return "".join(c if "!" <= c <= "~" and c != "\\" else "".join("\\%03o" % b for b in c.encode("utf-8")) for c in text)
+
+
+def load_inventory(path=INVENTORY):
+    """{path: "TYPE MODE UID:GID VALUE"} from the inventory's lines: CLASS ORIGIN TYPE MODE UID:GID PATH VALUE. CLASS
+    and ORIGIN are for its reader; what is compared is the rest."""
+    pinned = {}
+    with open(path) as f:
+        for number, line in enumerate(f, 1):
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            words = line.split(" ")
+            require(len(words) == 7 and words[0] in ("ours", "generated", "package", "unclassified")
+                    and re.fullmatch(r"[fldcbps?] [0-7]{4} \d+:\d+", " ".join(words[2:5])) is not None,
+                    "%s:%d is not CLASS ORIGIN TYPE MODE UID:GID PATH VALUE" % (path, number))
+            require(words[5] not in pinned, "%s:%d names %s twice" % (path, number, words[5]))
+            pinned[words[5]] = " ".join(words[2:5] + words[6:])
+    return pinned
+
+
+def _owners(root):
+    """{path in the image: "package=version"} from the dpkg database under `root` (the machine the initrd was
+    built on), for the inventory's ORIGIN column. A merged-/usr path is also looked up without its "usr/"."""
+    versions, status = {}, os.path.join(root, "var/lib/dpkg/status")
+    if os.path.exists(status):
+        with open(status, encoding="utf-8", errors="replace") as f:
+            for block in f.read().split("\n\n"):
+                fields = dict(l.split(": ", 1) for l in block.splitlines() if ": " in l and not l.startswith(" "))
+                if fields.get("Package") and fields.get("Version") and "installed" in fields.get("Status", ""):
+                    versions[fields["Package"]] = fields["Version"]
+    owners, info = {}, os.path.join(root, "var/lib/dpkg/info")
+    for name in sorted(os.listdir(info)) if os.path.isdir(info) else ():
+        if name.endswith(".list"):
+            package = name[:-5].split(":")[0]
+            with open(os.path.join(info, name), encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    owners.setdefault(line.strip().lstrip("/"), "%s=%s" % (package, versions.get(package, "?")))
+    return owners
+
+
+def ours():
+    """Our pinned files: {path: ("file", sha256) | ("link", target)}."""
+    pinned = {}
+    for name in UNLOCK_UNITS:
+        with open(os.path.join(INITRD_DIR, name), "rb") as f:
+            pinned[UNIT_DIR + "/" + name] = ("file", sha256(f.read()))
+    for path, name in UNLOCK_SCRIPTS.items():
+        with open(os.path.join(INITRD_DIR, name), "rb") as f:
+            pinned[path] = ("file", sha256(f.read()))
+    pinned.update({link: ("link", target) for link, target in UNLOCK_ENABLED.items()})
+    pinned[RELAY_DROPIN[0]] = ("file", sha256(RELAY_DROPIN[1]))
+    return pinned
+
+
+def _ours_path(path, files):
+    """Whether an entry of the image is this repository's (for the inventory's CLASS column)."""
+    if path in ours() or path in UNLOCK_BINARIES or path == "etc/crypttab":
+        return True
+    entry = files.get(path)
+    return os.path.basename(path) == RESET_DROPIN[0] and entry is not None and entry[1] == RESET_DROPIN[1]
+
+
+def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
+    """The inventory of an initrd (`uki initrd-inventory`): every entry, classed "ours", "generated" (no package
+    owns it on the build machine) or "package" (with its owner), sorted so the generated lines read together.
+    Without `root` (the build machine's root, for its dpkg database) nothing is classed but ours."""
+    files = _Files(initrd_files(data, run, tools))
+    owners = _owners(root) if root else None
+    rows = []
+    for path, state in entries(files).items():
+        raw = path
+        if _ours_path(raw, files):
+            cls, origin = "ours", "regalia-kms"
+        elif owners is None:
+            cls, origin = "unclassified", "-"
+        else:
+            owner = owners.get(raw) or (owners.get(raw[4:]) if raw.startswith("usr/") else None)
+            cls, origin = ("package", owner) if owner else ("generated", "dracut")
+        kind, mode, owner_ids, value = state.split(" ")
+        rows.append(({"ours": 0, "generated": 1, "unclassified": 1, "package": 2}[cls], path,
+                     " ".join((cls, origin, kind, mode, owner_ids, path, value))))
+    return [line for _, _, line in sorted(rows)]
+
+
+def _instructions(files, findings):
+    """The places the initrd takes instructions from, read for what would run something or move the socket."""
+    def lines(path):
+        body = _regular(files, path) or b""
+        return [l.strip() for l in body.decode("utf-8", "replace").splitlines() if l.strip() and not l.lstrip().startswith(("#", ";"))]
+    for path in sorted(files):
+        directory = os.path.dirname(path)
+        if directory.endswith("modprobe.d") and path.endswith(".conf") or path == "etc/modprobe.conf":
+            for line in lines(path):
+                if line.split()[0] in ("install", "remove"):
+                    findings.append("%s: %r runs a command when a module loads or unloads" % (path, line))
+        elif directory.endswith("sysctl.d") and path.endswith(".conf") or path == "etc/sysctl.conf":
+            for line in lines(path):
+                key, _, value = line.partition("=")
+                if key.strip().replace("/", ".").lstrip("-") == "kernel.core_pattern" and value.strip().startswith("|"):
+                    findings.append("%s: a core_pattern that pipes to a program (%s)" % (path, value.strip()))
+        elif directory.endswith("tmpfiles.d") and path.endswith(".conf"):
+            for line in lines(path):
+                words = line.split()
+                if len(words) > 1 and words[1].startswith(("/run/regalia-unlock", "/run/regalia")):
+                    findings.append("%s: %r acts at the unlock client's paths" % (path, line))
+
+
+def review_initrd(path, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None):
     """The review of the initrd at `path` (see above)."""
-    return review_initrd_data(read(path), run, tools)
+    return review_initrd_data(read(path), run, tools, inventory, client_sha256)
 
 
-def review_initrd_data(data, run=subprocess.run, tools=TOOLS, allowlist=ALLOWLIST):
-    """The same review, of an initrd's bytes (an image's .initrd section)."""
-    empty = {"schema": INITRD_REVIEW, "passed": False, "findings": [], "crypttab": None, "units": {}, "generators": {}, "inventory_sha256": None}
+def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None):
+    """The same review, of an initrd's bytes (an image's .initrd section). `client_sha256`: the unlock client
+    the build compiled, when it is given."""
+    empty = {"schema": INITRD_REVIEW, "passed": False, "findings": [], "crypttab": None, "units": {}, "clients": {}, "inventory_sha256": None}
     try:
         files = _Files(initrd_files(data, run, tools))
     except Refused as refused:
@@ -646,6 +748,7 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, allowlist=ALLOWLIS
 
     def lines(text):
         return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    # ---- layer 1: the rules ----
     with open(os.path.join(INITRD_DIR, "dracut", "90regalia-unlock", "crypttab")) as f:
         want = lines(f.read())
     try:
@@ -656,7 +759,6 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, allowlist=ALLOWLIS
     if got != want:
         findings.append("etc/crypttab must hold exactly the unlock client's line (%s); it holds %s"
                         % (want[0] if want else "?", "nothing" if got is None else (" | ".join(got) or "no line")))
-    # the command-line fragments, through any link to their directory
     fragments = []
     try:
         real = _resolve(files, "etc/cmdline.d")
@@ -671,81 +773,67 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, allowlist=ALLOWLIS
                 continue
             if any(re.fullmatch(p, word) for p in CMDLINE_REFUSED):
                 findings.append("%s holds %r: the initrd's command line must not say how the disk is opened" % (fragment, word))
-    # everything systemd and udev read: ours, pinned, or on the list
-    found, walk_findings = inventory(files)
+    pinned = ours()
+    found, walk_findings = walk_search(files)
     findings += walk_findings
-    pinned, listed = ours(), load_allowlist(allowlist)
-    for path, (kind, value) in sorted(found.items()):
-        if path in pinned:
-            if pinned[path] != (kind, value):
-                findings.append("%s is not this repository's (%s)" % (path, "a link to %s" % value if kind == "link" else "other bytes"))
-            continue
-        if os.path.basename(path) == RESET_DROPIN[0] and kind == "file":
-            unit = os.path.basename(os.path.dirname(path))[:-2]
-            if value != sha256(RESET_DROPIN[1]):
-                findings.append("%s is not the module's credential reset" % path)
-            # systemd-cryptsetup@.service is not a file of the image: its generator writes the units at boot,
-            # and the module resets it by name (module-setup.sh)
-            elif unit != "systemd-cryptsetup@.service" and not any(d + "/" + unit in found for d in SEARCH_DIRS):
-                findings.append("%s resets a unit the image does not hold" % path)
-            continue
-        if path not in listed:
-            findings.append("%s is not on the initrd's allowlist (%s)" % (path, "a link to %s" % value if kind == "link" else "a file"))
-        elif listed[path] is not None and listed[path] != (kind, value):
-            findings.append("%s is on the allowlist with other %s" % (path, "bytes" if kind == "file" else "target"))
-        elif _critical_dropin(path) and listed[path] is None:
-            findings.append("%s applies to the unlock path, and the allowlist names it without its sha256" % path)
-    for path in pinned:
-        if path not in found:
+    for path, want_state in sorted(pinned.items()):
+        entry = files.get(path)
+        have = None if entry is None else ("file", sha256(entry[1])) if stat_regular(entry[0]) else \
+            ("link", entry[1].decode("utf-8", "replace")) if stat_link(entry[0]) else ("other", None)
+        if have is None:
             findings.append("%s is not in the image" % path)
-    # the client, the script, and the paths the unlock units name
-    for path, name in UNLOCK_SCRIPTS.items():
-        with open(os.path.join(INITRD_DIR, name), "rb") as f:
-            if _regular(files, path) != f.read():
-                findings.append("%s is not this repository's %s" % (path, name))
+        elif have != want_state:
+            findings.append("%s is not this repository's (%s)" % (path, "a link to %s" % have[1] if have[0] == "link" else "other bytes"))
+    for path, (kind, value) in sorted(found.items()):
+        name = os.path.basename(path)
+        if name in UNLOCK_UNITS and path != UNIT_DIR + "/" + name and path not in pinned:      # (our enable links are pinned)
+            findings.append("%s: a copy of the unlock client's unit outside %s, where systemd would read it" % (path, UNIT_DIR))
+        if any(path.startswith(d + "/") for d in UNIT_SEARCH_DIRS) and _critical_dropin(path) and path not in pinned:
+            if not (name == RESET_DROPIN[0] and kind == "file" and value == sha256(RESET_DROPIN[1])):
+                findings.append("%s: a drop-in of the unlock path that is not the module's" % path)
+        if name == RESET_DROPIN[0] and kind == "file" and value != sha256(RESET_DROPIN[1]):
+            findings.append("%s is not the module's credential reset" % path)
+    _instructions(files, findings)
+    clients = {}
     for path in UNLOCK_BINARIES:
-        if _regular(files, path) is None:
+        body = _regular(files, path)
+        if body is None:
             findings.append("%s, the unlock client, is not in the image" % path)
+            continue
+        clients[path] = sha256(body)
+        if client_sha256 is not None and clients[path] != client_sha256:
+            findings.append("%s is not the client this build compiled (%s, not %s)" % (path, clients[path], client_sha256))
     units, scripts, seen = {}, set(), set()
     for name in UNLOCK_UNITS:
         body = _regular(files, UNIT_DIR + "/" + name)
         if body is not None and sha256(body) == pinned[UNIT_DIR + "/" + name][1]:
             units[name] = sha256(body)
             _scan_unit(files, UNIT_DIR + "/" + name, body.decode("utf-8", "replace"), findings, scripts)
-    # the drop-ins that apply to the unlock path (pinned by content, ours or listed) are read the same way
-    for path, (kind, _) in sorted(found.items()):
-        if kind == "file" and _critical_dropin(path):
-            _scan_unit(files, path, (_regular(files, path) or b"").decode("utf-8", "replace"), findings, scripts)
     for script in sorted(scripts):
         _scan_script(files, script, findings, seen)
-    generators = {p: v for p, (k, v) in found.items() if k == "file" and any(p.startswith(d + "/") for d in GENERATOR_DIRS)}
-    lines_ = "".join("%s %s %s\n" % (p, k, v) for p, (k, v) in sorted(found.items()))
-    return {"schema": INITRD_REVIEW, "passed": not findings, "findings": sorted(set(findings))[:64],
-            "crypttab": got[0] if got and len(got) == 1 else None, "units": units, "generators": generators,
-            "inventory_sha256": sha256(lines_.encode())}
-
-
-def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS):
-    """The allowlist lines an initrd would need (`uki initrd-inventory`): every file systemd and udev read
-    that is not ours, a drop-in of the unlock path with its sha256, a link with its target."""
-    files = _Files(initrd_files(data, run, tools))
-    found, _ = inventory(files)
-    pinned, out = ours(), []
-    for path, (kind, value) in sorted(found.items()):
-        if path in pinned or os.path.basename(path) == RESET_DROPIN[0]:
-            continue
-        if kind == "link":
-            out.append("%s -> %s" % (path, value))
-        elif _critical_dropin(path):
-            out.append("%s sha256:%s" % (path, value))
-        else:
-            out.append(path)
-    return out
+    # ---- layer 2: every entry, pinned ----
+    state = entries(files)
+    try:
+        expected = load_inventory(inventory or INVENTORY)
+    except (OSError, Refused) as error:
+        expected, findings = None, findings + ["the inventory cannot be read: %s" % error]
+    if expected is not None:
+        for path in sorted(set(state) | set(expected)):
+            if path not in expected:
+                findings.append("inventory: + %s %s (not in the inventory)" % (path, state[path]))
+            elif path not in state:
+                findings.append("inventory: - %s %s (in the inventory, not in the image)" % (path, expected[path]))
+            elif state[path] != expected[path]:
+                findings.append("inventory: ~ %s %s, the inventory says %s" % (path, state[path], expected[path]))
+    canonical = "".join("%s %s\n" % (p, state[p]) for p in sorted(state))
+    return {"schema": INITRD_REVIEW, "passed": not findings, "findings": sorted(set(findings))[:200],
+            "crypttab": got[0] if got and len(got) == 1 else None, "units": units, "clients": clients,
+            "inventory_sha256": sha256(canonical.encode())}
 
 
 def check_review(review):
     """A record's initrd review, checked for shape: the fields, and passed only with no finding."""
-    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units", "generators", "inventory_sha256"), "record.initrd_review")
+    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units", "clients", "inventory_sha256"), "record.initrd_review")
     require(review["schema"] == INITRD_REVIEW, "record.initrd_review is not a %s" % INITRD_REVIEW)
     require(isinstance(review["passed"], bool) and isinstance(review["findings"], list)
             and all(isinstance(f, str) for f in review["findings"]) and review["passed"] == (not review["findings"]),
@@ -753,8 +841,8 @@ def check_review(review):
     require(review["crypttab"] is None or isinstance(review["crypttab"], str), "record.initrd_review.crypttab is not text")
     require(isinstance(review["units"], dict) and set(review["units"]) <= set(UNLOCK_UNITS)
             and all(attest.is_hex(v, 64) for v in review["units"].values()), "record.initrd_review.units is not a map of the unlock units")
-    require(isinstance(review["generators"], dict) and all(isinstance(k, str) and attest.is_hex(v, 64) for k, v in review["generators"].items()),
-            "record.initrd_review.generators is not a map of paths to sha256")
+    require(isinstance(review["clients"], dict) and set(review["clients"]) <= set(UNLOCK_BINARIES)
+            and all(attest.is_hex(v, 64) for v in review["clients"].values()), "record.initrd_review.clients is not a map of the client binaries")
     require(review["inventory_sha256"] is None or attest.is_hex(review["inventory_sha256"], 64), "record.initrd_review.inventory_sha256 is not a sha256")
 
 INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey")
@@ -842,7 +930,7 @@ def _uname(uname):
     return uname
 
 
-def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS):
+def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS, inventory=None, unlock_client=None):
     """Builds NAME.unsigned.efi and NAME.record.json in `out_dir`; returns the record."""
     _name(name), _uname(uname)
     fingerprint, _ = public_key(read(inputs["pcrpkey"], 65536), "--pcrpkey", run, tools)
@@ -857,7 +945,8 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS):
         require(".pcrsig" not in dict(sections(data)), "an unsigned image must have no .pcrsig section")
         _check_sections(parts, inputs, uname)
         values, _ = _predict(parts, run, tools, work)
-        review = review_initrd(inputs["initrd"], run, tools)          # the staged copy: the bytes just measured
+        # the staged copy: the bytes just measured
+        review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None)
         record = {
             "schema": SCHEMA, "name": name, "uname": uname,
             "inputs": {k: {"sha256": sha256(read(inputs[k])), "size": os.path.getsize(inputs[k])} for k in INPUTS if inputs.get(k)},
@@ -891,7 +980,7 @@ RECORD_KEYS = ("schema", "name", "uname", "inputs", "sections", "unsigned_sha256
 def load_record(raw, signed=None):
     """A build record, checked. `signed`: True requires the signing part, False refuses it, None takes either."""
     try:
-        record = membership.load(raw, limit=64 * 1024)
+        record = membership.load(raw, limit=1024 * 1024)
     except RecursionError:
         raise Refused("not a build record: nested too deeply")
     require(isinstance(record, dict), "a build record is one JSON object")
@@ -994,7 +1083,7 @@ def _key_argument(value, source, what):
     return value
 
 
-def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS, second_record=None, report=None):
+def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS, second_record=None, report=None, inventory=None):
     """Signs the image `record` describes, rebuilt from `inputs`. `second_record` is the same image's record
     from another builder, and must be identical. `keys`: {"initrd" | "system" | "secure_boot": (key file
     or PKCS#11 URI, certificate file)}. Writes NAME.efi and NAME.signed.json."""
@@ -1029,7 +1118,9 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         for key, entry in record["inputs"].items():               # the copies, not the originals, are what is built
             require(sha256(read(inputs[key])) == entry["sha256"], "the input --%s changed while it was copied" % key.replace("_", "-"))
         # the review again, here, on the copy that is about to be built and signed: not taken on the record's word
-        require(review_initrd(inputs["initrd"], run, tools) == record["initrd_review"],
+        mine = review_initrd(inputs["initrd"], run, tools, inventory)
+        # (the build may also have compared the client with the one it compiled: that finding-free fact is the record's)
+        require(dict(mine, clients=record["initrd_review"]["clients"]) == record["initrd_review"] and mine["clients"] == record["initrd_review"]["clients"],
                 "this machine's review of the initrd is not the record's: nothing is signed")
         # the third build: this machine must get the bytes the record names before it signs anything
         data = _ukify(inputs, uname, os.path.join(work, "unsigned.efi"), run, tools)
@@ -1076,7 +1167,7 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
     return result
 
 
-def verify(image, record, public_keys, secure_boot_cert, run=subprocess.run, tools=TOOLS):
+def verify(image, record, public_keys, secure_boot_cert, run=subprocess.run, tools=TOOLS, inventory=None):
     """`image` is the signed image `record` (a signed record) describes. `public_keys`: {phase: PEM} of the
     two PCR keys; their fingerprints must be the record's. `secure_boot_cert` is required: the stub's code
     is not in PCR 11, and the Secure Boot signature is what covers it. Returns the record's PCR 11 values."""
@@ -1101,7 +1192,7 @@ def verify(image, record, public_keys, secure_boot_cert, run=subprocess.run, too
     _run(run, [tools["sbverify"], "--cert", secure_boot_cert, image], "checking the Secure Boot signature")
     # and the initrd it carries reviewed again, here, on the operator's machine (#198): the signatures say
     # the reviewed record was signed, this says the bytes still pass the same rules
-    require(record["initrd_review"]["passed"] and review_initrd_data(parts["initrd"], run, tools) == record["initrd_review"],
+    require(record["initrd_review"]["passed"] and review_initrd_data(parts["initrd"], run, tools, inventory) == record["initrd_review"],
             "the image's initrd does not pass the review its record states")
     return dict(record["pcr11"])
 
@@ -1196,6 +1287,8 @@ def main(argv=None):
     input_args(c)
     c.add_argument("--name", required=True)
     c.add_argument("--out", required=True)
+    c.add_argument("--initrd-inventory", default=None, help="the reviewed inventory the initrd must match (#198)")
+    c.add_argument("--unlock-client", help="the unlock client this build compiled: the initrd's must be it")
     c = sub.add_parser("sign", help="rebuild, sign PCR 11 per phase, sign for Secure Boot")
     input_args(c)
     c.add_argument("--record", required=True)
@@ -1205,12 +1298,14 @@ def main(argv=None):
         c.add_argument("--%s-key" % role, required=True, help="a key file, or a PKCS#11 URI with --key-source engine:pkcs11")
         c.add_argument("--%s-cert" % role, required=True, help="the key's X.509 certificate (PEM file)")
     c.add_argument("--key-source", default="file", choices=KEY_SOURCES)
+    c.add_argument("--initrd-inventory", default=None, help="the reviewed inventory the initrd must match (#198)")
     c = sub.add_parser("verify", help="check a signed image against its record")
     c.add_argument("--image", required=True)
     c.add_argument("--record", required=True)
     c.add_argument("--initrd-pub", required=True, help="the initrd-phase PCR key: public key or certificate (PEM)")
     c.add_argument("--system-pub", required=True, help="the system-phase PCR key: public key or certificate (PEM)")
     c.add_argument("--secure-boot-cert", required=True, help="the Secure Boot certificate the record names: it is what covers the stub")
+    c.add_argument("--initrd-inventory", default=None, help="the reviewed inventory the initrd must match (#198)")
     c = sub.add_parser("set", help="print the measurement set of this image for one host")
     c.add_argument("--record", required=True)
     c.add_argument("--label", required=True)
@@ -1220,32 +1315,35 @@ def main(argv=None):
     c.add_argument("--credentials-record", metavar="OUT", help="write what PCR 12 was computed from (espcreds.record)")
     c = sub.add_parser("initrd-review", help="review an initrd as build does, and print the findings")
     c.add_argument("--initrd", required=True)
-    c = sub.add_parser("initrd-inventory", help="print the allowlist lines an initrd would need (to review, never to paste unread)")
+    c.add_argument("--initrd-inventory", default=None)
+    c = sub.add_parser("initrd-inventory", help="print an initrd's inventory (every entry, classed), to read in a pull request")
     c.add_argument("--initrd", required=True)
+    c.add_argument("--root", help="the root of the machine that built it, whose dpkg database names each file's package")
     args = parser.parse_args(argv)
     try:
         if args.command == "initrd-review":
-            review = review_initrd(args.initrd)
+            review = review_initrd(args.initrd, inventory=args.initrd_inventory)
             print(json.dumps(review, indent=2, sort_keys=True))
             return 0 if review["passed"] else 1
         if args.command == "initrd-inventory":
-            print("\n".join(initrd_inventory_lines(read(args.initrd))))
+            print("\n".join(initrd_inventory_lines(read(args.initrd), root=args.root)))
             return 0
         if args.command == "build":
-            record = build(_inputs(args), args.uname, args.name, args.out)
+            record = build(_inputs(args), args.uname, args.name, args.out, inventory=args.initrd_inventory, unlock_client=args.unlock_client)
             print("built %s: unsigned image %s" % (record["name"], record["unsigned_sha256"]))
         elif args.command == "sign":
             keys = {"initrd": (args.initrd_key, args.initrd_cert), "system": (args.system_key, args.system_cert),
                     "secure_boot": (args.secure_boot_key, args.secure_boot_cert)}
-            record = sign(_inputs(args), load_record(read(args.record, 64 * 1024), signed=False), keys, args.key_source, args.out,
-                          second_record=load_record(read(args.second_record, 64 * 1024), signed=False))
+            record = sign(_inputs(args), load_record(read(args.record, 1024 * 1024), signed=False), keys, args.key_source, args.out,
+                          second_record=load_record(read(args.second_record, 1024 * 1024), signed=False), inventory=args.initrd_inventory)
             print("signed %s: image %s" % (record["name"], record["signed"]["image_sha256"]))
         elif args.command == "verify":
-            record = load_record(read(args.record, 64 * 1024), signed=True)
-            verify(args.image, record, {"initrd": read(args.initrd_pub, 65536), "system": read(args.system_pub, 65536)}, args.secure_boot_cert)
+            record = load_record(read(args.record, 1024 * 1024), signed=True)
+            verify(args.image, record, {"initrd": read(args.initrd_pub, 65536), "system": read(args.system_pub, 65536)}, args.secure_boot_cert,
+                   inventory=args.initrd_inventory)
             print("VERIFIED %s: the image is the record's, and both PCR signatures verify" % record["name"])
         else:
-            record = load_record(read(args.record, 64 * 1024))
+            record = load_record(read(args.record, 1024 * 1024))
             files = credential_files(args.esp)
             entry = measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536)), files)
             if args.credentials_record:

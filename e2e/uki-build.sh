@@ -44,7 +44,10 @@ W="$(mktemp -d)"; cd "$HERE" || exit 2
 stop(){ [ -f "$W/tpm.pid" ] || return 0; TPM2TOOLS_TCTI="$D" tpm2_shutdown -c >/dev/null 2>&1; kill "$(cat "$W/tpm.pid")" 2>/dev/null; rm -f "$W/tpm.pid"; }
 trap 'stop; $SUDO rm -rf "$W"' EXIT
 D="swtpm:path=$W/tpm.sock"
-uki(){ python3 -Es -m deploy.baremetal.uki "$@"; }
+# build, sign and verify review the initrd against an inventory (#198): here, the stand-in's own (written
+# below), since the reviewed image's inventory is e2e/unlock-boot-qemu.sh's to check
+uki(){ case "$1" in build|sign|verify) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" ;;
+                    *) python3 -Es -m deploy.baremetal.uki "$@" ;; esac; }
 field(){ python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): v=v[k]
 print(v)' "$1" "$2"; }
@@ -67,6 +70,7 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   mkdir "$U/systemd-cryptsetup@.service.d"   # the module's relay ordering, its bytes
   printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' > "$U/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
+python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
 printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do

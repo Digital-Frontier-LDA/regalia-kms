@@ -152,20 +152,26 @@ IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmd
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
 KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/uki/keys/TEST-secure-boot.key --secure-boot-cert /tmp/uki/keys/TEST-secure-boot.crt"
-# #198: the review build records, run alone first, so that a refusal says what and, for the allowlist,
-# which lines the real image would need (to read before adding them to initrd-allowlist.txt)
+# #198: the review build records, run alone first, so that a refusal says what. The image is checked
+# against deploy/baremetal/initrd/initrd-inventory.txt, every entry pinned; on a difference the lines that
+# differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
+# before a pull request changes the inventory.
+cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
 if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e" >"$W/review.json" 2>&1; then
-  cat "$W/review.json"
-  echo "### the inventory lines this initrd needs that the allowlist does not hold:"
-  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e" > "$W/inventory.txt" 2>&1 || true
-  { grep -v '^#' deploy/baremetal/initrd/initrd-allowlist.txt || true; } | sed '/^$/d' | sort > "$W/listed.txt"
-  sort "$W/inventory.txt" | comm -23 - "$W/listed.txt" | sed 's/^/INVENTORY /' || true
+  python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
+    || cat "$W/review.json"
+  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true
+  { grep -v '^#' deploy/baremetal/initrd/initrd-inventory.txt || true; } | sed '/^$/d' | sort > "$W/pinned.txt"
+  sort "$W/inventory.txt" > "$W/found.txt"
+  echo "### the image's inventory lines the reviewed inventory does not hold (+) and the reverse (-):"
+  comm -23 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY+ /' || true
+  comm -13 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY- /' || true
   echo "unlock-boot-qemu: the image's initrd does not pass uki.py's review"; exit 2
 fi
-echo "the initrd passes uki.py's review (#198): $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(len(r["generators"]), "generators, inventory", r["inventory_sha256"][:16])' "$W/review.json")"
+echo "the initrd passes uki.py's review (#198): inventory $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["inventory_sha256"][:16])' "$W/review.json")"
 # shellcheck disable=SC2086  # the two lists are words on purpose
 # two builds (the signer requires a second builder's identical record), then the signature
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second \
   && python3 -Es -m deploy.baremetal.uki sign $IN --record /tmp/uki/out/e2e.record.json --second-record /tmp/uki/second/e2e.record.json --out /tmp/uki/out $KEYS" >"$W/uki.log" 2>&1 \
   || { cat "$W/uki.log"; echo "unlock-boot-qemu: the image did not build or sign"; exit 2; }

@@ -1,0 +1,11 @@
+# Every entry of a KMS host's initrd, as reviewed (#198). deploy/baremetal/uki.py compares each initrd it
+# measures with this list: an entry added, removed or changed is refused, and the image cannot be signed.
+#
+#   CLASS ORIGIN TYPE MODE UID:GID PATH VALUE
+#   CLASS   ours (this repository), generated (written by dracut: read these), package (ORIGIN names it)
+#   TYPE    f file, l link, d directory, c/b device, p fifo, s socket; VALUE: a file's sha256, a link's
+#           target, a device's numbers, "-" otherwise. Paths escape whitespace and unprintables as \ooo.
+#
+# Written by `python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD --root /` on the machine that
+# built the initrd (e2e/unlock-boot-qemu.sh prints the lines that differ). A dracut, kernel or distribution
+# update changes it in a pull request whose diff is read: the "generated" lines first.
