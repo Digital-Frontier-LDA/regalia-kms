@@ -223,13 +223,14 @@ class Verification(unittest.TestCase):
         return attest.qualified_name(self.ek_name, attest.ak_identity(ak_pub or self.ak_pub)[0])
 
     def attempt(self, session=SESSION, key=KEY, epoch=EPOCH, node="site-a", quoted=None, sign_with=None, nonce=None,
-                signature=None, phase=None, **fields):
+                signature=None, phase=None, pcr_values=None, **fields):
         """The node quotes `quoted` (default: exactly what the verifier holds); the verifier checks its own values."""
         nonce = nonce or self.v.nonce("site-a")
         told = dict(node_id=node, epoch=epoch, session_id=session, ephemeral_public=key, nonce=nonce)
         extra = attest.qualifying_data(*dict(told, **(quoted or {})).values())
         blob = quote(extra, fields.pop("signer", self.signer()), **fields)
-        return self.v.verify(node, epoch, session, key, nonce, blob, signature or self.sign(blob, sign_with), **({"phase": phase} if phase else {}))
+        kw = dict({"phase": phase} if phase else {}, **({"pcr_values": pcr_values} if pcr_values is not None else {}))
+        return self.v.verify(node, epoch, session, key, nonce, blob, signature or self.sign(blob, sign_with), **kw)
 
     def refused(self, reason, **kw):
         with self.assertRaises(attest.Refused) as caught:
@@ -654,6 +655,55 @@ class Verification(unittest.TestCase):
         with self.assertRaises(attest.Refused) as caught:
             attest.validate_policy(flat)
         self.assertIn("fields mismatch", str(caught.exception))
+
+
+class ReportedValues(Verification):
+    """Protocol v2: the node sends its PCR values beside the quote. They are used only once they hash to the
+    quoted digest under the verifier's selection, and then only to name each PCR that differs."""
+
+    def test_values_that_match_the_quote_name_every_differing_pcr(self):
+        other = {"0": "11" * 32, "7": "99" * 32}
+        digest = attest.expected_pcr_digest(other)
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(digest=digest, pcr_values=dict(other))
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is not the expected PCR values. the set: PCR 7 is %s, expected %s"
+                         % ("99" * 32, "77" * 32))
+        # two sets, two PCRs off in one of them: each set named, PCRs in index order
+        self.staged(("image-1", FW, PCRS), ("image-2", FW, NEXT_PCRS))
+        third = {"0": "10" * 32, "7": "99" * 32}
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(digest=attest.expected_pcr_digest(third), pcr_values=dict(third), session=b"T" * 32, key=b"k2", reset=2)
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is none of the accepted measurement sets (image-1, image-2). "
+                         "image-1: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s | image-2: PCR 0 is %s, expected %s; PCR 7 is %s, expected %s"
+                         % ("10" * 32, "11" * 32, "99" * 32, "77" * 32, "10" * 32, "11" * 32, "99" * 32, "88" * 32))
+
+    def test_values_that_do_not_match_the_quote_are_refused_and_never_used(self):
+        tampered = dict(PCRS, **{"7": "78" * 32})                   # the quote is of PCRS, the values say otherwise
+        self.refused("the reported PCR values do not match the quote", pcr_values=tampered)
+        self.refused("the reported PCR values cover PCRs ['0', '7', '8'], not the quoted selection [0, 7]",
+                     pcr_values=dict(PCRS, **{"8": "00" * 32}))     # a PCR outside the selection
+        self.refused("the reported PCR values cover PCRs ['7'], not the quoted selection [0, 7]", pcr_values={"7": "77" * 32})   # one missing
+        for bad in ({"0": "11" * 32, "7": "77" * 31}, {"0": "11" * 32, "7": "AA" * 32}, {0: "11" * 32, "7": "77" * 32}, ["11" * 32], "x"):
+            with self.subTest(bad=str(bad)[:20]):
+                self.refused("must map PCR indices to 64 lowercase hex", pcr_values=bad)
+        self.refused("cover PCRs ['7', '00']", pcr_values={"00": "11" * 32, "7": "77" * 32})   # an index in another spelling
+
+    def test_matching_values_change_nothing_on_an_accepted_quote_and_v1_is_as_before(self):
+        verdict = self.attempt(pcr_values=dict(PCRS))
+        self.assertEqual(verdict["measurement"], "")
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(digest=attest.expected_pcr_digest({"0": "11" * 32, "7": "99" * 32}), session=b"T" * 32, key=b"k2", reset=2)
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is not the expected PCR values")      # v1: no values, no names
+
+    def test_per_phase_sets_are_named_with_their_phase(self):
+        self.policy["nodes"]["site-a"] = {"ek_name": self.ek_name.hex(), "accepted": [
+            {"label": "uki-1", "tpm_firmware_version": FW, "pcrs": dict(PCRS), "phases": {"initrd": {"11": "a1" * 32}, "system": {"11": "a2" * 32}}}]}
+        self.v = self.verifier()
+        got = dict(PCRS, **{"11": "a9" * 32})
+        with self.assertRaises(attest.Refused) as caught:
+            self.attempt(pcrs=(0, 7, 11), digest=attest.expected_pcr_digest(got), pcr_values=got, phase="initrd")
+        self.assertEqual(str(caught.exception), "the quoted PCR digest is not the expected PCR values. uki-1 (initrd phase): PCR 11 is %s, expected %s"
+                         % ("a9" * 32, "a1" * 32))
 
 
 class Node(unittest.TestCase):

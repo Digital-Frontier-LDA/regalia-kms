@@ -321,6 +321,35 @@ def validate_policy(doc):
     return nodes
 
 
+def check_reported_values(pcr_values, selected, quoted_digest):
+    """The node's reported PCR values, or None when it sent none (protocol v1). They must give exactly the
+    verifier's selection, each as 64 lowercase hex, and hash to the quoted digest: only then are they as good
+    as quoted. Anything else is refused, and never used."""
+    if pcr_values is None:
+        return None
+    require(isinstance(pcr_values, dict) and all(isinstance(k, str) and is_hex(v, 64) for k, v in pcr_values.items()),
+            "the reported PCR values must map PCR indices to 64 lowercase hex")
+    given = sorted(int(k) for k in pcr_values if re.fullmatch(r"0|[1-9][0-9]?", k))
+    require(len(given) == len(pcr_values) and given == selected,
+            "the reported PCR values cover PCRs %s, not the quoted selection %s" % (sorted(pcr_values, key=lambda k: (len(k), k)), selected))
+    require(hmac.compare_digest(quoted_digest, expected_pcr_digest(pcr_values)), "the reported PCR values do not match the quote")
+    return pcr_values
+
+
+def differences(reported, sets, phase):
+    """With reported values that match the quote: every PCR that differs from each accepted set, in index
+    order, with both values in hex. Without them: nothing to add (a v1 node)."""
+    if reported is None:
+        return ""
+    parts = []
+    for entry in sets:
+        want = values(entry, phase)
+        diff = ["PCR %s is %s, expected %s" % (i, reported[i], want[i]) for i in sorted(want, key=int) if reported[i] != want[i]]
+        where = entry["label"] + (" (%s phase)" % phase if "phases" in entry and phase else "")
+        parts.append("%s: %s" % (where or "the set", "; ".join(diff) if diff else "every PCR matches (the TPM firmware differs)"))
+    return ". " + " | ".join(parts)
+
+
 def expected_pcr_digest(pcrs):
     """What TPMS_QUOTE_INFO.pcrDigest is when the selected PCRs hold the expected values."""
     return hashlib.sha256(b"".join(bytes.fromhex(pcrs[i]) for i in sorted(pcrs, key=int))).digest()
@@ -448,12 +477,14 @@ class Verifier:
             save()
         return nonce
 
-    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature, phase=None):
+    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature, phase=None, pcr_values=None):
         """A quote for one boot session. `node_id`, `epoch` and `nonce` are what THIS verifier holds (the
         node it is talking to, its manifest epoch, the nonce it issued); the session ID and the ephemeral
         key are what the node sent. `phase` is the boot phase the request must come from (PHASES): what
-        the CALLER is deciding, never something the node said. Returns the verdict, or raises Refused
-        with the reason."""
+        the CALLER is deciding, never something the node said. `pcr_values` ({"<index>": "<64 hex>"},
+        protocol v2) are the values the node read beside its quote: unauthenticated, so used only once they
+        hash to the quoted digest under THIS verifier's selection, and then only to say which PCR differs
+        when the quote matches no accepted set. Returns the verdict, or raises Refused with the reason."""
         expected = self.node(node_id)
         require(phase is None or (isinstance(phase, str) and phase in PHASES), "the phase must be one of %s" % ", ".join(PHASES))
         phased = [s["label"] for s in expected["accepted"] if "phases" in s]
@@ -479,6 +510,7 @@ class Verifier:
             sets = expected["accepted"]
             selected = selection(sets[0])                              # the same for every set of a node
             require(q["pcrs"] == selected, "the quote covers PCRs %s, not the expected %s" % (q["pcrs"], selected))
+            reported = check_reported_values(pcr_values, selected, q["pcr_digest"])
             # One set must match WHOLE: its PCR values and its firmware version together. A new image
             # under the old TPM firmware's set, or the reverse, is a combination nobody approved.
             on_pcrs = [s for s in sets if hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(values(s, phase)))]
@@ -491,8 +523,9 @@ class Verifier:
                              and hmac.compare_digest(q["pcr_digest"], expected_pcr_digest(values(s, other)))]
                 require(not elsewhere, "the node is in the %s phase of %s; this request is accepted only from the %s phase"
                         % (other, elsewhere[0] if elsewhere else "", phase))
-            require(on_pcrs, "the quoted PCR digest is not the expected PCR values" if len(sets) == 1 else
-                    "the quoted PCR digest is none of the accepted measurement sets (%s)" % ", ".join(s["label"] for s in sets))
+            require(on_pcrs, ("the quoted PCR digest is not the expected PCR values" if len(sets) == 1 else
+                              "the quoted PCR digest is none of the accepted measurement sets (%s)" % ", ".join(s["label"] for s in sets))
+                    + differences(reported, sets, phase))
             require(matched, "the TPM firmware version %s is not the recorded %s" % (
                 q["firmware_version"], " or ".join(s["tpm_firmware_version"] for s in on_pcrs)))
             self.check_counters(record, q, session_id, ephemeral_public)
