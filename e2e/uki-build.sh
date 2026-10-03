@@ -198,7 +198,8 @@ opens system && F "another image opened the system-phase secret" || P "another i
 
 hdr "5  the measurement set of this image for a host"
 printf '{"0": "%s", "7": "%s"}' "$(printf '00%.0s' $(seq 32))" "$(printf '77%.0s' $(seq 32))" > "$W/pcrs.json"
-uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" > "$W/set.json" 2>"$W/set.err"
+mkdir -p "$W/esp/loader/credentials"; printf 'test-node\n' > "$W/esp/loader/credentials/regalia.node-id.cred"
+uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" --esp "$W/esp" > "$W/set.json" 2>"$W/set.err"
 python3 -IB - "$HERE" "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
 import sys; sys.path.append(sys.argv.pop(1))
 import json, sys

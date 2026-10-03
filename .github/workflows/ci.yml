@@ -361,7 +361,7 @@ jobs:
         run: |
           sudo apt-get install -y -qq --no-install-recommends locales >/dev/null
           sudo locale-gen en_US.UTF-8 >/dev/null
-          python3 -m unittest discover -s tests -p 'test_*.py'
+          python3 -Es -m unittest discover -s tests -p 'test_*.py'
 
       - name: test (both modules, race + vet)
         env:
@@ -400,8 +400,11 @@ jobs:
           # module in its place.
           REGALIA_EXPECT_CRYPTOGRAPHY: "1"
         run: |
-          python3 -I -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
-          python3 tools/bench/test_hsm_bench.py
+          # In its own virtual environment: the harness then runs -Es (no PYTHON* variables, no user
+          # site) and still finds what was installed for it.
+          python3 -I -m venv "$RUNNER_TEMP/bench"
+          "$RUNNER_TEMP/bench/bin/python" -I -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
+          "$RUNNER_TEMP/bench/bin/python" -Es tools/bench/test_hsm_bench.py
 
   govulncheck:
     runs-on: ubuntu-latest
@@ -458,7 +461,7 @@ jobs:
       - name: PKCS#11 extraction probe calibration (protected key REFUSED, exposed key LEAK) — may not skip
         env:
           REGALIA_EXPECT_SOFTHSM: "1"
-        run: python3 -m unittest -v tests.test_p11_extract_probe
+        run: python3 -Es -m unittest -v tests.test_p11_extract_probe
 
       - name: SoftHSM battery — and NOTHING in it may skip
         env:
@@ -646,7 +649,7 @@ jobs:
       - name: The profile compiles, and the parser check cannot pass by skipping
         env:
           REGALIA_EXPECT_APPARMOR_PARSER: "1"
-        run: python3 -m unittest -v tests.test_baremetal_apparmor
+        run: python3 -Es -m unittest -v tests.test_baremetal_apparmor
 
   # regalia-kms#69: freshness heartbeats. The TPM half on a software TPM: the heartbeat sequence in
   # its own NV counter (replay and disk rollback refused), and the TPM clock behind the time floor.
@@ -762,7 +765,7 @@ jobs:
       - name: The clock is authenticated only under two agreeing NTS sources (live chronyd)
         run: |
           set -o pipefail
-          python3 e2e/authtime-chrony-nts.py | tee "$RUNNER_TEMP/authtime.log"
+          python3 -Es e2e/authtime-chrony-nts.py | tee "$RUNNER_TEMP/authtime.log"
           grep -q '^authtime-chrony-nts: 18 passed, 0 failed$' "$RUNNER_TEMP/authtime.log" || {
             echo "::error::the authenticated-time test did not run all 18 checks" >&2; exit 1; }
 
@@ -1005,7 +1008,7 @@ jobs:
       - name: The daemon serves only while admitted (SoftHSM, leases on swtpm)
         run: |
           status=0
-          python3 e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
+          python3 -Es e2e/runtime-admission.py > "$RUNNER_TEMP/admission.log" 2>&1 || status=$?
           cat "$RUNNER_TEMP/admission.log"
           [ "$status" -eq 0 ] || exit "$status"
           grep -q '^runtime-admission: 32 passed, 0 failed$' "$RUNNER_TEMP/admission.log" || {
