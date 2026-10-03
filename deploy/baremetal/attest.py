@@ -74,6 +74,9 @@ import time
 POLICY_SCHEMA = "regalia-kms/attest-policy/v1"
 MAX_SETS = 2          # CURRENT and NEXT; see the module text
 SET_KEYS = ("label", "tpm_firmware_version", "pcrs")
+# a signed image's keys, by fingerprint (optional, and only with "phases"): the two PCR-signing keys' pkfp and the
+# Secure Boot certificate's SHA-256, as uki.py's signed record names them
+SIGNING_KEYS = ("initrd", "system", "secure_boot_cert")
 # The phases a node is judged in, and what it may ask for there: "initrd" an unlock (replacement.may_unlock),
 # "system" a runtime lease (lease.issue). Which systemd phase path each one is belongs to the image's build
 # record (#57): enter-initrd, and enter-initrd:leave-initrd:sysinit:ready.
@@ -248,6 +251,8 @@ def validate_set(entry, label):
     require(is_hex(entry["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
     _validate_pcrs(entry["pcrs"], "%s.pcrs" % label)
     if "phases" not in entry:
+        require("signing" not in entry, "%s.signing: only a set with per-phase PCR 11 (a signed unified kernel image) names "
+                "signing keys" % label)
         return
     phases = exact_keys(entry["phases"], PHASES, "%s.phases" % label)
     for phase in PHASES:
@@ -258,6 +263,14 @@ def validate_set(entry, label):
     # the same values in both phases would let the request of one phase pass as the other's
     require(phases[PHASES[0]] != phases[PHASES[1]], "%s.phases: the two phases hold the same values; a PCR that does not move "
             "between them belongs in pcrs" % label)
+    if "signing" in entry:
+        # the keys a signed image's PCR 11 policy and Secure Boot signature are made with (uki.py's signed record):
+        # a peer judges PCR values and never reads them; whoever SEALS to a PCR-signing key (enrol, #190) takes
+        # only a key the approved set names, so a re-signed copy of an approved image is no approved image
+        signing = exact_keys(entry["signing"], SIGNING_KEYS, "%s.signing" % label)
+        for name in SIGNING_KEYS:
+            require(is_hex(signing[name], 64), "%s.signing.%s must be 64 lowercase hex" % (label, name))
+        require(len({signing["initrd"], signing["system"]}) == 2, "%s.signing: the two phases' PCR keys must be two keys" % label)
 
 
 def selection(entry):
@@ -281,7 +294,7 @@ def validate_sets(sets, label):
     for i, entry in enumerate(sets):
         here = "%s.accepted[%d]" % (label, i)
         require(isinstance(entry, dict), "%s must be an object" % here)
-        exact_keys(entry, SET_KEYS + (("phases",) if "phases" in entry else ()), here)
+        exact_keys(entry, SET_KEYS + tuple(k for k in ("phases", "signing") if k in entry), here)
         require(isinstance(entry["label"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,48}", entry["label"]), "%s.label must be a short plain name" % here)
         validate_set(entry, here)
     if len(sets) == 2:
