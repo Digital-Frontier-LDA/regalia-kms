@@ -521,15 +521,17 @@ class Records(Case):
     def test_the_measurement_set_of_an_image_on_one_host(self):
         record = self.build()
         pcrs = {"0": "11" * 32, "7": "77" * 32}
-        entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs)
-        self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": pcrs,
+        creds = {"regalia.node-id.cred": b"node-a\n"}
+        entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs, creds)
+        self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": dict(pcrs, **{"12": espcreds.pcr12(creds)}),
                                  "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}}})
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}}
         self.assertTrue(measurements.version(document).startswith("m1-"))               # it is a set the document accepts
-        self.assertEqual(attest.selection(entry), [0, 7, 11])
-        self.refused("must not give PCR 11: it comes from the image's record, per phase", uki.measurement_set, record, "x", "0" * 16, dict(pcrs, **{"11": "00" * 32}))
-        self.refused("tpm_firmware_version must be 16 hex", uki.measurement_set, record, "x", "nope", pcrs)
-        self.refused("short plain name", uki.measurement_set, record, "an image", "0" * 16, pcrs)
+        self.assertEqual(attest.selection(entry), [0, 7, 11, 12])
+        self.refused("must not give PCR 11: it comes from the image's record, per phase", uki.measurement_set, record, "x", "0" * 16, dict(pcrs, **{"11": "00" * 32}), creds)
+        self.refused("tpm_firmware_version must be 16 hex", uki.measurement_set, record, "x", "nope", pcrs, creds)
+        self.refused("short plain name", uki.measurement_set, record, "an image", "0" * 16, pcrs, creds)
+        self.refused("the node's credential files are required", uki.measurement_set, record, "x", "0" * 16, pcrs, None)
 
     def test_pcr_12_comes_from_the_nodes_credential_files_and_never_by_hand(self):
         record = self.build()
@@ -546,31 +548,40 @@ class Records(Case):
             with self.subTest(label):
                 self.assertNotEqual(uki.measurement_set(record, "image-7", "0" * 16, pcrs, other)["pcrs"]["12"], entry["pcrs"]["12"])
         self.refused("must not give PCR 12: it is computed from the node's credential files", uki.measurement_set, record, "x", "0" * 16,
-                     dict(pcrs, **{"12": "12" * 32}))
+                     dict(pcrs, **{"12": "12" * 32}), files)
         self.refused("holds no credential the stub measures", uki.measurement_set, record, "x", "0" * 16, pcrs, {".hidden.cred": b"x", "notes.txt": b"y"})
         # the directory as the stub reads it: files only, no link, bounded
-        d = os.path.join(self.d, "esp-creds"); os.mkdir(d)
+        esp = os.path.join(self.d, "esp"); d = os.path.join(esp, "loader", "credentials"); os.makedirs(d)
+        os.makedirs(os.path.join(esp, "EFI", "Linux"))
         for name, data in files.items():
             with open(os.path.join(d, name), "wb") as f:
                 f.write(data)
-        self.assertEqual(uki.credential_files(d), files)
+        self.assertEqual(uki.credential_files(esp), files)
         os.symlink(os.path.join(d, "regalia.node-id.cred"), os.path.join(d, "link.cred"))
-        self.refused("is not a regular file", uki.credential_files, d)
+        self.refused("is not a regular file", uki.credential_files, esp)
         os.remove(os.path.join(d, "link.cred"))
+        os.mkdir(os.path.join(d, "sub"))
+        self.refused("is not a regular file", uki.credential_files, esp)            # stricter than the stub, on purpose
+        os.rmdir(os.path.join(d, "sub"))
+        # per-image credentials are measured into PCR 12 too: refused
+        os.makedirs(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
+        self.refused("the ESP holds per-image credentials (EFI/Linux/regalia.efi.extra.d)", uki.credential_files, esp)
+        os.rmdir(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
+        self.refused("is not a directory", uki.credential_files, os.path.join(self.d, "no-esp"))
         # through the command, with the record of what it was computed from
         with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
             json.dump(pcrs, f)
         rec = os.path.join(self.out, "image-7.record.json")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
-                                       os.path.join(self.d, "host-pcrs.json"), "--credentials", d, "--credentials-record", os.path.join(self.d, "creds.json")]), 0)
+                                       os.path.join(self.d, "host-pcrs.json"), "--esp", esp, "--credentials-record", os.path.join(self.d, "creds.json")]), 0)
         self.assertEqual(json.loads(out.getvalue())["pcrs"]["12"], espcreds.pcr12(files))
         with open(os.path.join(self.d, "creds.json")) as f:
             self.assertEqual(json.load(f), espcreds.record(files))
-        with contextlib.redirect_stderr(io.StringIO()) as err:
-            self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
-                                       os.path.join(self.d, "host-pcrs.json"), "--credentials-record", os.path.join(self.d, "c2.json")]), 1)
-        self.assertIn("--credentials-record needs --credentials", err.getvalue())
+        # --esp is required: a set without PCR 12 is not made at all
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as usage:
+            uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs", os.path.join(self.d, "host-pcrs.json")])
+        self.assertEqual(usage.exception.code, 2)
 
     def test_a_record_is_checked_when_it_is_read(self):
         record = self.build()
