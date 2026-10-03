@@ -568,6 +568,17 @@ class Records(Case):
         self.refused("the ESP holds per-image credentials (EFI/Linux/regalia.efi.extra.d)", uki.credential_files, esp)
         os.rmdir(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
         self.refused("is not a directory", uki.credential_files, os.path.join(self.d, "no-esp"))
+        # global addons are measured into PCR 12 too: refused; an empty addons directory is fine
+        os.makedirs(os.path.join(esp, "loader", "addons"))
+        self.assertEqual(uki.credential_files(esp), files)
+        open(os.path.join(esp, "loader", "addons", "x.addon.efi"), "wb").close()
+        self.refused("the ESP holds global addons", uki.credential_files, esp)
+        os.remove(os.path.join(esp, "loader", "addons", "x.addon.efi"))
+        # a link on the way (loader/ pointing elsewhere) is refused
+        elsewhere = os.path.join(self.d, "elsewhere"); os.rename(os.path.join(esp, "loader"), elsewhere)
+        os.symlink(elsewhere, os.path.join(esp, "loader"))
+        self.refused("is a link: the ESP is read as it will be installed", uki.credential_files, esp)
+        os.remove(os.path.join(esp, "loader")); os.rename(elsewhere, os.path.join(esp, "loader"))
         # through the command, with the record of what it was computed from
         with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
             json.dump(pcrs, f)

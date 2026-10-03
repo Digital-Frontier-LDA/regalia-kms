@@ -461,15 +461,22 @@ def credential_files(esp):
     regular files only, no link (the stub would read the target; a reviewer reading the directory would
     not), bounded in number and size. Stricter than the stub on purpose: a subdirectory, which the stub
     would skip, is refused, so the directory holds exactly what is measured.
-    The stub also measures PER-IMAGE credentials (<ESP>/EFI/**/<image>.efi.extra.d/*.cred) into PCR 12,
-    before these. A KMS host has none; one found under <ESP>/EFI is refused, because the PCR 12 computed
-    here would not be the one the host shows."""
+    The stub also measures PER-IMAGE credentials and addons (<ESP>/EFI/**/<image>.efi.extra.d/) and GLOBAL
+    addons (<ESP>/loader/addons/) into PCR 12. A KMS host has none; any found is refused, because the PCR 12
+    computed here would not be the one the host shows. No path component may be a link."""
+    # no link anywhere on the way: a link at loader/ or EFI/ would measure files the installed ESP does not hold
+    for part in ("EFI", "loader", os.path.join("loader", "credentials"), os.path.join("loader", "addons")):
+        require(not os.path.islink(os.path.join(esp, part)), "%s is a link: the ESP is read as it will be installed, with no link" % os.path.join(esp, part))
     extra = sorted(os.path.relpath(os.path.join(top, d), esp) for top, dirs, _ in os.walk(os.path.join(esp, "EFI")) for d in dirs
                    if d.lower().endswith(".extra.d"))
-    require(not extra, "the ESP holds per-image credentials (%s): systemd-stub measures them into PCR 12 too, and a KMS host has none"
+    require(not extra, "the ESP holds per-image credentials or addons (%s): systemd-stub measures them into PCR 12 too, and a KMS host has none"
             % ", ".join(extra))
+    # global addons (systemd 257: <ESP>/loader/addons/*.addon.efi) are measured into PCR 12 as well
+    addons = os.path.join(esp, "loader", "addons")
+    require(not (os.path.isdir(addons) and os.listdir(addons)), "the ESP holds global addons (%s): systemd-stub measures them into PCR 12 too, and "
+            "a KMS host has none" % addons)
     directory = os.path.join(esp, "loader", "credentials")
-    require(os.path.isdir(directory) and not os.path.islink(directory), "%s is not a directory: a KMS host's ESP holds its credentials there" % directory)
+    require(os.path.isdir(directory), "%s is not a directory: a KMS host's ESP holds its credentials there" % directory)
     names = sorted(os.listdir(directory))
     require(len(names) <= MAX_CREDENTIALS, "%s holds %d files; a KMS host has a handful of credentials" % (directory, len(names)))
     files = {}
