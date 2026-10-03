@@ -3,8 +3,10 @@
 Contract version **2 (draft)**, for #120. It says what `openbao-plugin-kms-regalia` will support,
 against which upstream versions, and through which KMS operations. Version 2 changes one thing: a
 CA key signs only what the KMS has inspected (see "A CA key signs only what the KMS has read").
-Nothing here is built yet: #121 implements auto-unseal, #122 External Keys, and #123 gates every
-claim below on a real OpenBao server. Until #123 passes for a row, that row is a design target and
+The development adapter in [`adapters/openbao`](adapters/openbao) exercises auto-unseal and
+Transit signing against the pinned real server with software tokens. It admits development only,
+not production. #121 implements auto-unseal, #122 External Keys, and #123 gates every production
+claim on software and witnessed hardware evidence. Until #123 passes for a row, that row is a design target and
 not a support claim.
 
 OpenBao owns application authentication, authorization, namespaces, KV, leases and the PKI and
@@ -126,12 +128,25 @@ converts ECDSA to ASN.1 DER and passes RSA and Ed25519 through.
 | RSA 2048, 3072, 4096, PKCS #1 v1.5 with SHA-256/384/512 | Supported | signing key: payload is the `DigestInfo` |
 | RSA-PSS (`*rsa.PSSOptions`) | **Refused** | the KMS signs with `CKM_RSA_PKCS` only |
 | Ed25519 | Transit signing only, message ≤ 1024 bytes | measured limit of the applet through OpenSC; an Ed25519 **PKI issuer is not supported**, because a certificate's to-be-signed bytes exceed that limit |
-| ECDSA or RSA with a hash that does not match the key's policy | **Refused** | one key, one hash |
+| ECDSA or RSA with a hash that does not match the key's policy | **Refused** | one key, one explicit mapping hash |
 
 A key mapping declares its `usage`: `signing` (Transit) or `x509-ca` (a PKI issuer). The declaration
 selects the plugin's behaviour above; it is not what protects the key. The KMS object's own policy
 lists exactly one content type, so a CA object signs nothing but inspected X.509 structures whatever
 the mapping says.
+
+The development adapter requires `hash_algorithm` in each signing mapping:
+`sha256` for P-256, `sha384` for P-384, `sha256`/`sha384`/`sha512` for RSA, and
+`none` for pure Ed25519. It accepts only that hash from `SignerOpts`; it does not
+infer a default. This is an explicit client mapping constraint, alongside the
+KMS object's own purpose policy.
+
+OpenBao 2.7.1 defaults **all external keys** to RSA-PSS signer options, even
+ECDSA/Ed25519. Transit clients must specify `signature_algorithm=pkcs1v15` for
+these mappings and their matching `hash_algorithm` (`sha2-256`, `sha2-384`,
+`sha2-512` or `none`). This follows the
+[pinned upstream dispatch](https://github.com/openbao/openbao/blob/v2.7.1/sdk/helper/keysutil/policy.go);
+the adapter refuses unsupported options rather than silently dropping them.
 
 A key mapping names **one immutable generation**: the object and the SHA-256 of its public key. If
 the key behind the object changes, every signature fails the pinned-key check and the mapping must
@@ -277,11 +292,12 @@ $ bao write sys/external-keys/configs/regalia \
     plugin=regalia address=https://kms.example.internal:8443 \
     server_name=kms.example.internal ca_path=/etc/openbao/kms/ca.pem \
     cert_path=/etc/openbao/kms/keys.crt key_path=/etc/openbao/kms/keys.key \
-    environment=staging
-$ bao write sys/external-keys/configs/regalia/keys/issuing-ca \
-    object_id=example-intermediate-ca purpose=openbao-pki-ca usage=x509-ca \
-    algorithm=p384 public_key_sha256=sha256:0000…0000 public_key=@intermediate.pub.pem
-$ bao write sys/external-keys/configs/regalia/keys/issuing-ca/grants/pki
+    environment=development timeout=10s
+$ bao write sys/external-keys/configs/regalia/keys/transit-signing \
+    object_id=example-transit-key purpose=openbao-transit usage=signing \
+    algorithm=p384 hash_algorithm=sha384 \
+    public_key_sha256=sha256:0000…0000 public_key=@transit.pub.pem
+$ bao write sys/external-keys/configs/regalia/keys/transit-signing/grants/transit
 ```
 
 Validation, the same for both interfaces:
