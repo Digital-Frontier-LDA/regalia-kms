@@ -38,7 +38,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
-            openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd
+            openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0
           # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel has no vTPM proxy
           # (CONFIG_TCG_VTPM_PROXY is not set), so the test makes the device with swtpm's CUSE mode.
           sudo apt-get install -y -qq --no-install-recommends tpm-udev
@@ -56,6 +56,7 @@ jobs:
           sudo ldconfig
           /usr/local/bin/swtpm --version
           /usr/local/bin/swtpm cuse --help | head -1
+          ls /usr/lib/x86_64-linux-gnu/libtss2-tcti-tabrmd*
       - name: Build the KMS daemon and the audit collector (part 2 runs them)
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
