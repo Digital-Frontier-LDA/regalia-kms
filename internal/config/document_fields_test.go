@@ -90,7 +90,7 @@ func documentFieldRows() []documentFieldRow {
 	hardwareDocument := "{" + hardwareQuad + "," + registryAndSite + "," + policyPair +
 		`,"rbac_policy_path":"/etc/regalia/rbac.json"` + lab + `}`
 	yubikeyDocument := "{" + yubikeyTriple + "," + registryAndSite + "," + policyPair + `,"rbac_policy_path":"/etc/regalia/rbac.json"` + lab + `}`
-	admissionDocument := `{"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission.json","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
+	admissionDocument := `{"runtime_admission":"required","runtime_admission_path":"/run/regalia/admission/admission.json","runtime_admission_owner":"regalia-admission","node_id":"site-a","boot_session_path":"/run/regalia/boot-session"}`
 	fencingDocument := "{" + fencingTriple + "," + registryAndSite + "}"
 
 	return []documentFieldRow{
@@ -169,7 +169,9 @@ func documentFieldRows() []documentFieldRow {
 		{"runtime_admission", admissionDocument,
 			func(c Config) string { return c.RuntimeAdmission }, "required"},
 		{"runtime_admission_path", admissionDocument,
-			func(c Config) string { return c.RuntimeAdmissionPath }, "/run/regalia/admission.json"},
+			func(c Config) string { return c.RuntimeAdmissionPath }, "/run/regalia/admission/admission.json"},
+		{"runtime_admission_owner", admissionDocument,
+			func(c Config) string { return c.RuntimeAdmissionOwner }, "regalia-admission"},
 		{"node_id", admissionDocument,
 			func(c Config) string { return c.NodeID }, "site-a"},
 		{"boot_session_path", admissionDocument,

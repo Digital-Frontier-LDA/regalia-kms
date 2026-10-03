@@ -33,9 +33,13 @@ What part 1 shows, on the units as shipped (deploy/baremetal/units):
      store and publishes the chain; regalia-wg-apply, root with CAP_NET_ADMIN only, reads that chain,
      verifies it against the TPM anchor, and brings wg-svc and wg-unlock up, read back; sync then binds
      both listeners
-  4  regalia-admission, root with no capability, verifies the chain against the TPM anchor, makes this
-     boot's session, and writes the admission file: "not admitted" because no peer answers (b and c are
-     not running: that is part 2)
+  4  the recovery-key boot path (#191): with no unlock client this boot, the lease service, run by hand as
+     its own user, refuses for want of a session and writes nothing, and cannot write /run/regalia;
+     started as a unit, it pulls in regalia-boot-session (root, no capability), which makes the pair, root's
+     0644; then regalia-admission, as regalia-admission with no capability, verifies the chain against the
+     TPM anchor and writes the admission file in its own directory: "not admitted" because no peer answers
+     (b and c are not running: that is part 2). The kernel reports the service's uids as that user's, and
+     the host probe agrees
   5  each unit's sandbox as systemd applied it (systemctl show), what regalia-authtime's process really
      sees, and what chrony does with a group-writable /run/chrony (observed, not asserted)
 
@@ -68,6 +72,8 @@ import http.client
 import json
 import os
 import pathlib
+import pwd
+import re
 import shutil
 import socket
 import ssl
@@ -81,11 +87,13 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import admission, attest, authtime, heartbeat, lease, measurements, membership, node, sync, wgsvc   # noqa: E402
+from deploy.baremetal import admission, attest, authtime, heartbeat, lease, measurements, membership, node, os_probe, sync, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
 
 PREFIX = "/usr/lib/regalia-kms"
-UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-admission.service", "regalia-sync.service")
+UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-boot-session.service",
+         "regalia-admission.service", "regalia-sync.service")
+ADMISSION_FILE = "/run/regalia/admission/admission.json"
 DAEMON_UNITS = ("regalia-kms.service", "regalia-audit-collector.service")
 NS, A_TCTI = "regalia-e2e-b", "device:/dev/tpmrm0"
 SITE, DEVICE, OBJECT, PRINCIPAL = "e2e-site", "softhsm-e2e", "e2e-signing-key", "spiffe://regalia/workload/e2e"
@@ -365,7 +373,7 @@ def provision(work):
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
     # the modes the units' StateDirectoryMode gives them; the store must be regalia-sync's (#190: an
     # enrolment run as root would leave files sync cannot open)
-    for directory, owner, mode in (("/var/lib/regalia-sync", "regalia-sync", 0o755), ("/var/lib/regalia-admission", "root", 0o700)):
+    for directory, owner, mode in (("/var/lib/regalia-sync", "regalia-sync", 0o755), ("/var/lib/regalia-admission", "regalia-admission", 0o700)):
         os.makedirs(directory)
         shutil.chown(directory, owner, owner)
         os.chmod(directory, mode)
@@ -468,20 +476,46 @@ def scenario(work, binaries, user):
     header("4  regalia-admission")
     # the CUSE TPM has no resource manager: one unit at a time from here (see the docstring)
     sh("systemctl", "stop", "regalia-wg-apply.path", "regalia-sync.service")
+    # the recovery-key boot: no unlock client ran, so no session yet. The lease service alone, as its own
+    # user, must refuse rather than make one (it cannot, and the daemon would not trust it), and write nothing
+    ok(not os.path.exists("/run/regalia/boot-session") and not os.path.exists("/run/regalia/boot-session.pub"),
+       "no boot session yet: no unlock client ran this boot")
+    alone = sh("runuser", "-u", "regalia-admission", "-g", "regalia-admission", "-G", "tss", "--", "timeout", "60",
+               "python3", "-Es", "-m", "deploy.baremetal.node", "--config", "/etc/regalia/node.json", "admission", check=False, cwd=PREFIX)
+    ok(alone.returncode == 2 and "regalia-boot-session.service makes one" in alone.stderr and not os.listdir("/run/regalia/admission")
+       and not os.path.exists("/run/regalia/boot-session"),
+       "the lease service alone refuses: this boot has no session, and it writes nothing", (alone.returncode, alone.stderr[-300:]))
+    denied = sh("runuser", "-u", "regalia-admission", "--", "touch", "/run/regalia/boot-session", check=False)
+    ok(denied.returncode != 0 and not os.path.exists("/run/regalia/boot-session"),
+       "and as its user it cannot write root's /run/regalia (where the boot session lives)", denied.stderr[-200:])
     sh("systemctl", "start", "regalia-admission.service")
-    admission = pathlib.Path("/run/regalia/admission.json")
+    pair = [os.stat("/run/regalia/" + n) if os.path.exists("/run/regalia/" + n) else None for n in ("boot-session", "boot-session.pub")]
+    ok(show("regalia-boot-session.service", "ActiveState", "Result") == {"ActiveState": "active", "Result": "success"}
+       and all(st is not None and st.st_uid == 0 and st.st_mode & 0o777 == 0o644 for st in pair),
+       "regalia-admission pulled in regalia-boot-session, which made the pair: root's, 0644",
+       journal("regalia-boot-session.service")[-400:])
+    admission = pathlib.Path(ADMISSION_FILE)
     doc = until(lambda: json.loads(admission.read_text()), 60, 2)
     doc = doc if isinstance(doc, dict) else {}
     ok(doc.get("serve_until_boottime_ms") == 0 and doc.get("epoch") == 1 and doc.get("manifest_digest", "00" * 32) != "00" * 32
        and doc.get("reason", "").startswith("renewal failed: no peer gave a lease"),
        "not admitted, under epoch 1 verified against the TPM anchor, because no peer answered (%s)" % doc.get("reason", "")[:90],
        doc or journal("regalia-admission.service")[-600:])
-    ok(pathlib.Path("/run/regalia/boot-session").exists() and pathlib.Path("/run/regalia/boot-session.pub").exists(),
-       "with no unlock client this boot, it made a session and wrote both files")
+    uid = pwd.getpwnam("regalia-admission").pw_uid
+    written, directory = os.stat(ADMISSION_FILE), os.stat(os.path.dirname(ADMISSION_FILE))
+    ok(uid != 0 and written.st_uid == uid and written.st_mode & 0o022 == 0 and directory.st_uid == uid and directory.st_mode & 0o777 == 0o755,
+       "the admission file is regalia-admission's (uid %d), in its own 0755 directory, written by nobody else" % uid,
+       (written.st_uid, oct(written.st_mode), directory.st_uid, oct(directory.st_mode)))
+    pid = show("regalia-admission.service", "MainPID")["MainPID"]
+    uids = re.search(r"^Uid:\s+(.*)$", pathlib.Path("/proc/%s/status" % pid).read_text(), re.M).group(1).split()
+    ok(set(uids) == {str(uid)}, "the kernel reports the running lease service's real, effective, saved and filesystem uids as %d" % uid, uids)
+    verdict = os_probe.lease_service_unprivileged(os_probe.Host(), "regalia-admission")
+    ok(verdict[0] is True, "the host probe measures it: %s" % verdict[1], verdict)
 
     header("5  the sandboxes as systemd applied them")
     for unit, want in (("regalia-sync.service", {"User": "regalia-sync", "CapabilityBoundingSet": "", "NoNewPrivileges": "yes"}),
-                       ("regalia-admission.service", {"User": "root", "CapabilityBoundingSet": ""}),
+                       ("regalia-admission.service", {"User": "regalia-admission", "CapabilityBoundingSet": "", "NoNewPrivileges": "yes"}),
+                       ("regalia-boot-session.service", {"User": "root", "CapabilityBoundingSet": "", "PrivateNetwork": "yes"}),
                        ("regalia-authtime.service", {"CapabilityBoundingSet": "cap_dac_override", "ProtectProc": "invisible"}),
                        ("regalia-wg-apply.service", {"CapabilityBoundingSet": "cap_net_admin"})):
         have = show(unit, *want)
@@ -573,7 +607,7 @@ class Daemon:
                 "pin_paths": {DEVICE: str(etc / "card.pin")},
                 "audit_journal_path": str(state / "audit.jsonl"), "audit_sink_url": "https://127.0.0.1:%d" % sink,
                 # what this test is about: the files regalia-admission writes, as the daemon finds them on a host
-                "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission.json",
+                "runtime_admission": "required", "runtime_admission_path": ADMISSION_FILE, "runtime_admission_owner": "regalia-admission",
                 "node_id": "a", "boot_session_path": "/run/regalia/boot-session"}}
         for name, document in documents.items():
             (etc / name).write_text(json.dumps(document, indent=1) + "\n")
@@ -746,12 +780,12 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(daemon.wait_for(503, 90) == 503, "regalia-kms.service is up and NOT ready (503): no admission yet", daemon.log()[-900:])
     sh("systemctl", "start", "regalia-admission.service")
     admitted_doc = until(lambda: (lambda d: d["serve_until_boottime_ms"] > admission.boottime_ms() and d)(
-        json.loads(pathlib.Path("/run/regalia/admission.json").read_text())), 120, 2)
+        json.loads(pathlib.Path(ADMISSION_FILE).read_text())), 120, 2)
     admitted_doc = admitted_doc if isinstance(admitted_doc, dict) else {}
     left = (admitted_doc.get("serve_until_boottime_ms", 0) - admission.boottime_ms()) / 1000
     ok(admitted_doc.get("epoch") == 2 and 200 < left <= lease.MAX_LIFETIME,
        "regalia-admission re-attested to b with a's TPM; b's TPM signed a lease; admitted for %.0f s under epoch 2" % left,
-       admitted_doc or json.loads(pathlib.Path("/run/regalia/admission.json").read_text()))
+       admitted_doc or json.loads(pathlib.Path(ADMISSION_FILE).read_text()))
     issued = [e for e in events if e.get("event") == "sync-lease" and e.get("subject") == "a"]
     ok(issued and issued[-1].get("outcome") == "ALLOW", "b's trail: a lease for a", issued[-1:] or events[-3:])
     ok(daemon.wait_for(200, 30) == 200, "the daemon is ready (200)", daemon.log()[-900:])
@@ -786,7 +820,7 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(bool(pulls) and all(b'"refused"' in r[2] for r in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:] or requests[-3:])
     # from here nothing writes the admission file: the daemon must stop on its own CLOCK_BOOTTIME
     sh("systemctl", "stop", "regalia-admission.service")
-    frozen = pathlib.Path("/run/regalia/admission.json").read_bytes()
+    frozen = pathlib.Path(ADMISSION_FILE).read_bytes()
     end = json.loads(frozen)["serve_until_boottime_ms"]
     granted = [e for e in events[mark:] if e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"]
     ok(not granted and end - admission.boottime_ms() > 15000,
@@ -797,7 +831,7 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(code == 200 and daemon.ready() == 200, "5 s before the end of the lease the daemon still signs and is ready", (code, answer))
     time.sleep(max(0, (end + 2000 - admission.boottime_ms()) / 1000))
     code, answer = daemon.sign(b"two seconds after the end")
-    ok(code == 503 and daemon.ready() == 503 and pathlib.Path("/run/regalia/admission.json").read_bytes() == frozen,
+    ok(code == 503 and daemon.ready() == 503 and pathlib.Path(ADMISSION_FILE).read_bytes() == frozen,
        "2 s after the end it refuses (503) and is not ready, with the admission file untouched since the lease service stopped",
        (code, answer, daemon.log()[-600:]))
     # b's handler never failed (a failure there is swallowed by sync.serve and would look like silence)

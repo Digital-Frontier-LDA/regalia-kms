@@ -29,8 +29,10 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"os/user"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -819,14 +821,37 @@ func admitRunner(settings config.Config, base operations.Runner, onTransition fu
 	if settings.RuntimeAdmission != config.RuntimeAdmissionRequired {
 		return base, nil, nil
 	}
+	// The lease service's user, by name (regalia-kms#191). Resolved here, once: a name that does not
+	// resolve is a startup refusal, never root by default.
+	owner, err := lookupAdmissionOwner(settings.RuntimeAdmissionOwner)
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime admission: %w", err)
+	}
 	gate, err := admission.Open(admission.Options{
 		Path: settings.RuntimeAdmissionPath, NodeID: settings.NodeID, SessionPath: settings.BootSessionPath,
-		OnTransition: onTransition,
+		OwnerUID: owner, OnTransition: onTransition,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("runtime admission: %w", err)
 	}
 	return admission.NewRunner(gate, base), gate, nil
+}
+
+// lookupAdmissionOwner resolves runtime_admission_owner to a uid. A variable so a test can resolve a
+// name without the host's user database.
+var lookupAdmissionOwner = func(name string) (uint32, error) {
+	if name == "" {
+		return 0, errors.New("runtime_admission_owner is not set: the lease service's user must be named")
+	}
+	account, err := user.Lookup(name)
+	if err != nil {
+		return 0, fmt.Errorf("runtime_admission_owner %q is not a user on this host", name)
+	}
+	uid, err := strconv.ParseUint(account.Uid, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("runtime_admission_owner %q has no numeric uid", name)
+	}
+	return uint32(uid), nil
 }
 
 // awaitingReauthorization names the backends whose provider does not yet make a returned token wait

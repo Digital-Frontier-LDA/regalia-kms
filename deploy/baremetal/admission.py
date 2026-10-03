@@ -2,10 +2,16 @@
 """The admission file: what tells the KMS daemon that this node holds a runtime lease (#74, Phase 14).
 
 The lease rules (lease.py) are Python; the daemon is Go. Writing those rules a second time in Go would
-give two copies that drift. So a small root service on the host keeps the lease, as a kubelet keeps a
+give two copies that drift. So a small service on the host keeps the lease, as a kubelet keeps a
 node lease, and writes ONE narrow fact for the daemon to read:
 
-    /run/regalia/admission.json   (root, 0644, in a directory only root can write; replaced atomically)
+    /run/regalia/admission/admission.json   (0644, replaced atomically)
+
+The service runs as its own user, regalia-admission, not root (#191): it talks to peers and parses their
+answers. /run/regalia/admission is that user's (0755, regalia.tmpfiles.conf) inside root's /run/regalia,
+so it can replace this file and nothing else there. The daemon accepts the file and its directory only
+from that user (runtime_admission_owner) or root, with no group or other write, and nothing above it that
+anyone else could swap; and it accepts the boot session beside it only from root.
 
     {"schema": "regalia.admission/v1",
      "node_id": ..., "session_id": "<64 hex: this boot's attested session>",
@@ -42,8 +48,9 @@ each step() compares the held lease's request time with the daemon's start, whic
 lease asked for at or before it is renewed now. `daemon_started` is injected; unit_started() is the one
 for a systemd unit. Not knowing the start (the unit is down) changes nothing.
 
-COOPERATIVE, as lease.Holder is: root on the node can write this file. What bounds a compromised node is
-outside it: peers refuse its unlocks, verifiers refuse its lease, the fencing authority decides who signs.
+COOPERATIVE, as lease.Holder is: root on the node, and the lease service's own user, can write this
+file. What bounds a compromised node is outside it: peers refuse its unlocks, verifiers refuse its
+lease, the fencing authority decides who signs.
 
 The call to a peer is injected (`renew`): the transport is #80. Run as a program, this only SHOWS the
 admission file the daemon reads.
@@ -119,7 +126,7 @@ def _printable(text, limit=membership.NAME_LIMIT):
 
 
 def write(path, document):
-    """Replace the admission file: complete or not at all, readable by the daemon, writable by root only."""
+    """Replace the admission file: complete or not at all, readable by the daemon, writable by its writer only."""
     require(tuple(document) == FIELDS, "an admission document has exactly its fields, in order")
     directory = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".admission-")
@@ -235,7 +242,7 @@ def read(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Show the admission file the KMS daemon reads.")
-    parser.add_argument("path", nargs="?", default="/run/regalia/admission.json")
+    parser.add_argument("path", nargs="?", default="/run/regalia/admission/admission.json")
     args = parser.parse_args(argv)
     try:
         document = read(args.path)

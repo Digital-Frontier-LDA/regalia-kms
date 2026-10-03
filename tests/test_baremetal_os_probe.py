@@ -30,8 +30,11 @@ CAPS_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "CapabilityBoundingSet
 PID_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "MainPID")
 EXEC_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "ExecStart,LoadState")
 CONFIG = "/etc/regalia-kms/config.json"
-ADMISSION = {"listen_address": "0.0.0.0:8443", "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission.json",
-             "node_id": "site-a", "boot_session_path": "/run/regalia/boot-session"}
+ADMISSION = {"listen_address": "0.0.0.0:8443", "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission/admission.json",
+             "runtime_admission_owner": "regalia-admission", "node_id": "site-a", "boot_session_path": "/run/regalia/boot-session"}
+# What the lease service's unit and process look like when it runs as its own user (#191; systemd 257)
+LEASE_SHOW = ("systemctl", "show", os_probe.ADMISSION_SERVICE, "-p", "User,NoNewPrivileges,CapabilityBoundingSet,MainPID,LoadState")
+LEASE_USER = ("getent", "passwd", "regalia-admission")
 
 
 RULE_STAT = ("stat", "-c", "%u %a", os_probe.PCSCD_RULE_PATH)
@@ -89,6 +92,7 @@ class FakeHost:
             "/proc/swaps": "Filename\tType\tSize\tUsed\tPriority\n",
             "/sys/module/apparmor/parameters/enabled": "Y\n",
             "/proc/20/status": proc_status(),
+            "/proc/30/status": "Name:\tpython3\nUid:\t991\t991\t991\t991\nGid:\t991\t991\t991\t991\n",
             "/proc/20/attr/apparmor/current": "regalia-kms (enforce)\n",
             CONFIG: json.dumps(ADMISSION),
             os_probe.PCSCD_RULE_PATH: SHIPPED_PCSCD_RULE,
@@ -109,6 +113,8 @@ class FakeHost:
             ("pkcheck", "--action-id", "org.debian.pcsc-lite.access_pcsc", "--process", "20"): "",
             ("pkcheck", "--action-id", "org.debian.pcsc-lite.access_card", "--process", "20"): "",
             EXEC_SHOW: exec_start(),
+            LEASE_SHOW: show(User="regalia-admission", NoNewPrivileges="yes", CapabilityBoundingSet="", MainPID="30", LoadState="loaded"),
+            LEASE_USER: "regalia-admission:x:991:991:Regalia KMS runtime admission:/var/lib/regalia-admission:/usr/sbin/nologin\n",
             ("systemd-analyze", "cat-config", "systemd/coredump.conf"): "[Coredump]\n#Storage=external\nStorage=none\n",
             ("systemd-analyze", "cat-config", "systemd/sleep.conf"): "[Sleep]\n",
             # The real layout (measured with pcsc_scan): the server endpoint carries the socket path,
@@ -298,8 +304,8 @@ class OSProbeTests(unittest.TestCase):
         """kms_runtime_admission_required reads the file the unit starts the daemon with (#74)."""
         results = measure(FakeHost())
         self.assertTrue(results["kms_runtime_admission_required"]["value"])
-        self.assertIn("runtime_admission required, node site-a, admission file /run/regalia/admission.json",
-                      results["kms_runtime_admission_required"]["why"])
+        self.assertIn("runtime_admission required, node site-a, admission file /run/regalia/admission/admission.json; "
+                      "the lease service runs as regalia-admission (uid 991, pid 30)", results["kms_runtime_admission_required"]["why"])
 
         def config(**changed):
             document = dict(ADMISSION)
@@ -320,6 +326,29 @@ class OSProbeTests(unittest.TestCase):
             ("no admission file", "requires runtime admission but lacks runtime_admission_path", config(runtime_admission_path=None)),
             ("an empty node ID", "requires runtime admission but lacks node_id", config(node_id="")),
             ("no boot session file", "requires runtime admission but lacks boot_session_path", config(boot_session_path=None)),
+            # #191: the lease service is its own user, as the unit says and as the kernel reports
+            ("no lease service user", "requires runtime admission but lacks runtime_admission_owner", config(runtime_admission_owner=None)),
+            ("the lease service as root", "runtime_admission_owner is root", config(runtime_admission_owner="root")),
+            ("a user this host does not have", "runtime_admission_owner 'regalia-admission' is not a user on this host", lambda g: g.commands.pop(LEASE_USER)),
+            ("a user with uid 0", "runtime_admission_owner 'regalia-admission' has uid 0",
+             lambda g: g.commands.__setitem__(LEASE_USER, "regalia-admission:x:0:0::/:/usr/sbin/nologin\n")),
+            ("the unit runs as root", "regalia-admission.service runs as root, not regalia-admission",
+             lambda g: g.commands.__setitem__(LEASE_SHOW, g.commands[LEASE_SHOW].replace("User=regalia-admission", "User=root"))),
+            ("the unit names no user", "regalia-admission.service runs as root (no User=)",
+             lambda g: g.commands.__setitem__(LEASE_SHOW, g.commands[LEASE_SHOW].replace("User=regalia-admission", "User="))),
+            ("the unit lets it gain privileges", "regalia-admission.service has NoNewPrivileges='no'",
+             lambda g: g.commands.__setitem__(LEASE_SHOW, g.commands[LEASE_SHOW].replace("NoNewPrivileges=yes", "NoNewPrivileges=no"))),
+            ("the unit keeps a capability", "regalia-admission.service has a capability bounding set: cap_net_admin",
+             lambda g: g.commands.__setitem__(LEASE_SHOW, g.commands[LEASE_SHOW].replace("CapabilityBoundingSet=", "CapabilityBoundingSet=cap_net_admin"))),
+            ("the unit not loaded", "regalia-admission.service is not loaded",
+             lambda g: g.commands.__setitem__(LEASE_SHOW, g.commands[LEASE_SHOW].replace("LoadState=loaded", "LoadState=not-found"))),
+            ("the lease service not running", "regalia-admission.service is not running",
+             lambda g: g.commands.__setitem__(LEASE_SHOW, g.commands[LEASE_SHOW].replace("MainPID=30", "MainPID=0"))),
+            ("its process status unreadable", "/proc/30/status has no Uid line", lambda g: g.files.pop("/proc/30/status")),
+            ("its process saved uid root", "the running lease service (pid 30) has uids 991 991 0 991",
+             lambda g: g.files.__setitem__("/proc/30/status", "Uid:\t991\t991\t0\t991\n")),
+            ("its process another user", "the running lease service (pid 30) has uids 992 992 992 992",
+             lambda g: g.files.__setitem__("/proc/30/status", "Uid:\t992\t992\t992\t992\n")),
             ("a node ID that is not text", "requires runtime admission but lacks node_id", config(node_id=7)),
             ("a configuration that cannot be read", "cannot read the daemon's configuration " + CONFIG, lambda g: g.files.pop(CONFIG)),
             ("not JSON", CONFIG + " is not valid JSON", lambda g: g.files.__setitem__(CONFIG, "{")),
