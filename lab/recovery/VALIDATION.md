@@ -45,3 +45,27 @@ Script SHA-256: `47e08272c808863fff8b524faa5146620e3375db7af5810ffa20aacb6e77afa
 
 The larger merged script has additional command paths. CI allowed 30 minutes (75 since the per-sync faults of #175)
 for complete coverage; incomplete runs and findings still fail.
+
+## #175 checkpoint (2026-10-03)
+
+The script rewritten for #175, run against the extended matrix on cryptsetup 2.7.5 (Debian 13 amd64,
+file-backed images, no root). **Passed: 337/337 scenarios reached, 0 findings.** It covers every call
+× fail before/after, TERM after and KILL before/after, plus closed stderr, the header-writing calls
+after each single failure, and every header sync × KILL, TERM and EIO:
+
+| Mode | Syncs per call |
+|---|---|
+| enrol | `luksAddKey` 3, `token import` 2 |
+| replace | `luksAddKey` 3, `token import` 2, `luksKillSlot` 3, `token remove` 2 |
+
+In 81 cases the header right after the fault was changed and not clean. Each is recorded as an
+observation, and the identical retry ended clean in every one. In every case the printed `STATE`
+was the header's.
+
+An earlier run found one case: replace, `luksKillSlot`, sync 1, KILL. luksKillSlot wipes the key
+material before it updates the metadata, and the retry refused the listed but spent keyslot. That
+is fixed in the script and covered by a unit test.
+
+Script SHA-256: `676c5ada5d44b8fffb0724eccfd2bf8c71fa441059a2d79732b2dfc9d342cb1b`. Report SHA-256:
+`628e99169a93d7f9843f2e60360598d8d5a064cbaaa28c3a2bb0cce99031781b`. The run took 61 minutes on two
+CPUs.
