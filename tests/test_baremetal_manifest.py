@@ -202,7 +202,8 @@ class Pin(Case):
         self.assertEqual(len(self.fake.logins), 1)
         self.assertTrue(os.path.exists(os.path.join(self.state, tool.LATCH)))
         self.fake.login_error = None
-        self.assertEqual(tool.main(["clear-pin-latch", "--state-dir", self.state]), 0)
+        with unittest.mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(tool.main(["clear-pin-latch", "--state-dir", self.state]), 0)
         self.sign()
         self.assertEqual(len(self.fake.logins), 2)
 
