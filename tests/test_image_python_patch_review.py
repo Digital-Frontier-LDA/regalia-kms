@@ -1,8 +1,10 @@
 """A review must not silently reverse patches or bypass source authentication."""
 import io
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -29,6 +31,25 @@ class PythonPatchReviewBoundaries(unittest.TestCase):
                     python_patch_review.review(Path(temp), output)
                 command.assert_not_called()
                 self.assertFalse(output.parent.exists())
+
+    def test_isolated_dispatcher_ignores_hostile_directory_and_python_environment(self):
+        dispatcher = Path(__file__).resolve().parents[1] / 'tools/lab_cli.py'
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name in ('json.py', 'argparse.py', 'tarfile.py'):
+                (root / name).write_text('raise RuntimeError("hostile module imported")\n')
+            environment = dict(os.environ, PYTHONPATH=temp, PYTHONHOME=temp,
+                               PYTHONUSERBASE=temp, PYTHONSTARTUP=str(root / 'json.py'))
+            command = [sys.executable, '-I', str(dispatcher), 'appliance-python-patch-review', '--help']
+            result = subprocess.run(command, cwd=root, env=environment, text=True,
+                                    capture_output=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('GNU patch executable', result.stdout)
+            command[1] = '-Es'
+            result = subprocess.run(command, cwd=root, env=environment, text=True,
+                                    capture_output=True, timeout=20)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('REFUSED: use python3 -I', result.stderr)
 
     def test_real_patch_does_not_correct_reverse_direction(self):
         executable = shutil.which('gpatch') or shutil.which('patch')

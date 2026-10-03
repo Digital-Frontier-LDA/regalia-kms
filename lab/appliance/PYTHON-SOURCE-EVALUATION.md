@@ -69,7 +69,7 @@ source authentication are rejected before publication.
 Run from the repository root (GNU patch must be available):
 
 ```sh
-python3 -Es -m lab.appliance.python_patch_review PYTHON_SOURCE_OUTPUT --output PATCH_REVIEW_OUTPUT
+python3 -I tools/lab_cli.py appliance-python-patch-review PYTHON_SOURCE_OUTPUT --output PATCH_REVIEW_OUTPUT
 ```
 
 On macOS with Homebrew GNU patch, add `--patch /opt/homebrew/bin/gpatch`.
