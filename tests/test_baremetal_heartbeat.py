@@ -476,6 +476,31 @@ class Sequence(Case):
         fresh.accept(beat(self.m1, 63001, issued=T0 + away + later), self.m1)
         self.assertEqual(counter.value(), 63001)
 
+    def test_a_planted_state_owes_nothing_and_moves_nothing(self):
+        """#230 third read (regalia-kms-51): finishing an owed advance must not trust the state file. A held
+        heartbeat that is not signed by a key the manifest names owes nothing: the genuine next one is taken
+        and the counter lands exactly on it."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        stranger = Ed25519PrivateKey.generate()
+        for label, planted, allowance in (("unsigned, huge", {"heartbeat": {"sequence": 10 ** 9}}, None),
+                                          ("signed by a stranger", beat(self.m1, 53705, issued=T0, key=stranger), hb.MAX_ALLOWANCE),
+                                          ("over its stored allowance", {"heartbeat": {"sequence": 5000}}, 1000)):
+            with self.subTest(label):
+                tpm = FakeTpm()
+                counter = hb.Counter("0x1500018", lock_path=self.d + "/p.lock", run=tpm)
+                counter.define()
+                path = os.path.join(self.d, "planted.json")
+                fresh = hb.Freshness(counter, lambda: (self.now, True), lambda: self.ticks, path)
+                fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+                with open(path) as f:
+                    state = json.load(f)
+                state["envelope"], state["allowance"] = planted, allowance
+                with open(path, "w") as f:
+                    json.dump(state, f)
+                fresh.accept(beat(self.m1, 2, issued=T0 + 60), self.m1)
+                self.assertEqual(counter.value(), 2)
+                os.unlink(path)
+
     def test_the_stored_allowance_never_exceeds_the_cap(self):
         self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
         self.later(2 * 366 * 86400)

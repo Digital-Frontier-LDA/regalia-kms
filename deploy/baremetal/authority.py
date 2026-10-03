@@ -187,6 +187,7 @@ class Authority:
         self.lock = threading.RLock()
         # A number reserved on the counter that nothing has been signed under yet: retried, never wasted
         self.reserved = None
+        self.wake = threading.Event()      # a revocation whose heartbeat failed: run_loop tries again now
 
     def path(self, name):
         return os.path.join(self.cfg["state_dir"], name)
@@ -220,6 +221,11 @@ class Authority:
 
     def _publish(self, raw):
         self._write(HEARTBEAT, raw, 0o644)
+
+    def _unpend(self):
+        """After a publish: a pending file that cannot be removed is only republished (the same bytes)."""
+        with contextlib.suppress(OSError):
+            os.unlink(self.path(PENDING))
 
     # ---- the sequence ----
 
@@ -263,7 +269,7 @@ class Authority:
                     self.trail({"event": "authority-heartbeat", "outcome": "DROPPED", "reason": str(stale)[:240], "signer": self.signer.kind})
                 else:
                     self._publish(json.dumps(pending, sort_keys=True).encode())     # the same bytes, again
-                    os.unlink(self.path(PENDING))
+                    self._unpend()
                     return pending
             lifetime = self.lifetime(manifest)
             # checked BEFORE a number is reserved: a key the manifest does not name would burn one per retry
@@ -282,7 +288,7 @@ class Authority:
                         "digest": body["manifest_digest"], "expires_at": body["expires_at"], "key": self.signer.public(),
                         "signer": self.signer.kind, "reason": reason})
             self._publish(raw)
-            os.unlink(self.path(PENDING))
+            self._unpend()
             return envelope
 
     def catch_up(self):
@@ -290,7 +296,7 @@ class Authority:
         published: the process stopped between the two), or a signed heartbeat is pending, publish now.
         Returns the envelope, or None."""
         held, manifest = self.held(), self.store.load()
-        if self._read(PENDING) is not None or held is None or held["heartbeat"]["epoch"] != manifest["epoch"]:
+        if os.path.exists(self.path(PENDING)) or held is None or held["heartbeat"]["epoch"] != manifest["epoch"]:
             return self.beat("the store is at epoch %d and no heartbeat for it was published" % manifest["epoch"])
         return None
 
@@ -319,7 +325,8 @@ class Authority:
                         "requester": requester, "reason": reason})
             try:
                 return envelope, self.beat("revocation of %s" % node_id)       # the pending old-epoch bytes are dropped there
-            except (Refused, OSError) as failure:
+            except Exception as failure:      # noqa: BLE001 - committed is committed, whatever the heartbeat did
+                self.wake.set()                                         # serve retries at once, not an interval later
                 raise Committed(candidate["epoch"], failure) from None
 
     def init(self, envelopes):
@@ -422,6 +429,9 @@ class Authority:
     def run_loop(self, stop, sleep=time.sleep, clock=time.monotonic):
         due, failures = 0.0, 0
         while not stop():
+            if self.wake.is_set():
+                self.wake.clear()
+                due = 0.0
             if clock() >= due:
                 try:
                     self.catch_up() or self.beat()
@@ -445,6 +455,19 @@ class Committed(Refused):
     def __init__(self, epoch, failure):
         super().__init__("epoch %d is committed; its heartbeat is not yet published (%s): the next beat will" % (epoch, failure))
         self.epoch = epoch
+
+
+def one_writer(state_dir):
+    """The single-writer lock: serve holds it while it runs, init and accept for their write. A second
+    writer is refused at once, never queued."""
+    import fcntl
+    fd = os.open(os.path.join(state_dir, "writer.lock"), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise Refused("another writer holds %s (is regalia-authority running? stop it first: one writer)" % os.path.join(state_dir, "writer.lock")) from None
+    return fd
 
 
 def retry_delay(failures, interval):
@@ -504,10 +527,9 @@ def main(argv=None):
             require(answer.get("ok") is True, "the authority refused: %s" % answer.get("refused"))
             print(json.dumps(answer.get("status", answer), indent=1, sort_keys=True))
             return 0
+        if args.command in ("init", "accept", "serve"):
+            _writer = one_writer(cfg["state_dir"])         # held for the life of this process
         if args.command in ("init", "accept"):
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
-                running = probe.connect_ex(cfg["control_socket"]) == 0
-            require(not running, "the authority is running (its control socket answers): stop regalia-authority first, one writer")
             owner = os.stat(cfg["state_dir"]).st_uid
             require(os.geteuid() == owner, "run as the authority's own user (uid %d), e.g. runuser -u regalia-authority -- ...: "
                     "files written as anyone else would lock the service out" % owner)

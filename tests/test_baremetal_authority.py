@@ -160,9 +160,15 @@ class Heartbeats(Case):
 
     def test_a_pending_file_that_cannot_be_used_is_dropped_and_serving_goes_on(self):
         """#230 second read (regalia-kms-51): a valid-JSON pending file without its fields crashed every beat."""
-        for label, raw in (("fields missing", b'{"heartbeat": {}}'), ("not JSON", b"{"), ("another key", None)):
+        for label, raw in (("fields missing", b'{"heartbeat": {}}'), ("not JSON", b"{"), ("a list", b"[]"), ("another key", None),
+                           ("inside the margin", "margin")):
             with self.subTest(label):
-                if raw is None:
+                if raw == "margin":                        # genuinely signed, but with less than MIN_INTERVAL_S to live
+                    self.a.beat()
+                    with open(self.d + "/heartbeat.json", "rb") as f:
+                        raw = f.read()
+                    self.now += hb.MAX_LIFETIME - hb.MIN_INTERVAL_S + 1
+                elif raw is None:
                     stranger = Ed25519PrivateKey.generate()
                     body = {"schema": hb.SCHEMA, "epoch": 1, "sequence": 99, "issued_at": authority.stamp(self.now), "expires_at": authority.stamp(self.now + 3600),
                             "manifest_digest": m.digest(self.m1)}
@@ -170,7 +176,7 @@ class Heartbeats(Case):
                 with open(self.d + "/pending-heartbeat.json", "wb") as f:
                     f.write(raw)
                 before = self.a.counter.value()
-                envelope = self.a.beat()
+                envelope = self.a.catch_up()                       # the path serve takes first
                 self.assertEqual(envelope["heartbeat"]["sequence"], before + 1)
                 self.assertFalse(os.path.exists(self.d + "/pending-heartbeat.json"))
                 self.assertEqual(self.events[-2]["outcome"], "DROPPED")
@@ -299,9 +305,10 @@ class Revocation(Case):
         self.assertEqual(self.a.held()["heartbeat"]["epoch"], 2)
 
     def test_a_revocation_committed_but_not_published_says_so(self):
-        with unittest.mock.patch.object(authority.Authority, "_publish", side_effect=OSError("disk full")):
+        with unittest.mock.patch.object(authority.Authority, "_publish", side_effect=KeyError("anything at all")):
             answer = self.a.control(json.dumps({"op": "revoke", "node": "c", "state": "QUARANTINED", "reason": "half done"}).encode(), 0)
         self.assertEqual((answer["ok"], answer["epoch"], answer["published"]), (True, 2, False))
+        self.assertTrue(self.a.wake.is_set())                  # serve tries again at once
         self.assertIn("the next beat will", answer["reason"])
         self.assertEqual(self.a.catch_up()["heartbeat"]["epoch"], 2)
 
@@ -326,7 +333,7 @@ class Control(Case):
         thread = self.a.control_listener(lambda: bool(stop), allowed_uid=os.getuid())
         self.addCleanup(lambda: (stop.append(True), thread.join(5)))
         answer = authority.ask(self.d + "/control.sock", {"op": "revoke", "node": ["c"], "state": "QUARANTINED", "reason": "list"})
-        self.assertEqual(answer["ok"], False)
+        self.assertEqual((answer["ok"], answer["refused"]), (False, "node, state and reason must be strings"))
         with unittest.mock.patch.object(authority.Authority, "status", side_effect=TypeError("unexpected")):
             self.assertIn("internal error (TypeError)", authority.ask(self.d + "/control.sock", {"op": "status"})["refused"])
         self.assertTrue(authority.ask(self.d + "/control.sock", {"op": "status"})["ok"])       # still answering
@@ -368,15 +375,15 @@ class CommandLine(Case):
         self.assertEqual((code, asked.call_args.args[1]), (0, {"op": "status"}))
         self.assertIn('"signer": "file"', out)
 
-    def test_init_and_accept_are_refused_while_serve_answers(self):
+    def test_one_writer_init_and_accept_are_refused_while_serve_holds_the_lock(self):
         with open(self.d + "/chain.json", "w") as f:
             json.dump([m_sign(self.m1)], f)
-        stop = []
-        thread = self.a.control_listener(lambda: bool(stop), allowed_uid=os.getuid())
-        self.addCleanup(lambda: (stop.append(True), thread.join(5)))
+        held = authority.one_writer(self.d)                    # what serve holds while it runs
+        self.addCleanup(os.close, held)
         code, _, err = self.run_main("accept", "--chain", self.d + "/chain.json")
         self.assertEqual(code, 2)
-        self.assertIn("the authority is running", err)
+        self.assertIn("another writer holds", err)
+        self.refused("another writer holds", authority.one_writer, self.d)
 
     def test_init_and_accept_only_as_the_service_s_own_user(self):
         with open(self.d + "/chain.json", "w") as f:

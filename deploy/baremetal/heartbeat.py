@@ -155,9 +155,9 @@ def validate(heartbeat):
     return issued, expires
 
 
-def verify(envelope, manifest):
-    """The heartbeat inside an envelope, if it is signed by a revocation key the CURRENT manifest names
-    and is for that manifest. Time and sequence are Freshness's to check."""
+def signed(envelope, manifest):
+    """The heartbeat inside an envelope, if it is well formed and signed by a revocation key `manifest`
+    names, WHATEVER epoch it is for. Returns (heartbeat, issued, expires). verify() adds the rest."""
     membership.exact(envelope, ("heartbeat", "signature"), "envelope")
     sig = envelope["signature"]
     membership.exact(sig, ("key", "sig"), "signature")
@@ -172,6 +172,13 @@ def verify(envelope, manifest):
             bytes.fromhex(sig["sig"]), DOMAIN + membership.canonical(heartbeat))
     except (InvalidSignature, ValueError):
         raise Refused("the heartbeat signature does not verify")
+    return heartbeat, issued, expires
+
+
+def verify(envelope, manifest):
+    """The heartbeat inside an envelope, if it is signed by a revocation key the CURRENT manifest names
+    and is for that manifest. Time and sequence are Freshness's to check."""
+    heartbeat, issued, expires = signed(envelope, manifest)
     require(heartbeat["epoch"] == manifest["epoch"], "the heartbeat is for epoch %d, the current manifest is epoch %d"
             % (heartbeat["epoch"], manifest["epoch"]))
     require(heartbeat["manifest_digest"] == membership.digest(manifest), "the heartbeat is for another manifest (digest mismatch)")
@@ -326,8 +333,15 @@ class Freshness:
         held = self.counter.value()
         # An advance a crash interrupted (the held heartbeat is above the counter) is finished FIRST, under
         # the allowance it was accepted under: a node that stopped at ANY increment of a long catch-up is
-        # not stranded by the counter it left behind, and the new heartbeat is measured from there.
+        # not stranded by the counter it left behind, and the new heartbeat is measured from there. Only
+        # for a held heartbeat SIGNED by a revocation key the current manifest names (any epoch: the
+        # catch-up may span one): a file planted on the disk owes nothing and moves nothing.
         owed = pending(state, held, self.counter.MAX_JUMP)
+        if owed:
+            try:
+                signed(state["envelope"], manifest)
+            except Refused:
+                owed = 0
         if owed:
             held = self.counter.advance(held + owed, state["allowance"] or self.counter.MAX_JUMP)
         allowance = min(allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP), MAX_ALLOWANCE)
