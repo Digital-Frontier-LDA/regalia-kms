@@ -1,0 +1,52 @@
+{
+  "blocking_matches_unchanged_from_77577c0": true,
+  "build_report_sha256": "ca3ff37a1bf477772c97948dfefc92a7be4f1e08b0ac548b18e5c6685b989651",
+  "build_status": "passed",
+  "ci_run": 37158446217,
+  "ci_url": "https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37158446217",
+  "database_built": "2026-10-03T06:31:58Z",
+  "distinct_blocking_cves": 367,
+  "findings": {
+    "Critical": 105,
+    "High": 640,
+    "Low": 37,
+    "Medium": 529,
+    "Negligible": 239,
+    "Unknown": 576
+  },
+  "head_commit": "64f18f46c5bca0ca384f8afa922f936f46b9fc2b",
+  "installed_package_binding": {
+    "archive_packages": 226,
+    "packages": 237,
+    "source_built_packages": 11,
+    "status": "verified"
+  },
+  "limits": [
+    "Actual rootfs tar bytes are not retained in the downloaded artifact; that digest remains a CI builder claim outside the runner.",
+    "This appliance still contains the old Python runtime. Candidate security fixes cannot be inferred from its passing boot checks.",
+    "The release gate fails on 105 Critical and 640 High findings; no suppression or scan-policy change is used."
+  ],
+  "normal_boot": {
+    "log_sha256": "66c063226ef23c456734124dc8bff00d04e22d77fe417d5e657ccfdd1409f576",
+    "mode": "UEFI disk boot in disposable overlay",
+    "multi_user_seconds": 11.23,
+    "status": "passed",
+    "verification_reran": false
+  },
+  "package_admitted": false,
+  "production_approved": false,
+  "python_candidate_installed": false,
+  "rootfs_sha256": "470c1d6854441443699a14700bca1ba7773c35124740aae3e7ae5fb16f2ac231",
+  "scan_evidence": {
+    "sbom.attestation.spdx.json": "28a25cc05d5139ef50bfcd190e096d975f2fa70d47cd2521802c45cd1fcadc6b",
+    "sbom.cdx.json": "d6c4fe092a26074fbef8b2bab42443848b9420b420f8cab0b92d192e243736da",
+    "sbom.spdx.json": "36c0a2d460e91aabab60435fe5cfee5bd69fc2d82f91ecfc29ce1c1a9399c9ba",
+    "sbom.syft.json": "171fae32633181f5a6bb3a608ecd6441bae9b35268c73a290649ddf7c8c5b0df",
+    "scanner-config.json": "00392cd4f00ef45aac1f325fe6f914efaa567e481760ef6704d55ddf34c85c21",
+    "vulnerabilities.json": "9008bade5a100349105c33a09ecf3ba6454b839a49b3694b16431d0cda5bb87e"
+  },
+  "scan_report_sha256": "f6aceb14e89a8f9ce2aca4ad935fc0eb89146c2cff6bc24d8b708fb01e015d4f",
+  "schema": "regalia.python-prerequisite-appliance-review/v1",
+  "source_merge_commit": "0fb8b12e6735069c15533c5430cd8b8c87fbb470",
+  "status": "prerequisite_image_passed_functional_checks_scan_remains_blocked"
+}

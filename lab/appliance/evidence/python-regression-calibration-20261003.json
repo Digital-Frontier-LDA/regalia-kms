@@ -1,0 +1,118 @@
+{
+  "authenticated_source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed CPython tar",
+    "authority_sha256": "1de2bbd31e2dd10aab4098c3ab2f937c530d924ddbfa2dd091f0c7cfb2ee182a",
+    "debian_packaging_version": "3.13.15-1",
+    "directory": "pool/main/p/python3.13",
+    "files": {
+      "Python-3.13.16.tar.xz": {
+        "bytes": 23225704,
+        "sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d"
+      },
+      "Python-3.13.16.tar.xz.asc": {
+        "bytes": 833,
+        "sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8"
+      },
+      "python3.13_3.13.15-1.debian.tar.xz": {
+        "bytes": 261776,
+        "sha256": "1cf592dd51de735ff73644743e8959fb16bd50714168855509b709fdeede8342"
+      },
+      "python3.13_3.13.15-1.dsc": {
+        "bytes": 4040,
+        "sha256": "4078ff651ea7096e6933f794b854054cda195d600e02ac83306cee524da31b87"
+      },
+      "python3.13_3.13.15.orig.tar.xz": {
+        "bytes": 23160540,
+        "sha256": "1e66a7945a48390ee4c2a4268a0e4185884059a13c4aab6d148aa208deea4a76"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "python3.13",
+    "package_admitted": false,
+    "packaged_authority_sha256": "f0116877747ac7bb245815039fa864b944195a5e52fa9f60103c6448bddc0bf7",
+    "packaging_suite": "sid",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+    "production_approved": false,
+    "release": {
+      "date": "2026-10-02T20:13:57+00:00",
+      "inrelease_sha256": "50c96ce9530ce174d156fe36c00285957553e35dd155d6ff9fca54e6b879f18b",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "sid",
+      "valid_until": "Fri, 09 Oct 2026 20:13:57 UTC"
+    },
+    "schema": "regalia.python-authenticated-source/v1",
+    "sigstore_signature_verified": false,
+    "sources_index_sha256": "5b081029e6583d90759c9e05855ec6ae0ae82a0392fe085a1785271e2d82a4f0",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signature": {
+      "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+      "signature_sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8",
+      "signed_sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "signing_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305"
+    },
+    "upstream_version": "3.13.16"
+  },
+  "candidate_positive_result": false,
+  "development_image": {
+    "architecture": "arm64",
+    "authenticated": false,
+    "id": "sha256:c2c09de0f1b74cd165d1d755ccea3140cf953ab5803c139a70fa1b5cbeae4e48"
+  },
+  "expat_probe": {
+    "accepted_16_byte_calls": 0,
+    "api": "legacy XML_SetHashSalt in pyexpat and ElementTree",
+    "legacy_calls": 2,
+    "log_sha256": "255d5b0cba451ec4036ce59b572693426825681cb1c55e71801dc302c8976173"
+  },
+  "limits": [
+    "The development parent is unsigned; Debian package metadata has not independently authenticated its installed payload bytes.",
+    "Only two targeted upstream cases and both Expat paths are calibrated here. HTML and SNI positive execution remain required.",
+    "At calibration time native candidate compilation was live; no installed candidate, ABI, repeatability or scanner clearance is qualified."
+  ],
+  "package_admitted": false,
+  "production_approved": false,
+  "recipe_sha256": {
+    "lab/appliance/python_expat_probe.c": "c447ba661da9d9614490dd652f0fce699bd83b8e5d2820c0313bea0cfd313352",
+    "lab/appliance/python_regressions.py": "28c12131c2b752e07c43b3751e4ce52335bf9b34c41259848db9b4308585519b",
+    "tools/lab_cli.py": "8909c99333c13f77b98855c569275d6876568aed7a8bc818a9785382ccbfcbe8"
+  },
+  "regressions": {
+    "cases": [
+      "test.test_ssl.SSLObjectTests.test_check_hostname_requires_server_hostname",
+      "test.test_tarfile.TestExtractionFilters.test_sneaky_hardlink_relocation"
+    ],
+    "log_sha256": "9a2b068e8be63c3b9783435d0bd341c0fe96345003d0442ad31bbb491dbad4ea",
+    "result": {
+      "errors": 0,
+      "expat_version": "expat_2.8.3",
+      "expected_failures": 0,
+      "failures": 4,
+      "installed_module_origins": {
+        "html.parser": "/usr/lib/python3.13/html/parser.py",
+        "pyexpat": "built-in",
+        "ssl": "/usr/lib/python3.13/ssl.py",
+        "tarfile": "/usr/lib/python3.13/tarfile.py",
+        "xml.etree.ElementTree": "/usr/lib/python3.13/xml/etree/ElementTree.py"
+      },
+      "openssl_version": "OpenSSL 3.5.7 9 Jun 2026",
+      "skipped": 0,
+      "tests_run": 2,
+      "unexpected_successes": 0
+    }
+  },
+  "runtime_package_versions": {
+    "libpython3.13-minimal": "3.13.5-2+deb13u5",
+    "libpython3.13-stdlib": "3.13.5-2+deb13u5",
+    "python3.13": "3.13.5-2+deb13u5",
+    "python3.13-minimal": "3.13.5-2+deb13u5"
+  },
+  "schema": "regalia.python-regression-calibration/v1",
+  "status": "development_baseline_correctly_rejected",
+  "test_inputs_sha256": {
+    "test_ssl.py": "e86a7fb441edb7ef7fa97781581fa15b1649fc63d80814574729a1e0c4a55750",
+    "test_tarfile.py": "2193b9cc8eb3888a636686f989ff67ce8e9cfcf434616c777b94b9de61cda6f5"
+  },
+  "worker_sha256": "20bbacdbcbf6062bb528247d7b0bdaed82f8f8f5d48ebfede8d5c5a5d9a0eff3"
+}

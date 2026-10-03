@@ -121,9 +121,14 @@ The SSL rebase preserves Debian's `_ssl_data_34.h` path. Upstream's newer 3.6
 error table differs in legacy compression reason names and numeric fallbacks;
 it must not be described as an exact superset. This candidate needs explicit
 error-mapping and SSL regression checks with the actual Debian runtime library.
-A native package compilation trial has started with pinned trixie/security apt
-authorities and a dedicated non-root build UID. Its cached base is unsigned,
-so it cannot qualify production compiler payloads or an appliance image.
+A native runtime package trial compiled the static and non-PIE interpreters,
+with all 112 configured modules passing import checks. It then failed in
+Debian's minimal-module dependency check: the packaging's legacy `imp` helper
+imports `_ERR_MSG`, which upstream no longer exposes. That helper needs a
+reviewed compatibility correction; the minimal-module gate remains required.
+The trial uses pinned trixie/security apt authorities and a dedicated non-root
+build UID. Its cached base is unsigned, so it cannot qualify production
+compiler payloads or an appliance image.
 
 ### Documentation compatibility and runtime package target
 
@@ -147,9 +152,49 @@ SSL fixes or performance. Explicit SSL regressions and inspection of actual
 test results remain required. This target selection is not evidence that the
 full documentation package builds.
 
+### Installed security regression gate
+
+`appliance-python-regressions` freshly verifies the complete source bundle, then
+extracts only its upstream `test/` fixtures. The standard libraries under test
+must come from the installed `/usr/lib/python3.13` tree or built-in modules,
+never the source checkout. It requires the four installed candidate package
+versions, an isolated interpreter and an ordinary user. Each advisory runs in
+a separate process with a 90-second timeout; failed, skipped, missing or
+expected-failure tests cannot produce a passing receipt. The CPU resource is
+explicitly enabled for the HTML parser regressions.
+
+```sh
+python3.13 -I tools/lab_cli.py appliance-python-regressions PYTHON_NEWER_OUTPUT --output INSTALLED_REGRESSION_OUTPUT
+```
+
+The targeted cases cover HTML parser CPU behavior, SNI context lifetime,
+SSLObject hostname enforcement and tar hard-link relocation. Calibration on
+the installed Debian `3.13.5-2+deb13u5` interpreter produces four real assertion
+failures in the hostname and tar cases, with no import errors or skips. This
+demonstrates that those checks distinguish the vulnerable runtime; the candidate
+still needs a positive run after installation. Expat version and XML parsing
+checks establish compatibility only. A separate disposable-process probe
+interposes the system Expat salt APIs and requires one accepted 16-byte API call
+and no legacy calls from each of pyexpat and ElementTree. Calibration on the
+old interpreter observes the legacy API in both paths. A failed preload or
+successful XML parse without the required trace cannot pass. No salt bytes are
+logged. This API-width evidence must still be combined with authenticated
+built-source and library provenance; it is not a statistical entropy estimate
+or scanner clearance. The qualification environment requires `cc`, Expat
+development headers and an executable temporary filesystem for the probe.
+
+The [baseline calibration receipt](evidence/python-regression-calibration-20261003.json)
+binds the authenticated test archive, exact worker/probe recipes, observed
+failures and limits of the unsigned development parent. It grants no candidate
+positive result. The [prerequisite appliance receipt](evidence/python-prerequisite-appliance-review-20261003.json)
+records the `64f18f4` CI rebuild: normal boot passes, its linked SBOM and scan
+hashes verify, and all **105 Critical / 640 High matches** are unchanged from
+the prior qualified utility image. That image still contains the old Python;
+its functional result cannot qualify this candidate.
+
 ## Residual Risk
 
-No new Python package is compiled, installed or admitted into the appliance.
+No new Python package has been produced, installed or admitted into the appliance.
 The Python API/ABI, AppArmor modules, Debian maintainer scripts, extension
 modules, boot tooling and actual scanner clearance remain unproved. Existing
 Python findings stay blocking. Published fixed-version notes alone cannot

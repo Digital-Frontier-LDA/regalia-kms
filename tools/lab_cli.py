@@ -7,6 +7,7 @@ COMMANDS = {
     'appliance-util-profile': 'lab.appliance.util_profile',
     'appliance-python-patch-review': 'lab.appliance.python_patch_review',
     'appliance-python-profile': 'lab.appliance.python_profile',
+    'appliance-python-regressions': 'lab.appliance.python_regressions',
     'appliance-util-build': 'lab.appliance.util_build',
     'appliance-util-smoke': 'lab.appliance.util_smoke',
     'appliance-probe': 'lab.appliance.probe',
