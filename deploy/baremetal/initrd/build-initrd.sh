@@ -71,7 +71,8 @@ EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [[ "$EPOCH" =~ ^[0-9]{1,11}$ ]] || die "--epoch must be seconds since 1970"
 [ -n "$OUT" ] || die "--out DIR is required"
 [ -n "$GO" ] && [ -x "$GO" ] || die "no go to launch the pinned toolchain with (put go on PATH, or --go FILE)"
-for t in mmdebstrap git python3; do command -v "$t" >/dev/null || die "$t is required"; done
+for t in mmdebstrap git python3 gpgv curl dpkg-deb; do command -v "$t" >/dev/null || die "$t is required"; done
+python3 -Es -c 'import cryptography' 2>/dev/null || die "python3-cryptography is required (the inventory and its check, deploy/baremetal/uki.py)"
 [ -z "$KEYRING" ] || [ -r "$KEYRING" ] || die "--keyring $KEYRING cannot be read"
 
 # the commit, clean: what this builder compiles and installs is exactly what the commit holds
