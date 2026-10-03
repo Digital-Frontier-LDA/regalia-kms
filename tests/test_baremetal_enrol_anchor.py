@@ -39,7 +39,8 @@ class Anchor(nt.Case):
         self.assertEqual(node.anchor().value(), 3)
         self.assertEqual(node.anchor().record(), (3, digest))
         self.assertEqual(node.store().load()["epoch"], 3)
-        self.assertEqual(node.freshness().counter.value(), 0)
+        counter = node.freshness().counter
+        self.assertNotEqual(counter._tpm("nvreadpublic", counter.index).returncode, 0, "the counter is the heartbeat step's")
         # again, as a resumed run: nothing changes
         self.assertEqual(self.anchor(chain), (3, digest))
         self.assertEqual(node.anchor().value(), 3)
@@ -53,18 +54,12 @@ class Anchor(nt.Case):
         second["nodes"] = [hbt.node(me, "ACTIVE", 0)] + second["nodes"]
         return [rt.sign(first), rt.sign(second)]
 
-    def test_a_late_node_gets_no_counter_at_zero(self):
-        """#190: its counter is defined AT the network's sequence by the first-heartbeat step, never at 0 here."""
-        chain = self.late_chain()
-        self.assertEqual(self.anchor(chain)[0], 2)
-        counter = self.node().freshness().counter
-        self.assertNotEqual(counter._tpm("nvreadpublic", counter.index).returncode, 0, "no heartbeat counter yet")
-        self.assertEqual(self.anchor(chain)[0], 2)                  # resumed: still none
-
-    def test_a_late_node_whose_counter_exists_already_is_refused(self):
-        self.node().freshness().counter.define()
-        with self.assertRaisesRegex(enrol.Refused, "joins after epoch 1 and the TPM already holds the heartbeat counter"):
-            self.anchor(self.late_chain())
+    def test_no_node_gets_a_counter_from_the_anchor_step(self):
+        """#190, d9's read: whatever epoch first names it, its counter is defined by the first-heartbeat step."""
+        for chain in (self.late_chain(), ):
+            self.anchor(chain)
+            counter = self.node().freshness().counter
+            self.assertNotEqual(counter._tpm("nvreadpublic", counter.index).returncode, 0)
 
     def test_a_longer_chain_continues_a_shorter_enrolment(self):
         chain = self.chain(3)

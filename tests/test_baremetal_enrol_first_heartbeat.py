@@ -18,9 +18,9 @@ class FirstHeartbeat(st.Case):
         self.late = hb.Freshness(self.counter, self.clock, lambda: self.ticks, os.path.join(self.d, "late-freshness.json"))
         self.trail = []
 
-    def take(self, sources=("b", "c", "authority")):
+    def take(self, sources=("b", "c", "authority"), bootstrap=False, manifest=None):
         transports = {s if s != "authority" else "authority": self.wire(s, "a") for s in sources}
-        return enrol.take_first_heartbeat("a", self.m1, self.stores["b"], self.late, transports, self.trail.append)
+        return enrol.take_first_heartbeat("a", manifest or self.m1, self.stores["b"], self.late, transports, self.trail.append, bootstrap)
 
     def test_the_highest_heartbeat_starts_the_counter_with_no_increment_loop(self):
         self.beat(self.m1)
@@ -40,6 +40,40 @@ class FirstHeartbeat(st.Case):
             self.take(sources=())
         self.assertIsNone(self.late.held())
         self.assertEqual(self.trail, [])
+
+    def test_bootstrap_starts_at_zero_only_when_nobody_holds_a_heartbeat_and_only_at_epoch_1(self):
+        """#190 (24): at 0 only by --bootstrap, the first bring-up of a cluster: and even then a heartbeat any reachable
+        source holds is taken instead."""
+        self.assertEqual(self.take(sources=(), bootstrap=True), (0, None))
+        self.assertEqual(self.counter.value(), 0)
+        self.assertEqual([(e["outcome"], e["sequence"]) for e in self.trail], [("INCOMPLETE", 0), ("ALLOW", 0)])
+        self.assertIn("bootstrap", self.trail[-1]["reason"])
+        self.assertEqual(self.take(sources=(), bootstrap=True), (None, None), "defined: nothing more to do")
+
+    def test_bootstrap_takes_a_heartbeat_when_there_is_one(self):
+        self.beat(self.m1)
+        sequence, left = self.take(bootstrap=True)
+        self.assertGreater(sequence, 0)
+        self.assertIsNotNone(left)
+
+    def test_bootstrap_is_refused_above_epoch_1(self):
+        later = dict(self.m1, epoch=2)
+        with self.assertRaisesRegex((enrol.Refused, m.Refused), "--bootstrap is the first bring-up of a cluster, under epoch 1"):
+            self.take(sources=(), bootstrap=True, manifest=later)
+
+    def test_a_refused_first_heartbeat_closes_the_trail_with_deny(self):
+        """d9's LOW on #279: the trail never ends open."""
+        self.beat(self.m1)
+        import unittest.mock
+        with unittest.mock.patch.object(self.late, "accept_first", side_effect=m.Refused("the heartbeat has expired")):
+            with self.assertRaisesRegex((enrol.Refused, m.Refused), "the heartbeat has expired. Run commit again"):
+                self.take()
+        self.assertEqual([e["outcome"] for e in self.trail], ["INCOMPLETE", "DENY"])
+
+    def test_a_half_defined_counter_is_recounts_case(self):
+        self.counter._tpm("nvdefine", self.counter.index, "-C", "o", "-a", "nt=counter|ownerwrite|ownerread", "-s", "8")
+        with self.assertRaisesRegex((enrol.Refused, m.Refused), "half defined"):
+            self.take()
 
     def test_a_heartbeat_for_another_manifest_is_not_taken(self):
         self.beat(self.m1)

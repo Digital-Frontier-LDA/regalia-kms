@@ -673,13 +673,8 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     require(not counter_present or (len(counter_present) == 2 and counter.value() == 0),
             "the TPM already holds the heartbeat counter's indices (%s) at a value other than a fresh one: enrolment "
             "does not take them over" % ", ".join(counter_present))
-    # A node first named above epoch 1 does not start its counter at 0: the network's heartbeats are far past
-    # the jump bound. Its counter is defined AT the first heartbeat it takes (first_heartbeat, as decided on
-    # #190), so here it must not exist yet (a complete pair could never be set to a sequence again).
-    late = (first_epoch(envelopes, cfg["root_key"], cfg["node_id"]) or 1) > 1
-    require(not (late and counter_present), "this node joins after epoch 1 and the TPM already holds the heartbeat counter's "
-            "indices (%s): it can no longer be started at the network's sequence. Remove them by hand (tpm2_nvundefine) "
-            "if this enrolment made them" % ", ".join(counter_present))
+    # The heartbeat counter is NOT defined here: first_heartbeat defines it AT the network's current sequence (or at
+    # 0, only at a network's bootstrap, by the operator's --bootstrap), whenever the node enrols (#190, d9's read).
     already = 0
     if os.path.exists(store.path):
         store.load()                                   # refuses a store the TPM anchor does not vouch for
@@ -703,12 +698,10 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     for envelope in envelopes[already:]:            # what the store holds already is this chain's beginning (checked)
         store.commit(envelope)
     manifest = store.load()
-    if not counter_present and not late:
-        counter.define()
     return manifest["epoch"], membership.digest(manifest)
 
 
-def first_heartbeat(config_path, run=subprocess.run):
+def first_heartbeat(config_path, run=subprocess.run, bootstrap=False):
     """As regalia-sync (it owns the heartbeat state and the counter's lock), for a node first named above epoch 1:
     the highest heartbeat any reachable peer or the authority holds, verified under this node's manifest, taken as
     its FIRST (heartbeat.Freshness.accept_first: same checks as accept, live by authenticated time with no
@@ -719,16 +712,26 @@ def first_heartbeat(config_path, run=subprocess.run):
     with open(config_path, "rb") as f:
         cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
     n = node_module.Node(cfg, run)
-    manifest = n.manifest()
-    return take_first_heartbeat(n.node_id, manifest, n.store(), n.freshness(), n.sources(manifest),
-                                node_module.Trail(n.path("sync-audit.jsonl")))
+    store = n.store()
+    manifest = store.load()             # the store the anchor step committed, checked against the TPM anchor (the
+    #                                     published chain does not exist yet: the sync service writes it)
+    return take_first_heartbeat(n.node_id, manifest, store, n.freshness(), n.sources(manifest),
+                                node_module.Trail(n.path("sync-audit.jsonl")), bootstrap)
 
 
-def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail):
-    """first_heartbeat's decision, given the node's parts: see there."""
+def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bootstrap=False):
+    """first_heartbeat's decision, given the node's parts. WHENEVER the node enrols with no heartbeat counter yet (a
+    founding node whose hardware came late, a re-imaged one, a replacement: the network's heartbeats may be far past
+    the jump bound), its counter is defined at the highest heartbeat a source holds that verifies under its
+    manifest. At 0 only at a network's BOOTSTRAP, when no heartbeat was ever issued: the operator says so
+    (`bootstrap`), and no reachable source may hold one. Returns (sequence, seconds left); (None, None) when there is
+    nothing to do (a heartbeat held, or the counter defined already)."""
     from deploy.baremetal import convergence, heartbeat, sync
-    if freshness.held() is not None:
+    counter = freshness.counter
+    present = [i for i in (counter.index, counter.base_index) if counter._tpm("nvreadpublic", i).returncode == 0]
+    if freshness.held() is not None or len(present) == 2:
         return None, None
+    require(not present, "the heartbeat counter is half defined (%s): that is recount.py's case, not enrolment's" % ", ".join(present))
     client = sync.Client(node_id, store, None, sources, lambda event: None)
     found, failures = [], []
     for name in sorted(sources):
@@ -741,25 +744,41 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail):
             found.append((heartbeat.verify(envelope, manifest)["sequence"], name, envelope))
         except (Refused, membership.Refused, KeyError, TypeError) as refusal:
             failures.append("%s: %s" % (name, refusal))
-    require(found, "no peer and no authority gave a heartbeat that verifies under epoch %d (%s): the node cannot start its "
-            "heartbeat counter yet; run commit again once one answers" % (manifest["epoch"], "; ".join(failures) or "none reachable"))
+    event = {"event": "heartbeat-first", "node": node_id, "epoch": manifest["epoch"]}
+    if not found:
+        require(bootstrap, "no peer and no authority gave a heartbeat that verifies under epoch %d (%s): the node cannot start "
+                "its heartbeat counter yet; run commit again once one answers (or, at a network's bootstrap, before any "
+                "heartbeat was ever issued, with --bootstrap)" % (manifest["epoch"], "; ".join(failures) or "none reachable"))
+        require(manifest["epoch"] == 1, "--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch %d: "
+                "a heartbeat has been issued since, run commit again once a source answers" % manifest["epoch"])
+        trail(dict(event, sequence=0, outcome="INCOMPLETE", reason="bootstrap (--bootstrap): no source holds a heartbeat (%s)"
+                   % "; ".join(failures)))
+        counter.define()
+        trail(dict(event, sequence=0, outcome="ALLOW", reason="bootstrap: the counter starts at 0"))
+        return 0, None
     sequence, source, envelope = max(found, key=lambda f: f[0])
-    event = {"event": "heartbeat-first", "node": node_id, "epoch": manifest["epoch"], "sequence": sequence,
-             "issuer": envelope["signature"]["key"], "source": source}
+    event.update(sequence=sequence, issuer=envelope["signature"]["key"], source=source)
     trail(dict(event, outcome="INCOMPLETE", reason="taking the first heartbeat"))
-    left = freshness.accept_first(envelope, manifest)
+    try:
+        left = freshness.accept_first(envelope, manifest)
+    except (Refused, membership.Refused) as refusal:
+        trail(dict(event, outcome="DENY", reason=str(refusal)))           # the trail never ends open
+        raise Refused("the first heartbeat (sequence %d, from %s) is refused: %s. Run commit again" % (sequence, source, refusal))
     trail(dict(event, outcome="ALLOW", reason=""))
     return sequence, left
 
 
-def run_first_heartbeat_as_sync(config_path, run=subprocess.run):
+def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False):
     done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
-                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path],
+                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
+               + (["--bootstrap"] if bootstrap else []),
                cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     require(done.returncode == 0, "the first-heartbeat step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^FIRST-HEARTBEAT (\S+) (\S+)$", done.stdout, re.M)
     require(m is not None, "the first-heartbeat step did not report its result")
-    return (None, None) if m.group(1) == "held" else (int(m.group(1)), float(m.group(2)))
+    if m.group(1) == "held":
+        return None, None
+    return int(m.group(1)), (None if m.group(2) == "-" else float(m.group(2)))
 
 
 def run_as_sync(config_path, chain, run=subprocess.run):
@@ -1114,7 +1133,7 @@ def render_credentials(journal, esp, site, chain, root_key, anchor, device=None)
 
 
 def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
-           out=sys.stdout, replace=None, first_beat=None):
+           out=sys.stdout, replace=None, first_beat=None, bootstrap=False):
     """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
     from an earlier `check`), the boot image checked (approved_image), the configuration installed, the state
     directory made regalia-sync's, the anchor, the store and the heartbeat counter set up AS regalia-sync, and the
@@ -1136,13 +1155,14 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
             "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
     journal.done("anchor", epoch=epoch, digest=digest)
-    envelopes = chain if isinstance(chain, list) else [chain]
-    if (first_epoch(envelopes, root_key, journal.doc["node_id"]) or 1) > 1 and journal.state("heartbeat_first") != "done":
-        # a node joining a running network: its heartbeat counter starts AT the network's current sequence (#190)
+    if journal.state("heartbeat_first") != "done":
+        # the heartbeat counter starts AT the network's current sequence whenever the node enrols (#190), at 0 only at
+        # the network's bootstrap (--bootstrap)
         journal.started("heartbeat_first")
-        sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON)
-        journal.done("heartbeat_first", sequence=sequence)
-        print("FIRST HEARTBEAT: %s" % ("already held" if sequence is None else
+        sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON, bootstrap=bootstrap)
+        journal.done("heartbeat_first", sequence=sequence, bootstrap=bool(bootstrap and sequence == 0 and left is None))
+        print("FIRST HEARTBEAT: %s" % ("nothing to do (a heartbeat held, or the counter defined)" if sequence is None else
+                                      "network bootstrap: the counter starts at 0" if left is None else
                                       "sequence %d, the counter defined at it; live for %.0f s more" % (sequence, left)), file=out)
     print("ENROLLED (trust anchors): node %s, membership epoch %d (%s) anchored in the TPM and committed as %s"
           % (journal.doc["node_id"], epoch, digest[:16], SYNC_USER), file=out)
@@ -1189,19 +1209,22 @@ def main(argv=None):
     k.add_argument("--esp", required=True, help="the ESP's mount point: the sealed credentials go to ESP/loader/credentials")
     k.add_argument("--enrol-dir", default=ENROL_DIR)
     k.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
+    k.add_argument("--bootstrap", action="store_true", help="the network has issued no heartbeat yet: start the counter at 0 "
+                   "if no reachable peer or authority holds one")
     h = sub.add_parser("_first-heartbeat", help=argparse.SUPPRESS)
     h.add_argument("--config", required=True)
+    h.add_argument("--bootstrap", action="store_true")
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
     if args.command == "_first-heartbeat":           # run by commit, as regalia-sync
         try:
-            sequence, left = first_heartbeat(args.config)
+            sequence, left = first_heartbeat(args.config, bootstrap=args.bootstrap)
         except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
-        print("FIRST-HEARTBEAT held -" if sequence is None else "FIRST-HEARTBEAT %d %.0f" % (sequence, left))
+        print("FIRST-HEARTBEAT held -" if sequence is None else "FIRST-HEARTBEAT %d %s" % (sequence, "-" if left is None else "%.0f" % left))
         return 0
     if args.command == "_anchor":                    # run by commit, as regalia-sync
         try:
@@ -1228,7 +1251,7 @@ def main(argv=None):
             boot = {"image": args.image, "record": args.image_record, "initrd_pub": args.initrd_pub, "system_pub": args.system_pub,
                     "secure_boot_cert": args.secure_boot_cert, "esp": args.esp}
             commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot,
-                   replace=args.replace)
+                   replace=args.replace, bootstrap=args.bootstrap)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
