@@ -904,9 +904,59 @@ INITRD_BUILD_KEYS = ("schema", "commit", "go", "snapshot", "source_date_epoch", 
                      "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries")
 
 
+# The checkout uki.py runs from: the initrd build record's provenance is held to it (#266).
+CHECKOUT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+INITRD_SCRIPT = "deploy/baremetal/initrd/build-initrd.sh"
+
+
+def _git(*args):
+    """git on CHECKOUT, read-only (no index lock), refused if it fails. Not the injectable `run`: provenance is
+    the checkout's, never a fake's."""
+    done = subprocess.run(["git", "-c", "safe.directory=" + CHECKOUT, "--no-optional-locks", "-C", CHECKOUT, *args],
+                          capture_output=True, timeout=60)
+    require(done.returncode == 0, "git %s failed in %s: %s" % (args[0], CHECKOUT, done.stderr.decode(errors="replace").strip()[-200:]))
+    return done.stdout
+
+
+def _committed(path):
+    """A file's bytes at HEAD (not the working tree's: an ignored file cannot stand in for it)."""
+    require(isinstance(path, str) and re.fullmatch(r"[A-Za-z0-9._/-]+", path) is not None and not path.startswith("/")
+            and ".." not in path.split("/"), "the initrd's build record names a repository file %r that is not a plain relative path" % (path,))
+    return _git("show", "HEAD:" + path)
+
+
+def check_provenance(built):
+    """#266 (required before the first production image): the record's provenance is this checkout's, so a
+    hand-written record naming the right initrd is refused.
+      * the checkout is clean (no change, no untracked file) and its HEAD is the record's commit;
+      * repository_files names exactly the files build-initrd.sh records (its REPO_FILES, read from that
+        commit's script), and each one's sha256 is the file's at that commit;
+      * go is that commit's go.mod release (its toolchain line, else its go line)."""
+    head = _git("rev-parse", "--verify", "HEAD").decode().strip()
+    require(_git("status", "--porcelain", "--untracked-files=all") == b"",
+            "the checkout %s has changes or untracked files: build and sign from a clean clone at the record's commit" % CHECKOUT)
+    require(built["commit"] == head, "the initrd's build record is from commit %s, and this checkout is at %s" % (built["commit"], head))
+    script = _committed(INITRD_SCRIPT).decode()
+    named = re.search(r"^SCRIPT=\"([^\"]+)\"$", script, re.M)
+    listed = re.search(r"^REPO_FILES=\(([^)]*)\)", script, re.M)
+    require(named and listed, "%s at %s names no REPO_FILES" % (INITRD_SCRIPT, head))
+    expected = {named.group(1) if f == '"$SCRIPT"' else f for f in listed.group(1).split()}
+    files = built["repository_files"]
+    require(isinstance(files, dict) and set(files) == expected,
+            "the initrd's build record names repository files %s, not build-initrd.sh's %s" % (sorted(files) if isinstance(files, dict) else files, sorted(expected)))
+    for path, digest in sorted(files.items()):
+        require(digest == sha256(_committed(path)), "the initrd's build record has %s at %s, not the commit's %s" % (path, digest, sha256(_committed(path))))
+    go_mod = _committed("go.mod").decode()
+    release = re.search(r"^toolchain (go1\.[0-9]+\.[0-9]+)$", go_mod, re.M) or re.search(r"^go (1\.[0-9]+\.[0-9]+)$", go_mod, re.M)
+    require(release, "go.mod at %s names no exact Go release" % head)
+    wanted = release.group(1) if release.group(1).startswith("go") else "go" + release.group(1)
+    require(built["go"] == wanted, "the initrd's build record says %s, and go.mod at the commit says %s" % (built["go"], wanted))
+
+
 def check_initrd_build(inputs, client_sha256):
-    """The initrd's build record, read and held to the initrd and the client given; None when there is none
-    (a library caller's test fixture: the build and sign commands require one)."""
+    """The initrd's build record, read and held to the initrd and the client given, and its provenance to this
+    checkout (check_provenance); None when there is none (a library caller's test fixture: the build and sign
+    commands require one)."""
     if not inputs.get("initrd_build"):
         return None
     built = membership.load(read(inputs["initrd_build"], 16 * 1024 * 1024), 16 * 1024 * 1024)
@@ -924,6 +974,13 @@ def check_initrd_build(inputs, client_sha256):
             "the initrd's build record is for another initrd (%s, not --initrd's %s)" % (built["initrd_sha256"], sha256(read(inputs["initrd"]))))
     require(client_sha256 is not None and built["client_sha256"] == client_sha256,
             "the initrd's build record names another unlock client (%s, not %s)" % (built["client_sha256"], client_sha256))
+    # 1e's smaller point on #258: the counts are counts, the lists are lists of names
+    for field in ("source_date_epoch", "initrd_size", "initrd_entries"):
+        require(type(built[field]) is int and built[field] > 0, "the initrd's build record's %s is not a positive integer" % field)
+    for field in ("packages", "packages_requested"):
+        require(isinstance(built[field], list) and built[field] and all(isinstance(p, str) and p for p in built[field]),
+                "the initrd's build record's %s is not a list of names" % field)
+    check_provenance(built)
     return built
 
 
