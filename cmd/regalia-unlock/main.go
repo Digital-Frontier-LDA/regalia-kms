@@ -50,6 +50,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -194,9 +195,10 @@ type unlocker struct {
 	out         io.Writer
 	diagnostics io.Writer
 
-	presented bool   // a quote of this session was taken, to be sent to a peer
-	earlier   bool   // ANOTHER session of this boot is on record: this process asks no peer
-	key       []byte // the volume's key, from this boot's one response; given to each later connection
+	presented bool       // a quote of this session was taken, to be sent to a peer
+	earlier   bool       // ANOTHER session of this boot is on record: this process asks no peer
+	key       []byte     // the volume's key, from this boot's one response; given to each later connection
+	secrets   sync.Mutex // spent (the serving loop) and forget (the signal goroutine) zero the same memory
 	peer      string
 	slot      string
 }
@@ -342,6 +344,8 @@ func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, error) {
 // init_on_free=1 on the signed command line (#221). The key the boot was given stays: the next asker
 // in this boot gets it.
 func (u *unlocker) spent() {
+	u.secrets.Lock()
+	defer u.secrets.Unlock()
 	wipe(u.local)
 	if u.boot != nil && u.boot.key != nil {
 		zeroPrivate(u.boot.key)
@@ -363,6 +367,8 @@ func zeroPrivate(key *rsa.PrivateKey) {
 }
 
 func (u *unlocker) forget() {
+	u.secrets.Lock()
+	defer u.secrets.Unlock()
 	wipe(u.local)
 	wipe(u.key)
 	if u.boot != nil && u.boot.key != nil {
