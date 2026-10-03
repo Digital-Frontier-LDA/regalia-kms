@@ -29,7 +29,7 @@
 #   boot 7  A COMMAND LINE FROM SMBIOS (io.systemd.stub.kernel-cmdline-extra, switching credential import
 #           back on, and an extra unit): either the stub ignores it, or PCR 12 moves and the peers refuse;
 #           nothing planted runs.
-#   boot 6  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
+#   boot 8  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
 #           console asks for the recovery key, and the key opens the volume.
 #
 # The guest is built here from Debian's own packages (mmdebstrap). REGALIA_BOOT_ROOTFS names a directory

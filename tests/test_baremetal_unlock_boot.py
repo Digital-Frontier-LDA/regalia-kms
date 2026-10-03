@@ -422,8 +422,10 @@ class OnQemu(tub.OnSwtpm):
         # and, where it honours it, appends it to the command line and measures it into PCR 12. Here it would switch
         # credential import back on, with an extra unit passed beside it. Either the stub ignores it (the command line
         # and PCR 12 are unchanged, systemd still imports nothing, and the unlock goes on), or it is appended (PCR 12
-        # moves and every peer refuses). In neither case does anything planted run, and the local half alone opens
-        # nothing (it is sealed to PCR 7 and the signed PCR 11, which this does not change).
+        # moves and every peer refuses). In neither case does anything planted run: even with import switched back on,
+        # the second layer (no debug generator, every credential import reset, #219) keeps the extra unit from being
+        # made, so import=yes is not harmless by itself, the two layers are. The local half alone opens nothing (it is
+        # sealed to PCR 7 and the signed PCR 11, which this does not change).
         since = len(self.events)
         extra_unit = {"systemd.extra-unit.regalia-planted.service":
                       b"[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nExecStart=/bin/sh -c 'echo \"<2>REGALIA-E2E-PLANTED-RAN\" > /dev/kmsg'\n",
@@ -442,14 +444,15 @@ class OnQemu(tub.OnSwtpm):
         else:
             self.assertEqual(shown[2].lower(), expected["pcr12"])                # ignored: nothing changed, and still no import
             self.assertIn("REGALIA-E2E-IMPORT credentials-imported=no", said)
+            self.assertTrue(allowed)                                             # nothing changed: the unlock goes on
             print("boot 7: the stub ignored the SMBIOS command line; the unlock went on (%s)" % ("allowed" if allowed else "refused"),
                   file=sys.stderr)
 
-        # boot 6, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
+        # boot 8, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
         for peer in ("b", "c"):
             self.ip("ip", "link", "set", "eth0", "down", ns=self.peer_ns[peer])
         since = len(self.events)
-        said = self.boot("6-no-peer", credentials, recovery=True)
+        said = self.boot("8-no-peer", credentials, recovery=True)
         self.assertIn("the disk stays locked: no peer helped in 5 rounds", said)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())
