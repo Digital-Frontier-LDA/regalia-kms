@@ -2,12 +2,14 @@
 # unlock-boot-qemu.sh — a KMS host BOOTS through a peer: a real initrd, a real encrypted root, the TPM
 # unsealing done by systemd, WireGuard before root (regalia-kms#66 PoC 6.1, 6.2, 6.5; #67 PoC 7.1, 7.4).
 #
-#   sudo REGALIA_UNLOCK_BIN=/path/to/regalia-unlock e2e/unlock-boot-qemu.sh
+#   sudo REGALIA_GO=/path/to/go REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/<TIME>/ \
+#        REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/<TIME>/ e2e/unlock-boot-qemu.sh
 #
 # A Debian 13 guest in QEMU (KVM when the machine has it) under UEFI (OVMF), with a software TPM as its
 # TPM. MEASURED BOOT: the guest boots a unified kernel image built and signed by deploy/baremetal/uki.py
-# (TEST keys made here), whose initrd is built by the guest's own dracut with the module
-# deploy/baremetal/initrd/dracut/90regalia-unlock and is the same for every host. Its disk: an ESP (the
+# (TEST keys made here), whose initrd is built REPRODUCIBLY by deploy/baremetal/initrd/build-initrd.sh (#248:
+# the archive snapshot of the guest, dracut with the module deploy/baremetal/initrd/dracut/90regalia-unlock,
+# the client compiled by the builder) and is the same for every host. Its disk: an ESP (the
 # image as EFI/BOOT/BOOTX64.EFI, and the host's credentials in loader/credentials, which systemd-stub
 # measures into PCR 12) and a GPT partition labelled regalia-root, a LUKS2 volume. The peers run on this
 # machine, in network namespaces, as in e2e/wg-boot-netns.sh; nothing is loaded outside a namespace.
@@ -48,7 +50,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "unlock-boot-qemu: run as root"; exit 2; }
-BIN="${REGALIA_UNLOCK_BIN:?set REGALIA_UNLOCK_BIN to a built cmd/regalia-unlock (static: CGO_ENABLED=0)}"
+GO="${REGALIA_GO:?set REGALIA_GO to a go (from 1.21: it launches the release go.mod pins, which builds the client)}"
 OVMF="${REGALIA_OVMF:-/usr/share/OVMF}"
 [ -r "$OVMF/OVMF_CODE_4M.fd" ] && [ -r "$OVMF/OVMF_VARS_4M.fd" ] || { echo "unlock-boot-qemu: OVMF is required ($OVMF/OVMF_CODE_4M.fd)"; exit 2; }
 for t in qemu-system-x86_64 swtpm tpm2_createek cryptsetup mkfs.ext4 mkfs.vfat sfdisk openssl wg nft ip python3; do
@@ -77,11 +79,34 @@ if [ -n "${REGALIA_BOOT_ROOTFS:-}" ]; then
   cp -a "$REGALIA_BOOT_ROOTFS" "$ROOT"
 else
   command -v mmdebstrap >/dev/null || { echo "unlock-boot-qemu: mmdebstrap is required (or REGALIA_BOOT_ROOTFS)"; exit 2; }
-  mmdebstrap --variant=minbase \
+  # a snapshot of the archive (REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/<time>/ in CI) gives
+  # the same packages on every run, so the initrd matches its reviewed inventory (#198); its Release file is
+  # past its Valid-Until, which only a snapshot may be
+  APTOPT=()
+  case "${REGALIA_BOOT_MIRROR:-}" in *snapshot.debian.org*) APTOPT=(--aptopt='Acquire::Check-Valid-Until "false"') ;; esac
+  # the main suite, its updates and its SECURITY suite (REGALIA_BOOT_SECURITY_MIRROR, the security archive's
+  # snapshot at the same time in CI): a reviewed baseline without security updates is not one to ship (#198)
+  MIRROR="${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}"
+  # (explicit lines name their keyring: mmdebstrap only picks one by itself for a bare mirror URL)
+  KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"      # Debian's own, pinned: the runner's predates trixie's keys
+  SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
+           "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
+  mmdebstrap --variant=minbase "${APTOPT[@]}" \
     --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
-    "$SUITE" "$ROOT" "${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}" >"$W/mmdebstrap.log" 2>&1 \
+    "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
+  # the guest's own apt reads the same lines: the keyring at the same path inside it
+  install -D -m 0644 "$KEYRING" "$ROOT$KEYRING"
 fi
+echo "### the initrd, built reproducibly by deploy/baremetal/initrd/build-initrd.sh (#248), at the guest's snapshot"
+# the same archive snapshot as the guest's tree: the builder takes its time from the mirror's URL
+SNAPSHOT="${REGALIA_BOOT_SNAPSHOT:-}"
+if [ -z "$SNAPSHOT" ] && [[ "${REGALIA_BOOT_MIRROR:-}" =~ snapshot\.debian\.org/archive/debian/([0-9]{8}T[0-9]{6}Z) ]]; then SNAPSHOT="${BASH_REMATCH[1]}"; fi
+[ -n "$SNAPSHOT" ] || { echo "unlock-boot-qemu: the initrd is built from a pinned archive snapshot: set REGALIA_BOOT_MIRROR to a snapshot.debian.org URL, or REGALIA_BOOT_SNAPSHOT"; exit 2; }
+[ -n "${KEYRING:-}" ] || KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"
+deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --out "$W/initrd-build" \
+  || { echo "unlock-boot-qemu: the initrd builder failed"; exit 2; }
+BIN="$W/initrd-build/regalia-unlock"          # the client the builder compiled: the initrd's, and the host's
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
 # what systemd needs to talk to a TPM, and is only suggested by its package
@@ -103,11 +128,11 @@ for u in regalia-e2e-enrol.service regalia-e2e-report.service; do ln -sf "/etc/s
 echo "/dev/mapper/root / ext4 defaults 0 1" > "$ROOT/etc/fstab"
 echo "lisbon" > "$ROOT/etc/hostname"
 
-echo "### the initrd, by the guest's own dracut, with the module"
+echo "### the initrd the builder made, beside the guest's kernel of the same snapshot"
 KVER="$(ls "$ROOT/lib/modules" | sort -V | tail -1)"
-chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /boot/initrd.e2e >"$W/dracut.log" 2>&1 \
-  || { tail -40 "$W/dracut.log"; echo "unlock-boot-qemu: dracut failed"; exit 2; }
-grep -i "regalia" "$W/dracut.log" | head -5 || true
+BUILT_KVER="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["kernel"])' "$W/initrd-build/initrd-build.json")"
+[ "$BUILT_KVER" = "$KVER" ] || { echo "unlock-boot-qemu: the initrd was built for kernel $BUILT_KVER, the guest has $KVER"; exit 2; }
+cp "$W/initrd-build/initrd.img" "$ROOT/boot/initrd.e2e"
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
 for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'regalia-unlock-relay\.service$' 'regalia-unlock-core\.socket$' 'regalia-wg-boot\.service$' \
          'systemd-pcrphase-initrd\.service$' 'initrd\.target\.wants/systemd-pcrphase-initrd\.service' 'systemd-pcrextend$' \
@@ -154,15 +179,33 @@ for k in initrd system secure-boot; do
 done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
 cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
+cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
 printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
-IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
+IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
 KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/uki/keys/TEST-secure-boot.key --secure-boot-cert /tmp/uki/keys/TEST-secure-boot.crt"
+# #198: the review build records, run alone first, so that a refusal says what. The image is checked
+# against deploy/baremetal/initrd/initrd-inventory.txt, every entry pinned; on a difference the lines that
+# differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
+# before a pull request changes the inventory.
+cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
+if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled" >"$W/review.json" 2>&1; then
+  python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
+    || cat "$W/review.json"
+  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true
+  { grep -v '^#' deploy/baremetal/initrd/initrd-inventory.txt || true; } | sed '/^$/d' | sort > "$W/pinned.txt"
+  sort "$W/inventory.txt" > "$W/found.txt"
+  echo "### the image's inventory lines the reviewed inventory does not hold (+) and the reverse (-):"
+  comm -23 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY+ /' || true
+  comm -13 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY- /' || true
+  echo "unlock-boot-qemu: the image's initrd does not pass uki.py's review"; exit 2
+fi
+echo "the initrd passes uki.py's review (#198): inventory $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["inventory_sha256"][:16])' "$W/review.json")"
 # shellcheck disable=SC2086  # the two lists are words on purpose
 # two builds (the signer requires a second builder's identical record), then the signature
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out \
-  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN --record /tmp/uki/out/e2e.record.json --second-record /tmp/uki/second/e2e.record.json --out /tmp/uki/out $KEYS" >"$W/uki.log" 2>&1 \
   || { cat "$W/uki.log"; echo "unlock-boot-qemu: the image did not build or sign"; exit 2; }
 grep 'PCR 11' "$W/uki.log" || true
@@ -172,8 +215,8 @@ grep 'PCR 11' "$W/uki.log" || true
 printf '%s regalia.e2e-image=old\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-old"
 IN_OLD="${IN/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-old }"
 # shellcheck disable=SC2086  # the two lists are words on purpose
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out \
-  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN_OLD --record /tmp/uki/out/e2e-old.record.json --second-record /tmp/uki/second/e2e-old.record.json --out /tmp/uki/out $KEYS" >"$W/uki-old.log" 2>&1 \
   || { cat "$W/uki-old.log"; echo "unlock-boot-qemu: the second image did not build or sign"; exit 2; }
 cp "$ROOT/tmp/uki/out/e2e.efi" "$W/e2e.efi"; cp "$ROOT/tmp/uki/out/e2e.signed.json" "$W/e2e.record.json"; cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"

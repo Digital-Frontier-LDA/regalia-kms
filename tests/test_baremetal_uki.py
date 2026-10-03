@@ -157,11 +157,23 @@ class FakeTools:
 KEYS = None
 
 
+def write_inventory(data, directory):
+    """The inventory of `data`, written where the review reads it: what a reviewed pull request would hold."""
+    path = os.path.join(directory, "inventory-%s.txt" % hashlib.sha256(data).hexdigest()[:12])
+    with open(path, "w") as f:
+        f.write("\n".join(uki.initrd_inventory_lines(data)) + "\n")
+    return path
+
+
 def setUpModule():
-    """The TEST keys, once for the module: three signing keys, a fourth, one too large and one that is not RSA."""
+    """The TEST keys, once for the module: three signing keys, a fourth, one too large and one that is not RSA.
+    And the inventory the fixture's initrd is reviewed against, in place of the reviewed image's (#198)."""
     global KEYS
     KEYS = tempfile.mkdtemp()
     unittest.addModuleCleanup(shutil.rmtree, KEYS, True)
+    patcher = mock.patch.object(uki, "INVENTORY", write_inventory(unlock_initrd(), KEYS))
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
     run = lambda *argv: subprocess.run(["openssl", *argv], check=True, capture_output=True)
     for name, bits in (("initrd", 2048), ("system", 2048), ("secure_boot", 2048), ("other", 2048), ("big", 3072)):
         key = os.path.join(KEYS, name)
@@ -171,6 +183,44 @@ def setUpModule():
     run("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", os.path.join(KEYS, "ec.key"))
     run("pkey", "-in", os.path.join(KEYS, "ec.key"), "-pubout", "-out", os.path.join(KEYS, "ec.pub"))
 
+
+def newc(entries):
+    """A cpio newc archive of `entries`: [(name, mode, data)], a link's data its target."""
+    out, ino = b"", 1
+    for name, mode, data in list(entries) + [("TRAILER!!!", 0, b"")]:
+        raw = name.encode() + b"\0"
+        head = b"070701" + b"".join(b"%08x" % v for v in (ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(raw), 0))
+        out += head + raw
+        out += b"\0" * (-len(out) % 4) + data
+        out += b"\0" * (-len(out) % 4)
+        ino += 1
+    return out
+
+
+CLIENT = b"\x7fELF regalia-unlock"          # the stand-in client binary, as the build compiled it
+INITRD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "baremetal", "initrd")
+
+
+def unlock_initrd(change=None, drop=()):
+    """An initrd that passes the review (#198): the module's crypttab, this repository's units and script, the
+    client, the two enable links, and links for merged /usr. `change`: {path: (mode, data)} to add or replace;
+    `drop`: paths to leave out. It carries the text "an initrd", which the stand-in tools look for."""
+    def mine(*parts):
+        with open(os.path.join(INITRD, *parts), "rb") as f:
+            return f.read()
+    files = {"bin": (0o120777, b"usr/bin"), "lib": (0o120777, b"usr/lib"), "usr/bin/sh": (0o100755, b"\x7fELF sh"),
+             "usr/bin/regalia-unlock": (0o100755, CLIENT), "usr/bin/ip": (0o100755, b"\x7fELF"),
+             "usr/bin/wg": (0o100755, b"\x7fELF"), "usr/bin/nft": (0o100755, b"\x7fELF"), "usr/bin/sed": (0o100755, b"\x7fELF"),
+             "etc/crypttab": (0o100644, mine("dracut", "90regalia-unlock", "crypttab")),
+             "etc/cmdline.d/10-quiet.conf": (0o100644, b"quiet rd.shell=0\n"),
+             "usr/lib/regalia/wg-boot": (0o100755, mine("wg-boot")), "etc/marker": (0o100644, b"an initrd")}
+    for unit in uki.UNLOCK_UNITS:
+        files["usr/lib/systemd/system/" + unit] = (0o100644, mine(unit))
+    for link, target in uki.UNLOCK_ENABLED.items():
+        files[link] = (0o120777, target.encode())
+    files[uki.RELAY_DROPIN[0]] = (0o100644, uki.RELAY_DROPIN[1])
+    files.update(change or {})
+    return newc([(n, mode, data) for n, (mode, data) in sorted(files.items()) if n not in drop])
 
 class Case(unittest.TestCase):
     @staticmethod
@@ -182,10 +232,11 @@ class Case(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tools = FakeTools()
         self.inputs = {}
-        for name, content in (("linux", b"a kernel"), ("initrd", b"an initrd"), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
+        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
                               ("os_release", b"ID=debian\n"), ("stub", b"a stub")):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
+        self.inputs["initrd_build"] = self.initrd_build()      # #248: an image is signed only from a builder's initrd
         self.out = os.path.join(self.d, "out")
 
     def write(self, name, content):
@@ -194,9 +245,27 @@ class Case(unittest.TestCase):
             f.write(content)
         return path
 
+    def initrd_build(self, name="initrd-build.json", initrd=None, client=CLIENT, **change):
+        """An initrd build record (build-initrd.sh, #248) for `initrd` (default: the input's) and `client`."""
+        with open(initrd or self.inputs["initrd"], "rb") as f:
+            initrd_sha256 = uki.sha256(f.read())
+        record = {"schema": uki.INITRD_BUILD_SCHEMA, "commit": "ab" * 20, "go": "go1.26.6", "snapshot": "20261003T121500Z",
+                  "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "6.12.111+deb13-amd64", "dracut": "106-6",
+                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "repository_files": {},
+                  "packages_sha256": "cd" * 32, "packages": ["dracut=106-6"], "initrd_sha256": initrd_sha256,
+                  "initrd_size": 1, "initrd_entries": 1}
+        record.update(change)
+        for key in [k for k, v in change.items() if v is None]:
+            del record[key]
+        return self.write(name, json.dumps(record).encode())
+
     def build(self, **kw):
-        return uki.build(dict(self.inputs, **kw.pop("inputs", {})), kw.pop("uname", "6.12.41+deb13-amd64"), kw.pop("name", "image-7"), self.out,
-                         run=self.tools, **kw)
+        kw.setdefault("unlock_client", self.write("regalia-unlock.compiled", CLIENT))
+        given = kw.pop("inputs", {})
+        inputs = dict(self.inputs, **given)
+        if "initrd_build" not in given:     # the build record for the initrd and the client this build is given
+            inputs["initrd_build"] = self.initrd_build("initrd-build-of-build.json", initrd=inputs["initrd"], client=uki.read(kw["unlock_client"]))
+        return uki.build(inputs, kw.pop("uname", "6.12.41+deb13-amd64"), kw.pop("name", "image-7"), self.out, run=self.tools, **kw)
 
     def signing_keys(self, **change):
         keys = {role: (self.key(role, "key"), self.key(role, "crt")) for role in ("initrd", "system", "secure_boot")}
@@ -340,7 +409,7 @@ class Build(Case):
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
         self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1")            # the file's newline is not in the image
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
-        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "linux", "os_release", "pcrpkey", "stub"])
+        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "stub"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
         self.assertEqual(record["tools"], {"ukify": "ukify 257 (stand-in)", "systemd_measure": "systemd-measure 257 (stand-in)"})
         with open(os.path.join(self.out, "image-7.record.json"), "rb") as f:
@@ -694,12 +763,18 @@ class Verify(Case):
 
 class Records(Case):
     def test_the_measurement_set_of_an_image_on_one_host(self):
-        record = self.build()
+        unsigned = self.build()
+        record = self.sign(record=unsigned)
         pcrs = {"0": "11" * 32, "7": "77" * 32}
         creds = {"regalia.node-id.cred": b"node-a\n"}
         entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs, creds)
+        # the keys the image is signed with, from its signed record: what enrol may seal to (#190, #265)
+        signing = {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"], "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
+                   "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}
         self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": dict(pcrs, **{"12": espcreds.pcr12(creds)}),
-                                 "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}}})
+                                 "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}},
+                                 "signing": signing})
+        self.refused("the record is of an unsigned image", uki.measurement_set, unsigned, "image-7", "2019102300163636", pcrs, creds)
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}}
         self.assertTrue(measurements.version(document).startswith("m1-"))               # it is a set the document accepts
         self.assertEqual(attest.selection(entry), [0, 7, 11, 12])
@@ -709,7 +784,7 @@ class Records(Case):
         self.refused("the node's credential files are required", uki.measurement_set, record, "x", "0" * 16, pcrs, None)
 
     def test_pcr_12_comes_from_the_nodes_credential_files_and_never_by_hand(self):
-        record = self.build()
+        record = self.sign()
         pcrs = {"7": "77" * 32}
         files = {"regalia.node-id.cred": b"node-a\n", "regalia.boot-mesh.cred": b"mesh", "regalia.unlock-local.cred": b"sealed"}
         entry = uki.measurement_set(record, "image-7", "0" * 16, pcrs, files)
@@ -786,7 +861,7 @@ class Records(Case):
         # through the command, with the record of what it was computed from
         with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
             json.dump(pcrs, f)
-        rec = os.path.join(self.out, "image-7.record.json")
+        rec = os.path.join(self.out, "image-7.signed.json")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
                                        os.path.join(self.d, "host-pcrs.json"), "--esp", esp, "--credentials-record", os.path.join(self.d, "creds.json")]), 0)
@@ -822,7 +897,7 @@ class Records(Case):
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
         argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
-                "--name", "x", "--out", self.out]
+                "--initrd-build", self.initrd_build(), "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(argv), 1)
         self.assertEqual(out.getvalue(), "")
@@ -834,3 +909,359 @@ class Records(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+
+class InitrdBuildRecord(Case):
+    """#248: the initrd's build record is an input, pinned like the others, and must name THIS initrd and THIS
+    client; the build and sign commands require it."""
+
+    def test_a_record_for_this_initrd_and_this_client_is_pinned_as_an_input(self):
+        record = self.build(inputs={"initrd_build": self.initrd_build()})
+        self.assertIn("initrd_build", record["inputs"])
+        with open(self.initrd_build(name="again.json"), "rb") as f:
+            self.assertEqual(record["inputs"]["initrd_build"]["sha256"], uki.sha256(f.read()))
+
+    def test_a_record_for_another_initrd_or_client_or_of_another_shape_is_refused(self):
+        other = self.write("other-initrd", b"another initrd")
+        cases = {
+            "the initrd's build record is for another initrd": self.initrd_build("a.json", initrd=other),
+            "the initrd's build record names another unlock client": self.initrd_build("b.json", client=b"another client"),
+            "the initrd's build record is not a regalia.initrd-build/v1": self.initrd_build("c.json", schema="regalia.initrd-build/v0"),
+            "the initrd's build record names no commit": self.initrd_build("d.json", commit="HEAD"),
+            "the initrd's build record names no exact Go release": self.initrd_build("e.json", go="go1.26"),
+            "the initrd's build record names no archive snapshot": self.initrd_build("f.json", snapshot="latest"),
+            "the initrd's build record has no packages_sha256": self.initrd_build("g.json", packages_sha256="x"),
+            "the initrd's build record": self.initrd_build("h.json", packages=None),          # a field missing
+            "not valid JSON": self.write("i.json", b"{"),
+        }
+        for reason, path in cases.items():
+            with self.subTest(reason=reason):
+                self.refused(reason, self.build, inputs={"initrd_build": path}, name="image-%d" % len(reason))
+
+    def test_sign_holds_the_record_to_the_inputs_and_rechecks_it(self):
+        record = self.build()
+        swapped = dict(self.inputs, initrd_build=self.initrd_build("swapped.json", commit="ef" * 20))
+        self.refused("the input --initrd-build is not the one the record was built from", self.sign, record=record, inputs=swapped)
+        left_out = {k: v for k, v in self.inputs.items() if k != "initrd_build"}
+        self.refused("the input --initrd-build is not the one the record was built from", self.sign, record=record, inputs=left_out)
+        self.sign(record=record)
+
+    def test_sign_itself_refuses_a_record_without_one(self):
+        """Not only the command line: a caller of the library function cannot sign an image whose record names no
+        initrd build record (#248, 1e's read of #258)."""
+        bare = {k: v for k, v in self.inputs.items() if k != "initrd_build"}
+        record = uki.build(bare, "6.12.41+deb13-amd64", "image-bare", self.out, run=self.tools,
+                           unlock_client=self.write("regalia-unlock.compiled", CLIENT))
+        self.assertNotIn("initrd_build", record["inputs"])
+        self.refused("the record names no initrd build record (--initrd-build): an image is signed only from an initrd every builder "
+                     "built itself", uki.sign, bare, record, self.signing_keys(), "file", self.out, run=self.tools,
+                     second_record=json.loads(json.dumps(record)), report=lambda line: None)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "image-bare.efi")))
+
+    def test_the_commands_require_it(self):
+        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.inputs["cmdline"],
+                "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
+                "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            uki.main(argv)
+        self.assertIn("--initrd-build", err.getvalue())
+
+
+class InitrdReview(Case):
+    """#198: the initrd that is measured is read here. Layer 1, the rules, says why; layer 2, every entry pinned
+    in the reviewed inventory, refuses whatever differs."""
+
+    def review(self, data, against=None):
+        """The review of `data` against the inventory of `against` (default: of `data` itself, so that only the
+        rules, layer 1, can refuse)."""
+        return uki.review_initrd_data(data, run=subprocess.run, inventory=write_inventory(data if against is None else against, self.d),
+                                      client_sha256=hashlib.sha256(CLIENT).hexdigest())
+
+    def refused_by(self, data, *reasons, against=None):
+        review = self.review(data, against)
+        self.assertFalse(review["passed"], review)
+        for reason in reasons:
+            self.assertTrue(any(reason in f for f in review["findings"]), (reason, review["findings"]))
+        return review
+
+    def passes(self, data):
+        review = self.review(data)
+        self.assertTrue(review["passed"], review["findings"])
+        return review
+
+    def test_the_module_s_initrd_passes_and_the_record_says_so(self):
+        review = self.passes(unlock_initrd())
+        self.assertEqual(review["crypttab"], "root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach")
+        self.assertEqual(sorted(review["units"]), sorted(uki.UNLOCK_UNITS))
+        self.assertEqual(review["clients"], {"usr/bin/regalia-unlock": hashlib.sha256(b"\x7fELF regalia-unlock").hexdigest()})
+        record = self.build()
+        self.assertEqual(record["initrd_review"], uki.review_initrd_data(unlock_initrd(), client_sha256=hashlib.sha256(CLIENT).hexdigest()))
+        uki.load_record(m.canonical(record), signed=False)
+        with open(os.path.join(INITRD, "dracut", "90regalia-unlock", "module-setup.sh")) as f:
+            setup = f.read()
+        for content in (uki.RELAY_DROPIN[1], uki.RESET_DROPIN[1]):
+            self.assertIn("printf '%s'" % content.decode().replace("\n", "\\n"), setup)
+
+    def test_one_changed_byte_anywhere_is_refused_with_a_diff_naming_it(self):
+        extra = {"usr/lib/dracut/hooks/pre-mount/10-x.sh": (0o100755, b"#!/bin/sh\ntrue\n"),
+                 "usr/lib/systemd/system-generators/systemd-tpm2-generator": (0o100755, b"\x7fELF gen"),
+                 "usr/lib/udev/rules.d/11-dm.rules": (0o100644, b"# dm\n"),
+                 "usr/lib/modprobe.d/dm.conf": (0o100644, b"options dm_mod x=1\n"),
+                 "usr/lib/modules/6.12/kernel/drivers/x.ko": (0o100644, b"module")}
+        baseline = unlock_initrd(extra)
+        self.passes(baseline)
+        for path in extra:
+            with self.subTest(path):
+                mode, body = extra[path]
+                changed = unlock_initrd(dict(extra, **{path: (mode, body[:-1] + bytes([body[-1] ^ 1]))}))
+                self.refused_by(changed, "inventory: ~ %s f" % path, against=baseline)
+        # the client: one changed byte, refused by the comparison with the compiled binary
+        self.refused_by(unlock_initrd(dict(extra, **{"usr/bin/regalia-unlock": (0o100755, CLIENT[:-1] + b"u")})),
+                        "usr/bin/regalia-unlock is not the client this build compiled", against=baseline)
+        # added, removed, a mode, an owner, a link's target
+        self.refused_by(unlock_initrd(dict(extra, **{"etc/profile.d/z.sh": (0o100644, b"")})), "inventory: + etc/profile.d/z.sh", against=baseline)
+        self.refused_by(unlock_initrd(extra, drop=("usr/lib/udev/rules.d/11-dm.rules",)), "inventory: - usr/lib/udev/rules.d/11-dm.rules", against=baseline)
+        self.refused_by(unlock_initrd(dict(extra, **{"usr/lib/modprobe.d/dm.conf": (0o100666, b"options dm_mod x=1\n")})),
+                        "inventory: ~ usr/lib/modprobe.d/dm.conf f 0666", against=baseline)
+        self.refused_by(unlock_initrd(dict(extra, **{"bin": (0o120777, b"usr/sbin")})), "inventory: ~ bin l 0777 0:0 usr/sbin", against=baseline)
+        owned = newc_owned(unlock_initrd(extra), "usr/lib/modprobe.d/dm.conf", 1000)
+        self.refused_by(owned, "inventory: ~ usr/lib/modprobe.d/dm.conf f 0644 1000:0", against=baseline)
+
+    def test_the_inventory_names_where_each_entry_comes_from(self):
+        root = os.path.join(self.d, "root")
+        os.makedirs(os.path.join(root, "var/lib/dpkg/info"))
+        with open(os.path.join(root, "var/lib/dpkg/status"), "w") as f:
+            f.write("Package: udev\nStatus: install ok installed\nVersion: 257.13-1\n\nPackage: gone\nStatus: deinstall ok config-files\nVersion: 1\n")
+        with open(os.path.join(root, "var/lib/dpkg/info/udev.list"), "w") as f:
+            f.write("/lib/udev/rules.d/60-block.rules\n/usr/lib/udev\n")
+        data = unlock_initrd({"usr/lib/udev/rules.d/60-block.rules": (0o100644, b"r"), "etc/initrd-release": (0o100644, b"x")})
+        lines = uki.initrd_inventory_lines(data, root=root)
+        by_path = {l.split(" ")[5]: l.split(" ")[:2] for l in lines}
+        self.assertEqual(by_path["usr/lib/udev/rules.d/60-block.rules"], ["package", "udev=257.13-1"])
+        self.assertEqual(by_path["etc/initrd-release"], ["generated", "dracut"])
+        self.assertEqual(by_path["usr/lib/systemd/system/regalia-unlock.service"], ["ours", "regalia-kms"])
+        self.assertEqual(by_path["etc/crypttab"], ["ours", "regalia-kms"])
+        # ours first, then what dracut generated (what a reader reads), then the packages' files
+        classes = [l.split(" ")[0] for l in lines]
+        self.assertEqual(classes, sorted(classes, key=["ours", "generated", "package"].index))
+        # the inventory reads back, and what is compared ignores the reader's columns
+        path = self.write("inv.txt", ("\n".join(lines) + "\n").encode())
+        self.assertTrue(uki.review_initrd_data(data, inventory=path, client_sha256=hashlib.sha256(CLIENT).hexdigest())["passed"])
+        self.refused("is not CLASS ORIGIN TYPE MODE UID:GID PATH VALUE", uki.load_inventory, self.write("bad.txt", b"usr/lib/x sha256:00\n"))
+
+    def test_a_planted_rd_luks_word_is_refused(self):
+        for word in ("rd.luks.uuid=0b1c", "rd.luks=0", "luks.options=tpm2-device=auto", "rd.luks.key=/key", "rd.break", "systemd.debug_shell"):
+            with self.subTest(word):
+                self.refused_by(unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, ("%s\n" % word).encode())}),
+                                "etc/cmdline.d/90-crypt.conf holds %r" % word)
+        self.refused_by(unlock_initrd({"etc/cmdline": (0o100644, b"rd.luks.name=abc=root\n")}), "etc/cmdline holds")
+        self.refused_by(unlock_initrd({"etc/cmdline.d": (0o120777, b"../usr/share/frag"), "usr/share/frag/x.conf": (0o100644, b"rd.luks.uuid=1\n")},
+                                      drop=("etc/cmdline.d/10-quiet.conf",)), "etc/cmdline.d/x.conf holds 'rd.luks.uuid=1'")
+        self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"# rd.luks.uuid=x\nrd.shell=0\n"),
+                                   "etc/cmdline.d/notes.txt": (0o100644, b"rd.luks=1")}))
+
+    def test_the_crypttab_holds_the_one_generic_line_and_nothing_else(self):
+        line = b"root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach\n"
+        for name, change, drop in (
+                ("an extra line", {"etc/crypttab": (0o100644, line + b"swap /dev/sda2 /dev/urandom swap\n")}, ()),
+                ("another key file", {"etc/crypttab": (0o100644, line.replace(b"/run/regalia-unlock/key.sock", b"/etc/root.key"))}, ()),
+                ("the build machine's", {"etc/crypttab": (0o100644, b"sda3_crypt UUID=1234 none luks,discard\n")}, ()),
+                ("none at all", None, ("etc/crypttab",)),
+                ("a link out of the image", {"etc/crypttab": (0o120777, b"/sysroot/etc/crypttab")}, ())):
+            with self.subTest(name):
+                self.refused_by(unlock_initrd(change, drop), "etc/crypttab must hold exactly the unlock client's line")
+        self.passes(unlock_initrd({"etc/crypttab": (0o100644, b"# comment\n\n" + line)}))
+
+    def test_our_files_are_this_repository_s_and_nothing_overrides_them(self):
+        unit = "usr/lib/systemd/system/regalia-unlock.service"
+        self.refused_by(unlock_initrd(drop=(unit,)), unit + " is not in the image")
+        self.refused_by(unlock_initrd({unit: (0o100644, b"[Service]\nExecStart=/bin/sh\n")}), unit + " is not this repository's (other bytes)")
+        with open(os.path.join(INITRD, "regalia-unlock.service"), "rb") as f:
+            same = f.read()
+        for where in ("etc/systemd/system.control/regalia-unlock.service", "etc/systemd/system.attached/regalia-unlock.service",
+                      "usr/local/lib/systemd/system/regalia-unlock.service", "etc/systemd/system/regalia-unlock.service",
+                      "run/systemd/system/regalia-unlock.service"):
+            with self.subTest(where):
+                self.refused_by(unlock_initrd({where: (0o100644, same)}), where + ": a copy of the unlock client's unit outside")
+        self.refused_by(unlock_initrd({"etc/systemd/system/regalia-unlock.service": (0o120777, b"/dev/null")}),
+                        "etc/systemd/system/regalia-unlock.service: a copy of the unlock client's unit outside")
+        self.refused_by(unlock_initrd(drop=("usr/bin/regalia-unlock",)), "usr/bin/regalia-unlock, the unlock client, is not in the image")
+        self.refused_by(unlock_initrd({"usr/lib/regalia/wg-boot": (0o100755, b"#!/bin/sh\nexit 0\n")}), "usr/lib/regalia/wg-boot is not this repository's")
+        link = "etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket"
+        self.refused_by(unlock_initrd(drop=(link,)), link + " is not in the image")
+        self.refused_by(unlock_initrd({link: (0o120777, b"/usr/lib/systemd/system/evil.socket"), "usr/lib/systemd/system/evil.socket": (0o100644, b"")}),
+                        link + " is not this repository's (a link to /usr/lib/systemd/system/evil.socket)")
+
+    def test_the_client_is_bound_to_the_binary_the_build_compiled_not_to_a_hash(self):
+        # the inventory says "=compiled" for it; the review fails without the compiled binary, or with another
+        lines = uki.initrd_inventory_lines(unlock_initrd())
+        self.assertIn("ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled", lines)
+        self.assertFalse(any(l.startswith("ours") and "regalia-unlock " in l and l.endswith(hashlib.sha256(CLIENT).hexdigest()) for l in lines))
+        review = uki.review_initrd_data(unlock_initrd())
+        self.assertIn("usr/bin/regalia-unlock cannot be held to the client the build compiled: it was not given (build --unlock-client)",
+                      review["findings"])
+        self.assertFalse(review["passed"])
+        # a client of other bytes but the same type, mode and owner passes layer 2, and is refused by the comparison
+        other = unlock_initrd({"usr/bin/regalia-unlock": (0o100755, b"\x7fELF another")})
+        findings = uki.review_initrd_data(other, inventory=write_inventory(unlock_initrd(), self.d),
+                                          client_sha256=hashlib.sha256(CLIENT).hexdigest())["findings"]
+        self.assertEqual([f for f in findings if "regalia-unlock" in f],
+                         ["usr/bin/regalia-unlock is not the client this build compiled (%s, not %s)"
+                          % (hashlib.sha256(b"\x7fELF another").hexdigest(), hashlib.sha256(CLIENT).hexdigest())])
+        # its mode is still pinned
+        self.refused_by(unlock_initrd({"usr/bin/regalia-unlock": (0o104755, CLIENT)}), "inventory: ~ usr/bin/regalia-unlock f 4755", against=unlock_initrd())
+
+    def test_the_client_must_be_the_one_the_build_compiled(self):
+        compiled = self.write("regalia-unlock", b"\x7fELF regalia-unlock")
+        self.assertTrue(self.build(unlock_client=compiled)["initrd_review"]["passed"])
+        other = self.write("regalia-unlock-other", b"\x7fELF another client")
+        review = self.build(name="image-8", unlock_client=other)["initrd_review"]
+        self.assertFalse(review["passed"])
+        self.assertTrue(any("usr/bin/regalia-unlock is not the client this build compiled" in f for f in review["findings"]), review["findings"])
+
+    def test_every_drop_in_of_the_unlock_path_must_be_the_module_s(self):
+        hostile = (0o100644, b"[Service]\nExecStart=\nExecStart=/usr/bin/sh -c 'echo key'\n")
+        for where in ("usr/lib/systemd/system/regalia-unlock.service.d/z.conf", "etc/systemd/system/regalia-unlock.service.d/z.conf",
+                      "etc/systemd/system/regalia-.service.d/z.conf", "etc/systemd/system/regalia-unlock-.service.d/z.conf",
+                      "etc/systemd/system/systemd-cryptsetup@root.service.d/z.conf", "etc/systemd/system/systemd-cryptsetup@.service.d/z.conf",
+                      "usr/lib/systemd/system/service.d/z.conf", "etc/systemd/system/socket.d/z.conf", "etc/systemd/system/cryptsetup.target.d/z.conf",
+                      "etc/systemd/system/initrd-switch-root.target.d/z.conf", "etc/systemd/system.control/regalia-unlock.service.d/z.conf",
+                      "run/systemd/transient/regalia-unlock.service.d/z.conf"):
+            with self.subTest(where):
+                self.refused_by(unlock_initrd({where: hostile}), where + ": a drop-in of the unlock path that is not the module's")
+        # the module's credential reset: on any unit, the cryptsetup@ template (made at boot by the generator) included
+        for unit in ("systemd-journald.service", "systemd-cryptsetup@.service"):
+            reset = "usr/lib/systemd/system/%s.d/%s" % (unit, uki.RESET_DROPIN[0])
+            self.passes(unlock_initrd({reset: (0o100644, uki.RESET_DROPIN[1])}))
+            self.refused_by(unlock_initrd({reset: (0o100644, b"[Service]\nExecStart=/bin/sh\n")}), reset + " is not the module's credential reset")
+
+    def test_instructions_that_would_run_something_or_move_the_socket_are_refused(self):
+        for path, body, reason in (
+                ("usr/lib/modprobe.d/dm.conf", b"install dm_crypt /usr/bin/sh -c 'cat /run/regalia-unlock/key.sock'\n", "runs a command when a module loads"),
+                ("etc/modprobe.d/x.conf", b"remove tpm_crb /usr/bin/true\n", "runs a command when a module loads"),
+                ("usr/lib/sysctl.d/50-coredump.conf", b"kernel.core_pattern=|/usr/bin/sh -c x\n", "a core_pattern that pipes to a program"),
+                ("etc/sysctl.d/x.conf", b"-kernel/core_pattern = |/x\n", "a core_pattern that pipes to a program"),
+                ("usr/lib/tmpfiles.d/x.conf", b"L+ /run/regalia-unlock/key.sock - - - - /dev/null\n", "acts at the unlock client's paths")):
+            with self.subTest(path):
+                self.refused_by(unlock_initrd({path: (0o100644, body)}), path + ":", reason)
+        self.passes(unlock_initrd({"usr/lib/modprobe.d/ok.conf": (0o100644, b"options dm_mod x=1\nblacklist pcspkr\n"),
+                                   "usr/lib/sysctl.d/ok.conf": (0o100644, b"kernel.core_pattern=core\n"),
+                                   "usr/lib/tmpfiles.d/ok.conf": (0o100644, b"d /run/lock 0755 root root -\n")}))
+
+    def test_links_are_followed_inside_the_image_and_a_redirected_directory_is_refused(self):
+        hostile = (0o100644, b"[Service]\nExecStart=/usr/bin/sh\n")
+        self.refused_by(unlock_initrd({"etc/systemd/system": (0o120777, b"../../usr/lib/evil"), "usr/lib/evil/regalia-unlock.service": hostile},
+                                      drop=tuple(uki.UNLOCK_ENABLED)), "etc/systemd/system/regalia-unlock.service: a copy of the unlock client's unit")
+        self.refused_by(unlock_initrd({"usr/lib/udev/rules.d/a.rules": (0o120777, b"b.rules"), "usr/lib/udev/rules.d/b.rules": (0o120777, b"a.rules")}),
+                        "usr/lib/udev/rules.d/a.rules: a link loop")
+        self.refused_by(unlock_initrd({"usr/lib/udev/rules.d/c.rules": (0o120777, b"/sysroot/etc/udev/c.rules")}),
+                        "usr/lib/udev/rules.d/c.rules: a link to /sysroot/etc/udev/c.rules, which is not in the image")
+        # ".." in a name is refused outright: the key is the name as written, never the kernel's interpretation of it
+        data = unlock_initrd({"../../usr/lib/systemd/system/x.service": hostile})
+        self.refused("with an empty, \".\" or \"..\" part", uki.initrd_files, data)
+        self.refused_by(data, "the initrd cannot be read", against=unlock_initrd())
+
+    def test_the_unlock_units_and_their_scripts_name_nothing_outside_the_image(self):
+        # the units are ours (pinned), so what they name is checked as the repository holds them
+        self.passes(unlock_initrd())
+        files = uki._Files(uki.initrd_files(unlock_initrd({"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\n. /etc/regalia/boot.env\ncat /sysroot/etc/k\n")})))
+        findings, seen = [], set()
+        uki._scan_script(files, "usr/lib/regalia/pre", findings, seen)
+        self.assertIn("usr/lib/regalia/pre:2 sources /etc/regalia/boot.env, which is not a file of the image", findings)
+        self.assertIn("usr/lib/regalia/pre:3 names /sysroot/etc/k, which is not in the image", findings)
+        findings = []
+        for line, reason in ((b"EnvironmentFile=-/sysroot/etc/default/regalia", "EnvironmentFile names /sysroot/etc/default/regalia"),
+                             (b"LoadCredential=k:/boot/efi/k.cred", "LoadCredential names /boot/efi/k.cred"),
+                             (b"LoadCredential=k:/.extra/global_credentials/../k.cred", "LoadCredential names /.extra/global_credentials/../k.cred")):
+            uki._scan_unit(files, "u", line.decode(), findings, set())
+            self.assertTrue(any(reason in f for f in findings), (reason, findings))
+        findings = []
+        uki._scan_unit(files, "u", "LoadCredential=k:/.extra/global_credentials/regalia.k.cred", findings, set())
+        self.assertEqual(findings, [])
+
+    def test_compressed_and_concatenated_initrds_are_read_as_the_kernel_reads_them(self):
+        import gzip
+        import lzma
+        main = unlock_initrd()
+        early = newc([("kernel/x86/microcode/GenuineIntel.bin", 0o100644, b"ucode")])
+        for name, data in (("gzip", gzip.compress(main)), ("xz", lzma.compress(main, format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC32)),
+                           ("early, padding, then gzip", early + b"\0" * 512 + gzip.compress(main)),
+                           ("gzip, then padding", gzip.compress(main) + b"\0" * 4096)):
+            with self.subTest(name):
+                self.passes(data)
+        # the early microcode archive is part of the inventory too
+        self.refused_by(newc([("kernel/x86/microcode/GenuineIntel.bin", 0o100644, b"ucodf")]) + gzip.compress(main),
+                        "inventory: ~ kernel/x86/microcode/GenuineIntel.bin", against=early + gzip.compress(main))
+        late = newc([("etc/crypttab", 0o100644, b"root /dev/sda3 none luks\n")])
+        for name, data in (("cpio after cpio", main + late), ("cpio after gzip", gzip.compress(main) + late),
+                           ("gzip after gzip", gzip.compress(main) + gzip.compress(late)),
+                           ("padding then cpio after xz", lzma.compress(main, format=lzma.FORMAT_XZ) + b"\0" * 8 + late)):
+            with self.subTest(name):
+                self.refused_by(data, "etc/crypttab must hold exactly")
+        if shutil.which("zstd"):
+            zst = subprocess.run(["zstd", "-q", "-c"], input=main, capture_output=True, check=True).stdout
+            self.passes(zst)
+        for data, reason in ((b"not an initrd at all", "neither a cpio archive, padding, nor a compression"),
+                             (main[:300], "a cpio archive in the initrd is cut short"),
+                             (gzip.compress(main)[:-40], "ends before its end marker"),
+                             (gzip.compress(main) + b"trailing", "at byte"),
+                             (b"\x1f\x8b\x08\x00garbage", "cannot be read"),
+                             (gzip.compress(gzip.compress(main)), "holds another compressed stream")):
+            with self.subTest(reason):
+                review = uki.review_initrd_data(data)
+                self.assertFalse(review["passed"])
+                self.assertTrue(any("the initrd cannot be read" in f and reason in f for f in review["findings"]), review["findings"])
+
+    def test_no_entry_can_hide_behind_another(self):
+        """d9's third read: two names that decode alike (invalid UTF-8) kept one entry, so a hostile hook hid
+        behind a benign one the kernel also unpacks. Names and link targets must be UTF-8, spelled once."""
+        def raw(entries):
+            out, ino = b"", 1
+            for name, mode, data in list(entries) + [(b"TRAILER!!!", 0, b"")]:
+                name += b"\0"
+                out += b"070701" + b"".join(b"%08x" % v for v in (ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(name), 0)) + name
+                out += b"\0" * (-len(out) % 4) + data
+                out += b"\0" * (-len(out) % 4)
+                ino += 1
+            return out
+        base = unlock_initrd()
+        hidden = raw([(b"usr/lib/dracut/hooks/pre-mount/10-\xff.sh", 0o100755, b"#!/bin/sh\ncat /run/regalia-unlock/key.sock\n"),
+                      (b"usr/lib/dracut/hooks/pre-mount/10-\xfe.sh", 0o100755, b"#!/bin/sh\ntrue\n")])
+        review = uki.review_initrd_data(base + hidden, inventory=write_inventory(base, self.d))
+        self.assertFalse(review["passed"])
+        self.assertTrue(any("an entry with a name that is not UTF-8: usr/lib/dracut/hooks/pre-mount/10-\\xff.sh" in f
+                            for f in review["findings"]), review["findings"])
+        # a link whose target is not UTF-8
+        review = uki.review_initrd_data(base + raw([(b"usr/lib/x", 0o120777, b"\xff")]))
+        self.assertTrue(any("the link usr/lib/x points at a target that is not UTF-8: \\xff" in f for f in review["findings"]), review["findings"])
+        # one path spelled two ways, and names the kernel would have to interpret
+        for entries, reason in (([(b"./usr/lib/a", 0o100644, b"1"), (b"usr/lib/a", 0o100644, b"2")], "names usr/lib/a twice, spelled differently"),
+                                ([(b"usr//lib/b", 0o100644, b"1")], "with an empty, \".\" or \"..\" part"),
+                                ([(b"usr/lib/../../c", 0o100644, b"1")], "with an empty, \".\" or \"..\" part"),
+                                ([(b"usr/./lib/d", 0o100644, b"1")], "with an empty, \".\" or \"..\" part")):
+            with self.subTest(reason):
+                review = uki.review_initrd_data(base + raw(entries))
+                self.assertTrue(any(reason in f for f in review["findings"]), review["findings"])
+        # the same spelling twice is the kernel's own rule: the later file replaces the earlier
+        later = base + raw([(b"etc/crypttab", 0o100644, b"root /dev/sda3 none luks\n")])
+        self.assertTrue(any("etc/crypttab must hold exactly" in f for f in uki.review_initrd_data(later)["findings"]))
+
+    def test_sign_refuses_an_image_whose_initrd_did_not_pass(self):
+        bad = self.write("initrd-bad", unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, b"rd.luks.uuid=1\n")}))
+        record = self.build(inputs={"initrd": bad})
+        self.assertFalse(record["initrd_review"]["passed"])
+        bad_inputs = dict(self.inputs, initrd=bad, initrd_build=self.initrd_build("bad-build.json", initrd=bad))
+        self.refused("the record's initrd review did not pass, so nothing is signed", self.sign, record=record, inputs=bad_inputs)
+        forged = json.loads(json.dumps(record))
+        forged["initrd_review"]["passed"] = True
+        self.refused("says passed only with no finding", self.sign, record=forged, inputs=bad_inputs)
+        forged["initrd_review"]["findings"] = []
+        self.refused("this machine's review of the initrd is not the record's", self.sign, record=forged, inputs=bad_inputs)
+
+
+def newc_owned(data, path, uid):
+    """`data` (one newc archive) with `path`'s owner changed: the uid field of its header rewritten."""
+    i = data.index(path.encode() + b"\0") - 110
+    return data[:i + 22] + b"%08x" % uid + data[i + 30:]

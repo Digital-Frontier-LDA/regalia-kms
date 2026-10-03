@@ -246,6 +246,23 @@ class Verification(unittest.TestCase):
         self.assertNotEqual(self.secrets[0][1], self.secrets[1][1])
         self.assertEqual(len(self.secrets[1][1]), 32)
 
+    def test_the_ak_offered_must_be_the_one_the_manifest_names(self):
+        """#190: given the manifest's AK Name, the challenge refuses any other AK, before anything is wrapped or held."""
+        manifest_ak = attest.ak_identity(self.other_pub)[0].hex()
+        made = len(self.secrets)
+        with self.assertRaises(attest.Refused) as caught:
+            self.v.challenge("site-a", EK_PUB, self.ak_pub, replace=True, ak_name=manifest_ak)
+        self.assertIn("not the one the manifest names", str(caught.exception))
+        self.assertEqual(len(self.secrets), made, "no credential is made for an AK the manifest does not name")
+        for spelling in (manifest_ak.upper(), manifest_ak[:-2] + "\u00e9a", manifest_ak[:-2], None.__class__.__name__):
+            with self.assertRaises(attest.Refused) as caught:     # never a TypeError, never another spelling
+                self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=spelling)
+            self.assertIn("must be 68 lowercase hex", str(caught.exception))
+        self.assertEqual(len(self.secrets), made)
+        self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=manifest_ak)
+        self.assertEqual(self.secrets[-1][0], manifest_ak)
+        self.assertEqual(self.v.enroll("site-a", self.secrets[-1][1]).hex(), manifest_ak)
+
     def test_enrollment_refusals(self):
         def refused(reason, fn, *args, **kw):
             with self.assertRaises(attest.Refused) as caught:
@@ -617,6 +634,27 @@ class Verification(unittest.TestCase):
             verdict = self.attempt(phase=phase, **self.boot(self.IMAGE2, phase))
             self.assertEqual((verdict["measurement"], verdict["phase"]), ("uki", phase))
         self.refused("the node is in the system phase of uki", phase="initrd", **self.boot(self.IMAGE2, "system"))
+
+    def test_a_signed_images_set_may_name_its_signing_keys(self):
+        """#190/#265: the keys a signed image's PCR policy and Secure Boot signature are made with, by fingerprint, so
+        that whoever seals to a PCR-signing key takes only one the approved set names. Peers never read them."""
+        def policy(*sets):
+            return {"schema": attest.POLICY_SCHEMA, "nodes": {"site-a": {"ek_name": self.ek_name.hex(), "accepted": list(sets)}}}
+        signing = {"initrd": "1a" * 32, "system": "5b" * 32, "secure_boot_cert": "5c" * 32}
+        attest.validate_policy(policy(dict(self.one("a", self.IMAGE1), signing=signing)))
+        cases = (
+            ("a field missing", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing={"initrd": "1a" * 32, "system": "5b" * 32})),
+            ("a field more", "signing fields mismatch", dict(self.one("a", self.IMAGE1), signing=dict(signing, pcrpkey="77" * 32))),
+            ("not hex", "signing.system must be 64 lowercase hex", dict(self.one("a", self.IMAGE1), signing=dict(signing, system="5B" * 32))),
+            ("one key for both phases", "the two phases' PCR keys must be two keys",
+             dict(self.one("a", self.IMAGE1), signing=dict(signing, system="1a" * 32))),
+            ("not an object", "signing must be an object", dict(self.one("a", self.IMAGE1), signing=[])),
+            ("on a set with no per-phase PCR 11", "only a set with per-phase PCR 11", dict(self.one("a", None), signing=signing)),
+        )
+        for label, reason, entry in cases:
+            with self.subTest(label), self.assertRaises(attest.Refused) as caught:
+                attest.validate_policy(policy(entry))
+            self.assertIn(reason, str(caught.exception))
 
     def test_what_a_per_phase_set_may_hold(self):
         def policy(*sets):

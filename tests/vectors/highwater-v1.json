@@ -1,0 +1,2351 @@
+{
+ "about": "The TPM high-water anchor as the initrd reads it, decided by the Python: each case is the NV indices a\nTPM holds (as membership.HighWater laid them out, driven through tests.test_baremetal_heartbeat.FakeTpm),\na chain from the ESP, and what Store.load decides before it writes anything.",
+ "cases": [
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "anchored at 3, the chain at 3",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 6,
+   "name": "anchored at 3, the chain ahead at 6",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "a TPM that never held a counter",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "0000000000000004",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "0000000000000001",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 0,
+   "length": 1,
+   "name": "defined only (epoch 0, a zero digest), the chain at 1",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000000000000000000000000000000000000000000000000000000000000000000000072c485cd52dca84b",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000000000000000000000000000000000000000000000000000000000000000000000072c485cd52dca84b",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "anchored at 5, the chain at 3: a restored disk",
+   "refused": "ROLLBACK: the membership on disk is epoch 3 but the TPM high-water is 5; fetch the chain from a peer",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002f",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "00000000000000057ac3c7a557030113e38b81696367985f14e12e2b51623635f0d9c070979a3b67281c4dfe75b8d1b5",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e100db9fd6bcd7c6f33",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "fork at 3",
+   "length": 3,
+   "name": "anchored at 3, another chain at 3",
+   "refused": "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded: a substituted chain is never anchored; record an incident",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "fork at 4",
+   "high_water": 3,
+   "length": 5,
+   "name": "anchored at 3, another chain from epoch 4",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "the crash window: counter at 4, record at 3, the chain at 4",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "fork at 4",
+   "high_water": 4,
+   "length": 4,
+   "name": "the crash window, another manifest at 4 (only 3 is pinned)",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "fork at 3",
+   "length": 4,
+   "name": "the crash window, another chain from 3",
+   "refused": "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded: a substituted chain is never anchored; record an incident",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 5,
+   "name": "the record two epochs behind the counter",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002f",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the TPM record is for epoch 3 but the TPM high-water is 5: the anchor is inconsistent (fail closed)"
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 0 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 1 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 7 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 8 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000004d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 20 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000004dc75111444c367b6e3929967f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 39 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 40 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e107d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "high_water": 4,
+   "length": 4,
+   "name": "a record write cut after 47 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000004dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e100db9fd6bcd7c6f2d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "both slots holding no valid record",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NO RECORD: neither record slot (0x150001a, 0x150001b) holds a valid record: the anchor cannot tell which chain this node accepted (fail closed); re-anchor it (MEMBERSHIP-RECOVERY.md)"
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "one slot never written",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 393218,
+      "data": null,
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "both slots never written",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 393218,
+      "data": null,
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 393218,
+      "data": null,
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NO RECORD: neither record slot (0x150001a, 0x150001b) holds a valid record: the anchor cannot tell which chain this node accepted (fail closed); re-anchor it (MEMBERSHIP-RECOVERY.md)"
+  },
+  {
+   "chain": "main",
+   "high_water": 3,
+   "length": 3,
+   "name": "one slot holding garbage",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a record slot that is gone",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "cannot read NV index 0x150001b: the high-water anchor is unavailable (fail closed): the index is not defined"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "the counter is gone",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "cannot read NV index 0x1500016: the high-water anchor is unavailable (fail closed): the index is not defined"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "the base is gone",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "cannot read NV index 0x1500017: the high-water anchor is unavailable (fail closed): the index is not defined"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a slot others may write (authwrite)",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264134,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001a does not have this anchor's attributes (0x60006, not 0x60002): it can be written or read otherwise than this software defines"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a slot under a policy (policywrite)",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264138,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001b does not have this anchor's attributes (0x6000a, not 0x60002): it can be written or read otherwise than this software defines"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a slot the owner cannot read",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537133058,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001a does not have this anchor's attributes (0x40002, not 0x60002): it can be written or read otherwise than this software defines"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a write-locked slot",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537266178,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x150001a is write-locked: no record can be written to it"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a slot of 40 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 393218,
+      "data": null,
+      "size": 40
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "record index 0x150001a is 40 bytes, not 48"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a slot that is a counter",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 393234,
+      "data": null,
+      "size": 8
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "record index 0x150001a is not an ordinary index"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a counter others may write",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264150,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500016 does not have this anchor's attributes (0x60016, not 0x60012): it can be written or read otherwise than this software defines"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a counter that clears at startup",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 671481874,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500016 does not have this anchor's attributes (0x8060012, not 0x60012): it can be written or read otherwise than this software defines"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a counter never incremented",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 393234,
+      "data": null,
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500016 is not a written counter"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a base that is not write-locked",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537272322,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "base index 0x1500017 is not written and write-locked"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a base others may write",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274374,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500017 does not have this anchor's attributes (0x62006, not 0x62002): it can be written or read otherwise than this software defines"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a base of 4 bytes",
+   "refused": "cannot read 8 bytes from NV index 0x1500017",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "00000000",
+      "size": 4
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "the counter below its base",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "00000000000f4240",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the NV counter 45 is below its base 1000000"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "two slots at one epoch naming different manifests",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7836d6b5e32657fe",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000003bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb26483669d4386636",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the two record slots name different manifests at epoch 3: the anchor is inconsistent (fail closed)"
+  },
+  {
+   "chain": "main",
+   "length": 1,
+   "name": "a planted record at the highest epoch beside a high-water of 0",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000fd59bdcb88f7146a",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000000000000000000000000000000000000000000000000000000000000000000000072c485cd52dca84b",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the TPM record is for epoch 18446744073709551615 but the TPM high-water is 0: the anchor is inconsistent (fail closed)"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a planted record at the highest epoch beside a high-water of 3",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "ffffffffffffffff0000000000000000000000000000000000000000000000000000000000000000fd59bdcb88f7146a",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "the TPM record is for epoch 18446744073709551615 but the TPM high-water is 3: the anchor is inconsistent (fail closed)"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a slot the TPM describes and does not read",
+   "refused": "cannot read 48 bytes from the record index 0x150001b: the anchor is unavailable (fail closed)",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": [
+     "0x150001b"
+    ]
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a base the TPM does not read",
+   "refused": "cannot read 8 bytes from NV index 0x1500017",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": [
+     "0x1500017"
+    ]
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "an index the TPM lists and does not describe",
+   "refused": "cannot read NV index 0x150001a: the high-water anchor is unavailable (fail closed): the TPM lists it and did not give it",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [
+     "0x150001a"
+    ],
+    "unreadable": []
+   }
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a TPM that does not answer",
+   "refused": "the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is unavailable (fail closed)",
+   "tpm": {
+    "broken": true,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   }
+  }
+ ],
+ "chains": {
+  "fork at 3": [
+   {
+    "manifest": {
+     "epoch": 1,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "8c2a4f3e52978da9f73eb8c322d457f09c545353b10acb2e758dbcdeb3273a1ab7e6f632b2862d8ae0a689513a102f94002828397d18c0c01c1d85024cebad03"
+   },
+   {
+    "manifest": {
+     "epoch": 2,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "cdec8b34788d55b4e137275224702fd545ad865919b0b0662724f08e9fe09665",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "1cd9cd738c298321a52fd515f0006a7177d98b911031fc6f2d94807c4c83d894a29ac93ad01c7da33fbefada13be003362f94ea9cc9c7b7fe24fe841e4d02005"
+   },
+   {
+    "manifest": {
+     "epoch": 3,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "DRAINING",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d059",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "fb83b5e9127e3c397077422f75ba809ce1bc38090a10b637a6aa3ee5df77663eb1599f2c079c35149f96ed216d91b83c2cce567fb7f6fff1e863ce488038670b"
+   },
+   {
+    "manifest": {
+     "epoch": 4,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "DRAINING",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "5efde7c8eaf9a20fa1e061bf84306c9362ad77b707c47a1fa5669cf8f154b54a",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "992607929a1e7216f8526ed2f86a1e22f570d07c7667d1de0d69642af1cd15b23d2c5d899009ddf58c57b9134827636bf7cec5af99e0ca4037fd594860c26f0d"
+   },
+   {
+    "manifest": {
+     "epoch": 5,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "DRAINING",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "199ba30e1f9b1e0be2e9119528250cb234ddb0db4b1336d94e03dd520bcdb8e1",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "f4edcf739479cee0911c06f2ff598bad37adb3d6187a5750005e646993c2db240abcc9ded4777898f6a1a969bba483b61be4c7443079a9a5c6d5d7a834f2ed0a"
+   },
+   {
+    "manifest": {
+     "epoch": 6,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "DRAINING",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "5693bc935ffdd10a5d58f765a8da4af870c1391aebf54728e20b2500b50628e9",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "a8d7b2efbaa526887809270ed000191ba4b77bfbe2c8b8a997280bb24859915716c603abd2f091392a731afe736e799427c99655a3b2f2de98354bc54dfeae0b"
+   }
+  ],
+  "fork at 4": [
+   {
+    "manifest": {
+     "epoch": 1,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "8c2a4f3e52978da9f73eb8c322d457f09c545353b10acb2e758dbcdeb3273a1ab7e6f632b2862d8ae0a689513a102f94002828397d18c0c01c1d85024cebad03"
+   },
+   {
+    "manifest": {
+     "epoch": 2,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "cdec8b34788d55b4e137275224702fd545ad865919b0b0662724f08e9fe09665",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "1cd9cd738c298321a52fd515f0006a7177d98b911031fc6f2d94807c4c83d894a29ac93ad01c7da33fbefada13be003362f94ea9cc9c7b7fe24fe841e4d02005"
+   },
+   {
+    "manifest": {
+     "epoch": 3,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d059",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "bb522b75b8190432193634d5bdf0aa7b03eff0ae52ed4f65ce87eedcc548139780be239009a2a67caeff196fd73f352452fc4f2b2ef064939b6d1147698d4e02"
+   },
+   {
+    "manifest": {
+     "epoch": 4,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "DRAINING",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "c8e349b1ce42e92eeb30293674b0d6072e001c7e6dc4fc10a0ab925ba648f5686f709069e3b2df578867fc2f63487207686f64cd8f413b171f20ae5765fb8a07"
+   },
+   {
+    "manifest": {
+     "epoch": 5,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "DRAINING",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "5363c509bfb66e77d7376ed4ffc862cfa8136a72f80ab3195558bac551dab261",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "e21d521c80131c274a45368f727b39af223c2c87a337074b324d5923166490205121a4d4447f9649b341165af82ade7256916847020a3215fb90e38ee14b520e"
+   },
+   {
+    "manifest": {
+     "epoch": 6,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "DRAINING",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "27b001f5f1ff5b601d2595f273b439e7e5eeab9489e34e1e168f706be7dffaf8",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "87b3ae9cc35bebf8059ebc40ecbe8072c2ebd4bfd576b30638f971d956ae975e2bd853998a68bc8483142a97d549c685c07fdb0e0e790d14b5817ca5c7e54b0c"
+   }
+  ],
+  "main": [
+   {
+    "manifest": {
+     "epoch": 1,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "8c2a4f3e52978da9f73eb8c322d457f09c545353b10acb2e758dbcdeb3273a1ab7e6f632b2862d8ae0a689513a102f94002828397d18c0c01c1d85024cebad03"
+   },
+   {
+    "manifest": {
+     "epoch": 2,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "cdec8b34788d55b4e137275224702fd545ad865919b0b0662724f08e9fe09665",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "1cd9cd738c298321a52fd515f0006a7177d98b911031fc6f2d94807c4c83d894a29ac93ad01c7da33fbefada13be003362f94ea9cc9c7b7fe24fe841e4d02005"
+   },
+   {
+    "manifest": {
+     "epoch": 3,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d059",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "bb522b75b8190432193634d5bdf0aa7b03eff0ae52ed4f65ce87eedcc548139780be239009a2a67caeff196fd73f352452fc4f2b2ef064939b6d1147698d4e02"
+   },
+   {
+    "manifest": {
+     "epoch": 4,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "42166e10eed276595f9c0d621c91cdb8b5ea7a5196a5ba42f3d3f4aa91150b58079e4522f2cc2cd8cc0ec92792165a323f77c9435dd8972814d091ec8cd1ee0e"
+   },
+   {
+    "manifest": {
+     "epoch": 5,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "dc75111444c367b6e3929967bfe1517ddaf14ac7d53987d83a894071adbe8e10",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "1a4bd28e7ec5facf1bb7399cab8e53f3a2be766fff55b3a569b9051cc693c242c458a966658368788df659c79061c0ab3f8181daba584ae58877abf0142fa80c"
+   },
+   {
+    "manifest": {
+     "epoch": 6,
+     "issued_at": "2026-10-03T12:00:00Z",
+     "nodes": [
+      {
+       "ak_name": "000b6565656565656565656565656565656565656565656565656565656565656565",
+       "ek_name": "000b0101010101010101010101010101010101010101010101010101010101010101",
+       "hsm_serials": [
+        "DENK0000001"
+       ],
+       "node_id": "n1",
+       "state": "ACTIVE",
+       "wg_boot_pub": "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f",
+       "wg_service_pub": "3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d"
+      },
+      {
+       "ak_name": "000b6666666666666666666666666666666666666666666666666666666666666666",
+       "ek_name": "000b0202020202020202020202020202020202020202020202020202020202020202",
+       "hsm_serials": [
+        "DENK0000002"
+       ],
+       "node_id": "n2",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2020202020202020202020202020202020202020202020202020202020202020",
+       "wg_service_pub": "3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e"
+      },
+      {
+       "ak_name": "000b6767676767676767676767676767676767676767676767676767676767676767",
+       "ek_name": "000b0303030303030303030303030303030303030303030303030303030303030303",
+       "hsm_serials": [
+        "DENK0000003"
+       ],
+       "node_id": "n3",
+       "state": "ACTIVE",
+       "wg_boot_pub": "2121212121212121212121212121212121212121212121212121212121212121",
+       "wg_service_pub": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
+      }
+     ],
+     "policy_version": "p1",
+     "prev_digest": "7ac3c7a557030113e38b81696367985f14e12e2b51623635f0d9c070979a3b67",
+     "revocation_keys": [],
+     "schema": "regalia.membership/v1"
+    },
+    "sig": "c5ff3f8e1bf36713bbf26e9d35e8f5395cc7103201c601a8dc759c051870c336fab39dcb075b0cdda5bef62edd61ce95abc63714bb49377197a3a94107c49205"
+   }
+  ]
+ },
+ "root_public": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+}
