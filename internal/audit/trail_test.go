@@ -56,6 +56,9 @@ func lastTrailLine(data []byte) []byte {
 func TestTrailEventsReadWhatTrailsPyWrites(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
+		if expect := os.Getenv("REGALIA_EXPECT_PYTHON"); expect != "" && expect != "0" {
+			t.Fatal("REGALIA_EXPECT_PYTHON is set, but python3 is not on PATH: the trails.py interop test must run here")
+		}
 		t.Skip("python3 is not installed")
 	}
 	_, here, _, _ := runtime.Caller(0)
@@ -308,5 +311,51 @@ func TestReportAlarmIsRefusedOutOfBounds(t *testing.T) {
 	collector.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != 401 {
 		t.Fatalf("an unauthenticated alarm: %d", recorder.Code)
+	}
+}
+
+// TestTheTrailMappingIsPinned holds tests/vectors/trail-events-v1.json: fixed trail bytes, as
+// trails.py wrote them, to the fixed event hashes they map to (#283, regalia-kms-3e). The
+// determinism test proves two builds agree; this proves today's build agrees with every shipped
+// stream. A refactor here, or a Go release that compacts or escapes a RawMessage differently,
+// fails this test instead of stopping every shipper in production with a tamper alarm.
+func TestTheTrailMappingIsPinned(t *testing.T) {
+	_, here, _, _ := runtime.Caller(0)
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", "tests", "vectors", "trail-events-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vector struct {
+		Format      string   `json:"format"`
+		Trail       string   `json:"trail"`
+		Lines       []string `json:"lines"`
+		LineSHA256  []string `json:"line_sha256"`
+		EventHashes []string `json:"event_hashes"`
+	}
+	if err := json.Unmarshal(raw, &vector); err != nil {
+		t.Fatal(err)
+	}
+	if vector.Format != TrailFormat {
+		t.Fatalf("the vector pins %s, the mapping is %s", vector.Format, TrailFormat)
+	}
+	events, err := TrailEvents(vector.Trail, []byte(strings.Join(vector.Lines, "\n")+"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, len(events))
+	for i, event := range events {
+		got[i] = event.Hash
+		var detail trailDetail
+		if err := json.Unmarshal(event.Detail, &detail); err != nil || detail.LineSHA256 != vector.LineSHA256[i] {
+			t.Errorf("event %d names line hash %s, the vector %s", i+1, detail.LineSHA256, vector.LineSHA256[i])
+		}
+	}
+	if len(vector.EventHashes) != len(got) {
+		t.Fatalf("the vector pins %d event hashes for %d lines; this build maps them to %q", len(vector.EventHashes), len(vector.Lines), got)
+	}
+	for i := range got {
+		if got[i] != vector.EventHashes[i] {
+			t.Errorf("line %d maps to %s, pinned %s: the mapping changed, and every shipped stream would read as rewritten", i+1, got[i], vector.EventHashes[i])
+		}
 	}
 }

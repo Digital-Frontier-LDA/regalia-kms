@@ -133,8 +133,8 @@ func TestVerifyingARecorderThatHasWrittenNothingIsIntact(t *testing.T) {
 // way to see either through the shipper is to fail it for a minute on real timers.
 //
 // Survived before this test: the outer comparison forced false (formerly shipper.go:181[0]), which
-// retries a failing collector every 100ms forever; and the cap forced false (formerly
-// shipper.go:183[0]), which settles at 51.2s instead of 30s. The outer comparison forced true is
+// retries a failing collector every 100ms forever; and the cap forced false
+// (formerly shipper.go:183[0]), which settles at 51.2s instead of 30s. The outer comparison forced true is
 // not in this list because it cannot be told apart: doubling the maximum is capped straight back.
 func TestShipBackoffDoublesAndIsHeldAtItsMaximum(t *testing.T) {
 	// Doubling is what stops a down collector being hammered: without it, every failed attempt

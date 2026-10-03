@@ -63,6 +63,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -176,7 +177,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "audit.go:324[0]", Verdict: "killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "Open's redo of the journal's collector-side position (the readShippedMark call is on line 322; the if check is on 323); the joint bypass with the audit.go:269[0] masking guard is caught by the test in Test and Compose.",
+			Notes:   "Open's redo of the journal's collector-side position (the readShippedMark call is just above the if check); the joint bypass with the audit.go:269[0] masking guard is caught by the test in Test and Compose.",
 			Test:    "TestACorruptShippedMarkIsRefusedNotIgnored",
 			Masking: "audit.go:269[0]",
 			MAlone:  []string{"TestACorruptShippedMarkIsRefusedNotIgnored"},
@@ -230,7 +231,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "verifier.go:74[0]", Verdict: "killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "VerifyNow's os.Open failure check (the os.Open call is on line 73; the if check is on 74); the masking guard at verifier.go:80[0] catches the joint bypass via the verifyEvents error path. The 3-arm protocol shows TestVerifyNowOnAMissingJournalReturnsUnreadableRatherThanPanicking fires ONLY on the joint bypass, not on M-alone — proof the masking guard's tests do NOT cover X alone.",
+			Notes:   "VerifyNow's os.Open failure check (the os.Open call is just above the if check); the masking guard at verifier.go:80[0] catches the joint bypass via the verifyEvents error path. The 3-arm protocol shows TestVerifyNowOnAMissingJournalReturnsUnreadableRatherThanPanicking fires ONLY on the joint bypass, not on M-alone — proof the masking guard's tests do NOT cover X alone.",
 			Test:    "TestVerifyNowOnAMissingJournalReturnsUnreadableRatherThanPanicking",
 			Masking: "verifier.go:80[0]",
 			MAlone:  []string{"TestVerifierClassifiesAReadFailureAsUnreadableNotBroken"},
@@ -268,7 +269,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "audit.go:328[0]", Verdict: "panic-killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "Open's file-open err check (the OpenFile call is on line 326); the masking guard at audit.go:332[0] catches the joint bypass. The panic propagates through defer file.Close() on a nil handle.",
+			Notes:   "Open's file-open err check (the OpenFile call is just above it); the masking guard at audit.go:332[0] catches the joint bypass. The panic propagates through defer file.Close() on a nil handle.",
 			Test:    "TestTheAcceptedFileModesAreTheOnesTheMessageDescribes",
 			Masking: "audit.go:332[0]",
 			MAlone:  []string{},
@@ -277,7 +278,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "audit.go:332[0]", Verdict: "panic-killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "Open's file-Stat err check (the Stat call is on line 330); the masking guard at audit.go:328[0] catches the joint bypass. With both operands neutralised, the nil file deref panics.",
+			Notes:   "Open's file-Stat err check (the Stat call is just above it); the masking guard at audit.go:328[0] catches the joint bypass. With both operands neutralised, the nil file deref panics.",
 			Test:    "TestTheAcceptedFileModesAreTheOnesTheMessageDescribes",
 			Masking: "audit.go:328[0]",
 			MAlone:  []string{},
@@ -327,7 +328,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "audit.go:178[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "json.Marshal(highWaterMark) cannot fail for a struct of strings and numbers (the Marshal call is on line 176; the if check is on 177).",
+			Notes: "json.Marshal(highWaterMark) cannot fail for a struct of strings and numbers (the Marshal call is just above the if check).",
 		},
 		{
 			ID: "audit.go:305[0]", Verdict: "unreachable",
@@ -342,7 +343,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "audit.go:381[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "json.Marshal(event) cannot fail for the Event struct's string/number/time fields (the Marshal call is on line 379; the if check is on 380).",
+			Notes: "json.Marshal(event) cannot fail for the Event struct's string/number/time fields (the Marshal call is just above the if check).",
 		},
 		{
 			ID: "audit.go:471[0]", Verdict: "unreachable",
@@ -357,7 +358,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "httpsink.go:89[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "ValidateSinkURL pre-rejects malformed URLs; NewRequestWithContext with valid input and a method/URL cannot fail (the NewRequestWithContext call is on line 88; the if check is on 89).",
+			Notes: "ValidateSinkURL pre-rejects malformed URLs; NewRequestWithContext with valid input and a method/URL cannot fail (the NewRequestWithContext call is just above the if check).",
 		},
 		{
 			ID: "httpsink.go:102[0]", Verdict: "unreachable",
@@ -367,17 +368,17 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "httpsink.go:124[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "Same shape as httpsink.go:74[0] — pre-rejected by ValidateSinkURL (the NewRequestWithContext call is on line 123; the if check is on 124).",
+			Notes: "Same shape as httpsink.go:89[0] — pre-rejected by ValidateSinkURL (the NewRequestWithContext call is just above the if check).",
 		},
 		{
 			ID: "httpsink.go:136[0]", Verdict: "unreachable",
 			Site:  "\t\tif response.Body != nil {",
-			Notes: "Same shape as httpsink.go:84[0].",
+			Notes: "Same shape as httpsink.go:102[0].",
 		},
 		{
 			ID: "httpsink.go:182[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "Ready's err check after sink.client.Do (the Do call is on line 181); the client/baseURL are validated by NewHTTPSink so no test construct produces the wrong side.",
+			Notes: "Ready's err check after sink.client.Do (the Do call is just above it); the client/baseURL are validated by NewHTTPSink so no test construct produces the wrong side.",
 		},
 		{
 			ID: "httpsink.go:185[0]", Verdict: "unreachable",
@@ -513,7 +514,7 @@ func TestLedgerRowNamesLiveSource(t *testing.T) {
 // 1 cannot-be-sole-refuser = 50). The two shipper.go:115 rows moved from
 // killed-on-compose to hangs-on-bypass on re-measurement (#453); the count moved with them.
 // The seven round-three rows left "unclassified" when they got verdicts: six gained tests and
-// audit.go:225[0] is unreachable, httpsink.go:95[0] joined as a new row, and shipper.go:181[0]
+// audit.go:225[0] is unreachable, httpsink.go:95[0] joined as a new row, and the row formerly shipper.go:181[0]
 // left unreachable for a test (it is now shipper.go:191[0]).
 //
 // The sums are computed at test time, so a row dropped from ledgerRows() or a
@@ -651,4 +652,55 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestLedgerCitationsNameLiveSource extends the drift guard from the rows' IDs to every other
+// "file.go:N[k]" this package's tests cite (a row's Masking, its Notes, the comments): each names a
+// row, or a line of that file that is still a branch (if, case, for, switch, && or ||). A
+// citation marked as history ("Was …", "formerly …") is exempt: it names where a row used to be.
+// (#283, regalia-kms-3e: renumbering after an edit must not leave a citation pointing at a
+// different line unseen. #282 replaces line numbers with symbols.)
+func TestLedgerCitationsNameLiveSource(t *testing.T) {
+	rows := map[string]bool{}
+	for _, row := range ledgerRows() {
+		rows[row.ID] = true
+	}
+	_, thisFile, _, _ := runtime.Caller(0)
+	auditDir := filepath.Dir(thisFile)
+	citation := regexp.MustCompile(`(?i)(was |formerly )?\b([a-z_]+\.go):(\d+)\[\d+\]`)
+	branch := regexp.MustCompile(`\bif\b|\bcase\b|\bfor\b|\bswitch\b|&&|\|\|`)
+	sources := map[string][]string{}
+	tests, _ := filepath.Glob(filepath.Join(auditDir, "*_test.go"))
+	for _, test := range tests {
+		data, err := os.ReadFile(test)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for number, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, `ID:`) || strings.Contains(line, "regexp.MustCompile") {
+				continue
+			}
+			for _, match := range citation.FindAllStringSubmatch(line, -1) {
+				cited := match[0][len(match[1]):]
+				if match[1] != "" || rows[cited] {
+					continue
+				}
+				file, lineNo := match[2], 0
+				fmt.Sscan(match[3], &lineNo)
+				lines, ok := sources[file]
+				if !ok {
+					source, err := os.ReadFile(filepath.Join(auditDir, file))
+					if err != nil {
+						t.Errorf("%s:%d cites %s, which is not a file of this package", filepath.Base(test), number+1, cited)
+						continue
+					}
+					lines = strings.Split(sweeptext.StripMutationWrappers(string(source)), "\n")
+					sources[file] = lines
+				}
+				if lineNo < 1 || lineNo > len(lines) || !branch.MatchString(lines[lineNo-1]) {
+					t.Errorf("%s:%d cites %s: not a row, and that line is not a branch", filepath.Base(test), number+1, cited)
+				}
+			}
+		}
+	}
 }

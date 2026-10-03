@@ -199,6 +199,23 @@ class Registry(Case):
         self.assertIn('node.path("sync-audit.jsonl")', source)               # sync's, in state_dir
 
 
+class PinnedVector(Case):
+    def test_the_pinned_trail_is_one_trails_py_accepts_line_for_line(self):
+        """#283 (regalia-kms-24): tests/vectors/trail-events-v1.json pins a trail to the events the Go
+        shipper maps it to (internal/audit/trail.go's TestTheTrailMappingIsPinned). Its lines are ones
+        this writer makes and this verify accepts, with the line hashes the events carry."""
+        with open(os.path.join(HERE, "..", "..", "tests", "vectors", "trail-events-v1.json")) as f:
+            vector = json.load(f)
+        self.assertEqual(vector["format"], "regalia.trail/v1")
+        data = "".join(line + "\n" for line in vector["lines"]).encode()
+        with open(self.path, "wb") as f:
+            f.write(data)
+        report = trails.verify(self.path)
+        self.assertEqual((report["chained"], report["legacy"], report["torn"]), (5, 2, 1))
+        self.assertEqual([hashlib.sha256(line.encode() + b"\n").hexdigest() for line in vector["lines"]], vector["line_sha256"])
+        self.assertEqual(len(vector["event_hashes"]), len(vector["lines"]))
+
+
 class ByPath(Case):
     def test_it_runs_by_path_from_anywhere_with_the_event_on_stdin(self):
         trails.append(self.path, {"event": "e"})

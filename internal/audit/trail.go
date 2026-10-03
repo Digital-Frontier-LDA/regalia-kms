@@ -81,7 +81,10 @@ type TrailSink interface {
 
 // trailDetail is an event's Detail: which line of which trail it is. LineSHA256 is of the line's
 // exact bytes, newline included (what the next line's prev names); Content is the line's JSON as
-// Go re-encodes it, or ContentBase64 its bytes when it is not JSON (torn) or not UTF-8.
+// Go re-encodes it, or ContentBase64 its bytes when it is not JSON (torn) or not UTF-8. Content is
+// data, not fields: the header fields above fall back to a safe default for a value validateDraft
+// would refuse, but Content keeps the line as written, control characters included (only a secret
+// key marker withholds it), so whatever displays a detail escapes it.
 type trailDetail struct {
 	Format        string          `json:"format"`
 	Trail         string          `json:"trail"`
