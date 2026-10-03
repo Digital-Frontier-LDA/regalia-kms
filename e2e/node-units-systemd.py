@@ -690,7 +690,7 @@ def part2(work, binaries, user, ctx, servers, status):
     server = sync.Server("b", store, freshness, verifier, lease.TpmSigner(b_tcti), wgsvc.key_at, events.append)
     # b's trail names a refused caller before it parses the request ("event": "sync"), so the test also
     # notes each request's operation and b's answer, to tell a's renewals from its pulls
-    requests, answer = [], server.handle
+    requests, b_handle = [], server.handle          # (not "answer": section 8 reuses that name for the daemon's reply)
 
     started, raised = [], []
 
@@ -702,7 +702,7 @@ def part2(work, binaries, user, ctx, servers, status):
         who = address[0] if isinstance(address, tuple) else address
         started.append((time.monotonic(), op, who))          # a request that never answers shows here only
         try:
-            out = answer(raw, address)
+            out = b_handle(raw, address)
         except BaseException:
             import traceback
             raised.append((op, traceback.format_exc()[-1500:]))
