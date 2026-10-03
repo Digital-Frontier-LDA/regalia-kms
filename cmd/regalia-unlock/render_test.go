@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -55,16 +56,20 @@ func (f vectorNV) Read(index uint32, size int) ([]byte, error) {
 }
 
 type renderFixture struct {
-	vector  map[string]any
-	root    string
-	files   map[string][]byte // what readFile returns, by path; the chain is under "ESP/" and readable only while mounted
-	mounted string
-	mounts  int
-	writes  map[string][]byte
-	tpm     vectorNV
-	tpmFail bool
-	slept   time.Duration
-	devices map[string]bool
+	vector       map[string]any
+	root         string
+	files        map[string][]byte // what readFile returns, by path; the chain is under "ESP/" and readable only while mounted
+	mounted      string
+	mounts       int
+	writes       map[string][]byte // what is in the output directory, temporary names included
+	failOn       int               // the write that fails (1-based); 0: none
+	nWrites      int
+	unmountFails bool
+	removed      []string
+	tpm          vectorNV
+	tpmFail      bool
+	slept        time.Duration
+	devices      map[string]bool
 }
 
 func loadVector(t *testing.T) map[string]any {
@@ -160,7 +165,13 @@ func (f *renderFixture) env() renderEnv {
 			f.mounted, f.mounts = dir, f.mounts+1
 			return nil
 		},
-		unmount: func(dir string) error { f.mounted, f.mounts = "", f.mounts-1; return nil },
+		unmount: func(dir string) error {
+			f.mounted, f.mounts = "", f.mounts-1
+			if f.unmountFails {
+				return errors.New("device busy")
+			}
+			return nil
+		},
 		mkdtemp: func() (string, error) { return "/run/esp-test", nil },
 		nv: func() (membership.NV, func(), error) {
 			if f.tpmFail {
@@ -169,8 +180,29 @@ func (f *renderFixture) env() renderEnv {
 			return f.tpm, func() {}, nil
 		},
 		sleep: func(d time.Duration) { f.slept += d },
-		write: func(path string, data []byte) error { f.writes[path] = data; return nil },
-		creds: "/creds", rootKey: "/root-key.json",
+		write: func(path string, data []byte) error {
+			f.nWrites++
+			if _, exists := f.writes[path]; exists {
+				return os.ErrExist
+			}
+			if f.nWrites == f.failOn {
+				f.writes[path] = data[:len(data)/2] // a write cut half-way
+				return errors.New("no space left on device")
+			}
+			f.writes[path] = data
+			return nil
+		},
+		rename: func(from, to string) error {
+			data, ok := f.writes[from]
+			if !ok {
+				return os.ErrNotExist
+			}
+			delete(f.writes, from)
+			f.writes[to] = data
+			return nil
+		},
+		remove: func(path string) error { f.removed = append(f.removed, path); delete(f.writes, path); return nil },
+		creds:  "/creds", rootKey: "/root-key.json",
 	}
 }
 
@@ -287,5 +319,87 @@ func TestRenderSaysOneLineAndRefusesBadArguments(t *testing.T) {
 	line := fmt.Sprintf("regalia-unlock: the boot configuration cannot be rendered: %v; nothing is asked of a peer, and the console asks for the recovery key\n", err)
 	if strings.Count(line, "\n") != 1 {
 		t.Errorf("not one line: %q", line)
+	}
+}
+
+// A write that fails at any of the four leaves the directory as it was: nothing under the real names, and no
+// temporary left behind (d9's read of #299).
+func TestAWriteThatFailsLeavesNoPartialSet(t *testing.T) {
+	for n := 1; n <= 4; n++ {
+		f := newFixture(t)
+		f.failOn = n
+		_, err := render("/run/regalia-boot", f.env())
+		if err == nil || !strings.Contains(err.Error(), "no space left on device") {
+			t.Errorf("write %d failing: %v", n, err)
+		}
+		if len(f.writes) != 0 {
+			t.Errorf("write %d failing left %v", n, f.writes)
+		}
+	}
+}
+
+// The ESP's mount point is removed on every path, and an unmount that fails is reported without hiding why
+// the read failed.
+func TestTheMountIsUndoneAndAFailedUnmountIsReported(t *testing.T) {
+	for name, change := range map[string]func(*renderFixture){
+		"success":       func(*renderFixture) {},
+		"no chain":      func(f *renderFixture) { delete(f.files, "ESP/"+chainOnESP) },
+		"no mount":      func(f *renderFixture) { f.files["mount-fails"] = []byte{1} },
+		"a stale chain": func(f *renderFixture) { f.tpm = tpmCase(t, f.vector, "anchored at 5, the chain at 3: a restored disk") },
+		"unmount fails": func(f *renderFixture) { f.unmountFails = true },
+	} {
+		f := newFixture(t)
+		change(f)
+		render("/run/regalia-boot", f.env())
+		removed := false
+		for _, path := range f.removed {
+			removed = removed || path == "/run/esp-test"
+		}
+		if !removed {
+			t.Errorf("%s: the mount point was not removed", name)
+		}
+	}
+	f := newFixture(t)
+	f.unmountFails = true
+	if _, err := render("/run/regalia-boot", f.env()); err == nil || !strings.Contains(err.Error(), "cannot be unmounted: device busy") || len(f.writes) != 0 {
+		t.Errorf("a failed unmount: %v, %d files", err, len(f.writes))
+	}
+	f = newFixture(t)
+	f.unmountFails = true
+	delete(f.files, "ESP/"+chainOnESP)
+	_, err := render("/run/regalia-boot", f.env())
+	if err == nil || !strings.Contains(err.Error(), "holds no membership chain") || !strings.Contains(err.Error(), "cannot be unmounted") {
+		t.Errorf("a failed read and a failed unmount: %v", err)
+	}
+}
+
+// A chain more than advance()'s bound above the high-water is an anomaly: refused, nothing written. Too long
+// a chain for the vector, so it is signed here with the vector's test root (private key bytes 0..31).
+func TestAChainTooFarAboveTheAnchorIsRefused(t *testing.T) {
+	f := newFixture(t)
+	f.tpm = tpmCase(t, f.vector, "defined only (epoch 0, a zero digest), the chain at 1")
+	seed := make([]byte, 32)
+	for i := range seed {
+		seed[i] = byte(i)
+	}
+	key := ed25519.NewKeyFromSeed(seed)
+	template := f.vector["chains"].(map[string]any)["main"].([]any)[0].(map[string]any)["manifest"].(map[string]any)
+	var envelopes []any
+	prev := ""
+	for epoch := 1; epoch <= 1001; epoch++ {
+		manifest := map[string]any{}
+		for k, v := range template {
+			manifest[k] = v
+		}
+		manifest["epoch"], manifest["prev_digest"] = json.Number(strconv.Itoa(epoch)), prev
+		sig := ed25519.Sign(key, append([]byte("regalia-membership/v1\x00"), membership.Canonical(manifest)...))
+		envelopes = append(envelopes, map[string]any{"manifest": manifest,
+			"signature": map[string]any{"signer": "root", "key": f.vector["root_public"], "sig": hex.EncodeToString(sig)}})
+		prev = membership.Digest(manifest)
+	}
+	f.files["ESP/"+chainOnESP] = membership.Canonical(envelopes)
+	_, err := render("/run/regalia-boot", f.env())
+	if err == nil || !strings.Contains(err.Error(), "epoch jump 1001 exceeds the bound 1000") || len(f.writes) != 0 {
+		t.Errorf("%v, %d files", err, len(f.writes))
 	}
 }

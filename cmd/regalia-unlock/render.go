@@ -42,7 +42,9 @@ type renderEnv struct {
 	mkdtemp  func() (string, error)
 	nv       func() (membership.NV, func(), error)
 	sleep    func(time.Duration)
-	write    func(path string, data []byte) error
+	write    func(path string, data []byte) error // a new file: it must not exist
+	rename   func(from, to string) error
+	remove   func(path string) error
 	creds    string // $CREDENTIALS_DIRECTORY
 	rootKey  string
 }
@@ -65,8 +67,18 @@ func realRenderEnv(tpmPath string) renderEnv {
 		},
 		sleep: time.Sleep,
 		write: func(path string, data []byte) error {
-			return os.WriteFile(path, data, 0o600)
+			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err != nil {
+				return err
+			}
+			if _, err := f.Write(data); err != nil {
+				f.Close()
+				return err
+			}
+			return f.Close()
 		},
+		rename:  os.Rename,
+		remove:  os.Remove,
 		creds:   os.Getenv("CREDENTIALS_DIRECTORY"),
 		rootKey: membership.RootKeyPath,
 	}
@@ -122,19 +134,28 @@ func espDevice(env renderEnv) (string, error) {
 }
 
 // readChain mounts the ESP read-only (nosuid, nodev, noexec) on a directory of its own, reads the chain, and
-// unmounts it before anything else is done: nothing of the ESP stays mounted.
-func readChain(env renderEnv, device string) ([]byte, error) {
+// unmounts it before anything else is done: nothing of the ESP stays mounted. (regalia-boot-render.service
+// also runs with PrivateMounts=yes: a mount that could not be undone dies with the unit's namespace.)
+func readChain(env renderEnv, device string) (raw []byte, err error) {
 	dir, err := env.mkdtemp()
 	if err != nil {
 		return nil, err
 	}
+	defer env.remove(dir)
 	if err := env.mount(device, dir); err != nil {
 		return nil, fmt.Errorf("the ESP %s cannot be mounted read-only: %v", device, err)
 	}
+	defer func() {
+		// an unmount that fails is reported, and never hides why the read failed
+		if unmountErr := env.unmount(dir); unmountErr != nil {
+			if err != nil {
+				raw, err = nil, fmt.Errorf("%v; and the ESP %s cannot be unmounted: %v", err, device, unmountErr)
+			} else {
+				raw, err = nil, fmt.Errorf("the ESP %s cannot be unmounted: %v", device, unmountErr)
+			}
+		}
+	}()
 	raw, readErr := env.readFile(filepath.Join(dir, chainOnESP))
-	if err := env.unmount(dir); err != nil {
-		return nil, fmt.Errorf("the ESP %s cannot be unmounted: %v", device, err)
-	}
 	if readErr != nil {
 		return nil, fmt.Errorf("the ESP holds no membership chain (%s: %v)", chainOnESP, readErr)
 	}
@@ -196,10 +217,38 @@ func render(dir string, env renderEnv) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, name := range []string{"regalia.unlock-config", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"} {
-		if err := env.write(filepath.Join(dir, name), files[name]); err != nil {
-			return "", err
-		}
+	if err := publish(env, dir, files); err != nil {
+		return "", err
 	}
 	return fmt.Sprintf("rendered the boot configuration of %s under manifest epoch %v (TPM high-water %d)", site.NodeID, current["epoch"], high), nil
+}
+
+// publish puts the four files into dir all together or not at all: each is written under a temporary name
+// first, and only when all four are written are they renamed onto their names. A failure removes what it
+// wrote, so dir never holds a mixed set (d9's read of #299).
+func publish(env renderEnv, dir string, files map[string][]byte) error {
+	names := []string{"regalia.unlock-config", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"}
+	temporary := func(name string) string { return filepath.Join(dir, "."+name+".render-new") }
+	var written, placed []string
+	undo := func() {
+		for _, path := range append(written, placed...) {
+			env.remove(path)
+		}
+	}
+	for _, name := range names {
+		if err := env.write(temporary(name), files[name]); err != nil {
+			env.remove(temporary(name)) // what the failed write itself left, cut short
+			undo()
+			return fmt.Errorf("cannot write %s: %v", name, err)
+		}
+		written = append(written, temporary(name))
+	}
+	for _, name := range names {
+		if err := env.rename(temporary(name), filepath.Join(dir, name)); err != nil {
+			undo()
+			return fmt.Errorf("cannot put %s in place: %v", name, err)
+		}
+		written, placed = written[1:], append(placed, filepath.Join(dir, name))
+	}
+	return nil
 }
