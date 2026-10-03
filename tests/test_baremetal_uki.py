@@ -977,6 +977,11 @@ class InitrdReview(Case):
         self.passes(unlock_initrd({journald: (0o100644, b"[Service]\n"), reset: (0o100644, uki.RESET_DROPIN[1])}), allow=[journald])
         self.refused_by(unlock_initrd({journald: (0o100644, b"[Service]\n"), reset: (0o100644, b"[Service]\nExecStart=/bin/sh\n")}),
                         reset + " is not the module's credential reset", allow=[journald])
+        # ... and on systemd-cryptsetup@.service, which the generator makes at boot and the image does not hold
+        cryptsetup = "usr/lib/systemd/system/systemd-cryptsetup@.service.d/" + uki.RESET_DROPIN[0]
+        self.passes(unlock_initrd({cryptsetup: (0o100644, uki.RESET_DROPIN[1])}))
+        self.refused_by(unlock_initrd({"usr/lib/systemd/system/gone.service.d/" + uki.RESET_DROPIN[0]: (0o100644, uki.RESET_DROPIN[1])}),
+                        "resets a unit the image does not hold")
 
     def test_nothing_unlisted_runs_generators_rules_and_manager_configuration_included(self):
         for where in ("usr/lib/systemd/system-generators/zz", "etc/systemd/system-generators/zz", "usr/lib/systemd/system-environment-generators/zz",

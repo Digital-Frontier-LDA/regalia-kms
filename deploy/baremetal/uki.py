@@ -684,7 +684,9 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, allowlist=ALLOWLIS
             unit = os.path.basename(os.path.dirname(path))[:-2]
             if value != sha256(RESET_DROPIN[1]):
                 findings.append("%s is not the module's credential reset" % path)
-            elif not any(d + "/" + unit in found for d in SEARCH_DIRS):
+            # systemd-cryptsetup@.service is not a file of the image: its generator writes the units at boot,
+            # and the module resets it by name (module-setup.sh)
+            elif unit != "systemd-cryptsetup@.service" and not any(d + "/" + unit in found for d in SEARCH_DIRS):
                 findings.append("%s resets a unit the image does not hold" % path)
             continue
         if path not in listed:
