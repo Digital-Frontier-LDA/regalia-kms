@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import unittest
 
-from deploy.baremetal import attest, measurements, uki
+from deploy.baremetal import attest, espcreds, measurements, uki
 from deploy.baremetal import membership as m
 
 # `systemd-measure calculate` (257.13-1~deb13u1) over sections whose content is their own name
@@ -521,15 +521,107 @@ class Records(Case):
     def test_the_measurement_set_of_an_image_on_one_host(self):
         record = self.build()
         pcrs = {"0": "11" * 32, "7": "77" * 32}
-        entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs)
-        self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": pcrs,
+        creds = {"regalia.node-id.cred": b"node-a\n"}
+        entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs, creds)
+        self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": dict(pcrs, **{"12": espcreds.pcr12(creds)}),
                                  "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}}})
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}}
         self.assertTrue(measurements.version(document).startswith("m1-"))               # it is a set the document accepts
-        self.assertEqual(attest.selection(entry), [0, 7, 11])
-        self.refused("must not give PCR 11: it comes from the image's record, per phase", uki.measurement_set, record, "x", "0" * 16, dict(pcrs, **{"11": "00" * 32}))
-        self.refused("tpm_firmware_version must be 16 hex", uki.measurement_set, record, "x", "nope", pcrs)
-        self.refused("short plain name", uki.measurement_set, record, "an image", "0" * 16, pcrs)
+        self.assertEqual(attest.selection(entry), [0, 7, 11, 12])
+        self.refused("must not give PCR 11: it comes from the image's record, per phase", uki.measurement_set, record, "x", "0" * 16, dict(pcrs, **{"11": "00" * 32}), creds)
+        self.refused("tpm_firmware_version must be 16 hex", uki.measurement_set, record, "x", "nope", pcrs, creds)
+        self.refused("short plain name", uki.measurement_set, record, "an image", "0" * 16, pcrs, creds)
+        self.refused("the node's credential files are required", uki.measurement_set, record, "x", "0" * 16, pcrs, None)
+
+    def test_pcr_12_comes_from_the_nodes_credential_files_and_never_by_hand(self):
+        record = self.build()
+        pcrs = {"7": "77" * 32}
+        files = {"regalia.node-id.cred": b"node-a\n", "regalia.boot-mesh.cred": b"mesh", "regalia.unlock-local.cred": b"sealed"}
+        entry = uki.measurement_set(record, "image-7", "0" * 16, pcrs, files)
+        self.assertEqual(entry["pcrs"], {"7": "77" * 32, "12": espcreds.pcr12(files)})
+        self.assertNotIn("12", entry["phases"]["initrd"])                         # one value for both phases, beside PCR 7
+        self.assertEqual(attest.selection(entry), [7, 11, 12])
+        # another file, a changed one, or one missing: another PCR 12
+        for label, other in (("one more (a unit drop-in)", dict(files, **{"x.conf.cred": b"[Service]"})),
+                             ("one changed", dict(files, **{"regalia.boot-mesh.cred": b"mesh2"})),
+                             ("one missing", {k: v for k, v in files.items() if k != "regalia.unlock-local.cred"})):
+            with self.subTest(label):
+                self.assertNotEqual(uki.measurement_set(record, "image-7", "0" * 16, pcrs, other)["pcrs"]["12"], entry["pcrs"]["12"])
+        self.refused("must not give PCR 12: it is computed from the node's credential files", uki.measurement_set, record, "x", "0" * 16,
+                     dict(pcrs, **{"12": "12" * 32}), files)
+        self.refused("holds no credential the stub measures", uki.measurement_set, record, "x", "0" * 16, pcrs, {".hidden.cred": b"x", "notes.txt": b"y"})
+        # the directory as the stub reads it: files only, no link, bounded
+        esp = os.path.join(self.d, "esp"); d = os.path.join(esp, "loader", "credentials"); os.makedirs(d)
+        os.makedirs(os.path.join(esp, "EFI", "Linux"))
+        for name, data in files.items():
+            with open(os.path.join(d, name), "wb") as f:
+                f.write(data)
+        self.assertEqual(uki.credential_files(esp), files)
+        os.symlink(os.path.join(d, "regalia.node-id.cred"), os.path.join(d, "link.cred"))
+        self.refused("link.cred is a link", uki.credential_files, esp)
+        os.remove(os.path.join(d, "link.cred"))
+        os.mkdir(os.path.join(d, "sub"))
+        self.refused("is not a regular file", uki.credential_files, esp)            # stricter than the stub, on purpose
+        os.rmdir(os.path.join(d, "sub"))
+        # per-image credentials are measured into PCR 12 too: refused
+        os.makedirs(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
+        self.refused("the ESP holds per-image credentials or addons (EFI/Linux/regalia.efi.extra.d)", uki.credential_files, esp)
+        os.rmdir(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
+        self.refused("has no loader/credentials directory", uki.credential_files, os.path.join(self.d, "no-esp"))
+        # global addons are measured into PCR 12 too: refused; an empty addons directory is fine
+        os.makedirs(os.path.join(esp, "loader", "addons"))
+        self.assertEqual(uki.credential_files(esp), files)
+        open(os.path.join(esp, "loader", "addons", "x.addon.efi"), "wb").close()
+        self.refused("the ESP holds global addons", uki.credential_files, esp)
+        os.remove(os.path.join(esp, "loader", "addons", "x.addon.efi"))
+        # FAT is case-insensitive, and so is the reader: the same checks in other cases, and twins refused
+        for path, reason in ((os.path.join(esp, "EFI", "Linux", "A.EFI.EXTRA.D"), "per-image credentials or addons"),
+                             (os.path.join(esp, "regalia.efi.extra.d"), "per-image credentials or addons")):
+            with self.subTest(path=path):
+                os.makedirs(path)
+                self.refused(reason, uki.credential_files, esp)
+                os.rmdir(path)
+        open(os.path.join(d, "REGALIA.NODE-ID.CRED"), "wb").close()
+        self.refused("holds names FAT would take for one (regalia.node-id.cred)", uki.credential_files, esp)
+        os.remove(os.path.join(d, "REGALIA.NODE-ID.CRED"))
+        os.symlink(esp, os.path.join(self.d, "esp-link"))
+        self.refused("esp-link is a link: give the ESP itself", uki.credential_files, os.path.join(self.d, "esp-link"))
+        # a link anywhere in the tree, not only on the way to the credentials
+        os.symlink(os.path.join(self.d), os.path.join(esp, "EFI", "Linux", "elsewhere"))
+        self.refused("is a link", uki.credential_files, esp)
+        os.remove(os.path.join(esp, "EFI", "Linux", "elsewhere"))
+        # the bounds: at most 32 files, each at most 1 MiB
+        many = os.path.join(self.d, "many"); os.makedirs(os.path.join(many, "loader", "credentials"))
+        for i in range(33):
+            open(os.path.join(many, "loader", "credentials", "c%02d.cred" % i), "wb").close()
+        self.refused("holds 33 files", uki.credential_files, many)
+        big = os.path.join(self.d, "big"); os.makedirs(os.path.join(big, "loader", "credentials"))
+        with open(os.path.join(big, "loader", "credentials", "big.cred"), "wb") as f:
+            f.write(bytes(uki.MAX_CREDENTIAL_BYTES + 1))
+        self.refused("is larger than", uki.credential_files, big)
+        # the stub's order is the byte order of the names (strcmp16), not a case-folded one: pinned here
+        # without a boot, with a pair that sorts differently under case folding
+        self.assertEqual([c["file"] for c in espcreds.record({"a.cred": b"1", "B.cred": b"2"})["credentials"]], ["B.cred", "a.cred"])
+        # a link on the way (loader/ pointing elsewhere) is refused
+        elsewhere = os.path.join(self.d, "elsewhere"); os.rename(os.path.join(esp, "loader"), elsewhere)
+        os.symlink(elsewhere, os.path.join(esp, "loader"))
+        self.refused("is a link: the ESP is read as it will be installed", uki.credential_files, esp)
+        self.assertFalse(os.path.islink(os.path.join(self.d, "elsewhere")))
+        os.remove(os.path.join(esp, "loader")); os.rename(elsewhere, os.path.join(esp, "loader"))
+        # through the command, with the record of what it was computed from
+        with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
+            json.dump(pcrs, f)
+        rec = os.path.join(self.out, "image-7.record.json")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
+                                       os.path.join(self.d, "host-pcrs.json"), "--esp", esp, "--credentials-record", os.path.join(self.d, "creds.json")]), 0)
+        self.assertEqual(json.loads(out.getvalue())["pcrs"]["12"], espcreds.pcr12(files))
+        with open(os.path.join(self.d, "creds.json")) as f:
+            self.assertEqual(json.load(f), espcreds.record(files))
+        # --esp is required: a set without PCR 12 is not made at all
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as usage:
+            uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs", os.path.join(self.d, "host-pcrs.json")])
+        self.assertEqual(usage.exception.code, 2)
 
     def test_a_record_is_checked_when_it_is_read(self):
         record = self.build()

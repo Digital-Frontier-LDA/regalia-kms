@@ -8,6 +8,7 @@ record of what it will measure, and signed in a separate step by keys that are o
                                             --secure-boot-key K --secure-boot-cert C [--key-source file|engine:pkcs11]
     python3 -Es -m deploy.baremetal.uki verify  --image IMAGE --record RECORD [--secure-boot-cert C]
     python3 -Es -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
+                                            --esp ROOT [--credentials-record OUT]
 
     INPUTS: --linux VMLINUZ --initrd INITRD [--microcode FILE] --cmdline FILE --os-release FILE
             --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub
@@ -61,7 +62,7 @@ import subprocess
 import sys
 import tempfile
 
-from deploy.baremetal import attest, membership
+from deploy.baremetal import attest, espcreds, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -451,11 +452,68 @@ def verify(image, record, public_keys, secure_boot_cert=None, run=subprocess.run
     return dict(record["pcr11"])
 
 
-def measurement_set(record, label, firmware, pcrs):
+MAX_CREDENTIALS = 32
+MAX_CREDENTIAL_BYTES = 1024 * 1024
+
+
+def credential_files(esp):
+    """{file name: bytes} of a node's ESP credentials (<ESP>/loader/credentials), as the stub reads them:
+    regular files only, no link (the stub would read the target; a reviewer reading the directory would
+    not), bounded in number and size. Stricter than the stub on purpose: a subdirectory, which the stub
+    would skip, is refused, so the directory holds exactly what is measured.
+    The stub also measures PER-IMAGE credentials and addons (<ESP>/EFI/**/<image>.efi.extra.d/) and GLOBAL
+    addons (<ESP>/loader/addons/) into PCR 12. A KMS host has none; any found is refused, because the PCR 12
+    computed here would not be the one the host shows. No path component may be a link. Names are
+    compared case-insensitively, as FAT and the stub compare them."""
+    # The ESP is FAT: names are compared case-insensitively there, and by the stub. So is every check here.
+    # The whole tree is walked once: no link anywhere (a link would measure files the installed ESP does
+    # not hold), no per-image credentials or addons (*.efi.extra.d, wherever an image may sit), no global
+    # addons (loader/addons), and no two names in one directory that FAT would take for one.
+    require(not os.path.islink(esp), "%s is a link: give the ESP itself" % esp)
+    credentials, extra, addons = None, [], []
+    for top, dirs, files_here in os.walk(esp):
+        for name in dirs + files_here:
+            require(not os.path.islink(os.path.join(top, name)), "%s is a link: the ESP is read as it will be installed, with no link"
+                    % os.path.join(top, name))
+        folded = [n.casefold() for n in dirs + files_here]
+        twins = sorted({n for n in folded if folded.count(n) > 1})
+        require(not twins, "%s holds names FAT would take for one (%s)" % (top, ", ".join(twins)))
+        where = os.path.relpath(top, esp).casefold().replace(os.sep, "/")
+        extra += [os.path.relpath(os.path.join(top, d), esp) for d in dirs if d.casefold().endswith(".extra.d")]
+        if where == "loader/addons":
+            addons += files_here + dirs
+        if where == "loader":
+            credentials = next((os.path.join(top, d) for d in dirs if d.casefold() == "credentials"), None)
+    require(not extra, "the ESP holds per-image credentials or addons (%s): systemd-stub measures them into PCR 12 too, and a KMS host has none"
+            % ", ".join(sorted(extra)))
+    require(not addons, "the ESP holds global addons (%s): systemd-stub measures them into PCR 12 too, and a KMS host has none" % ", ".join(sorted(addons)))
+    require(credentials is not None, "%s has no loader/credentials directory: a KMS host's ESP holds its credentials there" % esp)
+    directory = credentials
+    names = sorted(os.listdir(directory))
+    require(len(names) <= MAX_CREDENTIALS, "%s holds %d files; a KMS host has a handful of credentials" % (directory, len(names)))
+    files = {}
+    for name in names:
+        path = os.path.join(directory, name)
+        require(not os.path.islink(path) and os.path.isfile(path), "%s is not a regular file: a credential directory holds files only" % path)
+        files[name] = read(path, MAX_CREDENTIAL_BYTES)
+    return files
+
+
+def measurement_set(record, label, firmware, pcrs, credentials):
     """The measurement set of this image on one host (KERNEL-UPDATE.md step 1.4): that host's TPM firmware
-    version and its own PCR values, with PCR 11 per phase from the record."""
+    version and its own PCR values, with PCR 11 per phase from the record, and with `credentials` (the
+    node's ESP credential files, {file name: bytes}) PCR 12 as systemd-stub will measure them
+    (espcreds.pcr12). PCR 12 has one value for both phases: nothing extends it after the initrd (measured
+    in the unlock boot test, #215). It is never given by hand: a set that should hold it is made from the
+    files. It is REQUIRED: a set without it would leave PCR 12 unattested, the gap #66 closed, and after
+    stage B2 a host with no credentials cannot be unlocked unattended anyway."""
     load_record(membership.canonical(record))
     require(isinstance(pcrs, dict) and "11" not in pcrs, "the host's PCR values must not give PCR 11: it comes from the image's record, per phase")
+    require("12" not in pcrs, "the host's PCR values must not give PCR 12: it is computed from the node's credential files (--credentials)")
+    require(isinstance(credentials, dict), "the node's credential files are required: PCR 12 is attested, and comes from them")
+    require(any(espcreds.measured(n) for n in credentials), "the credential directory holds no credential the stub measures: PCR 12 would "
+            "be all zero, which is a host with no per-host configuration")
+    pcrs = dict(pcrs, **{"12": espcreds.pcr12(credentials)})
     entry = {"label": label, "tpm_firmware_version": firmware, "pcrs": pcrs,
              "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}
     try:
@@ -502,7 +560,9 @@ def main(argv=None):
     c.add_argument("--record", required=True)
     c.add_argument("--label", required=True)
     c.add_argument("--tpm-firmware-version", required=True)
-    c.add_argument("--pcrs", required=True, help='a JSON file: {"0": "<64 hex>", "7": ...}, the host\'s own values, without PCR 11')
+    c.add_argument("--pcrs", required=True, help='a JSON file: {"0": "<64 hex>", "7": ...}, the host\'s own values, without PCR 11 or 12')
+    c.add_argument("--esp", metavar="ROOT", required=True, help="the node's ESP as it will be: PCR 12 is computed from ROOT/loader/credentials")
+    c.add_argument("--credentials-record", metavar="OUT", help="write what PCR 12 was computed from (espcreds.record)")
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
@@ -519,7 +579,13 @@ def main(argv=None):
             print("VERIFIED %s: the image is the record's, and both PCR signatures verify" % record["name"])
         else:
             record = load_record(read(args.record, 64 * 1024))
-            print(json.dumps(measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536))), indent=2, sort_keys=True))
+            files = credential_files(args.esp)
+            entry = measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536)), files)
+            if args.credentials_record:
+                fd = os.open(args.credentials_record, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+                with os.fdopen(fd, "w") as f:
+                    f.write(json.dumps(espcreds.record(files), indent=2, sort_keys=True) + "\n")
+            print(json.dumps(entry, indent=2, sort_keys=True))
             return 0
         for phase in attest.PHASES:
             print("  PCR 11, %-6s (%s): %s" % (phase, PHASE_PATHS[phase], record["pcr11"][phase]))
