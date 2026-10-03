@@ -204,6 +204,8 @@ def hex_field(value, n, label):
 # and only the low-S form is accepted (the signer normalises). Introducing a P-256 key is a root-signed
 # change, like any change to revocation_keys. A node whose code predates this refuses a manifest with a
 # typed entry (fail closed): every node is upgraded before the root introduces one.
+# Two entries are distinct by their key hex: a P-256 point and a bare 64-hex string equal to its X
+# coordinate are two keys in two algorithms, each verified its own way, and neither stands in for the other.
 REVOCATION_ALGS = ("ed25519", "ecdsa-p256")
 P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 
