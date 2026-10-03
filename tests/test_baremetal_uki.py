@@ -17,6 +17,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from deploy.baremetal import attest, espcreds, measurements, uki
 from deploy.baremetal import membership as m
@@ -32,19 +33,26 @@ POLICY = ("132ab7e17a991bf12b108008052ca9c0c876f8a8c542f2d22eac1590a72105f4", "7
 TRAILER = b"\0SECURE-BOOT-SIGNATURE"
 
 
-def pe(sections, virtual=None):
-    """A PE file with these sections, as ukify lays them out: raw data padded to 512 bytes."""
+def pe(sections, virtual=None, addresses=None, size_of_image=None):
+    """A PE file with these sections, as ukify lays them out: raw data padded to 512 bytes, each section at
+    its own page-aligned virtual address, SizeOfImage covering them all."""
     header = bytearray(0x40)
     header[:2] = b"MZ"
     struct.pack_into("<I", header, 0x3c, 0x40)
-    coff = b"PE\0\0" + struct.pack("<HHIIIHH", 0x8664, len(sections), 0, 0, 0, 0, 0)
-    table, body, offset = b"", b"", (0x40 + len(coff) + 40 * len(sections) + 511) // 512 * 512
+    optional = bytearray(112)
+    struct.pack_into("<H", optional, 0, 0x20b)                                   # PE32+
+    coff = b"PE\0\0" + struct.pack("<HHIIIHH", 0x8664, len(sections), 0, 0, 0, len(optional), 0)
+    table, body, offset = b"", b"", (0x40 + len(coff) + len(optional) + 40 * len(sections) + 511) // 512 * 512
+    address = 0x1000
     for name, data in sections:
         raw = data + bytes(-len(data) % 512)
         size = (virtual or {}).get(name, len(data))
-        table += name.encode().ljust(8, b"\0") + struct.pack("<IIII", size, 0, len(raw), offset + len(body)) + bytes(16)
+        at = (addresses or {}).get(name, address)
+        table += name.encode().ljust(8, b"\0") + struct.pack("<IIII", size, at, len(raw), offset + len(body)) + bytes(16)
         body += raw
-    head = bytes(header) + coff + table
+        address = at + (max(size, 1) + 0xfff) // 0x1000 * 0x1000
+    struct.pack_into("<I", optional, 56, size_of_image if size_of_image is not None else address)
+    head = bytes(header) + coff + bytes(optional) + table
     return head + bytes(offset - len(head)) + body
 
 
@@ -64,11 +72,14 @@ class FakeTools:
     """ukify, systemd-measure, sbsign and sbverify as uki.py calls them; OpenSSL is the real one."""
 
     def __init__(self):
-        self.calls, self.tamper = [], {}
+        self.calls, self.tamper, self.envs, self.on_ukify = [], {}, [], None
 
-    def __call__(self, argv, capture_output=True, input=None):
+    def __call__(self, argv, capture_output=True, input=None, env=None):
         self.calls.append(list(argv))
+        self.envs.append((os.path.basename(argv[0]), argv[1] if len(argv) > 1 else "", env))
         tool = os.path.basename(argv[0])
+        if tool == "keyctl":
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
         if tool == "openssl":
             return subprocess.run(argv, capture_output=True, input=input)
         ok = lambda out=b"": subprocess.CompletedProcess(argv, 0, out, b"")
@@ -92,7 +103,10 @@ class FakeTools:
     def ukify(self, argv, ok):
         o = self.options(argv[2:])
         slurp = uki.read
-        sections = [(".text", b"stub code"), (".sbat", b"sbat,1,stand-in"), (".sdmagic", b"magic"),
+        # the stub's code is the --stub file's bytes: a stub that changes is seen in the image, as on a real build
+        if self.on_ukify:
+            self.on_ukify(o)
+        sections = [(".text", slurp(o["--stub"][0])), (".sbat", b"sbat,1,stand-in"), (".sdmagic", b"magic"),
                     (".osrel", slurp(o["--os-release"][0][1:])), (".cmdline", o["--cmdline"][0].encode() + self.tamper.get("cmdline", b"")),
                     (".uname", o["--uname"][0].encode()), (".pcrpkey", slurp(o["--pcrpkey"][0])),
                     (".linux", slurp(o["--linux"][0])), (".initrd", slurp(o["--initrd"][0]) + self.tamper.get("initrd", b""))]
@@ -101,7 +115,9 @@ class FakeTools:
         sections += self.tamper.get("extra", [])
         if "--section" in o:
             name, path = o["--section"][0].split(":@")
-            sections.append((name, slurp(path)))
+            sections.append((name, self.tamper.get("attach-pcrsig", slurp(path))))
+            if "attach-text" in self.tamper:
+                sections = [(n, self.tamper["attach-text"] if n == ".text" else d) for n, d in sections]
             if "attach" in self.tamper:
                 sections = [(n, d + self.tamper["attach"] if n == ".initrd" else d) for n, d in sections]
         with open(o["--output"][0], "wb") as f:
@@ -121,7 +137,7 @@ class FakeTools:
         fingerprint, _ = uki.public_key(uki.read(self.tamper.get("sign-cert", o["--certificate"][0])), "a certificate")
         signature = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=bytes.fromhex(policy), capture_output=True, check=True).stdout
         document = json.loads(uki.read(o["--append"][0])) if "--append" in o else {"sha256": []}
-        document["sha256"].append({"pcrs": [11], "pkfp": fingerprint, "pol": policy, "sig": base64.b64encode(signature).decode()})
+        document["sha256"].append({"pcrs": self.tamper.get("sign-pcrs", [11]), "pkfp": fingerprint, "pol": policy, "sig": base64.b64encode(signature).decode()})
         return ok(json.dumps(document).encode())
 
     def sbsign(self, argv, ok):
@@ -166,7 +182,7 @@ class Case(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tools = FakeTools()
         self.inputs = {}
-        for name, content in (("linux", b"a kernel"), ("initrd", b"an initrd"), ("cmdline", b"root=/dev/mapper/root ro quiet\n"),
+        for name, content in (("linux", b"a kernel"), ("initrd", b"an initrd"), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no\n"),
                               ("os_release", b"ID=debian\n"), ("stub", b"a stub")):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
@@ -187,8 +203,10 @@ class Case(unittest.TestCase):
         keys.update(change)
         return keys
 
-    def sign(self, record=None, keys=None, source="file", inputs=None):
-        return uki.sign(inputs or self.inputs, record or self.build(), keys or self.signing_keys(), source, self.out, run=self.tools)
+    def sign(self, record=None, keys=None, source="file", inputs=None, second=None):
+        record = record or self.build()
+        return uki.sign(inputs or self.inputs, record, keys or self.signing_keys(), source, self.out, run=self.tools,
+                        second_record=json.loads(json.dumps(record)) if second is None else second, report=lambda line: None)
 
     def public(self):
         return {phase: uki.read(self.key(phase, "pub")) for phase in attest.PHASES}
@@ -236,6 +254,15 @@ class Arithmetic(unittest.TestCase):
                 uki.sections(image)
             self.assertIn(reason, str(caught.exception), label)
 
+    def test_sections_lie_inside_the_image_and_apart_in_memory(self):
+        two = [(".linux", b"kernel"), (".initrd", b"initrd")]
+        self.assertEqual(len(uki.sections(pe(two))), 2)
+        for kw, reason in (({"addresses": {".linux": 0x1000, ".initrd": 0x1000}}, "section .initrd overlaps another in memory"),
+                           ({"size_of_image": 0x1800}, "lies beyond the image's size")):
+            with self.subTest(reason), self.assertRaises(m.Refused) as caught:
+                uki.sections(pe(two, **kw))
+            self.assertIn(reason, str(caught.exception))
+
     def test_only_the_sections_a_kms_image_holds_are_measured(self):
         base = [(".text", b"c"), (".sbat", b"s"), (".osrel", b"o"), (".cmdline", b"c"), (".uname", b"u"), (".linux", b"l"), (".initrd", b"i")]
         self.assertEqual(list(uki.measured(pe(base + [(".pcrsig", b"{}")]))), ["linux", "osrel", "cmdline", "initrd", "uname", "sbat"])
@@ -249,9 +276,17 @@ class Arithmetic(unittest.TestCase):
             self.assertIn("the image has no %s section" % missing, str(caught.exception))
 
     def test_the_command_line(self):
-        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200\n"), "root=/dev/mapper/root ro quiet console=ttyS0,115200")
+        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no\n"),
+                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no")
+        # the word every image must carry, and the record keeps the command line it was built with
+        with self.assertRaises(m.Refused) as caught:
+            uki.cmdline_text(b"root=/dev/mapper/root ro quiet\n")
+        self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
+        for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
+            with self.subTest(near=near), self.assertRaises(m.Refused):
+                uki.cmdline_text(("root=/dev/mapper/root ro %s" % near).encode())
         # the forms that turn a shell OFF are what an image should carry (the unlock test boots with them)
-        hardened = "root=/dev/mapper/root ro rd.shell=0 rd.emergency=poweroff systemd.debug_shell=0 rd.systemd.debug-shell=off"
+        hardened = "root=/dev/mapper/root ro systemd.import_credentials=no rd.shell=0 rd.emergency=poweroff systemd.debug_shell=0 rd.systemd.debug-shell=off"
         self.assertEqual(uki.cmdline_text(hardened.encode()), hardened)
         for raw, reason in ((b"", "one line of printable ASCII"), (b"\n", "one line of printable ASCII"), (b"a\nb\n", "one line of printable ASCII"),
                             (b"root=x\tro", "one line of printable ASCII"), ("root=é".encode(), "not ASCII")):
@@ -263,7 +298,7 @@ class Arithmetic(unittest.TestCase):
                      "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "init=/bin/sh", "rdinit=/bin/sh",
                      "systemd.unit=emergency.target", "rd.systemd.unit=rescue.target", "emergency", "rescue", "single", "S", "s", "1", "-b"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root %s ro" % word).encode())
+                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no" % word).encode())
             self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
 
 
@@ -276,7 +311,7 @@ class Build(Case):
         self.assertEqual(record["pcr11"], {phase: predicted(parts, path) for phase, path in uki.PHASE_PATHS.items()})
         self.assertNotEqual(record["pcr11"]["initrd"], record["pcr11"]["system"])
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
-        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet")            # the file's newline is not in the image
+        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no")            # the file's newline is not in the image
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
         self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "linux", "os_release", "pcrpkey", "stub"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
@@ -324,7 +359,7 @@ class Build(Case):
 
     def test_names_and_the_command_line_are_checked_before_anything_runs(self):
         for kw, reason in (({"name": "an image"}, "short plain name"), ({"name": "../x"}, "short plain name"), ({"uname": "6.12; rm"}, "--uname must be a kernel version"),
-                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1\n")}}, "holds 'rd.luks.uuid=1'")):
+                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no\n")}}, "holds 'rd.luks.uuid=1'")):
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
                 self.tools.calls.clear()
                 self.refused(reason, self.build, **kw)
@@ -366,7 +401,7 @@ class Sign(Case):
 
     def test_keys_in_a_token_are_named_by_uri_and_no_pin_travels_on_a_command_line(self):
         record = self.build()
-        uri = {role: "pkcs11:token=IMAGE;object=%s;type=private" % role for role in ("initrd", "system", "secure_boot")}
+        uri = {role: "pkcs11:serial=DENK0500001;token=SmartCard-HSM (UserPIN);object=%s;type=private" % role for role in ("initrd", "system", "secure_boot")}
         # the stand-in signer needs a key file: it is told which one, as the engine would resolve the URI
         keys = {role: (uri[role], self.key(role, "crt")) for role in uri}
         original = self.tools.systemd_measure
@@ -379,7 +414,7 @@ class Sign(Case):
                 self.tools.tamper["sign-key"] = self.key(role, "key")
             return original(argv, ok)
         self.tools.systemd_measure = by_uri
-        signed = uki.sign(self.inputs, record, keys, "engine:pkcs11", self.out, run=self.tools)
+        signed = uki.sign(self.inputs, record, keys, "engine:pkcs11", self.out, run=self.tools, second_record=dict(record), report=lambda line: None)
         self.assertIn("signed", signed)
         sbsign = next(c for c in self.tools.calls if c[0] == "sbsign")
         self.assertEqual(sbsign[1:5], ["--engine", "pkcs11", "--key", uri["secure_boot"]])
@@ -389,15 +424,29 @@ class Sign(Case):
         for form in ("pkcs11:token=X;pin-value=1", "pkcs11:token=X?pin-source=file:/p", "--pin", "--pin=1", "--pin-value=1", "--pin-source=f", "-p", "REGALIA_PIN=1"):
             self.assertTrue(pin_forms.search(form), form)
         self.assertFalse(pin_forms.search("/tmp/tmpindgrcel/key"))
-        for bad, reason in (("pkcs11:token=IMAGE;object=initrd;pin-value=648219", "carries a PIN or a PIN file in the URI"),
-                            ("pkcs11:token=IMAGE;object=initrd?pin-source=file:/tmp/pin", "carries a PIN or a PIN file in the URI"),
-                            (self.key("initrd", "key"), "the initrd key must be a PKCS#11 URI"), ("pkcs11:token=a b", "must be a PKCS#11 URI")):
+        base = "pkcs11:serial=DENK0500001;token=T;object=initrd;type=private"
+        for bad, reason in ((base + ";pin-value=648219", "names 'pin-value', which is not one of"),
+                            (base + ";PIN-VALUE=648219", "names 'PIN-VALUE', which is not one of"),
+                            (base + ";Pin-Value=1", "names 'Pin-Value'"), (base + ";pin%2Dvalue=1", "names 'pin%2Dvalue'"),
+                            (base + ";%70in-value=1", "names '%70in-value'"), (base + ";pin_value=1", "names 'pin_value'"),
+                            (base + "?pin-source=file:/tmp/pin", "has a query part"), (base + "?module-path=/tmp/evil.so", "has a query part"),
+                            (base.replace("object=initrd", "object=in%69trd"), "object='in%69trd' is not allowed"),
+                            (base + ";serial=X", "gives serial twice"),
+                            ("pkcs11:token=T;object=initrd;type=private", "must name the card by serial= and token="),
+                            ("pkcs11:serial=S;object=initrd;type=private", "must name the card by serial= and token="),
+                            ("pkcs11:serial=S;token=T;type=private", "must name the key by object= or id="),
+                            ("pkcs11:serial=S;token=T;object=initrd", "must say type=private"),
+                            ("pkcs11:serial=S;token=T;object=initrd;type=public", "must say type=private"),
+                            (self.key("initrd", "key"), "the initrd key must be a PKCS#11 URI")):
             with self.subTest(bad=bad):
                 self.tools.calls.clear()
-                self.refused(reason, uki.sign, self.inputs, record, dict(keys, initrd=(bad, self.key("initrd", "crt"))), "engine:pkcs11", self.out, run=self.tools)
+                self.refused(reason, uki.sign, self.inputs, record, dict(keys, initrd=(bad, self.key("initrd", "crt"))), "engine:pkcs11", self.out,
+                             run=self.tools, second_record=dict(record), report=lambda line: None)
                 self.assertEqual(self.tools.calls, [])                       # refused before any tool saw it
         self.refused("is not a file (with a token, pass --key-source engine:pkcs11", self.sign, record, dict(keys))
-        self.refused("--key-source is one of file, engine:pkcs11", uki.sign, self.inputs, record, keys, "provider:pkcs11", self.out, run=self.tools)
+        self.refused("--key-source is one of file, engine:pkcs11", uki.sign, self.inputs, record, keys, "provider:pkcs11", self.out, run=self.tools,
+                     second_record=dict(record))
+        uki._key_argument("pkcs11:serial=S;token=T;id=%01%02;type=private", "engine:pkcs11", "k")       # an id may be percent-encoded bytes
 
     def test_three_different_rsa_2048_keys_and_the_system_key_is_the_one_in_the_image(self):
         record = self.build()
@@ -444,13 +493,79 @@ class Sign(Case):
     def test_no_signature_may_change_what_is_measured(self):
         record = self.build()
         self.tools.tamper = {"attach": b" and more"}
-        self.refused("attaching the PCR signatures changed a measured section", self.sign, record)
+        self.refused("attaching the PCR signatures changed a section of the image", self.sign, record)
         self.tools.tamper = {"sbsign": b"AN INITRD"}
-        self.refused("the Secure Boot signature changed a measured section", self.sign, record)
+        self.refused("the Secure Boot signature changed a section of the image", self.sign, record)
         self.tools.tamper = {}
         self.tools.sbverify = lambda argv, ok: subprocess.CompletedProcess(argv, 1, b"", b"Signature verification failed")
         self.refused("checking the Secure Boot signature failed", self.sign, record)
         self.assertFalse(os.path.exists(os.path.join(self.out, "image-7.efi")))
+
+
+class Hardening(Case):
+    """regalia-kms-95's read of #186: the stub, the second builder, the PIN's path, what is written."""
+
+    def test_a_stub_swapped_between_the_builds_is_not_what_gets_signed(self):
+        record = self.build()
+        original = uki.read(self.inputs["stub"])
+        builds = []
+
+        def swap(options):
+            builds.append(options["--stub"][0])
+            if len(builds) == 1:                                   # after the third build, before the fourth
+                with open(self.inputs["stub"], "wb") as f:
+                    f.write(b"HOSTILE STUB")
+        self.tools.on_ukify = swap
+        signed = self.sign(record)
+        image = uki.read(os.path.join(self.out, "image-7.efi"))
+        self.assertEqual(dict(uki.sections(image))[".text"], original)          # the copy was built, not the file on disk
+        self.assertTrue(all(b != self.inputs["stub"] for b in builds))           # every build read the private copy
+        self.assertEqual(uki.stub_sections(image), record["stub_sections"])
+        self.assertIn("signed", signed)
+
+    def test_a_fourth_build_that_changes_the_stub_or_drops_a_signature_is_refused(self):
+        record = self.build()
+        self.tools.tamper = {"attach-text": b"HOSTILE CODE"}
+        self.refused("attaching the PCR signatures changed a section of the image (the stub's or a measured one)", self.sign, record)
+        self.tools.tamper = {}
+        one = json.dumps({"sha256": [{"pcrs": [11], "pkfp": "00" * 32, "pol": "00" * 32, "sig": ""}]}).encode()
+        self.tools.tamper = {"attach-pcrsig": one}
+        self.refused("carries 1 PCR signatures, not one per phase", self.sign, record)       # the carrying image's .pcrsig is checked too
+        self.tools.tamper = {"sign-pcrs": [7]}
+        self.refused("signed something other than the PCR 11 the record predicts", self.sign, record)
+        self.assertFalse(os.path.exists(os.path.join(self.out, "image-7.efi")))
+
+    def test_one_builder_alone_decides_nothing(self):
+        record = self.build()
+        other = json.loads(json.dumps(record))
+        other["inputs"]["initrd"]["sha256"] = "00" * 32
+        self.refused("the two builders' records differ: nothing is signed", self.sign, record, second=other)
+        self.refused("a second builder's record is required", uki.sign, self.inputs, record, self.signing_keys(), "file", self.out, run=self.tools)
+        shown = []
+        uki.sign(self.inputs, record, self.signing_keys(), "file", self.out, run=self.tools, second_record=dict(record), report=shown.append)
+        self.assertTrue(shown[0].startswith("signing image-7: unsigned image %s; inputs " % record["unsigned_sha256"]))
+        self.assertIn("initrd %s" % record["inputs"]["initrd"]["sha256"][:16], shown[0])
+
+    def test_systemd_measure_gets_no_inherited_credentials_and_its_cached_pin_is_purged(self):
+        with mock.patch.dict(os.environ, {"CREDENTIALS_DIRECTORY": "/run/credentials/x", "ENCRYPTED_CREDENTIALS_DIRECTORY": "/y"}):
+            self.sign()
+        measures = [env for tool, sub, env in self.tools.envs if tool == "systemd-measure" and sub == "sign"]
+        self.assertEqual(len(measures), 2)
+        self.assertTrue(all(env is not None and "CREDENTIALS_DIRECTORY" not in env and "ENCRYPTED_CREDENTIALS_DIRECTORY" not in env for env in measures))
+        names = [os.path.basename(c[0]) for c in self.tools.calls]
+        for i, name in enumerate(names):
+            if name == "systemd-measure" and self.tools.calls[i][1] == "sign":
+                self.assertEqual(self.tools.calls[i + 1], ["keyctl", "purge", "user", "measure-private-key-pin"])
+
+    def test_nothing_is_overwritten_and_no_record_is_written_through_a_link(self):
+        record = self.build()
+        self.refused("already exists: nothing is overwritten", self.build)
+        self.sign(record)
+        self.refused("already exists: nothing is overwritten", self.sign, record)
+        self.out = os.path.join(self.d, "fresh"); os.mkdir(self.out)
+        os.symlink(os.path.join(self.d, "elsewhere.json"), os.path.join(self.out, "image-7.record.json"))
+        self.refused("already exists: nothing is overwritten", self.build)
+        self.assertFalse(os.path.exists(os.path.join(self.d, "elsewhere.json")))
 
 
 class Verify(Case):
@@ -459,7 +574,8 @@ class Verify(Case):
         self.record = self.sign()
         self.image = os.path.join(self.out, "image-7.efi")
 
-    def check(self, record=None, image=None, keys=None, cert=None):
+    def check(self, record=None, image=None, keys=None, cert=""):
+        cert = self.key("secure_boot", "crt") if cert == "" else cert
         return uki.verify(image or self.image, record or self.record, keys or self.public(), cert, run=self.tools)
 
     def repointed(self, data, **change):
@@ -509,6 +625,15 @@ class Verify(Case):
         self.refused("the PCR signatures cover a bank other than SHA-256", self.check, **self.repointed(banked))
         junk = uki._ukify(self.inputs, self.record["uname"], os.path.join(self.d, "junk.efi"), self.tools, uki.TOOLS, pcrsig=self.write("junk.json", b"not json"))
         self.refused("is not a PCR signature document", self.check, **self.repointed(junk))
+
+    def test_the_stub_is_pinned_and_the_secure_boot_certificate_is_required(self):
+        data = uki.read(self.image)
+        hostile = data.replace(b"a stub", b"HOSTIL")
+        self.assertNotEqual(hostile, data)
+        self.refused("the image's stub is not the record's", self.check, **self.repointed(hostile))
+        self.refused("the Secure Boot certificate is required", self.check, cert=None)
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            uki.main(["verify", "--image", self.image, "--record", "r", "--initrd-pub", "a", "--system-pub", "b"])
 
     def test_the_secure_boot_signature_is_checked_against_the_recorded_certificate(self):
         self.check(cert=self.key("secure_boot", "crt"))
@@ -643,7 +768,7 @@ class Records(Case):
         self.refused("the record is of an unsigned image", uki.load_record, json.dumps(record).encode(), signed=True)
 
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
-        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh\n"),
+        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
                 "--name", "x", "--out", self.out]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
@@ -651,7 +776,7 @@ class Records(Case):
         self.assertEqual(out.getvalue(), "")
         self.assertIn("REFUSED: the command line holds 'init=/bin/sh'", err.getvalue())
         with contextlib.redirect_stderr(io.StringIO()) as err:
-            self.assertEqual(uki.main(["verify", "--image", "/nonexistent", "--record", "/nonexistent", "--initrd-pub", "x", "--system-pub", "y"]), 1)
+            self.assertEqual(uki.main(["verify", "--image", "/nonexistent", "--record", "/nonexistent", "--initrd-pub", "x", "--system-pub", "y", "--secure-boot-cert", "z"]), 1)
         self.assertIn("REFUSED: ", err.getvalue())
 
 
