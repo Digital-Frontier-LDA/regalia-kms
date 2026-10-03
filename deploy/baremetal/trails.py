@@ -60,13 +60,15 @@ MODE = 0o640                               # every trail: its writer writes, its
 OWN = ("seq", "prev")
 
 # name: (where, writer, stream at the collector, the group its shipper reads it through).
-# "state_dir", "admission_dir": the configuration's. The service trails take their writer's own group
-# (the file's group is the writer's); the operator tools' take TOOL_GROUP from their directory.
+# "state_dir", "admission_dir": the configuration's. Each service trail has a reader group of its own
+# (#286): its writer belongs to it and gives the trail that group (append's `group`), and its shipper
+# belongs to it and to nothing of the writer's, so the shipper reads the trail and no other file the writer
+# makes. The operator tools' trails take TOOL_GROUP from their directory, which holds nothing else.
 TRAILS = {
-    "sync": ("state_dir/sync-audit.jsonl", "regalia-sync.service (user regalia-sync), node", "sync", "regalia-sync"),
-    "admission": ("admission_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-admission"),
+    "sync": ("state_dir/sync-audit.jsonl", "regalia-sync.service (user regalia-sync), node", "sync", "regalia-audit-sync"),
+    "admission": ("admission_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-audit-admission"),
     "enrol": (TOOL_DIR + "/enrol.jsonl", "regalia-node enrol, root, by hand, node", "enrol", TOOL_GROUP),
-    "authority": ("state_dir/audit.jsonl", "regalia-authority.service (user regalia-authority)", "authority", "regalia-authority"),
+    "authority": ("state_dir/audit.jsonl", "regalia-authority.service (user regalia-authority)", "authority", "regalia-audit-authority"),
     "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor", TOOL_GROUP),
     "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount", TOOL_GROUP),
     "recovery-key": (TOOL_DIR + "/recovery-key.jsonl", "recovery-key.sh, root, by hand", "recovery-key", TOOL_GROUP),
@@ -152,15 +154,16 @@ def _tool_dir(directory):
         raise Refused("%s must be root's, 0700 or %s 2750: no group or other can write" % (directory, TOOL_GROUP))
 
 
-def append(path, event, now=time.time):
-    """Append `event` (a dict) to the trail at `path`, chained. Returns its seq. Raises if it cannot."""
+def append(path, event, now=time.time, group=None):
+    """Append `event` (a dict) to the trail at `path`, chained. Returns its seq. Raises if it cannot. `group` is
+    the trail's reader group (TRAILS' last field), given by a service writer that belongs to it (#286)."""
     if not isinstance(event, dict):
         raise Refused("an event is a JSON object")
     if any(k in event for k in OWN):
         raise Refused("an event may not carry %s: the trail sets them" % " or ".join(OWN))
     if os.path.dirname(os.path.abspath(path)) == TOOL_DIR:
         _tool_dir(TOOL_DIR)
-    fd = _open_locked(path)
+    fd = _open_locked(path, group)
     try:
         last, ended = _last_line(fd)
         if last and not ended:                     # torn by a crash: terminated, kept, chained over
@@ -172,7 +175,7 @@ def append(path, event, now=time.time):
         if len(line) > MAX_LINE:
             raise Refused("the event is %d bytes, more than a trail line may be" % len(line))
         if os.fstat(fd).st_size >= ROTATE_BYTES:
-            _rotate(path, fd, seq - 1, line)
+            _rotate(path, fd, seq - 1, line, group)
             return seq
         _write_whole(fd, line)
         os.fsync(fd)
@@ -181,18 +184,32 @@ def append(path, event, now=time.time):
         os.close(fd)
 
 
-def _readable_by_its_shipper(fd, info, path):
+def _readable_by_its_shipper(fd, info, path, group=None):
     """MODE on every append (a file made under a umask, or one written before this rule, is brought to it),
-    and, under the operator tools' directory, TOOL_GROUP: a trail its shipper cannot read is never shipped."""
+    and the trail's reader group: TOOL_GROUP under the operator tools' directory, else the `group` the writer
+    gives (#286). A trail its shipper cannot read is never shipped. A writer the unit did not put in its
+    group cannot give the file that group: the line is still written (the operation is recorded), and the
+    shipper's own refusal to read, in its log and metrics, says what is wrong."""
     if stat.S_IMODE(info.st_mode) != MODE:
         os.fchmod(fd, MODE)
-    if os.path.dirname(os.path.abspath(path)) == TOOL_DIR:
-        gid = _tool_group()
-        if gid is not None and info.st_gid != gid:
+    gid = _tool_group() if os.path.dirname(os.path.abspath(path)) == TOOL_DIR else _group(group)
+    if gid is not None and info.st_gid != gid:
+        try:
             os.fchown(fd, -1, gid)
+        except PermissionError:
+            pass
 
 
-def _open_locked(path):
+def _group(name):
+    if name is None:
+        return None
+    try:
+        return grp.getgrnam(name).gr_gid
+    except KeyError:
+        return None                        # not installed (a development machine): the writer's own group stays
+
+
+def _open_locked(path, group=None):
     """The trail, open and locked. A writer that waited on the lock while another rotated the file holds
     the archive's inode: it sees `path` is no longer that file, and opens the new one."""
     while True:
@@ -204,7 +221,7 @@ def _open_locked(path):
             fcntl.flock(fd, fcntl.LOCK_EX)
             now = os.stat(path, follow_symlinks=False)
             if (now.st_dev, now.st_ino) == (info.st_dev, info.st_ino):
-                _readable_by_its_shipper(fd, info, path)
+                _readable_by_its_shipper(fd, info, path, group)
                 return fd
         except BaseException:
             os.close(fd)
@@ -212,7 +229,7 @@ def _open_locked(path):
         os.close(fd)
 
 
-def _rotate(path, fd, last_seq, line):
+def _rotate(path, fd, last_seq, line, group=None):
     """Start a new file whose first line is `line`, chained onto the last line of the full one, which stays
     as the archive <path>.<last seq, 20 digits>. Under the caller's lock. In this order, so a cut anywhere
     leaves one chain:
@@ -241,7 +258,7 @@ def _rotate(path, fd, last_seq, line):
         os.unlink(following)
     new = os.open(following, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, MODE)
     try:
-        _readable_by_its_shipper(new, os.fstat(new), path)
+        _readable_by_its_shipper(new, os.fstat(new), path, group)
         _write_whole(new, line)
         os.fsync(new)
     finally:

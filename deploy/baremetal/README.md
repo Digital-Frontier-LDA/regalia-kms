@@ -800,9 +800,12 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
 - **Metrics** are in `/var/lib/regalia-audit-ship/<trail>.prom`: lines, committed, backlog, tampered.
 - **Its own user, no capability.** `regalia-audit-ship` (`units/regalia-audit-ship.sysusers.conf`) reads
   each trail through that trail's group only, given per instance by
-  `units/regalia-audit-ship@<trail>.service.d/reader.conf`. The service trails use their writer's own group;
-  the operator tools' trails use `regalia-audit`. Trails are 0640, and `/var/log/regalia` is
-  root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory is 0750 for this.
+  `units/regalia-audit-ship@<trail>.service.d/reader.conf`. Each service trail has a reader group of its own
+  (`regalia-audit-sync`, `-admission`, `-authority`; #286). Its writer belongs to it and gives the trail that
+  group, and its shipper belongs to it and to nothing of the writer's, so the shipper reads the trail and no
+  other file the writer makes. The operator tools' trails use `regalia-audit`. Trails are 0640, and
+  `/var/log/regalia` is root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory
+  is 0751: its shipper passes through to the trail, and every other file there is 0600.
   The client key in `/etc/regalia/audit-ship/` is 0640 root:regalia-audit-ship.
 - **Rotation.** A trail past 16 MiB is archived as `<trail>.<last seq>` (20 digits) and a new file begun.
   Its first line continues the chain (seq and prev), so the archives and the current file verify as one
