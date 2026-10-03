@@ -11,9 +11,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +25,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,9 +58,9 @@ func main() {
 }
 
 type options struct {
-	trail, path, collector, site, metrics string
-	interval                              time.Duration
-	once                                  bool
+	trail, path, collector, site, metrics, head string
+	interval                                    time.Duration
+	once                                        bool
 }
 
 func run(arguments []string, out io.Writer) error {
@@ -70,6 +75,7 @@ func run(arguments []string, out io.Writer) error {
 	tlsKey := flags.String("tls-key", "", "PEM client private key")
 	serverCA := flags.String("server-ca", "", "PEM CA bundle the collector's certificate is verified against")
 	flags.StringVar(&o.metrics, "metrics", "", "Prometheus textfile to write after every pass (optional)")
+	flags.StringVar(&o.head, "head", "", "where to record the committed line and the archives wholly behind it, for trails.py prune (optional)")
 	flags.DurationVar(&o.interval, "interval", 30*time.Second, "time between passes")
 	flags.BoolVar(&o.once, "once", false, "one pass, then exit")
 	if err := flags.Parse(arguments); err != nil {
@@ -96,10 +102,28 @@ func run(arguments []string, out io.Writer) error {
 func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) error {
 	stream := o.site + "." + o.trail
 	for {
-		data, err := readTrail(o.path)
 		var committed, total uint64
+		var boundaries []boundary
+		trail, err := openSegments(o.path)
 		if err == nil {
-			committed, total, err = audit.ShipTrail(ctx, sink, stream, o.trail, data)
+			committed, total, err = audit.ShipTrailLines(ctx, sink, stream, o.trail, trail.start, func(walker *audit.TrailWalker, each func(audit.Event) error) error {
+				for _, archive := range trail.archives {
+					if err := walker.Feed(archive.file, true, each); err != nil {
+						return err
+					}
+					boundaries = append(boundaries, boundary{archive.name, archive.seq, walker.Last()})
+				}
+				if trail.current == nil {
+					return nil
+				}
+				return walker.Feed(trail.current, false, each)
+			})
+			trail.close()
+		}
+		if err == nil {
+			if headErr := writeHead(ctx, sink, o.head, o.site+"."+o.trail, o.trail, boundaries, committed); headErr != nil {
+				fmt.Fprintf(out, "regalia-audit-ship: the head file could not be written: %v\n", headErr)
+			}
 		}
 		tampered := errors.Is(err, audit.ErrTrailTampered)
 		if metricsErr := writeMetrics(o.metrics, o.trail, committed, total, tampered, err == nil); metricsErr != nil {
@@ -122,32 +146,233 @@ func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) e
 	}
 }
 
-// readTrail reads the trail as trails.append opens it: never through a link, a regular file only. A
-// trail not yet written is empty, which ShipTrail refuses if the collector already holds lines of it.
-func readTrail(path string) ([]byte, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+// openedTrail is a trail as trails.py's segments() lays it out, open: where it continues from (the
+// prune marker), its archives in order, then its current file. It holds descriptors, not bytes, so a
+// trail of any size ships (#288); and a rotation or a prune while it ships cannot take lines from under
+// it (a renamed or unlinked file stays readable through its descriptor).
+type openedTrail struct {
+	start    audit.TrailStart
+	archives []openedArchive
+	current  *os.File
+}
+
+type openedArchive struct {
+	name string
+	seq  uint64
+	file *os.File
+}
+
+func (trail openedTrail) close() {
+	for _, archive := range trail.archives {
+		archive.file.Close()
 	}
+	if trail.current != nil {
+		trail.current.Close()
+	}
+}
+
+// boundary is where an archive ends in the stream: what prune records for it.
+type boundary struct {
+	name string
+	seq  uint64
+	at   audit.TrailStart
+}
+
+var archiveSuffix = regexp.MustCompile(`^\.([0-9]{20})$`)
+
+// openSegments opens the whole trail. A rotation or a prune running meanwhile would hand it a set of
+// files with lines missing, which would read as tampering: so it takes the directory's listing and the
+// marker before and after, and opens again when they moved. A trail still moving after a few tries is
+// an ordinary error, retried at the next pass.
+func openSegments(path string) (openedTrail, error) {
+	for attempt := 0; attempt < 5; attempt++ {
+		before, err := segmentsState(path)
+		if err != nil {
+			return openedTrail{}, err
+		}
+		trail, err := openSegmentsOnce(path, before)
+		after, stateErr := segmentsState(path)
+		if stateErr != nil {
+			trail.close()
+			return openedTrail{}, stateErr
+		}
+		if before == after {
+			return trail, err
+		}
+		trail.close()
+	}
+	return openedTrail{}, fmt.Errorf("%s kept rotating while it was opened", path)
+}
+
+// segmentsState names what a rotation or a prune changes: the files beside the trail, by name and
+// inode, and the marker's bytes. Appends are not in it: they only add lines after the ones read.
+func segmentsState(path string) (string, error) {
+	directory, base := filepath.Split(path)
+	entries, err := os.ReadDir(filepath.Clean(directory))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	var state strings.Builder
+	for _, entry := range entries {
+		name := entry.Name()
+		if name != base && !strings.HasPrefix(name, base+".") {
+			continue
+		}
+		info, err := os.Lstat(filepath.Join(directory, name))
+		if err != nil {
+			continue
+		}
+		identity := ""
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			identity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
+		}
+		fmt.Fprintf(&state, "%s %s -\n", name, identity) // no size: an append to the current file moves nothing
+	}
+	if marker, err := os.ReadFile(path + ".pruned"); err == nil {
+		state.Write(marker)
+	}
+	return state.String(), nil
+}
+
+func openSegmentsOnce(path, state string) (openedTrail, error) {
+	var trail openedTrail
+	directory, base := filepath.Split(path)
+	if marker, err := readRegular(path+".pruned", 4096); err == nil {
+		decoder := json.NewDecoder(bytes.NewReader(marker))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&trail.start); err != nil || trail.start == (audit.TrailStart{}) {
+			return trail, fmt.Errorf("%w: %s.pruned is not a prune marker", audit.ErrTrailTampered, path)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return trail, err
+	}
+	current, err := openRegular(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return trail, err
+	}
+	trail.current = current
+	var currentInfo os.FileInfo
+	if current != nil {
+		if currentInfo, err = current.Stat(); err != nil {
+			return trail, err
+		}
+	}
+	for _, line := range strings.Split(state, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 3 {
+			continue
+		}
+		match := archiveSuffix.FindStringSubmatch(strings.TrimPrefix(fields[0], base))
+		if match == nil {
+			continue
+		}
+		seq, _ := strconv.ParseUint(match[1], 10, 64)
+		if trail.start.Sequence > 0 && seq <= trail.start.Seq {
+			continue // a prune cut before it removed this: the marker covers it
+		}
+		file, err := openRegular(filepath.Join(directory, fields[0]))
+		if err != nil {
+			return trail, err
+		}
+		if info, err := file.Stat(); err != nil || (currentInfo != nil && os.SameFile(info, currentInfo)) {
+			file.Close() // a rotation cut after its link: this is the current file
+			if err != nil {
+				return trail, err
+			}
+			continue
+		}
+		trail.archives = append(trail.archives, openedArchive{name: fields[0], seq: seq, file: file})
+	}
+	sort.Slice(trail.archives, func(i, j int) bool { return trail.archives[i].seq < trail.archives[j].seq })
+	return trail, nil
+}
+
+// openRegular opens a file as trails.append does: never through a link, a regular file only.
+func openRegular(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	return file, nil
+}
+
+// readRegular reads a file as trails.append opens it: never through a link, a regular file only.
+func readRegular(path string, limit int64) ([]byte, error) {
+	file, err := openRegular(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a regular file", path)
-	}
-	data, err := io.ReadAll(io.LimitReader(file, maxTrail+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxTrail {
-		return nil, fmt.Errorf("%s is larger than %d bytes", path, maxTrail)
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("%s is larger than %d bytes", path, limit)
 	}
 	return data, nil
+}
+
+// readTrail reads one file as the trail; a missing one is empty (readSegments for the whole trail).
+func readTrail(path string) ([]byte, error) {
+	data, err := readRegular(path, maxTrail)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return data, err
+}
+
+// receipter is a sink that can fetch the collector's signed receipts (HTTPSink).
+type receipter interface {
+	Receipt(context.Context, uint64) (audit.Receipt, error)
+}
+
+// writeHead records, for trails.py prune, each archive the collector holds wholly: its name, the
+// time of its last line, and the collector's SIGNED RECEIPT for that line (#288). prune trusts the
+// receipt, verified against the keys it pins, and its own count of positions, never this file's
+// word: a compromised shipper cannot make it remove a line the collector does not hold. An archive
+// whose receipt cannot be had is left out, and waits.
+func writeHead(ctx context.Context, sink audit.TrailSink, path, stream, trail string, boundaries []boundary, committed uint64) error {
+	if path == "" {
+		return nil
+	}
+	type entry struct {
+		Name      string        `json:"name"`
+		Seq       uint64        `json:"seq"`
+		Timestamp int64         `json:"timestamp"`
+		Receipt   audit.Receipt `json:"receipt"`
+	}
+	record := struct {
+		Trail     string  `json:"trail"`
+		Stream    string  `json:"stream"`
+		Committed uint64  `json:"committed"`
+		Archives  []entry `json:"archives"`
+	}{Trail: trail, Stream: stream, Committed: committed, Archives: []entry{}}
+	receipts, ok := sink.(receipter)
+	for _, b := range boundaries {
+		if !ok || b.at.Sequence == 0 || b.at.Sequence > committed {
+			break
+		}
+		receipt, err := receipts.Receipt(ctx, b.at.Sequence)
+		if err != nil {
+			break
+		}
+		record.Archives = append(record.Archives, entry{b.name, b.seq, b.at.Timestamp, receipt})
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return replaceFile(path, encoded)
 }
 
 // writeMetrics replaces the textfile whole (write, fsync, rename), so the exporter never reads half.
@@ -175,12 +400,17 @@ regalia_audit_trail_tampered{trail=%[1]q} %[5]d
 	if ok {
 		body += fmt.Sprintf("# HELP regalia_audit_trail_last_success_seconds When a pass last committed everything.\n# TYPE regalia_audit_trail_last_success_seconds gauge\nregalia_audit_trail_last_success_seconds{trail=%q} %d\n", trail, time.Now().Unix())
 	}
+	return replaceFile(path, []byte(body))
+}
+
+// replaceFile writes path whole (write, fsync, rename), 0644, so no reader sees half of it.
+func replaceFile(path string, body []byte) error {
 	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(temporary.Name())
-	if _, err := temporary.WriteString(body); err != nil {
+	if _, err := temporary.Write(body); err != nil {
 		temporary.Close()
 		return err
 	}

@@ -1,6 +1,6 @@
 {
- "about": "#278: the regalia.trail/v1 mapping, pinned. A trail exactly as deploy/baremetal/trails.py writes it (a legacy object, a legacy non-object, chained lines, a line torn by a crash, a DENY, HTML-sensitive and non-ASCII text, a 2^64-1 integer, a withheld line, an unsafe operation and outcome) and the audit events internal/audit/trail.go must map it to. Changing any expected hash means every stream already shipped reads as rewritten: it needs a new TrailFormat and a new stream, never an edit here.",
- "format": "regalia.trail/v1",
+ "about": "#278: the regalia.trail/v2 mapping, pinned. A trail exactly as deploy/baremetal/trails.py writes it (a legacy object, a legacy non-object, chained lines, a line torn by a crash, a DENY, HTML-sensitive and non-ASCII text, a 2^64-1 integer, a withheld line, an unsafe operation and outcome) and the audit events internal/audit/trail.go must map it to. Changing any expected hash means every stream already shipped reads as rewritten: it needs a new TrailFormat and a new stream, never an edit here. (v1, which carried the line re-encoded rather than exact, was replaced by v2 before any stream shipped: #288.)",
+ "format": "regalia.trail/v2",
  "trail": "sync",
  "lines": [
   "{\"at\":1790000000,\"event\":\"before the chain\"}",
@@ -23,13 +23,13 @@
   "a44299f98560068c4b296292d4399d1d7fa4166c79b4c04ffd66638ea5739103"
  ],
  "event_hashes": [
-  "sha256:d0cb32e45af757551393c69992c73745420df40ff2b6a96857eba4faa8e38d82",
-  "sha256:dc01446badc748ecfd6314bc836ef8370103aa2684f06251bfbb037c73d15186",
-  "sha256:4c7dc4122a4a88de995a7a6a1ac477696ac65e0205b32a6bc9d81ddeb82f0b0b",
-  "sha256:4e802d812e5a83a1a31a4ae6b367b728a07f1413f796c1414cc6f2258676c72f",
-  "sha256:0f7de34dd3c63ed2fa9ef0fed272203dd245af6da82896dab6194512f518fe26",
-  "sha256:1a20da56ba0e8a5fb327fadac08990f2930f930966a9ffc7ffb4acd107081c18",
-  "sha256:c1d70618ed59904c44077f21ff703ba95d29a5f16a0927a250d566111c939349",
-  "sha256:b45b2ebc940ff6f3e545d8469662f195fd383e2cb9aaf0b662af021cedb96286"
+  "sha256:04274c3fd873e25b5e47a12703bb70e9be495070843d1d9afe2dcf218215cd63",
+  "sha256:64394ef7a9cccddf4e0e290882a22bfec54e1bc4bb301afa0f8028401ed706db",
+  "sha256:64ebde8aee445eb0d7d584c996a55a87ac54a95a7144430961182c814f83c6df",
+  "sha256:9d73ee864a9b4a0c3180699598cc5876f51796cd71b2a08498738a9a91b33068",
+  "sha256:5fcf57cafa45e436c4d29606ac3b17548da818a1f9cea23acaec8763511840f2",
+  "sha256:df4766d69a9232b28646d51a2741b34ec26a9c084e2e1582f8c59aab1095f385",
+  "sha256:2746352eb36cc8298d79dd9ccc07ff50f1837f6b178a6201a7f8cf58a5d29d0a",
+  "sha256:a25aa3d2084102cf37d2faa378c483b14661a0aafb59b54614cddf6177c8cb68"
  ]
 }

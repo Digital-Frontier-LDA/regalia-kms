@@ -54,6 +54,13 @@ no human); **Fencing authority** (the independent activation signer, FENCING.md)
 | **Escrow MAC key** | at the ceremony (step 0) | tier-0 payload; PIN card (Owner's safe); its check value (KCV) in the repository | by the Owner (card); otherwise only through k shares | authenticating PIN escrow files | payload re-issue (after an unexplained card opening) | as for rotation: escrows under the old key stop verifying | the payload, through k shares | Owner |
 | **PIN escrow files** (`escrow/pins-NNNN.age` + `.mac`) | at each PIN change, by the disc's escrow tool | the private repository: ciphertext and MAC, copyable by anyone with read access | the ciphertext freely; the plaintext only through the breakglass key (k shares) | recovering current PINs after a lost card | every PIN change writes a new one | a re-keyed MAC key makes old files stop verifying | the newest verified file, through k shares | Owner (writes); Shareholders (open) |
 
+## Audit (#278, #288)
+
+| Secret | Generated | Stored | Exportable | Authorized use | Rotation | Revocation | Recovery | Custody |
+|---|---|---|---|---|---|---|---|---|
+| **Collector receipt key** (Ed25519, proposed in #288) | on the audit collector's host, an online service key | that host, root 0600 (`regalia-audit-collector -receipt-key`) | only by that host's administrator | signing receipts: "this collector holds, in this client's stream, at this position, this event and this line". Each host's `trails.py prune` removes a trail archive only on such a receipt, checked against the keys it pins (`/etc/regalia/audit-ship/collector-receipt.pub`) | yearly or on suspicion: a new key on the collector; the new public key is pinned beside the old on every host, then the old is removed (the pin file is a set) | remove its public key from every host's pin file | **loss stops pruning only, no stranding**: archives wait on disk, the shipper keeps shipping, and a new key is pinned | Audit collector host |
+| **Audit client key** (per host, proposed in #278) | on the host | `/etc/regalia/audit-ship/client.key`, 0640 root:regalia-audit-ship | by root on the host | mTLS to the collector, which keys the host's streams by its certificate | with its certificate, or on suspicion | the collector's client CA | a new key and certificate. The collector keys streams by certificate, so this starts new streams; after a prune that raises a false tamper alarm until #291 lets a stream continue across a rotation | Node |
+
 ## Service trust (Phase 14)
 
 **Service TLS certificates**: short-lived, issued to the TPM-held mTLS key above after attestation;

@@ -35,6 +35,7 @@ package audit
 //     file is removed only once the collector's head is past its last line (#278).
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -43,6 +44,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"regexp"
 	"strconv"
 	"strings"
@@ -52,7 +54,7 @@ import (
 )
 
 // TrailFormat names the line-to-event mapping below; it is in every event's detail.
-const TrailFormat = "regalia.trail/v1"
+const TrailFormat = "regalia.trail/v2"
 
 // maxTrailContent bounds the line content copied into an event's detail; a longer line ships its
 // hash and length only.
@@ -79,73 +81,181 @@ type TrailSink interface {
 	ReportAlarm(context.Context, uint64, string, string) error
 }
 
-// trailDetail is an event's Detail: which line of which trail it is. LineSHA256 is of the line's
-// exact bytes, newline included (what the next line's prev names); Content is the line's JSON as
-// Go re-encodes it, or ContentBase64 its bytes when it is not JSON (torn) or not UTF-8. Content is
-// data, not fields: the header fields above fall back to a safe default for a value validateDraft
-// would refuse, but Content keeps the line as written, control characters included (only a secret
-// key marker withholds it), so whatever displays a detail escapes it.
+// trailDetail is an event's Detail: which line of which trail it is, and the line itself. LineSHA256 is
+// of the line's exact bytes, newline included (what the next line's prev names). Line carries those
+// bytes, less the newline, as a JSON string (which decodes back to exactly them), or LineBase64 when
+// they are not UTF-8; neither when Withheld says why not. So the collector checks that the content
+// is the line the hash names (validateTrailDetail): a shipper cannot ship a line's hash with other
+// content, only withhold it. Line is data, control characters included: whatever displays it escapes it.
 type trailDetail struct {
-	Format        string          `json:"format"`
-	Trail         string          `json:"trail"`
-	Kind          string          `json:"kind"`
-	LineSHA256    string          `json:"line_sha256"`
-	LineBytes     int             `json:"line_bytes"`
-	Content       json.RawMessage `json:"content,omitempty"`
-	ContentBase64 string          `json:"content_base64,omitempty"`
-	Withheld      string          `json:"withheld,omitempty"`
+	Format     string `json:"format"`
+	Trail      string `json:"trail"`
+	Kind       string `json:"kind"`
+	LineSHA256 string `json:"line_sha256"`
+	LineBytes  int    `json:"line_bytes"`
+	Line       string `json:"line,omitempty"`
+	LineBase64 string `json:"line_base64,omitempty"`
+	Withheld   string `json:"withheld,omitempty"`
 }
 
 // TrailEvents checks the trail's chain as trails.verify does and returns one event a complete line,
 // chained from genesis. A break is ErrTrailTampered.
 func TrailEvents(name string, data []byte) ([]Event, error) {
+	return TrailEventsFrom(name, TrailStart{}, data)
+}
+
+// TrailStart is where data begins in a trail whose older files were pruned (trails.py's prune marker,
+// <trail>.pruned): the last pruned line's seq and its number in the stream (Sequence), the event it
+// shipped as, its line's SHA-256, and that event's time. The zero value is the start of the trail.
+// Every event after it depends on exactly these, so a rebuild from a marker is the rebuild from the
+// first line, byte for byte.
+type TrailStart struct {
+	Seq        uint64 `json:"seq"`
+	Sequence   uint64 `json:"sequence"`
+	EventHash  string `json:"event_hash"`
+	LineSHA256 string `json:"line_sha256"`
+	Timestamp  int64  `json:"timestamp"`
+	LineChain  string `json:"line_chain"` // the running digest of the lines through this one (LineChain); prune checks it, the mapping does not use it
+}
+
+func (start TrailStart) valid() bool {
+	if start == (TrailStart{}) {
+		return true
+	}
+	hexOf := func(value string) bool {
+		_, err := hex.DecodeString(value)
+		return len(value) == 64 && err == nil && strings.ToLower(value) == value
+	}
+	return start.Sequence > 0 && start.Seq <= start.Sequence && auditHashPattern.MatchString(start.EventHash) &&
+		hexOf(start.LineSHA256) && hexOf(start.LineChain) && start.Timestamp >= 0
+}
+
+// TrailEventsFrom is TrailEvents for data that continues after start.
+func TrailEventsFrom(name string, start TrailStart, data []byte) ([]Event, error) {
+	walker, err := NewTrailWalker(name, start)
+	if err != nil {
+		return nil, err
+	}
+	var events []Event
+	complete := data[:bytes.LastIndexByte(data, '\n')+1]
+	for len(complete) > 0 {
+		end := bytes.IndexByte(complete, '\n') + 1
+		event, err := walker.Next(complete[:end])
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+		complete = complete[end:]
+	}
+	return events, nil
+}
+
+// TrailWalker maps a trail one line at a time: TrailEventsFrom's state between lines, so a trail of any
+// size is shipped without holding it (#288).
+type TrailWalker struct {
+	name   string
+	at     TrailStart // the last line mapped: what a marker after it would carry
+	chainN uint64     // the seq the next chained line must carry
+	chain  bool
+}
+
+// NewTrailWalker starts after start (the zero value: the first line of the trail).
+func NewTrailWalker(name string, start TrailStart) (*TrailWalker, error) {
 	if !trailNamePattern.MatchString(name) {
 		return nil, fmt.Errorf("%q is not a trail name", name)
 	}
-	complete := data[:bytes.LastIndexByte(data, '\n')+1]
-	var events []Event
-	var previousLine []byte
+	if !start.valid() {
+		return nil, fmt.Errorf("%w: the prune marker is not one trails.py writes", ErrTrailTampered)
+	}
+	if start.Sequence == 0 {
+		start.LineChain = LineChainStart
+	}
+	return &TrailWalker{name: name, at: start, chainN: start.Seq + 1, chain: start.Seq > 0}, nil
+}
+
+// Last is the walker's position: where a prune marker after the last line mapped would start.
+func (w *TrailWalker) Last() TrailStart { return w.at }
+
+// Next maps one complete line, its newline included.
+func (w *TrailWalker) Next(raw []byte) (Event, error) {
+	if len(raw) == 0 || raw[len(raw)-1] != '\n' {
+		return Event{}, errors.New("a trail line ends with its newline")
+	}
+	body := raw[:len(raw)-1]
+	number := w.at.Sequence + 1
 	previousHash, previousTime := genesisHash, time.Unix(0, 0).UTC()
-	expected, chained := uint64(1), false
-	for len(complete) > 0 {
-		end := bytes.IndexByte(complete, '\n') + 1
-		raw, body := complete[:end], complete[:end-1]
-		complete = complete[end:]
-		number := uint64(len(events) + 1)
-		var fields map[string]json.RawMessage
-		kind := "torn"
-		if json.Valid(body) {
-			kind = "legacy"
-			if json.Unmarshal(body, &fields) == nil && fields != nil {
-				if seq, ok := fields["seq"]; ok {
-					kind = "chained"
-					if string(seq) != strconv.FormatUint(expected, 10) || !trailSeqPattern.Match(seq) {
-						return nil, fmt.Errorf("%w: line %d carries seq %s where %d was expected", ErrTrailTampered, number, seq, expected)
-					}
-					var prev string
-					want := ""
-					if previousLine != nil {
-						sum := sha256.Sum256(previousLine)
-						want = hex.EncodeToString(sum[:])
-					}
-					if json.Unmarshal(fields["prev"], &prev) != nil || prev != want {
-						return nil, fmt.Errorf("%w: line %d's prev is not the SHA-256 of the line before it", ErrTrailTampered, number)
-					}
-					expected++
+	if w.at.Sequence > 0 {
+		previousHash, previousTime = w.at.EventHash, time.Unix(w.at.Timestamp, 0).UTC()
+	}
+	var fields map[string]json.RawMessage
+	kind := "torn"
+	if json.Valid(body) {
+		kind = "legacy"
+		if json.Unmarshal(body, &fields) == nil && fields != nil {
+			if seq, ok := fields["seq"]; ok {
+				kind = "chained"
+				if string(seq) != strconv.FormatUint(w.chainN, 10) || !trailSeqPattern.Match(seq) {
+					return Event{}, fmt.Errorf("%w: line %d carries seq %s where %d was expected", ErrTrailTampered, number, seq, w.chainN)
+				}
+				var prev string
+				if json.Unmarshal(fields["prev"], &prev) != nil || prev != w.at.LineSHA256 {
+					return Event{}, fmt.Errorf("%w: line %d's prev is not the SHA-256 of the line before it", ErrTrailTampered, number)
 				}
 			}
-			if kind == "legacy" && chained {
-				return nil, fmt.Errorf("%w: line %d has no seq after the chain began", ErrTrailTampered, number)
-			}
 		}
-		chained = chained || kind == "chained"
-		event := trailEvent(name, number, raw, kind, fields, previousTime)
-		event.PreviousHash = previousHash
-		event.Hash = eventHash(event)
-		events = append(events, event)
-		previousLine, previousHash, previousTime = raw, event.Hash, event.Timestamp
+		if kind == "legacy" && w.chain {
+			return Event{}, fmt.Errorf("%w: line %d has no seq after the chain began", ErrTrailTampered, number)
+		}
 	}
-	return events, nil
+	event := trailEvent(w.name, number, raw, kind, fields, previousTime)
+	event.PreviousHash = previousHash
+	event.Hash = eventHash(event)
+	sum := sha256.Sum256(raw)
+	if kind == "chained" {
+		w.at.Seq, w.chainN, w.chain = w.chainN, w.chainN+1, true
+	}
+	w.at.Sequence, w.at.EventHash, w.at.LineSHA256, w.at.Timestamp = number, event.Hash, hex.EncodeToString(sum[:]), event.Timestamp.Unix()
+	w.at.LineChain = LineChain(w.at.LineChain, w.at.LineSHA256)
+	return event, nil
+}
+
+// maxTrailLine bounds one line read from a trail: trails.py writes at most 64 KiB, and a legacy line
+// longer than this is not one of its.
+const maxTrailLine = 1 << 20
+
+// Feed maps the lines read from r, calling each for every event in order. An archive (whole) must end
+// with a newline; the current file's last line without one is left for the next pass (it may be
+// being written).
+func (w *TrailWalker) Feed(r io.Reader, whole bool, each func(Event) error) error {
+	reader := bufio.NewReaderSize(r, 64<<10)
+	var line []byte
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		line = append(line, chunk...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			if len(line) > maxTrailLine {
+				return fmt.Errorf("a trail line is longer than %d bytes", maxTrailLine)
+			}
+			continue
+		}
+		if err == io.EOF {
+			if len(line) > 0 && whole {
+				return fmt.Errorf("%w: an archive does not end with a whole line: not one rotation made", ErrTrailTampered)
+			}
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		event, mapErr := w.Next(line)
+		if mapErr != nil {
+			return mapErr
+		}
+		if err := each(event); err != nil {
+			return err
+		}
+		line = line[:0]
+	}
 }
 
 // trailEvent maps one line. Every value comes from the line, its number and the trail's name; a
@@ -200,16 +310,12 @@ func trailDetailOf(name, kind string, raw []byte, lineHash string) json.RawMessa
 		detail.Withheld = "the line carries a secret key marker"
 	case len(body) > maxTrailContent:
 		detail.Withheld = "the line is longer than an event may carry"
-	case kind != "torn" && utf8.Valid(body):
-		detail.Content = json.RawMessage(body)
+	case utf8.Valid(body):
+		detail.Line = string(body) // the line's exact text: a JSON string decodes back to these bytes
 	default:
-		detail.ContentBase64 = base64.StdEncoding.EncodeToString(body)
+		detail.LineBase64 = base64.StdEncoding.EncodeToString(body)
 	}
-	encoded, err := json.Marshal(detail)
-	if err != nil {
-		detail.Content, detail.ContentBase64, detail.Withheld = nil, "", "the line could not be re-encoded"
-		encoded, _ = json.Marshal(detail)
-	}
+	encoded, _ := json.Marshal(detail) // strings and numbers only: it cannot fail
 	return encoded
 }
 
@@ -226,28 +332,71 @@ func trailValueSafe(value string) bool {
 // holds. ErrTrailTampered (with an alarm raised at the collector) means stop; any other error is
 // the collector being unreachable or refusing, and the next pass tries again.
 func ShipTrail(ctx context.Context, sink TrailSink, site, name string, data []byte) (uint64, uint64, error) {
-	events, buildErr := TrailEvents(name, data)
-	total := uint64(len(events))
+	return ShipTrailFrom(ctx, sink, site, name, TrailStart{}, data)
+}
+
+// ShipTrailFrom is ShipTrail for a trail whose older files were pruned: data continues after start.
+func ShipTrailFrom(ctx context.Context, sink TrailSink, site, name string, start TrailStart, data []byte) (uint64, uint64, error) {
+	return ShipTrailLines(ctx, sink, site, name, start, func(walker *TrailWalker, each func(Event) error) error {
+		return walker.Feed(bytes.NewReader(data), false, each)
+	})
+}
+
+// ShipTrailLines is the shipping pass over a trail read line by line: walk feeds the walker the
+// trail's files in order. It asks the collector for its head first, checks the line at the head as
+// it passes it, and sends each line after it as it is read, so a trail of any size ships without
+// being held (#288). The collector must hold at least the pruned lines, and the line it holds at its
+// head must be the one walked there, or start itself.
+func ShipTrailLines(ctx context.Context, sink TrailSink, site, name string, start TrailStart, walk func(*TrailWalker, func(Event) error) error) (uint64, uint64, error) {
+	walker, walkerErr := NewTrailWalker(name, start)
 	head, hash, err := sink.CommittedHead(ctx, site)
 	if err != nil {
-		return 0, total, err
+		return 0, start.Sequence, err
 	}
 	switch {
-	case buildErr != nil && errors.Is(buildErr, ErrTrailTampered):
-		return head, total, raiseTrailAlarm(ctx, sink, head, hash, buildErr.Error())
-	case buildErr != nil:
-		return head, total, buildErr
+	case walkerErr != nil && errors.Is(walkerErr, ErrTrailTampered): // a prune marker that is not one: tampering, alarmed
+		return head, start.Sequence, raiseTrailAlarm(ctx, sink, head, hash, walkerErr.Error())
+	case walkerErr != nil:
+		return head, start.Sequence, walkerErr
+	case head < start.Sequence:
+		return head, start.Sequence, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("the trail %s was pruned through line %d and the collector committed only %d: lines were removed before they shipped", name, start.Sequence, head))
+	case head == start.Sequence && head > 0 && start.EventHash != hash:
+		return head, start.Sequence, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("the trail %s's prune marker names line %d as an event the collector did not commit there", name, head))
+	}
+	committed, total := head, start.Sequence
+	var sendErr, rewritten error
+	walkErr := walk(walker, func(event Event) error {
+		total = event.Sequence
+		switch {
+		case event.Sequence < head:
+			return nil
+		case event.Sequence == head:
+			if event.Hash != hash {
+				rewritten = fmt.Errorf("line %d of the trail %s is not the line the collector committed: the file was rewritten", head, name)
+				return rewritten
+			}
+			return nil
+		}
+		if err := sink.Send(ctx, event); err != nil {
+			sendErr = err
+			return err
+		}
+		committed = event.Sequence
+		return nil
+	})
+	switch {
+	case rewritten != nil:
+		return head, total, raiseTrailAlarm(ctx, sink, head, hash, rewritten.Error())
+	case sendErr != nil:
+		return committed, total, sendErr
+	case walkErr != nil && errors.Is(walkErr, ErrTrailTampered):
+		return committed, total, raiseTrailAlarm(ctx, sink, head, hash, walkErr.Error())
+	case walkErr != nil:
+		return committed, total, walkErr
 	case head > total:
 		return head, total, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("the trail %s holds %d complete lines and the collector committed %d: the file was cut short or replaced", name, total, head))
-	case head > 0 && events[head-1].Hash != hash:
-		return head, total, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("line %d of the trail %s is not the line the collector committed: the file was rewritten", head, name))
 	}
-	for i := head; i < total; i++ {
-		if err := sink.Send(ctx, events[i]); err != nil {
-			return i, total, err
-		}
-	}
-	return total, total, nil
+	return committed, total, nil
 }
 
 func raiseTrailAlarm(ctx context.Context, sink TrailSink, head uint64, hash, reason string) error {
@@ -263,6 +412,55 @@ func raiseTrailAlarm(ctx context.Context, sink TrailSink, head uint64, hash, rea
 // maxDetail bounds Event.Detail so a whole event stays inside the sink's and the collector's
 // 64 KiB, with room for every other field at its own 512 byte bound.
 const maxDetail = 48 << 10
+
+// validateTrailDetail holds a trail event's detail (trail.go) to the line it names: the content
+// decodes to bytes whose SHA-256, newline included, is line_sha256, and whose length is line_bytes;
+// or it is withheld, and carries none. A detail of an older trail format is refused.
+func validateTrailDetail(detail json.RawMessage) error {
+	var head struct {
+		Format string `json:"format"`
+	}
+	if detail == nil || json.Unmarshal(detail, &head) != nil || !strings.HasPrefix(head.Format, "regalia.trail/") {
+		return nil
+	}
+	if head.Format != TrailFormat {
+		return fmt.Errorf("a trail line in format %q: this collector takes %s", head.Format, TrailFormat)
+	}
+	var line struct {
+		LineSHA256 string  `json:"line_sha256"`
+		LineBytes  int     `json:"line_bytes"`
+		Line       *string `json:"line"`
+		LineBase64 *string `json:"line_base64"`
+		Withheld   string  `json:"withheld"`
+	}
+	if err := json.Unmarshal(detail, &line); err != nil || len(line.LineSHA256) != 64 {
+		return errors.New("a trail detail without its line's hash")
+	}
+	if line.Withheld != "" {
+		if line.Line != nil || line.LineBase64 != nil {
+			return errors.New("a trail detail both withholds its line and carries it")
+		}
+		return nil
+	}
+	var content []byte
+	switch {
+	case line.Line != nil && line.LineBase64 != nil:
+		return errors.New("a trail detail carries its line twice")
+	case line.Line != nil:
+		content = []byte(*line.Line)
+	case line.LineBase64 != nil:
+		decoded, err := base64.StdEncoding.DecodeString(*line.LineBase64)
+		if err != nil {
+			return errors.New("a trail detail's line_base64 is not base64")
+		}
+		content = decoded
+	}
+	sum := sha256.Sum256(append(content, '\n'))
+	if hex.EncodeToString(sum[:]) != line.LineSHA256 || len(content)+1 != line.LineBytes {
+		return errors.New("a trail detail's line is not the line its hash names")
+	}
+	return nil
+}
 
 // validateDetail is validateDraft's rule for Event.Detail (the one-line field in audit.go, where a doc comment would move
 // every line the #237 ledger cites). Detail is omitted when absent, so every event written before it
@@ -282,5 +480,5 @@ func validateDetail(detail json.RawMessage) error {
 	if upper := strings.ToUpper(string(detail)); strings.Contains(upper, "PRIVATE KEY") || strings.Contains(upper, "AGE-SECRET-KEY") {
 		return errors.New("unsafe audit detail")
 	}
-	return nil
+	return validateTrailDetail(detail)
 }
