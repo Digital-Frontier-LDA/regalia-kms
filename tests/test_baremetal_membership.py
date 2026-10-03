@@ -891,8 +891,10 @@ class RecordWrites(unittest.TestCase):
         self.assertEqual((hw.value(), hw.slots()), (10, [(10, "10" * 32)] * 2))
 
     def test_a_missing_slot_is_filled_before_a_wrong_one_holding_a_record_is_deleted(self):
-        """51's fifth read: the upgrade from main (one 40-byte, authwrite record index; the second slot absent)
-        deleted the wrong slot first, so a cut there lost the highest record. A missing slot is now written first."""
+        """51's fifth read: one wrongly attributed slot holding the highest record and the other slot absent (the
+        shape of an upgrade, here with a 48-byte tagged record; main's own 40-byte record is not read at all, see
+        MEMBERSHIP-RECOVERY.md) deleted the wrong slot first, so a cut there lost the highest record. A missing
+        slot is now written first."""
         hw = self.defined()
         hw.anchor(7, lambda epoch: "%02x" % epoch * 32)
         self.tpm(["tpm2_nvundefine", "0x150001a", "-C", "o"])
