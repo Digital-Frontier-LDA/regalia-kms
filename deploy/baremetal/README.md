@@ -736,6 +736,19 @@ removing only what it can prove it made.
   - `regalia.unlock-local` and `regalia.wg-boot-key`, sealed to this TPM (PCR 7, and PCR 11 through the
     initrd key) into the ESP's `loader/credentials`. Their SHA-256 and size are journalled for PCR 12.
   No directory on the way is followed through a link or is writable by others, and no file is replaced.
+  The initrd key is taken only from the root's chain: the approved set must name the image's signing
+  keys (`"signing"`, #267), so a re-signed copy of an approved image is refused.
+- **What stays on disk in the clear, and for how long.**
+  - The WG-BOOT private key stays only until its sealed copy is on the ESP.
+  - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until the peers'
+    LUKS paths are enrolled. That step is not built yet, so today it stays indefinitely: **the paths step
+    must land before any production enrolment.**
+  - Both live on the root volume, which at enrolment is open with the recovery key: encrypted at rest,
+    readable by root while the host runs. Host backups must exclude `/var/lib/regalia-enrol`.
+  - Removal is a plain unlink. Overwriting first buys nothing on ext4 over an SSD with TRIM.
+- **The ESP is written by root only** (it is root's and mounted by root). On FAT there is no link(2), so a
+  sealed file is published by checking the target is absent and renaming onto it; that check assumes no
+  other writer.
 
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):
 - each peer's AK in the attestation state (`attest.Verifier`);

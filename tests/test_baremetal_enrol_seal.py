@@ -169,6 +169,30 @@ class Seal(unittest.TestCase):
             self.seal()
         self.assertEqual(self.on_esp("regalia.unlock-local"), b"replaced by someone\n")
 
+    def test_a_lost_local_contribution_after_a_publish_whose_digest_was_still_pending_is_resealed(self):
+        """regalia-kms-d9's LOW on #265: unlock-local.cred renamed in, the run killed before its digest moved from
+        "pending:" to the file's key, then local.bin lost. The pending digest is exactly what this run published."""
+        real = os.rename
+
+        def rename_then_crash(src, dst):
+            real(src, dst)
+            if dst.endswith("regalia.unlock-local.cred"):
+                raise Crash()
+        with unittest.mock.patch.object(enrol.os, "rename", rename_then_crash):
+            with self.assertRaises(Crash):
+                self.seal()
+        os.unlink(os.path.join(self.dir, enrol.LOCAL_FILE))
+        files = self.seal()
+        self.assertEqual(sorted(files), ["regalia.unlock-local.cred", "regalia.wg-boot-key.cred"])
+
+    def test_no_reseal_once_the_enrolment_record_exists(self):
+        """regalia-kms-d9 on #265: the record publishes PCR 12 to the peers; a reseal after it would strand the node."""
+        self.seal()
+        self.journal.done("record")
+        os.unlink(os.path.join(self.dir, enrol.LOCAL_FILE))
+        with self.assertRaisesRegex(enrol.Refused, "after the enrolment record was written"):
+            self.seal()
+
     def test_a_clear_wg_boot_key_left_by_a_crash_is_removed_on_resume(self):
         self.seal()
         enrol._write_private(self.boot_key, (self.wg_private + "\n").encode())    # as if the unlink never ran
@@ -190,15 +214,20 @@ class ApprovedImage(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.paths = {}
-        for name, data in (("record", json.dumps({"schema": "stand-in"}).encode()), ("initrd", PEM), ("system", b"system key")):
+        self.signing = {"initrd": "1a" * 32, "system": "5b" * 32, "secure_boot_cert": "5c" * 32}
+        self.record = {"schema": "stand-in", "signed": {"pcr_signatures": {"initrd": {"pkfp": "1a" * 32}, "system": {"pkfp": "5b" * 32}},
+                                                         "secure_boot_cert_sha256": "5c" * 32}}
+        for name, data in (("record", json.dumps(self.record).encode()), ("initrd", PEM), ("system", b"system key")):
             self.paths[name] = os.path.join(self.d, name)
             with open(self.paths[name], "wb") as f:
                 f.write(data)
         self.pcr11 = {"initrd": "aa" * 32, "system": "bb" * 32}
 
-    def document(self, pcr11):
+    def document(self, pcr11, signing=True):
         entry = {"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32},
                  "phases": {phase: {"11": value} for phase, value in pcr11.items()}}
+        if signing:
+            entry["signing"] = self.signing if signing is True else signing
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {"a": {"accepted": [entry]}}}
         measurements.validate(document)
         return document
@@ -216,12 +245,25 @@ class ApprovedImage(unittest.TestCase):
             return dict(self.pcr11)
         self.assertEqual(self.approve(self.document(self.pcr11), verify), PEM)
         self.assertEqual(seen["keys"], {"initrd": PEM, "system": b"system key"})
-        self.assertEqual((seen["image"], seen["cert"], seen["record"]), ("image.efi", "sb.crt", {"schema": "stand-in"}))
+        self.assertEqual((seen["image"], seen["cert"], seen["record"]), ("image.efi", "sb.crt", self.record))
 
     def test_an_image_the_measurements_do_not_accept_is_refused(self):
         other = dict(self.pcr11, initrd="cc" * 32)
         with self.assertRaisesRegex(enrol.Refused, "accept no set with this image's PCR 11"):
             self.approve(self.document(other), lambda *a: dict(self.pcr11))
+
+    def test_a_set_that_names_no_signing_keys_is_refused(self):
+        with self.assertRaisesRegex(enrol.Refused, "names no signing keys"):
+            self.approve(self.document(self.pcr11, signing=False), lambda *a: dict(self.pcr11))
+
+    def test_a_re_signed_copy_of_an_approved_image_is_refused(self):
+        """regalia-kms-d9 on #265: the same measured sections, its own .pcrsig, Secure Boot signature and record. The
+        PCR 11 matches; the keys do not."""
+        for field in ("initrd", "system", "secure_boot_cert"):
+            with self.subTest(field):
+                other = dict(self.signing, **{field: "77" * 32})
+                with self.assertRaisesRegex(enrol.Refused, "a re-signed copy of an approved image is not an approved image"):
+                    self.approve(self.document(self.pcr11, signing=other), lambda *a: dict(self.pcr11))
 
     def test_an_image_that_does_not_verify_is_refused(self):
         def verify(*a):

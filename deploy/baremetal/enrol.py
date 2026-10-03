@@ -720,11 +720,15 @@ def _bundle(directory):
 
 
 def approved_image(image, record_path, initrd_pub, system_pub, secure_boot_cert, document, node_id, run=subprocess.run):
-    """The boot image this host's sealed credentials will open in, and the key they are sealed to. The initrd-phase
-    key is never taken as a bare file: uki.verify checks the image against its signed record, both PCR keys
-    against the record and the image's own signatures, and the Secure Boot signature; then the record's PCR 11
-    per phase must be a set the measurements document (which the manifest commits to) accepts for this node.
-    Returns the initrd-phase public key (PEM bytes) to seal to."""
+    """The boot image this host's sealed credentials will open in, and the key they are sealed to, taken ONLY
+    from the root's chain. uki.verify checks the image against its record, both PCR keys and the Secure Boot
+    certificate against the record and the image's own signatures. That proves the files given are consistent,
+    not that anyone approved them: PCR 11 does not cover .pcrsig, so a re-signed copy of an approved image,
+    with its own key and record, measures the same (regalia-kms-d9 on #265). So the set the measurements
+    document accepts for this node (the document the root-signed manifest commits to, measurements.bind) must
+    match the image's PCR 11 per phase AND name, under "signing", the very keys verified here: both PCR keys'
+    pkfp and the Secure Boot certificate's SHA-256 (#267). A set without "signing" is refused: there is no
+    second, typed path to trust a key. Returns the initrd-phase public key (PEM bytes) to seal to."""
     from deploy.baremetal import uki
     with open(record_path, "rb") as f:
         record = membership.load(f.read(membership.MAX_BYTES + 1))
@@ -736,11 +740,20 @@ def approved_image(image, record_path, initrd_pub, system_pub, secure_boot_cert,
         pcr11 = uki.verify(image, record, keys, secure_boot_cert, run)
     except (uki.Refused, membership.Refused) as refusal:
         raise Refused("the boot image is refused: %s" % refusal)
+    # what uki.verify has just proven the given files to be: the keys' pkfp and the certificate's SHA-256
+    verified = {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"], "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
+                "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}
     sets = measurements.validate(document).get(node_id, [])
-    approved = [s for s in sets if {phase: values.get("11") for phase, values in (s.get("phases") or {}).items()} == pcr11]
-    require(approved, "the measurements the manifest commits to accept no set with this image's PCR 11 (%s) for %s: "
+    matched = [s for s in sets if {phase: values.get("11") for phase, values in (s.get("phases") or {}).items()} == pcr11]
+    require(matched, "the measurements the manifest commits to accept no set with this image's PCR 11 (%s) for %s: "
             "the credentials would be sealed to an image this node may not run" % (
                 ", ".join("%s %s" % (p, v[:16]) for p, v in sorted(pcr11.items())), node_id))
+    require(any("signing" in s for s in matched), "the set the measurements accept for this image names no signing keys: the "
+            "initrd key cannot be taken from the root's chain. Regenerate the set from the SIGNED record (uki.py set, #267)")
+    require(any(s.get("signing") == verified for s in matched),
+            "the image is signed with keys the approved set does not name (initrd %s, system %s, Secure Boot %s): a re-signed "
+            "copy of an approved image is not an approved image. Nothing was sealed" % (
+                verified["initrd"][:16], verified["system"][:16], verified["secure_boot_cert"][:16]))
     return keys["initrd"]
 
 
@@ -858,9 +871,14 @@ def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):
     local_path = os.path.join(directory, LOCAL_FILE)
     unlock_file = SEALED[0][0] + espcreds.SUFFIX
     if journal.state("local") == "done" and not os.path.lexists(local_path) and journal.state("paths") != "done":
+        # ORDER: a reseal changes PCR 12, so it is possible only before the enrolment record publishes the sealed
+        # files' digests to the peers (the record comes after "paths"; regalia-kms-d9 on #265)
+        require(journal.state("record") is None, "local.bin is gone after the enrolment record was written: resealing now would "
+                "change the PCR 12 the peers expect. This is a re-enrolment (#76)")
         target = os.path.join(directory_esp, unlock_file)
         facts = {k: v for k, v in journal.get("seal").items() if k not in ("state", "at")}
-        recorded = (facts.get("files") or {}).get(unlock_file, {}).get("sha256") or facts.get(unlock_file)
+        recorded = ((facts.get("files") or {}).get(unlock_file, {}).get("sha256") or facts.get(unlock_file)
+                    or facts.get("pending:" + unlock_file))     # published, then a crash before the digest moved
         if os.path.lexists(target):
             with open(target, "rb") as f:
                 require(recorded is not None and hashlib.sha256(f.read(1 << 20)).hexdigest() == recorded,
