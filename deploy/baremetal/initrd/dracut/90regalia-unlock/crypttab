@@ -1,0 +1,3 @@
+# The root volume of a KMS host (regalia-kms#66): opened in the initrd with the key the unlock client gives
+# on its socket. The same line on every host; the partition is found by its GPT label.
+root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach

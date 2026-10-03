@@ -259,11 +259,16 @@ seal "regalia" {
   cert_path   = "/etc/openbao/kms/seal.crt"
   key_path    = "/etc/openbao/kms/seal.key"
   object_id   = "openbao-seal-example"
-  purpose     = "openbao-seal"
+  kms_purpose = "openbao-seal"
   environment = "staging"
   timeout     = "10s"
 }
 ```
+
+The seal uses `kms_purpose` for the Regalia request's `context.purpose`. OpenBao 2.7.1
+[reserves and removes `purpose`](https://github.com/openbao/openbao/blob/v2.7.1/internal/helper/configutil/kms.go)
+before forwarding the seal configuration to the plugin, so `purpose` cannot supply the KMS grant.
+`kms_purpose` is required; the plugin must not infer it from OpenBao's seal purpose or a default.
 
 External Keys, per namespace:
 
@@ -281,7 +286,8 @@ $ bao write sys/external-keys/configs/regalia/keys/issuing-ca/grants/pki
 
 Validation, the same for both interfaces:
 - Unknown fields are an error (`kms.DecodeConfigMap` with `ErrorUnused`), as are missing ones. There
-  are no defaults for `object_id`, `purpose`, `environment`, `ca_path`, `cert_path` or `key_path`.
+  are no defaults for `object_id`, the KMS purpose (`kms_purpose` in a seal, `purpose` in an
+  External Keys mapping), `environment`, `ca_path`, `cert_path` or `key_path`.
 - `address` must be `https`. The server is verified against `ca_path` only, never the system roots,
   with TLS 1.3.
 - **The environment is never read.** `WithDisallowEnvVars` and `AllowEnvironment: false` are the
@@ -344,8 +350,12 @@ Every KMS call carries a fresh `context.nonce`, the same value as `Idempotency-K
 - **A second seal path** (Shamir fallback, parallel unseal, seal migration) is not claimed. Any of
   them must be shown on the pinned release in #123 before this document mentions it as available.
 - **Restore.** A snapshot restored into fresh nodes needs the plugin's credentials and a KMS that
-  still holds the KEK generation the snapshot was sealed under. `retired` generations keep opening;
-  there is no state yet for a KEK that must refuse to open.
+  still holds an authorized KEK generation the snapshot was sealed under. `retired` generations
+  keep opening; `revoked` generations refuse both seal and release, even if the key still exists.
+  Revoking a predecessor can therefore make older snapshots unrestorable while current storage
+  rewrapped under a permitted generation remains usable. See
+  [`registry.UnwrapAllows` and `SealAllows`](internal/registry/registry.go) and the revocation
+  tests in [`internal/registry/revoked_state_test.go`](internal/registry/revoked_state_test.go).
 
 ## Conformance and qualification
 

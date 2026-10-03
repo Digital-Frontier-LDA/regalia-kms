@@ -6,9 +6,11 @@
 #   e2e/ssh-trust-sshd.sh
 #
 #   1  the example is a configuration sshd accepts, with one host key and no other
-#   2  a certificate from the user CA logs in to the node it names
-#   3  a node cannot answer for another; a retired node's key and a host outside the manifest are refused
-#   4  only a certificate logs in: no bare key, no password
+#   2  a certificate from the user CA logs in to the node it names; either of the two CA keys can issue,
+#      a third cannot, and a CA taken out of the trusted file stops at once
+#   3  a node cannot answer for another; a retired or stolen node's key is refused as REVOKED under every
+#      name and address; a host outside the manifest is refused
+#   4  only a certificate logs in: no bare key, and the server offers no password
 #   5  another CA, an expired or not-yet-valid certificate, an unlisted principal: refused
 #   6  a revoked certificate is refused; without the revocation list or a principals file, nobody logs in
 #   7  the example as written (FIDO-only) refuses a software key
@@ -21,8 +23,8 @@ for t in ssh ssh-keygen python3; do
   command -v "$t" >/dev/null || { echo "ssh-trust-sshd: $t is required (openssh-client, python3)"; exit 2; }
 done
 [ -n "${REGALIA_SSHD:-}" ] || command -v sshd >/dev/null || [ -x /usr/sbin/sshd ] || { echo "ssh-trust-sshd: sshd is required (openssh-server)"; exit 2; }
-out="$(REGALIA_EXPECT_SSHD=1 python3 -m unittest -v tests.test_baremetal_ssh_trust.OnSshd 2>&1)"; rc=$?
+out="$(REGALIA_EXPECT_SSHD=1 python3 -BEs -m unittest -v tests.test_baremetal_ssh_trust.OnSshd 2>&1)"; rc=$?
 printf '%s\n' "$out"
 [ "$rc" = 0 ] || { echo "ssh-trust-sshd: FAILED"; exit 1; }
-grep -q '^Ran 11 tests' <<< "$out" && ! grep -qi 'skipped' <<< "$out" || { echo "ssh-trust-sshd: the sshd tests did not all run"; exit 1; }
-echo "ssh-trust-sshd: 11 passed, 0 failed"
+grep -q '^Ran 12 tests' <<< "$out" && ! grep -qi 'skipped' <<< "$out" || { echo "ssh-trust-sshd: the sshd tests did not all run"; exit 1; }
+echo "ssh-trust-sshd: 12 passed, 0 failed"
