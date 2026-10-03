@@ -13,6 +13,19 @@ and HOW MUCH of it is accepted.
     lease-nonce   the caller's node_id                     a nonce                     attest.Verifier.nonce
     lease         the caller's lease request and its       a lease                     lease.issue
                   fresh quote over that nonce
+    ak-challenge  the caller's EK and AK public areas      a credential, or null if    enrolpeer.challenge
+                                                           its AK (the manifest's) is
+                                                           enrolled here already
+    ak-enroll     the activated secret                     the AK Name enrolled        attest.Verifier.enroll
+    ak-public     -                                        this node's EK and AK       (its own TPM)
+    ak-activate   a credential made to this node's EK/AK   the secret it releases      attest.node_activate
+    path-nonce    -                                        a nonce                     attest.Verifier.nonce
+    path          its boot session, a quote binding an     this node's contribution    enrolpeer.contribution
+                  enrolment key, and that key              wrapped to that key
+
+THE ENROLMENT OPERATIONS (#190) need the node's enrolpeer.Peer; a source without one (the revocation
+authority) refuses them. They are spent from their own rate class, so a node enrolling cannot use up its
+pulls, and another node is not touched at all.
 
 PULL ONLY. Nobody pushes. A node asks each peer and the authority on a timer (Client.pull) and applies
 what it gets through convergence.apply_bundle. A source that lies or withholds can DELAY a node and
@@ -90,13 +103,28 @@ MAX_ANSWER = 1024 * 1024
 MAX_ENVELOPES = 64               # per bundle; convergence allows 1000, which an answer of 1 MiB does not
 REQUEST_FIELDS = {"pull": ("v", "op", "summary", "sequence"),
                   "lease-nonce": ("v", "op", "node_id"),
-                  "lease": ("v", "op", "request", "evidence")}
+                  "lease": ("v", "op", "request", "evidence"),
+                  # a node's enrolment (#190, enrolpeer.py): its AK into this node's verifier, this node's AK into
+                  # its verifier, and this node's half of its LUKS path
+                  "ak-challenge": ("v", "op", "ek_public", "ak_public"),
+                  "ak-enroll": ("v", "op", "secret"),
+                  "ak-public": ("v", "op"),
+                  "ak-activate": ("v", "op", "credential"),
+                  "path-nonce": ("v", "op"),
+                  "path": ("v", "op", "session_id", "evidence", "binding")}
 ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "lease-nonce": ("v", "ok", "nonce"),
-                 "lease": ("v", "ok", "lease")}
+                 "lease": ("v", "ok", "lease"),
+                 "ak-challenge": ("v", "ok", "credential"),
+                 "ak-enroll": ("v", "ok", "ak_name"),
+                 "ak-public": ("v", "ok", "ek_public", "ak_public"),
+                 "ak-activate": ("v", "ok", "secret"),
+                 "path-nonce": ("v", "ok", "nonce"),
+                 "path": ("v", "ok", "enrolment")}
+ENROL_OPS = ("ak-challenge", "ak-enroll", "ak-public", "ak-activate", "path-nonce", "path")
 REFUSAL_FIELDS = ("v", "ok", "refused")
 EVIDENCE_FIELDS = ("ephemeral_public", "nonce", "quote", "signature")
-RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
+RATE = {"address": (30, 60), "any": (20, 60), "lease": (6, 60), "enrol": (12, 60), "drop": (1, 60), "listener": (1, 60)}   # class -> (requests, per seconds); the bucket holds that many
 OPEN = ("address", "drop")       # the classes keyed by a source address: anybody who can connect makes a key
 MAX_BUCKETS = 4096               # address-keyed buckets remembered at once; idle ones are forgotten first
 EVERYBODY = "*"                  # the one key the "too many callers" refusal is counted under
@@ -250,8 +278,10 @@ class Server:
     takes each audit event; `clock()` is this node's wall clock, used only to spare a caller a heartbeat
     that has already expired."""
 
-    def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time):
+    def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None):
+        """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused, as on the authority)."""
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
+        self.enrol, self._offered, self._offered_lock = enrol, {}, threading.Lock()   # ak-public given: caller -> when
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
         self._seen = None       # the manifest of the last request that read the store: see _is_a_node
 
@@ -373,6 +403,11 @@ class Server:
         require(isinstance(op, str) and op in REQUEST_FIELDS, "unknown operation")
         known["kind"] = "sync-" + op
         membership.exact(message, REQUEST_FIELDS[op], op)
+        if op in ENROL_OPS:
+            require(self.enrol is not None and self.attester is not None, "this source takes no enrolments")
+            self._spend(view.late, caller, "enrol")              # its own class: the enrolment ops cannot use up a pull's
+            # every enrolment op, not only the path: a quarantined or revoked node enrols nothing here
+            require(membership.may(manifest, caller, "request"), "%s may not request under epoch %d: no enrolment" % (caller, manifest["epoch"]))
         answer = getattr(self, "_" + op.replace("-", "_"))(view, manifest, caller, message)
         encoded = membership.canonical(dict({"v": VERSION, "ok": True}, **answer))
         require(len(encoded) <= MAX_ANSWER, "the answer would exceed %d bytes" % MAX_ANSWER)
@@ -452,6 +487,60 @@ class Server:
         membership.exact(evidence, EVIDENCE_FIELDS, "evidence")
         self._spend(view.late, caller, "lease")
         return {"lease": lease.issue(manifest, self.node_id, request, self.attester, evidence, self.freshness, self.signer)}
+
+
+    # ---- a node's enrolment (#190): every one of these is from the node the tunnel identified, as above ----
+
+    @staticmethod
+    def _hex(value, limit, label):
+        require(isinstance(value, str) and 2 <= len(value) <= 2 * limit and len(value) % 2 == 0
+                and all(c in "0123456789abcdef" for c in value), "%s must be lowercase hex, at most %d bytes" % (label, limit))
+        return bytes.fromhex(value)
+
+    def _ak_challenge(self, view, manifest, caller, message):
+        from deploy.baremetal import enrolpeer
+        credential = enrolpeer.challenge(self.attester, manifest, caller, self._hex(message["ek_public"], 1024, "ek_public"),
+                                         self._hex(message["ak_public"], 1024, "ak_public"))
+        return {"credential": None if credential is None else credential.hex()}
+
+    def _ak_enroll(self, view, manifest, caller, message):
+        # the manifest read for THIS request: an AK it no longer names is not enrolled (attest.Verifier.enroll)
+        name = self.attester.enroll(caller, self._hex(message["secret"], 32, "secret"), ak_name=pinned_node(manifest, caller)["ak_name"])
+        return {"ak_name": name.hex()}
+
+    def _ak_public(self, view, manifest, caller, message):
+        ek_public, ak_public = self.enrol.identity()
+        with self._offered_lock:
+            self._offered[caller] = time.monotonic()
+        return {"ek_public": ek_public.hex(), "ak_public": ak_public.hex()}
+
+    def _ak_activate(self, view, manifest, caller, message):
+        """This node's TPM opens a credential for the caller: an oracle for whatever a credential to its EK and AK
+        carries (attest.make_credential's invariant: only an AK enrolment challenge). Answered once, and only
+        within NONCE_TTL of this node giving the same caller its public areas, as an enrolment does."""
+        from deploy.baremetal import attest
+        with self._offered_lock:
+            given = self._offered.pop(caller, None)
+        require(given is not None and time.monotonic() - given <= attest.NONCE_TTL,
+                "an activation is answered only just after this node gave %s its AK (ak-public)" % caller)
+        return {"secret": self.enrol.activate(self._hex(message["credential"], 1024, "credential")).hex()}
+
+    def _path_nonce(self, view, manifest, caller, message):
+        return {"nonce": self.attester.nonce(caller).hex()}
+
+    def _path(self, view, manifest, caller, message):
+        from deploy.baremetal import enrolpeer
+        require(isinstance(message["evidence"], dict), "evidence is an object")
+        return {"enrolment": enrolpeer.contribution(manifest, self.node_id, caller, message["session_id"], message["evidence"],
+                                                    self._hex(message["binding"], 1024, "binding"), self.attester, self.freshness,
+                                                    self.enrol.contributions, self.enrol.wraps)}
+
+
+def pinned_node(manifest, node_id):
+    """The manifest's entry for `node_id`."""
+    found = [n for n in manifest["nodes"] if n["node_id"] == node_id]
+    require(len(found) == 1, "%s is not in the manifest" % node_id)
+    return found[0]
 
 
 # ---- the asking side ----

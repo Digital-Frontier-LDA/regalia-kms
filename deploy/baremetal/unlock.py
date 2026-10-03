@@ -315,13 +315,16 @@ class Contributions:
     def epochs(self, target):
         return sorted(int(e) for e in self._read()["targets"].get(target, {}))
 
-    def mint(self, target, epoch):
-        """A new contribution for `target` at path epoch `epoch`, above every one held for it."""
+    def mint(self, target, epoch, existing=False):
+        """A new contribution for `target` at path epoch `epoch`, above every one held for it. With `existing`, the
+        one already held at exactly that epoch is returned instead, decided under the same lock (mint_or_get)."""
         node_id(target, "target")
         path_epoch(epoch)
         with membership._exclusive(self.path + ".lock"):
             state = self._read()
             paths = state["targets"].setdefault(target, {})
+            if existing and str(epoch) in paths:
+                return bytes.fromhex(paths[str(epoch)])
             require(all(int(e) < epoch for e in paths), "path epoch %d is not above the ones held for %s (%s): a path epoch is never reused"
                     % (epoch, target, ", ".join(sorted(paths, key=int))))
             require(len(paths) < MAX_PATHS, "%d contributions are held for %s already: drop the ones no keyslot uses" % (len(paths), target))
@@ -330,6 +333,11 @@ class Contributions:
             paths[str(epoch)] = secret.hex()
             self._write(state)
         return secret
+
+    def mint_or_get(self, target, epoch):
+        """The contribution of path (`target`, `epoch`): the one held, or a new one minted, decided under the lock,
+        so two concurrent requests for one path get one secret (enrolpeer.contribution, #190)."""
+        return self.mint(target, epoch, existing=True)
 
     def drop(self, target, epoch=None):
         """Forget one path of `target` (after its keyslot was killed), or all of them (a retired node)."""
@@ -911,8 +919,17 @@ def contribute(contributions, manifest, peer, target, recipient_der, fingerprint
     require(peer != target, "a node is not its own peer")
     require(isinstance(fingerprint, str) and hmac.compare_digest(hashlib.sha256(recipient_der).hexdigest(), fingerprint.strip().lower()),
             "the enrolment key is not the one whose fingerprint was given: nothing was created")
-    recipient = recipient_key(recipient_der)
+    recipient_key(recipient_der)
     epoch = max([manifest["epoch"]] + [e + 1 for e in contributions.epochs(target)])
     secret = contributions.mint(target, epoch)
-    return {"schema": ENROLMENT_SCHEMA, "target": target, "peer": peer, "path_epoch": epoch,
-            "ciphertext": recipient.encrypt(secret, _oaep(_enrolment_label(target, peer, epoch))).hex()}
+    return wrap(secret, peer, target, epoch, recipient_der)
+
+
+def wrap(secret, peer, target, epoch, recipient_der):
+    """`secret`, the contribution of path `peer` -> `target` at path epoch `epoch`, encrypted to the target's
+    enrolment key: what Enrolment.open takes. contribute() mints and wraps; a peer that already holds the
+    secret of that path re-wraps the same one (enrolpeer.py, #190), never a second distinct secret."""
+    require(isinstance(secret, bytes) and len(secret) == SECRET_BYTES, "a contribution is %d bytes" % SECRET_BYTES)
+    recipient = recipient_key(recipient_der)
+    return {"schema": ENROLMENT_SCHEMA, "target": node_id(target, "target"), "peer": node_id(peer, "peer"),
+            "path_epoch": path_epoch(epoch), "ciphertext": recipient.encrypt(secret, _oaep(_enrolment_label(target, peer, epoch))).hex()}
