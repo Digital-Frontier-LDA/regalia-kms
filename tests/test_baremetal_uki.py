@@ -1078,10 +1078,10 @@ class InitrdReview(Case):
                         "usr/lib/udev/rules.d/a.rules: a link loop")
         self.refused_by(unlock_initrd({"usr/lib/udev/rules.d/c.rules": (0o120777, b"/sysroot/etc/udev/c.rules")}),
                         "usr/lib/udev/rules.d/c.rules: a link to /sysroot/etc/udev/c.rules, which is not in the image")
-        # ".." in a name stays in the image (the kernel unpacks it under /)
+        # ".." in a name is refused outright: the key is the name as written, never the kernel's interpretation of it
         data = unlock_initrd({"../../usr/lib/systemd/system/x.service": hostile})
-        self.assertIn("usr/lib/systemd/system/x.service", uki.initrd_files(data))
-        self.refused_by(data, "inventory: + usr/lib/systemd/system/x.service", against=unlock_initrd())
+        self.refused("with an empty, \".\" or \"..\" part", uki.initrd_files, data)
+        self.refused_by(data, "the initrd cannot be read", against=unlock_initrd())
 
     def test_the_unlock_units_and_their_scripts_name_nothing_outside_the_image(self):
         # the units are ours (pinned), so what they name is checked as the repository holds them
@@ -1133,6 +1133,40 @@ class InitrdReview(Case):
                 review = uki.review_initrd_data(data)
                 self.assertFalse(review["passed"])
                 self.assertTrue(any("the initrd cannot be read" in f and reason in f for f in review["findings"]), review["findings"])
+
+    def test_no_entry_can_hide_behind_another(self):
+        """d9's third read: two names that decode alike (invalid UTF-8) kept one entry, so a hostile hook hid
+        behind a benign one the kernel also unpacks. Names and link targets must be UTF-8, spelled once."""
+        def raw(entries):
+            out, ino = b"", 1
+            for name, mode, data in list(entries) + [(b"TRAILER!!!", 0, b"")]:
+                name += b"\0"
+                out += b"070701" + b"".join(b"%08x" % v for v in (ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(name), 0)) + name
+                out += b"\0" * (-len(out) % 4) + data
+                out += b"\0" * (-len(out) % 4)
+                ino += 1
+            return out
+        base = unlock_initrd()
+        hidden = raw([(b"usr/lib/dracut/hooks/pre-mount/10-\xff.sh", 0o100755, b"#!/bin/sh\ncat /run/regalia-unlock/key.sock\n"),
+                      (b"usr/lib/dracut/hooks/pre-mount/10-\xfe.sh", 0o100755, b"#!/bin/sh\ntrue\n")])
+        review = uki.review_initrd_data(base + hidden, inventory=write_inventory(base, self.d))
+        self.assertFalse(review["passed"])
+        self.assertTrue(any("an entry with a name that is not UTF-8: usr/lib/dracut/hooks/pre-mount/10-\\xff.sh" in f
+                            for f in review["findings"]), review["findings"])
+        # a link whose target is not UTF-8
+        review = uki.review_initrd_data(base + raw([(b"usr/lib/x", 0o120777, b"\xff")]))
+        self.assertTrue(any("the link usr/lib/x points at a target that is not UTF-8: \\xff" in f for f in review["findings"]), review["findings"])
+        # one path spelled two ways, and names the kernel would have to interpret
+        for entries, reason in (([(b"./usr/lib/a", 0o100644, b"1"), (b"usr/lib/a", 0o100644, b"2")], "names usr/lib/a twice, spelled differently"),
+                                ([(b"usr//lib/b", 0o100644, b"1")], "with an empty, \".\" or \"..\" part"),
+                                ([(b"usr/lib/../../c", 0o100644, b"1")], "with an empty, \".\" or \"..\" part"),
+                                ([(b"usr/./lib/d", 0o100644, b"1")], "with an empty, \".\" or \"..\" part")):
+            with self.subTest(reason):
+                review = uki.review_initrd_data(base + raw(entries))
+                self.assertTrue(any(reason in f for f in review["findings"]), review["findings"])
+        # the same spelling twice is the kernel's own rule: the later file replaces the earlier
+        later = base + raw([(b"etc/crypttab", 0o100644, b"root /dev/sda3 none luks\n")])
+        self.assertTrue(any("etc/crypttab must hold exactly" in f for f in uki.review_initrd_data(later)["findings"]))
 
     def test_sign_refuses_an_image_whose_initrd_did_not_pass(self):
         bad = self.write("initrd-bad", unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, b"rd.luks.uuid=1\n")}))

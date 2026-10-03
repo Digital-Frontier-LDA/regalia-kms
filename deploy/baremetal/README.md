@@ -43,26 +43,28 @@ Commissioning has two halves:
 
 ## 3. Operating system (Debian 13)
 
-- **Full-disk encryption** (LUKS2), enrolled to the TPM:
-  `systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 <root partition>`, with
-  `tpm2-device=auto` in `/etc/crypttab`. Measured: `root_disk_tpm_unlocked`.
-  - **A disk enrolled this way FAILS `root_disk_unlock_revocable`, and `host_probe.py` exits 1. That is
-    intended (#135): it is the known blocker for production.** PCR 7 does not change with the kernel, so
-    an old signed kernel image unlocks this disk, reads the host key and opens the HSM PIN. The probe
-    passes only when the unlock can retire an image: a peer's contribution (#67: `regalia-peer-unlock`
+- **Full-disk encryption** (LUKS2), opened in the initrd by the host's TPM **and** one peer (#67): one
+  keyslot per peer path, each opened by a half sealed to this TPM (PCR 7 and the image's signed PCR 11
+  policy) and a half the peer gives only to an image its current, root-signed manifest still lists. A
+  retired image gets the TPM's half and nothing else, so the disk stays locked (#135: shown on a real
+  boot by `e2e/unlock-boot-qemu.sh`, boots 2c and 2d; not yet on a DL360, the #65 checklist section D).
+  The pieces: the enrolment in `deploy/baremetal/unlock.py` (run by `regalia-node enrol commit`, #190,
+  not built yet), the initrd module `deploy/baremetal/initrd/dracut/90regalia-unlock` and the boot-time
+  client `cmd/regalia-unlock`. Measured: `root_disk_unlock_revocable`, `root_disk_tpm_unlocked`.
+  - **Never enrol the TPM alone** (`systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7`). A signed PCR
+    policy has no counter and PCR 7 does not change with the kernel, so every image ever signed would
+    unlock the disk, read the host key and open the HSM PIN. Such a disk FAILS `root_disk_unlock_revocable`,
+    `host_probe.py` exits 1, and there is no option to skip it. The probe passes for `regalia-peer-unlock`
     tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
     peer that holds a path, and a crypttab entry whose key file is the unlock client's socket,
     `/run/regalia-unlock/key.sock`, with only options known to leave the unlock alone (`luks`, `x-initrd.attach`,
     `discard`, `tries=`, `timeout=`, …: no `header=`, no `headless`, no other token device) and no `rd.luks.*` on the
     kernel command line. The probe reads `/etc/crypttab`, which is what the initrd was built from, not necessarily
-    what the initrd holds: rebuild the initrd after every edit. The enrolment exists in
-    `deploy/baremetal/unlock.py`, its boot-time client
-    does not yet), or an
+    what the initrd holds; what the initrd holds is reviewed when the image is built (#198). It also passes for an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
-    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). There is no option to skip the probe.
-    A host that is otherwise commissioned shows this as its only failing control. Signed evidence
-    (section 5) records every measured control as true, so no evidence can be signed for such a host:
-    with `--evidence` the run says the evidence is refused; run it without, to see the one control.
+    `e2e/pcrlock-luks-swtpm.sh`, and is unproven on a real boot). Signed evidence (section 5) records every
+    measured control as true, so no evidence can be signed for a host that fails it: with `--evidence` the run
+    says the evidence is refused; run it without, to see the one control.
   - The probe judges every dm-crypt volume under `/`, under the host key and under the credstore, and
     every token that names a keyslot on them: a second volume, a `clevis` token or a stale token fails
     it, and so does a keyslot that no token names (a passphrase, or a key file) on any of them. For an
@@ -79,7 +81,7 @@ Commissioning has two halves:
   it is never stored on a host. In this order:
   1. `sudo deploy/baremetal/recovery-key.sh --enrol <root partition>`: asks for the installer's
      passphrase, then for the recovery key twice. Then `--check`, with the key read from the **card**.
-  2. Enrol the TPM (above) and reboot once to see the disk unlock unattended.
+  2. Enrol the peer paths (above) and reboot once to see the disk unlock unattended.
   3. Only then wipe the installer's passphrase: `systemd-cryptenroll --wipe-slot=password <root partition>`.
 
   The key is 8 groups of 8 lower-case letters with a dash between groups. **The dashes are part of
@@ -93,9 +95,9 @@ Commissioning has two halves:
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
   `ima_policy_loaded`, which also requires the newest IMA entry for `/usr/local/sbin/regalia-kms` to
   carry the digest of the binary there now (start the service first).
-- **The PIN and the disk are sealed to PCR 7** (Secure Boot state and the keys it trusts), as
-  `systemd-cryptenroll` does by default. A kernel or KMS update does not change PCR 7, so nothing is
-  stranded; turning Secure Boot off, or enrolling other keys, does change it.
+- **The PIN, and the TPM's half of each disk path, are sealed to PCR 7** (Secure Boot state and the keys
+  it trusts). A kernel or KMS update does not change PCR 7, so nothing is stranded; turning Secure Boot
+  off, or enrolling other keys, does change it. Retiring an image is the peers' decision, not the TPM's.
   - **The PIN is sealed to the host key as well** (`/var/lib/systemd/credential.secret`, on the
     encrypted root disk): key type `host+tpm2`. A TPM policy alone cannot retire an image, so the PIN
     must also need the unlocked root disk (PIN-CUSTODY.md, "Why the host key is in the seal"). Losing

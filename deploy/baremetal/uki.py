@@ -389,13 +389,20 @@ def _cpio(data, pos, files):
         start = (name_end + 3) & ~3
         body = data[start:start + size]
         require(namesize >= 1 and len(body) == size and name_end <= len(data), "a cpio archive in the initrd is cut short")
-        name = data[pos + 110:name_end - 1].decode("utf-8", "replace")
+        raw = data[pos + 110:name_end - 1]
         pos = (start + size + 3) & ~3
-        if name == "TRAILER!!!":
+        if raw == b"TRAILER!!!":
             return pos
-        path = os.path.normpath("/" + name).lstrip("/")
-        if not path or path == ".":
+        path = _entry_name(raw)
+        if path is None:
             continue
+        if stat_link(mode):
+            _text(body, "the link %s points at a target" % path)
+        # one key, one spelling: two names that would read as the same path are refused, never merged (d9's read)
+        spelled = getattr(files, "_raw", None)
+        if spelled is not None:
+            require(spelled.setdefault(path, raw) == raw, "the initrd names %s twice, spelled differently (%s and %s)"
+                    % (path, _hexed(spelled[path]), _hexed(raw)))
         if stat_regular(mode) and nlink > 1:
             group = links.setdefault((ino, major, minor), [])
             group.append(path)
@@ -405,6 +412,33 @@ def _cpio(data, pos, files):
                 continue
         files[path] = (mode, body, uid, gid, "%d:%d" % (rmajor, rminor))
         require(len(files) <= MAX_INITRD_FILES, "the initrd holds more than %d files" % MAX_INITRD_FILES)
+
+
+def _hexed(raw):
+    """Raw bytes as printable text: anything but printable ASCII as \\xNN."""
+    return "".join(chr(b) if 0x21 <= b <= 0x7e and b != 0x5c else "\\x%02x" % b for b in raw)
+
+
+def _text(raw, what):
+    """`raw` as UTF-8, or a refusal that shows the bytes: a name decoded loosely could hide one entry behind another."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("%s that is not UTF-8: %s" % (what, _hexed(raw)))
+
+
+def _entry_name(raw):
+    """The key of an entry: its name as written, without a leading "./" or "/"; None for the root itself. A name with
+    an empty, "." or ".." component is refused: it would be the kernel's guess, not the name."""
+    name = _text(raw, "an entry with a name")
+    for prefix in ("./", "/"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    if name in ("", "."):
+        return None
+    parts = name.rstrip("/").split("/")
+    require(all(p not in ("", ".", "..") for p in parts), "the initrd holds an entry named %s, with an empty, \".\" or \"..\" part" % _hexed(raw))
+    return "/".join(parts)
 
 
 def _stream(data, run, tools):
@@ -437,11 +471,14 @@ def _stream(data, run, tools):
                   "reads (gzip, xz, zstd, lz4)" % 0)
 
 
-def initrd_files(data, run=subprocess.run, tools=TOOLS, depth=0):
+def initrd_files(data, run=subprocess.run, tools=TOOLS, depth=0, files=None):
     """Every file of an initrd as the kernel unpacks it (init/initramfs.c): cpio archives and compressed
     streams one after another, NUL padding between them, to the end; a later file replaces an earlier one.
     A compressed stream holds cpio archives (and padding) only. Read in memory, nothing is written."""
-    files, pos = {}, 0
+    if files is None:
+        files = _Files()
+        files._raw = {}                     # key -> the raw name it was first spelled with, across every segment
+    pos = 0
     while pos < len(data):
         if data[pos] == 0:
             pos += 1
@@ -454,7 +491,7 @@ def initrd_files(data, run=subprocess.run, tools=TOOLS, depth=0):
             inner, rest = _stream(data[pos:], run, tools)
         except Refused as refused:
             raise Refused(str(refused).replace("at byte 0", "at byte %d" % pos))
-        files.update(initrd_files(inner, run, tools, depth + 1))
+        initrd_files(inner, run, tools, depth + 1, files)
         data, pos = rest, 0
     return files
 
@@ -620,7 +657,7 @@ def entries(files):
     out = {}
     for path, (mode, body, uid, gid, rdev) in files.items():
         kind = kinds.get(mode & 0o170000, "?")
-        value = sha256(body) if kind == "f" else _escape(body.decode("utf-8", "replace")) if kind == "l" else rdev if kind in "cb" else "-"
+        value = sha256(body) if kind == "f" else _escape(_text(body, "a link target")) if kind == "l" else rdev if kind in "cb" else "-"
         out[_escape(path)] = "%s %04o %d:%d %s" % (kind, mode & 0o7777, uid, gid, value)
     return out
 

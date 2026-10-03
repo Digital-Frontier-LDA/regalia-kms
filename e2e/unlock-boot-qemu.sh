@@ -22,6 +22,13 @@
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key from the socket, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
+#   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
+#           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
+#           unattended, as boot 2.
+#   boot 2d THE SAME IMAGE, RETIRED: the document lists the current image only. The TPM releases the local
+#           half all the same (its signed PCR 11 policy has no counter), both peers refuse the quote naming
+#           PCR 11, nothing is given, the disk stays locked and the console asks for the recovery key.
+#           Boot 2b then boots the current image again: retiring one image strands nothing.
 #   boot 2b A CREDENTIAL FROM SMBIOS (a unit drop-in, as the firmware could pass one): not acted on, since
 #           the image's command line stops systemd importing credentials; the unlock goes on.
 #   boots 3-6  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line, an empty
@@ -190,7 +197,19 @@ chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki bui
   && python3 -Es -m deploy.baremetal.uki sign $IN --record /tmp/uki/out/e2e.record.json --second-record /tmp/uki/second/e2e.record.json --out /tmp/uki/out $KEYS" >"$W/uki.log" 2>&1 \
   || { cat "$W/uki.log"; echo "unlock-boot-qemu: the image did not build or sign"; exit 2; }
 grep 'PCR 11' "$W/uki.log" || true
+# A SECOND SIGNED IMAGE of the same build (#135): the same initrd and kernel, one inert word more on its command
+# line, so another PCR 11, signed by the same keys. The TPM's signed PCR 11 policy accepts both; only the peers'
+# measurement document tells them apart. Boots 2c and 2d approve it and then retire it.
+printf '%s regalia.e2e-image=old\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-old"
+IN_OLD="${IN/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-old }"
+# shellcheck disable=SC2086  # the two lists are words on purpose
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki sign $IN_OLD --record /tmp/uki/out/e2e-old.record.json --second-record /tmp/uki/second/e2e-old.record.json --out /tmp/uki/out $KEYS" >"$W/uki-old.log" 2>&1 \
+  || { cat "$W/uki-old.log"; echo "unlock-boot-qemu: the second image did not build or sign"; exit 2; }
 cp "$ROOT/tmp/uki/out/e2e.efi" "$W/e2e.efi"; cp "$ROOT/tmp/uki/out/e2e.signed.json" "$W/e2e.record.json"; cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"
+cp "$ROOT/tmp/uki/out/e2e-old.efi" "$W/e2e-old.efi"; cp "$ROOT/tmp/uki/out/e2e-old.signed.json" "$W/e2e-old.record.json"
+cmp -s "$W/e2e.efi" "$W/e2e-old.efi" && { echo "unlock-boot-qemu: the two images are the same file"; exit 2; }
 rm -rf "$ROOT/tmp/uki" "$W/keys"
 for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
@@ -217,7 +236,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### ten boots"
+echo "### twelve boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
@@ -228,4 +247,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 10 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer and the recovery key)"
+echo "unlock-boot-qemu: 12 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an older signed image approved and then retired (refused, the disk stays locked), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer and the recovery key)"
