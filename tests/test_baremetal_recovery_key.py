@@ -66,6 +66,13 @@ class RecoveryKey(unittest.TestCase):
                     'exit "$rc"\n' % (self.argv_log, self.argv_log, CRYPTSETUP))
         os.chmod(shim, os.stat(shim).st_mode | stat.S_IXUSR)
 
+    def fresh(self):
+        """A new image for the next subtest, after removing the last one: setUp() again on its own would
+        keep every subtest's 32 MiB image until the test ends, and a full /tmp then fails luksFormat
+        ("Device wipe error"), which looked like a flaky signal test under load."""
+        self.doCleanups()
+        self.setUp()
+
     def secret(self, value):
         path = os.path.join(self.dir, "secret-%d" % len(os.listdir(self.dir)))
         with open(path, "w", encoding="ascii") as f:
@@ -277,7 +284,7 @@ class RecoveryKey(unittest.TestCase):
         for name, how in {"the used keyslot could not be destroyed": {"fail_subcommand": "luksKillSlot --key-file"},
                           "the script was killed at that step": {"kill": "luksKillSlot --key-file"}}.items():
             with self.subTest(name=name):
-                self.setUp()
+                self.fresh()
                 self.enrolled()
                 self.cs("luksKillSlot", "--batch-mode", self.img, "0")
                 done = self.run_script("replace", KEY, NEW_KEY, **how)
@@ -618,7 +625,7 @@ class RecoveryKey(unittest.TestCase):
         for name, fault in {"killed before the mark": dict(kill="token import"),
                             "killed after the mark": dict(kill="--test-passphrase --key-slot 1")}.items():
             with self.subTest(name=name):
-                self.setUp()
+                self.fresh()
                 self.assertEqual(self.run_script("enrol", INSTALLER, KEY, **fault).returncode, -9)
                 done = self.run_script("enrol", INSTALLER, KEY)
                 self.assertEqual(done.returncode, 0, done.stderr)
@@ -844,7 +851,7 @@ class RecoveryKey(unittest.TestCase):
             "INT with standard error closed": dict(signal_after="INT:token import", close_stderr=True),
         }.items():
             with self.subTest(name=name):
-                self.setUp()
+                self.fresh()
                 code, stderr = self.interrupted("enrol", [INSTALLER, KEY], **run)
                 self.assertEqual(code, 0, stderr)
                 self.assertTrue(self.opens(KEY))
@@ -853,7 +860,7 @@ class RecoveryKey(unittest.TestCase):
                           "TERM after the used keyslot is destroyed": dict(signal_after="TERM:luksKillSlot --key-file"),
                           "INT while it is destroyed": dict(signal_at="INT:luksKillSlot --key-file")}.items():
             with self.subTest(name=name):
-                self.setUp()
+                self.fresh()
                 self.enrolled()
                 self.cs("luksKillSlot", "--batch-mode", self.img, "0")
                 code, stderr = self.interrupted("replace", [KEY, NEW_KEY], **run)
