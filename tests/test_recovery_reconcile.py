@@ -1,5 +1,6 @@
 """Explicit operator choices must never delete unproved or unselected slots."""
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -103,6 +104,11 @@ class KilledInsideTheRetirement(unittest.TestCase):
         self.cs('luksAddKey', '--batch-mode', *fast, '--key-file', self.secret('installer'), '--new-key-slot', '2', self.img, self.secret(NEW))
         subprocess.run([CRYPTSETUP, 'token', 'import', '--json-file', '-', self.img], input='{"type":"systemd-recovery","keyslots":["1"]}',
                        capture_output=True, text=True, check=True, timeout=60)
+        # killed before luksKillSlot starts: the mark is written, the slot untouched (#255)
+        self.killing_before = os.path.join(self.dir, 'cryptsetup-killed-before-the-kill')
+        with open(self.killing_before, 'w', encoding='ascii') as f:
+            f.write('#!/bin/bash\n[ "$1" = luksKillSlot ] && { kill -KILL "$PPID"; exit 137; }\nexec "%s" "$@"\n' % CRYPTSETUP)
+        os.chmod(self.killing_before, 0o700)
         self.killing = os.path.join(self.dir, 'cryptsetup-killed-at-the-wipe')
         with open(self.killing, 'w', encoding='ascii') as f:
             f.write(SHIM % (STRACE, CRYPTSETUP, CRYPTSETUP))
@@ -127,11 +133,39 @@ class KilledInsideTheRetirement(unittest.TestCase):
     def opens(self, value, slot=None):
         return self.cs('open', '--test-passphrase', '--key-file', self.secret(value), *(['--key-slot', slot] if slot else []), self.img, ok=False).returncode
 
-    def reconcile(self, kill=False):
+    def reconcile(self, kill=False, retired_card=OLD):
         source = Path(__file__).resolve().parents[1] / 'deploy/baremetal/recovery-reconcile.py'
-        return subprocess.run(['python3', '-I', '-c', WORKER, str(source), self.killing if kill else CRYPTSETUP, self.dir, self.img,
+        shim = {False: CRYPTSETUP, True: self.killing, 'before': self.killing_before}[kill]
+        return subprocess.run(['python3', '-I', '-c', WORKER, str(source), shim, self.dir, self.img,
                                '--keep-slot', '2', '--retire-slot', '1'],
-                              input=NEW + '\n' + OLD + '\n', capture_output=True, text=True, timeout=120)
+                              input=NEW + '\n' + retired_card + '\n', capture_output=True, text=True, timeout=120)
+
+    def area(self, slot):
+        """The SHA-256 of a keyslot's key area in the image now."""
+        area = self.header()['keyslots'][slot]['area']
+        with open(self.img, 'rb') as f:
+            f.seek(int(area['offset']))
+            return hashlib.sha256(f.read(int(area['size']))).hexdigest()
+
+    def test_a_wrong_card_after_a_cut_between_the_mark_and_the_kill_is_refused(self):
+        """#255 (d9): killed after the mark is written and before luksKillSlot starts, the retired slot is
+        intact; a wrong card opens nothing there too. The mark's area digest says the slot is unchanged, so
+        the wrong card is refused and the slot kept; its own card then finishes the retirement."""
+        killed = self.reconcile(kill='before')
+        self.assertEqual(killed.returncode, -9, killed.stderr)
+        kept = [t for t in self.header()['tokens'].values() if t['keyslots'] == ['2']]
+        self.assertEqual(kept[0]['regalia_retiring'][0][2], self.area('1'), 'the premise: marked, and the slot untouched')
+        self.assertEqual(self.opens(OLD, '1'), 0, 'the premise: the slot is intact')
+        wrong = 'rtuvcbde-fghijkln-bcdefghi-jklnrtuv-vvttrrnn-llkkjjii-hhggffee-ddccbbcc'
+        before = self.header()
+        refused = self.reconcile(retired_card=wrong)
+        self.assertIn('whose key material is as it was when it was marked', refused.stderr)
+        self.assertEqual(self.header(), before, 'a wrong card changed the header')
+        self.assertEqual(self.opens(OLD, '1'), 0, 'the intact slot was retired by a wrong card')
+        done = self.reconcile()
+        self.assertNotIn('REFUSED', done.stderr)
+        self.assertEqual(sorted(self.header()['keyslots']), ['0', '2'])
+        self.assertEqual(self.opens(OLD), 2)
 
     def test_the_same_selection_finishes_a_retirement_killed_after_the_wipe(self):
         killed = self.reconcile(kill=True)
@@ -141,7 +175,10 @@ class KilledInsideTheRetirement(unittest.TestCase):
         self.assertEqual(self.opens(OLD, '1'), 2, 'the premise: its key material is gone')
         kept = [t for t in meta['tokens'].values() if t['keyslots'] == ['2']]
         self.assertEqual(len(kept), 1)
-        self.assertEqual(kept[0]['regalia_retiring'], [['1', meta['keyslots']['1']['kdf']['salt']]])
+        # the mark names the slot by number and salt, and its key material as it was before the cut wipe (#255)
+        (mark,) = kept[0]['regalia_retiring']
+        self.assertEqual(mark[:2], ['1', meta['keyslots']['1']['kdf']['salt']])
+        self.assertNotEqual(mark[2], self.area('1'), 'the premise: the cut wipe changed the slot\'s key material')
         done = self.reconcile()
         self.assertEqual(done.returncode, 1, done.stderr)   # 1: the installer's passphrase is still an unlabelled slot
         self.assertNotIn('REFUSED', done.stderr)
