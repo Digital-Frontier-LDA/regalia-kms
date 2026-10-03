@@ -39,6 +39,7 @@ INSTALLED = pathlib.Path("/etc/systemd/system/regalia-audit-ship@.service")
 DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@sync.service.d")
 UNITS = HERE.parent / "deploy" / "baremetal" / "units"
 METRICS = pathlib.Path("/var/lib/regalia-audit-ship/sync.prom")
+HEAD = pathlib.Path("/var/lib/regalia-audit-ship/sync.head.json")      # the unit's -head, for prune
 PORT = 18443
 WORK = pathlib.Path("/var/lib/audit-ship-e2e")   # not under /tmp: the unit has PrivateTmp=yes and would not see it
 passed, failed = 0, 0
@@ -222,7 +223,7 @@ def main():
         for unit in (INSTANCE, COLLECTOR_UNIT):
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
-        for path in (DROPIN / "reader.conf", INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS):
+        for path in (DROPIN / "reader.conf", INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS, HEAD):
             if path.exists():
                 path.unlink()
         for directory in (DROPIN, ETC, METRICS.parent):
