@@ -83,7 +83,25 @@ type Collector struct {
 
 	mu      sync.Mutex
 	streams map[string]*collectorStream
+	// reported counts each identity's client-reported alarms in the current window (handleReportedAlarm).
+	reported map[string]*reportedWindow
 }
+
+// reportedWindow is one identity's count of client-reported alarms since start.
+type reportedWindow struct {
+	start   time.Time
+	count   int
+	flooded bool
+}
+
+// A client may report at most reportedAlarmLimit alarms per reportedAlarmWindow. Variables, so a
+// test can shorten them. One alarm a minute for an hour is more than any honest shipper raises:
+// each instance stops after its first.
+var (
+	reportedAlarmLimit  = 20
+	reportedAlarmWindow = time.Hour
+	collectorNow        = time.Now
+)
 
 // collectorStream is one daemon's committed chain: identity (client certificate
 // fingerprint) plus site header, the key the protocol document names. The file is the
@@ -132,7 +150,7 @@ func OpenCollector(stateDir string) (*Collector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("collector alarm log: %w", err)
 	}
-	collector := &Collector{stateDir: stateDir, alarms: alarms, streams: map[string]*collectorStream{}}
+	collector := &Collector{stateDir: stateDir, alarms: alarms, streams: map[string]*collectorStream{}, reported: map[string]*reportedWindow{}}
 	identities, err := os.ReadDir(streamsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("collector state directory: %w", err)
@@ -580,6 +598,17 @@ func (c *Collector) handleReportedAlarm(writer http.ResponseWriter, request *htt
 		})
 		return
 	}
+	switch c.admitReportedAlarm(identity, commonName, site) {
+	case reportRefused:
+		http.Error(writer, "too many alarms reported by this client: refused until the window ends", http.StatusTooManyRequests)
+		return
+	case reportFlood:
+		c.reject(request, writer, http.StatusTooManyRequests, collectorAlarm{
+			Identity: identity, CommonName: commonName, Site: site,
+			Reason: fmt.Sprintf("alarm flood: this client reported more than %d alarms within %s; further reports are refused until the window ends", reportedAlarmLimit, reportedAlarmWindow),
+		})
+		return
+	}
 	alarm := collectorAlarm{
 		Timestamp: time.Now().UTC(), Identity: identity, CommonName: commonName, Site: site,
 		Sequence: reported.Sequence, EventHash: reported.Hash, Reason: "reported by the client: " + reported.Reason,
@@ -589,6 +618,44 @@ func (c *Collector) handleReportedAlarm(writer http.ResponseWriter, request *htt
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+const (
+	reportAdmitted = iota
+	reportFlood    // the first report past the limit: the collector records one alarm of its own
+	reportRefused  // every later one in the window: refused, nothing written
+)
+
+// admitReportedAlarm counts a client-reported alarm against its identity's window. A client
+// certificate that is compromised can otherwise fill the alarm log; this bounds it to
+// reportedAlarmLimit lines and one flood alarm a window. The table holds one entry per identity
+// seen in the window: identities are certificates this collector's CA issued, and expired windows
+// are dropped as it grows.
+func (c *Collector) admitReportedAlarm(identity, commonName, site string) int {
+	now := collectorNow()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.reported) >= 1024 {
+		for key, window := range c.reported {
+			if now.Sub(window.start) >= reportedAlarmWindow {
+				delete(c.reported, key)
+			}
+		}
+	}
+	window := c.reported[identity]
+	if window == nil || now.Sub(window.start) >= reportedAlarmWindow {
+		window = &reportedWindow{start: now}
+		c.reported[identity] = window
+	}
+	if window.count < reportedAlarmLimit {
+		window.count++
+		return reportAdmitted
+	}
+	if window.flooded {
+		return reportRefused
+	}
+	window.flooded = true
+	return reportFlood
 }
 
 // syncDir fsyncs a directory so newly created entries in it survive a crash. Data-only syncs

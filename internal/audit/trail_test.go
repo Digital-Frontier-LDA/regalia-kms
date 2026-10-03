@@ -359,3 +359,50 @@ func TestTheTrailMappingIsPinned(t *testing.T) {
 		}
 	}
 }
+
+func TestReportedAlarmsAreCappedPerIdentity(t *testing.T) {
+	limit, window, now := reportedAlarmLimit, reportedAlarmWindow, collectorNow
+	defer func() { reportedAlarmLimit, reportedAlarmWindow, collectorNow = limit, window, now }()
+	clock := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	reportedAlarmLimit, reportedAlarmWindow, collectorNow = 3, time.Hour, func() time.Time { return clock }
+	stateDir := t.TempDir()
+	collector, err := OpenCollector(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	first := collectorTestCertificate(t, "first")
+	second := collectorTestCertificate(t, "second")
+	report := func(certificate *x509.Certificate) int {
+		request := httptest.NewRequest("POST", "/v1/alarms", strings.NewReader(`{"reason":"cut short"}`))
+		request.Header.Set("X-Regalia-Site", "sitea.sync")
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}}
+		recorder := httptest.NewRecorder()
+		collector.Handler().ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+	var codes []int
+	for i := 0; i < 5; i++ {
+		codes = append(codes, report(first))
+	}
+	if fmt.Sprint(codes) != "[204 204 204 429 429]" {
+		t.Fatalf("five reports in a window answered %v", codes)
+	}
+	reasons := collectorAlarmReasons(t, stateDir)
+	floods := 0
+	for _, reason := range reasons {
+		if strings.Contains(reason, "alarm flood") {
+			floods++
+		}
+	}
+	if len(reasons) != 4 || floods != 1 {
+		t.Fatalf("the alarm log holds %d lines, %d of them a flood: %q", len(reasons), floods, reasons)
+	}
+	if code := report(second); code != 204 {
+		t.Fatalf("another identity was refused: %d", code)
+	}
+	clock = clock.Add(time.Hour)
+	if code := report(first); code != 204 {
+		t.Fatalf("a new window refused: %d", code)
+	}
+}
