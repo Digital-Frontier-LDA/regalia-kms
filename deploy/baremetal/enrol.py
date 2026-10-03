@@ -595,8 +595,9 @@ def run_as_sync(config_path, chain, run=subprocess.run):
     """anchor_and_store, in a process of regalia-sync with the tss group (the TPM), started from the package
     root so `-m` finds it. The chain goes on its standard input: the enrolment directory is root's (0700),
     and regalia-sync could not read a file there. The journal stays with the caller."""
-    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", sys.executable, "-Es", "-m",
-                "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"],
+    # env -i: nothing of root's environment reaches the step (the TCTI comes from node.json, not from here)
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"],
                cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode())
     require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
@@ -615,15 +616,23 @@ def commit(directory, chain, root_key, typed, document, site, example, run=subpr
     manifest = check_manifest(directory, chain, root_key, typed, document)
     config = install_config(journal, journal.doc["node_id"], root_key, example, site, document, prefix)
     state = prefix + config["state_dir"]
-    if not os.path.isdir(state):
-        os.makedirs(state, 0o755)
+    if not os.path.lexists(state):
+        os.makedirs(os.path.dirname(state), 0o755, exist_ok=True)
+        os.mkdir(state, 0o755)
     if as_sync is None:
         import pwd
         user = pwd.getpwnam(SYNC_USER)
-        st = os.lstat(state)
-        if st.st_uid != user.pw_uid:
-            require(not os.listdir(state), "%s is not %s's and is not empty: enrolment does not take it over" % (state, SYNC_USER))
-            os.chown(state, user.pw_uid, user.pw_gid)
+        # by descriptor, on a directory opened without following a link: what is checked is what is changed
+        fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            st = os.fstat(fd)
+            if (st.st_uid, st.st_gid) != (user.pw_uid, user.pw_gid):
+                require(st.st_uid == 0 and not os.listdir(fd), "%s is neither %s's nor an empty directory of root's: "
+                        "enrolment does not take it over" % (state, SYNC_USER))
+                os.fchown(fd, user.pw_uid, user.pw_gid)
+                os.fchmod(fd, 0o755)
+        finally:
+            os.close(fd)
     journal.started("anchor")
     epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
