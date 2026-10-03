@@ -99,7 +99,11 @@ def validate(doc):
             "tcti must be null (the kernel's resource manager) or a TCTI string")
     for k in ("nv_epoch", "nv_sequence"):
         require(isinstance(doc[k], str) and re.fullmatch(r"0x01[0-9a-fA-F]{6}", doc[k]) is not None, "%s must be an NV index 0x01xxxxxx" % k)
-    require(abs(int(doc["nv_epoch"], 16) - int(doc["nv_sequence"], 16)) >= 5, "nv_epoch (five indices with its record) and nv_sequence must not overlap")
+    # what each occupies, from the classes that define them (the anchor: counter, base, two record slots; the
+    # sequence counter: counter and base), never retyped here (#244)
+    anchor = {int(i, 16) for i in membership.HighWater(doc["nv_epoch"])._indices()}
+    sequence = {int(i, 16) for i in heartbeat.Counter(doc["nv_sequence"])._indices()}
+    require(not anchor & sequence, "nv_epoch and nv_sequence must not overlap (both take %s)" % ", ".join("0x%x" % i for i in sorted(anchor & sequence)))
     for k in ("state_dir", "run_dir", "wg_service_key", "control_socket"):
         require(isinstance(doc[k], str) and doc[k].startswith("/"), "%s must be an absolute path" % k)
     signer = doc["signer"]
