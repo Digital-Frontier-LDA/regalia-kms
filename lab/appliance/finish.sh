@@ -129,6 +129,13 @@ update-grub
 # locales post-removal deletes its old config; write the builtin locale after
 # all package cleanup has finished. C.UTF-8 is supplied by libc, without locales.
 printf '%s\n' 'LANG=C.UTF-8' >/etc/locale.conf
+# No appliance account needs SUID mounting. Persist root-only privilege through
+# future dpkg updates, rather than only chmodding the current package files.
+# A pre-existing override is unexpected on this fresh template and must refuse.
+for binary in /usr/bin/mount /usr/bin/umount; do
+  test -f "$binary" && test ! -L "$binary"
+  dpkg-statoverride --update --add root root 0755 "$binary"
+done
 apt-get clean
 rm -rf /root/go /root/.cache /tmp/regalia-build /tmp/regalia-source /tmp/regalia-source.tar
 rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed

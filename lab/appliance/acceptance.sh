@@ -49,6 +49,38 @@ done
 check grep -qx 'LANG=C.UTF-8' /etc/locale.conf
 check sh -c 'systemctl show-environment | grep -qx "LANG=C.UTF-8"'
 check test -r /var/log/regalia-minimization.json
+# Root already mounts the export disk below. The same helpers must not grant
+# mounting privileges to a plain appliance UID, outside daemon-specific NNP.
+check python3 - <<'PY'
+import os
+import pathlib
+import pwd
+import stat
+import subprocess
+for name in ('mount', 'umount'):
+    binary = pathlib.Path('/usr/bin') / name
+    info = binary.lstat()
+    assert stat.S_ISREG(info.st_mode) and info.st_uid == info.st_gid == 0
+    assert stat.S_IMODE(info.st_mode) == 0o755
+    override = subprocess.check_output(['/usr/bin/dpkg-statoverride', '--list', str(binary)], text=True).split()
+    assert len(override) == 4 and override[:2] == ['root', 'root']
+    assert int(override[2], 8) == 0o755 and override[3] == str(binary)
+target = pathlib.Path('/run/regalia-nonroot-mount')
+target.mkdir(mode=0o755)
+account = pwd.getpwnam('regalia-kms')
+def ordinary_uid():
+    os.setgroups([])
+    os.setgid(account.pw_gid)
+    os.setuid(account.pw_uid)
+attempt = subprocess.run(['/usr/bin/mount', '--bind', '/etc', str(target)],
+                         preexec_fn=ordinary_uid, capture_output=True, text=True, timeout=10,
+                         env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL': 'C'})
+assert attempt.returncode != 0
+assert 'superuser' in attempt.stderr or 'permission denied' in attempt.stderr.lower()
+assert not os.path.ismount(target)
+target.rmdir()
+print('REGALIA_NONROOT_MOUNT_DENIED')
+PY
 # Temporarily start the real daemon with a public fixture and no credentials.
 # It must run under the installed policy while remaining cryptographically unready.
 # These public fixtures are removed before exporting the reusable disk.
