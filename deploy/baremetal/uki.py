@@ -16,7 +16,8 @@ record of what it will measure, and signed in a separate step by keys that are o
     build also takes --unlock-client FILE, the client the build compiled, which the image's must be
 
     INPUTS: --linux VMLINUZ --initrd INITRD [--microcode FILE] --cmdline FILE --os-release FILE
-            --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub
+            --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub --initrd-build INITRD-BUILD.json
+            (the initrd and its build record from deploy/baremetal/initrd/build-initrd.sh, #248)
 
 WHAT IS MEASURED. systemd-stub extends PCR 11 with every section of the image it boots, in a fixed order,
 and systemd then extends it with the name of each boot phase. So one image has one PCR 11 value in the
@@ -891,7 +892,39 @@ def check_review(review):
             and all(attest.is_hex(v, 64) for v in review["clients"].values()), "record.initrd_review.clients is not a map of the client binaries")
     require(review["inventory_sha256"] is None or attest.is_hex(review["inventory_sha256"], 64), "record.initrd_review.inventory_sha256 is not a sha256")
 
-INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey")
+INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey", "initrd_build")
+OPTIONAL_INPUTS = ("microcode",)
+# The initrd's build record (deploy/baremetal/initrd/build-initrd.sh, #248). Every builder builds the initrd
+# itself, from pinned inputs, and gets the same bytes and the same record; the record names what the initrd
+# came from. As an input it is pinned by its sha256 like the others, so the two builders' identical image
+# records also agree on the commit, the Go release, the snapshot and the package set; and it must name THIS
+# initrd and THIS client, or the image is not built and not signed.
+INITRD_BUILD_SCHEMA = "regalia.initrd-build/v1"
+INITRD_BUILD_KEYS = ("schema", "commit", "go", "snapshot", "source_date_epoch", "suite", "kernel", "dracut", "packages_requested",
+                     "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries")
+
+
+def check_initrd_build(inputs, client_sha256):
+    """The initrd's build record, read and held to the initrd and the client given; None when there is none
+    (a library caller's test fixture: the build and sign commands require one)."""
+    if not inputs.get("initrd_build"):
+        return None
+    built = membership.load(read(inputs["initrd_build"], 16 * 1024 * 1024), 16 * 1024 * 1024)
+    membership.exact(built, INITRD_BUILD_KEYS, "the initrd's build record")
+    require(built["schema"] == INITRD_BUILD_SCHEMA, "the initrd's build record is not a %s" % INITRD_BUILD_SCHEMA)
+    require(isinstance(built["commit"], str) and re.fullmatch(r"[0-9a-f]{40}", built["commit"]) is not None,
+            "the initrd's build record names no commit (40 hex)")
+    require(isinstance(built["go"], str) and re.fullmatch(r"go1\.[0-9]+\.[0-9]+", built["go"]) is not None,
+            "the initrd's build record names no exact Go release")
+    require(isinstance(built["snapshot"], str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", built["snapshot"]) is not None,
+            "the initrd's build record names no archive snapshot")
+    for field in ("client_sha256", "initrd_sha256", "packages_sha256"):
+        require(attest.is_hex(built[field], 64), "the initrd's build record has no %s" % field)
+    require(built["initrd_sha256"] == sha256(read(inputs["initrd"])),
+            "the initrd's build record is for another initrd (%s, not --initrd's %s)" % (built["initrd_sha256"], sha256(read(inputs["initrd"]))))
+    require(client_sha256 is not None and built["client_sha256"] == client_sha256,
+            "the initrd's build record names another unlock client (%s, not %s)" % (built["client_sha256"], client_sha256))
+    return built
 
 
 def _stage(inputs, work):
@@ -993,6 +1026,7 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS, invento
         values, _ = _predict(parts, run, tools, work)
         # the staged copy: the bytes just measured
         review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None)
+        check_initrd_build(inputs, sha256(read(unlock_client)) if unlock_client else None)
         record = {
             "schema": SCHEMA, "name": name, "uname": uname,
             "inputs": {k: {"sha256": sha256(read(inputs[k])), "size": os.path.getsize(inputs[k])} for k in INPUTS if inputs.get(k)},
@@ -1138,6 +1172,9 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
     require(second_record is not None, "a second builder's record is required: one builder alone does not decide what is signed")
     load_record(membership.canonical(second_record), signed=False)
     require(membership.canonical(second_record) == membership.canonical(record), "the two builders' records differ: nothing is signed")
+    # #248: an image is signed only from a reproducible initrd, whatever calls this (not only the command line)
+    require("initrd_build" in record["inputs"], "the record names no initrd build record (--initrd-build): an image is signed only "
+            "from an initrd every builder built itself (#248), so nothing is signed")
     # #198: no image is signed whose initrd was not reviewed and found to open the disk only as it must
     require(record["initrd_review"]["passed"], "the record's initrd review did not pass, so nothing is signed: %s"
             % "; ".join(record["initrd_review"]["findings"]))
@@ -1168,6 +1205,7 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
         require(mine == record["initrd_review"],
                 "this machine's review of the initrd is not the record's: nothing is signed")
+        check_initrd_build(inputs, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
         # the third build: this machine must get the bytes the record names before it signs anything
         data = _ukify(inputs, uname, os.path.join(work, "unsigned.efi"), run, tools)
         require(sha256(data) == record["unsigned_sha256"], "this machine built another image than the record's (%s, not %s): "
@@ -1299,7 +1337,7 @@ def measurement_set(record, label, firmware, pcrs, credentials):
     in the unlock boot test, #215). It is never given by hand: a set that should hold it is made from the
     files. It is REQUIRED: a set without it would leave PCR 12 unattested, the gap #66 closed, and after
     stage B2 a host with no credentials cannot be unlocked unattended anyway."""
-    load_record(membership.canonical(record))
+    load_record(membership.canonical(record), signed=True)
     require(isinstance(pcrs, dict) and "11" not in pcrs, "the host's PCR values must not give PCR 11: it comes from the image's record, per phase")
     require("12" not in pcrs, "the host's PCR values must not give PCR 12: it is computed from the node's credential files (--credentials)")
     require(isinstance(credentials, dict), "the node's credential files are required: PCR 12 is attested, and comes from them")
@@ -1307,7 +1345,11 @@ def measurement_set(record, label, firmware, pcrs, credentials):
             "be all zero, which is a host with no per-host configuration")
     pcrs = dict(pcrs, **{"12": espcreds.pcr12(credentials)})
     entry = {"label": label, "tpm_firmware_version": firmware, "pcrs": pcrs,
-             "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}
+             "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES},
+             # the keys the image is signed with, from its SIGNED record: what enrol may seal to (#190, #265)
+             "signing": {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"],
+                         "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
+                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}}
     try:
         attest.validate_sets([entry], "set")
     except attest.Refused as refusal:
@@ -1327,7 +1369,7 @@ def main(argv=None):
 
     def input_args(c):
         for key in INPUTS:
-            c.add_argument("--" + key.replace("_", "-"), required=key != "microcode")
+            c.add_argument("--" + key.replace("_", "-"), required=key not in OPTIONAL_INPUTS)
         c.add_argument("--uname", required=True)
 
     c = sub.add_parser("build", help="build the unsigned image and its record")

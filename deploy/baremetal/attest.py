@@ -74,12 +74,18 @@ import time
 POLICY_SCHEMA = "regalia-kms/attest-policy/v1"
 MAX_SETS = 2          # CURRENT and NEXT; see the module text
 SET_KEYS = ("label", "tpm_firmware_version", "pcrs")
+# a signed image's keys, by fingerprint (optional, and only with "phases"): the two PCR-signing keys' pkfp and the
+# Secure Boot certificate's SHA-256, as uki.py's signed record names them
+SIGNING_KEYS = ("initrd", "system", "secure_boot_cert")
 # The phases a node is judged in, and what it may ask for there: "initrd" an unlock (replacement.may_unlock),
 # "system" a runtime lease (lease.issue). Which systemd phase path each one is belongs to the image's build
 # record (#57): enter-initrd, and enter-initrd:leave-initrd:sysinit:ready.
 PHASES = ("initrd", "system")
 STATE_SCHEMA = "regalia-kms/attest-state/v1"
 TRANSCRIPT_LABEL = b"regalia-kms/attest/v1"
+# A quote that also binds one more value (a path enrolment key, #190): its own label and a sixth field, so it
+# can never encode to a lease's or an unlock's transcript, nor the reverse
+BINDING_LABEL = b"regalia-enrol/v1/path"
 MAX_BYTES = 128 * 1024
 # The state keeps two hashes for every boot it ever accepted, per node, and never forgets one (about
 # 140 bytes a boot: 4 MiB is some 10,000 boots a node across three nodes). When it is full the verifier
@@ -187,15 +193,21 @@ def parse_quote(blob):
     return out
 
 
-def transcript(node_id, epoch, session_id, ephemeral_public, nonce):
+def transcript(node_id, epoch, session_id, ephemeral_public, nonce, binding=None):
     """The canonical transcript the quote is bound to. Every field is length-prefixed under a fixed
-    label, so no two different field tuples encode to the same bytes."""
-    fields = (TRANSCRIPT_LABEL, node_id.encode(), struct.pack(">Q", epoch), session_id, ephemeral_public, nonce)
+    label, so no two different field tuples encode to the same bytes. With `binding` (bytes), the label is
+    BINDING_LABEL and the binding is a sixth field: the quote then also vouches for that value, in the same
+    boot session (a path enrolment key, #190)."""
+    if binding is None:
+        fields = (TRANSCRIPT_LABEL, node_id.encode(), struct.pack(">Q", epoch), session_id, ephemeral_public, nonce)
+    else:
+        require(isinstance(binding, bytes) and 1 <= len(binding) <= 1024, "the binding must be 1-1024 bytes")
+        fields = (BINDING_LABEL, node_id.encode(), struct.pack(">Q", epoch), session_id, ephemeral_public, nonce, binding)
     return b"".join(struct.pack(">I", len(f)) + f for f in fields)
 
 
-def qualifying_data(*fields):
-    return hashlib.sha256(transcript(*fields)).digest()
+def qualifying_data(*fields, binding=None):
+    return hashlib.sha256(transcript(*fields, binding=binding)).digest()
 
 
 def check_session(node_id, epoch, session_id, ephemeral_public, nonce):
@@ -248,6 +260,8 @@ def validate_set(entry, label):
     require(is_hex(entry["tpm_firmware_version"], 16), "%s.tpm_firmware_version must be 16 hex" % label)
     _validate_pcrs(entry["pcrs"], "%s.pcrs" % label)
     if "phases" not in entry:
+        require("signing" not in entry, "%s.signing: only a set with per-phase PCR 11 (a signed unified kernel image) names "
+                "signing keys" % label)
         return
     phases = exact_keys(entry["phases"], PHASES, "%s.phases" % label)
     for phase in PHASES:
@@ -258,6 +272,14 @@ def validate_set(entry, label):
     # the same values in both phases would let the request of one phase pass as the other's
     require(phases[PHASES[0]] != phases[PHASES[1]], "%s.phases: the two phases hold the same values; a PCR that does not move "
             "between them belongs in pcrs" % label)
+    if "signing" in entry:
+        # the keys a signed image's PCR 11 policy and Secure Boot signature are made with (uki.py's signed record):
+        # a peer judges PCR values and never reads them; whoever SEALS to a PCR-signing key (enrol, #190) takes
+        # only a key the approved set names, so a re-signed copy of an approved image is no approved image
+        signing = exact_keys(entry["signing"], SIGNING_KEYS, "%s.signing" % label)
+        for name in SIGNING_KEYS:
+            require(is_hex(signing[name], 64), "%s.signing.%s must be 64 lowercase hex" % (label, name))
+        require(len({signing["initrd"], signing["system"]}) == 2, "%s.signing: the two phases' PCR keys must be two keys" % label)
 
 
 def selection(entry):
@@ -281,7 +303,7 @@ def validate_sets(sets, label):
     for i, entry in enumerate(sets):
         here = "%s.accepted[%d]" % (label, i)
         require(isinstance(entry, dict), "%s must be an object" % here)
-        exact_keys(entry, SET_KEYS + (("phases",) if "phases" in entry else ()), here)
+        exact_keys(entry, SET_KEYS + tuple(k for k in ("phases", "signing") if k in entry), here)
         require(isinstance(entry["label"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,48}", entry["label"]), "%s.label must be a short plain name" % here)
         validate_set(entry, here)
     if len(sets) == 2:
@@ -396,7 +418,12 @@ def locked_state(path):
 
 def make_credential(ek_public, ak_name, secret, run=subprocess.run):
     """TPM2_MakeCredential in software (no TPM): the secret, wrapped to the EK and to the AK's Name. The
-    secret goes to the tool on stdin and is never written to disk."""
+    secret goes to the tool on stdin and is never written to disk.
+
+    INVARIANT (#190): a credential to a node's EK and AK carries an AK enrolment challenge and NOTHING ELSE. A
+    node activates such a credential for any node of the manifest that asks (sync's ak-activate, so that peers
+    can enrol its AK), which makes activation an oracle for whatever the credential wraps. Never use
+    MakeCredential to transport a secret to a node."""
     with tempfile.TemporaryDirectory(prefix="attest-") as d:
         ek, credential = os.path.join(d, "ek.pub"), os.path.join(d, "credential")
         with open(os.open(ek, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
@@ -429,13 +456,20 @@ class Verifier:
         require(isinstance(node_id, str) and node_id in self.nodes, "unknown node: not in the policy")
         return self.nodes[node_id]
 
-    def challenge(self, node_id, ek_public, ak_public, replace=False):
-        """Step 1 of enrollment: a credential only the TPM holding this EK and this AK can open."""
+    def challenge(self, node_id, ek_public, ak_public, replace=False, ak_name=None):
+        """Step 1 of enrollment: a credential only the TPM holding this EK and this AK can open. With `ak_name`
+        (the AK Name the root-signed manifest gives this node, #190), the AK offered must be exactly that one:
+        the challenge then proves the manifest's AK sits in the TPM with the manifest's EK."""
         expected = self.node(node_id)
         require(len(ek_public) <= 1024 and len(ak_public) <= 1024, "a public area exceeds 1 KiB")
         ek_name = name_of(public_area(ek_public, "the EK public area"))
         require(hmac.compare_digest(ek_name.hex(), expected["ek_name"]), "the EK is not the one recorded for this node at intake")
-        ak_name, _ = ak_identity(ak_public)
+        ak_name_offered, _ = ak_identity(ak_public)
+        if ak_name is not None:
+            # the manifest's one spelling (68 lowercase hex, as membership and lease.py hold it), checked before comparing
+            require(is_hex(ak_name, 68), "the manifest's ak_name must be 68 lowercase hex")
+            require(hmac.compare_digest(ak_name_offered.hex(), ak_name), "the AK offered is not the one the manifest names for this node")
+        ak_name = ak_name_offered
         secret = self.rand(32)
         credential = make_credential(ek_public, ak_name, secret, self.run)
         with locked_state(self.state_path) as (state, save):
@@ -447,8 +481,10 @@ class Verifier:
             save()
         return credential
 
-    def enroll(self, node_id, secret):
-        """Step 2: the node returned the secret, so the AK lives in the TPM with the recorded EK."""
+    def enroll(self, node_id, secret, ak_name=None):
+        """Step 2: the node returned the secret, so the AK lives in the TPM with the recorded EK. With `ak_name`
+        (the manifest's, read NOW), the pending AK must still be that one: a manifest that moved between the
+        challenge and this answer leaves no AK it does not name enrolled."""
         self.node(node_id)
         with locked_state(self.state_path) as (state, save):
             record = state["nodes"].get(node_id, {})
@@ -458,10 +494,20 @@ class Verifier:
             require(self.now() <= pending["expires"], "the enrollment challenge expired")
             require(hmac.compare_digest(hashlib.sha256(secret).hexdigest(), pending["secret_sha256"]),
                     "the activated credential is not the secret that was wrapped: the AK is not in the TPM with this EK")
+            if ak_name is not None:
+                require(is_hex(ak_name, 68) and hmac.compare_digest(ak_identity(bytes.fromhex(pending["ak_public"]))[0].hex(), ak_name),
+                        "the AK challenged is not the one the manifest names for this node now: nothing was enrolled")
             # the counters and the session history are kept: a new AK must not rewind the node's boot history
             record["ak_public"] = pending["ak_public"]
             save()
         return ak_identity(bytes.fromhex(pending["ak_public"]))[0]
+
+    def enrolled(self, node_id):
+        """The Name (hex) of the AK enrolled for `node_id`, or None. Read only."""
+        self.node(node_id)
+        with locked_state(self.state_path) as (state, _):
+            record = state["nodes"].get(node_id, {})
+            return ak_identity(bytes.fromhex(record["ak_public"]))[0].hex() if "ak_public" in record else None
 
     def nonce(self, node_id):
         self.node(node_id)
@@ -478,7 +524,7 @@ class Verifier:
             save()
         return nonce
 
-    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature, phase=None, pcr_values=None):
+    def verify(self, node_id, epoch, session_id, ephemeral_public, nonce, quote, signature, phase=None, pcr_values=None, binding=None):
         """A quote for one boot session. `node_id`, `epoch` and `nonce` are what THIS verifier holds (the
         node it is talking to, its manifest epoch, the nonce it issued); the session ID and the ephemeral
         key are what the node sent. `phase` is the boot phase the request must come from (PHASES): what
@@ -508,8 +554,9 @@ class Verifier:
             q = parse_quote(quote)
             require(q["qualified_signer"] == qualified_name(bytes.fromhex(expected["ek_name"]), ak_name),
                     "the quote's signer is not the enrolled AK under the recorded EK")
-            require(hmac.compare_digest(q["extra_data"], qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce)),
-                    "the quote is not bound to this transcript (node ID, manifest epoch, boot session ID, ephemeral key, nonce)")
+            require(hmac.compare_digest(q["extra_data"], qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce, binding=binding)),
+                    "the quote is not bound to this transcript (node ID, manifest epoch, boot session ID, ephemeral key, nonce%s)"
+                    % (", the value it must bind" if binding is not None else ""))
             sets = expected["accepted"]
             selected = selection(sets[0])                              # the same for every set of a node
             require(q["pcrs"] == selected, "the quote covers PCRs %s, not the expected %s" % (q["pcrs"], selected))
@@ -624,11 +671,11 @@ def node_activate(credential_path, secret_path, run=subprocess.run):
             run(["tpm2_flushcontext", session], capture_output=True)
 
 
-def node_quote(node_id, epoch, session_id, ephemeral_public, nonce, pcrs, quote_path, signature_path, run=subprocess.run):
+def node_quote(node_id, epoch, session_id, ephemeral_public, nonce, pcrs, quote_path, signature_path, run=subprocess.run, binding=None):
     check_session(node_id, epoch, session_id, ephemeral_public, nonce)
     require(pcrs and all(isinstance(i, int) and 0 <= i <= 23 for i in pcrs), "PCRs must be 0-23")
     tpm2("quote", "-c", AK_HANDLE, "-g", "sha256", "-l", "sha256:" + ",".join(str(i) for i in sorted(set(pcrs))),
-         "-q", qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce).hex(),
+         "-q", qualifying_data(node_id, epoch, session_id, ephemeral_public, nonce, binding=binding).hex(),
          "-m", quote_path, "-s", signature_path, "-f", "plain", run=run)
 
 
