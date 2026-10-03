@@ -241,13 +241,13 @@ def scenario(work):
     header("0  the TPM, as a device, and the controls")
     how = tpm(work)
     rm = "/dev/tpmrm0"
-    ok(os.path.exists(rm) and sh("tpm2_getrandom", "-T", "device:" + rm, "8", check=False).returncode == 0,
+    ok(os.path.exists(rm) and sh("tpm2_getrandom", "--hex", "-T", "device:" + rm, "8", check=False).returncode == 0,
        "a software TPM answers at /dev/tpmrm0, the device the units allow: %s" % how)
     info = os.stat(rm) if os.path.exists(rm) else None
     ok(info is not None and oct(info.st_mode & 0o777) == "0o660" and sh("stat", "-c", "%G", rm).stdout.strip() == "tss",
        "the device is the tss group's, 0660, as on a host", sh("ls", "-l", rm, check=False).stdout.strip())
     probe = sh("systemd-run", "--wait", "--pipe", "--collect", "-p", "User=root", "-p", "CapabilityBoundingSet=", "-p", "DevicePolicy=closed",
-               "-p", "DeviceAllow=/dev/tpmrm0 rw", "-E", "TPM2TOOLS_TCTI=device:/dev/tpmrm0", "--", "tpm2_getrandom", "8", check=False)
+               "-p", "DeviceAllow=/dev/tpmrm0 rw", "-E", "TPM2TOOLS_TCTI=device:/dev/tpmrm0", "--", "tpm2_getrandom", "--hex", "8", check=False)
     ok(probe.returncode != 0, "control: root with no capability and without the tss group cannot use it", probe.stderr.strip()[-200:])
 
     header("1  regalia-authtime: chrony with two NTS servers")
