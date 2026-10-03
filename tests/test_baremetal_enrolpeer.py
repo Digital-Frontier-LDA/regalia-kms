@@ -274,3 +274,51 @@ class Gate(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OnSwtpm(unittest.TestCase):
+    """The TPM halves Peer is wired with in node.Sync: this node's public areas, and its activation of a credential a
+    peer's verifier made for them. On a software TPM, through the TCTI given (as node.py passes its own)."""
+
+    def setUp(self):
+        import shutil
+        import subprocess
+        import tempfile
+        import time
+        if not all(shutil.which(t) for t in ("swtpm", "tpm2_createek")):
+            if os.environ.get("REGALIA_EXPECT_SWTPM") == "1":
+                self.fail("swtpm and tpm2-tools are expected here and were not found")
+            self.skipTest("needs swtpm and tpm2-tools")
+        self.d = tempfile.mkdtemp(dir=os.environ.get("TMPDIR", "/tmp"))
+        self.addCleanup(shutil.rmtree, self.d, True)
+        state, sock = self.d + "/tpm", self.d + "/tpm.sock"
+        os.mkdir(state)
+        subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + state, "--server", "type=unixio,path=" + sock,
+                        "--ctrl", "type=unixio,path=" + sock + ".ctrl", "--flags", "not-need-init,startup-clear",
+                        "--daemon", "--pid", "file=%s/pid" % self.d], check=True, capture_output=True)
+        time.sleep(0.5)
+        with open(self.d + "/pid") as f:
+            pid = int(f.read())
+        self.addCleanup(lambda: os.kill(pid, 15))
+        self.tcti = "swtpm:path=" + sock
+        # node_init flushes its transient objects only when the TCTI it sees is a simulator's (no resource manager)
+        patcher = unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI=self.tcti)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        attest.node_init(self.d)
+
+    def test_a_peers_challenge_is_activated_by_this_tpm_and_enrols_its_ak(self):
+        ek_public, ak_public = enrolpeer.tpm_identity(self.tcti)()
+        with open(self.d + "/ak.pub", "rb") as f:
+            self.assertEqual(attest.ak_identity(ak_public)[0], attest.ak_identity(f.read())[0])
+        ek_name = attest.name_of(attest.public_area(ek_public, "ek")).hex()
+        ak_name = attest.ak_identity(ak_public)[0].hex()
+        policy = {"schema": attest.POLICY_SCHEMA, "nodes": {"b": {"ek_name": ek_name, "tpm_firmware_version": "0" * 16,
+                                                                   "pcrs": {"7": "00" * 32}}}}
+        verifier = attest.Verifier(policy, self.d + "/attest.json")
+        credential = verifier.challenge("b", ek_public, ak_public, ak_name=ak_name)
+        secret = enrolpeer.tpm_activate(self.tcti)(credential)
+        self.assertEqual(verifier.enroll("b", secret, ak_name=ak_name).hex(), ak_name)
+        self.assertEqual(verifier.enrolled("b"), ak_name)
+        with self.assertRaises(attest.Refused):
+            enrolpeer.tpm_activate(self.tcti)(b"\x00" * 64)        # not a credential for this TPM

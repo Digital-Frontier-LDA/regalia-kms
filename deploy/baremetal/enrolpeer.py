@@ -28,6 +28,7 @@ each of its requests is a fresh attested one.
 import contextlib
 import hashlib
 import os
+import subprocess
 import tempfile
 
 from deploy.baremetal import attest, lease, membership, unlock
@@ -47,6 +48,47 @@ class Peer:
 
     def __init__(self, contributions, wraps, identity, activate):
         self.contributions, self.wraps, self.identity, self.activate = contributions, wraps, identity, activate
+
+
+def _with_tcti(run, tcti):
+    if not tcti:
+        return run
+    env = dict(os.environ, TPM2TOOLS_TCTI=tcti)
+    return lambda argv, **kw: run(argv, **dict(kw, env=env))
+
+
+def tpm_identity(tcti=None, run=subprocess.run):
+    """`identity()` for Peer: this node's EK and AK public areas (TPM2B_PUBLIC), read from its persistent handles."""
+    run = _with_tcti(run, tcti)
+
+    def identity():
+        with tempfile.TemporaryDirectory(prefix="enrol-") as d:
+            out = []
+            for handle in (attest.EK_HANDLE, attest.AK_HANDLE):
+                path = os.path.join(d, handle + ".pub")
+                attest.tpm2("readpublic", "-c", handle, "-o", path, run=run)
+                with open(path, "rb") as f:
+                    out.append(f.read(1025))
+            require(all(0 < len(o) <= 1024 for o in out), "a public area read from the TPM is empty or oversized")
+            return tuple(out)
+    return identity
+
+
+def tpm_activate(tcti=None, run=subprocess.run):
+    """`activate(credential)` for Peer: the secret this node's TPM releases for a credential made to its EK and AK
+    (attest.node_activate; the secret's file lives in a private temporary directory and is gone afterwards)."""
+    run = _with_tcti(run, tcti)
+
+    def activate(credential):
+        require(isinstance(credential, bytes) and 0 < len(credential) <= 1024, "a credential is 1-1024 bytes")
+        with tempfile.TemporaryDirectory(prefix="enrol-") as d:
+            cred, secret = os.path.join(d, "credential"), os.path.join(d, "secret")
+            with open(os.open(cred, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                f.write(credential)
+            attest.node_activate(cred, secret, run=run)
+            with open(secret, "rb") as f:
+                return f.read(64)
+    return activate
 
 
 def challenge(attester, manifest, caller, ek_public, ak_public):
