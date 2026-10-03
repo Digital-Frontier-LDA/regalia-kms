@@ -43,9 +43,10 @@ believes the chain it was given, exactly as a newly enrolled node does. So:
   reads, must reach the epoch of every record slot that still holds a valid record, and must carry that
   slot's manifest at that epoch;
 - everything is verified before anything is changed, and a refusal changes nothing;
-- **the new anchor is defined at the chain's epoch, with its manifest recorded.** There is no moment at
-  which the node holds an empty anchor that would accept another chain: interrupted at any point, it
-  holds the old remains, or no usable anchor, or the finished one;
+- **the new record goes into a record slot before the old counter is touched, and the new counter is
+  defined at the chain's epoch.** No valid record slot is deleted. Interrupted at any point, the node
+  holds what it held before, or the new record beside a counter out of step with it (unusable), or the
+  finished anchor: never less than it held, and never an empty anchor that would accept another chain;
 - the operator types a phrase naming the node, the epoch and the manifest digest, at a terminal;
 - the request (naming the epoch and manifest) and then the outcome are appended to an audit log, and
   without a writable log nothing is done.
@@ -56,7 +57,9 @@ python3 -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.js
     --audit-log /var/log/regalia/reanchor.jsonl
 ```
 
-It needs the TPM's owner authorization, as defining the anchor did at commissioning. That
+It needs the TPM's owner authorization, as defining the anchor did at commissioning. The TPM is
+tpm2-tools' default one, or the one named with `--tcti`; a `TPM2TOOLS_TCTI` left in the environment is
+refused, because it could point at another TPM, which would truthfully report the indices missing. That
 authorization is what authorizes the change. The typed phrase is a deliberate act, not a secret: it can
 be computed from the chain files.
 
@@ -95,9 +98,12 @@ incident for the root key's holder, not something to resolve on this host.
   (`tests/test_baremetal_membership.py`, `TornWrites`).
 - Re-anchoring (`tests/test_baremetal_reanchor.py`): each refusal, with the TPM and the file untouched;
   a record slot that still reads binds the chain when the counter is gone; a TPM that does not answer
-  is refused; **power lost at every single TPM command of the redefinition**, after each of which the
-  node refuses an older chain and a fork, and the command run again completes; the audit lines,
-  `INCOMPLETE` included. One run on a software TPM.
+  is refused; **power lost at every single TPM command of the redefinition**, from no valid record and
+  from two valid ones with the counter gone, after each of which the TPM still holds at least the epoch
+  it held, every record it holds is the chain's, the node refuses an older chain and a fork, and the
+  command run again completes; the audit lines, `INCOMPLETE` included (also when that line cannot be
+  written); a `TPM2TOOLS_TCTI` in the environment is refused and the TPM used is named in the log. One
+  run on a software TPM.
 - **A damaged newest slot leaves no trace.** If the newer slot is unreadable, the node falls back to
   the older one and repairs from the disk, as after a crash. Nothing records that it happened.
 - **Not tested: a physical TPM.** Whether a real TPM can leave a half-written NV index after a power

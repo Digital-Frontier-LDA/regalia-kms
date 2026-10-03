@@ -575,16 +575,60 @@ class RecordWrites(unittest.TestCase):
     def test_redefine_stops_at_an_index_it_cannot_delete(self):
         hw = self.defined()
         hw.anchor(2, lambda epoch: "%02x" % epoch * 32)
-        self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvundefine", "0x150001a"] else None
+        self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvundefine", "0x1500017"] else None
         del self.calls[:]
-        with self.assertRaisesRegex(m.Refused, "cannot delete NV index 0x150001a"):
+        with self.assertRaisesRegex(m.Refused, "cannot delete NV index 0x1500017"):
             hw.redefine(2, "02" * 32)
-        # the counter and its base go first, the record slots last: what a slot held still binds the next attempt
-        self.assertEqual([index for tool, index in self.calls if tool == "nvundefine"], ["0x1500016", "0x1500017", "0x150001a"])
-        self.assertEqual(hw.remains(), (None, [(1, "01" * 32), (2, "02" * 32)]))
+        # the new record goes in first, then the counter and its base are replaced; no valid record slot is deleted
+        self.assertEqual([index for tool, index in self.calls if tool == "nvundefine"], ["0x1500016", "0x1500017"])
+        self.assertEqual(hw.remains(), (None, [(2, "02" * 32), (2, "02" * 32)]))     # the new record went in first, over the older slot
         self.fault = lambda argv: None
         hw.redefine(2, "02" * 32)
         self.assertEqual((hw.value(), hw.slots()), (2, [(2, "02" * 32)] * 2))
+
+    def test_define_refuses_an_anchor_any_of_whose_indices_exists(self):
+        for index in ("0x1500016", "0x1500017", "0x150001a", "0x150001b"):
+            with self.subTest(index=index):
+                self.tpm = FakeTpm()
+                self.tpm(["tpm2_nvdefine", index, "-C", "o", "-s", "48", "-a", "ownerread|ownerwrite"])
+                del self.calls[:]
+                with self.assertRaisesRegex(m.Refused, "NV index %s already exists" % index):
+                    self.anchor().define()
+                self.assertEqual([tool for tool, _ in self.calls if tool in ("nvdefine", "nvwrite", "nvincrement")], [])
+
+    def test_redefine_keeps_the_record_slots_and_writes_the_new_record_into_them(self):
+        hw = self.defined()
+        hw.anchor(3, lambda epoch: "%02x" % epoch * 32)
+        del self.calls[:]
+        hw.redefine(5, "05" * 32)
+        order = [(tool, index) for tool, index in self.calls if tool in ("nvundefine", "nvdefine", "nvwrite")]
+        self.assertEqual(order, [("nvwrite", "0x150001b"), ("nvundefine", "0x1500016"), ("nvundefine", "0x1500017"),
+                                 ("nvdefine", "0x1500016"), ("nvdefine", "0x1500017"), ("nvwrite", "0x1500017"), ("nvwrite", "0x150001a")])
+        self.assertEqual((hw.value(), hw.slots()), (5, [(5, "05" * 32)] * 2))
+        # a slot that is not a proper record slot is replaced
+        self.tpm(["tpm2_nvundefine", "0x150001b", "-C", "o"])
+        self.tpm(["tpm2_nvdefine", "0x150001b", "-C", "o", "-s", "40", "-a", "ownerread|ownerwrite|authread|authwrite"])
+        del self.calls[:]
+        hw.redefine(6, "06" * 32)
+        self.assertEqual([index for tool, index in self.calls if tool == "nvundefine"], ["0x150001b", "0x1500016", "0x1500017"])
+        self.assertEqual((hw.value(), hw.slots()), (6, [(6, "06" * 32)] * 2))
+
+    def test_a_lock_free_verify_for_readers_that_cannot_take_the_lock(self):
+        """48's request: the node's root services read the published chain and cannot write the lock's directory."""
+        hw = self.defined()
+        hw.anchor(3, lambda epoch: "%02x" % epoch * 32)
+        reader = m.HighWater("0x1500016", lock_path="/nonexistent/dir/hw.lock", run=self.run_tpm)
+        good = lambda epoch: "%02x" % epoch * 32
+        self.assertEqual(reader.verify(good, lock=False), 3)
+        with self.assertRaises(OSError):
+            reader.verify(good)                                          # the locking form needs the lock
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded"):
+            reader.verify(lambda epoch: "aa" * 32 if epoch == 3 else good(epoch), lock=False)
+        self.tpm(["tpm2_nvincrement", "0x1500016", "-C", "o"])             # a commit in progress: the counter moved, the record not yet
+        self.assertEqual(reader.verify(good, lock=False), 4)
+        del self.calls[:]
+        reader.verify(good, lock=False)
+        self.assertEqual([tool for tool, _ in self.calls if tool in ("nvwrite", "nvincrement", "nvdefine", "nvundefine")], [])   # repairs nothing
 
     def test_redefine_refuses_a_digest_that_is_not_one_before_deleting_anything(self):
         hw = self.defined()

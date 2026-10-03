@@ -224,15 +224,20 @@ class StoreReanchor(Case):
         with mock.patch.object(m, "MAX_CHAIN_BYTES", 100):
             self.unchanged(before, "the chain to re-anchor on is oversized", self.store.reanchor, self.envs[:3])
 
-    def interrupted_at_every_call(self, max_jump):
+    def interrupted_at_every_call(self, max_jump, damage="lose_record"):
         """Re-anchor onto epochs 1-5 with the power lost at the k-th TPM call of the redefinition, for every k.
-        What is left is never an anchor that would take another chain (51's findings 3 and 4)."""
+        What is left is never an anchor that would take another chain (51's findings 3 and 4), and never one
+        that has forgotten a valid record (51's second-round finding A)."""
         outcomes = set()
         for k in range(1, 200):
             case = Case()
             case.setUp()
             try:
-                case.lose_record()
+                if damage == "lose_record":
+                    case.lose_record()
+                else:                                                # the counter is gone; both slots still hold valid records (3, then 2)
+                    case.tpm(["tpm2_nvundefine", "0x1500016", "-C", "o"])
+                    os.unlink(case.path)
                 with mock.patch.object(m.HighWater, "MAX_JUMP", max_jump):
                     real = case.hw.redefine
 
@@ -249,6 +254,11 @@ class StoreReanchor(Case):
                         pass
                     case.fail_from = None
                     self.assertTrue(case.store.reanchor_began)
+                    counter, records = case.hw.remains()
+                    floor = max([counter or 0] + [epoch for epoch, _ in records])
+                    self.assertGreaterEqual(floor, 3, "after TPM call %d the TPM holds less than the epoch 3 it held" % k)
+                    for epoch, held_digest in records:               # and every record it holds is the chain's
+                        self.assertEqual(held_digest, case.digest(epoch), "after TPM call %d" % k)
                     with open(case.path, "rb") as f:
                         self.assertEqual(f.read(), m.canonical(case.envs))           # the verified chain is on disk
                     why = case.hw.unusable()
@@ -282,6 +292,32 @@ class StoreReanchor(Case):
     def test_and_a_chain_longer_than_one_jump_is_not_stranded_by_it(self):
         self.interrupted_at_every_call(2)
 
+    def test_power_lost_while_valid_records_remain_never_lowers_what_the_tpm_holds(self):
+        """51's second-round finding A: the slots were deleted in index order, so a cut after the first delete
+        left only the older record (floor 2), after both nothing; with the file gone or garbage, a re-anchor
+        to epoch 2, or onto a fork at 3, then succeeded. The slots are no longer deleted."""
+        self.interrupted_at_every_call(m.HighWater.MAX_JUMP, damage="counter gone, valid slots")
+
+    def test_after_a_cut_with_the_file_gone_a_lower_chain_or_a_fork_is_still_refused(self):
+        self.tpm(["tpm2_nvundefine", "0x1500016", "-C", "o"])
+        os.unlink(self.path)
+        real = self.hw.redefine
+
+        def redefine(*args, **kw):
+            self.fail_from = self.calls + 12                         # past the first record write and the counter's delete
+            return real(*args, **kw)
+        with mock.patch.object(self.hw, "redefine", redefine), self.assertRaises(PowerLost):
+            self.store.reanchor(self.envs)
+        self.fail_from = None
+        os.unlink(self.path)                                         # the disk is no guard
+        self.assertIn((5, self.digest(5)), self.hw.remains()[1])                     # the new record went in before the counter was touched
+        fork = self.envs[:4] + [sign(manifest(5, self.digest(4), three(c="QUARANTINED")), ROOT)]
+        before = self.state()
+        self.unchanged(before, "below epoch 5, which this node's TPM still holds (a record slot)", self.store.reanchor, self.envs[:2])
+        self.unchanged(before, "below epoch 5, which this node's TPM still holds (a record slot)", self.store.reanchor, self.envs[:3])
+        self.unchanged(before, "CONFLICT: a record slot that still reads names another manifest at epoch 5", self.store.reanchor, fork)
+        self.assertEqual(self.store.reanchor(self.envs)["epoch"], 5)
+
     def test_a_crash_after_the_disk_write_leaves_the_old_remains_and_is_run_again(self):
         self.lose_record()
         nv = copy.deepcopy(self.tpm.nv)
@@ -298,10 +334,11 @@ class StoreReanchor(Case):
 
     def test_an_index_that_cannot_be_deleted_stops_it_and_is_run_again(self):
         self.lose_record()
-        self.refuse = lambda argv: argv[:2] == ["tpm2_nvundefine", "0x150001a"]
-        self.refused("cannot delete NV index 0x150001a", self.store.reanchor, self.envs)
+        self.refuse = lambda argv: argv[:2] == ["tpm2_nvundefine", "0x1500017"]
+        self.refused("cannot delete NV index 0x1500017", self.store.reanchor, self.envs)
         self.assertTrue(self.store.reanchor_began)
-        self.assertIn("the index is not defined", self.hw.unusable())                # the counter went first; the slots are still there
+        self.assertIn("the index is not defined", self.hw.unusable())                # the counter is gone; the new record is in a slot
+        self.assertIn((5, self.digest(5)), self.hw.remains()[1])
         self.refuse = lambda argv: False
         self.assertEqual(m.Store(self.path, ROOT_PUB, self.hw).reanchor(self.envs)["epoch"], 5)
 
@@ -443,13 +480,13 @@ class Command(Case):
     def test_a_failure_after_the_anchor_was_touched_is_incomplete_not_denied(self):
         """51's finding 5: it was reported as DENY, "not done", with the TPM changed."""
         self.lose_record()
-        self.refuse = lambda argv: argv[:2] == ["tpm2_nvdefine", "0x150001a"]        # the redefinition fails part-way
-        with self.assertRaisesRegex(reanchor.Incomplete, "cannot define the record index 0x150001a"):
+        self.refuse = lambda argv: argv[:2] == ["tpm2_nvdefine", "0x1500017"]        # the redefinition fails part-way
+        with self.assertRaisesRegex(reanchor.Incomplete, "cannot define the base index 0x1500017"):
             self.run_reanchor(self.sources())
         self.assertEqual(self.outcomes(), [("reanchor-requested", None), ("reanchor", "INCOMPLETE")])
-        self.assertIn("cannot define the record index", self.events[-1]["reason"])
-        self.assertEqual(self.hw.value(), 3)                                         # the new counter is there, at the chain's epoch
-        self.assertIn("the index is not defined", self.hw.unusable())                # and no record yet: not usable for anything
+        self.assertIn("cannot define the base index", self.events[-1]["reason"])
+        self.assertIn("the index is not defined", self.hw.unusable())                # the new counter has no base yet: not usable for anything
+        self.assertIn((3, self.digest(3)), self.hw.remains()[1])                     # and the new record is already in
         self.refuse = lambda argv: False
         self.assertEqual(self.run_reanchor(self.sources())["epoch"], 3)              # run again: it completes
         self.assertEqual(self.outcomes()[-1], ("reanchor", "ALLOW"))
@@ -472,9 +509,9 @@ class Command(Case):
                 return typed(prompt)
             return typed if typed is not None else prompt.split("Type exactly: ")[1].split("\n")[0]
         self.said = io.StringIO()
-        with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(self.said):
             rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty,
-                               highwater=lambda index: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm))
+                               highwater=lambda index, tcti: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm))
         return rc, asked
 
     def audit(self, log="audit.jsonl"):
@@ -519,7 +556,8 @@ class Command(Case):
         """51's finding 7: a pipe carrying the phrase was enough."""
         self.lose_record()
         before = self.state()
-        rc, asked = self.program(ask=None, tty=lambda: False)
+        with mock.patch("builtins.input", side_effect=AssertionError("asked without a terminal")):     # fail, never block, if the check is gone
+            rc, asked = self.program(ask=None, tty=lambda: False)
         self.assertEqual((rc, asked, self.state()), (1, [], before))
         self.assertIn("the phrase must be typed at a terminal: standard input is not one", self.said.getvalue())
         self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
@@ -535,15 +573,58 @@ class Command(Case):
 
     def test_an_interrupted_re_anchor_exits_3_and_says_to_run_it_again(self):
         self.lose_record()
-        self.refuse = lambda argv: argv[:2] == ["tpm2_nvdefine", "0x150001b"]
+        self.refuse = lambda argv: argv[:2] == ["tpm2_nvdefine", "0x1500017"]
         self.assertEqual(self.program()[0], 3)
-        self.assertIn("INCOMPLETE: the anchor was being replaced and it did not finish: cannot define the record index 0x150001b", self.said.getvalue())
+        self.assertIn("INCOMPLETE: the anchor was being replaced and it did not finish: cannot define the base index 0x1500017", self.said.getvalue())
         self.assertIn("Run this command again", self.said.getvalue())
         self.assertNotIn("nothing was changed", self.said.getvalue())
         self.assertEqual([e.get("outcome") for e in self.audit()], [None, "INCOMPLETE"])
         self.refuse = lambda argv: False
         self.assertEqual(self.program()[0], 0)
         self.assertEqual([e.get("outcome") for e in self.audit()], [None, "INCOMPLETE", None, "ALLOW"])
+
+    def test_an_incomplete_re_anchor_that_cannot_be_logged_is_still_incomplete(self):
+        """51's B and CodeRabbit on #182: the OSError from the log replaced Incomplete, and the operator was
+        told "nothing was changed" with a new counter on the TPM."""
+        self.lose_record()
+        self.refuse = lambda argv: argv[:2] == ["tpm2_nvdefine", "0x1500017"]          # the redefinition fails after the counter
+        real, appends = os.open, []
+
+        def opener(name, flags, *mode, **kw):
+            if name == self.d + "/audit.jsonl" and flags & os.O_APPEND:
+                appends.append(name)
+                if len(appends) > 1:
+                    raise OSError(28, "No space left on device", name)
+            return real(name, flags, *mode, **kw)
+        with mock.patch("os.open", side_effect=opener):
+            rc, _ = self.program()
+        self.assertEqual(rc, 3)
+        said = self.said.getvalue()
+        self.assertIn("INCOMPLETE: the anchor was being replaced and it did not finish: cannot define the base index", said)
+        self.assertIn("and this could not be written to the audit log", said)
+        self.assertNotIn("nothing was changed", said)
+        self.assertEqual([e.get("outcome") for e in self.audit()], [None])
+        with self.assertRaises(reanchor.Incomplete):                 # and at the function level
+            reanchor.reanchor(self.store, self.sources(), "b", lambda planned: reanchor.phrase("b", planned),
+                              mock.Mock(side_effect=[None, OSError(28, "No space left on device")]))
+
+    def test_the_tpm_is_named_on_the_command_line_never_taken_from_the_environment(self):
+        """51's C: a TPM2TOOLS_TCTI left in the shell would re-anchor another TPM, which truthfully says the
+        indices are missing, and the log would record an ALLOW that did nothing to this host."""
+        self.lose_record()
+        before = self.state()
+        with mock.patch.dict(os.environ, {"TPM2TOOLS_TCTI": "swtpm:path=/elsewhere"}):
+            rc, asked = self.program()
+        self.assertEqual((rc, asked, self.state()), (1, [], before))
+        self.assertIn("TPM2TOOLS_TCTI is set in the environment: name the TPM with --tcti instead", self.said.getvalue())
+        given = []
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("TPM2TOOLS_TCTI", None)
+            with mock.patch.object(reanchor, "main", reanchor.main):
+                rc, asked = self.program("--tcti", "device:/dev/tpmrm0")
+        self.assertEqual(rc, 0)
+        self.assertIn("TPM: device:/dev/tpmrm0, NV index 0x1500016.", self.said.getvalue() + "".join(asked) or "")
+        self.assertEqual({e["tpm"] for e in self.audit()}, {"device:/dev/tpmrm0"})
 
     def test_a_re_anchor_whose_outcome_cannot_be_recorded_says_it_is_done(self):
         """51's finding 5: with the log made unwritable while the operator was typing, the TPM was re-anchored
@@ -620,8 +701,9 @@ class OnSwtpm(_Swtpm):
             with open("%s/%s.json" % (self.d, name), "wb") as f:
                 f.write(m.canonical(envs))
         argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b", "--authority", self.d + "/authority.json",
-                "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl"]
-        make = lambda index: m.HighWater(index, tcti=self.tcti, lock_path=self.d + "/hw.lock")
+                "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
+        os.environ.pop("TPM2TOOLS_TCTI", None)
+        make = lambda index, tcti: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock")
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make), 1)
             self.assertEqual(self.hw.slots(), [None, None])                          # refused: the TPM as it was

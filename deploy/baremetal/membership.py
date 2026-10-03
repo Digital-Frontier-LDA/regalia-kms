@@ -382,6 +382,28 @@ class HighWater:
     there nothing to go by: that fails closed, and the way back is `Store.reanchor()`
     (reanchor.py; MEMBERSHIP-RECOVERY.md), never a silent return to trusting the epoch alone.
     The same limit as the counter: owner authorization on the running host can rewrite the record.
+
+    THE FORMAT ON THE TPM, for any other reader (the initrd reads it too). For counter index C (0x1500016
+    for membership):
+      * C: TPM_NT_COUNTER, 8 bytes, attributes ownerread|ownerwrite|authread|authwrite.
+      * C + 1, the base: ordinary, 8 bytes, ownerread|ownerwrite|authread|authwrite|writedefine; written
+        once and write-locked. The epoch is (counter - base), both read as unsigned 64-bit big-endian; a
+        counter below its base is refused.
+      * C + 4 and C + 5, the record slots: ordinary, EXACTLY 48 bytes, ownerread|ownerwrite|authread|authwrite.
+        A slot holds  epoch (8 bytes, unsigned big-endian) || digest (32 bytes) || tag (8 bytes),  where
+        digest is the SHA-256 of the canonical JSON of the manifest at that epoch (membership.digest; 32 zero
+        bytes at epoch 0) and  tag = SHA-256(b"regalia-membership-record/v1\x00" || epoch || digest)[0:8].
+        A slot is a record when its index is written and its tag matches; otherwise (never written, or a
+        cut write) it holds no record. C + 2 and C + 3 are another counter's (the heartbeat's).
+      * THE record is the valid slot with the highest epoch. Two valid slots at that epoch must name the
+        same digest. No valid slot is NO RECORD. A slot index that is missing, not ordinary, or not 48
+        bytes is not a record slot at all.
+      * The anchor is usable when the counter and base read and the record's epoch is the counter's
+        epoch or the one below it. A chain is the anchored one when its manifest digest at the record's
+        epoch is the record's digest. (HighWater.verify(lock=False) is that check, for readers that cannot
+        take the writer's lock.)
+    The vectors of tests/test_baremetal_membership.py (RecordWrites.test_a_slot_is_a_record_only_if_its_tag_matches,
+    and slot_bytes) pin this layout.
     """
 
     MAX_JUMP = 1000
@@ -442,11 +464,20 @@ class HighWater:
         return (self.index, self.base_index) + self.record_indices
 
     def _define(self, epoch, manifest_digest):
-        """Defines the anchor AT `epoch`, recording `manifest_digest`. The base is written as (where the
-        counter landed) - epoch, so the counter reads `epoch` from the moment the base exists, and the record
-        is written for that epoch at once: there is never a defined anchor that reads lower than `epoch`."""
+        """Defines the whole anchor AT `epoch`, recording `manifest_digest` (none of its indices may exist)."""
         for index in self._indices():
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
+        base = self._define_counter(epoch)
+        for index in self.record_indices:
+            r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
+            require(r.returncode == 0, "cannot define the record index %s" % index)
+        for _ in self.record_indices:            # each write takes the slot that is not valid, else the older one
+            self._write_record(epoch, manifest_digest)
+        return base
+
+    def _define_counter(self, epoch):
+        """The counter and its base, the counter reading `epoch` from the moment the base exists: the base is
+        written as (where the counter landed) - epoch, the counter raised first on a TPM where it lands below."""
         r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
         require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
@@ -460,29 +491,42 @@ class HighWater:
         r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
         require(r.returncode == 0, "cannot write the base index")
         require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
-        for index in self.record_indices:
-            r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
-            require(r.returncode == 0, "cannot define the record index %s" % index)
-        for _ in self.record_indices:            # each write takes the slot that is not valid yet
-            self._write_record(epoch, manifest_digest)
         return base
 
     def redefine(self, epoch, manifest_digest):
-        """Delete this anchor's indices and define them anew AT `epoch`, recording `manifest_digest`: the TPM
-        half of a re-anchor. It needs owner authorization and forgets what this TPM knew, so nothing calls
-        it but Store.reanchor(), after the chain was verified and written.
+        """Define this anchor anew AT `epoch`, recording `manifest_digest`: the TPM half of a re-anchor. It
+        needs owner authorization and replaces the counter, so nothing calls it but Store.reanchor(), after
+        the chain was verified against everything the TPM still holds and written to disk.
 
-        No state in between is a usable anchor for anything but that chain. Until the counter and its base
-        exist, the anchor is not defined; from then on the counter reads `epoch`; until a record is written,
-        there is NO RECORD; and the record written is the one for `epoch`. The record slots are deleted last,
-        so that if this is interrupted early, what they held still binds the next attempt."""
+        THE NEW RECORD GOES IN FIRST, the counter is replaced after it. In order: a record index that is not
+        a 48-byte ordinary index is replaced (it holds no record); the new record is written into a slot, the
+        one that is not valid or the older one, as any record is; the counter and its base are deleted and
+        defined again at `epoch`; the record is written into the other slot. A valid record is overwritten
+        only by the newer one, and from the first write on the TPM holds `epoch` itself. Interrupted anywhere,
+        the node holds what it held before, or a record at `epoch` beside a counter that is not in step with
+        it (unusable, and a floor at `epoch`), or the finished anchor. Never less than it held, and never an
+        anchor that would take another chain."""
         hex_field(manifest_digest, 64, "a manifest digest")
         with _exclusive(self.lock_path):
             defined = self._defined()
-            for index in self._indices():
+            for index in self.record_indices:
+                if int(index, 16) in defined and not self._is_slot(index):
+                    require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+                    defined.discard(int(index, 16))
+                if int(index, 16) not in defined:
+                    r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
+                    require(r.returncode == 0, "cannot define the record index %s" % index)
+            self._write_record(epoch, manifest_digest)
+            for index in (self.index, self.base_index):
                 if int(index, 16) in defined:
                     require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
-            return self._define(epoch, manifest_digest)
+            base = self._define_counter(epoch)
+            self._write_record(epoch, manifest_digest)
+            return base
+
+    def _is_slot(self, index):
+        attributes, size = self._public(index)
+        return attributes & self.NT_MASK == self.NT_ORDINARY and size == self.RECORD_BYTES
 
     def _base(self):
         """Checks both indices' attributes and returns the base (one call per value/advance/check)."""
@@ -629,8 +673,18 @@ class HighWater:
         with _exclusive(self.lock_path):
             return self._record()[0] == self._epoch(self._base())
 
-    def verify(self, digest_of):
-        """Refuses a chain that is not the anchored one; changes nothing. Returns the high-water epoch."""
+    def verify(self, digest_of, lock=True):
+        """Refuses a chain that is not the anchored one; changes nothing. Returns the high-water epoch.
+
+        lock=False is for a reader that cannot take the writer's lock (a service under another user, with
+        the lock's directory read-only to it). It reads without serializing against Store: a commit in
+        progress shows as the crash window (counter moved, record one behind) or as one slot being written
+        (its tag does not match yet), both of which this accepts as it accepts them after a crash. A
+        refusal from a lock-free read can be a commit racing it: read again before acting on it."""
+        if not lock:
+            hw = self._epoch(self._base())
+            self._verify(hw, digest_of, repair=False)
+            return hw
         with _exclusive(self.lock_path):
             hw = self._epoch(self._base())
             self._verify(hw, digest_of, repair=False)
@@ -807,7 +861,7 @@ class Store:
             require(self.hw.unusable() is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or "
                     "substituted is restored under the anchor it has (restore)")
             counter, records = self.hw.remains()
-            for held, what in [(counter, "its counter")] * (counter is not None) + [(epoch, "a record slot") for epoch, _ in records]:
+            for held, what in sorted([(counter, "its counter")] * (counter is not None) + [(epoch, "a record slot") for epoch, _ in records], reverse=True):
                 require(current["epoch"] >= held, "the fetched chain ends at epoch %d, below epoch %d, which this node's TPM still holds "
                         "(%s): re-anchoring does not go back" % (current["epoch"], held, what))
             for epoch, recorded in records:

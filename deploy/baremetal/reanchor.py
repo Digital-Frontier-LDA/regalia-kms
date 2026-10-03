@@ -24,9 +24,11 @@ so it is the one an attacker would want, and it is fenced accordingly:
     unusable anchor. A TPM or a tool that fails says nothing about the anchor, and this refuses.
   * NOTHING THE TPM STILL HOLDS IS FORGOTTEN. The chain must reach the old counter's epoch while it reads,
     reach the epoch of every record slot that still holds a valid record, and carry that slot's manifest.
-  * NEVER AN EMPTY ANCHOR. The new anchor is defined AT the chain's epoch with its manifest recorded. If the
-    operation is interrupted, the node holds either the old remains, or no usable anchor, or the finished
-    one: never an anchor that would accept another chain.
+  * NEVER LESS THAN IT HELD, NEVER AN EMPTY ANCHOR. The new record is written into a record slot before the
+    old counter is touched, and the new counter is defined AT the chain's epoch. No valid record slot is
+    deleted. Interrupted anywhere, the node holds what it held before, or the new record beside a counter
+    out of step with it (unusable), or the finished anchor: never less than it held, and never an anchor
+    that would accept another chain.
   * VERIFIED FIRST. All of the above is checked before anything is changed; a refusal changes nothing.
   * TYPED, AT A TERMINAL. The operator types a phrase naming the node, the epoch and the manifest digest
     being anchored. It is a deliberate act, not a secret: what authorizes the change is the TPM's owner
@@ -122,10 +124,15 @@ def reanchor(store, sources, node_id, typed, sink):
         store.reanchor(planned["chain"])
     except BaseException as failure:
         began = store.reanchor_began
-        sink(event("reanchor", planned, outcome="INCOMPLETE" if began else "DENY", reason=convergence._printable(failure) or type(failure).__name__))
-        if began:
-            raise Incomplete(str(failure) or type(failure).__name__) from failure
-        raise
+        reason = convergence._printable(failure) or type(failure).__name__
+        if not began:
+            sink(event("reanchor", planned, outcome="DENY", reason=reason))
+            raise
+        try:
+            sink(event("reanchor", planned, outcome="INCOMPLETE", reason=reason))
+        except OSError as unlogged:                 # the anchor changed: say so, logged or not
+            raise Incomplete("%s (and this could not be written to the audit log: %s)" % (reason, unlogged)) from failure
+        raise Incomplete(reason) from failure
     summary = {"epoch": planned["epoch"], "manifest_digest": planned["manifest_digest"]}
     try:
         sink(event("reanchor", planned, outcome="ALLOW", reason=""))
@@ -139,7 +146,11 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def main(argv=None, ask=None, highwater=membership.HighWater, tty=None):
+def _highwater(index, tcti):
+    return membership.HighWater(index, tcti=tcti)
+
+
+def main(argv=None, ask=None, highwater=_highwater, tty=None):
     """Exit status: 0 done; 1 refused, nothing changed; 2 usage; 3 INCOMPLETE, the anchor was being replaced:
     run it again; 4 done, but the outcome could not be written to the audit log."""
     ap = argparse.ArgumentParser(prog="python3 -m deploy.baremetal.reanchor", description=__doc__.splitlines()[0])
@@ -150,10 +161,15 @@ def main(argv=None, ask=None, highwater=membership.HighWater, tty=None):
     ap.add_argument("--authority", required=True, metavar="CHAIN.json", help="the whole chain, as the revocation authority gave it")
     ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain ANOTHER node gave; at least one, repeat for more")
     ap.add_argument("--audit-log", required=True, help="the file the audit events are appended to (one JSON object a line)")
+    ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
     args = ap.parse_args(argv)
+    # The TPM is named on the command line or is the default, never taken from the environment: a
+    # TPM2TOOLS_TCTI left over in the shell would re-anchor ANOTHER TPM, which would truthfully say that the
+    # indices are missing, and the audit log would record an ALLOW that did nothing to this host's anchor.
+    tpm = args.tcti or "the default TPM"
 
     def record(event):
-        line = json.dumps(dict(event, time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), sort_keys=True)
+        line = json.dumps(dict(event, tpm=tpm, time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), sort_keys=True)
         fd = os.open(args.audit_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         try:
             os.write(fd, (line + "\n").encode())
@@ -162,6 +178,7 @@ def main(argv=None, ask=None, highwater=membership.HighWater, tty=None):
             os.close(fd)
 
     def typed(planned):
+        print("TPM: %s, NV index %s." % (tpm, args.tpm_index))
         print("This node's TPM anchor is unusable: %s" % planned["reason"])
         print("The old epoch counter %s." % ("cannot be read" if planned["counter"] is None else "reads epoch %d" % planned["counter"]))
         for epoch, held in planned["records"]:
@@ -179,6 +196,7 @@ def main(argv=None, ask=None, highwater=membership.HighWater, tty=None):
 
     try:
         require(re.fullmatch(r"0x[0-9a-fA-F]{1,8}", args.tpm_index) is not None, "--tpm-index must be 0x and up to 8 hex digits")
+        require("TPM2TOOLS_TCTI" not in os.environ, "TPM2TOOLS_TCTI is set in the environment: name the TPM with --tcti instead, or unset it")
         membership.hex_field(args.root_key, 64, "--root-key")
         # The phrase is a deliberate act at this host's terminal, not a line in a script or a pipe. (It is not a
         # secret: what authorizes the change is the TPM's owner authorization.)
@@ -189,7 +207,7 @@ def main(argv=None, ask=None, highwater=membership.HighWater, tty=None):
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
-        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index))
+        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti))
         now_at = reanchor(store, sources, args.node_id, typed, record)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
