@@ -448,7 +448,8 @@ func TestTheCollectorSignsReceiptsForTheCallersOwnStreamOnly(t *testing.T) {
 	_ = json.Unmarshal(events[1].Detail, &detail)
 	signature, _ := hex.DecodeString(receipt.Signature)
 	if receipt.EventHash != events[1].Hash || receipt.LineSHA256 != detail.LineSHA256 ||
-		!ed25519.Verify(public, ReceiptPreimage(fingerprintOf(first), "sitea.sync", 2, events[1].Hash, detail.LineSHA256), signature) {
+		receipt.LineChain != LineChain(LineChain(LineChainStart, mustLineHash(t, events[0])), detail.LineSHA256) ||
+		!ed25519.Verify(public, ReceiptPreimage(fingerprintOf(first), "sitea.sync", 2, events[1].Hash, detail.LineSHA256, receipt.LineChain), signature) {
 		t.Fatalf("the receipt does not sign what the collector holds at 2: %+v", receipt)
 	}
 	for label, recorder := range map[string]*httptest.ResponseRecorder{

@@ -115,15 +115,19 @@ type TrailStart struct {
 	EventHash  string `json:"event_hash"`
 	LineSHA256 string `json:"line_sha256"`
 	Timestamp  int64  `json:"timestamp"`
+	LineChain  string `json:"line_chain"` // the running digest of the lines through this one (LineChain); prune checks it, the mapping does not use it
 }
 
 func (start TrailStart) valid() bool {
 	if start == (TrailStart{}) {
 		return true
 	}
-	_, err := hex.DecodeString(start.LineSHA256)
+	hexOf := func(value string) bool {
+		_, err := hex.DecodeString(value)
+		return len(value) == 64 && err == nil && strings.ToLower(value) == value
+	}
 	return start.Sequence > 0 && start.Seq <= start.Sequence && auditHashPattern.MatchString(start.EventHash) &&
-		len(start.LineSHA256) == 64 && err == nil && strings.ToLower(start.LineSHA256) == start.LineSHA256 && start.Timestamp >= 0
+		hexOf(start.LineSHA256) && hexOf(start.LineChain) && start.Timestamp >= 0
 }
 
 // TrailEventsFrom is TrailEvents for data that continues after start.
@@ -162,6 +166,9 @@ func NewTrailWalker(name string, start TrailStart) (*TrailWalker, error) {
 	}
 	if !start.valid() {
 		return nil, fmt.Errorf("%w: the prune marker is not one trails.py writes", ErrTrailTampered)
+	}
+	if start.Sequence == 0 {
+		start.LineChain = LineChainStart
 	}
 	return &TrailWalker{name: name, at: start, chainN: start.Seq + 1, chain: start.Seq > 0}, nil
 }
@@ -208,6 +215,7 @@ func (w *TrailWalker) Next(raw []byte) (Event, error) {
 		w.at.Seq, w.chainN, w.chain = w.chainN, w.chainN+1, true
 	}
 	w.at.Sequence, w.at.EventHash, w.at.LineSHA256, w.at.Timestamp = number, event.Hash, hex.EncodeToString(sum[:]), event.Timestamp.Unix()
+	w.at.LineChain = LineChain(w.at.LineChain, w.at.LineSHA256)
 	return event, nil
 }
 
@@ -340,15 +348,16 @@ func ShipTrailFrom(ctx context.Context, sink TrailSink, site, name string, start
 // being held (#288). The collector must hold at least the pruned lines, and the line it holds at its
 // head must be the one walked there, or start itself.
 func ShipTrailLines(ctx context.Context, sink TrailSink, site, name string, start TrailStart, walk func(*TrailWalker, func(Event) error) error) (uint64, uint64, error) {
-	walker, err := NewTrailWalker(name, start)
-	if err != nil {
-		return 0, 0, err
-	}
+	walker, walkerErr := NewTrailWalker(name, start)
 	head, hash, err := sink.CommittedHead(ctx, site)
 	if err != nil {
 		return 0, start.Sequence, err
 	}
 	switch {
+	case walkerErr != nil && errors.Is(walkerErr, ErrTrailTampered): // a prune marker that is not one: tampering, alarmed
+		return head, start.Sequence, raiseTrailAlarm(ctx, sink, head, hash, walkerErr.Error())
+	case walkerErr != nil:
+		return head, start.Sequence, walkerErr
 	case head < start.Sequence:
 		return head, start.Sequence, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("the trail %s was pruned through line %d and the collector committed only %d: lines were removed before they shipped", name, start.Sequence, head))
 	case head == start.Sequence && head > 0 && start.EventHash != hash:

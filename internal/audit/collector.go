@@ -122,6 +122,9 @@ type collectorStream struct {
 	// lineHashes[i] is the line_sha256 that event i+1's trail detail names ("" for an event that is not a
 	// trail line): what a receipt binds (handleReceipt).
 	lineHashes []string
+	// lineChains[i] is the running digest of every line hash up to event i+1 (LineChain): what makes a
+	// receipt for one line a commitment to every line before it.
+	lineChains []string
 	// size is the file offset through which the stream is durably written; a failed append
 	// is truncated back to it so a torn line never survives a recoverable write error.
 	size int64
@@ -217,12 +220,15 @@ func (c *Collector) loadStream(identity, site string) error {
 	if err != nil {
 		return fmt.Errorf("collector stream: %w", err)
 	}
-	hashes, lineHashes := make([]string, len(events)), make([]string, len(events))
+	hashes, lineHashes, lineChains := make([]string, len(events)), make([]string, len(events)), make([]string, len(events))
+	chain := LineChainStart
 	for i, event := range events {
 		hashes[i], lineHashes[i] = event.Hash, trailLineHash(event.Detail)
+		chain = LineChain(chain, lineHashes[i])
+		lineChains[i] = chain
 	}
 	c.streams[streamKey(identity, site)] = &collectorStream{
-		identity: identity, site: site, file: appendFile, hashes: hashes, lineHashes: lineHashes, size: info.Size(),
+		identity: identity, site: site, file: appendFile, hashes: hashes, lineHashes: lineHashes, lineChains: lineChains, size: info.Size(),
 	}
 	return nil
 }
@@ -526,7 +532,12 @@ func (stream *collectorStream) appendLocked(event Event) error {
 	}
 	stream.size += int64(written)
 	stream.hashes = append(stream.hashes, event.Hash)
-	stream.lineHashes = append(stream.lineHashes, trailLineHash(event.Detail))
+	lineHash, chain := trailLineHash(event.Detail), LineChainStart
+	if n := len(stream.lineChains); n > 0 {
+		chain = stream.lineChains[n-1]
+	}
+	stream.lineHashes = append(stream.lineHashes, lineHash)
+	stream.lineChains = append(stream.lineChains, LineChain(chain, lineHash))
 	return nil
 }
 
@@ -573,11 +584,30 @@ const ReceiptDomain = "regalia.collector.receipt/v1"
 
 // ReceiptPreimage is what a receipt signs: that this collector holds, in the stream of this client
 // identity (the SHA-256 of its certificate) and site, at this position, the event of this hash, whose
-// trail detail names a line of this SHA-256. deploy/baremetal/trails.py prune verifies it before it
+// trail detail names a line of this SHA-256, and that the running digest of every line up to it is this
+// (LineChain). deploy/baremetal/trails.py prune verifies it before it
 // removes an archive, so it removes only lines the collector holds (#288). One field a line; none can
 // hold a newline (the identity and hashes are hex, the site is collectorSitePattern's).
-func ReceiptPreimage(identity, site string, sequence uint64, eventHash, lineSHA256 string) []byte {
-	return []byte(fmt.Sprintf("%s\n%s\n%s\n%d\n%s\n%s", ReceiptDomain, identity, site, sequence, eventHash, lineSHA256))
+func ReceiptPreimage(identity, site string, sequence uint64, eventHash, lineSHA256, lineChain string) []byte {
+	return []byte(fmt.Sprintf("%s\n%s\n%s\n%d\n%s\n%s\n%s", ReceiptDomain, identity, site, sequence, eventHash, lineSHA256, lineChain))
+}
+
+// LineChainStart is the running digest before a stream's first line.
+const LineChainStart = "0000000000000000000000000000000000000000000000000000000000000000"
+
+// LineChain extends the running digest of a stream's lines by one line hash: SHA-256 of the previous
+// digest's 32 bytes and the line hash's 32 bytes (32 zero bytes for an event that is not a trail line).
+// A receipt signs it, so a receipt for line k commits to every line from the first to k: a shipper that
+// posted placeholder lines before a real one gets a digest no honest trail on disk reproduces, and
+// trails.py prune, recomputing it over the archives, removes nothing (regalia-kms-51 on #288).
+func LineChain(previous, lineSHA256 string) string {
+	before, _ := hex.DecodeString(previous)
+	line, err := hex.DecodeString(lineSHA256)
+	if err != nil || len(line) != 32 {
+		line = make([]byte, 32)
+	}
+	sum := sha256.Sum256(append(before, line...))
+	return hex.EncodeToString(sum[:])
 }
 
 // Receipt is the collector's answer to GET /v1/receipt.
@@ -585,7 +615,8 @@ type Receipt struct {
 	Sequence   uint64 `json:"sequence"`
 	EventHash  string `json:"event_hash"`
 	LineSHA256 string `json:"line_sha256"`
-	Signature  string `json:"signature"` // Ed25519 over ReceiptPreimage, hex
+	LineChain  string `json:"line_chain"` // the running digest of every line up to this one (LineChain)
+	Signature  string `json:"signature"`  // Ed25519 over ReceiptPreimage, hex
 }
 
 // trailLineHash is the line_sha256 a trail event's detail names, already held to its content by
@@ -635,14 +666,15 @@ func (c *Collector) handleReceipt(writer http.ResponseWriter, request *http.Requ
 	var receipt Receipt
 	held := stream != nil && sequence <= uint64(len(stream.hashes))
 	if held {
-		receipt = Receipt{Sequence: sequence, EventHash: stream.hashes[sequence-1], LineSHA256: stream.lineHashes[sequence-1]}
+		receipt = Receipt{Sequence: sequence, EventHash: stream.hashes[sequence-1], LineSHA256: stream.lineHashes[sequence-1],
+			LineChain: stream.lineChains[sequence-1]}
 	}
 	c.mu.Unlock()
 	if !held {
 		http.Error(writer, "this collector holds no such position of your stream", http.StatusNotFound)
 		return
 	}
-	receipt.Signature = hex.EncodeToString(ed25519.Sign(c.receiptKey, ReceiptPreimage(identity, site, sequence, receipt.EventHash, receipt.LineSHA256)))
+	receipt.Signature = hex.EncodeToString(ed25519.Sign(c.receiptKey, ReceiptPreimage(identity, site, sequence, receipt.EventHash, receipt.LineSHA256, receipt.LineChain)))
 	writer.Header().Set("Content-Type", "application/json")
 	encoded, _ := json.Marshal(receipt)
 	_, _ = writer.Write(encoded)

@@ -409,10 +409,11 @@ def _marker(path):
         return None
     except ValueError:
         raise Refused("%s is not a prune marker" % path)
-    fields = {"seq": int, "sequence": int, "event_hash": str, "line_sha256": str, "timestamp": int}
+    fields = {"seq": int, "sequence": int, "event_hash": str, "line_sha256": str, "timestamp": int, "line_chain": str}
     if not isinstance(marker, dict) or set(marker) != set(fields) or \
             not all(type(marker[k]) is t and (t is not int or marker[k] >= 0) for k, t in fields.items()) or \
-            not re.fullmatch(r"[0-9a-f]{64}", marker["line_sha256"]) or not re.fullmatch(r"sha256:[0-9a-f]{64}", marker["event_hash"]):
+            not re.fullmatch(r"[0-9a-f]{64}", marker["line_sha256"]) or not re.fullmatch(r"[0-9a-f]{64}", marker["line_chain"]) or \
+            not re.fullmatch(r"sha256:[0-9a-f]{64}", marker["event_hash"]):
         raise Refused("%s is not a prune marker" % path)
     return marker
 
@@ -451,6 +452,13 @@ def verify_trail(path, expected_head=None):
 
 
 RECEIPT_DOMAIN = "regalia.collector.receipt/v1"         # internal/audit/collector.go ReceiptPreimage
+LINE_CHAIN_START = "00" * 32                            # internal/audit/collector.go LineChainStart
+
+
+def line_chain(previous, line):
+    """The collector's running digest of a stream's lines (internal/audit/collector.go LineChain), extended
+    by one line's exact bytes, newline included."""
+    return hashlib.sha256(bytes.fromhex(previous) + hashlib.sha256(line).digest()).hexdigest()
 STREAM = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 
@@ -480,8 +488,8 @@ def client_identity(certificate_path):
 def _receipt_signed(receipt, keys, identity, stream):
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    preimage = ("%s\n%s\n%s\n%d\n%s\n%s" % (RECEIPT_DOMAIN, identity, stream, receipt["sequence"], receipt["event_hash"],
-                                            receipt["line_sha256"])).encode()
+    preimage = ("%s\n%s\n%s\n%d\n%s\n%s\n%s" % (RECEIPT_DOMAIN, identity, stream, receipt["sequence"], receipt["event_hash"],
+                                                receipt["line_sha256"], receipt["line_chain"])).encode()
     try:
         signature = bytes.fromhex(receipt["signature"])
     except (TypeError, ValueError):
@@ -503,7 +511,10 @@ def prune(path, head_path, trail, site, identity, keys):
         SHA-256 of its client certificate, and <site>.<trail>), so another stream's receipt is useless;
       * the receipt verifies under one of `keys` (receipt_keys);
       * its position is the one counted here, from the marker through the archives' lines on disk;
-      * its line hash is that of the archive's last line on disk.
+      * its line hash is that of the archive's last line on disk, and its LINE CHAIN (the collector's
+        running digest of every line it holds up to that one) is the one recomputed here over every line
+        on disk from the marker: a receipt for one real line after placeholder ones (withheld lines with
+        made-up hashes) carries a chain no trail on disk reproduces (regalia-kms-51).
     The collector checks every trail event's content against the line hash it names, so a receipt is
     for the line itself. A missing receipt leaves the archive (and every later one) waiting; a receipt
     that does not hold is refused, since only a forged head file makes one. The marker is written (and
@@ -521,24 +532,28 @@ def prune(path, head_path, trail, site, identity, keys):
     marker, archives, _ = segments(path)
     left = _left_behind(path, marker)                     # covered by the marker, left by a prune that was cut
     position = marker["sequence"] if marker else 0
+    chain = marker["line_chain"] if marker else LINE_CHAIN_START
     covered = []
     for archive in archives:
         data = _read_whole(archive)
         position += data.count(b"\n")
+        for line in data.splitlines(keepends=True):
+            chain = line_chain(chain, line)
         entry = named.get(os.path.basename(archive))
         receipt = entry.get("receipt") if isinstance(entry, dict) else None
         if not isinstance(receipt, dict):
             break                                         # not yet held at the collector, or not yet receipted
         last = data[data.rstrip(b"\n").rfind(b"\n") + 1:]
-        fields = (receipt.get("sequence"), receipt.get("event_hash"), receipt.get("line_sha256"), receipt.get("signature"))
+        fields = (receipt.get("sequence"), receipt.get("event_hash"), receipt.get("line_sha256"), receipt.get("signature"),
+                  receipt.get("line_chain"))
         if not data.endswith(b"\n") or not isinstance(fields[0], int) or not all(isinstance(v, str) for v in fields[1:]) or \
                 not isinstance(entry.get("timestamp"), int) or fields[0] != position or \
-                fields[2] != hashlib.sha256(last).hexdigest() or not re.fullmatch(r"sha256:[0-9a-f]{64}", fields[1]) or \
+                fields[2] != hashlib.sha256(last).hexdigest() or fields[4] != chain or not re.fullmatch(r"sha256:[0-9a-f]{64}", fields[1]) or \
                 not _receipt_signed(receipt, keys, identity, stream):
-            raise Refused("%s: its receipt does not hold (position %d, its last line, the stream %s, or the collector's "
-                          "signature): not pruned" % (archive, position, stream))
+            raise Refused("%s: its receipt does not hold (position %d, its last line, the chain of every line before it, the "
+                          "stream %s, or the collector's signature): not pruned" % (archive, position, stream))
         covered.append((archive, {"seq": int(ARCHIVE.fullmatch(archive[len(path):]).group(1)), "sequence": position,
-                                  "event_hash": fields[1], "line_sha256": fields[2], "timestamp": entry["timestamp"]}))
+                                  "event_hash": fields[1], "line_sha256": fields[2], "timestamp": entry["timestamp"], "line_chain": chain}))
     for archive in left:
         os.unlink(archive)
     if not covered:

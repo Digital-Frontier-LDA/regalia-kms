@@ -391,13 +391,23 @@ class Rotation(Case):
             self._keys.setdefault(name, Ed25519PrivateKey.generate())
         return [self._keys[n].public_key().public_bytes(_s.Encoding.Raw, _s.PublicFormat.Raw).hex() for n in names]
 
-    def receipt(self, sequence, line_sha256, key="old", stream=None):
+    def chain_through(self, sequence):
+        """The collector's running digest of this trail's lines, 1 to sequence, read from the files on disk
+        as they were before any prune (the test holds them all)."""
+        chain = trails.LINE_CHAIN_START
+        lines = b"".join(open(os.path.join(self.d, n), "rb").read() for n in self.archives()).splitlines(keepends=True)
+        for line in lines[:sequence]:
+            chain = trails.line_chain(chain, line)
+        return chain
+
+    def receipt(self, sequence, line_sha256, key="old", stream=None, chain=None):
         """What the collector signs (internal/audit/collector.go ReceiptPreimage)."""
         self.keys(key)
         event_hash = "sha256:" + hashlib.sha256(b"event %d" % sequence).hexdigest()
-        preimage = "%s\n%s\n%s\n%d\n%s\n%s" % (trails.RECEIPT_DOMAIN, self.IDENTITY, stream or "%s.%s" % (self.SITE, self.TRAIL),
-                                                sequence, event_hash, line_sha256)
-        return {"sequence": sequence, "event_hash": event_hash, "line_sha256": line_sha256,
+        chain = chain or self.chain_through(sequence)
+        preimage = "%s\n%s\n%s\n%d\n%s\n%s\n%s" % (trails.RECEIPT_DOMAIN, self.IDENTITY, stream or "%s.%s" % (self.SITE, self.TRAIL),
+                                                    sequence, event_hash, line_sha256, chain)
+        return {"sequence": sequence, "event_hash": event_hash, "line_sha256": line_sha256, "line_chain": chain,
                 "signature": self._keys[key].sign(preimage.encode()).hex()}
 
     def head(self, committed, upto=None, key="old", bend=None):
@@ -420,6 +430,12 @@ class Rotation(Case):
         with open(path, "w") as f:
             json.dump({"trail": self.TRAIL, "committed": committed, "archives": entries}, f)
         return path, entries
+
+    def placeholder_chain(self, sequence, last_line_sha256):
+        chain = trails.LINE_CHAIN_START
+        for k in range(1, sequence):
+            chain = hashlib.sha256(bytes.fromhex(chain) + hashlib.sha256(b"placeholder %d" % k).digest()).hexdigest()
+        return hashlib.sha256(bytes.fromhex(chain) + bytes.fromhex(last_line_sha256)).hexdigest()
 
     def prune(self, head, keys=("old",)):
         return trails.prune(self.path, head, self.TRAIL, self.SITE, self.IDENTITY, self.keys(*keys))
@@ -452,6 +468,11 @@ class Rotation(Case):
             "an unpinned key": lambda i, r: self.receipt(r["sequence"], r["line_sha256"], key="stranger"),
             "a forged signature": lambda i, r: dict(r, signature="00" * 64),
             "a claimed line count": lambda i, r: dict(self.receipt(r["sequence"] + 50, r["line_sha256"]), sequence=r["sequence"] + 50),
+            # regalia-kms-51: placeholder (withheld) lines with made-up hashes, then the archive's real last
+            # line. The collector holds the right last line at the right position, and signs, but its chain
+            # runs over the placeholders: no line before it ever reached the collector.
+            "placeholders before the real last line": lambda i, r: self.receipt(
+                r["sequence"], r["line_sha256"], chain=self.placeholder_chain(r["sequence"], r["line_sha256"])),
         }
         for label, bend in bends.items():
             with self.subTest(label):

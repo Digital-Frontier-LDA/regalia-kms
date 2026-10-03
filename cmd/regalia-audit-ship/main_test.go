@@ -307,14 +307,22 @@ func (sink *receiptSink) Receipt(_ context.Context, sequence uint64) (audit.Rece
 	if err := json.Unmarshal(event.Detail, &detail); err != nil {
 		return audit.Receipt{}, err
 	}
-	signature := ed25519.Sign(sink.key, audit.ReceiptPreimage(sink.identity, sink.stream, sequence, event.Hash, detail.LineSHA256))
-	return audit.Receipt{Sequence: sequence, EventHash: event.Hash, LineSHA256: detail.LineSHA256, Signature: hex.EncodeToString(signature)}, nil
+	chain := audit.LineChainStart
+	for _, earlier := range sink.events[:sequence] {
+		var d struct {
+			LineSHA256 string `json:"line_sha256"`
+		}
+		_ = json.Unmarshal(earlier.Detail, &d)
+		chain = audit.LineChain(chain, d.LineSHA256)
+	}
+	signature := ed25519.Sign(sink.key, audit.ReceiptPreimage(sink.identity, sink.stream, sequence, event.Hash, detail.LineSHA256, chain))
+	return audit.Receipt{Sequence: sequence, EventHash: event.Hash, LineSHA256: detail.LineSHA256, LineChain: chain, Signature: hex.EncodeToString(signature)}, nil
 }
 
 func TestAPruneAheadOfTheCollectorIsTampering(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sync-audit.jsonl")
-	marker := `{"seq":10,"sequence":10,"event_hash":"sha256:` + strings.Repeat("ab", 32) + `","line_sha256":"` + strings.Repeat("cd", 32) + `","timestamp":1790000000}`
+	marker := `{"seq":10,"sequence":10,"event_hash":"sha256:` + strings.Repeat("ab", 32) + `","line_sha256":"` + strings.Repeat("cd", 32) + `","timestamp":1790000000,"line_chain":"` + strings.Repeat("ef", 32) + `"}`
 	if err := os.WriteFile(path+".pruned", []byte(marker), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -322,5 +330,18 @@ func TestAPruneAheadOfTheCollectorIsTampering(t *testing.T) {
 	sink := &fakeSink{head: 4, hash: "sha256:" + strings.Repeat("ef", 32)}
 	if err := loop(context.Background(), sink, o, &bytes.Buffer{}); !errors.Is(err, audit.ErrTrailTampered) || len(sink.alarms) != 1 || !strings.Contains(sink.alarms[0], "removed before they shipped") {
 		t.Fatalf("a marker past the collector's head: %v, alarms %q", err, sink.alarms)
+	}
+}
+
+func TestAMarkerThatIsNotOneRaisesTheAlarm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sync-audit.jsonl")
+	if err := os.WriteFile(path+".pruned", []byte(`{"seq":10,"sequence":10,"event_hash":"not a hash","line_sha256":"","timestamp":1,"line_chain":""}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeSink{head: 10, hash: "sha256:" + strings.Repeat("ef", 32)}
+	err := loop(context.Background(), sink, options{trail: "sync", path: path, site: "sitea", interval: time.Hour}, &bytes.Buffer{})
+	if !errors.Is(err, audit.ErrTrailTampered) || len(sink.alarms) != 1 || sink.sends != 0 {
+		t.Fatalf("a forged marker: %v, %d alarms, %d sends", err, len(sink.alarms), sink.sends)
 	}
 }

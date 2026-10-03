@@ -800,7 +800,9 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
   this client's stream, at this position, this event and this line". It checks every trail event's
   content against the line hash it names (`regalia.trail/v2` carries the exact line), so a receipt is
   for the line itself. After each pass the shipper fetches a receipt for each archive the collector
-  holds wholly, into `/var/lib/regalia-audit-ship/<trail>.head.json`.
+  holds wholly, into `/var/lib/regalia-audit-ship/<trail>.head.json`. Each receipt also signs the
+  collector's running digest of every line of the stream up to that one (the line chain), so a receipt
+  for an archive's last line commits to every line before it.
   `regalia-audit-prune@<trail>.timer` (daily, as the trail directory's owner, no capability) removes an
   archive only if its receipt verifies against `/etc/regalia/audit-ship/collector-receipt.pub` (one
   key a line, so the collector's key can rotate with an overlap), names this host's client certificate
