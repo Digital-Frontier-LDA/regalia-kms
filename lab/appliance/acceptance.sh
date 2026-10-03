@@ -42,6 +42,16 @@ for tool in tpm2_quote tpm2_checkquote tpm2_unseal tpm2_import tpm2_nvread tpm2_
   check test -x "/usr/bin/$tool"
 done
 check test -x /usr/sbin/sulogin
+check test -r /var/log/regalia-util-smoke.json
+for package in mount util-linux util-linux-extra libmount1 libblkid1 libuuid1 libsmartcols1 liblastlog2-2; do
+  check test "$(dpkg-query -W -f='${Version}' "$package")" = 2.42.4-0+regalia1
+done
+check test "$(dpkg-query -W -f='${Version}' bsdutils)" = 1:2.42.4-0+regalia1
+for tool in mount umount findmnt lsblk su sulogin; do
+  check "$tool" --help
+done
+check cryptsetup --version
+check sh -c '! ldd /usr/bin/mount /usr/bin/blkid /usr/sbin/cryptsetup | grep -q "not found"'
 echo REGALIA_KERNEL_NETWORK_CRYPTO_PASS
 /usr/local/sbin/regalia-kms -version
 check systemctl start regalia-kms.service
@@ -180,9 +190,12 @@ cp /var/log/regalia-go-version.txt /mnt/regalia-export/go-version.txt
 cp /var/log/regalia-binary-build.txt /mnt/regalia-export/binary-build.txt
 cp /var/log/regalia-kernel-update.json /mnt/regalia-export/kernel-update.json
 cp /usr/local/share/regalia-appliance/tpm-proof/* /mnt/regalia-export/
+cp -r /usr/local/share/regalia-appliance/util-proof /mnt/regalia-export/
+cp /var/log/regalia-util-smoke.json /mnt/regalia-export/util-smoke.json
 # Compilation proof is exported for admission, then physically removed before
 # the exact final filesystem is scanned. No duplicate binaries remain in it.
 rm -rf /usr/local/share/regalia-appliance/tpm-proof
+rm -rf /usr/local/share/regalia-appliance/util-proof
 cp /usr/local/sbin/regalia-kms /mnt/regalia-export/regalia-kms
 # Remove the automatic verification boot flag after the successful prototype
 # test; normal boots retain the same commissioning and network restrictions.

@@ -17,6 +17,8 @@ from .probe import normal_boot
 from deploy.images.snapshot import validate as validate_snapshot, check_installed, render_preseed, POLICY as SNAPSHOT_POLICY
 from deploy.images.source import validate as validate_source
 from deploy.images.source_package import validate as validate_source_package, installed_binding
+from deploy.images.util_source import validate as validate_util_source
+from deploy.images.util_admission import validate as validate_util_packages
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +63,8 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
     snapshot_policy = json.loads(snapshot_policy_data)
     source_bundle = ROOT / "deploy/images/.artifacts/tpm-source"
     source_report = validate_source(source_bundle)
+    util_bundle = ROOT / "deploy/images/.artifacts/util-source"
+    util_report = validate_util_source(util_bundle)
     policy = json.loads((ROOT / "deploy/images/debian-policy.json").read_text())
     media_report = verify_gpg(media / policy["image"], media / policy["checksum"],
                               media / policy["signature"], media / "debian-cd.pub",
@@ -71,7 +75,8 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
     report = {"schema": "regalia.appliance-build/v1", "status": "building",
               "evidence_class": "emulated", "production_approved": False, "acceleration": acceleration,
               "installer": media_report, "package_snapshot": package_report,
-              "authenticated_tpm_source": source_report, "sources": {}}
+              "authenticated_tpm_source": source_report,
+              "authenticated_util_source": util_report, "sources": {}}
     try:
         frozen = staging / "inputs"
         frozen.mkdir()
@@ -99,6 +104,11 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
             for name in (*source_report["files"], "verification.json"):
                 archive.add(source_bundle / name, arcname=name, recursive=False)
         report["tpm_source_bundle_sha256"] = hash_regular(source_input, "sha256")[0]
+        util_input = frozen / "regalia-util-source.tar"
+        with tarfile.open(util_input, "w") as archive:
+            for name in (*util_report["files"], "verification.json"):
+                archive.add(util_bundle / name, arcname=name, recursive=False)
+        report["util_source_bundle_sha256"] = hash_regular(util_input, "sha256")[0]
         for source, destination in (("/install.amd/vmlinuz", "vmlinuz"), ("/install.amd/initrd.gz", "installer.gz")):
             command(["xorriso", "-osirrox", "on", "-indev", str(media / policy["image"]),
                      "-extract", source, str(staging / destination)], capture_output=True)
@@ -107,7 +117,9 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
         initrd = staging / "installer-initrd.gz"
         initrd.write_bytes((staging / "installer.gz").read_bytes() + gzip.compress(extra, mtime=0))
         disk = staging / "regalia-debian13-amd64.qcow2"
-        command(["qemu-img", "create", "-f", "qcow2", str(disk), "8G"], capture_output=True)
+        # Two full Debian utility builds need disposable source/package space.
+        # Sparse capacity does not retain those trees in the exported rootfs.
+        command(["qemu-img", "create", "-f", "qcow2", str(disk), "16G"], capture_output=True)
         shutil.copyfile(variables, staging / "uefi-vars.fd")
         report["firmware_sha256"] = hashlib.sha256(firmware.read_bytes()).hexdigest()
         report["qemu_version"] = command(["qemu-system-x86_64", "--version"], capture_output=True, text=True).stdout.splitlines()[0]
@@ -151,8 +163,21 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
                                                      cwd=ROOT, capture_output=True).stdout).hexdigest()
                          for name in ("tpm_build.py", "tpm_profile.py")}
         admitted = validate_source_package(export, source_bundle, package_inventory, recipe_hashes)
-        report["installed_package_binding"] = installed_binding(export / "packages.tsv", package_inventory, admitted)
-        report["export"] = {path.name: hash_regular(path, "sha256")[0] for path in export.iterdir()}
+        util_recipes = {name: hashlib.sha256(command(["git", "show", commit + ":" + path],
+                                                   cwd=ROOT, capture_output=True).stdout).hexdigest()
+                        for name, path in {
+                            "util_build.py": "lab/appliance/util_build.py",
+                            "util_profile.py": "lab/appliance/util_profile.py",
+                            "util_package.py": "deploy/images/util_package.py",
+                            "util-package-policy.json": "deploy/images/util-package-policy.json"}.items()}
+        util_admitted = validate_util_packages(export / "util-proof", util_bundle, package_inventory,
+                                              util_recipes, export / "rootfs.tar.gz")
+        report["installed_package_binding"] = installed_binding(export / "packages.tsv", package_inventory,
+                                                                 admitted, util_admitted)
+        report["util_package_binding"] = util_admitted
+        report["util_exports"] = {path.relative_to(export).as_posix(): hash_regular(path, "sha256")[0]
+                                  for path in (export / "util-proof").rglob("*") if path.is_file()}
+        report["export"] = {path.name: hash_regular(path, "sha256")[0] for path in export.iterdir() if path.is_file()}
         # Preserve useful final artifacts and evidence, not the compiler source
         # snapshot or installer initramfs. Failed builds retain diagnostics.
         shutil.rmtree(frozen)

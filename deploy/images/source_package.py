@@ -1,4 +1,4 @@
-"""Admit the single reviewed source-built TPM package to development evidence.
+"""Admit reviewed source-built packages to development evidence.
 
 This is a separate provenance path, not a signed-archive exception or scan
 waiver. Every other package must still match authenticated Debian indexes.
@@ -141,17 +141,27 @@ def validate(exports, bundle, inventory, recipe_hashes, architecture="amd64"):
             "compiler_inputs": compiler_binding, "recipe_inputs": recipe_hashes}
 
 
-def installed_binding(path, inventory, admitted):
+def installed_binding(path, inventory, admitted, utilities=None):
     require(admitted.get("schema") == "regalia.source-package-binding/v1" and admitted.get("status") == "verified"
             and admitted.get("package") == source.PACKAGE and admitted.get("version") == VERSION,
             "reviewed source admission required")
     rows = read_regular(path).decode("utf-8").splitlines()
+    require(len(rows) == len(set(rows)), "duplicate installed package inventory row")
     own = [row for row in rows if row.split("\t")[0].split(":")[0] == source.PACKAGE]
     require(own == [source.PACKAGE + "\t" + VERSION], "source-built installed package missing or ambiguous")
+    if utilities is not None:
+        from .util_admission import versions
+        require(utilities.get("schema") == "regalia.util-linux-source-binding/v1"
+                and utilities.get("status") == "verified" and utilities.get("packages") == versions(),
+                "reviewed utility source admission required")
+        for name, version in versions().items():
+            matches = [row for row in rows if row.split("\t")[0].split(":")[0] == name]
+            require(matches == [name + "\t" + version], "source-built utility inventory differs: " + name)
+            own.extend(matches)
     with tempfile.TemporaryDirectory(prefix="regalia-archive-inventory-") as temp:
         filtered = Path(temp) / "packages.tsv"
         filtered.write_text("\n".join(row for row in rows if row not in own) + "\n")
         signed = check_installed(filtered, inventory)
     return {"status": "verified", "packages": len(rows), "archive_packages": signed["packages"],
-            "source_built_packages": 1, "inventory_sha256": hash_regular(path, "sha256")[0],
-            "source_package": admitted}
+            "source_built_packages": len(own), "inventory_sha256": hash_regular(path, "sha256")[0],
+            "source_package": admitted, "utility_source_packages": utilities}

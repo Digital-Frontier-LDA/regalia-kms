@@ -26,6 +26,12 @@ case "$revision" in *[!0-9a-f]*|'') exit 1 ;; esac
 # Only the reviewed six-package kernel closure may come from dated backports.
 # Stable libraries remain on their authenticated Debian/security versions.
 python3 -I lab/appliance/kernel.py --apply >/var/log/regalia-kernel-update.json
+# Build utilities before installing the TPM profile. Both compiler inventories
+# must consist exclusively of authenticated archive package versions.
+mkdir -p /tmp/regalia-util-source
+tar -xf /tmp/regalia-util-source.tar -C /tmp/regalia-util-source
+python3 -I tools/lab_cli.py appliance-util-build --bundle /tmp/regalia-util-source \
+  --output /tmp/regalia-util-build >/var/log/regalia-util-build.log
 mkdir -p /tmp/regalia-tpm-source
 tar -xf /tmp/regalia-tpm-source.tar -C /tmp/regalia-tpm-source
 python3 -I tools/lab_cli.py appliance-tpm-build --bundle /tmp/regalia-tpm-source \
@@ -36,6 +42,13 @@ for name in tpm-source-package.json compiler-packages.tsv first.tpm2 second.tpm2
 done
 cp /usr/bin/tpm2 /usr/local/share/regalia-appliance/tpm-proof/installed.tpm2
 cp /tmp/regalia-tpm-build/tpm-source-package.json /var/log/regalia-tpm-source-package.json
+python3 -I tools/lab_cli.py appliance-util-build --output /tmp/regalia-util-build \
+  --install-built >/var/log/regalia-util-install.log
+python3 -I tools/lab_cli.py appliance-util-smoke >/var/log/regalia-util-smoke.json
+install -d -m 0700 /usr/local/share/regalia-appliance/util-proof
+for name in util-source-build.json compiler-packages.tsv first.log second.log first-packages second-packages; do
+  cp -r "/tmp/regalia-util-build/$name" /usr/local/share/regalia-appliance/util-proof/
+done
 # Debian authenticates the compiler package. Go's automatic newer toolchain and
 # module downloads use its checksum database; never disable those checks.
 export GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GOTOOLCHAIN=auto
@@ -116,6 +129,7 @@ SystemMaxUse=32M
 EOF
 # No credentials or private configuration are generated in this reusable disk.
 # Remove build-time tools, source, toolchain caches and installer SSH host keys.
+python3 -I tools/lab_cli.py appliance-util-build --output /tmp/regalia-util-build --purge-build-dependencies
 apt-get purge -y golang-go gcc libc6-dev make autoconf automake autoconf-archive libtool libtss2-dev libssl-dev pkg-config dpkg-dev
 # The reusable appliance has no interactive administration account. Editors
 # belong on recovery media; remove their parser attack surface from this disk.
@@ -159,6 +173,7 @@ done
 apt-get clean
 rm -rf /root/go /root/.cache /tmp/regalia-build /tmp/regalia-source /tmp/regalia-source.tar \
   /tmp/regalia-tpm-build /tmp/regalia-tpm-source /tmp/regalia-tpm-source.tar
+rm -rf /tmp/regalia-util-build /tmp/regalia-util-source /tmp/regalia-util-source.tar
 rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed
 rm -rf /var/lib/apt/lists/*
 truncate -s 0 /etc/machine-id

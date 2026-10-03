@@ -134,6 +134,35 @@ inspection never executes those scripts. Replacing the caller's package between
 parser calls cannot change the frozen inspected bytes. The full image guard
 collection passes 109 tests; Python isolation/documented-invocation guards pass.
 
+### Candidate appliance integration
+
+The new `appliance-util-build` command extracts only the pinned upstream and
+Debian packaging inputs, applies the checked profile, and builds twice as UID
+61001 under Debian's unchanged test rules. It inspects all nine runtime outputs
+before allowing local installation; no dependency override or forced Essential
+removal is allowed. Builds precede the TPM local installation so both compiler
+inventories remain entirely on the authenticated archive path. The temporary
+build account and source trees are removed.
+
+`deploy.images.util_admission` freshly authenticates sources, checks recipe and
+compiler bindings, reparses both sets of actual packages and reads installed
+files directly from the exported root filesystem. This additionally checks
+links, ownership and exact modes, including persistent 0755 mount/umount
+overrides. The final package inventory admits exactly these nine local utility
+versions and the existing TPM profile; every other row still needs a signed
+archive record. Candidate package bytes and full test logs are retained as
+development evidence. Both workflow recipes fetch the authenticated source
+bundle and require AMD64 boot/confinement and the unchanged exact-rootfs scan.
+
+The new filesystem reader verified all **389 regular files and 13 symlinks**
+against the previously installed native candidate. Its negative tests reject
+missing/substituted files, redirected links, changed ownership/modes,
+hardlinks and duplicates. All 111 image guards pass locally. The first new
+native harness run correctly refused package production: its nologin build
+account supplied the wrong shell to two `script` test groups. The test process
+now receives explicit `/bin/sh`; a fresh two-build run is pending. No vendor
+test is removed or reclassified. AMD64 image integration is also pending.
+
 ## Residual Risk
 
 The initial 2.41.6 evaluation built no Debian packages. The 2.42.4 evaluation
@@ -145,10 +174,10 @@ or complete signed compiler payload admission.
 Version/load checks and symbol equality do not prove structure/calling ABI,
 mount security, PAM/login, initramfs recovery, cgroup descriptor behavior or
 actual exploit resistance. The retained downstream patches, exact scripts and
-native file layout are reviewed, but AMD64 outputs, boot/recovery integration
-and a complete signed compiler/payload admission path remain unproved. The
-existing appliance admission still accepts only the reviewed TPM package;
-the new structure gate cannot substitute for candidate source/build admission.
+native file layout are reviewed, but AMD64 outputs and boot/recovery integration
+remain unproved. The last qualified appliance accepts only the reviewed TPM
+local package; the new nine-package admission and integration must pass the
+actual AMD64 workflow before they can qualify a replacement appliance.
 
 The repeatable source verifier is now `deploy.images.util_source`. It freshly
 verified upstream 2.42.4's tar, changelog and release notes using the same pinned
@@ -174,10 +203,10 @@ Essential/Protected flags, dependency relationships, PAM/systemd configuration
 and Debian's reviewed downstream changes. Do not force removal of essential
 packages or conceal source identities to influence matching.
 
-Before changing the appliance, extend narrowly scoped package admission to the
-reviewed payloads and compiler inputs. Prove reproductions, run benign security
-regressions and the existing recovery tests, then build, boot and scan the exact
-final filesystem. Local forks require continuing upstream/vendor advisory
+Qualify the narrowly scoped package admission against the actual AMD64 outputs
+and compiler inputs. Prove reproductions, run benign security regressions and
+the existing recovery tests, then build, boot and scan the exact final
+filesystem. Local forks require continuing upstream/vendor advisory
 tracking, authenticated patch review and rebuild qualification for every update.
 A Debian advisory database correction may still be needed where the scanner
 has no fixed-version constraint; retain the blocker until the original scanner

@@ -5,6 +5,7 @@ COMMANDS = {
     'appliance-build': 'lab.appliance.build',
     'appliance-tpm-build': 'lab.appliance.tpm_build',
     'appliance-util-profile': 'lab.appliance.util_profile',
+    'appliance-util-build': 'lab.appliance.util_build',
     'appliance-util-smoke': 'lab.appliance.util_smoke',
     'appliance-probe': 'lab.appliance.probe',
     'appliance-scan': 'lab.appliance.scan_build',
