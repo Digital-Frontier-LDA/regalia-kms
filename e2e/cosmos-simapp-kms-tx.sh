@@ -87,13 +87,16 @@ if [ -n "${REGALIA_COSMOS_TOKEN_SERIAL:-}" ]; then
   SERIAL="$REGALIA_COSMOS_TOKEN_SERIAL"
   PIN="${REGALIA_COSMOS_TOKEN_PIN:?REGALIA_COSMOS_TOKEN_PIN is required with a physical token}"
   OBJECT_ID="${REGALIA_COSMOS_TOKEN_OBJECT_ID:?REGALIA_COSMOS_TOKEN_OBJECT_ID is required with a physical token}"
-  SLOT_ID="$(pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | awk -v want="$SERIAL" '
-      /^Slot [0-9]+ \(0x[0-9a-fA-F]+\)/ { match($0, /\(0x[0-9a-fA-F]+\)/); id = substr($0, RSTART + 1, RLENGTH - 2) }
-      /serial num *:/ { v = $NF; if (v == want) { n++; found = id } }
-      END { if (n > 1) print "AMBIGUOUS"; else if (n == 1) print found }')"
-  [ "$SLOT_ID" != AMBIGUOUS ] || fail "more than one slot reports serial $SERIAL — refusing to guess which token signs"
-  [ -n "$SLOT_ID" ] || fail "no slot reports serial $SERIAL"
-  P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$SLOT_ID" --login --pin env:REGALIA_E2E_PIN "$@"; }
+  # A real card is isolated BEFORE anything lists the slots: OpenSC is shown ONLY this card (here and
+  # in the KMS path below, which inherits OPENSC_CONF), and the PIN goes only to the slot that holds
+  # this serial alone (e2e/lib/bench_cards.sh, regalia-kms#174).
+  case "$(basename "$MODULE")" in *softhsm*) fail "a physical token through SoftHSM is not a physical token";; esac
+  # shellcheck source=lib/bench_cards.sh
+  . "$(dirname "$0")/lib/bench_cards.sh"
+  bench_isolate "$STATE/opensc.conf" "$MODULE" "$SERIAL" || fail "cannot isolate $SERIAL in OpenSC (is it attached, alone under its serial?)"
+  SLOT_ID="$(bench_slot "$SERIAL")"; [ -n "$SLOT_ID" ] || fail "no single slot reports serial $SERIAL"
+  P11() { bench_gate "$SERIAL" "$SLOT_ID" || fail "$SERIAL is not the one card visible: no PIN"
+          REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$SLOT_ID" --login --pin env:REGALIA_E2E_PIN "$@"; }
   P11 --read-object --type pubkey --id "$OBJECT_ID" --output-file "$STATE/pub.der" >/dev/null 2>&1 \
     || fail "no public key at object $OBJECT_ID on $SERIAL"
 else
@@ -102,8 +105,11 @@ else
   printf 'directories.tokendir = %s\nobjectstore.backend = file\nlog.level = ERROR\nslots.removable = false\n' "$STATE/tokens" > "$STATE/softhsm2.conf"
   export SOFTHSM2_CONF="$STATE/softhsm2.conf"
   PIN="$(openssl rand -hex 16)"
+  # emulated token: no real card (SoftHSM)
   softhsm2-util --init-token --free --label regalia-kms-tx --so-pin "$(openssl rand -hex 16)" --pin "$PIN" >/dev/null
-  P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-tx --login --pin env:REGALIA_E2E_PIN "$@"; }
+  SOFTHSM_MODULE="$MODULE"
+  # emulated token: no real card (SoftHSM)
+  P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$SOFTHSM_MODULE" --token-label regalia-kms-tx --login --pin env:REGALIA_E2E_PIN "$@"; }
   P11 --keypairgen --key-type EC:secp256k1 --usage-sign --label regalia-kms-tx --id 01 >/dev/null
   P11 --read-object --type pubkey --id 01 --output-file "$STATE/pub.der" >/dev/null
   SERIAL="$(pkcs11-tool --module "$MODULE" --token-label regalia-kms-tx --list-slots 2>/dev/null \
@@ -157,6 +163,8 @@ kms_sign() {
   local -a over=()
   for kv in "$@"; do over+=("REGALIA_COSMOS_NODE_$kv"); done
   rm -f -- "$dir/sig.bin"
+  # Each run hands the token PIN to the KMS path: with a real card, only while it is the one card visible.
+  if [ -n "${BENCH_CARDS[*]:-}" ]; then bench_gate "$SERIAL" || fail "$SERIAL is not the one card visible: no PIN"; fi
   out="$(env REGALIA_COSMOS_NODE_SIGNDOC="$dir/signdoc.bin" REGALIA_COSMOS_NODE_SIGNATURE_OUT="$dir/sig.bin" \
      REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$SERIAL" REGALIA_PKCS11_E2E_PIN="$PIN" \
      REGALIA_COSMOS_NODE_OBJECT_ID="$OBJECT_ID" REGALIA_COSMOS_NODE_CHAIN_ID="$CHAIN_ID" \

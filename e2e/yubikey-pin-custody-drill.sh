@@ -58,6 +58,16 @@ tries(){ ykman --device "$1" piv info 2>/dev/null | sed -n 's/^PIN tries remaini
 counters(){ say "  counters: $PRIMARY=$(tries "$PRIMARY" || echo absent) $REPLACEMENT=$(tries "$REPLACEMENT" || echo absent)"; }
 for s in "$PRIMARY" "$REPLACEMENT"; do [ "$(tries "$s")" = 3 ] || die "$s does not start at 3 PIN tries: a drill that starts low cannot measure what it spends"; done
 say "cards $PRIMARY (primary) and $REPLACEMENT (replacement), registered and pinned; state $STATE"
+# OPENSC IS USED ONLY TO SEE THE NITROKEY, and it is shown ONLY the Nitrokey (e2e/lib/bench_cards.sh,
+# regalia-kms#174): with its defaults it would enumerate the YubiKeys under test too, open them, and
+# leave their PIV applet selected while the drill counts their PIN tries. Every PIN in this drill goes
+# to a YubiKey named by serial (ykman --device, and the provider, which checks the serial first).
+if [ -n "$NITROKEY" ]; then
+  # shellcheck source=lib/bench_cards.sh
+  . "$ROOT/e2e/lib/bench_cards.sh"
+  NK_MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
+  bench_isolate "$STATE/opensc.conf" "$NK_MODULE" "$NITROKEY" || die "cannot isolate the Nitrokey $NITROKEY in OpenSC"
+fi
 
 # ---- helpers ------------------------------------------------------------------------------------
 # USB device of a YubiKey, by serial: de-authorise each candidate until that serial vanishes.
@@ -98,7 +108,11 @@ seal(){ # seal <name> <out> ; the PIN arrives on stdin
   sudo systemd-creds encrypt --with-key=host --name="$1" - "$2" 2>>"$LOG" >/dev/null; }
 say "building the drill test binary"
 go -C "$ROOT" test -c -tags piv -o "$STATE/drill.test" ./internal/integration 2>&1 | tee -a "$LOG" || die "build"
+# The YubiKey a phase hands a PIN to is named by serial; it must be on the bus as that serial now.
+yk_gate(){ ykman list --serials 2>/dev/null | grep -qx "$1" || { say "$1 is not attached: no PIN presented"; return 97; }; }
 phase(){ # phase <name> <serial> <credential blob> ; returns the test's status
+  # "absent" runs with the card out on purpose and must present nothing: the one phase not gated.
+  [ "$1" = absent ] || yk_gate "$2" || die "$2 is not attached: no PIN presented"
   local out; out="$(sudo systemd-run --quiet --pipe --wait --collect -p LimitMEMLOCK=1M \
       -p "LoadCredentialEncrypted=yubi-drill.pin:$3" \
       --setenv=REGALIA_PINDRILL_PHASE="$1" --setenv=REGALIA_PINDRILL_SERIAL="$2" \
@@ -174,10 +188,10 @@ if [ -n "$NITROKEY" ]; then
   NK=""; for d in /sys/bus/usb/devices/*; do grep -q "^${NITROKEY}" "$d/serial" 2>/dev/null && NK="$d"; done
   [ -n "$NK" ] || die "cannot find Nitrokey $NITROKEY on USB"
   authorize "$NK" 0
-  pkcs11-tool --list-slots 2>/dev/null | grep -q "$NITROKEY" && die "the Nitrokey is still visible"
+  pkcs11-tool --module "$NK_MODULE" --list-slots 2>/dev/null | grep -q "$NITROKEY" && die "the Nitrokey is still visible"
   phase serve "$PRIMARY" "$STATE/v3.cred" || die "YubiKey custody failed while the HSM was out"
   authorize "$NK" 1; sleep 2
-  pkcs11-tool --list-slots 2>/dev/null | grep -q "$NITROKEY" && say "  Nitrokey back" || say "  WARNING: Nitrokey not visible again yet"
+  pkcs11-tool --module "$NK_MODULE" --list-slots 2>/dev/null | grep -q "$NITROKEY" && say "  Nitrokey back" || say "  WARNING: Nitrokey not visible again yet"
 else
   say "O1 — skipped: no Nitrokey serial given"
 fi

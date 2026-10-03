@@ -97,3 +97,29 @@ processes, and removes the token directory on exit. These are not staging-card
 credentials. Physical Cosmos qualification must use the separately gated
 `cosmos-hardware-sign-verify.sh` path with an operator-supplied credential and
 registry-selected token/object; it must never inherit or guess the SoftHSM PIN.
+
+## Real cards on a shared bench
+
+Every script here that drives a real card through OpenSC shows OpenSC only the cards it names and
+presents a PIN only behind a serial check (`e2e/lib/bench_cards.sh`, regalia-kms#174):
+
+- `bench_isolate <conf> <module> <serial>…` writes an OpenSC configuration that ignores every other
+  reader (by reader name, so it holds when readers are renumbered) and exports `OPENSC_CONF`. Readers
+  off the bus at that moment are not in the snapshot; `HSM_IGNORE_READERS` (default `Yubico`) is always
+  ignored as well.
+- `bench_gate <serial> [slot]` before every command that presents a PIN, the SO-PIN, or initialises a
+  card: exactly the isolated cards are visible and the serial is in exactly one slot (that slot, if
+  given). Under `sudo` the configuration is carried with `env OPENSC_CONF=…`, and into a systemd unit
+  with `--setenv`.
+- `tests/test_e2e_card_isolation.py` fails on a real-card script without the isolation, or with a PIN
+  line not behind a gate. SoftHSM-only scripts are exempt; a script with both kinds marks its emulated
+  lines with `# emulated token: no real card`.
+
+What isolation cannot do: two readers with the same name (two Pico HSMs) cannot be told apart, so
+one cannot be isolated while the other is attached. The static test reads the scripts: it shows a PIN
+line was not written without a gate in front of it, not that the gate is effective (`bench_gate S ||
+true` would pass), and a PIN exported in one place and used in another is seen only where it is used
+by a tool it knows.
+
+OpenSC ignores a reader whose name CONTAINS an `ignored_readers` entry (a substring match): that is
+why overlapping reader names are refused, and why `ignored_readers = " "` ignores every reader.
