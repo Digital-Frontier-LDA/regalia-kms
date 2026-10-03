@@ -676,6 +676,7 @@ class State(Case):
                                    ("floor field", "floor fields mismatch", dict(good, floor={"time": 1})),
                                    ("negative floor", "floor must be integers", dict(good, floor={"time": -1, "tpm_clock": 0})),
                                    ("allowance too large", "allowance is out of range", dict(good, allowance=hb.MAX_ALLOWANCE + 1)),
+                                   ("a list", "must be an object", [good]),
                                    ("allowance zero", "allowance is out of range", dict(good, allowance=0)),
                                    ("float floor", "floats are not allowed", None)):
             with self.subTest(label):

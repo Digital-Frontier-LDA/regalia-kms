@@ -278,6 +278,7 @@ class Freshness:
         state = membership.load(raw)
         # "allowance" (the bound the held heartbeat was accepted under) was added for #199; a state written
         # before it has none, and is read as the fixed bound
+        require(isinstance(state, dict), "the freshness state must be an object")
         state.setdefault("allowance", None)
         membership.exact(state, ("envelope", "floor", "allowance"), "freshness state")
         validate_floor(state["floor"])
