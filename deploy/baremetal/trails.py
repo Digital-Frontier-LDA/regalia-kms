@@ -26,6 +26,9 @@ an audit.Event whose own chain the collector already verifies (#278).
     it as torn, apart from a break.
   * A line is written whole or not at all: a short write cuts the file back and raises (_write_whole).
   * A chain cannot see its tail cut off; verify(expected_head=...) checks it against a hash kept elsewhere.
+  * Who may read it: a trail is 0640, its group the one its shipper reads through
+    (regalia-audit-ship@<trail>, a member of that group and nothing else, no capability). The registry
+    names the group; the operator tools' directory is root:regalia-audit 2750, so their trails take it.
   * Lines written before the chain existed (no seq) may only come first; the first chained line's prev
     covers the last of them.
 
@@ -38,6 +41,7 @@ append takes the event, a JSON object, on standard input (nothing on argv, so no
 operator tools' trails only (their path is fixed); exit 0 written, 1 refused (nothing written).
 """
 import fcntl
+import grp
 import hashlib
 import json
 import os
@@ -48,18 +52,22 @@ import time
 MAX_LINE = 64 * 1024                       # the collector's own bound on an event
 TOOL_DIR = "/var/log/regalia"
 TOOL_DIR_OWNER = 0                         # root: the operator tools run as root
+TOOL_GROUP = "regalia-audit"               # the group that reads the operator tools' trails
+MODE = 0o640                               # every trail: its writer writes, its shipper's group reads
 OWN = ("seq", "prev")
 
-# name: (where, writer, stream at the collector). "state_dir", "admission_dir": the configuration's.
+# name: (where, writer, stream at the collector, the group its shipper reads it through).
+# "state_dir", "admission_dir": the configuration's. The service trails take their writer's own group
+# (the file's group is the writer's); the operator tools' take TOOL_GROUP from their directory.
 TRAILS = {
-    "sync": ("state_dir/sync-audit.jsonl", "regalia-sync.service (user regalia-sync), node", "sync"),
-    "admission": ("admission_dir/audit.jsonl", "regalia-admission.service, node", "admission"),
-    "enrol": ("/var/lib/regalia-enrol/enrol-audit.jsonl", "regalia-node enrol, root, by hand, node", "enrol"),
-    "authority": ("state_dir/audit.jsonl", "regalia-authority.service (user regalia-authority)", "authority"),
-    "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor"),
-    "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount"),
-    "recovery-key": (TOOL_DIR + "/recovery-key.jsonl", "recovery-key.sh, root, by hand", "recovery-key"),
-    "recovery-reconcile": (TOOL_DIR + "/recovery-reconcile.jsonl", "recovery-reconcile.py, root, by hand", "recovery-reconcile"),
+    "sync": ("state_dir/sync-audit.jsonl", "regalia-sync.service (user regalia-sync), node", "sync", "regalia-sync"),
+    "admission": ("admission_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-admission"),
+    "enrol": (TOOL_DIR + "/enrol.jsonl", "regalia-node enrol, root, by hand, node", "enrol", TOOL_GROUP),
+    "authority": ("state_dir/audit.jsonl", "regalia-authority.service (user regalia-authority)", "authority", "regalia-authority"),
+    "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor", TOOL_GROUP),
+    "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount", TOOL_GROUP),
+    "recovery-key": (TOOL_DIR + "/recovery-key.jsonl", "recovery-key.sh, root, by hand", "recovery-key", TOOL_GROUP),
+    "recovery-reconcile": (TOOL_DIR + "/recovery-reconcile.jsonl", "recovery-reconcile.py, root, by hand", "recovery-reconcile", TOOL_GROUP),
 }
 
 
@@ -113,16 +121,32 @@ def _sequence_of(line):
     return seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 1 else None
 
 
+def _tool_group():
+    try:
+        return grp.getgrnam(TOOL_GROUP).gr_gid
+    except KeyError:
+        return None                        # not installed (a development machine): the directory stays 0700
+
+
 def _tool_dir(directory):
-    """The operator tools' directory: made here when absent (0700), and then required to be a real
-    directory of root's that no group or other may write, so the rule lives in one place."""
+    """The operator tools' directory, root:regalia-audit 2750: made here when absent, brought to that
+    from 0700, and otherwise required to be exactly a real directory of root's that only its owner
+    writes and only TOOL_GROUP reads, so the rule lives in one place."""
     try:
         os.mkdir(directory, 0o700)
     except FileExistsError:
         pass
+    gid = _tool_group()
     info = os.lstat(directory)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != TOOL_DIR_OWNER or info.st_mode & 0o022:
-        raise Refused("%s must be a directory of root's that no group or other can write" % directory)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != TOOL_DIR_OWNER:
+        raise Refused("%s must be a directory of root's" % directory)
+    if gid is not None and (info.st_gid, stat.S_IMODE(info.st_mode)) != (gid, 0o2750) and stat.S_IMODE(info.st_mode) == 0o700:
+        os.chown(directory, -1, gid, follow_symlinks=False)
+        os.chmod(directory, 0o2750, follow_symlinks=False)
+        info = os.lstat(directory)
+    mode = stat.S_IMODE(info.st_mode)
+    if mode != 0o700 and not (gid is not None and info.st_gid == gid and mode == 0o2750):
+        raise Refused("%s must be root's, 0700 or %s 2750: no group or other can write" % (directory, TOOL_GROUP))
 
 
 def append(path, event, now=time.time):
@@ -133,12 +157,13 @@ def append(path, event, now=time.time):
         raise Refused("an event may not carry %s: the trail sets them" % " or ".join(OWN))
     if os.path.dirname(os.path.abspath(path)) == TOOL_DIR:
         _tool_dir(TOOL_DIR)
-    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, MODE)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
             raise Refused("%s is not a regular file of this user's: not written" % path)
         fcntl.flock(fd, fcntl.LOCK_EX)
+        _readable_by_its_shipper(fd, info, path)
         last, ended = _last_line(fd)
         if last and not ended:                     # torn by a crash: terminated, kept, chained over
             _write_whole(fd, b"\n")
@@ -153,6 +178,17 @@ def append(path, event, now=time.time):
         return seq
     finally:
         os.close(fd)
+
+
+def _readable_by_its_shipper(fd, info, path):
+    """MODE on every append (a file made under a umask, or one written before this rule, is brought to it),
+    and, under the operator tools' directory, TOOL_GROUP: a trail its shipper cannot read is never shipped."""
+    if stat.S_IMODE(info.st_mode) != MODE:
+        os.fchmod(fd, MODE)
+    if os.path.dirname(os.path.abspath(path)) == TOOL_DIR:
+        gid = _tool_group()
+        if gid is not None and info.st_gid != gid:
+            os.fchown(fd, -1, gid)
 
 
 def _write_whole(fd, line):
