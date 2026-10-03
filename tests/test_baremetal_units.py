@@ -51,6 +51,12 @@ class Units(unittest.TestCase):
     def test_what_each_unit_may_write_and_reach(self):
         self.assertEqual(self.service("regalia-authtime")["ReadWritePaths"], "/run/regalia /run/chrony")
         self.assertEqual(self.service("regalia-authtime")["SupplementaryGroups"], "_chrony")
+        authtime_unit = self.service("regalia-authtime")
+        # the one capability it holds could read any file: it is shown almost none
+        self.assertEqual((authtime_unit["TemporaryFileSystem"], authtime_unit["ProtectProc"]), ("/etc:ro /var:ro", "invisible"))
+        self.assertEqual(authtime_unit["BindReadOnlyPaths"].split()[0], "/etc/regalia/node.json")
+        self.assertNotIn("site.json", authtime_unit["BindReadOnlyPaths"])
+        self.assertNotIn("wg-service", authtime_unit["BindReadOnlyPaths"])
         self.assertEqual(self.service("regalia-authtime")["PrivateNetwork"], "yes")
         self.assertEqual(self.service("regalia-authtime")["RestrictAddressFamilies"], "AF_UNIX")
         admission = self.service("regalia-admission")

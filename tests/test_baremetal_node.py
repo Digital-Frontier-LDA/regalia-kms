@@ -319,6 +319,13 @@ class Applying(Case):
         self.refused("could not be taken down or deleted", node.wg_apply, n)
 
 
+class Time(Case):
+    def test_the_time_service_reads_the_configuration_and_nothing_else(self):
+        os.unlink(self.cfg["site"])                                               # not even the site configuration
+        service = node.authtime_service(dict(self.cfg))
+        self.assertEqual((service.path, service.declared), (self.cfg["run_dir"] + "/authtime.json", tuple(self.cfg["time_servers"])))
+
+
 class Trail(Case):
     def test_events_are_appended_one_a_line_and_the_file_is_the_owner_s(self):
         trail = node.Trail(self.cfg["state_dir"] + "/audit.jsonl")

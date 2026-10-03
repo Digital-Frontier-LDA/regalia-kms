@@ -4,7 +4,8 @@
 # mode 0750), and binds a socket of its own there: so this runs as root in the _chrony group with ONE
 # capability, CAP_DAC_OVERRIDE, to write that directory. It writes nothing else but /run/regalia, and has
 # no network at all. (Running as _chrony instead would let a compromised chronyd, which parses NTP from
-# the network, forge the status: the readers accept it only from root.)
+# the network, forge the status: the readers accept it only from root.) If chronyd accepts a group-
+# writable /run/chrony, a tmpfiles line could make the capability unnecessary: to be measured on a host.
 [Unit]
 Description=Regalia KMS: is time authenticated (chrony, NTS)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
@@ -26,6 +27,13 @@ AmbientCapabilities=CAP_DAC_OVERRIDE
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/run/regalia /run/chrony
+# CAP_DAC_OVERRIDE would let it read any file it can see, so it sees almost none: /etc is an empty
+# read-only tmpfs with only its own configuration and what the C library needs bound into it, /var is
+# empty, and other processes are invisible under /proc. (Not ProcSubset=pid: the kernel's boot ID,
+# under /proc/sys, is part of the status it writes.)
+TemporaryFileSystem=/etc:ro /var:ro
+BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime
+ProtectProc=invisible
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

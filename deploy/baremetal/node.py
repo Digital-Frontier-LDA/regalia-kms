@@ -473,8 +473,10 @@ class Sync:
                 listener.close()
 
 
-def authtime_service(node):
-    return authtime.Service(os.path.join(node.runtime, "authtime.json"), node.cfg["time_servers"])
+def authtime_service(cfg):
+    """Takes the configuration only: it reads nothing else (not the site configuration, not a key), and
+    its unit hides the rest of /etc and all of /var from it."""
+    return authtime.Service(os.path.join(cfg["run_dir"], "authtime.json"), cfg["time_servers"])
 
 
 # ---- command line ----
@@ -485,13 +487,14 @@ def main(argv=None):
     parser.add_argument("service", choices=("authtime", "wg-apply", "admission", "sync", "check"))
     args = parser.parse_args(argv)
     try:
+        if args.service == "authtime":
+            authtime_service(load(args.config)).run(lambda: False)
+            return 0
         node = Node(load(args.config))
         if args.service == "check":
             print(json.dumps({"node_id": node.node_id, "epoch": node.manifest()["epoch"]}))
         elif args.service == "wg-apply":
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
-        elif args.service == "authtime":
-            authtime_service(node).run(lambda: False)
         elif args.service == "admission":
             admission_service(node).run(lambda: False)
         else:
