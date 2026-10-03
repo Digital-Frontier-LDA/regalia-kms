@@ -51,7 +51,7 @@ class Chain(Case):
             self.assertEqual(json.loads(after)["prev"], hashlib.sha256(before + b"\n").hexdigest())
         report = trails.verify(self.path)
         self.assertEqual((report["chained"], report["head"]), (3, hashlib.sha256(lines[-1] + b"\n").hexdigest()))
-        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o640)                  # its shipper's group reads it
 
     def test_an_edited_deleted_or_reordered_line_breaks_the_chain(self):
         for i in range(4):
@@ -166,30 +166,56 @@ class ToolDirectory(Case):
         """#278 (regalia-kms-3e): append makes /var/log/regalia when absent, 0700, then requires a real
         directory of root's with no group or other write: the rule in one place, not in every tool."""
         tool_dir = os.path.join(self.d, "regalia")
-        with unittest.mock.patch.object(trails, "TOOL_DIR", tool_dir), unittest.mock.patch.object(trails, "TOOL_DIR_OWNER", os.getuid()):
+        absent = unittest.mock.patch.object(trails, "TOOL_GROUP", "no-such-group-for-this-test")
+        with unittest.mock.patch.object(trails, "TOOL_DIR", tool_dir), unittest.mock.patch.object(trails, "TOOL_DIR_OWNER", os.getuid()), absent:
             trails.append(os.path.join(tool_dir, "recount.jsonl"), {"event": "e"})
-            self.assertEqual(os.stat(tool_dir).st_mode & 0o777, 0o700)
+            self.assertEqual(os.stat(tool_dir).st_mode & 0o7777, 0o700)           # no regalia-audit group: private
             os.chmod(tool_dir, 0o770)
             self.refused("no group or other can write", trails.append, os.path.join(tool_dir, "recount.jsonl"), {"event": "e"})
             os.chmod(tool_dir, 0o700)
-        with unittest.mock.patch.object(trails, "TOOL_DIR", tool_dir):         # owned by this user, not root
+        with unittest.mock.patch.object(trails, "TOOL_DIR", tool_dir), absent:  # owned by this user, not root
             self.refused("a directory of root's", trails.append, os.path.join(tool_dir, "recount.jsonl"), {"event": "e"})
         link = os.path.join(self.d, "linked")
         os.symlink(tool_dir, link)
-        with unittest.mock.patch.object(trails, "TOOL_DIR", link), unittest.mock.patch.object(trails, "TOOL_DIR_OWNER", os.getuid()):
+        with unittest.mock.patch.object(trails, "TOOL_DIR", link), unittest.mock.patch.object(trails, "TOOL_DIR_OWNER", os.getuid()), absent:
             self.refused("a directory of root's", trails.append, os.path.join(link, "recount.jsonl"), {"event": "e"})
+
+    def test_with_the_audit_group_the_directory_is_2750_and_the_trails_take_the_group(self):
+        """#283 (regalia-kms-24): the shipper reads the operator tools' trails through regalia-audit and no
+        capability. A 0700 directory is brought to root:regalia-audit 2750, each trail to 0640 in that
+        group; a group-writable one is still refused. (The test user's own group stands in for it.)"""
+        import grp
+        tool_dir = os.path.join(self.d, "regalia")
+        os.mkdir(tool_dir, 0o700)
+        group = grp.getgrgid(os.getgid()).gr_name
+        trail = os.path.join(tool_dir, "recount.jsonl")
+        with unittest.mock.patch.object(trails, "TOOL_DIR", tool_dir), unittest.mock.patch.object(trails, "TOOL_DIR_OWNER", os.getuid()), \
+                unittest.mock.patch.object(trails, "TOOL_GROUP", group):
+            trails.append(trail, {"event": "e"})
+            info = os.stat(tool_dir)
+            self.assertEqual((info.st_mode & 0o7777, info.st_gid), (0o2750, os.getgid()))
+            self.assertEqual((os.stat(trail).st_mode & 0o777, os.stat(trail).st_gid), (0o640, os.getgid()))
+            os.chmod(tool_dir, 0o2770)
+            self.refused("no group or other can write", trails.append, trail, {"event": "e"})
+
+    def test_a_trail_of_another_mode_is_brought_to_0640(self):
+        with open(self.path, "w"):
+            pass
+        os.chmod(self.path, 0o600)                                                 # made under a umask, or before the rule
+        trails.append(self.path, {"event": "e"})
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o640)
 
 
 class Registry(Case):
     def test_every_trail_is_named_once_with_where_it_is(self):
-        self.assertEqual(trails.where("enrol"), "/var/lib/regalia-enrol/enrol-audit.jsonl")
+        self.assertEqual(trails.where("enrol"), "/var/log/regalia/enrol.jsonl")
         self.assertEqual(trails.where("sync", {"state_dir": "/var/lib/regalia-sync"}), "/var/lib/regalia-sync/sync-audit.jsonl")
         self.assertEqual(trails.where("admission", {"admission_dir": "/var/lib/regalia-admission"}), "/var/lib/regalia-admission/audit.jsonl")
         self.refused("give the configuration", trails.where, "sync")
         self.refused("no trail is called", trails.where, "nope")
-        streams = [stream for _, _, stream in trails.TRAILS.values()]
+        streams = [stream for _, _, stream, _ in trails.TRAILS.values()]
         self.assertEqual(len(streams), len(set(streams)))
-        for name in ("reanchor", "recount", "recovery-key", "recovery-reconcile"):
+        for name in ("enrol", "reanchor", "recount", "recovery-key", "recovery-reconcile"):
             self.assertEqual(trails.where(name), "/var/log/regalia/%s.jsonl" % name)
 
     def test_the_node_s_trails_are_where_the_services_write_them(self):
@@ -199,6 +225,23 @@ class Registry(Case):
         self.assertIn('node.path("sync-audit.jsonl")', source)               # sync's, in state_dir
 
 
+class PinnedVector(Case):
+    def test_the_pinned_trail_is_one_trails_py_accepts_line_for_line(self):
+        """#283 (regalia-kms-24): tests/vectors/trail-events-v1.json pins a trail to the events the Go
+        shipper maps it to (internal/audit/trail.go's TestTheTrailMappingIsPinned). Its lines are ones
+        this writer makes and this verify accepts, with the line hashes the events carry."""
+        with open(os.path.join(HERE, "..", "..", "tests", "vectors", "trail-events-v1.json")) as f:
+            vector = json.load(f)
+        self.assertEqual(vector["format"], "regalia.trail/v1")
+        data = "".join(line + "\n" for line in vector["lines"]).encode()
+        with open(self.path, "wb") as f:
+            f.write(data)
+        report = trails.verify(self.path)
+        self.assertEqual((report["chained"], report["legacy"], report["torn"]), (5, 2, 1))
+        self.assertEqual([hashlib.sha256(line.encode() + b"\n").hexdigest() for line in vector["lines"]], vector["line_sha256"])
+        self.assertEqual(len(vector["event_hashes"]), len(vector["lines"]))
+
+
 class ByPath(Case):
     def test_it_runs_by_path_from_anywhere_with_the_event_on_stdin(self):
         trails.append(self.path, {"event": "e"})
@@ -206,7 +249,7 @@ class ByPath(Case):
         done = subprocess.run([sys.executable, "-Es", script, "verify", self.path], cwd="/", capture_output=True, timeout=30)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(json.loads(done.stdout)["chained"], 1)
-        with unittest.mock.patch.dict(trails.TRAILS, {"recount": (self.path, "test", "recount")}), \
+        with unittest.mock.patch.dict(trails.TRAILS, {"recount": (self.path, "test", "recount", "regalia-audit")}), \
                 unittest.mock.patch.object(trails.sys, "stdin", unittest.mock.Mock(buffer=unittest.mock.Mock(read=lambda n: b'{"event":"recount-requested"}'))), \
                 unittest.mock.patch("sys.stdout"):
             self.assertEqual(trails.main(["append", "recount"]), 0)

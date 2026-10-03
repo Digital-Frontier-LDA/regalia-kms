@@ -772,6 +772,28 @@ removing only what it can prove it made.
 - the enrolment record signed by the AK's quote;
 - `commit --replace` (#76).
 
+### Shipping the audit trails (#278)
+
+Every trail in `deploy/baremetal/trails.py`'s registry is hash-chained line by line and shipped to the
+audit collector by one instance of `units/regalia-audit-ship@.service` per trail
+(`systemctl enable --now regalia-audit-ship@sync`; `cmd/regalia-audit-ship`, `internal/audit/trail.go`).
+Each line becomes one audit event on the stream `<site>.<trail>`.
+- **No local state.** Each pass rebuilds the events from the file and goes on only if the collector's
+  committed head is one of them. A file cut short, rewritten or removed under what was shipped raises an
+  alarm in the collector's `alarms.jsonl`, and the instance exits 3. The unit does not restart it, and
+  starting it by hand repeats the same check. Investigate first. Then restore the file from a backup
+  (each shipped line's SHA-256 is in its event's detail, to check the copy against), and start the unit
+  again.
+- **Metrics** are in `/var/lib/regalia-audit-ship/<trail>.prom`: lines, committed, backlog, tampered.
+- **Its own user, no capability.** `regalia-audit-ship` (`units/regalia-audit-ship.sysusers.conf`) reads
+  each trail through that trail's group only, given per instance by
+  `units/regalia-audit-ship@<trail>.service.d/reader.conf`. The service trails use their writer's own group;
+  the operator tools' trails use `regalia-audit`. Trails are 0640, and `/var/log/regalia` is
+  root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory is 0750 for this.
+  The client key in `/etc/regalia/audit-ship/` is 0640 root:regalia-audit-ship.
+- **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
+  records one "alarm flood" alarm of its own and answers 429.
+
 ### The revocation authority (#199)
 
 `deploy/baremetal/authority.py`, run by `units/regalia-authority.service` on the authority host (not a KMS

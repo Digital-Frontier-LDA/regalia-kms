@@ -1,0 +1,66 @@
+# Ships the audit trail %i (deploy/baremetal/trails.py's registry: sync, admission, enrol, authority,
+# reanchor, recount, recovery-key, recovery-reconcile) to the audit collector, one event a line, on the
+# stream <site>.%i (cmd/regalia-audit-ship, internal/audit/trail.go; #278).
+#
+# It keeps no state: each pass checks the file against the collector's committed head. When the file no
+# longer holds what the collector committed (cut short, rewritten, removed) it raises an alarm at the
+# collector and exits 3, and this unit does NOT restart it: the trail stays stopped until an operator
+# looks. `systemctl start` repeats the same check, so it cannot quietly resume.
+#
+# Configuration, one file per instance plus one for the host:
+#   /etc/regalia/audit-ship.env       COLLECTOR=https://collector.example:8443  SITE=sitea
+#   /etc/regalia/audit-ship/%i.env    TRAIL_PATH=/var/lib/regalia-sync/sync-audit.jsonl
+#   (the path is trails.where(%i, the node's or authority's configuration))
+#   /etc/regalia/audit-ship/client.crt, client.key (0640 root:regalia-audit-ship), collector-ca.pem
+# Its own user (regalia-audit-ship.sysusers.conf) and NO capability: each instance reads its one trail
+# through that trail's group, from its drop-in regalia-audit-ship@%i.service.d/reader.conf (the
+# registry's group: the writer's own, or regalia-audit for the operator tools'). Trails are 0640.
+# It writes nothing but its metrics, in its state directory.
+[Unit]
+Description=Regalia KMS: ship the %i audit trail to the audit collector
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/regalia/audit-ship.env
+EnvironmentFile=/etc/regalia/audit-ship/%i.env
+ExecStart=/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} -collector ${COLLECTOR} -site ${SITE} \
+    -tls-cert /etc/regalia/audit-ship/client.crt -tls-key /etc/regalia/audit-ship/client.key \
+    -server-ca /etc/regalia/audit-ship/collector-ca.pem -metrics /var/lib/regalia-audit-ship/%i.prom
+Restart=on-failure
+RestartSec=30s
+RestartPreventExitStatus=3
+User=regalia-audit-ship
+Group=regalia-audit-ship
+StateDirectory=regalia-audit-ship
+StateDirectoryMode=0755
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

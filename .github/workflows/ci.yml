@@ -112,6 +112,9 @@ jobs:
           REGALIA_EXPECT_SWTPM: "1"
           # internal/pin's ACL guard needs a filesystem that takes POSIX ACLs; the runner's does.
           REGALIA_EXPECT_ACL_GUARD_ENFORCED: "1"
+          # internal/audit maps a trail the real deploy/baremetal/trails.py writes (#278): python3 is on
+          # the runner, so with this set a missing one fails instead of skipping.
+          REGALIA_EXPECT_PYTHON: "1"
         run: |
           umask 002
           go test -race ./...

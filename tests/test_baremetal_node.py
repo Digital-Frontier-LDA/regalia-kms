@@ -418,7 +418,7 @@ class Trail(Case):
         lines = [json.loads(line) for line in open(self.cfg["state_dir"] + "/audit.jsonl")]
         self.assertEqual([(e["event"], e["outcome"]) for e in lines], [("sync-pull", "ALLOW"), ("sync-pull", "DENY")])
         self.assertTrue(all(isinstance(e["at"], int) for e in lines))
-        self.assertEqual(stat.S_IMODE(os.stat(self.cfg["state_dir"] + "/audit.jsonl").st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(self.cfg["state_dir"] + "/audit.jsonl").st_mode), 0o640)              # #283: its shipper reads it through the group
         with self.assertRaises(OSError):
             node.Trail(self.d + "/nowhere/audit.jsonl")({"event": "x"})              # a trail that cannot be written raises
 
