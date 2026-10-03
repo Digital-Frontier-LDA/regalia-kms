@@ -1,0 +1,133 @@
+{
+  "documentation_build": {
+    "development_parent_authenticated": false,
+    "development_parent_id": "sha256:79c07a2dc1635fbf3315661c99cb3814b7de0093d37c958684995d8c9eb346d3",
+    "log_sha256": "77ba8411ed6eea4527a37960201f5e405770090e1c1472cb13d875eba206743b",
+    "original_opengraph_type_error_present": false,
+    "result": "failed",
+    "warning_count": 199,
+    "warnings_treated_as_errors": true
+  },
+  "fuzz": 0,
+  "limits": [
+    "The separate documentation package remains unqualified; no warnings are disabled.",
+    "A live native runtime package build has no successful package result at receipt creation.",
+    "The cached development parent is unsigned; this trial cannot qualify production compiler payloads.",
+    "No package is admitted into the appliance and no Python vulnerability finding is cleared."
+  ],
+  "native_build_context_sha256": "8d8b22e66e99772692bd8672039bab49e6dcaf3deec1f446ebb8c5ee00682fba",
+  "opengraph_checks": [
+    {
+      "list_concatenation": "pass",
+      "social_cards": false,
+      "tag_values_preserved": [
+        "<meta name=\"theme-color\" content=\"#3776ab\">",
+        "<meta property=\"og:image:width\" content=\"200\">",
+        "<meta property=\"og:image:height\" content=\"200\">"
+      ]
+    },
+    {
+      "list_concatenation": "pass",
+      "social_cards": true,
+      "tag_values_preserved": [
+        "<meta name=\"theme-color\" content=\"#3776ab\">"
+      ]
+    }
+  ],
+  "package_admitted": false,
+  "patch_application_logs_sha256": "c5188ec68a3c9902899854f9819505065f02480915b6d3ccceb7a78c77e31a10",
+  "production_approved": false,
+  "recipe_sha256": {
+    "lab/appliance/python-profile-policy.json": "6e699ccc1a8bae84469ba150822fbb7188d9a901e6656cd57aea0b244cc82585",
+    "lab/appliance/python_profile.py": "222924edfd185f7fdeb17d947b9110bf3afc83550470923fd926654e132022c9"
+  },
+  "runtime_package_target": "dpkg-buildpackage -B -us -uc; vendor binary-arch target and unchanged test/mincheck/benchmark policy. Vendor rules exclude the full SSL suite and disable pybench; separate regressions remain required.",
+  "schema": "regalia.python-doc-profile-review/v1",
+  "sequential_patch_count": 26,
+  "sequential_patch_failures": 0,
+  "source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed CPython tar",
+    "authority_sha256": "1de2bbd31e2dd10aab4098c3ab2f937c530d924ddbfa2dd091f0c7cfb2ee182a",
+    "debian_packaging_version": "3.13.15-1",
+    "directory": "pool/main/p/python3.13",
+    "files": {
+      "Python-3.13.16.tar.xz": {
+        "bytes": 23225704,
+        "sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d"
+      },
+      "Python-3.13.16.tar.xz.asc": {
+        "bytes": 833,
+        "sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8"
+      },
+      "python3.13_3.13.15-1.debian.tar.xz": {
+        "bytes": 261776,
+        "sha256": "1cf592dd51de735ff73644743e8959fb16bd50714168855509b709fdeede8342"
+      },
+      "python3.13_3.13.15-1.dsc": {
+        "bytes": 4040,
+        "sha256": "4078ff651ea7096e6933f794b854054cda195d600e02ac83306cee524da31b87"
+      },
+      "python3.13_3.13.15.orig.tar.xz": {
+        "bytes": 23160540,
+        "sha256": "1e66a7945a48390ee4c2a4268a0e4185884059a13c4aab6d148aa208deea4a76"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "python3.13",
+    "package_admitted": false,
+    "packaged_authority_sha256": "f0116877747ac7bb245815039fa864b944195a5e52fa9f60103c6448bddc0bf7",
+    "packaging_suite": "sid",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+    "production_approved": false,
+    "release": {
+      "date": "2026-10-02T20:13:57+00:00",
+      "inrelease_sha256": "50c96ce9530ce174d156fe36c00285957553e35dd155d6ff9fca54e6b879f18b",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "sid",
+      "valid_until": "Fri, 09 Oct 2026 20:13:57 UTC"
+    },
+    "schema": "regalia.python-authenticated-source/v1",
+    "sigstore_signature_verified": false,
+    "sources_index_sha256": "5b081029e6583d90759c9e05855ec6ae0ae82a0392fe085a1785271e2d82a4f0",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signature": {
+      "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+      "signature_sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8",
+      "signed_sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "signing_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305"
+    },
+    "upstream_version": "3.13.16"
+  },
+  "source_profile": {
+    "edit_sha256": {
+      "Doc/conf.py": "13e7d8e2f861be426901ec80cbbb26a4d6b44bd39508999a40c639509c5fdcae",
+      "debian/changelog": "8b4caa43fed0d91f97e6887b67f68e6b2d8ae5bbada8f84315709d2fe2246b08",
+      "debian/control": "f74329eaabbc3975a17e169118597a097c0d92780267e4a4d1277036043ca8af",
+      "debian/patches/issue127330.diff": "b173bdb3019d2a937aca32268db7afa4f93ab9d44ab5cf85cb59acd49c5457f1",
+      "debian/patches/test-freeze-strip-libdir.diff": "9ecf861941010b2fae0d43301f4dcb67b9ec06b640ecafb46a387034a51e596a",
+      "debian/patches/tkinter-import.diff": "c5391d53670d5832657bd84abd3350ed5202a56f835a5b08bb5c716ce52dae19"
+    },
+    "input_sha256": {
+      "Doc/conf.py": "dce4ff61514898b9f0dbdbbcba27176fc116edeedf54429ec6c7a85a65ae3e37",
+      "Lib/turtle.py": "0c60d423a1da8856751644094dd26bcd682f3e5ce05577325558865d21067796",
+      "Modules/_ssl_data_31.h": "2a7422834f784f66e62a65ce856f7c7975528d32ebfbaf0f209ca41fb1c31ac3",
+      "Tools/freeze/test/freeze.py": "7befdc280952b680346353022289acc3a6dae04c81be919b205f9acb34868915",
+      "debian/changelog": "7363818105c6ca4f4044b95a5c029e3b2d301136fab384b81f0a0402b72a08c6",
+      "debian/control": "09e51b50845a09cbbf38ddc628b8ee5014be9629ea533d44732d3c0ec4d24e9f",
+      "debian/patches/issue127330.diff": "35af77eeed62797304d0f21da18c32bb18c8dc125993d7cc66383623dc4c5011",
+      "debian/patches/series": "e5b0c8d330310cf998b78f4f31d624aeccd947bbf687d5ee29bea65cbed80e76",
+      "debian/patches/test-freeze-strip-libdir.diff": "6f57941b860246cf64eaef8fd9fe818079757ff057a39fd6871fe2ba8fa7ef77",
+      "debian/patches/tkinter-import.diff": "b733d2dee6d1ed1c013c08133d90cf215ede8da804245002d4fef8bddc035ad5",
+      "debian/rules": "603cd5d940e7d5c3e992ad5bac6ce1756db16a6b502d124fef548e5f189b029b"
+    },
+    "package_admitted": false,
+    "production_approved": false,
+    "schema": "regalia.python-source-profile-result/v1",
+    "version": "3.13.16-0+regalia1"
+  },
+  "status": "authenticated_profile_and_doc_extension_compatibility_verified",
+  "unchanged_patch_series_sha256": "e5b0c8d330310cf998b78f4f31d624aeccd947bbf687d5ee29bea65cbed80e76",
+  "unchanged_vendor_rules_sha256": "603cd5d940e7d5c3e992ad5bac6ce1756db16a6b502d124fef548e5f189b029b"
+}

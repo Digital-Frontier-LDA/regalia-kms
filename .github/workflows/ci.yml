@@ -10,6 +10,274 @@ permissions:
   contents: read
 
 jobs:
+  appliance-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select appliance recipe changes
+        id: recipe
+        env:
+          BASE_COMMIT: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 -I - <<'PY'
+          import os, re, subprocess
+          base = os.environ['BASE_COMMIT']
+          if base:
+              assert re.fullmatch('[a-f0-9]{40}', base)
+              files = subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines()
+              changed = any(path.startswith(('lab/appliance/', 'deploy/images/', 'cmd/', 'internal/',
+                                             'config/', 'deploy/systemd/', 'deploy/baremetal/')) or path in
+                            ('go.mod', 'go.sum', 'tools/lab_cli.py', '.github/workflows/appliance.yml',
+                             '.github/workflows/ci.yml') for path in files)
+          else:
+              changed = True
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('changed=' + str(changed).lower() + '\n')
+          PY
+      - name: Install the image build infrastructure
+        if: steps.recipe.outputs.changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf xorriso cpio gnupg
+          mkdir -p deploy/images/.artifacts
+      - name: Preflight hardware virtualization on the ephemeral runner
+        if: steps.recipe.outputs.changed == 'true'
+        run: sh lab/appliance/ci-kvm.sh
+      - name: Authenticate the pinned Debian installer
+        if: steps.recipe.outputs.changed == 'true'
+        run: |
+          python3 -Es -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+          python3 -Es -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
+          python3 -Es -m deploy.images.source deploy/images/.artifacts/tpm-source --snapshot deploy/images/.artifacts/package-snapshot
+          python3 -Es -m deploy.images.util_source deploy/images/.artifacts/util-source --snapshot deploy/images/.artifacts/package-snapshot
+      - name: Install and exercise the actual daemon inside the appliance
+        if: steps.recipe.outputs.changed == 'true'
+        run: sudo -u "$(id -un)" -g kvm -- python3 -I tools/lab_cli.py appliance-build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
+      - name: Authenticate scanners and scan the exact final filesystem (release gate)
+        if: steps.recipe.outputs.changed == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/regalia-scan-tools"
+          sh deploy/images/bootstrap-cosign.sh "$RUNNER_TEMP/regalia-scan-tools/cosign"
+          export PATH="$RUNNER_TEMP/regalia-scan-tools:$PATH"
+          python3 -Es -m deploy.images.tools deploy/images/.artifacts/scanners
+          python3 -I tools/lab_cli.py appliance-scan --build lab/appliance/.artifacts/debian13-prototype \
+            --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan \
+            --commit "$GITHUB_SHA"
+      - name: Preserve Debian triage without waiving the scan verdict
+        if: ${{ always() && hashFiles('lab/appliance/.artifacts/scan/scan-report.json') != '' }}
+        run: |
+          python3 -Es -m deploy.images.triage lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/triage
+          python3 -Es -m deploy.images.remediation lab/appliance/.artifacts/scan \
+            --review lab/appliance/.artifacts/triage --snapshot deploy/images/.artifacts/package-snapshot \
+            --output lab/appliance/.artifacts/remediation
+      - name: Retain public build and boot diagnostics
+        if: always() && steps.recipe.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: appliance-boot-evidence
+          path: |
+            lab/appliance/.artifacts/**/build-report.json
+            lab/appliance/.artifacts/**/kernel-update.json
+            lab/appliance/.artifacts/**/tpm-source-package.json
+            lab/appliance/.artifacts/**/compiler-packages.tsv
+            lab/appliance/.artifacts/**/util-proof/**
+            lab/appliance/.artifacts/**/util-smoke.json
+            lab/appliance/.artifacts/**/install.log
+            lab/appliance/.artifacts/**/install.stderr
+            lab/appliance/.artifacts/**/acceptance.log
+            lab/appliance/.artifacts/**/acceptance.stderr
+            lab/appliance/.artifacts/**/normal-boot.log
+            lab/appliance/.artifacts/**/normal-boot.stderr
+            lab/appliance/.artifacts/scan/*.json
+            lab/appliance/.artifacts/triage/*
+            lab/appliance/.artifacts/remediation/*
+            deploy/images/.artifacts/package-snapshot/verification.json
+            deploy/images/.artifacts/package-snapshot/policy.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+  image-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install image verification dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends gnupg
+          python3 -I -m venv "$RUNNER_TEMP/image-verification"
+          "$RUNNER_TEMP/image-verification/bin/pip" install --quiet PyYAML==6.0.3
+      - name: Real GPG tampering tests and image input inventory
+        run: |
+          "$RUNNER_TEMP/image-verification/bin/python" -Es -m unittest discover -s tests -p 'test_image_*.py' -v
+          "$RUNNER_TEMP/image-verification/bin/python" -I deploy/images/inventory.py
+      - name: Authenticate the pinned scanner publishers
+        run: |
+          mkdir -p "$RUNNER_TEMP/regalia-tools" deploy/images/.artifacts
+          sh deploy/images/bootstrap-cosign.sh "$RUNNER_TEMP/regalia-tools/cosign"
+          export PATH="$RUNNER_TEMP/regalia-tools:$PATH"
+          python3 -Es -m deploy.images.tools deploy/images/.artifacts/scanners
+
+  binary-repeatability:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Compare exact executable bytes from independent source paths and compiler caches
+        run: |
+          python3 -Es -m deploy.images.rebuild --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/rebuild"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-repeatability-evidence
+          path: ${{ runner.temp }}/rebuild/rebuild-report.json
+          if-no-files-found: error
+          retention-days: 14
+
+  independent-binary-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [first, second]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build once with private source, module and compiler caches
+        run: python3 -Es -m deploy.images.independent build --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/independent"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: independent-${{ matrix.builder }}
+          path: ${{ runner.temp }}/independent/
+          if-no-files-found: error
+          retention-days: 7
+
+  independent-binary-compare:
+    needs: independent-binary-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: independent-*
+          path: ${{ runner.temp }}/independent-downloads
+      - name: Require distinct runner boots, identical inputs and exact executable bytes
+        run: |
+          python3 -Es -m deploy.images.independent verify \
+            "$RUNNER_TEMP/independent-downloads/independent-first" \
+            "$RUNNER_TEMP/independent-downloads/independent-second" \
+            --commit "$GITHUB_SHA" --output "$RUNNER_TEMP/independent-comparison.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: independent-comparison
+          path: ${{ runner.temp }}/independent-comparison.json
+          if-no-files-found: error
+          retention-days: 14
+
+  bootstrap-harness-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Audit pinned host harness dependencies and their transitive packages
+        run: |
+          python3 -I -m venv "$RUNNER_TEMP/bootstrap-audit"
+          "$RUNNER_TEMP/bootstrap-audit/bin/python" -I -m pip install --quiet pip-audit==2.9.0
+          "$RUNNER_TEMP/bootstrap-audit/bin/pip-audit" -r lab/bootstrap/harness-requirements.txt
+
+  bootstrap-cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [20261002, 20261003]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Signed policy, peer leases, PKCS11 service and seeded faults
+        env:
+          REGALIA_CHAOS_SEED: ${{ matrix.seed }}
+          REGALIA_CHAOS_STEPS: "36"
+        run: bash lab/bootstrap/run-cluster.sh
+      - name: Retain sanitized assertion and fault evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bootstrap-cluster-${{ matrix.seed }}
+          path: lab/bootstrap/.artifacts/cluster-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  bootstrap-vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: TPM-attested early WireGuard and encrypted-root boot in QEMU
+        run: bash lab/bootstrap/run-vm.sh
+
+  bootstrap-network:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Three isolated nodes recover over kernel WireGuard
+        run: bash lab/bootstrap/run-network.sh
+
+  bootstrap-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Debian 13 software TPM and LUKS2 bootstrap experiments
+        run: bash lab/bootstrap/run.sh
+      - name: Repeated unorderly TPM starts above the dictionary lockout threshold
+        run: |
+          lab_test_image=$(docker image inspect regalia-bootstrap-lab:dev --format '{{.Id}}')
+          docker run --init --rm --pull=never --network none --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges --user "$(id -u):$(id -g)" \
+            --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777 --pids-limit 128 \
+            --mount "type=bind,src=$PWD/lab/bootstrap/.artifacts,dst=/evidence" \
+            --env REGALIA_LAB_SWTPM_SECCOMP=kill --entrypoint /usr/bin/env "$lab_test_image" \
+            python3 -Es /opt/tpm_soak.py --cycles 100 --output /evidence/tpm-soak-report.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: tpm-restart-soak
+          path: lab/bootstrap/.artifacts/tpm-soak-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -1,0 +1,580 @@
+{
+  "counts": {
+    "ambiguous": 0,
+    "forward_only": 18,
+    "requires_individual_review": 26,
+    "reverse_only": 18
+  },
+  "full_review_sha256": "98c7f30d2cf67920c86bfbc3c3b5f8e8a1aed69c748b848036912adb2aae33e8",
+  "independent_container_dry_run_agrees": true,
+  "limits": [
+    "No patch is applied, omitted or approved.",
+    "Patch interactions and security regressions require separate verification.",
+    "This is patch applicability, not a package build, executable regression or scan clearance.",
+    "The independent GNU patch trial used an unsigned cached development container."
+  ],
+  "method": "Each patch dry-run independently against clean authenticated upstream; fuzz=0, forced direction. Reverse success is only a review candidate, not semantic proof.",
+  "package_admitted": false,
+  "patch_version": "GNU patch 2.8",
+  "patches": [
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "93714537ab60361cd6aaeaac751d9c2f535550baf23153f9ca2f54ab54201252",
+      "patch": "deb-locations.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "fbfd1d8c6e274da1917144cd039e6a470a408beb03b469a60307144f44d2f583",
+      "sha256": "f221324c317db9d4af097ab74b672e8d3ebc3f1ede004f0764f99622b1f9b1d4"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "fc404aa757a56099b6e9ab502ecf1b01d85a12caa1f364d08709adf9ec6cff79",
+      "patch": "distutils-install-layout.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "ee47ef023b9ead6eefa3ab99243b237e74fd2dce6e2b20473fdedd536e767127",
+      "sha256": "997e33940a2265c26809e968785f0fa875641fe6b85fefb45d1ebea9b843f491"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "d7c1184d450fab5ed22091f8b43dcc946c2d00a9b64e1a59ffd6c9f7e24862ed",
+      "patch": "sysconfig-debian-schemes.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "5f49227982a1759cd50f5ab7ea03e657f63055d04ada7a81ca967955f05fe468",
+      "sha256": "729a7ca561ad644b1b28431f228581f7ce18ff10fcd3d3d4079be82ea10d2c49"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "14c2a09050367bff9e60f7957f579a4c304130f20d7d516ac437e7a6faf6ef2e",
+      "patch": "tkinter-import.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "63307e7eedc212ae88df3564b15867d6c25e060457e955cf34244e67063c206a",
+      "sha256": "b733d2dee6d1ed1c013c08133d90cf215ede8da804245002d4fef8bddc035ad5"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "50f4f703cd9de1fd8d43f7c7332f580cbbc4299489b29595c47ef7e4ff7e8f5f",
+      "patch": "gdbm-import.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "73e2cd02a15c81c09a8c163baaebe60eef3ea5eac938e225c79c2e9e65b9f4de",
+      "sha256": "f19ed394875c7352f94f7cfb503161ba95533d739cbe90defb63c1c387b2c58c"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "eb4a2a2724ede864226e2895a2e301311fded29285ab0cb5f4d9bf5bab272ab5",
+      "patch": "link-opt.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "fd35ab6ca11b119b39f4030460ff6ed05df37ac12791efe11fdee6c2c072525e",
+      "sha256": "fa8a14edaf1175803f66b3b7d5030db0bac277e7c492b51c0625c1b9902b20d9"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "955196dd7dd850e91c843ea6e52f00a3b12712609eeb397e052f541330d99765",
+      "patch": "setup-modules.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "8b0268870d5098b9bc244d107a844caba82197c62315f4a83f6530438e8e1a98",
+      "sha256": "81ffaf5abd0baa7830361f1dd100fe6c8b97189d8cb285f8b0294a8f50876fa4"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "762115d82f5551425d53099842e2940d1e0568e11b7e7a9dd4da38ed0d7549c3",
+      "patch": "profiled-build.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "cf1d1ef39a8ccf8c56e1b582cc83c46b9431fa6d8f35ea5e8fa617e67113d3b2",
+      "sha256": "2772c6447781bc17aab8a11ee0de04fe1d753eca895582426b2293a8d3097232"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "ce180e9442dd9d83f4890aaaad9bc3a839958935811d1f415973fac2b90e1d56",
+      "patch": "langpack-gettext.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "93afc3856a60781d69db2b54c8fbe523bc9b388c01cc3a84b2d2a1322cc4fd30",
+      "sha256": "1137a60149a876e8f9e5c5f4f6ed28d1ae2c34ef1d652ed7ae1b46a89efd80bc"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "5bb4d4788eb660337e0960189a62cba64a0b7c615342eb8fe45f698c6606cb87",
+      "patch": "disable-sem-check.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "8f571b7ab0c689b8a272a2fb1539fa43b85344fdbbd64bfb1172c874c2eaf25d",
+      "sha256": "aa241126ae8461657e783f5b51802e7dd97a7ea0c0e2a356d5188d024a6f4935"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "bc61d04f26ec6e7629b2a8548d8d53017f69a9122c5c75916283f6aea4746f26",
+      "patch": "multiarch.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "d84fb8da312bfb404fa8ce6b0b2d25a063c072e433f457c84e8d12094135bde4",
+      "sha256": "d65aadd7f4fc1558f735095811077ca0545c1240e7795fca4629adf70e695aaa"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "5486b873e6a42ad8be945d28f17518ed66fad4e54ce75a85f4cbf9450ca333dd",
+      "patch": "ensurepip-disabled.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "3849ca9716c231f8b24d88c833560df3ce29c4e77e2f89f59f422e743c92db8e",
+      "sha256": "a75adb23472365e44037c5a89c06e12e88b183f9bd4f3fd0627b9ceff521efbc"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "2696dab14317ea7452843fc7a8f274c923ce46280f0e3dfcbdfb54dfbd223cac",
+      "patch": "destshared-location.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "5982f2a703bc8db55e6602d37ee999f33b04699ffa52163736195a57cceff5dd",
+      "sha256": "53e06ef4cc03c8c58432e403d89eabb9aa74f19c64ac8fc275d50f751264ccc9"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "3e0e157dd3324dbfcc1b48b5c4a93be49e6c2ed6ae113e675f15cb383a219c34",
+      "patch": "min-tempfile.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "7a2b319b808dbb5afbff7168cbaf2cd751ac86a3d9816e80b53c738cbd8f8eae",
+      "sha256": "fb4435a10e1397d28b369968e4abe9364417072daa366ab85549979bd434667d"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "94bbaee7d73cb99b627f084d36fca93a55df4347bf41bcfe3b3a68cf35333613",
+      "patch": "min-lib-argparse.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "f6e9bafad697445e662791fe3804de5e76102f2bc8ceb3848fc84e2d495db9e6",
+      "sha256": "9c74b43258a314aa7e93bdc0b807ea2bfe94f879c1675f10c2efabca3dfaeb9e"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "0e853bfe6fe0d3165d1175060d27bf31d41fc9a4ee0ee54c0f0f12581463fdcb",
+      "patch": "min-argparse-no-shutil.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "40df92c896a4d26834d463315b6b838e2f96ffa580e87df7629daf64d420b575",
+      "sha256": "049e9c9752d193dcd961144a3db901fab5ee6d9f1a994bab58768dd996bf3813"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "de1d3adbfc0c721f7b14d72d83a669647290c755ec277a6998915373dc5db245",
+      "patch": "min-ntpath-import.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "522bc8b8683b7ac5856108f1e646398c4a529a4fdf5824dc52dc1b0eee3f5579",
+      "sha256": "03f27ddead7da9c3b7888f3c011a83e86e07d234d8d1e3f4d2036b4263892d84"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "cc8d2d34b6c692ab742557acd2f01e588039cd5973d86638a5753cd778034deb",
+      "patch": "min-compileall.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "84b3fd1145b07647bd7475c2c65dad125ed645e98b130dd1a64f7abeda3c1de4",
+      "sha256": "0d398ba213063c5e9acafedd26d699a24915176cbb171e17cbc0b16fc92e5138"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "ef847ba77b12778c7915a955c91b604646b9bfa574dc2ba6d30a9a67ab6eb0bb",
+      "patch": "min-pyrepl-import.dff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "ef847ba77b12778c7915a955c91b604646b9bfa574dc2ba6d30a9a67ab6eb0bb",
+      "sha256": "3f429b240442b5d5d718d3ef920fdd25df28bb0624d6273a4d8d3505f82f93f5"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "2696dab14317ea7452843fc7a8f274c923ce46280f0e3dfcbdfb54dfbd223cac",
+      "patch": "makefile-bootstrap.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "1fe480669149121c1db8ddb414076a644f402f58c8e666451fa07749de74a626",
+      "sha256": "48cd7cc415157c2904622f00a43b097e065ab5bc43d1e7c77790d84863c5faf3"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "58f7afa4f414299d1eea99b84b4a313954a70b9085b15b60ecd512d199e431cf",
+      "patch": "test-freeze-strip-libdir.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "58f7afa4f414299d1eea99b84b4a313954a70b9085b15b60ecd512d199e431cf",
+      "sha256": "6f57941b860246cf64eaef8fd9fe818079757ff057a39fd6871fe2ba8fa7ef77"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "26fb727ce3671ea8dadfd0f719feb2bf2ac3b54b4b71fbda4df2c4b184e0fa3c",
+      "patch": "stable-abi-multiarch.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "0e77cb5b63c34c5e1c01d438d74fd3e1fd97a01d5287059ba0eb6c7d57438473",
+      "sha256": "d23e81efb9298b0d869ac61bc6b464c9c2ecb6e98e680cea880f2147443ced67"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "9fee23f8f6e02ad1a5da6fc0f3477701007d8664c80845a79541cd6bd80cddd5",
+      "patch": "gchead-alignment.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "96c9fb7363a676cf1c119c1b5ec4430e3f53836712f67596baa06fcede9e562c",
+      "sha256": "c19b9895c17e0ef4676588f5e965bc7fbda9b2f551c17e214f94e84b02502e92"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "f8cdf1191d795ef3b60681e644555fe1b48a2d4109a5f1eda82971a63440353b",
+      "patch": "issue127330.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "569bec5e11de3869380dffdaa378d28f577c44ed0e43fcf142b1d09bae800704",
+      "sha256": "09c985a5d83882c4c2fcb03b4e79312fdf32b1b55d2ee701975f6c975547ba72"
+    },
+    {
+      "forward_exit": 0,
+      "forward_log_sha256": "c113dd86765e1a7f07d54c254f60e0673d7045d7075070d1042902b72a5e78e1",
+      "patch": "no-sphinx-8.2.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "a6937c017ffd4a28565b90161aef36a63c09113f876884d0fdacf8d40ca19409",
+      "sha256": "806370117a2858b8b5d417113dbf9cd6e2334ee1d9f1b9a6701d0a5d4de5d64a"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "94926a15dca94e4182ca683fb51ecbd15582a78343f900ff33760f98ce2715e6",
+      "patch": "Add-Debian-specific-documentation-path-to-IDLE-menu.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "94926a15dca94e4182ca683fb51ecbd15582a78343f900ff33760f98ce2715e6",
+      "sha256": "e58a5a5f26138d5ef50cb5186cf9781e2bcb0f783b1f0f04df842ec54562feb0"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "8c2c25d4422f68ec60a7da118019262e46ae60bf2a1a6b7f99f58bdb46704281",
+      "patch": "revert-logger-disable.diff",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "175e635918df239be1a7902f3cefca6f8690db993147852fc94ec760b7301466",
+      "sha256": "8ea6322633daa45439715b248bab177a420216c16f035da85f02b5e7f3b252fb"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "24638d7847cf94ed3835478bf42d97ed1bd3ab0aa9d33abbdff43bdc9cd498b9",
+      "patch": "CVE-2025-11468.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "fd1d61dc0fc113622b674a13dc3fb69dc6847cdf10d65f50a17f31dac21275fb",
+      "sha256": "aaf7d403321a1e90a7c7c896634915675934d67b240ed422839a6df940409ba3"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "19b06cf6c7b3c9dc0d68b5065fb185f8db88f4eb61138a4285afd68ae29355b6",
+      "patch": "CVE-2025-12084.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "8b04e5da398f76fef826421444b5809a0089bcaeb178a1739ffcf8a869550543",
+      "sha256": "16de082ade17ec54706eb84427f7ab205ef7f7b343a5ab9019147f844feeae08"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "5dace6e2a7d3c86bd3348557f37f2344b82781219eeb5b43800babc1fd70f9dd",
+      "patch": "CVE-2025-13462.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "551032aa43ac6afe4d5a2980ebf08c230dd3fce64b9b05b162f7f444e371330c",
+      "sha256": "73baa0bd2e7dfb5b4bfa368f7712a513537fdc6313fa22400ec8e62448339a96"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "5fbed7313c57cecb294f1e0b227dd5e968ff600a3063c7d551c63fc9047d3c5e",
+      "patch": "CVE-2025-13836.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "cbc3187442c8d6e94c18989f7144c7ca418cc2022fc35ce16511918f09a0ebb7",
+      "sha256": "9b61a9ea9afeb5cd329f9c066168e93877165c093ffb152ff603f63c7d865e30"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "0c4447556972b4db496dfa51ab1219390f8a3dd45ea1d20dba30d10a4f28d896",
+      "patch": "CVE-2025-13837.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "8389623a5df633ad0e1254455454bc3455ee39933bc75133f3e343b1c97b358c",
+      "sha256": "9e698f5ef72f7ef979886bca1924fe2a9bda3d907394fbad52546f9f36cabdb8"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "4af7fa1eb531ded9600ca7392dd7b4240005726a2e13c17d9bdf9dcd80eb933a",
+      "patch": "CVE-2025-6069.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "990edc121f348ec04b0fd57478c7eec355ddca43a49152f59dc729d1f764ba5f",
+      "sha256": "fce5c304ab164e30ca6941849d54c59e2efb73e6f4b249e0f8fa41bc67b76e93"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "c579dacf57b3e4b38df63f14d185d70fa5effdc27d8fe7b8e0dfbf0677d0d73b",
+      "patch": "CVE-2025-6075.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "46b1f5771cffb0db8d9026fa33cce0fc5a328352ab3f5198f79285acebef4372",
+      "sha256": "26483acfec5d8e0c3d662134a158d50294eb335a33865ee7f257dcfbab7f3e57"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "71296bd5e80b9b090ed0ded029dd74ed890e3aa8b3de7676bfe49de9cbfd2ed2",
+      "patch": "CVE-2025-8194.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "6b3bd441f55270a903fca52b6d1d5fba02ddfc05e55dddbe955aa48ac2d7f2f4",
+      "sha256": "1bd526f6a1e0e4030c471300141a2de657d040dd03fc73baa97307f260be201f"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "d470a49ab5ef11dde9d4b788deecf4bfb1cb02a757b215f9261865f18535be43",
+      "patch": "CVE-2025-8291.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "434ef1fc2c721811cf126b328a14a1374451df7c75a12b74baeec92970c13123",
+      "sha256": "6aac014f14618b2d476790de95fc29f1a742acd93c1b1fe55675866212c2d329"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "d1d4927bac31ad09e2c81e6a5e783341ff9f6f451372e15a9a07eaea45b0a66f",
+      "patch": "CVE-2025-15282.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "0a6fad7c71fc6c5bae4281ba39890d3a260cdbf84dd508d367f67c1189a1d3d3",
+      "sha256": "4b519e007dd75ec4348061e8f082b2f0015da0b98a0c6362c34b5af72f75d6fc"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "460c8f846f2db6d61bc7a4f2662728022b4e0f8f8ded9d656c3f99e0666bf059",
+      "patch": "CVE-2026-0672.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "9162b05ce4bb2116a1b786eaf9d2da31f7bf059fec2692d03cd7f36b3dc63ad0",
+      "sha256": "724a99f1a526fa3d99bad36e7b0a61766552308e1ed06c6e0e193d79b5999148"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "441edddf989ea2df803ae2f0bb7ffc9ec8ffc30e249accebb788cdcaeb3ae041",
+      "patch": "CVE-2026-0865.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "7b1871729ac9ebf65d1e18e64a0e74e49b20b72df4f79a41f63572d4dbd74f41",
+      "sha256": "808fcf17c541c6edac04295a733921d73675fd15923caf26e853a34c3c7ec420"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "fd1c8a236f801f075cc894dae7e44855911be4fc4fa5852f68b5a3973b108641",
+      "patch": "CVE-2026-1299.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "620de6c4fe914cc6e62185ea2513d66282e9726d2c61b950c428a3bc40f63157",
+      "sha256": "caa88153d22b1163703d2d8902dca26980b8fc0f92eca9318ffe69068c1b046a"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "1b06a173069b852561440da5778635d16eee4a4bf391dc48e246ccc53b29351f",
+      "patch": "CVE-2026-2297.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "8653bd190e3f14dc4be8d6fbfb41028b9f9fb32144d1f513dee1b226f9702d52",
+      "sha256": "765725d57ac747b6f8a083edf9c136b7eff919aa952a4f32b23ed12a35f1cfd1"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "d66d2bb6750b470faf3144060ea00720c127af951b35681eee82263b75e389a3",
+      "patch": "CVE-2026-3446.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "9296afbd075efb71c4e08d932c70ca4d4a74efd9cfcb13275c67e82e10aba00d",
+      "sha256": "ffbe1850292590a40905a6c4965c36038955c7c9f529ede079c91bf5798ad400"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "0098197dbd38f9f07ea89e53af9699c00e5a4aae41bddeaadc0861bfe9d940f2",
+      "patch": "CVE-2026-4224.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "70f87245d7f5fd22c51cf7dd0479e8906052d12b1d01f7bc3f26fecf5078742a",
+      "sha256": "82b0d84a79f3b87aa16e38df90bd5cf1b38d1ab7290b2e22d3f4db6378e8bf37"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "a8fdba5aa3d9356a646ddb8ec8e8c94ac5994215bb20787a20213b11c6a8c098",
+      "patch": "CVE-2026-3644.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "abc1f48d59672e15d6785585557a593e54a57bb654ab54e79d4a3c9a653e6dd0",
+      "sha256": "0283da2d312742ca568ba3b397eb316864543893373984e8797617f95ce56aae"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "a1bcf73b3acaff8090073ff4d9cd5e4c5487dd4e89e018b6d143e23121a42018",
+      "patch": "CVE-2026-4519.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "25f95580d8284d1a2b034d39f14d5daad6d8f662f2892e3c97f6b5621b28f7fc",
+      "sha256": "5d6b93deda8f1c1b55a570419050068d24830125c2bbd6d3769ee4272b99ca34"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "0851a4f68c4fcd9c238cd0a806003f1c826457e39f8d292dd6da3fa7f4ea12de",
+      "patch": "CVE-2026-6019.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "0460094a4b3ff4e3f6fcb17323211b87f1f53338180fbf89dea2aba720c6f3a1",
+      "sha256": "eea0dcb6ca25aa0872b0b4fa542ae257414153b788349c18ccbc0170d3d9c4ba"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "0460094a4b3ff4e3f6fcb17323211b87f1f53338180fbf89dea2aba720c6f3a1",
+      "patch": "CVE-2026-6019-2.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "3d5a1949a661622548afe0d68b3c4cb841605ae226ebffd7d5891a21e7cb92f8",
+      "sha256": "2e9dab1ae909ae606b34f38beb548330a8c8d576606e509ecbd7629c0486314b"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "4944be054cccdd7911ab84c70713523afda0e9baca2289db60c91b72e21ce9ac",
+      "patch": "CVE-2026-6100.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "35acb093d6061c0bcabfdd0a9ef63754d937fb91f8c822d420b2f3315d97d0fe",
+      "sha256": "90abaceb3513ca52a0cccc50859dd2aaf87bdeb008ea7d8c12c2cb42f768fc2d"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "159512b8887c26ed040b5db09251af3be00b17dcff690ccc46e9ad19b788f2bc",
+      "patch": "ssl-sni-crash.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "0f30a2b7f212736fdc44d9d643b237a576b836a304a5b0cdb25df66ad42bc18a",
+      "sha256": "90388637754e23e1c93254848729e9f4de8985c15c025c662465501676503901"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "e7bcd82f75a655dd32e712214fdefe5ded68263ff50d30f30687ea21cd99a1ca",
+      "patch": "ssl-reference-leak.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "ee9ee71095875238d9c0d28ae2452ae3fe4fad4d30ebdf7b8dbefa948e66bb45",
+      "sha256": "c798331306d4fc176c1e3a112e75d99eb41f9727cf562cf95fa37843215896e0"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "3153de79bd47b561b8e370c4b026b41df17eefb569233b8bacde822da5f59518",
+      "patch": "dict-use-after-free.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "72498f8aa4561fcb4d7a22bf8ff7f9c85c2b25d30ed33f24d9360597682fc3a4",
+      "sha256": "b569600e12ea30235f4a29413a03b60ff9e9ea197ffe767b54f88df16944d51a"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "3dd608eece6a1fdebe68dd4d55c6665d2bcfd9a3feceb82489b02f7fe2d1ea53",
+      "patch": "traverse-managed-dicts.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "ee6a3a30de1b3eefdea4791cee7f26de3a8ce17ab4c4e237a83596020be91b2a",
+      "sha256": "3c62981c6646c44fb1de98f0a27c5bc5864558e88fae39f7d232fc5619554c5f"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "3fffd02dd5f8d564196ccf7879159465ba363985af460cd93e0e1b6fcbb891ea",
+      "patch": "CVE-2026-1502.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "2394ad519c418b05787c066c611743378e4adae6c6557f1fbddbd5c4a61c7d4b",
+      "sha256": "df6616e5aea760a8cd86f4794f5bea280b196923a83b5a7c462bd4e739515d3a"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "187bf17d8a4b7f31c90937f01ab56068e76d85bdf3931cae111327c6ce60a9d6",
+      "patch": "CVE-2026-3276.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "b7bc087a1525cc3d9326978efdf837269721e8c0727c45206c5de5e6b2cd2ec4",
+      "sha256": "d7b909c3269497c641ef65b8f5f6e55592fc6cf19941aa63360f02bad69fde01"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "8e92836094f8a226fa42398b787bbfa5b7a7159389e26e885d4e1a3fc0a101bd",
+      "patch": "CVE-2026-7774.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "4e1525d6c960e2e866a756e3bf0b4161e910f21055d9f696608c6f0e4057c08b",
+      "sha256": "fc3335d5799a546d3537345cf6bade449ba259264c1f5b5f64c2176327673264"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "0230982ac8f4e070ff0e06717231069bcdd87035e8c9b05aab39a898c0d14374",
+      "patch": "CVE-2026-8328.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "b76f822f90838f25ae303a180bc740abe6cf2d822d15faeb56ed0f4e43f84694",
+      "sha256": "051503143a4ba371863e1901042cc14e17198a263f14239011173693781aebfe"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "e159da12af9916146d1b26c92451421edf4ab2d860119a2599f095e064c2830b",
+      "patch": "CVE-2026-9669.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "d45e1b06c596b25e7ecb5d891995daa6d51fa863c4eefb464f904bd328a4100e",
+      "sha256": "46c2f0a8a2d6534e339513d06656e22ef58ff115b69cef612d06efe4d076d7b0"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "5a9aaf5c31e6379dd20dae838c1c1cf3801b744c1cd5ff1f44a01ad41a2f26c7",
+      "patch": "CVE-2026-6879.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "6ee0773a24dbaf11a8dae376ea863bf23cdcaeb830cdf2fdc2f61a7a8ca60f06",
+      "sha256": "6dc192fd9daee945901aed7a1473e66aecf1621a233209daa6d90d4e6948fbd3"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "cb223d58db29f1c2fa7b3e5454cc9105b0cff7c1760eb390405d5a26894d16cc",
+      "patch": "CVE-2026-0864.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "0df5124f6415ca5457f839a40ffe59a51d4885b06f5fdaa201b9657cfb2c362a",
+      "sha256": "c6ad5eb0b231eeb89891608630d98952218f7ec806aab3c639385d8effd902a1"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "65dc2295997e8afb57f4b5c849c398d0e93722bd2f7467185757aa9a1bdf04d2",
+      "patch": "CVE-2026-4360.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "7f52cf55ade8ad4c5f435a45a656790f217a651f7675ef37484992bedad904ca",
+      "sha256": "c7c4d1d861e67dc09ca990ee48d483a106cb455e865e29a51389024e82bc430f"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "e5c7d763fc5e573e3dc0934dd6cc6e978539fea97d48ff20922c91c141e89908",
+      "patch": "CVE-2026-11940.patch",
+      "reverse_exit": 1,
+      "reverse_log_sha256": "e5c7d763fc5e573e3dc0934dd6cc6e978539fea97d48ff20922c91c141e89908",
+      "sha256": "9fc3c82d6aea788cf503aae1b6f81b495382b3af99bcbeb3c2e2f0999b3bc57c"
+    },
+    {
+      "forward_exit": 1,
+      "forward_log_sha256": "1d93aae6073544775b2214962ebfd425a2ff6a3f19241ff2dc62559a7c12f248",
+      "patch": "CVE-2026-11972.patch",
+      "reverse_exit": 0,
+      "reverse_log_sha256": "000f94140a01e1e5a05a5cf55758830e63847857f9294f43e758845fd1f7d475",
+      "sha256": "43df40cab65308eeff529e2b9d6cb6b8640dd8eb1488904bd7f63e15f0871410"
+    }
+  ],
+  "production_approved": false,
+  "recipe_sha256": "a9bcdff3dbfd1d021506c09c18c34b8ee15c911a92dbe632946f2c55e5bb483b",
+  "schema": "regalia.python-patch-review-receipt/v1",
+  "series_sha256": "0316ad0cccd092ed185b5b321ef148a4d53c5812f8786a492a5685d93efb409c",
+  "source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed CPython tar",
+    "authority_sha256": "1de2bbd31e2dd10aab4098c3ab2f937c530d924ddbfa2dd091f0c7cfb2ee182a",
+    "debian_packaging_version": "3.13.5-2+deb13u5",
+    "directory": "pool/main/p/python3.13",
+    "files": {
+      "Python-3.13.16.tar.xz": {
+        "bytes": 23225704,
+        "sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d"
+      },
+      "Python-3.13.16.tar.xz.asc": {
+        "bytes": 833,
+        "sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8"
+      },
+      "python3.13_3.13.5-2+deb13u5.debian.tar.xz": {
+        "bytes": 299640,
+        "sha256": "a51f456e654ce2c9b40cc1db8005e5041cdb0b2c3aa96ab0871c49fe95280366"
+      },
+      "python3.13_3.13.5-2+deb13u5.dsc": {
+        "bytes": 4298,
+        "sha256": "4be84e20fb902354fa86955e2fbea6e8bdbd158f54833423488308a9b3532662"
+      },
+      "python3.13_3.13.5.orig.tar.xz": {
+        "bytes": 22856016,
+        "sha256": "93e583f243454e6e9e4588ca2c2662206ad961659863277afcdb96801647d640"
+      },
+      "python3.13_3.13.5.orig.tar.xz.asc": {
+        "bytes": 963,
+        "sha256": "da6e013d98dcf8fc6696cdb2872b0051fc8fdeb632f73ef9f54d7b5a68647401"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "python3.13",
+    "package_admitted": false,
+    "packaged_authority_sha256": "f0116877747ac7bb245815039fa864b944195a5e52fa9f60103c6448bddc0bf7",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+    "production_approved": false,
+    "release": {
+      "date": "2026-09-12T07:55:41+00:00",
+      "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "trixie",
+      "valid_until": null
+    },
+    "schema": "regalia.python-authenticated-source/v1",
+    "sigstore_signature_verified": false,
+    "sources_index_sha256": "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signature": {
+      "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+      "signature_sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8",
+      "signed_sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "signing_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305"
+    },
+    "upstream_version": "3.13.16"
+  },
+  "status": "authenticated_dry_run_only"
+}

@@ -1,0 +1,22 @@
+services:
+  lab:
+    image: regalia-bootstrap-lab:dev
+    platform: "${REGALIA_LAB_PLATFORM:-linux/amd64}"
+    build:
+      context: .
+      target: ipc
+    user: "${REGALIA_LAB_UID:-65532}:${REGALIA_LAB_GID:-65532}"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777
+    volumes:
+      - ./.artifacts:/evidence
+    environment:
+      REGALIA_LAB_REPORT: /evidence/report.json
+      REGALIA_LAB_COMMIT: "${REGALIA_LAB_COMMIT:-unknown}"
+      REGALIA_LAB_IMAGE_ID: "${REGALIA_LAB_IMAGE_ID:-unknown}"
+      REGALIA_LAB_DAEMON_PLATFORM: "${REGALIA_LAB_DAEMON_PLATFORM:-unknown}"
+      REGALIA_LAB_SWTPM_SECCOMP: "${REGALIA_LAB_SWTPM_SECCOMP:-kill}"

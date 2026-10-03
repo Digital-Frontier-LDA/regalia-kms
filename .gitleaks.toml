@@ -29,3 +29,17 @@ regexes = [
     '''^c2VjcmV0LWVudmVsb3BlLWZpeHR1cmU=$''',
     '''^d3JhcHBlZA==$''',
 ]
+
+[[allowlists]]
+description = "Public Debian 13 archive signing fingerprints; exact authority identifiers, never private material"
+regexes = [
+    "^04B54C3CDCA79751B16BC6B5225629DF75B188BD$",
+    "^5E04A1E3223A19A20706E20F9904613D4CCE68C6$",
+]
+
+[[allowlists]]
+description = "Exact public TPM CLI name and configure option, also present in committed build history; neither is a credential"
+regexes = [
+    "^tpm2_policysecret$",
+    "^--with-efivar=no$",
+]

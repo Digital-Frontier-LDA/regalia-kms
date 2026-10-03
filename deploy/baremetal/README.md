@@ -24,7 +24,9 @@ Commissioning has two halves:
 2. In RBSU (F9): **Restore Default System Settings**, then **clear the TPM**.
 3. Replace the disks, or securely erase them.
 4. Record them in the evidence: the server serial (`host_serial`), `system_rom_version`,
-   `ilo_firmware_version`, `tpm_ek_certificate_present` (`tpm2_getekcertificate`), and
+   `ilo_firmware_version`, `tpm_ek_certificate_present` (read the RSA/ECC NV certificate
+   with `tpm2_nvread`; the complete signed Debian `tpm2_getekcertificate` tool belongs
+   on separate enrollment/recovery media when a network fetch is required), and
    `used_hardware_intake: true` once steps 1-3 are done.
 
 ## 2. Firmware settings (RBSU / iLO)
@@ -42,6 +44,17 @@ Commissioning has two halves:
 | Internal USB port | the **Nitrokey HSM 2** goes here, inside the chassis | measured: `hsm_token_attached` (USB 20a0:4230 in sysfs; path pinned in the evidence) |
 
 ## 3. Operating system (Debian 13)
+
+Authenticate installation media **before** writing it to USB or booting it. On the
+trusted workstation, from the repository root run
+`python3 -Es -m deploy.images.fetch_debian OUTPUT_DIR`. It pins
+Debian 13.7.0/amd64 and the full Debian CD signing-key fingerprint, verifies the
+detached GPG signature and SHA-512, and publishes the directory only after success.
+Re-run `deploy/images/verify.py gpg` against the image immediately before use;
+retain the original signed manifest, signature and verification evidence.
+For custom appliance/recovery images, require the same checks under the approved
+release signing key. See the [image verification contract](../images/README.md).
+An unsigned image or an image with only a checksum is not approved installation media.
 
 - **Full-disk encryption** (LUKS2), opened in the initrd by the host's TPM **and** one peer (#67): one
   keyslot per peer path, each opened by a half sealed to this TPM (PCR 7 and the image's signed PCR 11

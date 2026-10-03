@@ -54,7 +54,7 @@ func (source *LockedFileSource) PIN(ctx context.Context, deviceID string) ([]byt
 	}
 	defer file.Close()
 	var stat unix.Stat_t
-	if err := unix.Fstat(descriptor, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || !ownerOnly(descriptor, stat.Mode) || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) {
+	if err := unix.Fstat(descriptor, &stat); err != nil || stat.Mode&unix.S_IFMT != unix.S_IFREG || !ownerOnly(descriptor, uint32(stat.Mode)) || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) {
 		return nil, errors.New("PIN credential unavailable")
 	}
 	value, err := io.ReadAll(io.LimitReader(file, maximumCredentialBytes+1))

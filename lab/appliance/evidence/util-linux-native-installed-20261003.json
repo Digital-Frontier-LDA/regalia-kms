@@ -1,0 +1,412 @@
+{
+  "abi": {
+    "all_baseline_exports_retained": true,
+    "counts": {
+      "baseline": {
+        "libblkid.so.1": 125,
+        "liblastlog2.so.2": 10,
+        "libmount.so.1": 348,
+        "libsmartcols.so.1": 218,
+        "libuuid.so.1": 32
+      },
+      "candidate": {
+        "libblkid.so.1": 125,
+        "liblastlog2.so.2": 10,
+        "libmount.so.1": 359,
+        "libsmartcols.so.1": 224,
+        "libuuid.so.1": 32
+      }
+    },
+    "exports_sha256": "bef148835369097e67a9302522be3093386faf7e9c21524c1261d301ed89a77c",
+    "limit": "Symbol names/versions/types retained; not a complete structure or calling-convention proof."
+  },
+  "appliance_installed": false,
+  "architecture": "arm64",
+  "candidate_image": "sha256:3dd255ca2509ffe6258f1e1fc9902e1b0e1bcc26d190c77187990a6953b9a13f",
+  "copied_code_inputs": {
+    "deploy/images/__init__.py": "3157ad0fcb4fed4d720f5f63056d9a4ce93a13b647053e830f97abd4e7b96a6f",
+    "deploy/images/fetch_debian.py": "068768dfaafefe46bee76df9ee496d6a721cb14e132cc588f982a44606bb311b",
+    "deploy/images/independent.py": "59af1eedb38eb70e24a9e991cdcd3fe19c2637ebaee4dacef97224b2d251f3c6",
+    "deploy/images/inventory.py": "a11896ab6e080dcaea900123be8688f26cb11fd465238f805333f3da35100a2e",
+    "deploy/images/rebuild.py": "db2864dcc9bf6a737bddd9d5fb18585f8f41b0bb3fee74941e1ccbfb2a38cca3",
+    "deploy/images/release.py": "146015c149514f6f221062bc8729ec900e89b8230f7095fd1c79ace8d399cd5d",
+    "deploy/images/remediation.py": "2428df2e55a8b481834b50ad43df1ef646a2c348cad4482b531d111d20eb1077",
+    "deploy/images/scan.py": "9286de81faedc294a1990f35247c0f211e674f66366a0d956f5198a1646a7595",
+    "deploy/images/snapshot.py": "0cdb726d93ac13b04690597dfcc0ced0790aae3de491e51ff6a6b574ba8300f1",
+    "deploy/images/source.py": "66f1d8befbbf05a1678a2952475df88c1d48d88bf49c2d1637e003b464778c05",
+    "deploy/images/source_package.py": "deb536299b636baf1bb95eeab42c299f28fed9a35bd4c0ee06a3e61962d6be49",
+    "deploy/images/tools.py": "21b1a166b6563548aa4c0456574bae54d4c5a1443785f799294e639f415141af",
+    "deploy/images/triage.py": "2f5b9961e54f2df82c280767fb554dc55bad12d5b79c64ad79a36e686248456d",
+    "deploy/images/util_package.py": "5a1924752bbc7202346dcc258ccca31ac2ef7b68f3c8a6b35cca7351562a86c6",
+    "deploy/images/util_source.py": "e3ca79f9eafcb07a39f38c07d273660554880606148e75697fce4ed979d13458",
+    "deploy/images/verify.py": "619abcd89a682fb32056830c9baa12c7ed8eba6f53b5631b7153143d86f4c4a4",
+    "lab/appliance/__init__.py": "4985386f925b4c534f6fe81dc84ebd308f4b9b2f5cf204a989d0b506ec954bf0",
+    "lab/appliance/build.py": "6e3277a005d2aad472ddd9da19909651c2750302281837730dd43a01dc58f4e7",
+    "lab/appliance/collect.py": "6a027258364834d325daae67efd726b069e85e0e8221c479b1cd06a96cf4ae90",
+    "lab/appliance/kernel.py": "beccce1c5be26927dcb31c0bab1fc44033ef517363c3e3d276305bbf19938c20",
+    "lab/appliance/minimize.py": "6e8173c3e90c261fa9ef41caf842813966007c5e6dd3620f4ac80e1f29e3aec2",
+    "lab/appliance/probe.py": "a3ed4538c0e91d1c478b9632bb464875b704aea408ffc4aeb01ff96d3e3cb3cb",
+    "lab/appliance/scan_build.py": "b20b24512421de4bfdfea01fcdaee3ef3e4a019a142760a063f199de438e3193",
+    "lab/appliance/scan_docker.py": "37edbc1a3ec4b83a44b40ece0a0c5bf76db8db691f0bcaec9347b8627a96fb52",
+    "lab/appliance/tpm_build.py": "35c0817fc7c0feb28f82676e7461e7283575e801dacfb076c806972a169ec1a4",
+    "lab/appliance/tpm_profile.py": "3b97dca3b8e22a60ce7f9cf72c6c1563b2e05956c603b996e76952186c9b91a1",
+    "lab/appliance/util_profile.py": "a0f7356e4386b37cbceed4d8fbcc5890a3944ca6ba2c9946b7a7688054a330b7",
+    "lab/appliance/util_smoke.py": "f833b81acd2790ab3ccd7ec9dad1b9c3ba6c037d76b5a7771e74acb02d596220",
+    "tools/__init__.py": "c9d7e96d8621b0bbc7ec9dcb29015cd165a6bce57c6c4d76ef47d1ad854d1941",
+    "tools/custody_manifest.py": "cf4a019ac5cd1396bfded1366eb2afb8157b06b838b62a94f2e83e0d68697b50",
+    "tools/fido_continuity.py": "e4cee77df3accdfb804c4040099babec383e907d9758863f7274b4325ed2d317",
+    "tools/junit.py": "ec2d995e86727e2ddc3ec50c9293c6ad48df3cb83c5adfc0598a8a17aa035a33",
+    "tools/lab_cli.py": "8b6cde6b75fd7cf4901a4a8159b5fa82bec4d88e6509af6a0372fb97858250d2",
+    "tools/qualified_stack.py": "4c5509c4b7aa0b336976cb7d58157fe2b5ddf589823e930e0ef644cf091768db"
+  },
+  "docker_recipe": {
+    "network": "none",
+    "sha256": "c11d00ae1b0ecee168bf623e5439668e809e67d9db88ec04282e9234ce89c4a8",
+    "text": "FROM regalia-util-linux-debian-package-prototype:20261003\nUSER root\nCOPY *.deb packages.sha256 /inputs/\nCOPY code /inputs/code\nRUN sha256sum --check /inputs/packages.sha256 && rm -f /etc/dpkg/dpkg.cfg.d/docker /etc/dpkg/dpkg.cfg.d/docker-apt-speedup && apt-get install -y --no-install-recommends /inputs/*.deb && dpkg --audit && for binary in /usr/bin/mount /usr/bin/umount; do dpkg-statoverride --update --add root root 0755 \"$binary\"; done\nENTRYPOINT [\"python3\", \"-I\", \"/inputs/code/tools/lab_cli.py\", \"appliance-util-smoke\"]\n"
+  },
+  "installed_binding": {
+    "candidate_bytes_match": true,
+    "installed_regular_file_checks": 389,
+    "mount_modes": "0755",
+    "production_approved": false
+  },
+  "installed_binding_sha256": "f6b10a5f675fb991a035b2f7c2f4b7c483804d91c5e355c48514097a6969c748",
+  "limits": [
+    "Source signatures, reproducible native package bytes and structure checks are separate evidence; this is not AMD64 appliance admission.",
+    "Cached unsigned development base remains unqualified; compiler versions alone do not bind all compiler payload bytes.",
+    "No actual mount, dm-crypt mapping, PAM login, measured boot or hardware HSM/TPM operations are proved.",
+    "All 36 existing util-linux High findings remain; no waiver or matching change."
+  ],
+  "package_admitted": false,
+  "package_structure": {
+    "bsdutils": {
+      "control": {
+        "Architecture": "arm64",
+        "Description": "basic utilities from 4.4BSD-Lite\nThis package contains the bare minimum of BSD utilities needed for a Debian\nsystem: logger, renice, script, scriptlive, scriptreplay and wall. The\nremaining standard BSD utilities are provided by bsdextrautils.",
+        "Essential": "yes",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "617",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "bsdutils",
+        "Pre-Depends": "libc6 (>= 2.38), libsystemd0 (>= 254)",
+        "Priority": "required",
+        "Recommends": "bsdextrautils",
+        "Section": "utils",
+        "Source": "util-linux (2.42.4-0+regalia1)",
+        "Version": "1:2.42.4-0+regalia1"
+      },
+      "package_sha256": "5b96078b7d66e5bb5bbfbe9e4a33409159d0b03529526d61a8299048b60ba378",
+      "regular_files": 23
+    },
+    "libblkid1": {
+      "control": {
+        "Architecture": "arm64",
+        "Depends": "libc6 (>= 2.38)",
+        "Description": "block device ID library\nThe blkid library allows system programs such as fsck and mount to\nquickly and easily find block devices by filesystem UUID or label.\nThis allows system administrators to avoid specifying filesystems by\nhard-coded device names and use a logical naming system instead.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "518",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libblkid1",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "3141567091c7bf9569168906474e7b9aa630754f489fa0acf3bdd8bc092db426",
+      "regular_files": 6
+    },
+    "liblastlog2-2": {
+      "control": {
+        "Architecture": "arm64",
+        "Depends": "libc6 (>= 2.38), libsqlite3-0 (>= 3.5.9)",
+        "Description": "lastlog2 database shared library\nY2038 safe lastlog database implementation, library files.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "124",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "liblastlog2-2",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "3f3823761d562b8a30945c247c625983aee6a190386eb24fe19b186a5c74ec6e",
+      "regular_files": 5
+    },
+    "libmount1": {
+      "control": {
+        "Architecture": "arm64",
+        "Depends": "libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.38), libselinux1 (>= 3.1~), libsystemd0 (>= 251)",
+        "Description": "device mounting library\nThis device mounting library is used by mount and umount helpers.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "654",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libmount1",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Suggests": "cryptsetup-bin",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "9907fd755337e67c645ce70a22492c10d48324357c233d503549cdb8b289b9e6",
+      "regular_files": 6
+    },
+    "libsmartcols1": {
+      "control": {
+        "Architecture": "arm64",
+        "Depends": "libc6 (>= 2.38)",
+        "Description": "smart column output alignment library\nThis smart column output alignment library is used by fdisk utilities.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "458",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libsmartcols1",
+        "Priority": "optional",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "be587c7ca293d8b6b25ecd5dc79c7bdbc55322f5300bcc22623ad9a24c6afc57",
+      "regular_files": 6
+    },
+    "libuuid1": {
+      "control": {
+        "Architecture": "arm64",
+        "Breaks": "libuuid1t64 (<< 2.42.4-0+regalia1)",
+        "Depends": "libc6 (>= 2.38)",
+        "Description": "Universally Unique ID library\nThe libuuid library generates and parses 128-bit Universally Unique\nIDs (UUIDs). A UUID is an identifier that is unique within the space\nof all such identifiers across both space and time. It can be used for\nmultiple purposes, from tagging objects with an extremely short lifetime\nto reliably identifying very persistent objects across a network.\n.\nSee RFC 4122 for more information.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "126",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "same",
+        "Package": "libuuid1",
+        "Priority": "optional",
+        "Provides": "libuuid1t64 (= 2.42.4-0+regalia1)",
+        "Replaces": "libuuid1t64",
+        "Section": "libs",
+        "Source": "util-linux",
+        "Suggests": "uuid-runtime",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "e13f0ab2fc7fd0d566be9cf2f2c913afeb1d566256ba480f1de364f1aa8593aa",
+      "regular_files": 5
+    },
+    "mount": {
+      "control": {
+        "Architecture": "arm64",
+        "Description": "tools for mounting and manipulating filesystems\nThis package provides the mount(8), umount(8), swapon(8),\nswapoff(8), and losetup(8) commands.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "788",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "mount",
+        "Pre-Depends": "libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.38), libmount1 (= 2.42.4-0+regalia1), libselinux1 (>= 3.1~), libsmartcols1 (= 2.42.4-0+regalia1)",
+        "Priority": "required",
+        "Section": "admin",
+        "Source": "util-linux",
+        "Suggests": "nfs-common",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "28d8fafe295970e32a3ac8576f86b7652506d9c784e75e204b26fd5b80350312",
+      "regular_files": 24
+    },
+    "util-linux": {
+      "control": {
+        "Architecture": "arm64",
+        "Conflicts": "hardlink",
+        "Description": "miscellaneous system utilities\nThis package contains a number of important utilities, most of which\nare oriented towards maintenance of your system. Some of the more\nimportant utilities included in this package allow you to view kernel\nmessages, create new filesystems, view block device information,\ninterface with real time clock, etc.",
+        "Essential": "yes",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "7755",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "util-linux",
+        "Pre-Depends": "libpam-modules, libpam-runtime, libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.41), libcap-ng0 (>= 0.7.9), libcrypt1 (>= 1:4.1.0), liblastlog2-2 (= 2.42.4-0+regalia1), libmount1 (= 2.42.4-0+regalia1), libpam0g (>= 0.99.7.1), libselinux1 (>= 3.1~), libsmartcols1 (= 2.42.4-0+regalia1), libsystemd0 (>= 251), libtinfo6 (>= 6), libudev1 (>= 183), libuuid1 (= 2.42.4-0+regalia1)",
+        "Priority": "required",
+        "Provides": "hardlink",
+        "Recommends": "sensible-utils",
+        "Replaces": "hardlink",
+        "Section": "utils",
+        "Suggests": "dosfstools, kbd, util-linux-extra, util-linux-locales, wtmpdb",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "48ab7d963bf39771826030d2278629539a2f2ec2e1e3694cfbaa7b86d4cdb342",
+      "regular_files": 257
+    },
+    "util-linux-extra": {
+      "control": {
+        "Architecture": "arm64",
+        "Breaks": "initscripts (<< 3.08-2~), util-linux (<< 2.40.4-4~)",
+        "Depends": "libaudit1 (>= 1:2.2.1), libc6 (>= 2.38), libsmartcols1 (= 2.42.4-0+regalia1), zlib1g (>= 1:1.1.4)",
+        "Description": "interactive login tools\nTools commonly found on systems where humans login interactively,\nor are needed with non-standard system configurations.",
+        "Homepage": "https://github.com/util-linux/util-linux",
+        "Installed-Size": "2113",
+        "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+        "Multi-Arch": "foreign",
+        "Package": "util-linux-extra",
+        "Priority": "standard",
+        "Replaces": "util-linux (<< 2.40.4-4~)",
+        "Section": "utils",
+        "Source": "util-linux",
+        "Version": "2.42.4-0+regalia1"
+      },
+      "package_sha256": "8a9720e67414bfd50bb75ffcd0f7c35716ff0bb7047d5f706941e0a58261b004",
+      "regular_files": 57
+    }
+  },
+  "parent_image": "sha256:1a6f0d7d2f35871d972f62e91796c971b4bd55971abb241643f26f8d24f3b95f",
+  "production_approved": false,
+  "profile_input_hashes": {
+    "debian/changelog": "a9174d55cd1d7be7eae33675dd24c3c3662766f9ad53ee914d6c7607e44e79aa",
+    "debian/control": "3f9ff1015a263906b45094949abb28bd8e8c0b5c2fd1176762de1553696fb305",
+    "debian/patches/debian/lsfd-usrbin.patch": "3855ccf229151d6df6646d82a27dc78fa0303dbc4f9272bce9607fb311cb025c",
+    "debian/patches/series": "5b1df14f3d86dedc98174065a1ea5a5e05fa6e64ac85a3023f49b26bb3e41c88",
+    "debian/patches/upstream/libmount-restrict-source-path-canonicalization-for-non-ro.patch": "543fe497aaa63410af1053e52724cb8bfae9d7e0660fd86c490b4ec43fde8133",
+    "debian/patches/upstream/loopdev-use-openat2-RESOLVE_NO_SYMLINKS-for-backing-file.patch": "9276c07a00380c76512cecdf1521489b403201ec0f15d63a831795365c46acf6",
+    "lib/loopdev.c": "0c5d58080d03202f483ba6c41d3af30b656cd8be86862f6b847dfffa7167a25e",
+    "libmount/src/context.c": "e8a67883eb37f459f255047ca325ffffc12427708487d3baab9d33ec9cb298e8"
+  },
+  "recipe_inputs": {
+    "deploy/images/source_package.py": {
+      "sha256": "deb536299b636baf1bb95eeab42c299f28fed9a35bd4c0ee06a3e61962d6be49"
+    },
+    "deploy/images/util-package-policy.json": {
+      "sha256": "0f60322ddbd97b9af69dd56817b2b0dc0e1eadba1200d1dd64b21321d93a3598"
+    },
+    "deploy/images/util_package.py": {
+      "sha256": "5a1924752bbc7202346dcc258ccca31ac2ef7b68f3c8a6b35cca7351562a86c6"
+    },
+    "lab/appliance/util_profile.py": {
+      "sha256": "a0f7356e4386b37cbceed4d8fbcc5890a3944ca6ba2c9946b7a7688054a330b7"
+    },
+    "lab/appliance/util_smoke.py": {
+      "sha256": "f833b81acd2790ab3ccd7ec9dad1b9c3ba6c037d76b5a7771e74acb02d596220"
+    },
+    "tools/lab_cli.py": {
+      "sha256": "8b6cde6b75fd7cf4901a4a8159b5fa82bec4d88e6509af6a0372fb97858250d2"
+    }
+  },
+  "schema": "regalia.util-linux-native-installed-review/v1",
+  "smoke": {
+    "checks": [
+      "UUID API",
+      "LUKS2 header creation",
+      "valid LUKS key",
+      "wrong LUKS key rejected",
+      "blkid LUKS type/UUID",
+      "findmnt fstab parser",
+      "six CLI load checks"
+    ],
+    "limits": [
+      "No dm-crypt mapping, actual mount, measured boot, PAM login or hardware operations."
+    ],
+    "loaded_libraries": [
+      "libmount.so.1",
+      "libblkid.so.1",
+      "libuuid.so.1",
+      "libsmartcols.so.1",
+      "liblastlog2.so.2"
+    ],
+    "packages": {
+      "bsdutils": "1:2.42.4-0+regalia1",
+      "libblkid1": "2.42.4-0+regalia1",
+      "liblastlog2-2": "2.42.4-0+regalia1",
+      "libmount1": "2.42.4-0+regalia1",
+      "libsmartcols1": "2.42.4-0+regalia1",
+      "libuuid1": "2.42.4-0+regalia1",
+      "mount": "2.42.4-0+regalia1",
+      "util-linux": "2.42.4-0+regalia1",
+      "util-linux-extra": "2.42.4-0+regalia1"
+    },
+    "production_approved": false,
+    "schema": "regalia.util-linux-native-smoke/v1",
+    "status": "passed"
+  },
+  "smoke_sha256": "6d0c3058e14256b5c606ec52e469f05cf6a36143a793d0ce28a56caf1f9105b3",
+  "source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed upstream tar/notes",
+    "authority_sha256": "ab6fb7fab1351270d0520e8ee090e3b8d3e174023e8c18634801d8d16c4a6115",
+    "debian_packaging_version": "2.41.5-0+deb13u1",
+    "directory": "pool/main/u/util-linux",
+    "files": {
+      "util-linux-2.42.4.tar.sign": {
+        "bytes": 833,
+        "sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e"
+      },
+      "util-linux-2.42.4.tar.xz": {
+        "bytes": 10729748,
+        "sha256": "fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec"
+      },
+      "util-linux_2.41.5-0+deb13u1.debian.tar.xz": {
+        "bytes": 107604,
+        "sha256": "5b327ccd22f0f4ed28a389870aa51d04ecedb8693e52a1d122850f2b3188cbf6"
+      },
+      "util-linux_2.41.5-0+deb13u1.dsc": {
+        "bytes": 4988,
+        "sha256": "43e9b2cbebd10fdc598c4ad10217c8202c28de53af6eafc892c8e9b5cbf3a3a5"
+      },
+      "util-linux_2.41.5.orig.tar.xz": {
+        "bytes": 9474992,
+        "sha256": "f586e35d320ff537aab3ffeca37e9ecd482ccbe013590db4429a414d8aa6a728"
+      },
+      "v2.42.4-ChangeLog": {
+        "bytes": 29598,
+        "sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503"
+      },
+      "v2.42.4-ChangeLog.sign": {
+        "bytes": 833,
+        "sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "bytes": 1713,
+        "sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16"
+      },
+      "v2.42.4-ReleaseNotes.sign": {
+        "bytes": 833,
+        "sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "util-linux",
+    "packaged_authority_sha256": "00f98634547af7d591c1e1821848df3099ba48c716b8129887770cfe15be2e08",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+    "production_approved": false,
+    "release": {
+      "date": "2026-09-12T07:55:41+00:00",
+      "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "trixie",
+      "valid_until": null
+    },
+    "schema": "regalia.util-linux-authenticated-source/v1",
+    "sources_index_sha256": "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signatures": {
+      "util-linux-2.42.4.tar": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e",
+        "signed_sha256": "5eec78fac0908c1bc18dbe91478741115a3209156dc6105a78ec46dce0f590b3",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ChangeLog": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6",
+        "signed_sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c",
+        "signed_sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      }
+    },
+    "upstream_version": "2.42.4"
+  },
+  "structure_policy_sha256": "0f60322ddbd97b9af69dd56817b2b0dc0e1eadba1200d1dd64b21321d93a3598"
+}

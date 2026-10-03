@@ -1,0 +1,16 @@
+*
+!Dockerfile
+!lab.py
+!tpm_soak.py
+!peer.py
+!peer_cases.py
+!membership_cases.py
+!network.py
+!cluster.py
+!tokens.py
+!leases.py
+!device.py
+!vm.py
+!guest.py
+!guest-init.sh
+!root-init.sh

@@ -1,0 +1,112 @@
+{
+  "branch_head": "fa2b2ddf142c01a4c0a9f15b28e12dc83e7e95f8",
+  "build_report_sha256": "7b1d3b65278e0d86cb9376ef454a10d08e24aa3983dae8da0dd43695f78fa608",
+  "ci_run": 37148915582,
+  "decision": "Require the four reviewed setarch symlinks only for AMD64; preserve the common exact payload and all control/mode/hash checks.",
+  "extra_paths": [
+    "usr/bin/i386",
+    "usr/bin/x86_64",
+    "usr/share/man/man8/i386.8.gz",
+    "usr/share/man/man8/x86_64.8.gz"
+  ],
+  "install_log_sha256": "1e06e09eeb3ee9176662caa2c7cbb258d7a90b0aa8ee6302eafc08fa93417281",
+  "limitations": [
+    "Failed guest evidence contains diagnostic paths, not full candidate packages. The next workflow must inspect actual links/modes, reproduce packages, validate installed payload, boot and scan."
+  ],
+  "missing_paths": [],
+  "production_approved": false,
+  "reviewed_files": {
+    "debian/util-linux.install": {
+      "bytes": 6114,
+      "sha256": "b2e71492f716d68500f9d77443761a86e4163c48fccb4e36147d6adb7e7678f9"
+    },
+    "util-linux-2.42.4/sys-utils/Makemodule.am": {
+      "bytes": 15895,
+      "sha256": "a28d6eb3b5f2384c6502e70a7169001ffcd3d5eebd66fd97e34f4770837f4581"
+    }
+  },
+  "schema": "regalia.util-linux-amd64-layout-review/v1",
+  "source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed upstream tar/notes",
+    "authority_sha256": "ab6fb7fab1351270d0520e8ee090e3b8d3e174023e8c18634801d8d16c4a6115",
+    "debian_packaging_version": "2.41.5-0+deb13u1",
+    "directory": "pool/main/u/util-linux",
+    "files": {
+      "util-linux-2.42.4.tar.sign": {
+        "bytes": 833,
+        "sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e"
+      },
+      "util-linux-2.42.4.tar.xz": {
+        "bytes": 10729748,
+        "sha256": "fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec"
+      },
+      "util-linux_2.41.5-0+deb13u1.debian.tar.xz": {
+        "bytes": 107604,
+        "sha256": "5b327ccd22f0f4ed28a389870aa51d04ecedb8693e52a1d122850f2b3188cbf6"
+      },
+      "util-linux_2.41.5-0+deb13u1.dsc": {
+        "bytes": 4988,
+        "sha256": "43e9b2cbebd10fdc598c4ad10217c8202c28de53af6eafc892c8e9b5cbf3a3a5"
+      },
+      "util-linux_2.41.5.orig.tar.xz": {
+        "bytes": 9474992,
+        "sha256": "f586e35d320ff537aab3ffeca37e9ecd482ccbe013590db4429a414d8aa6a728"
+      },
+      "v2.42.4-ChangeLog": {
+        "bytes": 29598,
+        "sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503"
+      },
+      "v2.42.4-ChangeLog.sign": {
+        "bytes": 833,
+        "sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "bytes": 1713,
+        "sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16"
+      },
+      "v2.42.4-ReleaseNotes.sign": {
+        "bytes": 833,
+        "sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "util-linux",
+    "packaged_authority_sha256": "00f98634547af7d591c1e1821848df3099ba48c716b8129887770cfe15be2e08",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+    "production_approved": false,
+    "release": {
+      "date": "2026-09-12T07:55:41+00:00",
+      "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "trixie",
+      "valid_until": null
+    },
+    "schema": "regalia.util-linux-authenticated-source/v1",
+    "sources_index_sha256": "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signatures": {
+      "util-linux-2.42.4.tar": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e",
+        "signed_sha256": "5eec78fac0908c1bc18dbe91478741115a3209156dc6105a78ec46dce0f590b3",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ChangeLog": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6",
+        "signed_sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c",
+        "signed_sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      }
+    },
+    "upstream_version": "2.42.4"
+  },
+  "status": "reviewed"
+}

@@ -1,0 +1,86 @@
+{
+  "actual_utility_packages_reinspected": 18,
+  "archive_packages": {
+    "inventory_sha256": "e1bd60d2aca293134019783fc6092530af0cfe23f9d7af3229ac5bafa5cc8f15",
+    "packages": 227,
+    "status": "verified"
+  },
+  "build_report_sha256": "48cecd3fee5468b150c551db48ed278c6f6cbc59cbcfb8c46405bdca062b4b7a",
+  "ci_run": 37152834644,
+  "compiler_inputs": {
+    "inventory_sha256": "fc25f5f4e04b07f5dfea29fafe85dec11b2a3539f75443ba2c6d109821ae69c3",
+    "packages": 425,
+    "status": "verified"
+  },
+  "counts": {
+    "Critical": 105,
+    "High": 640,
+    "Low": 37,
+    "Medium": 529,
+    "Negligible": 239,
+    "Unknown": 576
+  },
+  "findings_sha256": "9b911ef4a4b3e5678cff0fa59e2633f18c3157cbff6e8bd58378964382235a73",
+  "functional_jobs_passed": 40,
+  "head": "6bd184350695a3d75ba921e3f8e2dcc000434ab1",
+  "limitations": [
+    "Actual eighteen AMD64 utility packages and public logs are reverified locally; final rootfs and TPM package/executable bytes were not uploaded and remain builder claims outside CI.",
+    "The nine-package candidate leaves login at its archive version; the ten-package follow-up remains under qualification.",
+    "No High/Critical match is waived or claimed cleared."
+  ],
+  "local_source_packages": {
+    "bsdutils": "1:2.42.4-0+regalia1",
+    "libblkid1": "2.42.4-0+regalia1",
+    "liblastlog2-2": "2.42.4-0+regalia1",
+    "libmount1": "2.42.4-0+regalia1",
+    "libsmartcols1": "2.42.4-0+regalia1",
+    "libuuid1": "2.42.4-0+regalia1",
+    "mount": "2.42.4-0+regalia1",
+    "tpm2-tools": "5.7-1+regalia1",
+    "util-linux": "2.42.4-0+regalia1",
+    "util-linux-extra": "2.42.4-0+regalia1"
+  },
+  "normal_boot_seconds": 11.83,
+  "production_approved": false,
+  "rootfs_bytes_independently_present": false,
+  "rootfs_payload_binding": {
+    "payload_binding_sha256": "7287d3c09785cd5692b81ee412592cdd6a67b55caa041caac268643f8b51e3e4",
+    "regular_files": 389,
+    "rootfs_sha256": "3e840a2489bebf216cd2e35fc52b5621e2a707c7cbb408d75ec9360e8a234beb",
+    "status": "verified",
+    "symlinks": 17
+  },
+  "rootfs_sha256": "3e840a2489bebf216cd2e35fc52b5621e2a707c7cbb408d75ec9360e8a234beb",
+  "sbom_sha256": "65474d8d7b133a05a87317ac6ea5e4d6bdb7252ac2b95c13f0411e4fa3b955f6",
+  "scan_delta": {
+    "added_package": "util-linux-extra",
+    "advisories": [
+      "CVE-2026-76642",
+      "CVE-2026-78408",
+      "CVE-2026-78409",
+      "CVE-2026-78410"
+    ],
+    "database_built": "2026-10-03T06:31:58Z",
+    "new_high_matches": 4,
+    "prior": "8e8ccbb",
+    "removed_high_critical_advisory_package_pairs": 0,
+    "scanner_configuration_unchanged": true,
+    "utility_constraint": "none (unknown)",
+    "utility_fix_state": "wont-fix"
+  },
+  "scan_report_sha256": "07b46272936612defeec5c9cd4c5eda8a5bf04acc42b4cf8e13ba1486a919265",
+  "schema": "regalia.util-linux-amd64-qualified-review/v1",
+  "source_commit": "e3cabe40f305da9a52ded11966f49d6ab43f6a7a",
+  "status": "public_evidence_reverified",
+  "tpm_compiler_inputs": {
+    "inventory_sha256": "a3850fae9f4b9807ce786fad5c374e0f6e20e5aed0933435071258717538aa1b",
+    "packages": 463,
+    "status": "verified"
+  },
+  "vendor_tests": {
+    "known_failed_lines_per_build": 8,
+    "limitations": "Vendor skips and known failures are retained; the summary is not evidence every operation executed.",
+    "skipped_lines_per_build": 172,
+    "summary_cases": 368
+  }
+}

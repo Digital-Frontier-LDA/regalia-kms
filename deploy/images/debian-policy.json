@@ -1,0 +1,11 @@
+{
+  "schema": "regalia.debian-media/v1",
+  "version": "13.7.0",
+  "architecture": "amd64",
+  "image": "debian-13.7.0-amd64-netinst.iso",
+  "base_url": "https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/",
+  "checksum": "SHA512SUMS",
+  "signature": "SHA512SUMS.sign",
+  "key_url": "https://www.debian.org/CD/key-DA87E80D6294BE9B.txt",
+  "primary_fingerprint": "DF9B9C49EAA9298432589D76DA87E80D6294BE9B"
+}

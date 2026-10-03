@@ -1,0 +1,256 @@
+{
+  "candidate": {
+    "control": {
+      "Architecture": "arm64",
+      "Depends": "libpam-modules, libpam-runtime, libaudit1 (>= 1:2.2.1), libc6 (>= 2.38), libcrypt1 (>= 1:4.1.0), libpam0g (>= 0.99.7.1)",
+      "Description": "system login tools\nThis package provides support for console-based logins and for\nchanging effective user or group IDs, including:\n * login, the program that invokes a user shell on a virtual terminal,\n * nologin, a dummy shell for disabled user accounts,\n * newgrp, a program to change the effective group IDs.",
+      "Homepage": "https://github.com/util-linux/util-linux",
+      "Installed-Size": "448",
+      "Maintainer": "Regalia laboratory <noreply@example.invalid>",
+      "Multi-Arch": "foreign",
+      "Package": "login",
+      "Pre-Depends": "login.defs (>= 1:4.16.0-1~)",
+      "Priority": "required",
+      "Protected": "yes",
+      "Section": "admin",
+      "Source": "util-linux (2.42.4-0+regalia1)",
+      "Version": "1:4.16.0-2+really2.42.4-0+regalia1"
+    },
+    "package_admitted": false,
+    "package_sha256": "11818a632b8145ea7ab31eb0e545613beade12a3a56ddfa63a72a02dea8e1781",
+    "payload_sha256": {
+      "etc/pam.d/login": "71b58114fcdc0e037b9700a92f14638a4a24f8480f23b03cc26740511fdd56dc",
+      "usr/bin/login": "02ce98fd64e8a4b2a0974f40c3d23a17668b708b5a523a3e4bd29870a0395bb6",
+      "usr/bin/newgrp": "79bd918e23890ee8dea67696bf4e42019cd5317a63446a85ce44f865d90a544a",
+      "usr/sbin/nologin": "ce17c9c404fef9aefda9676024a41c40f4248ddba68de6e1f4914493fadcb822",
+      "usr/share/bash-completion/completions/newgrp": "308c63025a564a23e80c1c6386918359a0e0f4bf82811754f01a56d9358aa45c",
+      "usr/share/doc/login/NEWS.Debian.gz": "ef07ba8b9e6bcc88029a15494ae958dd1195ab7a2f0c4c26098edd5f7fa1ee80",
+      "usr/share/doc/login/changelog.Debian.gz": "474e0e3fcbdbafcec7166e2a0196e5941d014153c99c1cbd4b47391549131d79",
+      "usr/share/doc/login/changelog.gz": "066409459ae4ad07483eb5ec53518fb5a14b3a21355732034fbb90833505181e",
+      "usr/share/doc/login/copyright": "56b67e2eb8bac5a15d91e261d558d73f1f029113cced229753138194997366b6",
+      "usr/share/lintian/overrides/login": "f3d35db7b08eb45cce926b99584161e413552bcd39e6aec97f3084d7ba8849ad",
+      "usr/share/man/ar/man1/login.1.gz": "a96452e79fd0371a7cd0e7a26ebb9ccb56e42640ef08ad8c0a09d33480175ada",
+      "usr/share/man/ar/man1/newgrp.1.gz": "bcff6266337f91fb61ac65a647eb6333aeb3f7701b0b5e0d34c66f8fa5d9382c",
+      "usr/share/man/ar/man8/nologin.8.gz": "8db09246ae39d7403c3b2a3df59beb2305864216f0bb5c918148c4d073b2fad7",
+      "usr/share/man/de/man1/login.1.gz": "e4fb309d3020c2a14e1e4b6af0aad65192861d79e10569780ee89d5946c100de",
+      "usr/share/man/de/man1/newgrp.1.gz": "209e59a794162616786e5f50d16850b17665b0e089adf47c2c020e281c4e6498",
+      "usr/share/man/de/man8/nologin.8.gz": "cc40faa9843e22d6f1e34adf100d24c7d0b9ba128e048f56ef9dd76290989b2f",
+      "usr/share/man/fr/man1/login.1.gz": "80550f15589f7b43682d67a4b457c6e2ebc9be8419ccfa6b15bbc4f7f4bf7369",
+      "usr/share/man/man1/login.1.gz": "d215e2d395e807f66559ca126d4acd4f4d6caa0ad8613e05ef84cd5288cb20b0",
+      "usr/share/man/man1/newgrp.1.gz": "819c9c79a5e70c730c29a98801cf930facfc6382dc5530ac6397dd4b4f548747",
+      "usr/share/man/man8/nologin.8.gz": "df6b82de74f195e9ca10d40fe38afc742ce4292c2b61f4f37619895109f80a9c",
+      "usr/share/man/pl/man1/login.1.gz": "80a47bb88bbb1d01ddcc46a58187c3101914310c188b5327262fc715063921bb",
+      "usr/share/man/pl/man1/newgrp.1.gz": "4ef95439b22553ab4713b7643ea43d1b6275500728c1b80e597eb4fe26227f0f",
+      "usr/share/man/pl/man8/nologin.8.gz": "9c10e9dfd3c32dea656c4fc8f63dcd08ad4fbc3960f8aa42d2ab495a04fb1392",
+      "usr/share/man/ro/man1/login.1.gz": "c4ee0ebc0c5c900ef047cab8250c0f89fcd86fd942d333c3b2ecadc801694099",
+      "usr/share/man/ro/man1/newgrp.1.gz": "0abf2aab951172957aeaf45b5ff41096ba6cddcb64a68fb969c5cece77ed9b53",
+      "usr/share/man/ro/man8/nologin.8.gz": "b60b2415c933566158938109291d183ca62082d9caaf244252de25ba809c3d62",
+      "usr/share/man/sr/man1/login.1.gz": "fcbcc3ea91b9430e7bcc73be6803624d409658d0d44e1df1f9d96620fea0971b",
+      "usr/share/man/sr/man1/newgrp.1.gz": "60fd1e156966b2906f1005ae67cb48910e0d25387b7d3c0bdba0b6ac9d40818a",
+      "usr/share/man/sr/man8/nologin.8.gz": "613002f82a8868aa2f850e5bf2710d97335477e7098d7cfb237afe01952bacb2",
+      "usr/share/man/sv/man1/login.1.gz": "c0cdcfc238257e654ee1223215c2574bee88fd0f51e139e1b3ad517e72523e59",
+      "usr/share/man/sv/man1/newgrp.1.gz": "e2741b78b2caed573ffc1ad72e4aeef8e5d5c935dfc5d2be5a232397a012d02e",
+      "usr/share/man/sv/man8/nologin.8.gz": "ab10e661f329c1dd94e7c04ee4bec593d0f4854c86b182da27a52b09ac518b29",
+      "usr/share/man/uk/man1/login.1.gz": "e95622863ac61d63fdbb351baf0e61b18ff7dac8e609ee7bfcbaa37cdf8cf9eb",
+      "usr/share/man/uk/man1/newgrp.1.gz": "20d5c48547573accd642fd17a51061a0cdffa1a00d8fe085aeaed37764a9c800",
+      "usr/share/man/uk/man8/nologin.8.gz": "b8b41c5d1d15ba3618b723f6f716ef6aa9d3b5b8cea84b93273a510c082f8bf6"
+    },
+    "policy_sha256": "a747652da21336b2c263524282c6f7f8af5e86a8be699d80af72e1165c342ca3",
+    "production_approved": false,
+    "schema": "regalia.util-linux-package-structure/v1",
+    "status": "verified"
+  },
+  "checks": {
+    "all_ten_actual_package_pairs": "Exact policy inspection passes; full candidate records match across both prior compilation paths.",
+    "documented_invocations": 2,
+    "image_guards": 112,
+    "minimization_guards": 3,
+    "python_isolation_guards": 5
+  },
+  "limits": [
+    "Reuses actual packages reproduced previously on one unsigned cached development builder; no new compilation or independent-builder reproduction is claimed.",
+    "Native exported rootfs is development evidence, not the AMD64 appliance, a measured boot, PAM authentication rehearsal or new vulnerability scan.",
+    "All source/package identities remain truthful. No existing Critical/High finding is claimed cleared until the exact appliance filesystem passes the unchanged scanner.",
+    "The complete ten-package guest build and admission require the next AMD64 workflow."
+  ],
+  "native_install": {
+    "architecture": "arm64",
+    "base_image_id": "sha256:79c07a2dc1635fbf3315661c99cb3814b7de0093d37c958684995d8c9eb346d3",
+    "container_state": {
+      "Dead": false,
+      "Error": "",
+      "ExitCode": 0,
+      "FinishedAt": "2026-10-03T20:57:06.932586177Z",
+      "OOMKilled": false,
+      "Paused": false,
+      "Pid": 0,
+      "Restarting": false,
+      "Running": false,
+      "StartedAt": "2026-10-03T20:55:50.154871503Z",
+      "Status": "exited"
+    },
+    "driver_sha256": "ab551390ff6617002ea0a21e5965ffcf6bf4f1d33f2075ab83d0591a35f6c907",
+    "filesystem_binding": {
+      "payload_binding_sha256": "835c40e5f443431fcacafd505f0072f08b5841fac5c9261a2fc83d2b4970e5dd",
+      "regular_files": 424,
+      "rootfs_sha256": "13c0085f516f13dfdcab7fff84f24f162ca5506cdc222f4b85b419f50b41030c",
+      "status": "verified",
+      "symlinks": 15
+    },
+    "log_sha256": "d9bd7081d4924c5dc9762f976cb77c06b7b8e21a6d89791cb1773f1dc163fc14",
+    "network": "none",
+    "publisher_signature_verified": false,
+    "smoke": {
+      "checks": [
+        "UUID API",
+        "LUKS2 header creation",
+        "valid LUKS key",
+        "wrong LUKS key rejected",
+        "blkid LUKS type/UUID",
+        "findmnt fstab parser",
+        "six CLI load checks",
+        "login CLI load",
+        "nologin denies a login shell"
+      ],
+      "limits": [
+        "No dm-crypt mapping, actual mount, measured boot, PAM login or hardware operations."
+      ],
+      "loaded_libraries": [
+        "libmount.so.1",
+        "libblkid.so.1",
+        "libuuid.so.1",
+        "libsmartcols.so.1",
+        "liblastlog2.so.2"
+      ],
+      "packages": {
+        "bsdutils": "1:2.42.4-0+regalia1",
+        "libblkid1": "2.42.4-0+regalia1",
+        "liblastlog2-2": "2.42.4-0+regalia1",
+        "libmount1": "2.42.4-0+regalia1",
+        "libsmartcols1": "2.42.4-0+regalia1",
+        "libuuid1": "2.42.4-0+regalia1",
+        "login": "1:4.16.0-2+really2.42.4-0+regalia1",
+        "mount": "2.42.4-0+regalia1",
+        "util-linux": "2.42.4-0+regalia1",
+        "util-linux-extra": "2.42.4-0+regalia1"
+      },
+      "production_approved": false,
+      "schema": "regalia.util-linux-native-smoke/v1",
+      "status": "passed"
+    }
+  },
+  "prior_reproduction_receipt_sha256": "8de8ba19da11e0e24ca44ea815bfd4647a33e5805b8399021e5e698856442db4",
+  "production_approved": false,
+  "proposed_recipe_sha256": {
+    "deploy/images/util-package-policy.json": "a747652da21336b2c263524282c6f7f8af5e86a8be699d80af72e1165c342ca3",
+    "deploy/images/util_admission.py": "92b0c117d0c30c46ad76f056de8ee01808fd499b19aa0ee1aa5411a921708cd6",
+    "deploy/images/util_package.py": "a2bbf604e1fc45c1aa59bc1ba73ed4556e0f4133180d6a67bbb13f61a39b7d4e",
+    "lab/appliance/acceptance.sh": "7ad39ae6b594117f86fa33f313ebb41a46470618483e5e7e2e35a0cd5d78998c",
+    "lab/appliance/minimize.py": "d0eb83d5c39caa34fb7ff1700375fe009179e3653dd62038e67b44a3c3d3e9a1",
+    "lab/appliance/util_build.py": "1b69eb19db8be4edf2113262f3784aac4f2d71421ab819aca129a5a6b17f5e2b",
+    "lab/appliance/util_smoke.py": "2da49439c182a608b26614b27cde20d0e590170889100162c2389afff2c5ec56"
+  },
+  "review": {
+    "control_members": 8,
+    "maintainer_scripts": "Four exact dh_installdeb scripts remove historical obsolete conffiles using dpkg-maintscript-helper; scripts and conffiles metadata are hash pinned.",
+    "package": "login",
+    "pam_matches_authenticated_debian_packaging": true,
+    "pam_sha256": "71b58114fcdc0e037b9700a92f14638a4a24f8480f23b03cc26740511fdd56dc",
+    "pam_source": "debian/login.pam",
+    "payload_members": 76,
+    "privileged_payload": "Only existing usr/bin/newgrp at 04755; login and nologin remain 0755. The independent TPM parser retains its no-privileged-files default.",
+    "protected": "yes",
+    "source": "util-linux",
+    "source_version": "2.42.4-0+regalia1",
+    "version": "1:4.16.0-2+really2.42.4-0+regalia1"
+  },
+  "schema": "regalia.util-linux-login-review/v1",
+  "source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed upstream tar/notes",
+    "authority_sha256": "ab6fb7fab1351270d0520e8ee090e3b8d3e174023e8c18634801d8d16c4a6115",
+    "debian_packaging_version": "2.41.5-0+deb13u1",
+    "directory": "pool/main/u/util-linux",
+    "files": {
+      "util-linux-2.42.4.tar.sign": {
+        "bytes": 833,
+        "sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e"
+      },
+      "util-linux-2.42.4.tar.xz": {
+        "bytes": 10729748,
+        "sha256": "fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec"
+      },
+      "util-linux_2.41.5-0+deb13u1.debian.tar.xz": {
+        "bytes": 107604,
+        "sha256": "5b327ccd22f0f4ed28a389870aa51d04ecedb8693e52a1d122850f2b3188cbf6"
+      },
+      "util-linux_2.41.5-0+deb13u1.dsc": {
+        "bytes": 4988,
+        "sha256": "43e9b2cbebd10fdc598c4ad10217c8202c28de53af6eafc892c8e9b5cbf3a3a5"
+      },
+      "util-linux_2.41.5.orig.tar.xz": {
+        "bytes": 9474992,
+        "sha256": "f586e35d320ff537aab3ffeca37e9ecd482ccbe013590db4429a414d8aa6a728"
+      },
+      "v2.42.4-ChangeLog": {
+        "bytes": 29598,
+        "sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503"
+      },
+      "v2.42.4-ChangeLog.sign": {
+        "bytes": 833,
+        "sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "bytes": 1713,
+        "sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16"
+      },
+      "v2.42.4-ReleaseNotes.sign": {
+        "bytes": 833,
+        "sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "util-linux",
+    "packaged_authority_sha256": "00f98634547af7d591c1e1821848df3099ba48c716b8129887770cfe15be2e08",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+    "production_approved": false,
+    "release": {
+      "date": "2026-09-12T07:55:41+00:00",
+      "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "trixie",
+      "valid_until": null
+    },
+    "schema": "regalia.util-linux-authenticated-source/v1",
+    "sources_index_sha256": "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signatures": {
+      "util-linux-2.42.4.tar": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e",
+        "signed_sha256": "5eec78fac0908c1bc18dbe91478741115a3209156dc6105a78ec46dce0f590b3",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ChangeLog": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6",
+        "signed_sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c",
+        "signed_sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      }
+    },
+    "upstream_version": "2.42.4"
+  },
+  "status": "native_candidate_verified",
+  "test_log_sha256": {
+    "regalia-util-login-image-guards-20261003.log": "f58235543f5807c850275bd7603a91b03301adb1494864270916dfd1f84a6e73",
+    "regalia-util-login-isolation-20261003.log": "9de2ba5e57cda3183178ec2ad5c468a88cc1cf04b028a71d52a8698cba33eafa",
+    "regalia-util-login-minimize-guards-20261003.log": "d60cf076301ffe4b0e2c8c7ea31f9d49515318a305236c1da529a0397323e18a"
+  }
+}

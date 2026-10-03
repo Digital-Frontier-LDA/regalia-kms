@@ -1,0 +1,32 @@
+# Laboratory compiler only, never an appliance or release image. Match the
+# explicitly reviewed development input; publisher signatures remain unverified.
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+
+COPY archive-key-13.asc archive-key-13-security.asc sources.list /inputs/
+RUN rm -f /etc/apt/sources.list.d/* \
+    && cp /inputs/sources.list /etc/apt/sources.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        gcc libc6-dev make binutils autoconf automake autoconf-archive libtool \
+        libtss2-dev libssl-dev pkg-config swtpm python3-yaml python3-cryptography \
+        cryptsetup-bin wireguard-tools \
+    && dpkg-query -W -f='${Package}\t${Version}\n' > /inputs/build-packages.tsv \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY tpm2-tools_5.7.orig.tar.gz tpm_profile.py /inputs/
+ARG BUILD_DIRECTORY=/build/first
+RUN printf '%s\n' '714912361fddbd7e01473be9065b2949b5ad2f5dff80063648f00f4eaf38971b  /inputs/tpm2-tools_5.7.orig.tar.gz' | sha256sum --check \
+    && mkdir -p "${BUILD_DIRECTORY}" \
+    && tar -xzf /inputs/tpm2-tools_5.7.orig.tar.gz -C "${BUILD_DIRECTORY}" \
+    && python3 -I /inputs/tpm_profile.py "${BUILD_DIRECTORY}/tpm2-tools-5.7" \
+    && cd "${BUILD_DIRECTORY}/tpm2-tools-5.7" \
+    && ./bootstrap \
+    && ./configure --disable-fapi --with-efivar=no --prefix=/opt/regalia-esys/usr \
+        CFLAGS="-O2 -g0 -ffile-prefix-map=${BUILD_DIRECTORY}/tpm2-tools-5.7=." \
+        LDFLAGS='-Wl,--build-id=none,-z,relro,-z,now' \
+    && make -j4 && make install \
+    && ldd /opt/regalia-esys/usr/bin/tpm2 > /inputs/runtime-libraries.txt \
+    && ! grep -E 'libcurl|libtss2-fapi' /inputs/runtime-libraries.txt \
+    && sha256sum /opt/regalia-esys/usr/bin/tpm2 > /inputs/binary.sha256
+
+ENV PATH=/opt/regalia-esys/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
