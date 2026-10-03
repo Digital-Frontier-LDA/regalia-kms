@@ -73,6 +73,16 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' > "$U/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
 python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
+# the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in that
+# names this initrd and this client, which is all uki.py holds it to (the real one is e2e/unlock-boot-qemu.sh's)
+python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" <<'PY'
+import hashlib, json, sys
+digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
+json.dump({"schema": "regalia.initrd-build/v1", "commit": "0" * 40, "go": "go1.26.6", "snapshot": "20261003T121500Z",
+           "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
+           "client_sha256": digest(sys.argv[2]), "repository_files": {}, "packages_sha256": "0" * 64, "packages": [],
+           "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0}, open(sys.argv[3], "w"))
+PY
 printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
@@ -80,7 +90,8 @@ for k in initrd system secure-boot other; do
   openssl rsa -in "$W/TEST-$k.key" -pubout -out "$W/TEST-$k.pub" 2>/dev/null
   openssl req -new -x509 -key "$W/TEST-$k.key" -out "$W/TEST-$k.crt" -subj "/CN=TEST $k key, not for production/" -days 30 2>/dev/null
 done
-IN=(--linux "$LINUX" --initrd "$W/initrd" --cmdline "$W/cmdline" --os-release "$W/os-release" --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub")
+IN=(--linux "$LINUX" --initrd "$W/initrd" --cmdline "$W/cmdline" --os-release "$W/os-release" --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub"
+    --initrd-build "$W/initrd-build.json")
 FILEKEYS=(--initrd-key "$W/TEST-initrd.key" --initrd-cert "$W/TEST-initrd.crt" --system-key "$W/TEST-system.key" --system-cert "$W/TEST-system.crt"
           --secure-boot-key "$W/TEST-secure-boot.key" --secure-boot-cert "$W/TEST-secure-boot.crt")
 

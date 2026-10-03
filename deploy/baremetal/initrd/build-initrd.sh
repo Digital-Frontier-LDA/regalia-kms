@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build-initrd.sh — build the KMS host initrd REPRODUCIBLY, from pinned inputs (regalia-kms#248).
 #
-#   sudo deploy/baremetal/initrd/build-initrd.sh --snapshot 20261003T121500Z --out DIR [--go GO] [--epoch N]
+#   sudo deploy/baremetal/initrd/build-initrd.sh --snapshot 20261003T121500Z --out DIR [--go GO] [--epoch N] [--keyring FILE]
 #
 # Every builder runs this itself, on its own machine, from its own clone of the repository at the agreed
 # commit, and never copies another builder's initrd, client or script: the image's build record carries the
@@ -25,7 +25,11 @@
 # LC_ALL=C and TZ=UTC). Only a proxy setting (GOPROXY, HTTPS_PROXY) passes to `go`: it decides where a module
 # is fetched from, never what it holds (go.sum and the checksum database do).
 #
-# OUT, written last and all together: DIR/initrd.img, DIR/initrd-listing.txt (one line per entry: path,
+# --keyring FILE: the Debian archive keyring the archive is verified with (default: the system's); it decides
+# whether the archive is trusted, never what it holds.
+#
+# OUT, written last and all together: DIR/initrd.img, DIR/regalia-unlock (the client it compiled, which
+# `uki.py build --unlock-client` takes), DIR/initrd-listing.txt (one line per entry: path,
 # type, mode, uid, gid, size, sha256, link) and DIR/initrd-build.json (regalia.initrd-build/v1: the inputs
 # and the result), the record moved in last; a refusal leaves DIR empty.
 # Measured on two runners and a Debian 13 container, in two directories and in a hostile environment
@@ -46,14 +50,15 @@ REPO_FILES=("$SCRIPT" go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/barem
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
 die(){ echo "build-initrd: $*" >&2; exit 2; }
-SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO"
+SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
 while [ $# -gt 0 ]; do
   case "$1" in
     --snapshot) SNAPSHOT="${2:-}"; shift 2 ;;
     --epoch) EPOCH="${2:-}"; shift 2 ;;
     --out) OUT="${2:-}"; shift 2 ;;
     --go) GO="${2:-}"; shift 2 ;;
-    *) die "unknown argument $1 (--snapshot TIME --out DIR [--go GO] [--epoch N])" ;;
+    --keyring) KEYRING="${2:-}"; shift 2 ;;
+    *) die "unknown argument $1 (--snapshot TIME --out DIR [--go GO] [--epoch N] [--keyring FILE])" ;;
   esac
 done
 [ "$(id -u)" = 0 ] || die "run as root (the root tree is built and chrooted into)"
@@ -65,8 +70,8 @@ EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [ -n "$OUT" ] || die "--out DIR is required"
 [ -n "$GO" ] && [ -x "$GO" ] || die "no go to launch the pinned toolchain with (put go on PATH, or --go FILE)"
 for t in mmdebstrap git python3; do command -v "$t" >/dev/null || die "$t is required"; done
-KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
-[ -r "$KEYRING" ] || die "$KEYRING is required (debian-archive-keyring)"
+[ -r "$KEYRING" ] || die "$KEYRING is required (debian-archive-keyring, or --keyring FILE)"
+KEYRING="$(readlink -f "$KEYRING")"
 
 # the commit, clean: what this builder compiles and installs is exactly what the commit holds
 # (run as root on a checkout another user owns: git is told to trust exactly this path, and reads without
@@ -174,5 +179,6 @@ with open(sys.argv[3], "w") as f:
     f.write("\n")
 PY
 # into --out last, the record after the files it describes: a refusal before this leaves --out empty
-for f in initrd.img initrd-listing.txt initrd-build.json; do mv "$W/stage/$f" "$OUT/$f"; done
+cp "$W/regalia-unlock" "$W/stage/regalia-unlock"
+for f in initrd.img regalia-unlock initrd-listing.txt initrd-build.json; do mv "$W/stage/$f" "$OUT/$f"; done
 echo "build-initrd: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_size"], "bytes,", r["initrd_entries"], "entries, commit", r["commit"][:12], r["go"], "dracut", r["dracut"], "kernel", r["kernel"])' "$OUT/initrd-build.json")"

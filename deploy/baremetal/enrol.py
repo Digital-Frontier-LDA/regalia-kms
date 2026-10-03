@@ -617,6 +617,12 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
     anchor_indices = hw._indices()
+    # Every refusal before the first write: the heartbeat counter is checked BEFORE the anchor is defined or the
+    # store committed, so a counter someone else advanced leaves the TPM and the store as they were.
+    counter_present = defined(counter, (counter.index, counter.base_index))
+    require(not counter_present or (len(counter_present) == 2 and counter.value() == 0),
+            "the TPM already holds the heartbeat counter's indices (%s) at a value other than a fresh one: enrolment "
+            "does not take them over" % ", ".join(counter_present))
     already = 0
     if os.path.exists(store.path):
         store.load()                                   # refuses a store the TPM anchor does not vouch for
@@ -640,13 +646,8 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     for envelope in envelopes[already:]:            # what the store holds already is this chain's beginning (checked)
         store.commit(envelope)
     manifest = store.load()
-    counter_indices = (counter.index, counter.base_index)
-    present = defined(counter, counter_indices)
-    if not present:
+    if not counter_present:
         counter.define()
-    else:
-        require(len(present) == 2 and counter.value() == 0, "the TPM already holds the heartbeat counter's indices (%s) at "
-                "a value other than a fresh one: enrolment does not take them over" % ", ".join(present))
     return manifest["epoch"], membership.digest(manifest)
 
 
