@@ -597,7 +597,12 @@ def node_init(out_dir, run=subprocess.run):
 
 def node_activate(credential_path, secret_path, run=subprocess.run):
     """TPM2_ActivateCredential under the EK's policy (endorsement auth). The secret goes to a 0600 file;
-    tpm2_activatecredential also prints it, so its output is never passed on."""
+    tpm2_activatecredential also prints it, so its output is never passed on.
+
+    Three processes share one policy session through the -S file: each tpm2-tools call saves the
+    session's context when it ends and loads it in the next. Behind the kernel's resource manager
+    (/dev/tpmrm0, a host's TCTI) that holds: tests/test_baremetal_attest_kernel_rm.py activates through
+    it (measured 2026-10-03, Linux 6.18, tpm2-tools 5.7). tpm2-abrmd would pass for another reason."""
     with tempfile.TemporaryDirectory(prefix="attest-") as d:
         session = os.path.join(d, "session.ctx")
         tpm2("startauthsession", "--policy-session", "-S", session, run=run)
