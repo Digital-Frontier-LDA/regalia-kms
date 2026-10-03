@@ -179,7 +179,7 @@ class Epoch(Case):
             rc, out, err = self.run_cli(*mine)
             self.assertEqual((rc, err), (0, ""))
             self.assertTrue(self.as_json(*mine)[1]["checked_against_tpm"])
-            built.assert_called_with("0x1500016")
+            built.assert_called_with("0x1500016", tcti="device:/dev/tpmrm0")
             for argv in (["epoch", *substituted], ["propose", *substituted, "--old", self.write("o.json", BOTH), "--new", self.write("n.json", NEXT)]):
                 with self.subTest(argv[0]):
                     rc, out, err = self.run_cli(*argv, "--tpm-index", "0x1500016")
@@ -212,6 +212,46 @@ class Epoch(Case):
                     rc, report = self.as_json(*argv)
                     self.assertEqual(rc, 1)
                     self.assertIn("--tpm-index must be", json.dumps(report))
+
+
+    def test_the_tpm_read_is_the_one_tcti_names_never_one_left_in_the_environment(self):
+        """The check is run on a peer during a recovery: a TPM2TOOLS_TCTI left in the operator's shell must not
+        point it at another TPM. --tcti names it (default the kernel's resource manager), and the output says
+        which TPM was read."""
+        argv = ["epoch", *self.on([self.m1, self.m2]), "--tpm-index", "0x1500016"]
+        reads = mock.patch.multiple(m.HighWater, value=mock.Mock(return_value=2), verify=mock.Mock(return_value=2),
+                                    pinned=mock.Mock(return_value=True))
+        with reads, mock.patch.object(rollout.membership, "HighWater", wraps=m.HighWater) as built:
+            for extra, tcti in (([], "device:/dev/tpmrm0"), (["--tcti", "swtpm:path=/run/t.sock"], "swtpm:path=/run/t.sock")):
+                with self.subTest(tcti=tcti), mock.patch.dict(os.environ):
+                    os.environ.pop("TPM2TOOLS_TCTI", None)
+                    rc, out, err = self.run_cli(*argv, *extra)
+                    self.assertEqual((rc, err), (0, ""))
+                    self.assertIn("checked against the TPM epoch counter of " + tcti, out)
+                    report = self.as_json(*argv, *extra)[1]
+                    self.assertEqual(report["tpm"], tcti)
+                    simulator = tcti.startswith("swtpm:")
+                    self.assertEqual("WARNING: that is a TPM SIMULATOR, not this host's TPM" in out, simulator)
+                    self.assertEqual(report.get("tpm_is_a_simulator", False), simulator)
+                    built.assert_called_with("0x1500016", tcti=tcti)
+            built.reset_mock()
+            with mock.patch.dict(os.environ, TPM2TOOLS_TCTI="swtpm:path=/tmp/other.sock"):
+                for extra in ([], ["--tcti", "device:/dev/tpmrm0"]):
+                    rc, out, err = self.run_cli(*argv, *extra)
+                    self.assertEqual((rc, out), (1, ""))
+                    self.assertIn("TPM2TOOLS_TCTI is set in the environment: unset it and name the TPM with --tcti", err)
+            with mock.patch.dict(os.environ):
+                os.environ.pop("TPM2TOOLS_TCTI", None)
+                for tcti in ("", "device: /dev/tpmrm0", "libtpms", "device:/dev/tpm0\nx", "device:" + "a" * 201):
+                    with self.subTest(tcti=tcti):
+                        rc, out, err = self.run_cli(*argv, "--tcti=" + tcti)
+                        self.assertEqual((rc, out), (1, ""))
+                        self.assertIn("--tcti must be device, swtpm, mssim or tabrmd", err)
+            built.assert_not_called()
+        rc, out, err = self.run_cli("epoch", *self.on([self.m1]), "--tcti", "device:/dev/tpmrm0")
+        self.assertEqual((rc, out), (1, ""))
+        self.assertIn("--tcti names the TPM --tpm-index reads: give both, or neither", err)
+        self.assertNotIn("tpm", self.as_json("epoch", *self.on([self.m1]))[1])
 
 
 class Propose(Case):
@@ -360,6 +400,36 @@ class Decisions(Case):
                                   "--candidate", self.write("cand.json", dict(candidate, policy_version=measurements.version(sneaks))))
         self.assertEqual(rc, 1)
         self.assertIn("a replacement does not change the measurements of c", err)
+
+    def test_every_decision_checked_against_the_tpm_names_it(self):
+        """may-reboot (the one an operator acts on), retire-ready and check-replacement decide on what the TPM
+        said too: each names the TPM it read, and says when that is a simulator. A '%' in the TCTI is text."""
+        done = dict(a={"b": "image-2", "c": "image-2"}, b={"a": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        decisions = {"may-reboot": (self.reboot("a", self.state()), 2, "YES: a may reboot into image-2"),
+                     "retire-ready": (self.retire(**done), 2, "YES: every node was last seen on its target")}
+        for tcti, simulator in (("device:/dev/tpmrm0", False), ("swtpm:path=/run/100%a.sock", True)):
+            for command, (argv, epoch, said) in decisions.items():
+                with self.subTest(command=command, tcti=tcti), mock.patch.dict(os.environ), \
+                        mock.patch.multiple(m.HighWater, value=mock.Mock(return_value=epoch), verify=mock.Mock(return_value=epoch),
+                                            pinned=mock.Mock(return_value=True)):
+                    os.environ.pop("TPM2TOOLS_TCTI", None)
+                    checked = [*argv, "--tpm-index", "0x1500016", "--tcti", tcti]
+                    rc, out, err = self.run_cli(*checked)
+                    self.assertEqual((rc, err), (0, ""))
+                    self.assertIn(said, out)
+                    self.assertIn("checked against the TPM epoch counter of " + tcti, out)
+                    self.assertNotIn("NOT checked", out)
+                    self.assertEqual("WARNING: that is a TPM SIMULATOR" in out, simulator)
+                    rc, result = self.as_json(*checked)
+                    self.assertEqual((rc, result["checked_against_tpm"], result["tpm"], result.get("tpm_is_a_simulator", False)),
+                                     (0, True, tcti, simulator))
+                    os.environ["TPM2TOOLS_TCTI"] = "swtpm:path=/tmp/other.sock"
+                    rc, out, err = self.run_cli(*checked)
+                    self.assertEqual((rc, out), (1, ""))
+                    self.assertIn("TPM2TOOLS_TCTI is set in the environment", err)
+        rc, result = self.as_json(*self.retire(**done))
+        self.assertEqual((rc, result["checked_against_tpm"]), (0, False))
+        self.assertNotIn("tpm", result)
 
 
 if __name__ == "__main__":

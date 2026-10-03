@@ -1,11 +1,16 @@
 # This node's runtime lease, and the admission file the KMS daemon reads (deploy/baremetal/admission.py).
-# Root, because the daemon accepts that file only from root (a dedicated user is #191); and nothing
-# else: no capability. It asks the peers for a lease over the service tunnel and nowhere else.
+# Its own user, regalia-admission (regalia.sysusers.conf), not root (#191): it asks the peers for a lease
+# over the service tunnel, nowhere else, and parses their answers. It writes one directory,
+# /run/regalia/admission (that user's, regalia.tmpfiles.conf), and the KMS daemon accepts the file there
+# only from that user (its runtime_admission_owner) or root. It reads the boot session root left in
+# /run/regalia (the unlock client's, or regalia-boot-session.service's) and cannot write it.
 [Unit]
 Description=Regalia KMS: the runtime lease and the admission file
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
-After=regalia-wg-apply.service regalia-authtime.service
+After=regalia-wg-apply.service regalia-authtime.service regalia-boot-session.service
 Wants=regalia-wg-apply.service regalia-authtime.service
+# no session, no lease: without it this service has nothing to ask with, and must not make one
+Requires=regalia-boot-session.service
 
 [Service]
 Type=simple
@@ -15,16 +20,18 @@ Environment=PATH=/usr/sbin:/usr/bin
 ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json admission
 Restart=always
 RestartSec=5s
-User=root
-# the TPM (its quotes, the anchor) is the tss group's: root without capabilities is held to file modes
+User=regalia-admission
+Group=regalia-admission
+# the TPM (its quotes, the anchor) is the tss group's
 SupplementaryGroups=tss
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
-# /run/regalia is shared with the unlock client and the KMS daemon: written into, never declared as
-# this unit's RuntimeDirectory (systemd would remove it, boot-session included, when this unit stops).
-ReadWritePaths=/run/regalia
+# Its own directory under root's /run/regalia, made by tmpfiles and never declared as this unit's
+# RuntimeDirectory: systemd would remove it when this unit stops, and the last admission file must
+# stand until it runs out by itself (admission.py).
+ReadWritePaths=/run/regalia/admission
 StateDirectory=regalia-admission
 StateDirectoryMode=0700
 ProtectHome=yes

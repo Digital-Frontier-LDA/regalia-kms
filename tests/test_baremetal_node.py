@@ -2,7 +2,9 @@
 
 The TPM, wg and ip are fakes here (hbt.FakeTpm and a recorder). The units that run these under a real
 systemd, and the end-to-end run, are the next step."""
+import contextlib
 import errno
+import io
 import json
 import os
 import shutil
@@ -206,7 +208,7 @@ class BootSession(Case):
         self.assertEqual(node.boot_session(self.run_dir()), ("ab" * 32, bytes.fromhex("30" * 300)))
 
     def test_with_no_session_this_boot_one_is_made_and_written_as_the_unlock_client_would(self):
-        session, public = node.boot_session(self.run_dir(), rand=lambda n: b"\x07" * n)
+        session, public = node.boot_session(self.run_dir(), rand=lambda n: b"\x07" * n, make=True)
         self.assertEqual(session, "07" * 32)
         self.assertTrue(public.startswith(b"regalia-kms runtime session "))
         self.assertEqual(node.boot_session(self.run_dir()), (session, public))      # the next start finds it
@@ -214,10 +216,33 @@ class BootSession(Case):
             self.assertEqual(stat.S_IMODE(os.stat(self.run_dir() + "/" + name).st_mode), 0o644)
         # a lone key (the unlock client died between its two writes) means nothing was presented: a session is made
         os.unlink(self.run_dir() + "/boot-session")
-        self.assertEqual(node.boot_session(self.run_dir(), rand=lambda n: b"\x09" * n)[0], "09" * 32)
+        self.assertEqual(node.boot_session(self.run_dir(), rand=lambda n: b"\x09" * n, make=True)[0], "09" * 32)
+
+    def test_only_the_root_oneshot_makes_a_session_the_lease_service_only_reads_one(self):
+        # #191: the lease service is not root and cannot write /run/regalia; without `make` no session
+        # is a refusal that names the unit that makes one, and nothing is written
+        self.refused("regalia-boot-session.service makes one", node.boot_session, self.run_dir())
+        self.assertEqual(sorted(os.listdir(self.run_dir())), [])
+        # a lone key is no session either
+        with open(self.run_dir() + "/boot-session.pub", "w") as f:
+            f.write("30\n")
+        self.refused("regalia-boot-session.service makes one", node.boot_session, self.run_dir())
+
+    def test_the_boot_session_command_makes_the_pair_once_and_keeps_the_unlock_client_s(self):
+        path = os.path.join(self.d, "node.json")
+        with open(path, "w") as f:
+            json.dump(self.cfg, f)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(node.main(["--config", path, "boot-session"]), 0)
+            first = node.boot_session(self.run_dir())
+            self.assertEqual(node.main(["--config", path, "boot-session"]), 0)
+        self.assertEqual(node.boot_session(self.run_dir()), first)               # a second run keeps it
+        self.assertIn("made now", out.getvalue().splitlines()[0])
+        self.assertIn("the unlock client's", out.getvalue().splitlines()[1])
 
     def test_a_session_whose_key_is_missing_or_malformed_is_refused_not_guessed(self):
-        node.boot_session(self.run_dir())
+        node.boot_session(self.run_dir(), make=True)
         os.unlink(self.run_dir() + "/boot-session.pub")
         self.refused("whose key is missing", node.boot_session, self.run_dir())
         for marker, key, reason in (("AB" * 32 + "\n", "30\n", "boot-session is malformed"), ("ab" * 32, "30\n", "boot-session is malformed"),

@@ -31,8 +31,12 @@ and that the daemon needs a runtime lease to serve (#74):
 
   kms_runtime_admission_required  the configuration the unit starts the daemon with (the file after
                               -config in ExecStart) states "runtime_admission": "required" with its
-                              admission file, this node's ID and the boot session file. "disabled-for-lab"
-                              is a lab setting: a host carrying it is not commissioned
+                              admission file, the lease service's user, this node's ID and the boot
+                              session file. "disabled-for-lab" is a lab setting: a host carrying it is not
+                              commissioned. And the lease service is not root (#191): regalia-admission.service
+                              runs as that user (User=, NoNewPrivileges=yes, an empty capability bounding
+                              set), and the kernel reports its running main process's real, effective,
+                              saved and filesystem uids as that user's, none of them 0
 
 and that the daemon's two token backends do not lock each other out (regalia#541):
 
@@ -129,8 +133,8 @@ class Host:
             return None
 
 
-def unit_properties(host, *names):
-    rc, out = host.run(["systemctl", "show", SERVICE, "-p", ",".join(names)])
+def unit_properties(host, *names, service=SERVICE):
+    rc, out = host.run(["systemctl", "show", service, "-p", ",".join(names)])
     props = {}
     for line in out.splitlines():
         key, _, value = line.partition("=")
@@ -331,12 +335,50 @@ def runtime_admission(host):
         return False, f"{paths[0]} says runtime_admission \"disabled-for-lab\": this daemon serves with no runtime lease"
     if stated != "required":
         return False, f"{paths[0]} does not state runtime_admission \"required\" (it says {stated!r})"
-    missing = [k for k in ("runtime_admission_path", "node_id", "boot_session_path")
+    missing = [k for k in ("runtime_admission_path", "runtime_admission_owner", "node_id", "boot_session_path")
                if not (isinstance(config.get(k), str) and config[k])]
     if missing:
         return False, f"{paths[0]} requires runtime admission but lacks {', '.join(missing)}"
+    ok, why = lease_service_unprivileged(host, config["runtime_admission_owner"])
+    if not ok:
+        return False, why
     return True, (f"{paths[0]}: runtime_admission required, node {config['node_id']}, "
-                  f"admission file {config['runtime_admission_path']}")
+                  f"admission file {config['runtime_admission_path']}; {why}")
+
+
+ADMISSION_SERVICE = "regalia-admission.service"
+
+
+def lease_service_unprivileged(host, owner):
+    """The lease service runs as `owner` (the daemon's runtime_admission_owner), which is not root: as the
+    unit says, and as the kernel reports for its running main process (#191)."""
+    if owner in ("root", "0"):
+        return False, "runtime_admission_owner is root: the lease service, which parses what peers send, runs as root"
+    rc, entry = host.run(["getent", "passwd", owner])
+    fields = entry.strip().split(":") if rc == 0 else []
+    if len(fields) < 3 or not fields[2].isdigit():
+        return False, f"runtime_admission_owner {owner!r} is not a user on this host"
+    uid = fields[2]
+    if uid == "0":
+        return False, f"runtime_admission_owner {owner!r} has uid 0"
+    _, props = unit_properties(host, "User", "NoNewPrivileges", "CapabilityBoundingSet", "MainPID", "LoadState", service=ADMISSION_SERVICE)
+    if props.get("LoadState") != "loaded":
+        return False, f"{ADMISSION_SERVICE} is not loaded"
+    if props.get("User") != owner:
+        return False, f"{ADMISSION_SERVICE} runs as {props.get('User') or 'root (no User=)'}, not {owner}, the user the daemon trusts"
+    if props.get("NoNewPrivileges") != "yes":
+        return False, f"{ADMISSION_SERVICE} has NoNewPrivileges={props.get('NoNewPrivileges')!r}"
+    if "CapabilityBoundingSet" not in props or props["CapabilityBoundingSet"].strip():
+        return False, f"{ADMISSION_SERVICE} has a capability bounding set: {props.get('CapabilityBoundingSet', 'unreadable') or 'every capability'}"
+    pid = props.get("MainPID", "")
+    if not pid.isdigit() or pid == "0":
+        return False, f"{ADMISSION_SERVICE} is not running, so the uid the kernel gave it cannot be read (start it first)"
+    found = re.search(r"^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$", host.read(f"/proc/{pid}/status") or "", re.M)
+    if not found:
+        return False, f"/proc/{pid}/status has no Uid line"
+    if set(found.groups()) != {uid}:
+        return False, f"the running lease service (pid {pid}) has uids {' '.join(found.groups())}, not {owner}'s {uid} throughout"
+    return True, f"the lease service runs as {owner} (uid {uid}, pid {pid}), NoNewPrivileges=yes, no capability"
 
 
 # What a YubiKey's CCID reader is called by pcscd ("Yubico YubiKey OTP+FIDO+CCID 00 00", "Yubico YubiKey

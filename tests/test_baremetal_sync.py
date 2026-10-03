@@ -739,7 +739,8 @@ class Lying(Case):
         self.client.transports["liar"] = lambda raw: deep
         with self.assertRaises(m.Refused) as caught:
             self.client.renewer("liar", self.quote)(self.holder.request())
-        self.assertIn("the lease could not be asked for (RecursionError)", str(caught.exception))
+        # membership.load refuses it itself since #182 ("nested too deeply"); before, the RecursionError reached this caller
+        self.assertIn("nested too deeply", str(caught.exception))
 
         def broken_quote(nonce, manifest):
             raise KeyError("tpm")
