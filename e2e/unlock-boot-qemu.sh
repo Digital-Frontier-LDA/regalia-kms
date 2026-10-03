@@ -16,10 +16,14 @@
 #           (PoC 6.5: the manual path works with no peer and no credential). The running guest seals
 #           the local half and the WG-BOOT key to its own TPM (PCR 7, and PCR 11 through the image's
 #           initrd-phase signature), and reports its PCRs: PCR 11 must be the build record's.
+#   boot 1b AN UNDECRYPTABLE SEALED CREDENTIAL: the real client cannot start; the relay on the key socket
+#           gives nothing, and the console asks for the recovery key, promptly.
 #   boot 2  UNATTENDED. Nobody types anything. systemd unseals both credentials in the initrd, the boot
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key from the socket, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
+#   boot 2b A CREDENTIAL FROM SMBIOS (a unit drop-in, as the firmware could pass one): not acted on, since
+#           the image's command line stops systemd importing credentials; the unlock goes on.
 #   boots 3-5  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line): PCR 12
 #           is not the one the peers expect, and they refuse the quote.
 #   boot 6  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
@@ -77,8 +81,8 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
 # What a KMS host has installed: the client, the units, the script, the dracut module.
 install -D -m 0755 "$BIN" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
-install -m 0644 deploy/baremetal/initrd/regalia-unlock.socket deploy/baremetal/initrd/regalia-unlock.service \
-  deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
+install -m 0644 deploy/baremetal/initrd/regalia-unlock.service \
+  deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
 # And what only the test adds, in the real root: the enrolment step and the report.
@@ -95,13 +99,38 @@ chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-
   || { tail -40 "$W/dracut.log"; echo "unlock-boot-qemu: dracut failed"; exit 2; }
 grep -i "regalia" "$W/dracut.log" | head -5 || true
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
-for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.socket$' 'regalia-unlock\.service$' 'regalia-wg-boot\.service$' \
+for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'regalia-unlock-relay\.service$' 'regalia-unlock-core\.socket$' 'regalia-wg-boot\.service$' \
          'systemd-pcrphase-initrd\.service$' 'initrd\.target\.wants/systemd-pcrphase-initrd\.service' 'systemd-pcrextend$' \
          'bin/wg$' 'bin/nft$' 'bin/ip$' 'wireguard\.ko' 'nf_tables\.ko' 'nft_ct\.ko' 'virtio_net\.ko'; do
   grep -q "$f" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: the initrd lacks $f"; grep -c . "$W/lsinitrd.txt"; exit 2; }
 done
 # nothing per host: no /etc/regalia, and the one crypttab line of the module
 if grep -q 'etc/regalia' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds files under /etc/regalia"; exit 2; fi
+# nothing in it acts on a credential by name: no generator of units from credentials, the imports reset
+if grep -q 'systemd-debug-generator' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds systemd-debug-generator"; exit 2; fi
+# every unit in the finished image that takes credentials by name has its reset, and systemd-cryptsetup's too
+mkdir "$ROOT/tmp/ird"
+chroot "$ROOT" sh -c 'cd /tmp/ird && lsinitrd --unpack /boot/initrd.e2e' >/dev/null 2>&1 || { echo "unlock-boot-qemu: cannot unpack the initrd"; exit 2; }
+uncovered=""; taking=""
+[ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-journald.service" ] || { echo "unlock-boot-qemu: the unpacked initrd has no systemd units"; exit 2; }
+for unit in "$ROOT"/tmp/ird/usr/lib/systemd/system/*.service; do
+  name="${unit##*/}"; case "$name" in regalia-*) continue ;; esac
+  # the unit with all its drop-ins, as systemd reads it; the reset must be there and must sort last
+  grep -qsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=[^[:space:]]' "$unit" "$unit.d/"*.conf || continue
+  taking="$taking $name"
+  last="$(ls "$unit.d/"*.conf 2>/dev/null | sort | tail -1)"
+  [ "${last##*/}" = 99-regalia-no-credentials.conf ] || uncovered="$uncovered $name"
+done
+[ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-cryptsetup@.service.d/99-regalia-no-credentials.conf" ] || uncovered="$uncovered systemd-cryptsetup@.service"
+# a drop-in under etc/ would come after every one under usr/: none may set a credential
+if grep -rqsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=[^[:space:]]' "$ROOT"/tmp/ird/etc/systemd/system/; then
+  uncovered="$uncovered (a credential setting under etc/systemd/system)"
+fi
+[ -z "$uncovered" ] || { echo "unlock-boot-qemu: units in the image that take credentials by name, with no reset:$uncovered"; exit 2; }
+# not vacuous: journald takes credentials in every systemd 257 initrd, and it was found and reset
+case " $taking " in *" systemd-journald.service "*) ;; *) echo "unlock-boot-qemu: the check found no credential-taking unit (journald):$taking"; exit 2 ;; esac
+echo "units that take credentials, each reset last:$taking systemd-cryptsetup@.service"
+rm -rf "$ROOT/tmp/ird"
 chroot "$ROOT" lsinitrd -f etc/crypttab /boot/initrd.e2e | grep -v '^#' > "$W/crypttab.txt"
 cmp -s "$W/crypttab.txt" <(grep -v '^#' deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab) \
   || { cat "$W/crypttab.txt"; echo "unlock-boot-qemu: the initrd's crypttab is not the module's"; exit 2; }
@@ -115,7 +144,7 @@ for k in initrd system secure-boot; do
 done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
 cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
-printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4}" > "$ROOT/tmp/uki/cmdline"
+printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
@@ -154,7 +183,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### six boots"
+echo "### eight boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
@@ -165,4 +194,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 6 boots passed (enrolment with the recovery key, unattended through a peer, no peer and the recovery key, three planted credentials refused)"
+echo "unlock-boot-qemu: 8 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, three planted ESP credentials refused, no peer and the recovery key)"

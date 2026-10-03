@@ -841,10 +841,11 @@ class Units(unittest.TestCase):
         return sections
 
     def test_the_socket_is_the_one_crypttab_and_the_probe_know(self):
-        socket_unit = dict(self.unit("regalia-unlock.socket")["Socket"])
-        self.assertEqual(socket_unit["ListenStream"], unlock.KEY_SOCKET)
-        self.assertEqual((socket_unit["SocketMode"], socket_unit["DirectoryMode"]), ("0600", "0700"))
-        self.assertNotIn("Accept", socket_unit)                       # one service takes the listening socket itself
+        # the relay makes it (no .socket unit: a missing path makes systemd-cryptsetup ask, a refused one does not)
+        relay = dict(self.unit("regalia-unlock-relay.service")["Service"])
+        self.assertIn(" -listen %s " % unlock.KEY_SOCKET, relay["ExecStart"])
+        self.assertEqual((relay["RuntimeDirectory"], relay["RuntimeDirectoryMode"]), (os.path.basename(os.path.dirname(unlock.KEY_SOCKET)), "0700"))
+        self.assertFalse(os.path.exists(os.path.join(REPO, "deploy/baremetal/initrd/regalia-unlock.socket")))
 
     def test_every_credential_of_the_initrd_is_unsealed_after_pcr_11_holds_the_initrd_phase(self):
         """A credential sealed to the image's initrd-phase PCR 11 signature opens only once systemd-pcrphase-initrd
@@ -862,18 +863,55 @@ class Units(unittest.TestCase):
         depends = module[module.index("depends() {"):module.index("installkernel() {")]
         self.assertIn("systemd-pcrphase", re.search(r"^\s*echo (.*)$", depends, re.M).group(1).split())
 
+    def test_the_key_socket_is_served_by_a_relay_that_holds_nothing_and_always_starts(self):
+        """The recovery key's path does not depend on the real client starting (#66): the key socket's service is
+        a relay with no credential, no TPM, no network and no dependency, in front of the real client's socket."""
+        core = dict(self.unit("regalia-unlock-core.socket")["Socket"])
+        self.assertEqual(core["Service"], "regalia-unlock.service")
+        self.assertEqual((core["SocketMode"], core["DirectoryMode"]), ("0600", "0700"))
+        relay = self.unit("regalia-unlock-relay.service")
+        service, unit = relay["Service"], relay["Unit"]
+        values = dict(service)
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -relay %s -listen %s -relay-wait 330s" % (core["ListenStream"], unlock.KEY_SOCKET))
+        # ready only once its socket listens; restarted without limit; never given up on
+        self.assertEqual((values["Type"], values["NotifyAccess"], values["Restart"], dict(unit_section := relay["Unit"])["StartLimitIntervalSec"]),
+                         ("notify", "main", "always", "0"))
+        # systemd-cryptsetup waits for it, weakly (the module's drop-in)
+        with open(os.path.join(REPO, "deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh")) as f:
+            module = f.read()
+        self.assertIn("printf '[Unit]\\nWants=regalia-unlock-relay.service\\nAfter=regalia-unlock-relay.service\\n'", module)
+        self.assertIn("systemd-cryptsetup@.service.d/50-regalia-relay.conf", module)
+        # the client's own budget ends its attempt before the relay stops waiting
+        client = dict(self.unit("regalia-unlock.service")["Service"])["ExecStart"]
+        self.assertTrue(client.endswith(" -budget 200s"), client)
+        # no setting that adds dependencies on mounts or other units (systemd.exec: PrivateTmp, JoinsNamespaceOf, ...)
+        for adds in ("PrivateTmp", "JoinsNamespaceOf", "RequiresMountsFor", "ReadWritePaths", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem"):
+            self.assertNotIn(adds, values)
+        self.assertFalse([k for k, _ in service if "Credential" in k or k in ("DeviceAllow", "Environment", "EnvironmentFile", "User")])
+        self.assertEqual((values["RestrictAddressFamilies"], values["PrivateNetwork"], values["DevicePolicy"], values["PrivateDevices"]),
+                         ("AF_UNIX", "yes", "closed", "yes"))
+        self.assertEqual((values["CapabilityBoundingSet"], values["NoNewPrivileges"], values["ProtectSystem"], values["LimitCORE"]), ("", "yes", "strict", "0"))
+        # nothing it needs can fail: no Requires/Wants/BindsTo/Requisite/After, only what stops it at switch-root
+        self.assertEqual(sorted(k for k, _ in unit if k not in ("Description", "Documentation")),
+                         ["After", "Before", "Conflicts", "DefaultDependencies", "StartLimitIntervalSec", "Wants"])
+        self.assertEqual((dict(unit)["Wants"], dict(unit)["After"]), ("regalia-unlock-core.socket",) * 2)   # weak: never Requires
+        self.assertEqual(dict(self.unit("regalia-unlock.service")["Unit"])["Requires"], "regalia-unlock-core.socket")
+
     def test_the_image_is_the_same_for_every_host(self):
-        """Nothing per host is in the initrd (#66): every per-host file is a system credential, named without
-        a path (searched among the credentials systemd was given at boot), and the one crypttab line names the
-        root partition by its GPT label."""
+        """Nothing per host is in the initrd (#66): every per-host file comes from the ESP, read by a fixed path
+        under the stub's archive (/.extra/global_credentials), never from systemd's credential store, and the
+        one crypttab line names the root partition by its GPT label."""
         here = os.path.join(REPO, "deploy/baremetal/initrd")
         secret = {"regalia-unlock.service": ["regalia.unlock-local"], "regalia-wg-boot.service": ["regalia.wg-boot-key"]}
         plain = {"regalia-unlock.service": ["regalia.unlock-config"],
                  "regalia-wg-boot.service": ["regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"]}
         for name in secret:
             service = self.unit(name)["Service"]
-            self.assertEqual([v for k, v in service if k == "LoadCredentialEncrypted"], secret[name], name)
-            self.assertEqual([v for k, v in service if k == "LoadCredential"], plain[name], name)
+            # each by its fixed path under the stub's archive: no credential is taken from systemd's store
+            at = lambda names: ["%s:/.extra/global_credentials/%s.cred" % (n, n) for n in names]
+            self.assertEqual([v for k, v in service if k == "LoadCredentialEncrypted"], at(secret[name]), name)
+            self.assertEqual([v for k, v in service if k == "LoadCredential"], at(plain[name]), name)
+            self.assertFalse([k for k, _ in service if k == "ImportCredential"], name)
         for name in sorted(os.listdir(here)) + ["dracut/90regalia-unlock/module-setup.sh"]:
             if os.path.isfile(os.path.join(here, name)):
                 with open(os.path.join(here, name)) as f:
@@ -889,6 +927,13 @@ class Units(unittest.TestCase):
                                      '"${systemdsystemunitdir:?}/$unit"', '"${moddir:?}/crypttab" /etc/crypttab'])
         check = module[module.index("check() {"):module.index("depends() {")]
         self.assertIn('if [ -n "${hostonly-}" ]; then', check)
+        # the second layer: no generator of units from credentials, and no credential imported by tmpfiles or sysctl
+        self.assertIn('rm -f -- "${initdir:?}${systemdutildir:?}/system-generators/systemd-debug-generator"', install)
+        # every unit in the image that takes credentials by name, found (not listed), and systemd-cryptsetup's
+        self.assertIn('for unit in "${initdir:?}${systemdsystemunitdir:?}"/*.service systemd-cryptsetup@.service; do', install)
+        self.assertIn("grep -qsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)='", install)
+        self.assertNotIn("| grep", install)                          # no pipe: under pipefail a missing drop-in dir would fail it
+        self.assertIn("printf '[Service]\\nImportCredential=\\nLoadCredential=\\nLoadCredentialEncrypted=\\n'", install)
         with open(os.path.join(here, "dracut/90regalia-unlock/crypttab")) as f:
             lines = [l.split() for l in f if l.strip() and not l.startswith("#")]
         self.assertEqual(lines, [["root", "PARTLABEL=regalia-root", unlock.KEY_SOCKET, "luks,x-initrd.attach"]])
@@ -920,7 +965,7 @@ class Units(unittest.TestCase):
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]
         values = dict(service)
-        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config")
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 200s")
         # the one place it may write: root's, 0755, kept after the unit ends (the lease service and the daemon use it)
         self.assertEqual((values["RuntimeDirectory"], values["RuntimeDirectoryMode"], values["RuntimeDirectoryPreserve"]), ("regalia", "0755", "yes"))
         self.assertNotIn("ReadWritePaths", values)
@@ -936,8 +981,8 @@ class Units(unittest.TestCase):
             self.assertIn("'%s'" % line, check)
             self.assertIn(line.split("=", 1)[1], (values | unit)[line.split("=", 1)[0]])
         self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
-        self.assertEqual(values["LoadCredentialEncrypted"], unlock.LOCAL_NAME)          # a system credential, decrypted: never in plain
-        self.assertEqual([v for k, v in service if k == "LoadCredential"], ["regalia.unlock-config"])   # the one plain one: not secret
+        self.assertEqual(values["LoadCredentialEncrypted"], "%s:/.extra/global_credentials/%s.cred" % ((unlock.LOCAL_NAME,) * 2))   # decrypted: never in plain
+        self.assertEqual([v for k, v in service if k == "LoadCredential"], ["regalia.unlock-config:/.extra/global_credentials/regalia.unlock-config.cred"])
         self.assertEqual((values["CapabilityBoundingSet"], values["NoNewPrivileges"], values["ProtectSystem"]), ("", "yes", "strict"))
         self.assertEqual(values["RestrictAddressFamilies"], "AF_UNIX AF_INET AF_INET6")
         self.assertEqual((values["DevicePolicy"], sorted(v for k, v in service if k == "DeviceAllow")), ("closed", ["/dev/tpmrm0 rw", "block-* r"]))
@@ -1316,14 +1361,16 @@ class OnSwtpm(unittest.TestCase):
         units, source = "/run/systemd/system", os.path.join(REPO, "deploy", "baremetal", "initrd")
         binary = "/usr/local/bin/regalia-unlock-e2e-%d" % os.getpid()
         inside = "/run/regalia-e2e-%d" % os.getpid()                  # where the unit sees the test's directory
-        installed = [binary, units + "/regalia-unlock.socket", units + "/regalia-unlock.service", units + "/regalia-unlock.service.d", inside]
+        installed = [binary, units + "/regalia-unlock-relay.service", units + "/regalia-unlock.service", units + "/regalia-unlock.service.d", inside,
+                     units + "/regalia-unlock-core.socket", units + "/regalia-unlock-relay.service", units + "/regalia-unlock-relay.service.d"]
+        shipped = ("regalia-unlock-relay.service", "regalia-unlock-core.socket", "regalia-unlock.service")
 
         def remove():
-            run(["systemctl", "stop", "regalia-unlock.socket", "regalia-unlock.service"], capture_output=True)
+            run(["systemctl", "stop", *shipped], capture_output=True)
             for path in installed + ([] if had_runtime_directory else ["/run/regalia"]):
                 shutil.rmtree(path, True) if os.path.isdir(path) else os.path.exists(path) and os.unlink(path)
             run(["systemctl", "daemon-reload"], capture_output=True)
-            run(["systemctl", "reset-failed", "regalia-unlock.service", "regalia-unlock.socket"], capture_output=True)
+            run(["systemctl", "reset-failed", *shipped], capture_output=True)
         # The unit writes this boot's session into /run/regalia. On a machine that HAS one (a KMS host, a bench
         # host with the lease service) that would replace a live record: refused, before anything is installed.
         self.assertFalse(os.path.exists("/run/regalia"), "/run/regalia exists: this test must not run on a host that uses it")
@@ -1331,9 +1378,14 @@ class OnSwtpm(unittest.TestCase):
         self.addCleanup(remove)
         shutil.copy(self.client, binary)
         os.chmod(binary, 0o700)
-        for name in ("regalia-unlock.socket", "regalia-unlock.service"):
+        for name in shipped:
             shutil.copy(os.path.join(source, name), units)
         os.mkdir(installed[3])
+        os.mkdir(installed[7])
+        relay_wait = 20
+        with open(installed[7] + "/e2e.conf", "w") as f:                 # the binary under test, and a shorter bound
+            f.write("[Service]\nExecStart=\nExecStart=%s -relay /run/regalia-unlock-core/core.sock -listen %s -relay-wait %ds\n"
+                    % (binary, unlock.KEY_SOCKET, relay_wait))
         config, local = self.d + "/unlock.json", self.d + "/local"
 
         def boot(endpoints):
@@ -1354,7 +1406,7 @@ class OnSwtpm(unittest.TestCase):
                     "LoadCredentialEncrypted=\nLoadCredential=\nLoadCredential=%s:%s\nBindReadOnlyPaths=%s:%s\n"
                     % (binary, inside, inside, unlock.LOCAL_NAME, local, self.d, inside))
         self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
-        started = run(["systemctl", "start", "regalia-unlock.socket"], capture_output=True, text=True)
+        started = run(["systemctl", "start", "regalia-unlock-core.socket", "regalia-unlock-relay.service"], capture_output=True, text=True)
         self.assertEqual(started.returncode, 0, started.stderr)
         self.assertTrue(stat.S_ISSOCK(os.stat(unlock.KEY_SOCKET).st_mode))
         self.assertEqual(stat.S_IMODE(os.stat(unlock.KEY_SOCKET).st_mode), 0o600)
@@ -1398,7 +1450,7 @@ class OnSwtpm(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertLess(took, 60)
         self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
-        self.assertEqual((state("regalia-unlock.socket", "ActiveState"), state("regalia-unlock.service", "ActiveState")), ("active", "active"))
+        self.assertEqual((state("regalia-unlock-relay.service", "ActiveState"), state("regalia-unlock.service", "ActiveState")), ("active", "active"))
         self.assertEqual(os.listdir("/run/regalia"), [])
         self.systemd_refusal = (code, round(took, 1), err.strip().splitlines()[-1] if err.strip() else "")
         print("\nsystemd-cryptsetup with no key from the socket: exit %d after %.1fs: %s" % self.systemd_refusal, file=sys.stderr)
@@ -1449,6 +1501,64 @@ class OnSwtpm(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
         self.assertEqual(self.reasons(since), ["the subject's attestation is refused: the quoted PCR digest is not the expected PCR values"] * 4)
+
+        # 5-8  THE REAL CLIENT FAILS, in four ways, and the console must still be asked: the relay on the key socket
+        #      starts whatever happens to the real client and gives nothing, within its bound. (Before the relay,
+        #      a real client that could not start left systemd-cryptsetup with a reset connection, and it failed
+        #      without asking for the recovery key.)
+        failing = installed[3] + "/zz-failing.conf"                     # after e2e.conf, which it overrides
+        garbage = self.d + "/not-a-sealed-credential"
+        with open(garbage, "w") as f:
+            f.write("bm90IGEgY3JlZGVudGlhbA==\n")
+        crash = ("import os, socket; s = socket.socket(fileno=3); c, _ = s.accept(); c.send(b'k' * 20); os._exit(1)")
+        for label, conf, said in (
+                ("a client that hangs", "[Service]\nExecStart=\nExecStart=/bin/sleep 600\n", "no answer within %ds" % relay_wait),
+                ("a client that crashes mid-answer", "[Service]\nExecStart=\nExecStart=/usr/bin/python3 -c \"%s\"\n" % crash, "not one whole key"),
+                ("a sealed credential that does not decrypt",
+                 "[Service]\nLoadCredential=\nLoadCredentialEncrypted=\nLoadCredentialEncrypted=%s:%s\n" % (unlock.LOCAL_NAME, garbage), None),
+                ("a credential file that is absent",
+                 "[Service]\nLoadCredential=\nLoadCredential=%s:%s/absent\n" % (unlock.LOCAL_NAME, self.d), None)):
+            with self.subTest(label):
+                run(["systemctl", "stop", "regalia-unlock.service"], capture_output=True)
+                with open(failing, "w") as f:
+                    f.write(conf)
+                self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
+                run(["systemctl", "reset-failed", *shipped], capture_output=True)
+                self.assertEqual(run(["systemctl", "restart", "regalia-unlock-core.socket"], capture_output=True).returncode, 0)
+                since_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                code, took, err = attach()
+                self.assertNotEqual(code, 0)
+                self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
+                self.assertIn("Failed to activate with key file", err)        # a key that did not fit: the console would ask
+                self.assertNotIn("Connection reset", err)
+                self.assertLess(took, relay_wait + 15)
+                relayed = run(["journalctl", "-u", "regalia-unlock-relay.service", "-o", "cat", "--since", since_time, "--no-pager"],
+                              capture_output=True, text=True).stdout
+                self.assertIn("nothing is given, and the console asks for the recovery key", relayed)
+                if said:
+                    self.assertIn(said, relayed)
+                self.assertEqual(state("regalia-unlock-relay.service", "ActiveState"), "active")
+                print("%s: systemd-cryptsetup got nothing after %.1fs" % (label, took), file=sys.stderr)
+        os.unlink(failing)
+
+        # 9  THE RELAY ITSELF CANNOT START: then there is no key socket at all, and systemd-cryptsetup, finding the
+        #    key file missing, asks for the recovery key (it would fail without asking on a refused connection)
+        relay_failing = installed[7] + "/zz-failing.conf"
+        for how, command in (("exits at once", "/bin/false"), ("cannot be executed", "/nonexistent/regalia-unlock")):
+            with self.subTest("the relay " + how):
+                with open(relay_failing, "w") as f:
+                    f.write("[Service]\nExecStart=\nExecStart=%s\n" % command)
+                self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
+                run(["systemctl", "restart", "regalia-unlock-relay.service"], capture_output=True)
+                time.sleep(2)
+                self.assertFalse(os.path.exists(unlock.KEY_SOCKET))
+                code, took, err = attach()
+                self.assertNotEqual(code, 0)
+                self.assertIn("Failed to activate, key file '%s' missing" % unlock.KEY_SOCKET, err)   # the path that goes on to ask
+                self.assertNotIn("Connection", err)
+                self.assertGreater(int(state("regalia-unlock-relay.service", "NRestarts") or 0), 0)          # tried again, without limit
+                print("the relay %s: systemd-cryptsetup found no key file after %.1fs, and would ask" % (how, took), file=sys.stderr)
+        os.unlink(relay_failing)
 
 
 if __name__ == "__main__":

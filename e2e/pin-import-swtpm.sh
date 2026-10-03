@@ -37,6 +37,9 @@ TA="swtpm:path=$W/A.sock"; TB="swtpm:path=$W/B.sock"
 # In CI there is no reader; on a machine with tokens attached, a default OpenSC config would enumerate
 # every card as root and leave a YubiKey's PIV applet selected (that cost three PIV PIN tries on
 # 2026-10-02 elsewhere). Every reader is ignored (every PC/SC reader name contains a space).
+# OpenSC ignores a reader whose name CONTAINS an ignored_readers entry: the match is by SUBSTRING,
+# so the single space below matches every reader name. If OpenSC ever matched by equality, this would
+# ignore nothing and the cards would be enumerated again (regalia-kms#174).
 printf 'app default {\n  ignored_readers = " ";\n}\n' > "$W/opensc-none.conf"
 seal(){ local tcti="$1"; shift; sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$W/cred" OPENSC_CONF="$W/opensc-none.conf" "$SEAL" "$@" 2>&1; }
 fp(){ openssl pkey -pubin -in "$1" -outform der | sha256sum | cut -d' ' -f1; }
