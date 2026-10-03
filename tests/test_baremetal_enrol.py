@@ -127,6 +127,33 @@ class InitOnSwtpm(unittest.TestCase):
                 self.assertEqual(enrol._wg_public_of(self.wg, subprocess.run), bundle["wg_service_pub"])
                 self.assertEqual(enrol._wg_public_of(self.dir + "/wg-boot.key", subprocess.run), bundle["wg_boot_pub"])
 
+    def _plant(self, index, data):
+        with open(self.d + "/nv.bin", "wb") as f:
+            f.write(data)
+        subprocess.run(["tpm2_nvdefine", index, "-C", "o", "-s", str(len(data)),
+                        "-a", "ownerread|ownerwrite|authread|authwrite"], check=True, capture_output=True)
+        subprocess.run(["tpm2_nvwrite", index, "-C", "o", "-i", self.d + "/nv.bin"], check=True, capture_output=True)
+
+    def _certificate(self, key_pem_path, ends_in_zero=False):
+        """DER of a certificate for the key in key_pem_path, by a throwaway CA; with ends_in_zero, one whose
+        last byte is 0x00 (about one signature in 256 is), which a NUL-stripping reader would truncate."""
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+        with open(key_pem_path, "rb") as f:
+            subject_key = serialization.load_pem_public_key(f.read())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test TPM manufacturer")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for serial in range(1, 5000):
+            ca = ec.generate_private_key(ec.SECP256R1())
+            der = (x509.CertificateBuilder().subject_name(x509.Name([])).issuer_name(name).public_key(subject_key)
+                   .serial_number(serial).not_valid_before(now).not_valid_after(now + datetime.timedelta(days=1))
+                   .sign(ca, hashes.SHA256()).public_bytes(serialization.Encoding.DER))
+            if not ends_in_zero or der[-1] == 0:
+                return der
+        self.fail("no certificate ending in 00 was made")
+
     def _plant_certificate(self, key_pem_path):
         """A certificate for the key in key_pem_path, signed by a throwaway CA, at the RSA EK cert index."""
         from cryptography import x509
@@ -165,6 +192,105 @@ class InitOnSwtpm(unittest.TestCase):
         self._plant_certificate(self.d + "/other.pem")
         with self.assertRaisesRegex(enrol.Refused, "certifies another key than this TPM's EK"):
             self.init()
+
+
+    def _this_ek_pem(self):
+        subprocess.run(["tpm2_createek", "-c", self.d + "/ek.ctx", "-G", "rsa", "-u", self.d + "/ek.pub"], check=True, capture_output=True)
+        subprocess.run(["tpm2_readpublic", "-c", self.d + "/ek.ctx", "-f", "pem", "-o", self.d + "/ek.pem"], check=True, capture_output=True)
+        subprocess.run(["tpm2_flushcontext", "-t"], capture_output=True)
+        return self.d + "/ek.pem"
+
+    def test_a_certificate_ending_in_a_zero_byte_is_read_whole_and_padding_is_allowed(self):
+        der = self._certificate(self._this_ek_pem(), ends_in_zero=True)
+        self._plant("0x01c00002", der + b"\x00" * 7)
+        bundle = self.init()
+        self.assertEqual(base64.b64decode(bundle["ek_certificate"]["der"]), der)
+
+    def test_a_certificate_that_is_there_but_unreadable_is_a_refusal_not_an_absence(self):
+        der = self._certificate(self._this_ek_pem())
+        for name, data in (("truncated", der[:-10]), ("not padding after it", der + b"\x01\x02"),
+                           ("not DER", b"\x00" * 64), ("a broken body", der[:20] + b"\x00" * (len(der) - 20))):
+            with self.subTest(name=name):
+                subprocess.run(["tpm2_nvundefine", "0x01c00002", "-C", "o"], capture_output=True)
+                subprocess.run(["tpm2_evictcontrol", "-C", "o", "-c", attest.AK_HANDLE], capture_output=True)
+                shutil.rmtree(self.dir, True)
+                self._plant("0x01c00002", data)
+                with self.assertRaises(enrol.Refused) as caught:
+                    self.init()
+                self.assertIn("0x01c00002", str(caught.exception))
+
+    def test_an_ecc_only_tpm_is_not_refused(self):
+        """The ECC EK certificate certifies the ECC EK, which this enrolment does not use: recorded, not judged."""
+        subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", self.d + "/ecc.key"], check=True, capture_output=True)
+        subprocess.run(["openssl", "ec", "-in", self.d + "/ecc.key", "-pubout", "-out", self.d + "/ecc.pem"], check=True, capture_output=True)
+        self._plant("0x01c0000a", self._certificate(self.d + "/ecc.pem"))
+        bundle = self.init()
+        self.assertIsNone(bundle["ek_certificate"])
+        self.assertTrue(json.load(open(self.dir + "/journal.json"))["steps"]["ek_certificate"]["ecc_certificate_present"])
+
+    def test_resume_refuses_what_appeared_at_its_handle_or_path_after_a_crash(self):
+        """regalia-kms-1e's reproductions on #234: a crash, then something foreign at our AK handle or our key
+        path; the rerun must refuse and leave it, not evict or unlink it."""
+        def crash_at(word):
+            def run(argv, *a, **kw):
+                if argv[0] == word or argv[:2] == ["wg", word]:
+                    raise Crash()
+                return subprocess.run(argv, *a, **kw)
+            return run
+        # (A) killed at tpm2_createak, then a foreign AK at 0x81010002
+        with self.assertRaises(Crash):
+            self.init(run=crash_at("tpm2_createak"))
+        subprocess.run(["tpm2_flushcontext", "-t"], capture_output=True)
+        os.mkdir(self.d + "/foreign")
+        subprocess.run(["tpm2_createak", "-C", attest.EK_HANDLE, "-c", self.d + "/foreign/ak.ctx", "-G", "ecc", "-g", "sha256",
+                        "-s", "ecdsa", "-u", self.d + "/foreign/ak.pub"], check=True, capture_output=True)
+        subprocess.run(["tpm2_evictcontrol", "-C", "o", "-c", self.d + "/foreign/ak.ctx", attest.AK_HANDLE], check=True, capture_output=True)
+        subprocess.run(["tpm2_flushcontext", "-t"], capture_output=True)
+        foreign = enrol._name_at(attest.AK_HANDLE, self.d, subprocess.run)
+        with self.assertRaisesRegex(enrol.Refused, "persistent object at 0x81010002"):
+            self.init()
+        self.assertEqual(enrol._name_at(attest.AK_HANDLE, self.d, subprocess.run), foreign)
+        subprocess.run(["tpm2_evictcontrol", "-C", "o", "-c", attest.AK_HANDLE], check=True, capture_output=True)
+        # (B) killed at `wg genkey` for the WG-SERVICE key, then somebody's key at its path
+        with self.assertRaises(Crash):
+            self.init(run=crash_at("genkey"))
+        os.makedirs(os.path.dirname(self.wg), exist_ok=True)
+        with open(self.wg, "w") as f:
+            f.write("somebody's key\n")
+        with self.assertRaisesRegex(enrol.Refused, "already exists and this enrolment did not make it"):
+            self.init()
+        self.assertEqual(open(self.wg).read(), "somebody's key\n")
+        # ...and after the public half was journalled: a DIFFERENT valid key there is still not ours
+        os.unlink(self.wg)
+        journal = json.load(open(self.dir + "/journal.json"))
+        private, public = enrol._wg_pair(subprocess.run)
+        journal["steps"]["wg_service"] = {"state": "started", "at": 0, "public": public}
+        with open(self.dir + "/journal.json", "w") as f:
+            json.dump(journal, f)
+        other, _ = enrol._wg_pair(subprocess.run)
+        with open(self.wg, "w") as f:
+            f.write(other + "\n")
+        with self.assertRaisesRegex(enrol.Refused, "already exists and this enrolment did not make it"):
+            self.init()
+        self.assertEqual(open(self.wg).read(), other + "\n")
+        # and the key it recorded IS removed and made again
+        with open(self.wg, "w") as f:
+            f.write(private + "\n")
+        bundle = self.init()
+        self.assertNotEqual(bundle["wg_service_pub"], public)
+
+    def test_the_enrolment_directory_must_be_safe(self):
+        os.symlink(self.d + "/elsewhere", self.dir)
+        os.mkdir(self.d + "/elsewhere")
+        with self.assertRaisesRegex(enrol.Refused, "not a real directory"):
+            self.init()
+        os.unlink(self.dir)
+        os.chmod(self.d, 0o775)
+        try:
+            with self.assertRaisesRegex(enrol.Refused, "closed to group and others"):
+                self.init()
+        finally:
+            os.chmod(self.d, 0o700)
 
 
 if __name__ == "__main__":

@@ -19,11 +19,14 @@ by hand to the ceremony (the fallback the ceremony records).
 WHAT IT REFUSES: a persistent object at the EK or AK handle, or a WG-SERVICE key, that this enrolment did
 not make. A host that was enrolled is re-enrolled only as a new node, through replacement (#76).
 
+BETWEEN THE PHASES the WG-BOOT private key is in the clear on the encrypted root, 0600 in a root-only
+directory; `commit` seals it to the TPM and removes it. Host backups must exclude /var/lib/regalia-enrol.
+
 A CRASH AT ANY STEP: every step is recorded in the journal (journal.json, root, in a 0700 directory)
 as started before it acts and as done, with what it produced, after. Run `init` again: a done step is
-checked against what it recorded and skipped; a step that started and did not finish has produced
-nothing anyone has seen yet, so its outputs at OUR handles and paths are removed and it runs again.
-Nothing else is ever removed.
+checked against what it recorded and skipped; a step that started and did not finish is done again, and
+removes only what it can PROVE it made: an AK whose Name, or a key file whose public key, it journalled
+before that object or file existed. Anything else at its handle or path is refused, never removed.
 """
 import argparse
 import base64
@@ -31,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -219,9 +223,31 @@ def identity(journal, directory, run):
     return facts
 
 
+def _der_exact(raw, index):
+    """The certificate in an NV index, cut at the length its outer DER SEQUENCE gives. The rest of the index
+    must be padding (0x00 or 0xFF). Anything else is a refusal: a certificate that is there but cannot be
+    read is not "no certificate"."""
+    require(len(raw) >= 4 and raw[0] == 0x30, "the EK certificate at %s is not DER (no outer SEQUENCE)" % index)
+    if raw[1] < 0x80:
+        size, head = raw[1], 2
+    else:
+        count = raw[1] & 0x7f
+        require(1 <= count <= 3 and len(raw) >= 2 + count, "the EK certificate at %s has a malformed DER length" % index)
+        size, head = int.from_bytes(raw[2:2 + count], "big"), 2 + count
+    end = head + size
+    require(end <= len(raw), "the EK certificate at %s is truncated (%d of %d bytes)" % (index, len(raw), end))
+    rest = raw[end:]
+    require(rest.strip(b"\x00") == b"" or rest.strip(b"\xff") == b"",
+            "the EK certificate at %s is followed by data that is not padding" % index)
+    return raw[:end]
+
+
 def ek_certificate(journal, directory, run):
-    """The TPM's EK certificate, when it carries one, checked to certify THIS EK. Not a trust decision: the
-    ceremony verifies it to the manufacturer's CA."""
+    """The TPM's EK certificate for the RSA EK this enrolment uses (TCG index 0x01c00002), checked to
+    certify THAT key. Only a missing index means "no certificate"; one that is there and cannot be read,
+    or certifies another key, is a refusal. An ECC EK certificate (0x01c0000a) certifies the ECC EK, which
+    this enrolment does not use: its presence is recorded, nothing is decided on it. Not a trust decision
+    either way: the ceremony verifies the issuer against the manufacturer's CA."""
     if journal.state("ek_certificate") == "done":
         return journal.get("ek_certificate")
     journal.started("ek_certificate")
@@ -231,27 +257,32 @@ def ek_certificate(journal, directory, run):
     with open(os.path.join(directory, "ek.pem"), "rb") as f:
         ek_spki = serialization.load_pem_public_key(f.read()).public_bytes(
             serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    defined = _nv_indices(run)
     found = None
-    for index in EK_CERT_INDICES:
-        done = _run(["tpm2_nvread", index, "-o", os.path.join(directory, "ek-cert.der")], run, check=False, text=True)
-        if done.returncode != 0:
-            continue
-        with open(os.path.join(directory, "ek-cert.der"), "rb") as f:
-            raw = f.read()
+    rsa_index, ecc_index = EK_CERT_INDICES
+    if rsa_index in defined:
+        path = os.path.join(directory, "ek-cert.der")
+        _run(["tpm2_nvread", rsa_index, "-o", path], run, text=True)
+        with open(path, "rb") as f:
+            der = _der_exact(f.read(), rsa_index)
         try:
-            cert = x509.load_der_x509_certificate(raw.rstrip(b"\x00") if raw.endswith(b"\x00") else raw)
-        except ValueError:
-            continue
-        spki = cert.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-        if spki == ek_spki:
-            found = {"index": index, "der": base64.b64encode(cert.public_bytes(serialization.Encoding.DER)).decode(),
-                     "issuer": cert.issuer.rfc4514_string(), "certifies_this_ek": True}
-            break
-        require(False, "the EK certificate at %s certifies another key than this TPM's EK: refused, the ceremony "
-                "could not tell this TPM from another" % index)
-    facts = {"certificate": found}
+            cert = x509.load_der_x509_certificate(der)
+            spki = cert.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+        except ValueError as error:
+            raise Refused("the EK certificate at %s cannot be read: %s" % (rsa_index, error))
+        require(spki == ek_spki, "the EK certificate at %s certifies another key than this TPM's EK: refused, the "
+                "ceremony could not tell this TPM from another" % rsa_index)
+        found = {"index": rsa_index, "der": base64.b64encode(der).decode(),
+                 "claimed_issuer": cert.issuer.rfc4514_string(), "certifies_this_ek": True}
+    facts = {"certificate": found, "ecc_certificate_present": ecc_index in defined}
     journal.done("ek_certificate", **facts)
     return facts
+
+
+def _nv_indices(run):
+    out = _run(["tpm2_getcap", "handles-nv-index"], run, text=True).stdout
+    return {h.lower() for h in re.findall(r"0x[0-9a-fA-F]{7,8}", out)} | {
+        "0x%08x" % int(h, 16) for h in re.findall(r"0x[0-9a-fA-F]{7,8}", out)}
 
 
 def _wg_pair(run):
@@ -270,19 +301,30 @@ def _wg_public_of(path, run):
 
 
 def wg_key(journal, step, path, run):
+    """A WireGuard key made here. Its PUBLIC half is journalled before the private file is written, so on a
+    resume a file at `path` is removed only if it holds that very key; anything else is refused and left."""
     if journal.state(step) == "done":
         recorded = journal.get(step)["public"]
         require(os.path.exists(path) and _wg_public_of(path, run) == recorded,
                 "%s no longer holds the key this enrolment made" % path)
         return recorded
-    if journal.state(step) == "started":
-        if os.path.exists(path):
-            os.unlink(path)                      # ours, and its public half was never shown to anyone
-    else:
-        require(not os.path.exists(path), "%s already exists and this enrolment did not make it. A host that was "
-                "enrolled is re-enrolled only as a new node, through replacement (#76)" % path)
-    journal.started(step)
+    if os.path.lexists(path):
+        recorded = journal.get(step).get("public") if journal.state(step) == "started" else None
+        mine = recorded is not None and os.path.isfile(path) and not os.path.islink(path)
+        if mine and os.path.getsize(path) == 0:
+            pass                         # created (O_EXCL) and killed before the one write: our empty file
+        elif mine:
+            try:
+                mine = _wg_public_of(path, run) == recorded
+            except Refused:
+                mine = False
+        require(mine, "%s already exists and this enrolment did not make it. A host that was enrolled is re-enrolled "
+                "only as a new node, through replacement (#76); a stray file is removed by hand: rm %s" % (path, path))
+        os.unlink(path)
     private, public = _wg_pair(run)
+    journal.started(step)
+    journal.doc["steps"][step]["public"] = public               # recorded BEFORE the private file exists
+    _atomic_json(journal.path, journal.doc)
     os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
     _write_private(path, (private + "\n").encode())
     journal.done(step, public=public, path=path)
@@ -298,10 +340,33 @@ def firmware_version(run):
     return "%08x%08x" % tuple(words) if None not in words else None
 
 
+def _safe_directory(directory):
+    """The enrolment directory holds the journal and, between the phases, the WG-BOOT private key: it must be a
+    real directory (not a link), owned by root, 0700, and every directory above it root's and not writable by
+    group or others (otherwise someone could swap it). Created if absent; never trusted if it is not so."""
+    directory = os.path.abspath(directory)
+    me = os.geteuid()                    # root, in production: main() refuses anything else
+    walk = os.path.dirname(directory)
+    while True:
+        st = os.lstat(walk)
+        require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me) and not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH),
+                "%s is not a root-owned directory closed to group and others: the enrolment directory under it "
+                "could be replaced" % walk)
+        if walk == "/":
+            break
+        walk = os.path.dirname(walk)
+    if not os.path.lexists(directory):
+        os.mkdir(directory, 0o700)
+    st = os.lstat(directory)
+    require(stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode) and st.st_uid == me,
+            "%s is not a real directory owned by this user (root)" % directory)
+    os.chmod(directory, 0o700)
+    require(stat.S_IMODE(os.lstat(directory).st_mode) == 0o700, "%s could not be made 0700" % directory)
+
+
 def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
-    os.makedirs(directory, mode=0o700, exist_ok=True)
-    os.chmod(directory, 0o700)
+    _safe_directory(directory)
     journal = Journal(directory, node_id)
     ids = identity(journal, directory, run)
     cert = ek_certificate(journal, directory, run)
@@ -321,8 +386,8 @@ def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subpro
         print("NO EK CERTIFICATE in this TPM. Copy BY HAND to the ceremony:\n  EK Name   %s\n  sha256    %s"
               % (ids["ek_name"], hashlib.sha256(bytes.fromhex(ids["ek_name"])).hexdigest()), file=out)
     else:
-        print("EK certificate from %s, issued by %s; it certifies this TPM's EK (the ceremony verifies the issuer)"
-              % (cert["certificate"]["index"], cert["certificate"]["issuer"]), file=out)
+        print("EK certificate from %s, which CLAIMS to be issued by %s. It certifies this TPM's EK; whether that issuer "
+              "is the manufacturer is for the ceremony to verify" % (cert["certificate"]["index"], cert["certificate"]["claimed_issuer"]), file=out)
     return bundle
 
 
@@ -339,7 +404,7 @@ def main(argv=None):
         return 2
     try:
         init(args.node_id, args.enrol_dir, args.wg_service_key)
-    except (Refused, attest.Refused, OSError) as error:
+    except (Refused, attest.Refused, OSError, ValueError) as error:       # json.JSONDecodeError is a ValueError
         print("REFUSED: %s" % error, file=sys.stderr)
         return 1
     return 0
