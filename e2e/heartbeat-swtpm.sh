@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.." || exit 2
 for t in swtpm tpm2_nvdefine tpm2_nvincrement tpm2_readclock python3; do
   command -v "$t" >/dev/null || { echo "heartbeat-swtpm: $t is required (swtpm, tpm2-tools, python3)"; exit 2; }
 done
-out="$(REGALIA_EXPECT_SWTPM=1 python3 -Es -m unittest -v tests.test_baremetal_heartbeat.OnSwtpm 2>&1)"; rc=$?
+out="$(REGALIA_EXPECT_SWTPM=1 python3 -BEs -m unittest -v tests.test_baremetal_heartbeat.OnSwtpm 2>&1)"; rc=$?
 printf '%s\n' "$out"
 [ "$rc" = 0 ] || { echo "heartbeat-swtpm: FAILED"; exit 1; }
 # all three ran, and none was skipped

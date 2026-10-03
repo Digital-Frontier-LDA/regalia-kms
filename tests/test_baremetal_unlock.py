@@ -846,10 +846,61 @@ class Units(unittest.TestCase):
         self.assertEqual((socket_unit["SocketMode"], socket_unit["DirectoryMode"]), ("0600", "0700"))
         self.assertNotIn("Accept", socket_unit)                       # one service takes the listening socket itself
 
+    def test_every_credential_of_the_initrd_is_unsealed_after_pcr_11_holds_the_initrd_phase(self):
+        """A credential sealed to the image's initrd-phase PCR 11 signature opens only once systemd-pcrphase-initrd
+        has extended "enter-initrd"; a unit that unseals one without that ordering fails when it wins the race."""
+        here = os.path.join(REPO, "deploy/baremetal/initrd")
+        loading = [n for n in sorted(os.listdir(here)) if n.endswith(".service")
+                   and [k for k, _ in self.unit(n).get("Service", []) if k.startswith("LoadCredential")]]
+        self.assertEqual(loading, ["regalia-unlock.service", "regalia-wg-boot.service"])   # a new one is checked too
+        for name in loading:
+            after = " ".join(v for k, v in self.unit(name)["Unit"] if k == "After").split()
+            self.assertIn("systemd-pcrphase-initrd.service", after, name)
+        # ... and that unit is IN the initrd: dracut adds the module only when one depends on it
+        with open(os.path.join(here, "dracut/90regalia-unlock/module-setup.sh")) as f:
+            module = f.read()
+        depends = module[module.index("depends() {"):module.index("installkernel() {")]
+        self.assertIn("systemd-pcrphase", re.search(r"^\s*echo (.*)$", depends, re.M).group(1).split())
+
+    def test_the_image_is_the_same_for_every_host(self):
+        """Nothing per host is in the initrd (#66): every per-host file is a system credential, named without
+        a path (searched among the credentials systemd was given at boot), and the one crypttab line names the
+        root partition by its GPT label."""
+        here = os.path.join(REPO, "deploy/baremetal/initrd")
+        secret = {"regalia-unlock.service": ["regalia.unlock-local"], "regalia-wg-boot.service": ["regalia.wg-boot-key"]}
+        plain = {"regalia-unlock.service": ["regalia.unlock-config"],
+                 "regalia-wg-boot.service": ["regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"]}
+        for name in secret:
+            service = self.unit(name)["Service"]
+            self.assertEqual([v for k, v in service if k == "LoadCredentialEncrypted"], secret[name], name)
+            self.assertEqual([v for k, v in service if k == "LoadCredential"], plain[name], name)
+        for name in sorted(os.listdir(here)) + ["dracut/90regalia-unlock/module-setup.sh"]:
+            if os.path.isfile(os.path.join(here, name)):
+                with open(os.path.join(here, name)) as f:
+                    for number, line in enumerate(f, 1):
+                        if not line.lstrip().startswith("#"):
+                            self.assertNotIn("/etc/regalia", line, "%s:%d" % (name, number))
+        with open(os.path.join(here, "dracut/90regalia-unlock/module-setup.sh")) as f:
+            module = f.read()
+        install = module[module.index("install() {"):]
+        installed = re.findall(r"inst_(?:simple|multiple)\s+(?:-\S+\s+)?([^\n]+)", install)
+        # from the build machine: programs, the module's own units and script, and the crypttab line IN THE MODULE
+        self.assertEqual(installed, ["regalia-unlock wg nft ip sed cat sleep", "/usr/lib/regalia/wg-boot",
+                                     '"${systemdsystemunitdir:?}/$unit"', '"${moddir:?}/crypttab" /etc/crypttab'])
+        check = module[module.index("check() {"):module.index("depends() {")]
+        self.assertIn('if [ -n "${hostonly-}" ]; then', check)
+        with open(os.path.join(here, "dracut/90regalia-unlock/crypttab")) as f:
+            lines = [l.split() for l in f if l.strip() and not l.startswith("#")]
+        self.assertEqual(lines, [["root", "PARTLABEL=regalia-root", unlock.KEY_SOCKET, "luks,x-initrd.attach"]])
+        with open(os.path.join(here, "wg-boot")) as f:
+            script = f.read()
+        for credential in ("regalia.wg-boot-key", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"):
+            self.assertRegex(script, r'(?m)^[^#\n]*/%s"' % re.escape(credential))
+
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]
         values = dict(service)
-        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config /etc/regalia/unlock.json")
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config")
         # the one place it may write: root's, 0755, kept after the unit ends (the lease service and the daemon use it)
         self.assertEqual((values["RuntimeDirectory"], values["RuntimeDirectoryMode"], values["RuntimeDirectoryPreserve"]), ("regalia", "0755", "yes"))
         self.assertNotIn("ReadWritePaths", values)
@@ -865,8 +916,8 @@ class Units(unittest.TestCase):
             self.assertIn("'%s'" % line, check)
             self.assertIn(line.split("=", 1)[1], (values | unit)[line.split("=", 1)[0]])
         self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
-        self.assertEqual(values["LoadCredentialEncrypted"], unlock.LOCAL_NAME + ":/etc/regalia/unlock-local.cred")
-        self.assertNotIn("LoadCredential", values)                    # never a credential that is not sealed
+        self.assertEqual(values["LoadCredentialEncrypted"], unlock.LOCAL_NAME)          # a system credential, decrypted: never in plain
+        self.assertEqual([v for k, v in service if k == "LoadCredential"], ["regalia.unlock-config"])   # the one plain one: not secret
         self.assertEqual((values["CapabilityBoundingSet"], values["NoNewPrivileges"], values["ProtectSystem"]), ("", "yes", "strict"))
         self.assertEqual(values["RestrictAddressFamilies"], "AF_UNIX AF_INET AF_INET6")
         self.assertEqual((values["DevicePolicy"], sorted(v for k, v in service if k == "DeviceAllow")), ("closed", ["/dev/tpmrm0 rw", "block-* r"]))
@@ -1280,7 +1331,7 @@ class OnSwtpm(unittest.TestCase):
                 f.write(unlock.unseal_local(sealed, tpm2_device=self.tcti["a"], run=run))
         with open(installed[3] + "/e2e.conf", "w") as f:
             f.write("[Service]\nExecStart=\nExecStart=%s -config %s/unlock.json -tpm unix:%s/a.sock -rounds 2 -wait 0s\n"
-                    "LoadCredentialEncrypted=\nLoadCredential=%s:%s\nBindReadOnlyPaths=%s:%s\n"
+                    "LoadCredentialEncrypted=\nLoadCredential=\nLoadCredential=%s:%s\nBindReadOnlyPaths=%s:%s\n"
                     % (binary, inside, inside, unlock.LOCAL_NAME, local, self.d, inside))
         self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
         started = run(["systemctl", "start", "regalia-unlock.socket"], capture_output=True, text=True)

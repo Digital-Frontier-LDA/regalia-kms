@@ -2,9 +2,10 @@
 # dracut module: the pre-root disk unlock of a KMS host (regalia-kms#66, #67).
 #
 # What it puts in the initrd: the unlock client and its socket-activated unit, the boot mesh unit and
-# its script, and the three tools the script runs (ip, wg, nft). The files that differ per host and per
-# manifest are under /etc/regalia: the boot configuration, the two TPM-sealed credentials, the
-# WireGuard configuration, the ruleset and boot.env. They are taken when present.
+# its script, the three tools the script runs (ip, wg, nft), and one crypttab line. The image is the
+# same for every host: what differs per host and per manifest (the boot configuration, the two
+# TPM-sealed credentials, the WireGuard configuration, the ruleset, boot.env) comes at boot as system
+# credentials, from the ESP through systemd-stub.
 #
 # Not included by default: add it with `dracut --add regalia-unlock` (or add_dracutmodules+=).
 #
@@ -14,6 +15,13 @@
 
 check() {
     require_binaries regalia-unlock wg nft ip || return 1
+    # One image for every host: in hostonly mode dracut copies the build machine's identity and crypt
+    # settings into the image (machine-id, rd.luks.uuid in cmdline.d, its crypttab). Build with
+    # --no-hostonly --no-hostonly-cmdline.
+    if [ -n "${hostonly-}" ]; then
+        derror "regalia-unlock: dracut runs in hostonly mode: build the image with --no-hostonly --no-hostonly-cmdline"
+        return 1
+    fi
     # systemd unseals the two credentials through this library, and its package only suggests it: without
     # it the image builds, and no boot can unseal anything
     local library found=
@@ -24,6 +32,11 @@ check() {
     done
     if [ -z "$found" ]; then
         derror "regalia-unlock: libtss2-tcti-device is not installed: systemd could not unseal the boot credentials"
+        return 1
+    fi
+    # The module is two files: without its crypttab line the image would build and open nothing.
+    if [ ! -s "${moddir:?}/crypttab" ]; then
+        derror "regalia-unlock: $moddir/crypttab is missing: install the whole module directory"
         return 1
     fi
     # The client and its unit come from the host separately. The client stays for the whole initrd phase
@@ -42,7 +55,10 @@ check() {
 }
 
 depends() {
-    echo systemd systemd-cryptsetup tpm2-tss
+    # systemd-pcrphase: the unit that extends PCR 11 with "enter-initrd". It is not in dracut's default set
+    # (its check() returns 0, not 255), and without it no credential sealed to the image's initrd-phase
+    # signature opens: the units here are ordered After= it, which does nothing for a unit that is absent.
+    echo systemd systemd-cryptsetup systemd-pcrphase tpm2-tss
 }
 
 installkernel() {
@@ -59,15 +75,11 @@ install() {
     for unit in regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done
-    # Taken when present, and said when not: an image without them builds, and every boot of it ends at
-    # the recovery-key prompt.
-    for file in /etc/regalia/unlock.json /etc/regalia/unlock-local.cred /etc/regalia/wg-boot.cred \
-        /etc/regalia/wg-boot.conf /etc/regalia/boot.nft /etc/regalia/boot.env /etc/crypttab; do
-        if [ -e "$file" ]; then
-            inst_simple "$file"
-        else
-            dwarn "regalia-unlock: $file is not there: this image cannot unlock the root volume unattended"
-        fi
-    done
+    # The one crypttab line, the same on every host: the root partition is found by its GPT label. Nothing
+    # per host is taken from the machine that builds the image (not /etc/regalia, not its /etc/crypttab):
+    # what differs per host comes as system credentials at boot (the units say which).
+    # (in place of any other: dracut's crypt modules copy the build machine's in hostonly mode)
+    rm -f -- "${initdir:?}/etc/crypttab"
+    inst_simple "${moddir:?}/crypttab" /etc/crypttab
     "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket
 }

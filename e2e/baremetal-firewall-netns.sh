@@ -155,7 +155,7 @@ udpok 124 && F "the NTP host on an undeclared UDP port was reachable" || P "the 
 
 # ---- 5: the service tunnel ---------------------------------------------------------------------------------
 hdr "5  the service tunnel (#80): real WireGuard, and what the ruleset lets through it"
-PREFIX="$(python3 -I -c "import sys; sys.path.insert(0, '$BM'); import sitecfg; print(sitecfg.SERVICE_PREFIX)")"
+PREFIX="$(python3 -IB -c "import sys; sys.path.insert(0, '$BM'); import sitecfg; print(sitecfg.SERVICE_PREFIX)")"
 # a tunnel address is derived from the WireGuard public key: the prefix, then 80 bits of SHA-256 of the key
 derive(){ python3 -I -c "
 import base64, hashlib, ipaddress, sys

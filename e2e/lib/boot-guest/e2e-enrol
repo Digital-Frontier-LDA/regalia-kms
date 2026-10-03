@@ -6,8 +6,8 @@
 set -eu
 mkdir -p /mnt/enrol
 mount /dev/vdb /mnt/enrol
-systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=regalia-unlock-local /mnt/enrol/local.bin /mnt/enrol/unlock-local.cred
-systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=regalia-wg-boot-key /mnt/enrol/wg-boot.key /mnt/enrol/wg-boot.cred
+systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=regalia.unlock-local /mnt/enrol/local.bin /mnt/enrol/unlock-local.cred
+systemd-creds encrypt --with-key=tpm2 --tpm2-pcrs=7 --name=regalia.wg-boot-key /mnt/enrol/wg-boot.key /mnt/enrol/wg-boot.cred
 for pcr in 7 11; do cat "/sys/class/tpm/tpm0/pcr-sha256/$pcr" > "/mnt/enrol/pcr$pcr"; done
 sync
 umount /mnt/enrol

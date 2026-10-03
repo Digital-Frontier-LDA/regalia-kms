@@ -111,6 +111,10 @@ Commissioning has two halves:
     production binds PCR 7 alone until they are. The evidence records the two separately:
     `credential_tpm2_pcrs` (bound directly) and `credential_tpm2_signed_pcrs` with
     `credential_tpm2_pcr_key_pkfp` (the signed policy and its key; both `""` without one).
+    It also records `node_id` and `unlock_peers` (#67): which node of the membership manifest this
+    host is and which peers hold an unlock path for its root disk (`[]` when none). The probe judges a
+    peer-enrolled root disk against that signed record; `--node-id`/`--unlock-peer` given beside the
+    evidence must agree with it.
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by `deploy/baremetal/os_probe.py`.
@@ -497,10 +501,41 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 - **The initrd** is built with dracut and the module `deploy/baremetal/initrd/dracut/90regalia-unlock`
   (`dracut --add regalia-unlock`): the client, the two units above, `regalia-wg-boot.service` with its
   script (the initrd ruleset first, then the declared address, then WireGuard with the WG-BOOT key
-  systemd unsealed), `ip`, `wg`, `nft`, and the network drivers. The files that differ per host and
-  per manifest are under `/etc/regalia` (the boot configuration, the two sealed credentials, the
-  WireGuard configuration, the ruleset, `boot.env`), with the root volume's crypttab entry:
-  `root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach`.
+  systemd unsealed), `ip`, `wg`, `nft`, the network drivers, and one crypttab line, the same on every
+  host: `root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach` (the root
+  volume is the GPT partition labelled `regalia-root`). **The image holds nothing per host**, so one
+  image has one PCR 11 for every host. What differs per host and per manifest comes at boot as
+  **system credentials**, which systemd-stub passes from the ESP (`loader/credentials/<name>.cred`,
+  each measured into PCR 12):
+  | credential | what | sealed |
+  |---|---|---|
+  | `regalia.unlock-local` | the local half | to the TPM (`unlock.seal_local`) |
+  | `regalia.wg-boot-key` | the WG-BOOT private key | to the TPM |
+  | `regalia.unlock-config` | `unlock.boot_config` | no |
+  | `regalia.wg-boot-conf` | `bootnet.boot_wg_conf` | no |
+  | `regalia.boot-nft` | `bootnet.boot_ruleset` | no |
+  | `regalia.boot-env` | `BOOT_NIC`, `BOOT_ADDRESS`, `BOOT_GATEWAY`, `BOOT_TUNNEL` (read as data) | no |
+
+  The units name each without a path: systemd looks for it among the credentials it was given at
+  boot, decrypts the two sealed ones (a plain one under those names is refused), and treats a missing
+  one as absent: the client then gives nothing and the console asks for the recovery key. The machine
+  that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+
+  **OPEN, and blocking for production: the ESP is a channel into the initrd.** Whoever can write the
+  ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
+  drop-in (`systemd.extra-unit.*`, `systemd.unit-dropin.*`), tmpfiles, sysctl and fstab lines. Sealed to
+  this machine's TPM with an empty PCR policy, which needs only the TPM's public storage key, such a
+  credential decrypts, and a drop-in on the unit that opens the disk could print the volume key, while
+  PCR 11 is unchanged and the peers answer. This is systemd-stub's behaviour with or without the files
+  here. What catches it is PCR 12: every credential is measured into it, so **the peers must attest PCR
+  12 in the initrd phase**, against the value the node's credentials give (the plain ones are rendered
+  from the manifest and the site configuration, the two sealed ones are fixed at enrolment). Until
+  then a changed ESP is not refused. (#66; the alternative, every per-host file signed and anything
+  else on the ESP refused, is heavier.)
+  The image must be built with `dracut --no-hostonly --no-hostonly-cmdline` (the module refuses
+  hostonly mode, which copies the build machine's identity and crypt settings into the image). The
+  ruleset credential may hold only `table inet regalia_boot` and include no file; `down` flushes every
+  table.
 - **Shown on a real boot** (`e2e/unlock-boot-qemu.sh`: a Debian 13 guest in QEMU with a software TPM,
   its whole disk one LUKS2 volume, the peers reached over WireGuard):
   - enrolment: with nothing enrolled the console asks "Please enter recovery key for disk root", and
@@ -511,23 +546,26 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     interface, its ruleset and its addresses are gone and the link is down;
   - no peer: the client gives nothing after its five rounds (about two minutes in the runs so far),
     and the console asks for the passphrase or recovery key, which opens the volume.
+  The guest's initrd is the image as built, with no file added: the per-host files reach it as system
+  credentials through QEMU's SMBIOS. systemd keeps those apart from the ESP's (which it searches
+  first, and which must decrypt to be used by name): the test shows the units and the names, not the
+  ESP path, and under SeaBIOS (no Secure Boot) it cannot show that a forged sealed credential is
+  refused.
   NOT shown: measured boot. The guest boots a plain kernel and initrd under SeaBIOS, so PCR 11 is zero
   and PCR 7 holds no Secure Boot state: sealing to the TPM and the peers' check of the quote are shown
   as mechanics, on this TPM and no other, and nothing there would refuse a changed initrd. That needs
-  a unified kernel image under UEFI. Also not shown: a network card that udev renames in the initrd
-  (the guest's is `eth0`), a host whose initrd is built with the files already under `/etc/regalia`
-  (the test appends them to the image), and any physical machine.
+  a unified kernel image under UEFI, with the credentials on its ESP (next). Also not shown: a network
+  card that udev renames in the initrd (the guest's is `eth0`), and any physical machine.
 - **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
   keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen
   in the boot test). `/etc/crypttab` on the root is only what the initrd was built from, if it was
   rebuilt since the last edit. So it is checked on the image, before the image is approved:
   ```sh
   lsinitrd IMAGE | grep -E 'regalia|etc/crypttab|etc/cmdline\.d|usr/bin/(wg|nft)$'   # what it holds
-  lsinitrd -f etc/crypttab IMAGE          # one entry: root UUID=… /run/regalia-unlock/key.sock luks,x-initrd.attach
-  lsinitrd -f etc/regalia/unlock.json IMAGE   # this node, its disk, the PCRs it quotes, its peers
+  lsinitrd -f etc/crypttab IMAGE          # one entry: root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach
   ```
-  No file under `etc/cmdline.d` may configure LUKS (`rd.luks.*`), and no other crypttab entry may
-  name the root volume.
+  No file under `etc/cmdline.d` may configure LUKS (`rd.luks.*`), no other crypttab entry may name
+  the root volume, and nothing may be under `etc/regalia`.
 - **Enrolment** is an operator step between two running hosts; the recovery key authorizes adding the
   keyslot. Order: enrol the recovery key, enrol both peer paths, reboot once and see a peer unlock the
   disk, and only then wipe the TPM-only keyslot (`systemd-cryptenroll --wipe-slot=tpm2`).
@@ -577,6 +615,43 @@ nothing.
 
 Not there yet, so **nothing here is to be run on a KMS host**: measured boot with a unified kernel
 image (a changed or retired initrd refused on a real boot), the commands an operator types to enrol a
-host and to write `/etc/regalia` after each manifest, the long-running peer process, and every run on
+host and to write the ESP credentials after each manifest, the long-running peer process, and every run on
 a physical TPM, a DL360 (#65) or the real datacenter networks. Sections 3 to 5 above still describe
 the single-site baseline (initramfs-tools, TPM-only crypttab); they change when this is commissioned.
+
+## 8. The node's running services (three-site, #80): not commissioned yet
+
+Four systemd units in `deploy/baremetal/units/`, all run from one configuration, `/etc/regalia/node.json`
+(`deploy/baremetal/node.py`; schema `regalia.node/v1`, every field required):
+
+| Unit | Runs as | Privilege | Does |
+|---|---|---|---|
+| `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
+| `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
+| `regalia-admission` | root | none; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission.json` |
+| `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store, runs the heartbeat watch |
+
+- **One writer of the membership chain.** `regalia-sync` owns the store and publishes the verified chain
+  (`/var/lib/regalia-sync/chain.json`, 0644). The root services verify that copy themselves against the
+  root key and the TPM anchor: a `regalia-sync` that withholds or rolls back makes them refuse, so the node
+  stops serving rather than serving under an old manifest.
+- **The boot session** comes from the unlock client (`/run/regalia/boot-session` and `.pub`, #67); on a
+  boot that opened the disk with the recovery key, `regalia-admission` makes one and writes the pair.
+  Edge cases from the unlock side: an unwritable `/run` at the first quote followed by a client restart in
+  the same boot can leave a record one peer does not hold until the next boot; a kexec always ends at the
+  recovery prompt.
+- `/run/regalia` is created by `regalia.tmpfiles.conf` when the unlock client did not run, and is never
+  any unit's `RuntimeDirectory=` (systemd would remove it, boot session included, when that unit stops).
+- Each unit's sandbox is pinned by `tests/test_baremetal_units.py`, including systemd's own
+  `systemd-analyze verify` and an offline exposure score of at most 3.0.
+
+**NOT BUILT: provisioning a node (#190).** Nothing writes a node's trust anchors yet. Until the enrolment
+command exists they are placed by hand, as the end-to-end test does: the membership store's first
+manifest (`/var/lib/regalia-sync/membership.json`, through `membership.Store.commit`, which also defines
+and advances the TPM anchor), the heartbeat counter's NV index, the measurements document the manifest
+commits to, each peer's AK in the attestation state (`attest.Verifier`), the WG-SERVICE private key
+(`/etc/regalia/wg-service.key`, 0600), the site configuration with `boot_mesh` and `service_mesh`, and
+`chrony.conf` as `authtime.conf()` renders it (the whole file).
+
+**NOT BUILT: the revocation authority (#199).** Nothing signs heartbeats yet: a cluster run with these
+units stops authorizing within the heartbeat lifetime, by design, until the authority exists.

@@ -21,9 +21,10 @@ stranger had sent it. That holds for the revocation authority's channel too.
 
 WHO. The caller is the node whose WireGuard key the CURRENT manifest pins (peer_of), and nothing the
 caller says in-band identifies it. `identify(manifest, source)` is injected: it answers which WireGuard
-public key the source address of a connection belongs to (on a host: wgsvc, #80 step 2). That key is
-looked up in the manifest this node holds NOW, for every request, so a node revoked in the manifest is
-refused although its tunnel is still up. A message that names a node (lease-nonce, lease) must name the
+public key the source address of a connection belongs to (on a host wgsvc.key_at: a tunnel address is
+derived from its key, and the interface allows each key exactly that address; the argument is in
+wgsvc.py). That key is looked up in the manifest this node holds NOW, for every request, so a node
+revoked in the manifest is refused although its tunnel is still up. A message that names a node (lease-nonce, lease) must name the
 node the tunnel identified. A node in a terminal state gets nothing, not even a pull.
 
 HOW MUCH.
@@ -70,8 +71,8 @@ answers pull, and refuses the two lease operations.
 NO TLS. WireGuard authenticates both ends by the pinned keys and encrypts; every payload that matters is
 signed or attested end to end. See #80.
 
-NOT HERE: the WireGuard interface and the kernel lookup behind `identify` (step 2); units, firewall
-rules and probes (step 3); convergence.recover over this transport.
+NOT HERE: the WireGuard interface (wgsvc.py); units, firewall rules and probes (step 3);
+convergence.recover over this transport.
 """
 import copy
 import socket
