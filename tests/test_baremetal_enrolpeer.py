@@ -139,8 +139,8 @@ class Target(Case):
             self.calls.append(("challenge", peer, ek, ak, replace, ak_name))
             return b"credential for " + peer.encode()
 
-        def enroll(self, peer, secret):
-            self.calls.append(("enroll", peer, secret))
+        def enroll(self, peer, secret, ak_name=None):
+            self.calls.append(("enroll", peer, secret, ak_name))
 
     def run_with(self, verifier, header=None, peer="b", manifest=None):
         meta = header or {"keyslots": {"0": {}}, "tokens": {}}
@@ -173,7 +173,7 @@ class Target(Case):
         verifier = self.Verifier()
         self.run_with(verifier)
         self.assertEqual(verifier.calls, [("challenge", "b", b"ek of b", b"ak of b", False, self.entry("b")["ak_name"]),
-                                          ("enroll", "b", b"S" * 32)])
+                                          ("enroll", "b", b"S" * 32, self.entry("b")["ak_name"])])
         self.assertEqual(self.activated, [b"credential for b"])
 
     def test_a_path_already_in_the_header_is_not_asked_for_again(self):

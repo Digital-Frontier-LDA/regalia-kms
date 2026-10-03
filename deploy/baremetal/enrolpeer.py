@@ -183,33 +183,34 @@ def contribution(manifest, peer, target, session_id, evidence, binding, attester
 
 # ---- the enrolling node's side ----
 
-def with_peer(manifest, node_id, peer, ask, identity, activate, verifier, session, quote, local, sealed_local, device, recovery,
-              run=None):
-    """Enrol `node_id` with `peer`, over `ask(op, **fields)` -> the peer's answer (sync.Client._ask's shape): its AK
-    into the peer's verifier and the peer's AK into this node's `verifier` (each against the manifest's AK Name),
-    then this node's LUKS path from the peer. `identity()` -> (EK, AK) public areas of this node's TPM;
-    `activate(credential)` -> the secret it releases; `session` = (boot session ID hex, session key bytes);
-    `quote(epoch, session_id, session_key, nonce, binding)` -> evidence; `recovery` the key that opens `device`
-    now (typed at the console). Returns {"path_epoch", "keyslot"}, or {"path_epoch": None, "keyslot": None,
-    "existing": True} when the header already holds this peer's path. Refused at the first step that fails."""
+def enrol_aks(manifest, node_id, peer, ask, identity, activate, verifier):
+    """The AK half of enrolling `node_id` with `peer` (run as the user that owns `verifier`'s state: regalia-sync):
+    this node's AK into the peer's verifier, and the peer's AK into this node's, each against the manifest's
+    AK Name. `ask(op, **fields)` -> the peer's answer; `identity()` -> (EK, AK) public areas of this node's TPM;
+    `activate(credential)` -> the secret it releases."""
     nodes = membership.validate(manifest)
     require(peer != node_id and peer in nodes, "%s is not another node of the manifest" % peer)
-    # this node refuses a contribution from a peer its own manifest does not let authorize (revoked, quarantined)
-    require(membership.may(manifest, peer, "authorize"), "%s may not authorize under epoch %d: no path from it" % (peer, manifest["epoch"]))
-    mine = nodes[node_id]
-    # 1. this node's AK into the peer's verifier
     ek_public, ak_public = identity()
     answer = ask("ak-challenge", ek_public=ek_public.hex(), ak_public=ak_public.hex())
     if answer["credential"] is not None:
         secret = activate(bytes.fromhex(answer["credential"]))
-        require(ask("ak-enroll", secret=secret.hex())["ak_name"] == mine["ak_name"], "%s enrolled another AK than the manifest's" % peer)
-    # 2. the peer's AK into this node's verifier
+        require(ask("ak-enroll", secret=secret.hex())["ak_name"] == nodes[node_id]["ak_name"], "%s enrolled another AK than the manifest's" % peer)
     if verifier.enrolled(peer) != nodes[peer]["ak_name"]:
         theirs = ask("ak-public")
         credential = verifier.challenge(peer, bytes.fromhex(theirs["ek_public"]), bytes.fromhex(theirs["ak_public"]),
                                         replace=False, ak_name=nodes[peer]["ak_name"])
-        verifier.enroll(peer, bytes.fromhex(ask("ak-activate", credential=credential.hex())["secret"]))
-    # 3. the path: already in the header (a rerun after the token was written), or asked for now
+        verifier.enroll(peer, bytes.fromhex(ask("ak-activate", credential=credential.hex())["secret"]), ak_name=nodes[peer]["ak_name"])
+
+
+def request_path(manifest, node_id, peer, ask, session, quote, local, sealed_local, device, recovery, run=None):
+    """The path half (as root: the LUKS header): this node's LUKS path from `peer`, which must already hold this
+    node's AK (enrol_aks). `session` = (boot session ID hex, session key bytes); `quote(epoch, session_id,
+    session_key, nonce, binding)` -> evidence; `recovery` the key that opens `device` now (typed at the console).
+    Returns {"path_epoch", "keyslot"}, or {"path_epoch": None, "keyslot": None, "existing": True} when the header
+    already holds this peer's path."""
+    membership.validate(manifest)
+    # this node refuses a contribution from a peer its own manifest does not let authorize (revoked, quarantined)
+    require(membership.may(manifest, peer, "authorize"), "%s may not authorize under epoch %d: no path from it" % (peer, manifest["epoch"]))
     meta = unlock.luks_meta(device, run) if run else unlock.luks_meta(device)
     if any(t.get("peer") == peer and t.get("target") == node_id for _, t in unlock.path_tokens(meta)):
         return {"path_epoch": None, "keyslot": None, "existing": True}
@@ -226,3 +227,11 @@ def with_peer(manifest, node_id, peer, ask, identity, activate, verifier, sessio
     slot = unlock.enrol_path(device, node_id, peer, path_epoch, local, sealed_local, contribution, recovery,
                              **({"run": run} if run else {}))
     return {"path_epoch": path_epoch, "keyslot": slot}
+
+
+def with_peer(manifest, node_id, peer, ask, identity, activate, verifier, session, quote, local, sealed_local, device, recovery,
+              run=None):
+    """Both halves in one process (tests; a tool that is both users): enrol_aks, then request_path."""
+    require(membership.may(manifest, peer, "authorize"), "%s may not authorize under epoch %d: no path from it" % (peer, manifest["epoch"]))
+    enrol_aks(manifest, node_id, peer, ask, identity, activate, verifier)
+    return request_path(manifest, node_id, peer, ask, session, quote, local, sealed_local, device, recovery, run)

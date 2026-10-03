@@ -665,6 +665,132 @@ def run_as_sync(config_path, chain, run=subprocess.run):
     return int(m.group(1)), m.group(2)
 
 
+# ---- design steps 6 and 7: the peers' AKs, and this node's LUKS path from each peer (#190) ----
+
+ROOT_DEVICE = "/dev/disk/by-partlabel/regalia-root"      # the root volume, as the image's crypttab names it
+
+
+def _ask_for(node, manifest, peer):
+    """`ask(op, **fields)` to `peer` over the service tunnel (sync's transport and answer rules)."""
+    from deploy.baremetal import sync
+    transports = node.sources(manifest)
+    require(peer in transports, "%s is not reachable over the service tunnel by this node's manifest" % peer)
+    client = sync.Client(node.node_id, None, None, transports, lambda event: None)
+    return lambda op, **fields: client._ask(peer, op, **fields)
+
+
+def peers_to_enrol(manifest, node_id):
+    """Every other node that may authorize: each must give this node a path before local.bin goes."""
+    return sorted(n["node_id"] for n in manifest["nodes"] if n["node_id"] != node_id and membership.may(manifest, n["node_id"], "authorize"))
+
+
+def enrol_aks(config_path, run=subprocess.run):
+    """As regalia-sync (it owns the verifier's state): this node's AK into every peer's verifier, and theirs into
+    its own. Returns {peer: "ok" or the refusal}; a peer that is down is named, the others go on."""
+    from deploy.baremetal import enrolpeer, node as node_module
+    node = node_module.Node(node_module.load(config_path), run)
+    manifest = node.manifest()
+    verifier = node.attester_for(manifest)
+    identity, activate = enrolpeer.tpm_identity(node.tcti, run), enrolpeer.tpm_activate(node.tcti, run)
+    out = {}
+    for peer in peers_to_enrol(manifest, node.node_id):
+        try:
+            enrolpeer.enrol_aks(manifest, node.node_id, peer, _ask_for(node, manifest, peer), identity, activate, verifier)
+            out[peer] = "ok"
+        except (Refused, membership.Refused, attest.Refused, OSError) as refusal:
+            out[peer] = str(refusal)
+    return out
+
+
+def run_aks_as_sync(config_path, run=subprocess.run):
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_aks", "--config", config_path],
+               cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    require(done.returncode == 0, "the AK step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
+    found = re.findall(r"^AK (\S+) (.*)$", done.stdout, re.M)
+    require(found, "the AK step did not report")
+    return dict(found)
+
+
+def _quote_with(node):
+    """request_path's `quote`: this node's TPM quote over its boot session, binding the enrolment key."""
+    def quote(epoch, session_id, session_key, nonce, binding):
+        env = dict(os.environ, TPM2TOOLS_TCTI=node.tcti) if node.tcti else None
+        with tempfile.TemporaryDirectory(prefix="enrol-quote-") as d:
+            paths = (os.path.join(d, "quote"), os.path.join(d, "signature"))
+            attest.node_quote(node.node_id, epoch, bytes.fromhex(session_id), session_key, nonce, node.cfg["pcrs"], *paths,
+                              run=lambda argv, **kw: node.run(argv, **dict(kw, **({"env": env} if env else {}))), binding=binding)
+            quote_bytes, signature = (open(p, "rb").read() for p in paths)
+        return {"ephemeral_public": session_key.hex(), "nonce": nonce.hex(), "quote": quote_bytes.hex(), "signature": signature.hex()}
+    return quote
+
+
+def enrol_paths(directory, esp, recovery, device=ROOT_DEVICE, run=subprocess.run, aks=None, out=sys.stdout, config_path=None):
+    """Design steps 6 and 7 of #190, after `commit` (resumable, run again until it finishes):
+      1. the AKs both ways, as regalia-sync (`aks`, default run_aks_as_sync);
+      2. as root, this node's LUKS path from every peer that may authorize (enrolpeer.request_path), each
+         journalled ("path:<peer>") once its keyslot opens and its token is written;
+      3. only when EVERY such peer has a path: "paths" done in the journal, then local.bin unlinked, then
+         "local_removed" journalled. Nothing else removes it.
+    `recovery()` returns the recovery key (typed at the console). Returns the peers still without a path."""
+    from deploy.baremetal import enrolpeer, node as node_module
+    journal = Journal(directory, _bundle(directory)["node_id"])
+    require(journal.state("seal") == "done", "the boot credentials are not sealed yet: run `enrol commit` first")
+    if journal.state("paths") == "done":
+        _remove_local(journal, directory)
+        return []
+    config_path = config_path or NODE_JSON
+    node = node_module.Node(node_module.load(config_path), run)
+    manifest = node.manifest()
+    peers = peers_to_enrol(manifest, node.node_id)
+    require(peers, "no other node may authorize under epoch %d: no path can be made" % manifest["epoch"])
+    ak_results = (aks or run_aks_as_sync)(config_path)
+    sealed_file = os.path.join(esp, "loader", "credentials", SEALED[0][0] + espcreds.SUFFIX)
+    with open(sealed_file, "rb") as f:
+        sealed = f.read(1 << 20)
+    require(hashlib.sha256(sealed).hexdigest() == journal.get("seal")["files"][os.path.basename(sealed_file)]["sha256"],
+            "%s is not the credential this enrolment sealed" % sealed_file)
+    sealed_local = "".join(sealed.decode("ascii").split())
+    local = local_contribution(journal, directory)
+    session = node_module.boot_session(node.runtime)      # (ID hex, key): the one this boot presents to everyone
+    key, missing = None, []
+    for peer in peers:
+        if journal.state("path:" + peer) == "done":
+            continue
+        if ak_results.get(peer) != "ok":
+            missing.append("%s (AK step: %s)" % (peer, ak_results.get(peer, "not reached")))
+            continue
+        if key is None:
+            key = recovery()
+        try:
+            result = enrolpeer.request_path(manifest, node.node_id, peer, _ask_for(node, manifest, peer), session, _quote_with(node),
+                                            local, sealed_local, device, key, run)
+        except (Refused, membership.Refused, attest.Refused, OSError) as refusal:
+            missing.append("%s (%s)" % (peer, refusal))
+            continue
+        journal.done("path:" + peer, **{k: v for k, v in result.items() if v is not None})
+        print("PATH from %s: %s" % (peer, "already in the header" if result.get("existing") else
+                                    "path epoch %d, keyslot %d" % (result["path_epoch"], result["keyslot"])), file=out)
+    del key, local
+    if missing:
+        print("NOT FINISHED: no path yet from %s. local.bin stays; run `enrol paths` again once they answer" % "; ".join(missing), file=out)
+        return missing
+    journal.done("paths", peers=peers)
+    _remove_local(journal, directory)
+    print("ENROLLED: a path from every peer (%s); the local contribution is only sealed now" % ", ".join(peers), file=out)
+    return []
+
+
+def _remove_local(journal, directory):
+    """The last step: local.bin goes only after "paths" is journalled done; then that is journalled too."""
+    require(journal.state("paths") == "done", "local.bin is removed only once every peer's path is journalled")
+    path = os.path.join(directory, LOCAL_FILE)
+    if os.path.lexists(path):
+        os.unlink(path)
+    if journal.state("local_removed") != "done":
+        journal.done("local_removed")
+
+
 def _hand_over(state, chown=True):
     """The state directory, made regalia-sync's: every directory above it trusted and made one level at a time
     (_open_trusted), then the directory itself opened without following a link and judged by descriptor, so what
@@ -954,8 +1080,8 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         files = seal_credentials(journal, directory, boot["esp"], initrd_pub, run)
         print("SEALED to this TPM and the initrd key, on the ESP: %s" % ", ".join(
             "%s (sha256 %s, %d bytes)" % (f, v["sha256"][:16], v["size"]) for f, v in sorted(files.items())), file=out)
-        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled (not built "
-              "yet, #190); the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
+        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled: run "
+              "`enrol paths` next; the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
     return epoch, digest
 
 
@@ -986,10 +1112,43 @@ def main(argv=None):
     k.add_argument("--secure-boot-cert", required=True, help="the Secure Boot certificate the record names")
     k.add_argument("--esp", required=True, help="the ESP's mount point: the sealed credentials go to ESP/loader/credentials")
     k.add_argument("--enrol-dir", default=ENROL_DIR)
+    q = sub.add_parser("paths", help="the peers' AKs and this node's LUKS path from each peer; then local.bin goes")
+    q.add_argument("--esp", required=True, help="the ESP's mount point (the sealed unlock-local credential is read from it)")
+    q.add_argument("--device", default=ROOT_DEVICE)
+    q.add_argument("--enrol-dir", default=ENROL_DIR)
+    x = sub.add_parser("_aks", help=argparse.SUPPRESS)
+    x.add_argument("--config", required=True)
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
+    if args.command == "_aks":                       # run by paths, as regalia-sync
+        try:
+            results = enrol_aks(args.config)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        for peer, result in sorted(results.items()):
+            print("AK %s %s" % (peer, " ".join(str(result).split())))
+        return 0
+    if args.command == "paths":
+        if os.geteuid() != 0:
+            print("REFUSED: enrolment runs as root, at the host's console", file=sys.stderr)
+            return 2
+
+        def recovery():
+            # the recovery key from the console only: never argv, the environment, a file or the journal
+            import getpass
+            require(os.path.exists("/dev/tty"), "the recovery key is typed at the console; there is no terminal")
+            typed = getpass.getpass("The recovery key of this host's root volume (from its card; not shown): ")
+            require(typed, "no recovery key was typed")
+            return typed.encode()
+        try:
+            missing = enrol_paths(args.enrol_dir, args.esp, recovery, args.device)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 3 if missing else 0
     if args.command == "_anchor":                    # run by commit, as regalia-sync
         try:
             chain = membership.load(sys.stdin.buffer.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
