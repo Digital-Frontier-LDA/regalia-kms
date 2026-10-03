@@ -1172,6 +1172,9 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
     require(second_record is not None, "a second builder's record is required: one builder alone does not decide what is signed")
     load_record(membership.canonical(second_record), signed=False)
     require(membership.canonical(second_record) == membership.canonical(record), "the two builders' records differ: nothing is signed")
+    # #248: an image is signed only from a reproducible initrd, whatever calls this (not only the command line)
+    require("initrd_build" in record["inputs"], "the record names no initrd build record (--initrd-build): an image is signed only "
+            "from an initrd every builder built itself (#248), so nothing is signed")
     # #198: no image is signed whose initrd was not reviewed and found to open the disk only as it must
     require(record["initrd_review"]["passed"], "the record's initrd review did not pass, so nothing is signed: %s"
             % "; ".join(record["initrd_review"]["findings"]))
