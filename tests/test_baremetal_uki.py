@@ -745,12 +745,18 @@ class Verify(Case):
 
 class Records(Case):
     def test_the_measurement_set_of_an_image_on_one_host(self):
-        record = self.build()
+        unsigned = self.build()
+        record = self.sign(record=unsigned)
         pcrs = {"0": "11" * 32, "7": "77" * 32}
         creds = {"regalia.node-id.cred": b"node-a\n"}
         entry = uki.measurement_set(record, "image-7", "2019102300163636", pcrs, creds)
+        # the keys the image is signed with, from its signed record: what enrol may seal to (#190, #265)
+        signing = {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"], "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
+                   "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}
         self.assertEqual(entry, {"label": "image-7", "tpm_firmware_version": "2019102300163636", "pcrs": dict(pcrs, **{"12": espcreds.pcr12(creds)}),
-                                 "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}}})
+                                 "phases": {"initrd": {"11": record["pcr11"]["initrd"]}, "system": {"11": record["pcr11"]["system"]}},
+                                 "signing": signing})
+        self.refused("the record is of an unsigned image", uki.measurement_set, unsigned, "image-7", "2019102300163636", pcrs, creds)
         document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}}
         self.assertTrue(measurements.version(document).startswith("m1-"))               # it is a set the document accepts
         self.assertEqual(attest.selection(entry), [0, 7, 11, 12])
@@ -760,7 +766,7 @@ class Records(Case):
         self.refused("the node's credential files are required", uki.measurement_set, record, "x", "0" * 16, pcrs, None)
 
     def test_pcr_12_comes_from_the_nodes_credential_files_and_never_by_hand(self):
-        record = self.build()
+        record = self.sign()
         pcrs = {"7": "77" * 32}
         files = {"regalia.node-id.cred": b"node-a\n", "regalia.boot-mesh.cred": b"mesh", "regalia.unlock-local.cred": b"sealed"}
         entry = uki.measurement_set(record, "image-7", "0" * 16, pcrs, files)
@@ -837,7 +843,7 @@ class Records(Case):
         # through the command, with the record of what it was computed from
         with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
             json.dump(pcrs, f)
-        rec = os.path.join(self.out, "image-7.record.json")
+        rec = os.path.join(self.out, "image-7.signed.json")
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
                                        os.path.join(self.d, "host-pcrs.json"), "--esp", esp, "--credentials-record", os.path.join(self.d, "creds.json")]), 0)
