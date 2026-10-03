@@ -6,8 +6,8 @@ CGO disabled, readonly modules, trimmed source paths and embedded source/version
 identities. It never publishes a release or installs a plugin.
 
 ```sh
-python3 tools/package_openbao.py --output /absolute/new/artifact-directory
-python3 tools/package_openbao.py --verify --output /absolute/artifact-directory
+python3 -I tools/package_openbao.py --output /absolute/new/artifact-directory
+python3 -I tools/package_openbao.py --verify --output /absolute/artifact-directory
 ```
 
 The version is `v0.1.0-dev.<commit-prefix>`. Each deterministic gzip/tar contains

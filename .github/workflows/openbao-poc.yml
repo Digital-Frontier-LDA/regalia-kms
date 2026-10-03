@@ -67,10 +67,10 @@ jobs:
       - name: Build and verify reproducible development packages
         working-directory: .
         run: |
-          python3 tools/package_openbao.py --output "$RUNNER_TEMP/openbao-packages"
-          python3 tools/package_openbao.py --output "$RUNNER_TEMP/openbao-packages-repeat"
+          python3 -I tools/package_openbao.py --output "$RUNNER_TEMP/openbao-packages"
+          python3 -I tools/package_openbao.py --output "$RUNNER_TEMP/openbao-packages-repeat"
           cmp "$RUNNER_TEMP/openbao-packages/checksums.txt" "$RUNNER_TEMP/openbao-packages-repeat/checksums.txt"
-          python3 tools/package_openbao.py --verify --output "$RUNNER_TEMP/openbao-packages"
+          python3 -I tools/package_openbao.py --verify --output "$RUNNER_TEMP/openbao-packages"
       - name: Upload development packages
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
