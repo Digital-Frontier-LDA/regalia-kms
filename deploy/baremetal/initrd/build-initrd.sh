@@ -152,7 +152,8 @@ inroot sh -c 'cd /tmp/unpacked && lsinitrd --unpack /tmp/initrd.img' >/dev/null 
    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$y" "$m" "$u" "$g" "$s" "$n" "$h" "$l"
  done) > "$W/stage/initrd-listing.txt"
 # No hard-linked file: whether dracut links two identical files depended on the clock (#248), so a file with
-# more than one link means --nohardlink was dropped or a dracut update links some other way. Refused.
+# more than one link means --nohardlink was dropped or a dracut update links some other way. Refused. Regular
+# files only: a directory's link count is its subdirectories plus two, and nothing else in an initrd is linked.
 linked="$(awk -F'\t' '$2 == "f" && $7 > 1 {print $1 " (" $7 " links)"}' "$W/stage/initrd-listing.txt" | head -5)"
 [ -z "$linked" ] || die "the initrd holds hard-linked files, which make the archive depend on the build's timing (#248): $(tr '\n' ' ' <<< "$linked")"
 inroot dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"

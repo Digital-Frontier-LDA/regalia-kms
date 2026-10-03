@@ -557,13 +557,19 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Build the initrd once, on Debian 13
-        run: REGALIA_GO="$(command -v go)" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 1
+      - name: Build the initrd three times from nothing, on Debian 13; all must be identical
+        run: REGALIA_GO="$(command -v go)" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 3
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: initrd-debian
           path: ${{ runner.temp }}/repro/build-1
           retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: initrd-debian-every-build
+          path: ${{ runner.temp }}/repro
+          retention-days: 14
 
   initrd-reproducible-compare:
     needs: [initrd-reproducible, initrd-reproducible-debian]

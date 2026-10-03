@@ -22,7 +22,9 @@ wiring), the ESP holds the measured site configuration and the signed chain inst
 change no longer moves PCR 12. The sealed credentials (the local half, the WG-BOOT key) are not here: they
 are made once, at enrolment, by whoever holds the TPM.
 """
-from deploy.baremetal import bootnet, membership, unlock
+import re
+
+from deploy.baremetal import bootnet, membership, sitecfg, unlock
 
 Refused, require = membership.Refused, membership.require
 
@@ -32,6 +34,47 @@ UNLOCK_PCRS = (7, 11, 12)
 CREDENTIALS_DIR = "loader/credentials"
 # the credentials render() gives, by name (each is <name>.cred on the ESP)
 RENDERED = ("regalia.unlock-config", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env")
+
+
+# regalia.site: what the initrd needs of the site configuration, and nothing else, as canonical JSON (B3: the
+# one measured, non-secret file; the credentials derived from the manifest are rendered from it in the initrd,
+# by cmd/regalia-unlock/bootcfg, which is held to render() byte for byte).
+SITE_SCHEMA = "regalia.boot-site/v1"
+SITE_KEYS = ("schema", "host_ipv4", "device", "boot_mesh")
+SITE_MAX_BYTES = 16 * 1024
+
+
+def site_document(site, device):
+    """regalia.site for the host `site` (sitecfg-validated, with a boot_mesh) whose root volume is `device`:
+    canonical bytes, so a peer recomputes them and the PCR 12 they give."""
+    mesh = site["boot_mesh"]
+    require(mesh is not None, "the site config has no boot_mesh: this is a single-site host")
+    document = {"schema": SITE_SCHEMA, "host_ipv4": site["host_ipv4"], "device": device, "boot_mesh": mesh}
+    read_site(membership.canonical(document))                  # what is written is what the initrd reads back
+    return membership.canonical(document)
+
+
+def read_site(raw):
+    """regalia.site as the initrd reads it: strict JSON in canonical bytes, the boot_mesh checked by sitecfg's
+    own rules (the zone and port checks need the whole site config: sitecfg.validate made them when the file
+    was written, and PCR 12 attests it). Returns (site, device): a site that render() takes."""
+    require(isinstance(raw, bytes) and len(raw) <= SITE_MAX_BYTES, "regalia.site is at most %d bytes" % SITE_MAX_BYTES)
+    document = membership.load(raw, SITE_MAX_BYTES)
+    require(membership.canonical(document) == raw, "regalia.site is not in canonical form")
+    membership.exact(document, SITE_KEYS, "regalia.site")
+    require(document["schema"] == SITE_SCHEMA, "regalia.site: schema must be %s" % SITE_SCHEMA)
+    require(isinstance(document["device"], str) and re.fullmatch(r"[A-Za-z0-9/_.:=-]{1,255}", document["device"]) is not None,
+            "regalia.site: device must be a plain path")
+    try:
+        host = sitecfg._address(document["host_ipv4"], "host_ipv4")
+        context = {"host_ipv4": host, "kms_port": None, "ssh_port": None, "client_cidrs": [], "monitoring_cidrs": [],
+                   "admin_cidrs": [], "outbound": []}
+        mesh = sitecfg._boot_mesh(document["boot_mesh"], context)
+    except sitecfg.InvalidSite as invalid:
+        raise Refused("regalia.site: %s" % invalid) from None
+    require(mesh is not None, "regalia.site: boot_mesh must not be null")
+    require(mesh == document["boot_mesh"], "regalia.site: boot_mesh is not in sitecfg's normal form")
+    return {"host_ipv4": host, "boot_mesh": mesh}, document["device"]
 
 
 def boot_env(site):
