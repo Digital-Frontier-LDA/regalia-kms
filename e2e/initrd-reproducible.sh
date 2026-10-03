@@ -6,7 +6,8 @@
 # Runs deploy/baremetal/initrd/build-initrd.sh BUILDS times (default 2), each from nothing, in its own
 # directory, at one pinned snapshot. Build 2 runs in a HOSTILE environment that the builder must not let
 # through: another locale, time zone, umask, TMPDIR and working directory; stray SOURCE_DATE_EPOCH, GZIP and
-# ZSTD_CLEVEL; Go variables that would change the client (GOFLAGS, CGO_ENABLED=1, GOTOOLCHAIN=local); and,
+# ZSTD_CLEVEL; Go variables that would change the client (GOFLAGS, CGO_ENABLED=1, GOTOOLCHAIN=local) or
+# weaken its verification (GOSUMDB=off, GONOSUMDB, GOINSECURE); and,
 # with REGALIA_HOSTILE_APT=1 (CI only: it writes under the host's /etc/apt), a host apt configuration with
 # a dead proxy and recommends switched on, which would break the download or change the package set if
 # mmdebstrap read it. Every build's initrd and build record must be identical. It writes OUT/build-N/
@@ -40,7 +41,7 @@ for n in $(seq 1 "$BUILDS"); do
     HOSTILE_TMP="$(mktemp -d /var/tmp/regalia-hostile-tmp.XXXXXX)"
     ( umask 077; cd /
       env LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8 TZ=Pacific/Kiritimati TMPDIR="$HOSTILE_TMP" SOURCE_DATE_EPOCH=0 GZIP=-1 ZSTD_CLEVEL=1 \
-        GOFLAGS=-ldflags=-X=main.hostile=1 CGO_ENABLED=1 GOTOOLCHAIN=local \
+        GOFLAGS=-ldflags=-X=main.hostile=1 CGO_ENABLED=1 GOTOOLCHAIN=local GOSUMDB=off GONOSUMDB='*' GOINSECURE='*' \
         "$REPO/deploy/baremetal/initrd/build-initrd.sh" --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n" )
   else
     deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n"
