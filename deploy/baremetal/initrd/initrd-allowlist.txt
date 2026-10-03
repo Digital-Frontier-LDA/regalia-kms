@@ -11,7 +11,7 @@
 # `python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD`, and read before it is added:
 # a new line is a new thing the initrd runs.
 
-# Debian 13 (trixie), dracut 106 with --no-hostonly --add regalia-unlock, systemd 257: the set e2e/unlock-boot-qemu.sh's
+# Debian 13 (trixie) dracut with --no-hostonly --add regalia-unlock, and systemd 257: the set e2e/unlock-boot-qemu.sh's
 # image holds, read 2026-10-03. No drop-in of the unlock path is among them (none needs a sha256).
 # debug-shell.service, emergency and rescue are units of the image; what would start them (systemd.debug_shell,
 # rd.shell, rd.break, emergency, rescue) is refused on the command line and in cmdline.d.
