@@ -85,7 +85,7 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 |---|---|---|
 | 2.1 | Check the step: `python3 -Es -m deploy.baremetal.rollout transition --old CURRENT.json --new BOTH.json` must answer `approve`. It refuses a renamed set, a changed label, a dropped host, two steps in one document | **exists** |
 | 2.2 | **Compare the document with each host's PCR survey by eye.** No check can tell an unapproved image entered under an approved name | **manual**, and it is the control |
-| 2.2a | **Review what the image's initrd does to open the root disk**: its own `etc/crypttab`, its `etc/cmdline.d`, and the unlock client's units and socket. The initrd must take the key from the unlock client's socket and from nowhere else. This is checked on the image, before it is approved, because it cannot be checked afterwards: once a host has booted, nothing on it shows what the initrd held (measured, #135). `host_probe.py` reads the root's `/etc/crypttab` and the kernel command line only | **NOT BUILT**: needs the UKI (#57), whose PCR 11 then covers the initrd; no command lists an image's unlock configuration yet |
+| 2.2a | **Review what the image's initrd does to open the root disk**: its own `etc/crypttab`, its `etc/cmdline.d`, and the unlock client's units and socket. The initrd must take the key from the unlock client's socket and from nowhere else. This is checked on the image, before it is approved, because it cannot be checked afterwards: once a host has booted, nothing on it shows what the initrd held (measured, #135). `host_probe.py` reads the root's `/etc/crypttab` and the kernel command line only | **exists** (#198): `uki build` unpacks the initrd it measures and records the review (`initrd_review` in the record): the one generic crypttab line, no `rd.luks*` or other refused word in `cmdline.d`, this repository's unlock units and script as systemd takes them, the client and the two enable links, and no path outside the image in the unlock path (sourced, executed or read; the stub's `/.extra/global_credentials/NAME.cred` and runtime directories excepted). `uki sign` refuses a record whose review did not pass and reviews its own copy again; `uki verify` reviews the image's `.initrd` again. It judges what it names: dracut's own hooks and systemd's units outside the unlock path are not reviewed |
 | 2.3 | Compute the document's version from the file in hand, at signing time: `python3 -Es -m deploy.baremetal.rollout version --measurements BOTH.json` | **exists** |
 | 2.4 | Write manifest N+1, unsigned: `python3 -Es -m deploy.baremetal.rollout propose --membership CHAIN.json --root-key HEX --old CURRENT.json --new BOTH.json`. It prints the current manifest with `epoch + 1`, `prev_digest`, and `policy_version` set to that version, and signs nothing | writing the proposal **exists**; signing it is step 2.6 |
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
@@ -181,3 +181,22 @@ Two limits, so this is not read as more than it is:
    sign an unreviewed image by hand, so the key's custody (the owner, #156) is part of this guarantee.
 2. It shows an image that passed the review when it was signed, not that it is the current one. A retired image
    that once passed still opens until it is retired: that is #135's (pcrlock retirement).
+
+## The initrd's inventory and the archive snapshot (#198)
+
+`uki build`, `sign` and `verify` compare every entry of the initrd with
+`deploy/baremetal/initrd/initrd-inventory.txt` and refuse any difference, so the image is built from a pinned
+snapshot of the Debian archive, its updates and its security suite (`REGALIA_BOOT_MIRROR` and
+`REGALIA_BOOT_SECURITY_MIRROR`, one date for both in `.github/workflows/ci.yml`).
+
+**Every image update starts by moving the snapshot date and refreshing the inventory**, in one pull request:
+
+1. Move the snapshot date.
+2. Build.
+3. Write the inventory with `python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD --root /`.
+4. Read the diff: the `generated` lines first, then the packages whose versions moved.
+
+A pinned snapshot also freezes security fixes, so how stale it may get has a limit. **The date must be moved
+whenever a Debian security advisory (DSA, or a point release's security update) touches a package that the
+inventory names**, and in any case before an image is signed for production. The client binary is not pinned by
+a hash: its line says `=compiled`, and `build --unlock-client` holds it to the binary this commit compiles.
