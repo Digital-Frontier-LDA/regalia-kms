@@ -70,6 +70,17 @@ class InitOnSwtpm(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "persistent object at .*replacement \\(#76\\)"):
             self.init()
         self.assertIn(attest.AK_HANDLE.lower(), enrol.persistent_handles(subprocess.run))
+        foreign = enrol._name_at(attest.AK_HANDLE, self.d, subprocess.run)
+        self.assertEqual(json.load(open(self.d + "/enrol/journal.json"))["steps"], {}, "the refusal wrote a step")
+        # a "started" journal does not license evicting an AK whose Name it never recorded
+        with open(self.d + "/enrol/journal.json") as f:
+            journal = json.load(f)
+        journal["steps"]["identity"] = {"state": "started", "at": 0}
+        with open(self.d + "/enrol/journal.json", "w") as f:
+            json.dump(journal, f)
+        with self.assertRaisesRegex(enrol.Refused, "persistent object at 0x81010002"):
+            self.init()
+        self.assertEqual(enrol._name_at(attest.AK_HANDLE, self.d, subprocess.run), foreign, "a foreign AK was evicted")
         # a WG-SERVICE key it did not make
         shutil.rmtree(self.d + "/enrol")
         for handle in (attest.AK_HANDLE, attest.EK_HANDLE):

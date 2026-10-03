@@ -129,37 +129,92 @@ def _evict(handle, run):
     _run(["tpm2_evictcontrol", "-C", "o", "-c", handle], run, text=True)
 
 
+def _name_at(handle, directory, run):
+    """The Name of the persistent object at `handle`, from its public area."""
+    path = os.path.join(directory, ".probe.pub")
+    _run(["tpm2_readpublic", "-c", handle, "-o", path], run, text=True)
+    try:
+        with open(path, "rb") as f:
+            return attest.name_of(attest.public_area(f.read(), handle)).hex()
+    finally:
+        os.unlink(path)
+
+
+def _this_tpms_ek(directory, run):
+    """The EK this TPM derives from its endorsement seed, made transiently: (public area, Name). The same
+    template gives the same key every time, so an EK at our handle with this Name is this TPM's own."""
+    ctx, pub = os.path.join(directory, ".ek.ctx"), os.path.join(directory, ".ek.pub")
+    try:
+        _run(["tpm2_createek", "-c", ctx, "-G", "rsa", "-u", pub], run, text=True)
+        with open(pub, "rb") as f:
+            blob = f.read()
+        _run(["tpm2_flushcontext", ctx], run, check=False, text=True)
+        if os.environ.get("TPM2TOOLS_TCTI", "").startswith(("swtpm", "mssim")):
+            _run(["tpm2_flushcontext", "-t"], run, check=False, text=True)   # no resource manager (see attest.node_init)
+        return blob, attest.name_of(attest.public_area(blob, "the EK")).hex()
+    finally:
+        for p in (ctx, pub):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
 def identity(journal, directory, run):
-    """The EK and AK, persistent; their public areas in the enrolment directory."""
-    ours = {attest.EK_HANDLE.lower(), attest.AK_HANDLE.lower()}
+    """The EK and AK, persistent; their public areas in the enrolment directory.
+
+    RESUME EVICTS ONLY WHAT IT CAN PROVE IT MADE. The EK is derived from the TPM's seed: an object at the EK
+    handle whose Name equals this TPM's own EK is that EK, whoever persisted it. The AK is random: its Name
+    is recorded in the journal right after TPM2_Create and BEFORE it is made persistent, so any AK this
+    enrolment persisted has a recorded Name, and an object at the AK handle with another Name is not ours
+    and is refused, never evicted."""
+    ek_h, ak_h = attest.EK_HANDLE.lower(), attest.AK_HANDLE.lower()
     if journal.state("identity") == "done":
         facts = journal.get("identity")
         for k in ("ek", "ak"):
             with open(os.path.join(directory, k + ".pub"), "rb") as f:
                 require(attest.name_of(attest.public_area(f.read(), k)).hex() == facts[k + "_name"],
                         "%s.pub no longer matches the journal" % k)
-        require(ours <= persistent_handles(run), "the EK or AK this enrolment made is no longer in the TPM")
+        require({ek_h, ak_h} <= persistent_handles(run), "the EK or AK this enrolment made is no longer in the TPM")
+        for handle, k in ((attest.EK_HANDLE, "ek"), (attest.AK_HANDLE, "ak")):
+            require(_name_at(handle, directory, run) == facts[k + "_name"],
+                    "the object at %s is not the %s this enrolment recorded" % (handle, k.upper()))
         return facts
-    present = ours & persistent_handles(run)
-    if journal.state("identity") == "started":
-        for handle in sorted(present):          # ours, and nobody has seen them yet: made again
-            _evict(handle, run)
-        for k in ("ek", "ak"):
-            p = os.path.join(directory, k + ".pub")
-            if os.path.exists(p):
-                os.unlink(p)
-    else:
-        require(not present, "the TPM already holds a persistent object at %s, which this enrolment did not make. "
-                "A host that was enrolled is re-enrolled only as a new node, through replacement (#76)"
-                % ", ".join(sorted(present)))
+    ek_blob, ek_name = _this_tpms_ek(directory, run)
+    present = persistent_handles(run)
+    started = journal.state("identity") == "started"
+    if ek_h in present:
+        require(_name_at(attest.EK_HANDLE, directory, run) == ek_name,
+                "the TPM holds an object at %s that is not this TPM's EK. A host that was enrolled is re-enrolled "
+                "only as a new node, through replacement (#76)" % attest.EK_HANDLE)
+        # This TPM's own EK, persisted by whoever (some distributions provision it): the same key, so it is
+        # used as it is. What marks a host as already enrolled is an AK at the AK handle (below).
+    if ak_h in present:
+        recorded = journal.get("identity").get("ak_name") if started else None
+        require(recorded is not None and _name_at(attest.AK_HANDLE, directory, run) == recorded,
+                "the TPM already holds a persistent object at %s, which this enrolment did not make. A host that "
+                "was enrolled is re-enrolled only as a new node, through replacement (#76)" % attest.AK_HANDLE)
+        _evict(attest.AK_HANDLE, run)            # recorded right after it was created: ours, unseen
     journal.started("identity")
-    attest.node_init(directory, run=run)
-    facts = {}
-    for k in ("ek", "ak"):
-        with open(os.path.join(directory, k + ".pub"), "rb") as f:
-            blob = f.read()
-        facts[k + "_public"] = blob.hex()
-        facts[k + "_name"] = attest.name_of(attest.public_area(blob, k)).hex()
+    with tempfile.TemporaryDirectory(prefix="enrol-") as d:
+        if ek_h not in persistent_handles(run):
+            _run(["tpm2_createek", "-c", attest.EK_HANDLE, "-G", "rsa", "-u", os.path.join(d, "ek.pub")], run, text=True)
+        ctx, ak_pub = os.path.join(d, "ak.ctx"), os.path.join(d, "ak.pub")
+        _run(["tpm2_createak", "-C", attest.EK_HANDLE, "-c", ctx, "-G", "ecc", "-g", "sha256", "-s", "ecdsa", "-u", ak_pub],
+             run, text=True)
+        with open(ak_pub, "rb") as f:
+            ak_blob = f.read()
+        ak_name = attest.name_of(attest.public_area(ak_blob, "the AK")).hex()
+        journal.doc["steps"]["identity"]["ak_name"] = ak_name       # recorded BEFORE it is made persistent
+        _atomic_json(journal.path, journal.doc)
+        _run(["tpm2_evictcontrol", "-C", "o", "-c", ctx, attest.AK_HANDLE], run, text=True)
+        if os.environ.get("TPM2TOOLS_TCTI", "").startswith(("swtpm", "mssim")):
+            _run(["tpm2_flushcontext", "-t"], run, check=False, text=True)   # no resource manager (see attest.node_init)
+    for k, blob in (("ek", ek_blob), ("ak", ak_blob)):
+        path = os.path.join(directory, k + ".pub")
+        if os.path.exists(path):
+            os.unlink(path)
+        _write_private(path, blob)
+        os.chmod(path, 0o644)
+    facts = {"ek_public": ek_blob.hex(), "ek_name": ek_name, "ak_public": ak_blob.hex(), "ak_name": ak_name}
     journal.done("identity", **facts)
     return facts
 
