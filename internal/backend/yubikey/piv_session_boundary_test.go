@@ -237,8 +237,10 @@ func TestTheUnreachableCardInstrumentSeparatesItsThreeOutcomes(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:240 op0, :245 op0, :245 op1 — usable
-// piv_driver.go:101, :112, :127, :188, :207 op0 — every caller of usable
+// piv_driver.go:(*pivSession).usable{ctx.Err() != nil}[0], piv_driver.go:(*pivSession).usable{session.closed || session.card == nil}[0] and [1] — usable
+// op0 of piv_driver.go:(*pivSession).Identity{session.usable(ctx)}, piv_driver.go:(*pivSession).Policies{session.usable(ctx)},
+// piv_driver.go:(*pivSession).PINRetries{session.usable(ctx)}, piv_driver.go:(*pivSession).PublicKey{session.usable(ctx)},
+// piv_driver.go:(*pivSession).privateKey{session.pin == ""} — every caller of usable
 // ----------------------------------------------------------------------------
 
 // A SESSION THAT IS NOT USABLE MUST REFUSE WITHOUT REACHING THE CARD.
@@ -326,7 +328,7 @@ func TestASessionThatIsNotUsableRefusesWithoutReachingTheCard(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:207 op1 `session.pin == ""`
+// piv_driver.go:(*pivSession).privateKey{session.pin == ""}[1] `session.pin == ""`
 // ----------------------------------------------------------------------------
 
 // NO PRIVATE-KEY OPERATION BEFORE A VERIFIED PIN.
@@ -366,7 +368,9 @@ func TestNoPrivateKeyOperationHappensBeforeALogin(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:116 op0, :192 op0, :211 op0 — parseSlot
+// op0 of piv_driver.go:(*pivSession).Policies{parseSlot(objectID) then err != nil},
+// piv_driver.go:(*pivSession).PublicKey{parseSlot(objectID) then err != nil},
+// piv_driver.go:(*pivSession).privateKey{parseSlot(objectID) then err != nil} — parseSlot
 // ----------------------------------------------------------------------------
 
 // AN OBJECT ID THAT IS NOT A SLOT MUST NOT BE SENT TO THE CARD.
@@ -423,7 +427,7 @@ func TestAnObjectIDThatIsNotASlotNeverReachesTheCard(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:138 op1 `len(pin) < 6`
+// piv_driver.go:(*pivSession).Login{len(pin) < 6}[1] `len(pin) < 6`
 // ----------------------------------------------------------------------------
 
 // A PIN TOO SHORT IS NOT PRESENTED TO THE CARD, BECAUSE PRESENTING IT SPENDS A
@@ -478,7 +482,7 @@ func TestALoginPINBelowTheAcceptedLengthNeverReachesTheCard(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:228 op0 `session.closed`, :233 op0 `session.card == nil`
+// piv_driver.go:(*pivSession).Close{if session.closed}[0], piv_driver.go:(*pivSession).Close{session.card == nil}[0]
 // ----------------------------------------------------------------------------
 
 // CLOSE IS IDEMPOTENT AND SURVIVES A SESSION THAT NEVER HELD A CARD.
@@ -525,7 +529,7 @@ func TestCloseIsIdempotentAndSurvivesACardlessSession(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:292 op0, op2, op4 — the CARD's half of algorithmMatches
+// piv_driver.go:algorithmMatches{value == piv.AlgorithmEC256}[0], [2] and [4] — the CARD's half of algorithmMatches
 // ----------------------------------------------------------------------------
 
 // ONE FIXTURE, TWO OPERANDS, AND ONLY ONE OF THEM PINNED.
@@ -569,7 +573,7 @@ func TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested(t *testin
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:266 op0/op1 — RECORDED, NOT TESTED
+// piv_driver.go:parseSlot{number >= 0x82 && number <= 0x95}[0] and [1] — RECORDED, NOT TESTED
 // ----------------------------------------------------------------------------
 //
 // `number >= 0x82 && number <= 0x95` bounds the retired key-management slots.
@@ -590,7 +594,7 @@ func TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested(t *testin
 // succeeds, so `(true || ok)` cannot be reached with ok false.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:253 op0 — RECORDED, NOT TESTED
+// piv_driver.go:parseSlot{err != nil}[0] — RECORDED, NOT TESTED
 // ----------------------------------------------------------------------------
 //
 // parseSlot returns strconv's error when the object id is not hex. Neutralised,
@@ -601,7 +605,7 @@ func TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested(t *testin
 // return.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:43, :47, :51, :56, :57, :63, :67, :71, :78, :85, :89
+// every guard of piv_driver.go:(*PIVDriver).Open and (*PIVDriver).Ready
 // OPEN/READY, NOW VIA THE SEAM  ::  piv_driver_seam_test.go
 // ----------------------------------------------------------------------------
 //
@@ -667,8 +671,8 @@ func TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested(t *testin
 //	                            impossible and not seam-reachable.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:105, :120, :131, :144, :153, :157, :161, :165, :173, :177,
-// :181, :196, :200, :215, :219 — UNREACHABLE-BY-ANY-FIXTURE
+// piv_driver.go: the guards on what the card answered, in Identity, Policies, PINRetries,
+// Login, Sign, Unwrap, PublicKey and privateKey — UNREACHABLE-BY-ANY-FIXTURE
 // ----------------------------------------------------------------------------
 //
 // These are the operands BELOW the guards this file closes: they read what the

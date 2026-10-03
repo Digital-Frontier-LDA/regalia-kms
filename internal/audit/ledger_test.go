@@ -61,14 +61,10 @@ package audit
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -79,7 +75,7 @@ import (
 // ID is a citation, "file.go:Func{anchor}[i]" (#282): the function the guard is in, a piece of
 // the guard's own text, and i the operand index (multi-operand guards like
 // shipper.go:(*shipper).waitShipped{shipper.failures != failures} have [0] and [1]). See
-// resolveCitation for the anchor forms. A citation names no line number, so an edit elsewhere in
+// sweeptext.ResolveCitation for the anchor forms. A citation names no line number, so an edit elsewhere in
 // the file leaves every ID, and every prose citation of it, unchanged.
 //
 // MAlone and Compose carry the per-row control-arm measurement (X+M vs
@@ -464,152 +460,23 @@ func ledgerRows() []ledgerRow {
 	}
 }
 
-// citationPattern is one "file.go:Func{anchor}[i]" citation; the operand index is optional in prose.
-// The function is Name, (T).Name or (*T).Name. An anchor holds no braces.
-var citationPattern = regexp.MustCompile(`\b([a-z_]+\.go):((?:\(\*?[A-Za-z_]\w*\)\.)?[A-Za-z_]\w*)\{([^{}]+)\}(\[\d+\])?`)
-
-// lineCitationPattern is the form #282 retired, "file.go:N[i]": a line number, renumbered by every
-// edit above it. Only history may still use it ("Was …", "formerly …"), naming where a row used to be.
-var lineCitationPattern = regexp.MustCompile(`(?i)(was |formerly )?\b([a-z_]+\.go):(\d+)\b`)
-
-// citationSources reads a file of this package for resolveCitation, through
-// sweeptext.StripMutationWrappers so a citation resolves during an in-flight sweep -- without the
-// strip, a row whose guard has just been mutated would go red on its own drift guard, and a sweep
-// harness reading a red as KILLED would retire the operand as covered when nothing detects it.
-type citationSources func(file string) (string, error)
-
-func liveSources(t *testing.T) citationSources {
+// liveSources reads this package's files for sweeptext.ResolveCitation, the resolver every ledger
+// shares (#282, #290).
+func liveSources(t *testing.T) sweeptext.Sources {
 	_, thisFile, _, _ := runtime.Caller(0)
-	auditDir := filepath.Dir(thisFile)
-	return func(file string) (string, error) {
-		data, err := os.ReadFile(filepath.Join(auditDir, file))
-		if err != nil {
-			return "", err
-		}
-		return sweeptext.StripMutationWrappers(string(data)), nil
-	}
-}
-
-// resolveCitation finds the source line a citation names, and returns it with its text.
-//
-// The function is found by the parser, and the anchor is searched only within its declaration,
-// and only in its code: comments are blanked first, so a comment that still says the anchor text
-// after the guard is gone cannot stand in for it (regalia-kms-d9).
-//   - {text}: the one line of the function holding text. None, or more than one, is an error: an
-//     ambiguous anchor names no line.
-//   - {text#n}: the n-th line holding text, for a guard written twice word for word in one
-//     function; refused when text is on one line only, so every citation has one spelling.
-//   - {first then text}: for the guards whose own text is not unique, `err != nil` after the call
-//     that set err. text must be on the one line holding first, or on the next line holding code;
-//     a line put between them is an error, not a citation that silently moves to another guard.
-func resolveCitation(sources citationSources, citation string) (int, string, error) {
-	match := citationPattern.FindStringSubmatch(citation)
-	if match == nil || match[0] != citation {
-		return 0, "", fmt.Errorf("not a citation of the form file.go:Func{anchor}[i]")
-	}
-	file, function, anchor := match[1], match[2], strings.ReplaceAll(match[3], `\"`, `"`)
-	source, err := sources(file)
-	if err != nil {
-		return 0, "", err
-	}
-	positions := token.NewFileSet()
-	parsed, err := parser.ParseFile(positions, file, source, parser.SkipObjectResolution|parser.ParseComments)
-	if err != nil {
-		return 0, "", err
-	}
-	lines := strings.Split(source, "\n")
-	code := []byte(source)
-	for _, group := range parsed.Comments {
-		for offset := positions.Position(group.Pos()).Offset; offset < positions.Position(group.End()).Offset; offset++ {
-			if code[offset] != '\n' {
-				code[offset] = ' '
-			}
-		}
-	}
-	codeLines := strings.Split(string(code), "\n")
-	first, last := 0, 0
-	for _, declaration := range parsed.Decls {
-		decl, ok := declaration.(*ast.FuncDecl)
-		if !ok || declName(decl) != function {
-			continue
-		}
-		if first != 0 {
-			return 0, "", fmt.Errorf("%s declares %s twice", file, function)
-		}
-		first, last = positions.Position(decl.Pos()).Line, positions.Position(decl.End()).Line
-	}
-	if first == 0 {
-		return 0, "", fmt.Errorf("%s declares no function %s", file, function)
-	}
-	text, then, chained := strings.Cut(anchor, " then ")
-	occurrence := 0
-	if hash := strings.LastIndex(text, "#"); hash >= 0 {
-		if n, err := strconv.Atoi(text[hash+1:]); err == nil && n >= 1 {
-			text, occurrence = text[:hash], n
-		}
-	}
-	var holding []int
-	for number := first; number <= last; number++ {
-		if strings.Contains(codeLines[number-1], text) {
-			holding = append(holding, number)
-		}
-	}
-	switch {
-	case occurrence != 0 && len(holding) < 2:
-		return 0, "", fmt.Errorf("%q is on %d line(s) of %s: #%d is for a text written more than once", text, len(holding), function, occurrence)
-	case occurrence != 0 && occurrence > len(holding):
-		return 0, "", fmt.Errorf("%q is on %d lines of %s, not %d", text, len(holding), function, occurrence)
-	case occurrence != 0:
-		holding = holding[occurrence-1 : occurrence]
-	case len(holding) != 1:
-		return 0, "", fmt.Errorf("%q is on %d lines of %s: an anchor must name one", text, len(holding), function)
-	}
-	line := holding[0]
-	if chained && !strings.Contains(codeLines[line-1], then) {
-		next := line + 1
-		for next <= last && strings.TrimSpace(codeLines[next-1]) == "" {
-			next++
-		}
-		if next > last || !strings.Contains(codeLines[next-1], then) {
-			return 0, "", fmt.Errorf("%q is not on the line holding %q or the next line of code in %s", then, text, function)
-		}
-		line = next
-	}
-	return line, strings.TrimRight(lines[line-1], " \t\r"), nil
-}
-
-// declName is a function's name as a citation spells it: Name, (T).Name or (*T).Name.
-func declName(decl *ast.FuncDecl) string {
-	if decl.Recv == nil || len(decl.Recv.List) == 0 {
-		return decl.Name.Name
-	}
-	receiver := decl.Recv.List[0].Type
-	star := ""
-	if pointer, ok := receiver.(*ast.StarExpr); ok {
-		receiver, star = pointer.X, "*"
-	}
-	switch generic := receiver.(type) {
-	case *ast.IndexExpr:
-		receiver = generic.X
-	case *ast.IndexListExpr:
-		receiver = generic.X
-	}
-	if ident, ok := receiver.(*ast.Ident); ok {
-		return "(" + star + ident.Name + ")." + decl.Name.Name
-	}
-	return decl.Name.Name
+	return sweeptext.DirSources(filepath.Dir(thisFile))
 }
 
 // checkRowsResolve is the drift guard over a set of sources: each row's ID resolves to one line,
 // and that line is the row's Site.
-func checkRowsResolve(t *testing.T, sources citationSources) {
+func checkRowsResolve(t *testing.T, sources sweeptext.Sources) {
 	t.Helper()
 	rows := ledgerRows()
 	if len(rows) == 0 {
 		t.Fatalf("the ledger is empty: post-PR tally is 42 — a zero count means the slice was deleted")
 	}
 	for _, row := range rows {
-		line, have, err := resolveCitation(sources, citationPattern.FindString(row.ID))
+		line, have, err := sweeptext.ResolveCitation(sources, sweeptext.CitationPattern.FindString(row.ID))
 		if err != nil {
 			t.Errorf("row %q: %v", row.ID, err)
 			continue
@@ -621,7 +488,7 @@ func checkRowsResolve(t *testing.T, sources citationSources) {
 }
 
 // TestLedgerRowNamesLiveSource walks the ledger rows and asserts each ID still names one line of
-// the live source (resolveCitation), and that line is still the row's Site.
+// the live source (sweeptext.ResolveCitation), and that line is still the row's Site.
 //
 // FALSIFY: change one row's Site to a string that does not match the live source, or set Site to
 // "INTENTIONALLY BROKEN"; or change an ID's anchor to text the function holds twice, or not at
@@ -792,7 +659,7 @@ func equalStringSlices(a, b []string) bool {
 
 // TestLedgerCitationsNameLiveSource extends the drift guard from the rows' IDs to every other
 // citation this package's tests make (a row's Masking, its Notes, the comments), and to the one in
-// internal/policy that cites audit.go: each resolves (resolveCitation), and one with an operand
+// internal/policy that cites audit.go: each resolves (sweeptext.ResolveCitation), and one with an operand
 // index names a row or a line that is still a branch (if, case, for, switch, return, && or ||). A
 // line-number citation is refused unless it is marked as history ("Was …", "formerly …"): it names
 // where a row used to be. (#283, regalia-kms-3e; #282 replaced the line numbers with anchors.)
@@ -820,16 +687,16 @@ func TestLedgerCitationsNameLiveSource(t *testing.T) {
 				continue
 			}
 			where := fmt.Sprintf("%s:%d", filepath.Base(test), number+1)
-			for _, match := range lineCitationPattern.FindAllStringSubmatch(line, -1) {
+			for _, match := range sweeptext.LineCitationPattern.FindAllStringSubmatch(line, -1) {
 				if match[1] == "" {
 					t.Errorf("%s cites %s by line number: cite file.go:Func{anchor}[i] (#282)", where, match[0])
 				}
 			}
-			for _, cited := range citationPattern.FindAllString(line, -1) {
+			for _, cited := range sweeptext.CitationPattern.FindAllString(line, -1) {
 				if strings.HasPrefix(cited, "file.go:") {
 					continue // the form itself, as the comments spell it
 				}
-				_, text, err := resolveCitation(sources, cited)
+				_, text, err := sweeptext.ResolveCitation(sources, cited)
 				switch {
 				case err != nil:
 					t.Errorf("%s cites %s: %v", where, cited, err)
