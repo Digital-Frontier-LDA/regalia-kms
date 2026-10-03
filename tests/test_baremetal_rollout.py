@@ -259,6 +259,24 @@ class Transition(Case):
         self.assertEqual(measurements.transition(BOTH, NEXT), "retire")
         self.assertEqual(measurements.transition(BOTH, dict(copy.deepcopy(BOTH), name="again")), "unchanged")
 
+    def test_the_same_image_under_other_signing_keys_is_another_set(self):
+        """#267: a set names the keys its image is signed with. The same PCRs re-signed with another initrd key (it is
+        not measured) are never "unchanged": refused under its old label, and under a new one."""
+        signed = lambda label, initrd: dict(uki(label, "a1", "a2"), signing={"initrd": initrd * 32, "system": "5b" * 32,   # noqa: E731
+                                                                              "secure_boot_cert": "5c" * 32})
+        before = document("v1", **{n: [signed("image-1", "1a")] for n in "abc"})
+        self.assertEqual(measurements.transition(before, dict(copy.deepcopy(before), name="again")), "unchanged")
+        # under its old label: a changed image, refused even in an emergency
+        same_label = document("v2", **{n: [signed("image-1", "1b")] for n in "abc"})
+        self.refused("has other measurements than before; a changed image gets a new label", measurements.transition, before, same_label,
+                     emergency=True)
+        # under a new label: it cannot sit beside the old set (the same measurements), and an emergency that drops the old
+        # one still accepts its measurements; so a key rotation comes with a rebuilt image (a new PCR 11), never a re-sign
+        relabelled = document("v2", **{n: [signed("image-1-resigned", "1b")] for n in "abc"})
+        self.refused("would still accept the same measurements under another label", measurements.transition, before, relabelled,
+                     emergency=True)
+        self.refused("", measurements.transition, before, relabelled)
+
     def test_giving_next_up_is_not_called_a_retirement(self):
         """Both leave one set per node. Signing the wrong half after retire_ready passed would lock out
         every node, so the two have different names."""
