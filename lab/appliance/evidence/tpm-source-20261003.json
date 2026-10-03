@@ -1,0 +1,935 @@
+{
+  "actual_recipe_package_inventory_sha256": "58a72e777124aa4b0a4d83c002a235f6204a38423edbd9829af51c9bd6fa55ca",
+  "authenticated_source": {
+    "authentication": "pinned GPG InRelease -> SHA256 Sources -> SHA256 source files",
+    "directory": "pool/main/t/tpm2-tools",
+    "files": {
+      "tpm2-tools_5.7-1.debian.tar.xz": {
+        "bytes": 18468,
+        "sha256": "fa85351716424934be848c18863eac785d71f90dc1e9857adc20aaaf39cf03c6"
+      },
+      "tpm2-tools_5.7-1.dsc": {
+        "bytes": 2193,
+        "sha256": "d0d0d9ea97195214c44a54442ae1680677ca23bacf9c97858dbf0ce26992a2fe"
+      },
+      "tpm2-tools_5.7.orig.tar.gz": {
+        "bytes": 784535,
+        "sha256": "714912361fddbd7e01473be9065b2949b5ad2f5dff80063648f00f4eaf38971b"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "tpm2-tools",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "production_approved": false,
+    "release": {
+      "date": "2026-09-12T07:55:41+00:00",
+      "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "trixie",
+      "valid_until": null
+    },
+    "schema": "regalia.authenticated-source/v1",
+    "sources_index_sha256": "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "version": "5.7-1"
+  },
+  "binary_sha256": "a9ed047e60c6165dea6a1ed398e940bbb9848d7461268580292bfbaec9e04151",
+  "bootstrap": {
+    "architecture": "aarch64",
+    "checks": [
+      {
+        "name": "toolchain",
+        "status": "passed"
+      },
+      {
+        "name": "fresh quote verifies against enrolled AK",
+        "status": "passed"
+      },
+      {
+        "name": "quote replay fails with fresh challenge",
+        "status": "passed"
+      },
+      {
+        "name": "substituted TPM identity is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "quote matches approved PCR values",
+        "status": "passed"
+      },
+      {
+        "name": "TPM unseals local contribution under approved PCR",
+        "status": "passed"
+      },
+      {
+        "name": "TPM unseals WireGuard key under approved PCR",
+        "status": "passed"
+      },
+      {
+        "name": "empty password cannot bypass PCR policy",
+        "status": "passed"
+      },
+      {
+        "name": "sealed blob cannot be loaded by another TPM",
+        "status": "passed"
+      },
+      {
+        "name": "tampered quote message is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "tampered quote signature is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "tampered quoted PCR data is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "quote binds the bootstrap request",
+        "status": "passed"
+      },
+      {
+        "name": "changed node_id is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "changed manifest_epoch is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "changed boot_session_id is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "changed ephemeral_public_key is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "changed peer_nonce is rejected",
+        "status": "passed"
+      },
+      {
+        "name": "verifier B releases a signed session-encrypted contribution",
+        "status": "passed"
+      },
+      {
+        "name": "verifier B rejects a consumed challenge",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects duplicate B response consumption",
+        "status": "passed"
+      },
+      {
+        "name": "verifier C releases a signed session-encrypted contribution",
+        "status": "passed"
+      },
+      {
+        "name": "verifier C rejects a consumed challenge",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects duplicate C response consumption",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects altered response ciphertext",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects altered response signature",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects altered response request_digest",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects substituted authorizer",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects an unregistered peer signing key",
+        "status": "passed"
+      },
+      {
+        "name": "another boot private key cannot decrypt the contribution",
+        "status": "passed"
+      },
+      {
+        "name": "invalid responses preserve the valid pending session",
+        "status": "passed"
+      },
+      {
+        "name": "verifier rejects an old quote in a fresh challenge",
+        "status": "passed"
+      },
+      {
+        "name": "target rejects an old response in a new boot session",
+        "status": "passed"
+      },
+      {
+        "name": "first valid response prevents consuming a later peer response",
+        "status": "passed"
+      },
+      {
+        "name": "verifier rejects a quote from a different TPM",
+        "status": "passed"
+      },
+      {
+        "name": "verifier checks PCR selection even when raw PCR digest matches",
+        "status": "passed"
+      },
+      {
+        "name": "verifier rejects tampered authorization quote",
+        "status": "passed"
+      },
+      {
+        "name": "verifier rejects tampered authorization signature",
+        "status": "passed"
+      },
+      {
+        "name": "verifier rejects a request after its policy epoch advances",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses an expired challenge",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies requester state DRAINING",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies requester state QUARANTINED",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies requester state RETIRED",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies requester state REVOKED_STOLEN",
+        "status": "passed"
+      },
+      {
+        "name": "MAINTENANCE requester may receive bootstrap",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies authorizer state MAINTENANCE",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies authorizer state DRAINING",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies authorizer state QUARANTINED",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies authorizer state RETIRED",
+        "status": "passed"
+      },
+      {
+        "name": "verifier denies authorizer state REVOKED_STOLEN",
+        "status": "passed"
+      },
+      {
+        "name": "concurrent workers issue exactly one grant per challenge",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses duplicate JSON fields",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses unknown IPC fields",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses null request body",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses oversized IPC body",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses malformed JSON",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses boolean epoch",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses malformed recipient key",
+        "status": "passed"
+      },
+      {
+        "name": "verifier refuses unknown request field",
+        "status": "passed"
+      },
+      {
+        "name": "client cannot substitute a verifier filesystem path",
+        "status": "passed"
+      },
+      {
+        "name": "pending challenge count is bounded",
+        "status": "passed"
+      },
+      {
+        "name": "signed-policy peer denies bootstrap before genesis",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot commission genesis",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects unknown signer without changing state",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects altered signature without changing state",
+        "status": "passed"
+      },
+      {
+        "name": "root-signed genesis installs the enrolled policy",
+        "status": "passed"
+      },
+      {
+        "name": "authenticated current manifest replay is idempotent",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects payload tampering under a recorded signature",
+        "status": "passed"
+      },
+      {
+        "name": "membership signature binds the authority role",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects a valid signature for another cluster",
+        "status": "passed"
+      },
+      {
+        "name": "root cannot silently replace a locally commissioned AK",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects a skipped epoch",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects a conflicting predecessor",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects a different body at the accepted epoch",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects malformed version value True",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects malformed epoch value True",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects malformed epoch value 0",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects malformed epoch value 18446744073709551616",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects malformed previous_digest value 00",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects malformed cluster_id value GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects unknown field",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects missing node",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects unknown node",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects unknown state",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects state type",
+        "status": "passed"
+      },
+      {
+        "name": "membership rejects PCR type",
+        "status": "passed"
+      },
+      {
+        "name": "signed ACTIVE policy authorizes a fresh TPM quote",
+        "status": "passed"
+      },
+      {
+        "name": "restrictive signed revocation advances epoch and clears pending challenges",
+        "status": "passed"
+      },
+      {
+        "name": "signed revocation blocks an already attested pending request",
+        "status": "passed"
+      },
+      {
+        "name": "signed revocation denies new bootstrap requests",
+        "status": "passed"
+      },
+      {
+        "name": "persisted epoch rejects signed rollback across verifier restarts",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot restore a stolen node",
+        "status": "passed"
+      },
+      {
+        "name": "membership root can restore trust explicitly",
+        "status": "passed"
+      },
+      {
+        "name": "signed peer quarantine removes its authority to bootstrap an ACTIVE target",
+        "status": "passed"
+      },
+      {
+        "name": "root can restore a peer while retaining target retirement",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot undo terminal retirement",
+        "status": "passed"
+      },
+      {
+        "name": "root can explicitly restore a retired identity",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot change ak_sha256",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot change approved_pcr",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot grant state MAINTENANCE",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot grant state DRAINING",
+        "status": "passed"
+      },
+      {
+        "name": "revocation authority cannot publish a no-op epoch",
+        "status": "passed"
+      },
+      {
+        "name": "membership root can approve a new measurement policy",
+        "status": "passed"
+      },
+      {
+        "name": "signed measurement policy is enforced by actual TPM quote verification",
+        "status": "passed"
+      },
+      {
+        "name": "revocation signer can revoke after a root measurement update",
+        "status": "passed"
+      },
+      {
+        "name": "racing signed conflicting updates accept exactly one complete policy",
+        "status": "passed"
+      },
+      {
+        "name": "observed limitation: full state-file restore permits previously revoked bootstrap",
+        "status": "passed"
+      },
+      {
+        "name": "changed-PCR quote is still cryptographically authentic",
+        "status": "passed"
+      },
+      {
+        "name": "peer rejects an authentic but unapproved PCR state",
+        "status": "passed"
+      },
+      {
+        "name": "changed PCR prevents WireGuard key release",
+        "status": "passed"
+      },
+      {
+        "name": "changed PCR prevents local contribution release",
+        "status": "passed"
+      },
+      {
+        "name": "TPM plus B contribution opens B keyslot",
+        "status": "passed"
+      },
+      {
+        "name": "TPM plus C contribution opens C keyslot",
+        "status": "passed"
+      },
+      {
+        "name": "B and C keyslots are independent",
+        "status": "passed"
+      },
+      {
+        "name": "TPM contribution alone cannot unlock",
+        "status": "passed"
+      },
+      {
+        "name": "peer contribution alone cannot unlock",
+        "status": "passed"
+      },
+      {
+        "name": "wrong TPM contribution cannot unlock",
+        "status": "passed"
+      },
+      {
+        "name": "wrong peer contribution cannot unlock",
+        "status": "passed"
+      },
+      {
+        "name": "substituted peer path cannot unlock",
+        "status": "passed"
+      },
+      {
+        "name": "removed B path no longer unlocks",
+        "status": "passed"
+      },
+      {
+        "name": "C path survives removal of B path",
+        "status": "passed"
+      }
+    ],
+    "debian_version": "13.7",
+    "docker_daemon_platform": "linux/arm64",
+    "evidence_class": "emulated",
+    "harness_sha256": "ce8f2ea65ccbde45653abc09cfb0d5133c051b88fd349e1bb8b3076bd53f4c18",
+    "image_id": "sha256:3535aacc3f553b79f096838601fa9c9e5b7f84ce8057d598f4a3c0946eeb255e",
+    "limitations_observed": {
+      "membership_state_rollback_is_possible": true
+    },
+    "packages": [
+      "adduser\t3.152",
+      "apt\t3.0.3",
+      "autoconf\t2.72-3.1",
+      "autoconf-archive\t20220903-3",
+      "automake\t1:1.17-4",
+      "autotools-dev\t20240727.1",
+      "base-files\t13.8+deb13u7",
+      "base-passwd\t3.6.7",
+      "bash\t5.2.37-2+b10",
+      "binutils\t2.44-3",
+      "binutils-aarch64-linux-gnu\t2.44-3",
+      "binutils-common\t2.44-3",
+      "binutils-gold\t2.44-2",
+      "binutils-gold-aarch64-linux-gnu\t2.44-2",
+      "bsdutils\t1:2.41.5-0+deb13u1",
+      "ca-certificates\t20250419",
+      "comerr-dev\t2.1-1.47.2-3+b12",
+      "coreutils\t9.7-3",
+      "cpp\t4:14.2.0-1",
+      "cpp-14\t14.2.0-19",
+      "cpp-14-aarch64-linux-gnu\t14.2.0-19",
+      "cpp-aarch64-linux-gnu\t4:14.2.0-1",
+      "cryptsetup-bin\t2:2.7.5-2",
+      "dash\t0.5.12-12",
+      "debconf\t1.5.91",
+      "debian-archive-keyring\t2025.1",
+      "debianutils\t5.23.2",
+      "diffutils\t1:3.10-4",
+      "dmsetup\t2:1.02.205-2",
+      "dpkg\t1.22.22",
+      "file\t1:5.46-5",
+      "findutils\t4.10.0-3",
+      "gcc\t4:14.2.0-1",
+      "gcc-14\t14.2.0-19",
+      "gcc-14-aarch64-linux-gnu\t14.2.0-19",
+      "gcc-14-base\t14.2.0-19",
+      "gcc-aarch64-linux-gnu\t4:14.2.0-1",
+      "golang-1.24-go\t1.24.4-1",
+      "golang-1.24-src\t1.24.4-1",
+      "golang-go\t2:1.24~2",
+      "golang-src\t2:1.24~2",
+      "grep\t3.11-4+b1",
+      "gzip\t1.13-1+deb13u1",
+      "hostname\t3.25",
+      "init-system-helpers\t1.69~deb13u1",
+      "krb5-multidev\t1.21.3-5+deb13u1",
+      "libacl1\t2.3.2-2+b1",
+      "libapparmor1\t4.1.0-1",
+      "libapt-pkg7.0\t3.0.3",
+      "libasan8\t14.2.0-19",
+      "libatomic1\t14.2.0-19",
+      "libattr1\t1:2.5.2-3",
+      "libaudit-common\t1:4.0.2-2+deb13u1",
+      "libaudit1\t1:4.0.2-2+deb13u1",
+      "libbinutils\t2.44-3",
+      "libblkid1\t2.41.5-0+deb13u1",
+      "libbrotli-dev\t1.1.0-2+b7",
+      "libbrotli1\t1.1.0-2+b7",
+      "libbsd0\t0.12.2-2",
+      "libbz2-1.0\t1.0.8-6",
+      "libc-bin\t2.41-12+deb13u4",
+      "libc-dev-bin\t2.41-12+deb13u4",
+      "libc6\t2.41-12+deb13u4",
+      "libc6-dev\t2.41-12+deb13u4",
+      "libcap-ng0\t0.8.5-4+b1",
+      "libcap2\t1:2.75-10+deb13u1+b3",
+      "libcc1-0\t14.2.0-19",
+      "libcom-err2\t1.47.2-3+b12",
+      "libcrypt-dev\t1:4.4.38-1",
+      "libcrypt1\t1:4.4.38-1",
+      "libcryptsetup12\t2:2.7.5-2",
+      "libctf-nobfd0\t2.44-3",
+      "libctf0\t2.44-3",
+      "libcurl3t64-gnutls\t8.14.1-2+deb13u5",
+      "libcurl4-openssl-dev\t8.14.1-2+deb13u5",
+      "libcurl4t64\t8.14.1-2+deb13u5",
+      "libdb5.3t64\t5.3.28+dfsg2-9",
+      "libdebconfclient0\t0.280",
+      "libdevmapper1.02.1\t2:1.02.205-2",
+      "libevent-2.1-7t64\t2.1.13-stable-1~deb13u1",
+      "libexpat1\t2.8.3-1~deb13u1",
+      "libffi8\t3.4.8-2",
+      "libftdi1-2\t1.5-10",
+      "libgcc-14-dev\t14.2.0-19",
+      "libgcc-s1\t14.2.0-19",
+      "libgdbm-compat4t64\t1.24-2",
+      "libgdbm6t64\t1.24-2",
+      "libgmp-dev\t2:6.3.0+dfsg-3",
+      "libgmp10\t2:6.3.0+dfsg-3",
+      "libgmpxx4ldbl\t2:6.3.0+dfsg-3",
+      "libgnutls-dane0t64\t3.8.9-3+deb13u4",
+      "libgnutls-openssl27t64\t3.8.9-3+deb13u4",
+      "libgnutls28-dev\t3.8.9-3+deb13u4",
+      "libgnutls30t64\t3.8.9-3+deb13u4",
+      "libgomp1\t14.2.0-19",
+      "libgprofng0\t2.44-3",
+      "libgssapi-krb5-2\t1.21.3-5+deb13u1",
+      "libgssrpc4t64\t1.21.3-5+deb13u1",
+      "libhogweed6t64\t3.10.1-1",
+      "libhwasan0\t14.2.0-19",
+      "libidn2-0\t2.3.8-2",
+      "libidn2-dev\t2.3.8-2",
+      "libisl23\t0.27-1",
+      "libitm1\t14.2.0-19",
+      "libjansson4\t2.14-2+b3",
+      "libjson-c-dev\t0.18+ds-1",
+      "libjson-c5\t0.18+ds-1",
+      "libk5crypto3\t1.21.3-5+deb13u1",
+      "libkadm5clnt-mit12\t1.21.3-5+deb13u1",
+      "libkadm5srv-mit12\t1.21.3-5+deb13u1",
+      "libkdb5-10t64\t1.21.3-5+deb13u1",
+      "libkeyutils1\t1.6.3-6",
+      "libkmod2\t34.2-2",
+      "libkrb5-3\t1.21.3-5+deb13u1",
+      "libkrb5-dev\t1.21.3-5+deb13u1",
+      "libkrb5support0\t1.21.3-5+deb13u1",
+      "liblastlog2-2\t2.41.5-0+deb13u1",
+      "libldap-dev\t2.6.10+dfsg-1",
+      "libldap2\t2.6.10+dfsg-1",
+      "liblsan0\t14.2.0-19",
+      "liblz4-1\t1.10.0-4",
+      "liblzma5\t5.8.1-1+deb13u1",
+      "libmagic-mgc\t1:5.46-5",
+      "libmagic1t64\t1:5.46-5",
+      "libmd0\t1.1.0-2+b1",
+      "libmount1\t2.41.5-0+deb13u1",
+      "libmpc3\t1.3.1-1+b3",
+      "libmpfr6\t4.2.2-1",
+      "libncursesw6\t6.5+20250216-2",
+      "libnettle8t64\t3.10.1-1",
+      "libnghttp2-14\t1.64.0-1.1+deb13u1",
+      "libnghttp2-dev\t1.64.0-1.1+deb13u1",
+      "libnghttp3-9\t1.8.0-1",
+      "libnghttp3-dev\t1.8.0-1",
+      "libngtcp2-16\t1.11.0-1+deb13u1",
+      "libngtcp2-crypto-gnutls8\t1.11.0-1+deb13u1",
+      "libp11-kit-dev\t0.25.5-3",
+      "libp11-kit0\t0.25.5-3",
+      "libpam-modules\t1.7.0-5",
+      "libpam-modules-bin\t1.7.0-5",
+      "libpam-runtime\t1.7.0-5",
+      "libpam0g\t1.7.0-5",
+      "libpcre2-8-0\t10.46-1~deb13u2",
+      "libpcsclite-dev\t2.3.3-1",
+      "libpcsclite1\t2.3.3-1",
+      "libperl5.40\t5.40.1-6+deb13u1",
+      "libpkgconf3\t1.8.1-4",
+      "libpopt0\t1.19+dfsg-2",
+      "libpsl-dev\t0.21.2-1.1+b1",
+      "libpsl5t64\t0.21.2-1.1+b1",
+      "libpython3-stdlib\t3.13.5-1",
+      "libpython3.13-minimal\t3.13.5-2+deb13u5",
+      "libpython3.13-stdlib\t3.13.5-2+deb13u5",
+      "libreadline8t64\t8.2-6",
+      "librtmp-dev\t2.4+20151223.gitfa8646d.1-2+b5",
+      "librtmp1\t2.4+20151223.gitfa8646d.1-2+b5",
+      "libsasl2-2\t2.1.28+dfsg1-9",
+      "libsasl2-modules-db\t2.1.28+dfsg1-9",
+      "libseccomp2\t2.6.0-2",
+      "libselinux1\t3.8.1-1",
+      "libsemanage-common\t3.8.1-1",
+      "libsemanage2\t3.8.1-1",
+      "libsepol2\t3.8.1-1",
+      "libsframe1\t2.44-3",
+      "libsmartcols1\t2.41.5-0+deb13u1",
+      "libsqlite3-0\t3.46.1-7+deb13u2",
+      "libssh2-1-dev\t1.11.1-1+deb13u2",
+      "libssh2-1t64\t1.11.1-1+deb13u2",
+      "libssl-dev\t3.5.7-1~deb13u3",
+      "libssl3t64\t3.5.7-1~deb13u3",
+      "libstdc++6\t14.2.0-19",
+      "libsystemd-shared\t257.13-1~deb13u1",
+      "libsystemd0\t257.13-1~deb13u1",
+      "libtasn1-6\t4.20.0-2+deb13u1",
+      "libtasn1-6-dev\t4.20.0-2+deb13u1",
+      "libtinfo6\t6.5+20250216-2",
+      "libtool\t2.5.4-4",
+      "libtpms0\t0.9.2-3.2",
+      "libtsan2\t14.2.0-19",
+      "libtss2-dev\t4.1.3-1.2",
+      "libtss2-esys-3.0.2-0t64\t4.1.3-1.2",
+      "libtss2-fapi1t64\t4.1.3-1.2",
+      "libtss2-mu-4.0.1-0t64\t4.1.3-1.2",
+      "libtss2-policy0t64\t4.1.3-1.2",
+      "libtss2-rc0t64\t4.1.3-1.2",
+      "libtss2-sys1t64\t4.1.3-1.2",
+      "libtss2-tcti-cmd0t64\t4.1.3-1.2",
+      "libtss2-tcti-device0t64\t4.1.3-1.2",
+      "libtss2-tcti-i2c-ftdi0\t4.1.3-1.2",
+      "libtss2-tcti-i2c-helper0\t4.1.3-1.2",
+      "libtss2-tcti-libtpms0t64\t4.1.3-1.2",
+      "libtss2-tcti-mssim0t64\t4.1.3-1.2",
+      "libtss2-tcti-pcap0t64\t4.1.3-1.2",
+      "libtss2-tcti-spi-ftdi0\t4.1.3-1.2",
+      "libtss2-tcti-spi-helper0t64\t4.1.3-1.2",
+      "libtss2-tcti-spi-ltt2go0\t4.1.3-1.2",
+      "libtss2-tcti-spidev0\t4.1.3-1.2",
+      "libtss2-tcti-swtpm0t64\t4.1.3-1.2",
+      "libtss2-tctildr0t64\t4.1.3-1.2",
+      "libubsan1\t14.2.0-19",
+      "libudev1\t257.13-1~deb13u1",
+      "libunbound8\t1.26.1-0+deb13u1",
+      "libunistring5\t1.3-2",
+      "libusb-1.0-0\t2:1.0.28-1",
+      "libuuid1\t2.41.5-0+deb13u1",
+      "libxxhash0\t0.8.3-2",
+      "libyaml-0-2\t0.2.5-2",
+      "libzstd-dev\t1.5.7+dfsg-1",
+      "libzstd1\t1.5.7+dfsg-1",
+      "linux-libc-dev\t6.12.111-1",
+      "login\t1:4.16.0-2+really2.41.5-0+deb13u1",
+      "login.defs\t1:4.17.4-2",
+      "m4\t1.4.19-8",
+      "make\t4.4.1-2",
+      "mawk\t1.3.4.20250131-1",
+      "media-types\t13.0.0",
+      "mount\t2.41.5-0+deb13u1",
+      "ncurses-base\t6.5+20250216-2",
+      "ncurses-bin\t6.5+20250216-2",
+      "netbase\t6.5",
+      "nettle-dev\t3.10.1-1",
+      "openssl\t3.5.7-1~deb13u3",
+      "openssl-provider-legacy\t3.5.7-1~deb13u3",
+      "passwd\t1:4.17.4-2",
+      "perl\t5.40.1-6+deb13u1",
+      "perl-base\t5.40.1-6+deb13u1",
+      "perl-modules-5.40\t5.40.1-6+deb13u1",
+      "pkg-config\t1.8.1-4",
+      "pkgconf\t1.8.1-4",
+      "pkgconf-bin\t1.8.1-4",
+      "python3\t3.13.5-1",
+      "python3-bcrypt\t4.2.0-2.1+b1",
+      "python3-cffi-backend\t1.17.1-3",
+      "python3-cryptography\t43.0.0-3+deb13u1",
+      "python3-minimal\t3.13.5-1",
+      "python3-yaml\t6.0.2-1+b2",
+      "python3.13\t3.13.5-2+deb13u5",
+      "python3.13-minimal\t3.13.5-2+deb13u5",
+      "readline-common\t8.2-6",
+      "rpcsvc-proto\t1.4.3-1+b1",
+      "sed\t4.9-2+deb13u1",
+      "sqv\t1.3.0-3+b2",
+      "swtpm\t0.7.1-1.5",
+      "swtpm-libs\t0.7.1-1.5",
+      "systemd\t257.13-1~deb13u1",
+      "sysvinit-utils\t3.14-4",
+      "tar\t1.35+dfsg-3.1",
+      "tpm-udev\t0.6+nmu1",
+      "tpm2-tools\t5.7-1+b1",
+      "tzdata\t2026c-0+deb13u1",
+      "udev\t257.13-1~deb13u1",
+      "util-linux\t2.41.5-0+deb13u1",
+      "wireguard-tools\t1.0.20210914-3",
+      "zlib1g\t1:1.3.dfsg+really1.3.1-1+b1",
+      "zlib1g-dev\t1:1.3.dfsg+really1.3.1-1+b1"
+    ],
+    "schema_version": 1,
+    "source_commit": "024fc39c587206dac8a41b7c2d5e37dd145cd3fb",
+    "sources_sha256": {
+      "lab.py": "ce8f2ea65ccbde45653abc09cfb0d5133c051b88fd349e1bb8b3076bd53f4c18",
+      "membership_cases.py": "9a1d50d9506af7a009819285d91d3225b59e948690a80dfc3d8dfb728ef3fdd5",
+      "peer.py": "62278eb562e393bae1f07b41bc98f5bcdadb729c7a8abc8d1f8e7f4b7d5b9622",
+      "peer_cases.py": "b5c7e383b666ec9630b18576be6b49998a3288e9c8431a4c28a540e149422a33"
+    },
+    "status": "passed",
+    "swtpm_seccomp": "kill",
+    "timestamp": "2026-10-03T14:49:35.918552+00:00"
+  },
+  "development_base": {
+    "image_id": "sha256:d1eaa43878780eaa7ca5f7ad2f34e57917be9caf82e270933e656dabd8d457a1",
+    "platform": "linux/arm64",
+    "publisher_signature_verified": false
+  },
+  "distinct_compile_paths_comparison": {
+    "image_ids": [
+      "sha256:4f39f34ee12e50c88dae473dd6c118c834f1cf1e5879a0b786595125df3ff31e",
+      "sha256:a98afec9df4265913b6bdc2feb125a8628555e3f474201b4d9cbe701fe9f3560"
+    ],
+    "independent_builders": false,
+    "status": "matched"
+  },
+  "ek_nv_fixture": {
+    "checks": [
+      {
+        "name": "rsa: absent certificate fails with TPM handle refusal",
+        "status": "passed"
+      },
+      {
+        "name": "rsa: NV read preserves exact DER bytes",
+        "status": "passed"
+      },
+      {
+        "name": "rsa: trusted fixture chain and EK public key bind",
+        "status": "passed"
+      },
+      {
+        "name": "rsa: wrong fixture root refuses",
+        "status": "passed"
+      },
+      {
+        "name": "rsa: valid chain with substituted EK public key refuses",
+        "status": "passed"
+      },
+      {
+        "name": "rsa: malformed certificate refuses",
+        "status": "passed"
+      },
+      {
+        "name": "rsa: corrupted certificate signature refuses",
+        "status": "passed"
+      },
+      {
+        "name": "ecc: absent certificate fails with TPM handle refusal",
+        "status": "passed"
+      },
+      {
+        "name": "ecc: NV read preserves exact DER bytes",
+        "status": "passed"
+      },
+      {
+        "name": "ecc: trusted fixture chain and EK public key bind",
+        "status": "passed"
+      },
+      {
+        "name": "ecc: wrong fixture root refuses",
+        "status": "passed"
+      },
+      {
+        "name": "ecc: valid chain with substituted EK public key refuses",
+        "status": "passed"
+      },
+      {
+        "name": "ecc: malformed certificate refuses",
+        "status": "passed"
+      },
+      {
+        "name": "ecc: corrupted certificate signature refuses",
+        "status": "passed"
+      }
+    ],
+    "evidence_class": "emulated",
+    "production_approved": false,
+    "schema": "regalia.ek-nv-fixture/v1",
+    "source_sha256": "8965d1e3d646716e6475197bf0814edbf75395bfe6abae7c77b799be3c5ed3b5",
+    "status": "passed"
+  },
+  "evidence_class": "emulated",
+  "final_rootfs_scanned": false,
+  "limits": [
+    "Cached unsigned development base shared by compilation experiments.",
+    "Exact final appliance filesystem still contains curl/FAPI and remains blocked.",
+    "Physical firmware/TPM/HSM and manufacturer certificate profile/trust are unqualified.",
+    "Software manifest state rollback remains possible."
+  ],
+  "production_approved": false,
+  "recipe_inputs_sha256": {
+    "deploy/images/source.py": "3d7a5f1fd5e392c4bf408fc5af376b9a2a895f0bd330da3bfedece2fd443a09e",
+    "lab/appliance/Dockerfile.tpm-source": "dbe387f71cdf39199052df5665fda04b9048db0ae13d744d19068a1e173038dc",
+    "lab/appliance/tpm_profile.py": "3b97dca3b8e22a60ce7f9cf72c6c1563b2e05956c603b996e76952186c9b91a1",
+    "lab/bootstrap/ek_nv_cases.py": "8965d1e3d646716e6475197bf0814edbf75395bfe6abae7c77b799be3c5ed3b5"
+  },
+  "release_admissible": false,
+  "repository_recipe": {
+    "binary_digest_record": "a9ed047e60c6165dea6a1ed398e940bbb9848d7461268580292bfbaec9e04151  /opt/regalia-esys/usr/bin/tpm2",
+    "expected_equal": true,
+    "image_id": "sha256:3535aacc3f553b79f096838601fa9c9e5b7f84ce8057d598f4a3c0946eeb255e"
+  },
+  "restart_soak": {
+    "ak_attributes": 328818,
+    "cycles_completed": 4,
+    "evidence_class": "emulated",
+    "final_counters": {
+      "TPM2_PT_LOCKOUT_COUNTER": 3,
+      "TPM2_PT_LOCKOUT_INTERVAL": 1000,
+      "TPM2_PT_LOCKOUT_RECOVERY": 1000,
+      "TPM2_PT_MAX_AUTH_FAIL": 3
+    },
+    "initial_counters": {
+      "TPM2_PT_LOCKOUT_COUNTER": 0,
+      "TPM2_PT_LOCKOUT_INTERVAL": 1000,
+      "TPM2_PT_LOCKOUT_RECOVERY": 1000,
+      "TPM2_PT_MAX_AUTH_FAIL": 3
+    },
+    "locked_counters": {
+      "TPM2_PT_LOCKOUT_COUNTER": 3,
+      "TPM2_PT_LOCKOUT_INTERVAL": 1000,
+      "TPM2_PT_LOCKOUT_RECOVERY": 1000,
+      "TPM2_PT_MAX_AUTH_FAIL": 3
+    },
+    "production_approved": false,
+    "schema": "regalia.tpm-restart-soak/v1",
+    "sealed_object_attributes": {
+      "local": 1042,
+      "wg": 1042
+    },
+    "source_sha256": "ce8f2ea65ccbde45653abc09cfb0d5133c051b88fd349e1bb8b3076bd53f4c18",
+    "status": "passed"
+  },
+  "restart_test_image_id": "sha256:4f39f34ee12e50c88dae473dd6c118c834f1cf1e5879a0b786595125df3ff31e",
+  "schema": "regalia.tpm-source-experiment/v1"
+}
