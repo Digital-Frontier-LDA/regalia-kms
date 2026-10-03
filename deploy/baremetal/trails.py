@@ -24,13 +24,15 @@ an audit.Event whose own chain the collector already verifies (#278).
   * A line torn by a crash (no newline at the end of the file) is terminated and kept, and the chain goes
     on over its bytes: refusing to append after it would refuse every operation for ever. verify reports
     it as torn, apart from a break.
+  * A line is written whole or not at all: a short write cuts the file back and raises (_write_whole).
+  * A chain cannot see its tail cut off; verify(expected_head=...) checks it against a hash kept elsewhere.
   * Lines written before the chain existed (no seq) may only come first; the first chained line's prev
     covers the last of them.
 
 Run by path, from anywhere (it imports nothing but the standard library):
 
     python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py append recovery-key < event.json
-    python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py verify /var/log/regalia/recovery-key.jsonl
+    python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py verify /var/log/regalia/recovery-key.jsonl [<expected head>]
 
 append takes the event, a JSON object, on standard input (nothing on argv, so nothing in ps), for the
 operator tools' trails only (their path is fixed); exit 0 written, 1 refused (nothing written).
@@ -139,18 +141,32 @@ def append(path, event, now=time.time):
         fcntl.flock(fd, fcntl.LOCK_EX)
         last, ended = _last_line(fd)
         if last and not ended:                     # torn by a crash: terminated, kept, chained over
-            os.write(fd, b"\n")
+            _write_whole(fd, b"\n")
             last += b"\n"
         previous = _sequence_of(last) if last else None
         seq = (previous or chained_count(fd, last)) + 1 if last else 1
         line = canonical(dict(event, at=event.get("at", int(now())), seq=seq, prev=hashlib.sha256(last).hexdigest() if last else "")) + b"\n"
         if len(line) > MAX_LINE:
             raise Refused("the event is %d bytes, more than a trail line may be" % len(line))
-        os.write(fd, line)
+        _write_whole(fd, line)
         os.fsync(fd)
         return seq
     finally:
         os.close(fd)
+
+
+def _write_whole(fd, line):
+    """Write `line` at the end, all of it or none of it: a short write (a disk filling mid-line) or a failed
+    one cuts the file back to where it was, under the caller's lock, and raises. A partial line left
+    behind would be read as torn and chained over, recording an operation that was refused."""
+    size = os.fstat(fd).st_size
+    try:
+        written = os.write(fd, line)
+        if written != len(line):
+            raise OSError("a short write: %d of %d bytes" % (written, len(line)))
+    except BaseException:
+        os.ftruncate(fd, size)
+        raise
 
 
 def chained_count(fd, last):
@@ -164,10 +180,15 @@ def chained_count(fd, last):
     return count
 
 
-def verify(path):
+def verify(path, expected_head=None):
     """Check a trail's chain. Returns {"lines", "chained", "legacy", "torn", "head"}; raises Refused at the
     first break (a line whose prev is not the previous line's SHA-256, a seq out of order, a line not in
-    canonical form, a legacy line after a chained one)."""
+    canonical form, a legacy line after a chained one).
+
+    A chain cannot see its own tail cut off: a file truncated after line n verifies as a good file of n
+    lines. Only a record kept elsewhere can: `expected_head` is the SHA-256 of a line known to have been
+    written (the shipper's last acknowledged line, the collector's), and verify refuses unless the chain
+    passes through it. "head" is the last line's hash; a final torn line is that line, and counted torn."""
     with open(path, "rb") as f:
         data = f.read()
     lines = data.split(b"\n")
@@ -177,7 +198,10 @@ def verify(path):
         lines[-1:] = [lines[-1]] if lines else []
     report = {"lines": 0, "chained": 0, "legacy": 0, "torn": 0, "head": ""}
     previous, expected, chained = b"", 1, False
+    reached = expected_head is None
     for number, body in enumerate(lines, 1):
+        if previous and hashlib.sha256(previous).hexdigest() == expected_head:
+            reached = True
         raw = body + b"\n"
         report["lines"] += 1
         try:
@@ -203,6 +227,8 @@ def verify(path):
         report["chained"] += 1
         previous = raw
     report["head"] = hashlib.sha256(previous).hexdigest() if previous else ""
+    if not reached and report["head"] != expected_head:
+        raise Refused("the chain does not reach %s, a line known to have been written: the file was cut short or replaced" % expected_head)
     return report
 
 
@@ -217,14 +243,14 @@ def main(argv):
         except (Refused, OSError, ValueError) as failure:
             print("REFUSED: %s" % failure, file=sys.stderr)
             return 1
-    if len(argv) == 2 and argv[0] == "verify":
+    if len(argv) in (2, 3) and argv[0] == "verify":
         try:
-            print(json.dumps(verify(argv[1]), sort_keys=True))
+            print(json.dumps(verify(*argv[1:]), sort_keys=True))
             return 0
         except (Refused, OSError) as failure:
             print("BROKEN: %s" % failure, file=sys.stderr)
             return 1
-    print("usage: trails.py append <trail> < event.json | verify <path>", file=sys.stderr)
+    print("usage: trails.py append <trail> < event.json | verify <path> [<expected head>]", file=sys.stderr)
     return 2
 
 

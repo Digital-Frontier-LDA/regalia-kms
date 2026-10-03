@@ -78,6 +78,25 @@ class Chain(Case):
         self.assertEqual((report["chained"], report["torn"]), (2, 1))
         self.assertEqual(json.loads(self.lines()[-1])["prev"], hashlib.sha256(b'{"event":"cut sh\n').hexdigest())
 
+    def test_a_cut_tail_is_seen_only_against_an_expected_head(self):
+        """#278 (regalia-kms-24): a file cut after line n is a good chain of n lines; the head the shipper
+        (or collector) last acknowledged is what tells. The chain must pass through it, or end on it."""
+        for i in range(4):
+            trails.append(self.path, {"event": "e", "i": i})
+        good = self.lines()
+        heads = [hashlib.sha256(line + b"\n").hexdigest() for line in good]
+        for head in heads:
+            self.assertEqual(trails.verify(self.path, expected_head=head)["chained"], 4)
+        self.rewrite(good[:2])
+        self.assertEqual(trails.verify(self.path)["chained"], 2)                        # unseen without one
+        self.assertEqual(trails.verify(self.path, expected_head=heads[1])["head"], heads[1])
+        self.refused("does not reach", trails.verify, self.path, heads[3])
+        self.refused("does not reach", trails.verify, self.path, "0" * 64)
+        with open(self.path, "ab") as f:
+            f.write(b'{"event":"cut')                                                     # a final torn line
+        report = trails.verify(self.path, expected_head=heads[1])
+        self.assertEqual((report["torn"], report["head"]), (1, hashlib.sha256(b'{"event":"cut\n').hexdigest()))
+
     def test_legacy_lines_may_only_come_first(self):
         with open(self.path, "wb") as f:
             f.write(b'{"at":1,"event":"before the chain"}\n')
@@ -105,6 +124,24 @@ class Writer(Case):
         self.refused("may not carry", trails.append, self.path, {"event": "e", "prev": ""})
         self.refused("more than a trail line may be", trails.append, self.path, {"event": "x" * trails.MAX_LINE})
         self.refused("JSON object", trails.append, self.path, ["not", "an", "object"])
+
+    def test_a_short_or_failed_write_leaves_the_file_as_it_was_and_raises(self):
+        """#278 (regalia-kms-24): a disk filling mid-line must not leave half a line, which the next append
+        would chain over as torn, recording an operation that was refused."""
+        trails.append(self.path, {"event": "a"})
+        with open(self.path, "rb") as f:
+            before = f.read()
+        real = os.write
+        for label, fake in (("short", lambda fd, data: real(fd, data[:len(data) // 2])),
+                            ("ENOSPC", unittest.mock.Mock(side_effect=OSError(28, "No space left on device")))):
+            with self.subTest(label):
+                with unittest.mock.patch.object(trails.os, "write", fake):
+                    with self.assertRaises(OSError):
+                        trails.append(self.path, {"event": "refused"})
+                with open(self.path, "rb") as f:
+                    self.assertEqual(f.read(), before)
+        self.assertEqual(trails.append(self.path, {"event": "b"}), 2)
+        self.assertEqual((trails.verify(self.path)["chained"], trails.verify(self.path)["torn"]), (2, 0))
 
     def test_concurrent_writers_never_share_a_seq(self):
         processes = [multiprocessing.Process(target=_writer, args=(self.path, 25, 100 * k)) for k in range(4)]
