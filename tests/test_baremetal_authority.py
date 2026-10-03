@@ -378,6 +378,37 @@ class Revocation(Case):
         self.assertEqual(self.a.store.load()["epoch"], 1)
 
 
+class TunnelApply(Case):
+    """wg-apply runs as root with CAP_NET_ADMIN (CodeRabbit on #230): it must not load the revocation key
+    (whose owner check refuses root) nor create anything in the service's state directory."""
+
+    def test_it_reads_the_chain_as_a_reader_and_never_builds_the_authority(self):
+        before = set(os.listdir(self.d))
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            if argv[0].startswith("tpm2_"):
+                return self.tpm(argv, **kw)
+            if argv[:2] == ["wg", "pubkey"]:
+                return unittest.mock.Mock(returncode=0, stdout=b"AAAA" * 10 + b"AAA=\n")
+            return unittest.mock.Mock(returncode=0, stdout=b"", stderr=b"")
+        with unittest.mock.patch.object(authority, "Authority", side_effect=AssertionError("wg-apply built the Authority")), \
+                unittest.mock.patch.object(authority, "signer_for", side_effect=AssertionError("wg-apply loaded the key")), \
+                unittest.mock.patch.object(authority.wgsvc, "reconcile", return_value="fd72::1") as reconcile:
+            with open(self.d + "/wg.key", "w") as f:
+                f.write("x\n")
+            self.assertEqual(authority.wg_apply(authority.validate(config(self.d)), run), "fd72::1")
+        self.assertEqual(reconcile.call_args.args[0]["epoch"], 1)
+        self.assertEqual(set(os.listdir(self.d)) - before, {"wg.key"})       # no lock file, nothing else
+
+    def test_a_fork_the_tpm_never_recorded_is_refused(self):
+        fork = dict(self.m1, issued_at="2026-09-30T00:00:00Z")
+        with open(self.d + "/membership.json", "wb") as f:
+            f.write(m.canonical([m_sign(fork)]))
+        self.refused("CONFLICT", authority.held_chain, authority.validate(config(self.d)), self.tpm)
+
+
 class Control(Case):
     def test_root_only_and_the_requests_it_answers(self):
         refused = self.a.control(b'{"op":"status"}', peer_uid=1000)

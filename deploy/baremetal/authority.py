@@ -459,9 +459,7 @@ class Authority:
             sleep(1)
 
     def signer_tunnel_key(self):
-        with open(self.cfg["wg_service_key"]) as f:
-            private = f.read(200).strip()
-        return wgsvc.hex_key(self.run(["wg", "pubkey"], input=(private + "\n").encode(), capture_output=True, timeout=10).stdout.decode().strip())
+        return tunnel_key(self.cfg, self.run)[1]
 
 
 class Committed(Refused):
@@ -512,13 +510,52 @@ def ask(path, request):
     return json.loads(b"".join(chunks))
 
 
-def wg_apply(authority):
-    """The authority's wg-svc, from the manifest it holds: every node a peer, at its underlay."""
-    manifest = authority.store.load()
-    with open(authority.cfg["wg_service_key"]) as f:
+def held_chain(cfg, run):
+    """The manifest the authority holds, read as a reader that is not the writer (wg-apply runs as root):
+    the store's file opened without following a link, verified from the root key and against the TPM
+    record with the lock-free check (#182). Nothing is created or locked in the service's state directory,
+    and the revocation key is not touched."""
+    path = os.path.join(cfg["state_dir"], "membership.json")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        require(stat.S_ISREG(os.fstat(fd).st_mode), "the authority's membership file is not a regular file")
+        raw = os.read(fd, membership.MAX_CHAIN_BYTES + 1)
+    finally:
+        os.close(fd)
+    envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)
+    require(isinstance(envelopes, list) and envelopes, "the authority holds no membership chain")
+    manifest = membership.accept_chain(None, envelopes, cfg["root_key"])
+    manifests = [e["manifest"] for e in envelopes]
+
+    def digest_of(epoch):
+        require(epoch <= len(manifests), "ROLLBACK: the chain ends at epoch %d, below the TPM anchor %d" % (len(manifests), epoch))
+        return membership.digest(manifests[epoch - 1]) if epoch else membership.HighWater.ZERO
+    anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "highwater.lock"))
+    try:
+        anchor.verify(digest_of, lock=False)
+    except Refused as refused:
+        if str(refused).startswith("ROLLBACK"):
+            raise
+        anchor.verify(digest_of, lock=False)          # a commit racing the read: it stands only if it stays
+    return manifest
+
+
+def tunnel_key(cfg, run):
+    """(private, public hex) of the authority's WireGuard service key."""
+    with open(cfg["wg_service_key"]) as f:
         private = f.read(200).strip()
-    return wgsvc.reconcile(manifest, wgsvc.AUTHORITY, authority.cfg["underlays"], private, listen_port=authority.cfg["listen_port"],
-                           run=authority.run, own_key=authority.signer_tunnel_key())
+    return private, wgsvc.hex_key(run(["wg", "pubkey"], input=(private + "\n").encode(), capture_output=True, timeout=10).stdout.decode().strip())
+
+
+def wg_apply(cfg, run=None):
+    """The authority's wg-svc, from the manifest it holds: every node a peer, at its underlay. Run as root
+    (CAP_NET_ADMIN), so it reads as a reader (held_chain) and never builds the Authority: no revocation
+    key is loaded and nothing is written in the service's state directory."""
+    import subprocess
+    run = run or subprocess.run
+    manifest = held_chain(cfg, run)
+    private, public = tunnel_key(cfg, run)
+    return wgsvc.reconcile(manifest, wgsvc.AUTHORITY, cfg["underlays"], private, listen_port=cfg["listen_port"], run=run, own_key=public)
 
 
 # ---- command line ----
@@ -553,11 +590,12 @@ def main(argv=None):
             require(os.geteuid() == owner, "run as the authority's own user (uid %d), e.g. runuser -u regalia-authority -- ...: "
                     "files written as anyone else would lock the service out" % owner)
             _writer = one_writer(cfg["state_dir"])         # after the uid check; held for the life of this process
+        if args.command == "wg-apply":
+            print("wg-svc applied: %s" % wg_apply(cfg))    # as root: a reader, never the Authority (no key, no lock files)
+            return 0
         authority = Authority(cfg)
         if args.command == "serve":
             authority.serve(lambda: False)
-        elif args.command == "wg-apply":
-            print("wg-svc applied: %s" % wg_apply(authority))
         else:
             with open(args.chain, "rb") as f:
                 envelopes = membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
