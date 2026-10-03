@@ -74,6 +74,10 @@ class Anchor(nt.Case):
         counter.advance(5)
         with self.assertRaisesRegex(enrol.Refused, "heartbeat counter"):
             self.anchor(self.chain(1))
+        # refused before the first write: no anchor defined, no store committed (CodeRabbit on #256)
+        self.assertFalse(os.path.exists(node.path("membership.json")))
+        hw = node.anchor()
+        self.assertEqual([i for i in hw._indices() if hw._tpm("nvreadpublic", i).returncode == 0], [])
 
 
 if __name__ == "__main__":
