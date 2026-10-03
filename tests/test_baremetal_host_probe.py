@@ -140,7 +140,8 @@ class FakeHost:
             host_probe.IMA_LOG: "10 ab ima-ng sha256:cd /usr/bin/bash\n10 ef ima-ng sha256:%s %s\n" % (KMS_SHA256, host_probe.KMS_BINARY),
             USB + "/1-1.4/idVendor": "20a0\n", USB + "/1-1.4/idProduct": "4230\n",
             USB + "/1-1/idVendor": "1d6b\n", USB + "/1-1/idProduct": "0002\n",
-            PIN_FILE: cred("host-tpm2-7.cred"),
+            # sealed to the host key and the TPM under PCR 7 and the signed PCR 11 policy (#198 requires it)
+            PIN_FILE: cred("host-pk-7-11.cred"),
             host_probe.PCRLOCK_POLICY: json.dumps(PCRLOCK),
         }
         self.bytes = {host_probe.SECURE_BOOT_VAR: SB_ON, host_probe.KMS_BINARY: KMS_BYTES}
@@ -182,7 +183,7 @@ class FakeHost:
 
 def probe(host, name):
     if name == "pin_credentials_sealed_as_recorded":
-        return host_probe.pin_credentials(host, PCR7)
+        return host_probe.pin_credentials(host, SIGNED)
     return host_probe.import_key(host, FP[:16]) if name == "pin_import_key_present" else host_probe.PROBES[name](host)
 
 
@@ -242,7 +243,8 @@ class HostProbe(unittest.TestCase):
         h = FakeHost()
         h.runs[LUKS_DUMP] = (0, LUKS_TODAY)
         with redirect_stdout(io.StringIO()) as out:
-            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7"], host=h)
+            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+                                     "--credential-pcr-key-pkfp", PKFP], host=h)
         report = json.loads(out.getvalue())
         self.assertEqual(rc, 1)
         self.assertFalse(report["measured"]["root_disk_unlock_revocable"]["value"])
@@ -340,8 +342,10 @@ class HostProbe(unittest.TestCase):
         self.assertTrue(host_probe.recovery_keyslot(h)[0])
         # through main(): every platform control true, with the record from the command line
         with redirect_stdout(io.StringIO()) as out:
-            host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--node-id", "a",
-                             "--unlock-peer", "b", "--unlock-peer", "c"], host=self.peer_host())
+            host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+                             "--credential-pcr-key-pkfp", PKFP, "--node-id", "a",
+                             "--unlock-peer", "b", "--unlock-peer", "c"],
+                            host=self.peer_host(self.path("b", "1", "pk-7-11.cred"), LUKS_META["tokens"]["1"], self.path("c", "3", "pk-7-11.cred")))
         report = json.loads(out.getvalue())["measured"]
         self.assertEqual([n for n in host_probe.PLATFORM if not report[n]["value"]], [])
         # a signed PCR 11 policy on the local share is the other accepted binding
@@ -365,7 +369,8 @@ class HostProbe(unittest.TestCase):
                     self.assertIn(reason, why)
         self.assertIn("BLOCKING FOR PRODUCTION (#135)", host_probe.unlock_revocable(h, ("a", ("b",)))[1])
         with redirect_stdout(io.StringIO()) as out:                      # main() with no record: both controls fail, and say why
-            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7"], host=self.peer_host())
+            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+                                  "--credential-pcr-key-pkfp", PKFP], host=self.peer_host())
         report = json.loads(out.getvalue())["measured"]
         self.assertEqual(rc, 1)
         self.assertEqual([n for n in host_probe.PLATFORM if not report[n]["value"]], ["root_disk_tpm_unlocked", "root_disk_unlock_revocable"])
@@ -754,7 +759,8 @@ class HostProbe(unittest.TestCase):
     def test_a_probe_that_raises_is_a_failing_control_in_the_report_not_a_crash(self):
         h = FakeHost()
         with mock.patch.dict(host_probe.PROBES, uefi_boot=lambda host: 1 / 0), redirect_stdout(io.StringIO()) as out:
-            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7"], host=h)
+            rc = host_probe.main(["--import-key-sha256", FP[:16], "--credential-pcrs", "7", "--credential-signed-pcrs", "11",
+                                     "--credential-pcr-key-pkfp", PKFP], host=h)
         report = json.loads(out.getvalue())
         self.assertEqual(rc, 1)
         self.assertEqual(report["measured"]["uefi_boot"], {"value": False, "why": "the probe raised ZeroDivisionError: division by zero "
@@ -1046,6 +1052,10 @@ class HostProbe(unittest.TestCase):
             "too short to be a credential": ("QUJD\n", PCR7, "too short"),
             "an unreadable file": (None, PCR7, "too short"),
             "nothing recorded to compare with": (cred("host-tpm2-7.cred"), None, "no recorded binding to compare"),
+            # #198: sealed exactly as recorded, to the host key and PCR 7, opening on this boot, and still
+            # refused: without the signed PCR 11 policy nothing ties this boot to a reviewed image
+            "sealed as recorded with no signed PCR 11 policy": (cred("host-tpm2-7.cred"), PCR7,
+                                                                "with no signed PCR 11 policy nothing ties this boot to an image `uki sign` signed"),
         }
         for label, (blob, record, reason) in cases.items():
             with self.subTest(label):
@@ -1062,7 +1072,7 @@ class HostProbe(unittest.TestCase):
 
     def test_the_host_key_must_be_roots_alone_and_on_the_encrypted_disk(self):
         """The credential's other half. On a clear disk it is one more file an old image can read."""
-        value, why = host_probe.pin_credentials(FakeHost(), PCR7)
+        value, why = host_probe.pin_credentials(FakeHost(), SIGNED)
         self.assertTrue(value, why)
         self.assertIn("sealed to the host key and the TPM", why)
         self.assertIn("the host key is root's, 0400, on root_crypt", why)
@@ -1084,7 +1094,7 @@ class HostProbe(unittest.TestCase):
             with self.subTest(label):
                 h = FakeHost()
                 h.runs.update(runs)
-                value, why = host_probe.pin_credentials(h, PCR7)
+                value, why = host_probe.pin_credentials(h, SIGNED)
                 self.assertFalse(value, why)
                 self.assertIn(reason, why)
 
@@ -1092,16 +1102,16 @@ class HostProbe(unittest.TestCase):
         """A blob cut by a few bytes keeps a whole header (measured: systemd says 'Encrypted file too
         short'); so does one sealed by another TPM, or under a name the unit does not load it by."""
         h = FakeHost()
-        h.files[PIN_FILE] = base64.b64encode(base64.b64decode(cred("host-tpm2-7.cred"))[:-20]).decode()
-        self.assertEqual(host_probe.credential_header(h.files[PIN_FILE]), PCR7)
+        h.files[PIN_FILE] = base64.b64encode(base64.b64decode(cred("host-pk-7-11.cred"))[:-20]).decode()
+        self.assertEqual(host_probe.credential_header(h.files[PIN_FILE]), SIGNED)
         h.runs[OPEN_PIN] = (1, "")
-        value, why = host_probe.pin_credentials(h, PCR7)
+        value, why = host_probe.pin_credentials(h, SIGNED)
         self.assertFalse(value)
         self.assertIn("does NOT open on this boot", why)
         h = FakeHost()
         h.runs.pop(OPEN_PIN)          # no systemd-creds, or it failed to run
-        self.assertFalse(host_probe.pin_credentials(h, PCR7)[0])
-        value, why = host_probe.pin_credentials(FakeHost(), PCR7)
+        self.assertFalse(host_probe.pin_credentials(h, SIGNED)[0])
+        value, why = host_probe.pin_credentials(FakeHost(), SIGNED)
         self.assertTrue(value, why)
         self.assertIn("open on this boot", why)
 
@@ -1111,16 +1121,16 @@ class HostProbe(unittest.TestCase):
                 host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin", "/dev/null")] = (0, "")
         h.dirs[host_probe.CREDSTORE].append("regalia-kms-yubikey-site-a.pin")
         h.files[host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin"] = cred("host.cred")
-        value, why = host_probe.pin_credentials(h, PCR7)
+        value, why = host_probe.pin_credentials(h, SIGNED)
         self.assertFalse(value)
         self.assertIn("regalia-kms-yubikey-site-a.pin is sealed with the host key", why)
-        h.files[host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin"] = cred("host-tpm2-7.cred")
-        value, why = host_probe.pin_credentials(h, PCR7)
+        h.files[host_probe.CREDSTORE + "/regalia-kms-yubikey-site-a.pin"] = cred("host-pk-7-11.cred")
+        value, why = host_probe.pin_credentials(h, SIGNED)
         self.assertTrue(value, why)
         self.assertIn("2 PIN credential(s)", why)
         h = FakeHost()
         h.dirs[host_probe.CREDSTORE] = ["regalia-kms-hsm-site-a.pin.prev-20260930T100000Z", "mtls.key"]
-        value, why = host_probe.pin_credentials(h, PCR7)
+        value, why = host_probe.pin_credentials(h, SIGNED)
         self.assertFalse(value)
         self.assertIn("no PIN credential", why)
 
@@ -1303,7 +1313,10 @@ class SignedEvidence(unittest.TestCase):
                 host_probe.main(args, host=host)
             return json.loads(out.getvalue())["measured"]["pin_credentials_sealed_as_recorded"]
         signed_doc = self.doc(credential_tpm2_signed_pcrs="11", credential_tpm2_pcr_key_pkfp=PKFP)
-        self.assertTrue(run(self.doc(), cred("host-tpm2-7.cred"))["value"])
+        # a record and a blob that agree, with no signed PCR 11 policy: sealed as recorded, and still refused (#198)
+        unsigned = run(self.doc(), cred("host-tpm2-7.cred"))
+        self.assertFalse(unsigned["value"])
+        self.assertIn("with no signed PCR 11 policy nothing ties this boot to an image `uki sign` signed", unsigned["why"])
         self.assertTrue(run(signed_doc, cred("host-pk-7-11.cred"))["value"])
         for doc, blob in ((self.doc(), cred("host-pk-7-11.cred")), (signed_doc, cred("host-tpm2-7.cred"))):
             result = run(doc, blob)
@@ -1317,7 +1330,7 @@ class SignedEvidence(unittest.TestCase):
             with redirect_stdout(io.StringIO()) as out:
                 host_probe.main(["--import-key-sha256", FP[:16], *args], host=host)
             return json.loads(out.getvalue())["measured"]["pin_credentials_sealed_as_recorded"]
-        self.assertTrue(run("--credential-pcrs", "7")["value"])
+        self.assertIn("no signed PCR 11 policy", run("--credential-pcrs", "7")["why"])
         self.assertTrue(run("--credential-pcrs", "7", "--credential-signed-pcrs", "11", "--credential-pcr-key-pkfp", PKFP,
                             blob="host-pk-7-11.cred")["value"])
         self.assertIn("no recorded binding to compare", run()["why"])
