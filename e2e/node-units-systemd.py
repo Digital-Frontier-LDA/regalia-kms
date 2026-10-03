@@ -800,6 +800,8 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(code == 503 and daemon.ready() == 503 and pathlib.Path("/run/regalia/admission.json").read_bytes() == frozen,
        "2 s after the end it refuses (503) and is not ready, with the admission file untouched since the lease service stopped",
        (code, answer, daemon.log()[-600:]))
+    # b's handler never failed (a failure there is swallowed by sync.serve and would look like silence)
+    ok(not raised, "b's handler answered every request it received without raising (%d requests)" % len(started), raised[-1:])
 
 
 def cfg_port(ctx):
