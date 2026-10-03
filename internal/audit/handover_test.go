@@ -222,10 +222,10 @@ func TestAHandoverIsTakenOnceAndTheStateHasOneHolder(t *testing.T) {
 	if _, err := OpenCollector(stateDir); err == nil || !strings.Contains(err.Error(), "held by another collector") {
 		t.Fatalf("a second holder of the state: %v", err)
 	}
-	if err := collector.RecordOperatorHandover(fingerprintOf(pki.new), fingerprintOf(pki.alien), ""); err == nil {
+	if err := collector.RecordOperatorHandover(fingerprintOf(pki.new), fingerprintOf(pki.alien), "", false); err == nil {
 		t.Fatal("an operator hand-over without a reason was taken")
 	}
-	if err := collector.RecordOperatorHandover(fingerprintOf(pki.new), fingerprintOf(pki.alien), "the 2027 key was lost; replaced by ticket 42"); err != nil {
+	if err := collector.RecordOperatorHandover(fingerprintOf(pki.new), fingerprintOf(pki.alien), "the 2027 key was lost; replaced by ticket 42", false); err != nil {
 		t.Fatalf("the operator hand-over: %v", err)
 	}
 	if head, _ := getCollectorPosition(t, collector.Handler(), pki.alien, "sitea.sync"); head != 1 {
@@ -234,5 +234,50 @@ func TestAHandoverIsTakenOnceAndTheStateHasOneHolder(t *testing.T) {
 	collector.Close()
 	if reasons := collectorAlarmReasons(t, stateDir); len(reasons) < 2 || !strings.HasPrefix(reasons[len(reasons)-1], "record: ") {
 		t.Fatalf("the hand-overs are not recorded in the alarm log: %q", reasons)
+	}
+}
+
+// TestACertificateThatShippedBeforeItsHandoverCanBeRecovered: #296 (regalia-kms-51). B shipped before the
+// hand-over and started its own stream (a re-ship of the trail from line 1), so a plain hand-over is
+// refused. The operator's -discard-new-streams moves B's own stream aside if, and only if, it is a prefix
+// of A's: then B continues A's stream.
+func TestACertificateThatShippedBeforeItsHandoverCanBeRecovered(t *testing.T) {
+	pki := newHandoverPKI(t)
+	old, new := fingerprintOf(pki.old), fingerprintOf(pki.new)
+	events, _ := TrailEvents("sync", trailLines(nil, 4, "sync-pull"))
+	other, _ := TrailEvents("sync", trailLines(nil, 1, "something else"))
+	shippedTooEarly := func(extra bool) *Collector {
+		collector, err := OpenCollector(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { collector.Close() })
+		for _, event := range events {
+			postCollectorEvent(t, collector.Handler(), pki.old, "sitea.sync", event)
+		}
+		for _, event := range events[:2] { // B, too early: its own stream, the trail from line 1
+			postCollectorEvent(t, collector.Handler(), pki.new, "sitea.sync", event)
+		}
+		if extra { // and a stream that is a prefix of nothing of A's
+			postCollectorEvent(t, collector.Handler(), pki.new, "sitea.admission", other[0])
+		}
+		return collector
+	}
+	refused := shippedTooEarly(true)
+	if err := refused.RecordOperatorHandover(old, new, "shipped before the hand-over", false); err == nil {
+		t.Fatal("a hand-over to an identity with streams of its own was taken")
+	}
+	if err := refused.RecordOperatorHandover(old, new, "shipped before the hand-over", true); err == nil || !strings.Contains(err.Error(), "not a prefix") {
+		t.Fatalf("a stream that is not a prefix of A's was discarded: %v", err)
+	}
+	if head, _ := getCollectorPosition(t, refused.Handler(), pki.new, "sitea.sync"); head != 2 {
+		t.Fatalf("a refused recovery moved something: B now sees %d", head)
+	}
+	recovered := shippedTooEarly(false)
+	if err := recovered.RecordOperatorHandover(old, new, "shipped before the hand-over", true); err != nil {
+		t.Fatalf("the recovery: %v", err)
+	}
+	if head, _ := getCollectorPosition(t, recovered.Handler(), pki.new, "sitea.sync"); head != 4 {
+		t.Fatalf("after the recovery B sees head %d, not A's 4", head)
 	}
 }

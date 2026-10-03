@@ -169,6 +169,7 @@ func operatorHandover(arguments []string, out *os.File) error {
 	old := flags.String("old", "", "the retired client certificate's fingerprint: SHA-256 of its DER, hex")
 	replacement := flags.String("new", "", "its replacement's fingerprint")
 	reason := flags.String("reason", "", "why the old certificate cannot sign the hand-over itself (recorded)")
+	discard := flags.Bool("discard-new-streams", false, "the new certificate shipped before its hand-over: move its own streams aside, allowed only when each is a prefix of the old certificate's on the same site")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -180,7 +181,7 @@ func operatorHandover(arguments []string, out *os.File) error {
 		return err
 	}
 	defer collector.Close()
-	if err := collector.RecordOperatorHandover(*old, *replacement, *reason); err != nil {
+	if err := collector.RecordOperatorHandover(*old, *replacement, *reason, *discard); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "regalia-audit-collector: the streams of %s now continue under %s; %s is retired\n", *old, *replacement, *old)

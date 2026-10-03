@@ -516,7 +516,8 @@ def prune(path, head_path, trail, site, identity, keys):
         on disk from the marker: a receipt for one real line after placeholder ones (withheld lines with
         made-up hashes) carries a chain no trail on disk reproduces (regalia-kms-51).
     The collector checks every trail event's content against the line hash it names, so a receipt is
-    for the line itself. A missing receipt leaves the archive (and every later one) waiting; a receipt
+    for the line itself. A head file written under another client certificate (a rotation the shipper has
+    not passed under yet) waits. A missing receipt leaves the archive (and every later one) waiting; a receipt
     that does not hold is refused, since only a forged head file makes one. The marker is written (and
     synced) first, so a cut leaves files the marker covers, which segments() skips and the next prune
     removes. Returns how many were removed."""
@@ -528,6 +529,10 @@ def prune(path, head_path, trail, site, identity, keys):
         raise Refused("the stream %r or the identity is not one the collector keys" % stream)
     with open(head_path, "rb") as f:
         head = json.loads(f.read(1 << 20))
+    if not isinstance(head, dict) or head.get("identity") != identity:
+        # Written under another client certificate (a rotation, #291): its receipts name that certificate.
+        # Not a forgery: wait for the shipper's next pass under this one (regalia-kms-51 on #296).
+        return 0
     named = {entry.get("name"): entry for entry in head.get("archives", []) if isinstance(entry, dict)} if isinstance(head, dict) else {}
     marker, archives, _ = segments(path)
     left = _left_behind(path, marker)                     # covered by the marker, left by a prune that was cut

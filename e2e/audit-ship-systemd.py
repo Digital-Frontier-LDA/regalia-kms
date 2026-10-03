@@ -13,9 +13,9 @@ REGALIA_SHIP_HOST_OK.
      group) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
   1  with units/regalia-audit-ship@sync.service.d as shipped, it reads it through the group and ships it;
   2  a line appended later ships on the next pass, and the collector's stream holds every line;
-  2b the client certificate is rotated: `regalia-audit-ship handover` (the old key signs, the new certificate
-     presents it), the files swapped, the unit restarted: the same stream goes on, and the old certificate is
-     refused (#291);
+  2b the client certificate is rotated (#291). Swapped before the hand-over, the shipper refuses to send.
+     After `regalia-audit-ship handover` (the old key signs, the new certificate presents it) and a restart,
+     the same stream goes on, and the old certificate is refused;
   3  the trail cut short under what was shipped: the instance ends with status 3, systemd does NOT restart
      it, the collector's alarm log holds the shipper's alarm, and the metrics say tampered;
   4  a manual start repeats the refusal: it never quietly resumes.
@@ -170,16 +170,21 @@ def scenario(work, binaries):
        "the metrics say 5 committed, not tampered", metrics)
 
     print("\n### 2b  the client certificate rotated: a hand-over, and the stream goes on (#291)")
-    done = sh(str(BIN), "handover", "-collector", "https://127.0.0.1:%d" % PORT, "-old-cert", str(work / "shipper.pem"),
-              "-old-key", str(work / "shipper.key"), "-tls-cert", str(work / "shipper2.pem"), "-tls-key", str(work / "shipper2.key"),
-              "-server-ca", str(work / "ca.pem"), check=False)
-    ok(done.returncode == 0, "regalia-audit-ship handover: the old key signs, the new certificate presents it", done.stdout + done.stderr)
+    # first the order error: the files swapped and the unit restarted BEFORE the hand-over (regalia-kms-51)
     for source, target, mode in (("shipper2.pem", "client.crt", 0o644), ("shipper2.key", "client.key", 0o640)):
         shutil.copy(work / source, ETC / target)
         shutil.chown(ETC / target, "root", "regalia-audit-ship")
         os.chmod(ETC / target, mode)
     sh("systemctl", "restart", INSTANCE)
     append_as_writer(trail, 1, 5)
+    pending = until(lambda: "hand-over pending" in journal(INSTANCE, 20), 45)
+    ok(pending and stream_lines(state) == 5, "shipping as the new certificate before the hand-over is refused: nothing sent",
+       (stream_lines(state), journal(INSTANCE, 5)))
+    done = sh(str(BIN), "handover", "-collector", "https://127.0.0.1:%d" % PORT, "-old-cert", str(work / "shipper.pem"),
+              "-old-key", str(work / "shipper.key"), "-tls-cert", str(work / "shipper2.pem"), "-tls-key", str(work / "shipper2.key"),
+              "-server-ca", str(work / "ca.pem"), check=False)
+    ok(done.returncode == 0, "regalia-audit-ship handover: the old key signs, the new certificate presents it", done.stdout + done.stderr)
+    sh("systemctl", "restart", INSTANCE)
     ok(until(lambda: stream_lines(state) == 6, 75) and 'regalia_audit_trail_tampered{trail="sync"} 0' in METRICS.read_text(),
        "under the new certificate the same stream goes on to 6 lines, not tampered", (stream_lines(state), journal(INSTANCE, 5)))
     refused = sh("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--cert", str(work / "shipper.pem"), "--key", str(work / "shipper.key"),

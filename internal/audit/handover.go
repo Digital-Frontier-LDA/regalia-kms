@@ -181,11 +181,74 @@ func (c *Collector) recordHandover(old, new, by, reason string) error {
 // RecordOperatorHandover is the operator's hand-over, for an old certificate whose key is lost
 // (cmd/regalia-audit-collector handover). The collector holding this state must not be running: the
 // caller opened it, so it holds the state directory's lock.
-func (c *Collector) RecordOperatorHandover(old, new, reason string) error {
+//
+// discardNewStreams is the way out of a certificate that shipped before its hand-over (regalia-kms-51
+// on #296): its first pass started streams of its own, re-shipping its trails from their first line, so
+// every hand-over to it is refused. It is allowed only when each stream of the new identity is a prefix
+// of the old identity's stream on the same site (the same events, so nothing is lost): those files are
+// moved aside, under discarded/, kept, before the hand-over is recorded.
+func (c *Collector) RecordOperatorHandover(old, new, reason string, discardNewStreams bool) error {
 	if strings.TrimSpace(reason) == "" || len(reason) > 512 || strings.IndexFunc(reason, unicode.IsControl) >= 0 {
 		return errors.New("an operator hand-over needs a reason: one line, at most 512 characters")
 	}
-	return c.recordHandover(old, new, "operator", reason)
+	by := "operator"
+	if discardNewStreams {
+		discarded, err := c.discardPrefixStreams(old, new)
+		if err != nil {
+			return err
+		}
+		by, reason = "operator, its own prefix streams moved aside", fmt.Sprintf("%s (%d streams of %s moved to discarded/)", reason, discarded, new)
+	}
+	return c.recordHandover(old, new, by, reason)
+}
+
+// discardPrefixStreams moves the new identity's own streams to discarded/<new>/, if each is a prefix of
+// the old identity's stream on the same site; refuses, moving nothing, otherwise.
+func (c *Collector) discardPrefixStreams(old, new string) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !identityFingerprintHexPattern.MatchString(old) || !identityFingerprintHexPattern.MatchString(new) {
+		return 0, errors.New("a hand-over is between two certificate fingerprints")
+	}
+	root := c.streamIdentityLocked(old)
+	var own []*collectorStream
+	for _, stream := range c.streams {
+		if stream.identity != new {
+			continue
+		}
+		previous := c.streams[streamKey(root, stream.site)]
+		if previous == nil || len(stream.hashes) > len(previous.hashes) {
+			return 0, fmt.Errorf("%s's stream for %q is not a prefix of %s's: nothing moved", new, stream.site, old)
+		}
+		for i, hash := range stream.hashes {
+			if previous.hashes[i] != hash {
+				return 0, fmt.Errorf("%s's stream for %q differs from %s's at event %d: nothing moved", new, stream.site, old, i+1)
+			}
+		}
+		own = append(own, stream)
+	}
+	if len(own) == 0 {
+		return 0, nil
+	}
+	aside := filepath.Join(c.stateDir, "discarded", new+"-"+time.Now().UTC().Format("20060102T150405Z"))
+	if err := os.MkdirAll(aside, 0o700); err != nil {
+		return 0, err
+	}
+	for _, stream := range own {
+		stream.file.Close()
+		name := streamFilePrefix + stream.site + streamFileSuffix
+		if err := os.Rename(c.streamPath(new, stream.site), filepath.Join(aside, name)); err != nil {
+			return 0, err
+		}
+		delete(c.streams, streamKey(new, stream.site))
+	}
+	for _, dir := range []string{aside, filepath.Dir(aside), filepath.Join(c.stateDir, streamsDirName, new)} {
+		if err := syncDir(dir); err != nil {
+			return 0, err
+		}
+	}
+	_ = os.Remove(filepath.Join(c.stateDir, streamsDirName, new)) // empty now; OpenCollector refuses nothing it did not write
+	return len(own), nil
 }
 
 // resolveCaller is every endpoint's step after authentication: a retired identity is refused (and
@@ -244,7 +307,11 @@ func (c *Collector) handleHandover(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	if _, err := old.Verify(x509.VerifyOptions{Roots: c.clientRoots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
-		refuse(http.StatusForbidden, "the old certificate does not chain to the client CA: "+err.Error())
+		refuse(http.StatusForbidden, "the old certificate does not chain to the client CA (or has expired: rotate before NotAfter, or use the operator's hand-over): "+err.Error())
+		return
+	}
+	if old.KeyUsage != 0 && old.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
+		refuse(http.StatusForbidden, "the old certificate's key usage does not allow a signature")
 		return
 	}
 	digest := sha256.Sum256(old.Raw)

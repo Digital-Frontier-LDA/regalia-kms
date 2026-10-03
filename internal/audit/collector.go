@@ -183,6 +183,12 @@ func OpenCollector(stateDir string) (*Collector, error) {
 		return nil, fmt.Errorf("collector alarm log: %w", err)
 	}
 	collector := &Collector{stateDir: stateDir, alarms: alarms, lock: lock, streams: map[string]*collectorStream{}, reported: map[string]*reportedWindow{}}
+	opened := false
+	defer func() {
+		if !opened {
+			collector.Close() // every refusal below releases the files and the state directory's lock
+		}
+	}()
 	identities, err := os.ReadDir(streamsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("collector state directory: %w", err)
@@ -204,15 +210,14 @@ func OpenCollector(stateDir string) (*Collector, error) {
 				return nil, fmt.Errorf("collector state holds stream file %q whose site segment is not a site this collector would have written", file.Name())
 			}
 			if err := collector.loadStream(identity.Name(), site); err != nil {
-				collector.Close()
 				return nil, err
 			}
 		}
 	}
 	if err := collector.loadHandovers(); err != nil {
-		collector.Close()
 		return nil, err
 	}
+	opened = true
 	return collector, nil
 }
 

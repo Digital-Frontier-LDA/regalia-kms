@@ -99,5 +99,5 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
-          grep -q '^audit-ship-systemd: 16 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
-            echo "::error::the shipper test did not pass all 16 checks" >&2; exit 1; }
+          grep -q '^audit-ship-systemd: 17 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
+            echo "::error::the shipper test did not pass all 17 checks" >&2; exit 1; }

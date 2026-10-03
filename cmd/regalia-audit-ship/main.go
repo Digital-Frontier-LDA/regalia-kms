@@ -22,6 +22,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,6 +66,7 @@ func main() {
 
 type options struct {
 	trail, path, collector, site, metrics, head string
+	identity                                    string // this host's client certificate: SHA-256 of its DER, hex
 	interval                                    time.Duration
 	once                                        bool
 }
@@ -99,6 +101,10 @@ func run(arguments []string, out io.Writer) error {
 	if o.interval < time.Second {
 		return errors.New("-interval must be at least a second")
 	}
+	var err error
+	if o.identity, err = certificateIdentity(*tlsCert); err != nil {
+		return err
+	}
 	sink, err := buildSink(o.collector, o.site+"."+o.trail, *tlsCert, *tlsKey, *serverCA)
 	if err != nil {
 		return err
@@ -115,6 +121,9 @@ func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) e
 		var boundaries []boundary
 		trail, err := openSegments(o.path)
 		if err == nil {
+			err = handoverPending(ctx, sink, o)
+		}
+		if err == nil {
 			committed, total, err = audit.ShipTrailLines(ctx, sink, stream, o.trail, trail.start, func(walker *audit.TrailWalker, each func(audit.Event) error) error {
 				for _, archive := range trail.archives {
 					if err := walker.Feed(archive.file, true, each); err != nil {
@@ -130,7 +139,7 @@ func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) e
 			trail.close()
 		}
 		if err == nil {
-			if headErr := writeHead(ctx, sink, o.head, o.site+"."+o.trail, o.trail, boundaries, committed); headErr != nil {
+			if headErr := writeHead(ctx, sink, o.head, o.identity, o.site+"."+o.trail, o.trail, boundaries, committed); headErr != nil {
 				fmt.Fprintf(out, "regalia-audit-ship: the head file could not be written: %v\n", headErr)
 			}
 		}
@@ -350,7 +359,7 @@ type receipter interface {
 // receipt, verified against the keys it pins, and its own count of positions, never this file's
 // word: a compromised shipper cannot make it remove a line the collector does not hold. An archive
 // whose receipt cannot be had is left out, and waits.
-func writeHead(ctx context.Context, sink audit.TrailSink, path, stream, trail string, boundaries []boundary, committed uint64) error {
+func writeHead(ctx context.Context, sink audit.TrailSink, path, identity, stream, trail string, boundaries []boundary, committed uint64) error {
 	if path == "" {
 		return nil
 	}
@@ -361,11 +370,12 @@ func writeHead(ctx context.Context, sink audit.TrailSink, path, stream, trail st
 		Receipt   audit.Receipt `json:"receipt"`
 	}
 	record := struct {
+		Identity  string  `json:"identity"` // the certificate these receipts name: prune waits when it is not its own
 		Trail     string  `json:"trail"`
 		Stream    string  `json:"stream"`
 		Committed uint64  `json:"committed"`
 		Archives  []entry `json:"archives"`
-	}{Trail: trail, Stream: stream, Committed: committed, Archives: []entry{}}
+	}{Identity: identity, Trail: trail, Stream: stream, Committed: committed, Archives: []entry{}}
 	receipts, ok := sink.(receipter)
 	for _, b := range boundaries {
 		if !ok || b.at.Sequence == 0 || b.at.Sequence > committed {
@@ -524,4 +534,56 @@ func handover(arguments []string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "regalia-audit-ship: the collector continues %x's streams under %x; swap client.crt/client.key and restart the shippers\n", oldSum, newSum)
 	return nil
+}
+
+// errHandoverPending: this host's certificate changed, and the collector holds nothing for the new one.
+var errHandoverPending = errors.New("hand-over pending: this trail shipped under another client certificate, " +
+	"and the collector knows nothing for this one; run `regalia-audit-ship handover` first (#291)")
+
+// handoverPending refuses to ship as a new certificate before the hand-over (regalia-kms-51 on #296).
+// Shipping first would start the new certificate's own stream, and the collector then refuses every
+// hand-over to it. The head file says under which certificate this trail last shipped and how far: if
+// that is another certificate, with lines shipped, while the collector has nothing for this one, the
+// hand-over has not happened. Nothing is sent; the next pass asks again. (Without a head file there is
+// nothing to compare: the operator's `regalia-audit-collector handover -discard-new-streams` recovers.)
+func handoverPending(ctx context.Context, sink audit.TrailSink, o options) error {
+	if o.head == "" || o.identity == "" {
+		return nil
+	}
+	raw, err := readRegular(o.head, 1<<20)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var head struct {
+		Identity  string `json:"identity"`
+		Committed uint64 `json:"committed"`
+	}
+	if json.Unmarshal(raw, &head) != nil || head.Identity == "" || head.Identity == o.identity || head.Committed == 0 {
+		return nil
+	}
+	position, _, err := sink.CommittedHead(ctx, o.site+"."+o.trail)
+	if err != nil {
+		return err
+	}
+	if position == 0 {
+		return errHandoverPending
+	}
+	return nil
+}
+
+// certificateIdentity is how the collector names this host: the SHA-256 of its client certificate's DER.
+func certificateIdentity(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("client certificate: %w", err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return "", errors.New("client certificate: not a PEM certificate")
+	}
+	sum := sha256.Sum256(block.Bytes)
+	return hex.EncodeToString(sum[:]), nil
 }
