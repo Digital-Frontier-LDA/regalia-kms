@@ -476,7 +476,7 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 - **The relay** (`regalia-unlock-relay.service`): it makes the key socket crypttab names, holds no
   credential, no TPM and no network, and needs nothing that can fail. It asks the real client on its
   own socket (`regalia-unlock-core.socket`) and passes on exactly one whole key, or gives nothing after
-  any failure or after 330 s (the real client ends its own attempt within 240 s, so its answer comes
+  any failure or after 330 s (the real client ends its own attempt within 200 s, so its answer comes
   first; a client that hangs yields the prompt). With nothing, systemd-cryptsetup asks for the
   recovery key. It makes the socket ITSELF, with no `.socket` unit, because systemd-cryptsetup asks for
   the recovery key when the key file does not exist, and fails without asking when a connection is

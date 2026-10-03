@@ -114,12 +114,14 @@ chroot "$ROOT" sh -c 'cd /tmp/ird && lsinitrd --unpack /boot/initrd.e2e' >/dev/n
 uncovered=""
 for unit in "$ROOT"/tmp/ird/usr/lib/systemd/system/*.service; do
   name="${unit##*/}"; case "$name" in regalia-*) continue ;; esac
-  grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=' "$unit" || continue
-  [ -f "$unit.d/50-regalia-no-credentials.conf" ] || uncovered="$uncovered $name"
+  # the unit with all its drop-ins, as systemd reads it; the reset must be there and must sort last
+  cat "$unit" "$unit.d/"*.conf 2>/dev/null | grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=[^[:space:]]' || continue
+  last="$(ls "$unit.d/"*.conf 2>/dev/null | sort | tail -1)"
+  [ "${last##*/}" = 99-regalia-no-credentials.conf ] || uncovered="$uncovered $name"
 done
-[ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-cryptsetup@.service.d/50-regalia-no-credentials.conf" ] || uncovered="$uncovered systemd-cryptsetup@.service"
+[ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-cryptsetup@.service.d/99-regalia-no-credentials.conf" ] || uncovered="$uncovered systemd-cryptsetup@.service"
 [ -z "$uncovered" ] || { echo "unlock-boot-qemu: units in the image that take credentials by name, with no reset:$uncovered"; exit 2; }
-echo "units with a credential reset: $(find "$ROOT/tmp/ird/usr/lib/systemd/system" -name 50-regalia-no-credentials.conf | wc -l)"
+echo "units with a credential reset: $(find "$ROOT/tmp/ird/usr/lib/systemd/system" -name 99-regalia-no-credentials.conf | wc -l)"
 rm -rf "$ROOT/tmp/ird"
 chroot "$ROOT" lsinitrd -f etc/crypttab /boot/initrd.e2e | grep -v '^#' > "$W/crypttab.txt"
 cmp -s "$W/crypttab.txt" <(grep -v '^#' deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab) \

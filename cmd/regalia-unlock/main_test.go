@@ -702,12 +702,12 @@ func pathsOf(t *testing.T, tokens map[string]any) (map[string][]pathToken, []str
 	return paths, skipped
 }
 
-func dialer(peers ...*fakePeer) func(string) transport {
+func dialer(peers ...*fakePeer) func(string, time.Time) transport {
 	byEndpoint := map[string]*fakePeer{}
 	for i, peer := range peers {
 		byEndpoint[fmt.Sprintf("192.0.2.%d:7443", i+1)] = peer
 	}
-	return func(endpoint string) transport {
+	return func(endpoint string, _ time.Time) transport {
 		if peer := byEndpoint[endpoint]; peer != nil {
 			return peer.send
 		}
@@ -902,7 +902,7 @@ func TestTheTransportIsOneBoundedRequestPerConnection(t *testing.T) {
 			connection.Close()
 		}
 	}()
-	send := tcpTransport(listener.Addr().String())
+	send := tcpTransport(listener.Addr().String(), time.Time{})
 	reply, err := send([]byte(`{"v":1,"op":"hello","node_id":"lisbon"}`))
 	if err != nil || string(reply) != `{"v":1,"error":"DENIED"}` || string(<-got) != `{"v":1,"op":"hello","node_id":"lisbon"}` {
 		t.Fatalf("%q %v", reply, err)
@@ -986,9 +986,9 @@ func (l *locked) said() string {
 }
 
 // through wraps a dialer: every request to a peer is made under the lock, after `before` (if any).
-func (l *locked) through(dial func(string) transport, before func()) func(string) transport {
-	return func(endpoint string) transport {
-		send := dial(endpoint)
+func (l *locked) through(dial func(string, time.Time) transport, before func()) func(string, time.Time) transport {
+	return func(endpoint string, until time.Time) transport {
+		send := dial(endpoint, until)
 		return func(request []byte) ([]byte, error) {
 			if before != nil {
 				before()

@@ -883,7 +883,7 @@ class Units(unittest.TestCase):
         self.assertIn("systemd-cryptsetup@.service.d/50-regalia-relay.conf", module)
         # the client's own budget ends its attempt before the relay stops waiting
         client = dict(self.unit("regalia-unlock.service")["Service"])["ExecStart"]
-        self.assertTrue(client.endswith(" -budget 240s"), client)
+        self.assertTrue(client.endswith(" -budget 200s"), client)
         # no setting that adds dependencies on mounts or other units (systemd.exec: PrivateTmp, JoinsNamespaceOf, ...)
         for adds in ("PrivateTmp", "JoinsNamespaceOf", "RequiresMountsFor", "ReadWritePaths", "BindPaths", "BindReadOnlyPaths", "TemporaryFileSystem"):
             self.assertNotIn(adds, values)
@@ -964,7 +964,7 @@ class Units(unittest.TestCase):
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]
         values = dict(service)
-        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 240s")
+        self.assertEqual(values["ExecStart"], "/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 200s")
         # the one place it may write: root's, 0755, kept after the unit ends (the lease service and the daemon use it)
         self.assertEqual((values["RuntimeDirectory"], values["RuntimeDirectoryMode"], values["RuntimeDirectoryPreserve"]), ("regalia", "0755", "yes"))
         self.assertNotIn("ReadWritePaths", values)
@@ -1543,18 +1543,20 @@ class OnSwtpm(unittest.TestCase):
         # 9  THE RELAY ITSELF CANNOT START: then there is no key socket at all, and systemd-cryptsetup, finding the
         #    key file missing, asks for the recovery key (it would fail without asking on a refused connection)
         relay_failing = installed[7] + "/zz-failing.conf"
-        with open(relay_failing, "w") as f:
-            f.write("[Service]\nExecStart=\nExecStart=/bin/false\n")
-        self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
-        run(["systemctl", "restart", "regalia-unlock-relay.service"], capture_output=True)
-        time.sleep(2)
-        self.assertFalse(os.path.exists(unlock.KEY_SOCKET))
-        code, took, err = attach()
-        self.assertNotEqual(code, 0)
-        self.assertIn("Failed to activate, key file '%s' missing" % unlock.KEY_SOCKET, err)   # the path that goes on to ask
-        self.assertNotIn("Connection", err)
-        self.assertGreater(int(state("regalia-unlock-relay.service", "NRestarts") or 0), 0)          # and it is tried again, without limit
-        print("the relay cannot start: systemd-cryptsetup found no key file after %.1fs, and would ask" % took, file=sys.stderr)
+        for how, command in (("exits at once", "/bin/false"), ("cannot be executed", "/nonexistent/regalia-unlock")):
+            with self.subTest("the relay " + how):
+                with open(relay_failing, "w") as f:
+                    f.write("[Service]\nExecStart=\nExecStart=%s\n" % command)
+                self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
+                run(["systemctl", "restart", "regalia-unlock-relay.service"], capture_output=True)
+                time.sleep(2)
+                self.assertFalse(os.path.exists(unlock.KEY_SOCKET))
+                code, took, err = attach()
+                self.assertNotEqual(code, 0)
+                self.assertIn("Failed to activate, key file '%s' missing" % unlock.KEY_SOCKET, err)   # the path that goes on to ask
+                self.assertNotIn("Connection", err)
+                self.assertGreater(int(state("regalia-unlock-relay.service", "NRestarts") or 0), 0)          # tried again, without limit
+                print("the relay %s: systemd-cryptsetup found no key file after %.1fs, and would ask" % (how, took), file=sys.stderr)
         os.unlink(relay_failing)
 
 

@@ -94,13 +94,15 @@ install() {
     for unit in "${initdir:?}${systemdsystemunitdir:?}"/*.service systemd-cryptsetup@.service; do
         unit="${unit##*/}"
         case "$unit" in regalia-*) continue ;; esac
+        # (the unit file and its vendor drop-ins; the reset is named to sort last, so it wins over them)
         if [ "$unit" != systemd-cryptsetup@.service ] \
-            && ! grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=' "${initdir:?}${systemdsystemunitdir:?}/$unit"; then
+            && ! cat "${initdir:?}${systemdsystemunitdir:?}/$unit" "${initdir:?}${systemdsystemunitdir:?}/$unit.d/"*.conf 2>/dev/null \
+            | grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)='; then
             continue
         fi
         mkdir -p "${initdir:?}${systemdsystemunitdir:?}/$unit.d"
         printf '[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n' \
-            > "${initdir:?}${systemdsystemunitdir:?}/$unit.d/50-regalia-no-credentials.conf"
+            > "${initdir:?}${systemdsystemunitdir:?}/$unit.d/99-regalia-no-credentials.conf"
     done
     # systemd-cryptsetup waits for the relay's socket to listen, and does not need the relay to start: if it
     # does not, the key file is missing and systemd-cryptsetup asks for the recovery key

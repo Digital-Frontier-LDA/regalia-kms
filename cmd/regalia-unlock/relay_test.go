@@ -82,7 +82,7 @@ func TestTheRelayPassesOneWholeKeyOrNothing(t *testing.T) {
 func TestAnAttemptEndsWithinItsBudget(t *testing.T) {
 	porto := newFakePeer(t, "porto")
 	paths, _ := pathsOf(t, tokensFor(porto))
-	slow := func(string) transport {
+	slow := func(string, time.Time) transport {
 		return func([]byte) ([]byte, error) { time.Sleep(40 * time.Millisecond); return nil, errNoConnection }
 	}
 	var log bytes.Buffer
@@ -93,5 +93,42 @@ func TestAnAttemptEndsWithinItsBudget(t *testing.T) {
 	wantError(t, err, "no peer helped within 150ms")
 	if took := time.Since(started); took > 400*time.Millisecond {
 		t.Fatalf("the attempt took %s with a budget of 150ms", took)
+	}
+}
+
+// At the edge of the budget: the last ask is cut at the budget, not 10 s later. A peer that accepts and
+// never answers is asked just before the budget ends; the attempt ends at the budget.
+func TestTheLastAskEndsWithTheBudget(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close() // accepted, never answered
+		}
+	}()
+	porto := newFakePeer(t, "porto")
+	config := configFor(porto)
+	config.Peers[0].Endpoint = listener.Addr().String()
+	paths, _ := pathsOf(t, tokensFor(porto))
+	boot := testSession(t)
+	var log bytes.Buffer
+	started := time.Now()
+	_, _, _, err = deriveKey(config, options{rounds: 1, budget: 300 * time.Millisecond}, paths, bytes.Repeat([]byte{1}, 32), boot,
+		tcpTransport, noQuote, func(time.Duration) {}, &log)
+	if err == nil {
+		t.Fatal("a peer that never answers gave a key")
+	}
+	if took := time.Since(started); took > time.Second {
+		t.Fatalf("the last ask ran %s past a budget of 300ms (ioTimeout alone is %s)", took, ioTimeout)
+	}
+	if !strings.Contains(log.String(), "the reply did not arrive") {
+		t.Fatalf("the ask was not cut at the budget: %s", log.String())
 	}
 }
