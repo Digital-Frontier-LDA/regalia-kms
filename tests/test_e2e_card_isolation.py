@@ -68,6 +68,25 @@ def softhsm_only(text):
     return "libsofthsm2" in text and "opensc-pkcs11" not in text
 
 
+# A shell that could be handed a command: sh, bash, dash, zsh, ksh, or one named in a variable.
+SHELL = r"(?:(?<![\w/.-])(?:ba|da|z|k)?sh\b|\"?\$\{?\w+\}?\"?)"
+
+
+def outside_names(body):
+    """The variables a shell command string reads that it does not set itself (a for loop's name, an
+    assignment) and that are not its positional parameters: what the caller's environment decides."""
+    read = set(re.findall(r"\$\{?([A-Za-z_]\w*)", body))
+    set_here = set(re.findall(r"\bfor\s+([A-Za-z_]\w*)\s+in\b", body)) | set(re.findall(r"(?:^|[;\s])([A-Za-z_]\w*)=", body))
+    return sorted(read - set_here)
+
+
+def pin_name(name):
+    """A variable named for a PIN, whatever its case: PIN as one of its words (NK_PIN, so_pin, Pin), not a
+    path to one (*_FILE, *_PATH, *_DIR) and not a word that merely contains it (KEYPIN)."""
+    words = name.lower().split("_")
+    return "pin" in words and words[-1] not in ("file", "path", "dir")
+
+
 # What a real-card script may not do, each a way past the gate check (#225). Each finding: (line, why).
 LIB_GATE_NAMES = ("bench_gate", "bench_reader_gate", "bench_isolate", "bench_slot")
 
@@ -86,17 +105,36 @@ def script_problems(text):
             found.append((n, "eval: what it runs is not read by this check"))
         if re.search(r"\b(bash|sh)\b[^|;&]*<<", b):
             found.append((n, "a here-document fed to a shell: its body is not read by this check"))
-        for m in re.finditer(r"\b(bash|sh)\s+-[a-z]*c\s+(\S)", line):
-            literal = re.match(r"'([^']*)'", line[m.start(2):])
+        # a shell given a command string: any shell, or one named in a variable, with any options before -c
+        for m in re.finditer(SHELL + r"\s+(?:-[-\w]+\s+)*-[a-z]*c\s+(\S)", line):
+            literal = re.match(r"'([^']*)'", line[m.start(1):])
             if not literal:
-                found.append((n, "%s -c with a command that is not one single-quoted literal" % m.group(1)))
-            elif TOOLS.search(literal.group(1)) or PIN.search(literal.group(1)):
-                found.append((n, "%s -c runs a card tool or a PIN line inside a string" % m.group(1)))
+                found.append((n, "a shell -c with a command that is not one single-quoted literal"))
+            elif TOOLS.search(literal.group(1)) or PIN.search(literal.group(1)) or re.search(r"`|\beval\b", literal.group(1)) \
+                    or outside_names(literal.group(1)):
+                found.append((n, "a shell -c runs a card tool, a PIN line, an expansion or eval inside a string"))
+        if re.search(r"\|\s*" + SHELL + r"(?:\s|$)", b) or re.search(r"\b(?:source|\.)\s+<\(", b) or "/dev/stdin" in b:
+            found.append((n, "a command piped into, or sourced by, a shell: what it runs is not read by this check"))
+        for m in re.finditer(CALL_START + r"(export|declare|typeset|readonly|local)\b(.*)", line):   # the builtin, not "ykman … export"
+            words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", re.split(r"[;&|]", m.group(2))[0])
+            flags = [w for w in words if w.startswith("-")]
+            if m.group(1) != "export" and not any("x" in f for f in flags):
+                continue                                     # not exported
+            if m.group(1) == "export" and "-n" in flags:
+                continue                                     # export -n UN-exports
+            for word in (w for w in words if not w.startswith("-")):
+                bare_word = word.strip("\"'")
+                if bare_word.startswith("$") or "$(" in bare_word.split("=")[0]:
+                    found.append((n, "an exported name that is not a literal: it could be a PIN"))
+                elif pin_name(bare_word.split("=")[0]):
+                    found.append((n, "a PIN exported to every later command: hand it to the one gated command that uses it"))
+        if re.search(r"\bset\s+(?:-\w*a\w*\b|-o\s+allexport\b)", b):
+            found.append((n, "allexport: every variable set later, a PIN too, is exported"))
+        if re.search(r"\bshopt\s+-s\s+expand_aliases\b", b) or re.search(r"\balias\s+(?:%s)=" % "|".join(LIB_GATE_NAMES + GATES), b):
+            found.append((n, "aliases: a gate's name could run something else"))
         if re.search(r"\b(if|while|until)\s+(!\s*)?(false|true|:)\s*;", b):
             found.append((n, "a constant condition: a gate under it may never run"))
-        # (export -n UN-exports: that is the right thing, not this)
-        if re.search(r"\bexport\s+(?!-n\b)(?:-\w+\s+)*(?:[A-Z0-9_]*_)?PIN(?:_[A-Z0-9_]+)?\b", line):
-            found.append((n, "a PIN exported to every later command: hand it to the one gated command that uses it"))
+
     return found
 
 
@@ -504,7 +542,7 @@ class TheCheckItself(unittest.TestCase):
             'eval "$CMD"\n': "eval",
             "bash <<EOF\npkcs11-tool --login\nEOF\n": "here-document fed to a shell",
             'sh -c "$X"\n': "not one single-quoted literal",
-            "sh -c 'pkcs11-tool --login'\n": "card tool or a PIN line inside a string",
+            "sh -c 'pkcs11-tool --login'\n": "card tool, a PIN line",
             "if false; then bench_gate S; fi\n": "constant condition",
             'export NK_PIN="$P"\n': "PIN exported",
         }
@@ -512,6 +550,39 @@ class TheCheckItself(unittest.TestCase):
             with self.subTest(script):
                 self.assertTrue(any(why in w for _, w in script_problems(script)), script_problems(script))
         self.assertEqual(script_problems("sh -c 'ls /etc' sh x\ndie(){ echo no; exit 2; }\n"), [])
+
+
+    def test_the_dodges_51_found_are_refused(self):
+        """51's read of #287: the shell, export and alias rules, each in the spellings that got past them."""
+        cases = {
+            "sh -c '$CMD'\n": "expansion or eval inside a string",
+            "sh -c 'eval \"$1\"' _ \"$X\"\n": "expansion or eval inside a string",
+            'echo "$CMD" | bash\n': "piped into, or sourced by, a shell",
+            'source <(printf %s "$CMD")\n': "piped into, or sourced by, a shell",
+            "bash /dev/stdin <<< x\n": "piped into, or sourced by, a shell",
+            'bash -e -c "$X"\n': "not one single-quoted literal",
+            'bash --norc -c "$X"\n': "not one single-quoted literal",
+            'dash -c "$X"\n': "not one single-quoted literal",
+            '"$SH" -c "$X"\n': "not one single-quoted literal",
+            'declare -x NK_PIN="$P"\n': "PIN exported",
+            'typeset -gx so_pin="$P"\n': "PIN exported",
+            'readonly -x PIN=1\n': "PIN exported",
+            'export "NK_PIN=$P"\n': "PIN exported",
+            'export A NK_PIN="$P"\n': "PIN exported",
+            'export "$name"\n': "not a literal",
+            'pin="$P"; export pin\n': "PIN exported",
+            "set -a\n": "allexport",
+            "set -o allexport\n": "allexport",
+            "shopt -s expand_aliases\n": "aliases",
+            "alias bench_gate=true\n": "aliases",
+        }
+        for script, why in cases.items():
+            with self.subTest(script):
+                self.assertTrue(any(why in w for _, w in script_problems(script)), script_problems(script))
+        for fine in ("export -n NK_PIN\n", "export HSM_PIN_FILE=/x\n", "export KEYPIN=x\n", "declare -A SLOT\n",
+                     "local pin=1\n", "sh -c 'ls /etc' sh x\n", "set -euo pipefail\n"):
+            with self.subTest(fine):
+                self.assertEqual(script_problems(fine), [])
 
 
 if __name__ == "__main__":
