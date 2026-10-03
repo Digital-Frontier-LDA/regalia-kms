@@ -29,3 +29,7 @@ regexes = [
     '''^c2VjcmV0LWVudmVsb3BlLWZpeHR1cmU=$''',
     '''^d3JhcHBlZA==$''',
 ]
+
+[[allowlists]]
+description = "An uncompressed P-256 PUBLIC point (SEC1: 04 || X || Y, 65 bytes, 130 hex), as typed revocation and root keys are written (#199, #156). Public by construction; a private P-256 scalar is 32 bytes (64 hex) and does not match."
+regexes = ['''^04[0-9a-f]{128}$''']

@@ -79,11 +79,14 @@ class Configuration(unittest.TestCase):
             with self.subTest(bad), self.assertRaises(m.Refused):
                 authority.validate(config("/x", **bad))
 
-    def test_a_pkcs11_signer_is_named_and_refused_until_built(self):
-        cfg = authority.validate(config("/x", signer={"kind": "pkcs11"}))
-        with self.assertRaises(m.Refused) as caught:
-            authority.signer_for(cfg)
-        self.assertIn("not built yet", str(caught.exception))
+    def test_a_pkcs11_signer_s_configuration(self):
+        good = {"kind": "pkcs11", "module": "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so", "serial": "DENK0404380", "key_id": "51",
+                "pin_credential": "revocation-pin", "opensc_conf": "/etc/regalia-kms/opensc.conf"}
+        authority.validate(config("/x", signer=good))
+        for bad in ({"serial": "DENK 0404380"}, {"key_id": "5G"}, {"pin_credential": "../pin"}, {"module": "opensc-pkcs11.so"},
+                    {"opensc_conf": "relative.conf"}, {"pin": "123456"}):
+            with self.subTest(bad), self.assertRaises(m.Refused):
+                authority.validate(config("/x", signer=dict(good, **bad)))
 
     def test_the_key_file_must_be_this_user_s_and_private(self):
         d = tempfile.mkdtemp()
@@ -407,6 +410,90 @@ class TunnelApply(Case):
         with open(self.d + "/membership.json", "wb") as f:
             f.write(m.canonical([m_sign(fork)]))
         self.refused("CONFLICT", authority.held_chain, authority.validate(config(self.d)), self.tpm)
+
+
+SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so") if os.path.exists(c)), None)
+
+
+@unittest.skipUnless(SOFTHSM and shutil.which("pkcs11-tool") and shutil.which("softhsm2-util"), "SoftHSM and pkcs11-tool are not installed")
+class Pkcs11(unittest.TestCase):
+    """Pkcs11Signer against SoftHSM: the same pkcs11-tool calls the Nitrokey gets."""
+
+    def setUp(self):
+        import subprocess
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        os.makedirs(self.d + "/tokens")
+        with open(self.d + "/softhsm2.conf", "w") as f:
+            f.write("directories.tokendir = %s/tokens\nobjectstore.backend = file\nlog.level = ERROR\n" % self.d)
+        patch = unittest.mock.patch.dict(os.environ, {"SOFTHSM2_CONF": self.d + "/softhsm2.conf"})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.pin = "%08d" % (int.from_bytes(os.urandom(4), "big") % 10 ** 8)
+        subprocess.run(["softhsm2-util", "--init-token", "--free", "--label", "revocation", "--so-pin", "12345678", "--pin", self.pin],
+                       check=True, capture_output=True)
+        listing = subprocess.run(["pkcs11-tool", "--module", SOFTHSM, "--list-slots"], check=True, capture_output=True, text=True).stdout
+        self.serial = next(line.split(":", 1)[1].strip() for line in listing.splitlines() if "serial num" in line)
+        subprocess.run(["pkcs11-tool", "--module", SOFTHSM, "--token-label", "revocation", "--login", "--pin", "env:P", "--keypairgen",
+                        "--key-type", "EC:prime256v1", "--id", "51", "--label", "revocation"], check=True, capture_output=True, env=dict(os.environ, P=self.pin))
+        os.makedirs(self.d + "/credentials")
+        with open(self.d + "/credentials/revocation-pin", "w") as f:
+            f.write(self.pin + "\n")
+
+    def signer(self, **override):
+        args = dict(module=SOFTHSM, serial=self.serial, key_id="51", pin_credential="revocation-pin", credentials=self.d + "/credentials")
+        args.update(override)
+        return authority.Pkcs11Signer(args.pop("module"), args.pop("serial"), args.pop("key_id"), args.pop("pin_credential"),
+                                      credentials=args.pop("credentials"), **args)
+
+    def test_it_signs_low_s_and_its_signatures_verify(self):
+        signer = self.signer()
+        self.assertEqual((signer.kind, signer.alg, len(signer.public())), ("pkcs11", "ecdsa-p256", 130))
+        for n in range(12):
+            message = b"regalia-heartbeat/v1\0" + str(n).encode()
+            signature = signer.sign(message)
+            self.assertLessEqual(int.from_bytes(signature[32:], "big"), m.P256_ORDER // 2)
+            m.verify_revocation("ecdsa-p256", signer.public(), message, signature.hex(), "test")
+
+    def test_an_authority_on_the_token_signs_a_heartbeat_a_node_accepts(self):
+        signer = self.signer()
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        tpm, events = hbt.FakeTpm(), []
+        a = authority.Authority(authority.validate(config(d)), signer=signer, clock=lambda: (T0, True), run=tpm, trail=events.append)
+        import tests.test_baremetal_revocation_keys as tk
+        man = tk.v3(hbt.manifest(keys=[{"alg": "ecdsa-p256", "key": signer.public()}]))
+        a.init([m_sign(man)])
+        envelope = a.beat()
+        self.assertEqual(hb.verify(envelope, man)["sequence"], 1)
+        self.assertEqual(events[-1]["signer"], "pkcs11")
+        _, beat = a.revoke("c", "REVOKED_STOLEN", "stolen", "local-root")
+        self.assertEqual(beat["heartbeat"]["epoch"], 2)
+
+    def test_the_wrong_serial_or_no_pin_is_refused_before_any_signature(self):
+        with self.assertRaises(m.Refused) as caught:
+            self.signer(serial="NOSUCHTOKEN")
+        self.assertIn("no token with serial NOSUCHTOKEN", str(caught.exception))
+        signer = self.signer(credentials=self.d + "/elsewhere")
+        with self.assertRaises(OSError):
+            signer.sign(b"x")
+
+    def test_the_pin_never_reaches_argv(self):
+        signer = self.signer()
+        seen = []
+        real = signer.run
+        signer.run = lambda argv, **kw: (seen.append(argv), real(argv, **kw))[1]
+        signer.sign(b"y")
+        self.assertTrue(seen and not any(self.pin in " ".join(argv) for argv in seen))
+        self.assertTrue(any("env:REGALIA_REVOCATION_PIN" in argv for argv in seen))
+
+    def test_a_key_that_is_not_p256_is_refused(self):
+        import subprocess
+        subprocess.run(["pkcs11-tool", "--module", SOFTHSM, "--token-label", "revocation", "--login", "--pin", "env:P", "--keypairgen",
+                        "--key-type", "EC:secp384r1", "--id", "52"], check=True, capture_output=True, env=dict(os.environ, P=self.pin))
+        with self.assertRaises(m.Refused) as caught:
+            self.signer(key_id="52")
+        self.assertIn("not a P-256 key", str(caught.exception))
 
 
 class Control(Case):
