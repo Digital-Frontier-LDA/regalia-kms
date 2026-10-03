@@ -3,7 +3,7 @@
   "node_id": "lisbon",
   "site": "/etc/regalia/site.json",
   "root_key": "0000000000000000000000000000000000000000000000000000000000000000",
-  "tcti": null,
+  "tcti": "device:/dev/tpmrm0",
   "nv_epoch": "0x01500016",
   "nv_heartbeat": "0x01500018",
   "state_dir": "/var/lib/regalia-sync",

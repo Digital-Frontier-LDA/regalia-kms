@@ -2,12 +2,21 @@
 """The node's four units under a real systemd, part 1 (#80, step 3b): they start, reach what their sandboxes
 let them reach, and do their first job.
 
-    sudo --preserve-env=GITHUB_ACTIONS python3 -Es e2e/node-units-systemd.py   (CI only; elsewhere REGALIA_NODE_HOST_OK=1)
+    sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/node-units-systemd.py
 
-IT CHANGES THE MACHINE, which is why it refuses to run anywhere but a throwaway CI runner: it loads the
-kernel's tpm_vtpm_proxy module and gives a software TPM a /dev/tpmrm device, replaces the system chrony's
-configuration (so the system clock follows two private NTS servers on the loopback), creates the user
-regalia-sync, installs the units under /etc/systemd/system, and writes /etc/regalia and /var/lib/regalia-*.
+IT CHANGES THE MACHINE, so it runs only on a GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted: not
+a self-hosted one, where GITHUB_ACTIONS is set too), or where REGALIA_NODE_HOST_OK equals the machine's
+own /etc/machine-id; and never where a TPM, /etc/regalia, /usr/lib/regalia-kms or /var/lib/regalia-sync
+already exists (a KMS host, or one being set up). It gives a software TPM the device name /dev/tpmrm0,
+replaces the system chrony's configuration (the system clock follows two private NTS servers on the
+loopback), creates the user regalia-sync, installs the units, and writes /etc/regalia and /var/lib/regalia-*.
+
+THE TPM is swtpm. Where the kernel has the vTPM proxy it sits behind the kernel's resource manager, as on a
+host; GitHub's Azure kernel has none, and there it is swtpm's CUSE device, which has NO resource manager:
+one command buffer, no per-connection context, so two processes using it at once could receive each
+other's responses, and sessions survive between processes (on a host the kernel flushes them when a
+connection closes). The test therefore lets one unit at a time use the TPM after the first one, and part 2
+must not rest anything on a session kept across processes (attest.activate does that: #190).
 
 What part 1 shows, on the units as shipped (deploy/baremetal/units):
 
@@ -20,10 +29,11 @@ What part 1 shows, on the units as shipped (deploy/baremetal/units):
      store and publishes the chain; regalia-wg-apply, root with CAP_NET_ADMIN only, reads that chain,
      verifies it against the TPM anchor, and brings wg-svc and wg-unlock up, read back; sync then binds
      both listeners
-  4  regalia-admission, root with no capability, opens the TPM, makes this boot's session, and writes
-     the admission file: "not admitted", with no peer to ask (that is part 2)
-  5  each unit's sandbox as systemd applied it (systemctl show), and chronyd and a group-writable
-     /run/chrony (the measurement that could take regalia-authtime's capability away)
+  4  regalia-admission, root with no capability, verifies the chain against the TPM anchor, makes this
+     boot's session, and writes the admission file: "not admitted" because no peer answers (b and c are
+     not running: that is part 2)
+  5  each unit's sandbox as systemd applied it (systemctl show), what regalia-authtime's process really
+     sees, and what chrony does with a group-writable /run/chrony (observed, not asserted)
 
 Part 2 adds the peers, the authority and the KMS daemon: a lease from a peer, the daemon ready, and a
 revocation reaching the daemon.
@@ -93,9 +103,17 @@ def show(unit, *properties):
 
 
 def main():
-    if os.environ.get("GITHUB_ACTIONS") != "true" and os.environ.get("REGALIA_NODE_HOST_OK") != "1":
-        print("node-units-systemd: refused: this changes the machine (a kernel module, the system chrony and clock, a user, "
-              "units). It runs in CI; set REGALIA_NODE_HOST_OK=1 only on a throwaway host.")
+    try:
+        machine = pathlib.Path("/etc/machine-id").read_text().strip()
+    except OSError:
+        machine = None
+    if os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted" and (not machine or os.environ.get("REGALIA_NODE_HOST_OK") != machine):
+        print("node-units-systemd: refused: this changes the machine (a TPM device, the system chrony and clock, a user, units, "
+              "/etc/regalia). It runs on a GitHub-hosted runner; on another throwaway host set REGALIA_NODE_HOST_OK to its /etc/machine-id.")
+        return 2
+    present = [p for p in ("/dev/tpm0", "/dev/tpmrm0", "/etc/regalia", PREFIX, "/var/lib/regalia-sync") if os.path.exists(p)]
+    if present:
+        print("node-units-systemd: refused: %s exists: this looks like a KMS host or one being set up" % ", ".join(present))
         return 2
     if os.geteuid() != 0:
         print("node-units-systemd: run as root")
@@ -114,9 +132,8 @@ def tpm(work):
     """A software TPM as a character device the units open as a host's: /dev/tpmrm0, the tss group's, 0660.
     The kernel's vTPM proxy where the kernel has it; else (GitHub's Azure kernel is built without it)
     swtpm's CUSE device under that name, which needs no kernel module but FUSE's CUSE, and is a TPM
-    without the kernel's resource manager (the units use it one at a time). Returns how it was made."""
-    if os.path.exists("/dev/tpmrm0") or os.path.exists("/dev/tpm0"):
-        raise SystemExit("node-units-systemd: this machine has a TPM; the test gives a software one that name")
+    without the kernel's resource manager (see the module's docstring). Returns (how, whether the test
+    set the device's group and mode itself)."""
     state = work / "tpm"
     state.mkdir()
     shutil.chown(state, "tss", "tss")
@@ -135,12 +152,12 @@ def tpm(work):
         sh("tpm2_startup", "-c", "-T", "device:/dev/tpmrm0")
         how = "swtpm's CUSE device"
     sh("udevadm", "settle", check=False)
-    # the distribution's rule (tpm-udev: KERNEL=="tpmrm[0-9]*", tss, 0660) where udev applied it to this device
-    if sh("stat", "-c", "%G %a", "/dev/tpmrm0", check=False).stdout.strip() != "tss 660":
-        shutil.chown("/dev/tpmrm0", "tss", "tss")
+    # the distribution's rule (tpm-udev: KERNEL=="tpmrm[0-9]*", group tss, 0660) where udev applied it
+    by_test = sh("stat", "-c", "%G %a", "/dev/tpmrm0", check=False).stdout.strip() != "tss 660"
+    if by_test:
+        shutil.chown("/dev/tpmrm0", "root", "tss")
         os.chmod("/dev/tpmrm0", 0o660)
-        how += "; tss 0660 set by the test, as tpm-udev's rule sets it on a host"
-    return how
+    return how, by_test
 
 
 def chrony(work):
@@ -171,8 +188,6 @@ def chrony(work):
 
 def install():
     """The package, the units, the user and /run/regalia, as a host would have them."""
-    if os.path.exists(PREFIX):
-        shutil.rmtree(PREFIX)
     os.makedirs(PREFIX)
     shutil.copytree(ROOT / "deploy", pathlib.Path(PREFIX) / "deploy", ignore=shutil.ignore_patterns("__pycache__"))
     units = ROOT / "deploy" / "baremetal" / "units"
@@ -222,39 +237,47 @@ def provision(work):
     cfg = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
     cfg.update(node_id="a", root_key=raw(root), time_servers=["127.0.0.2", "127.0.0.3"])
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
-    for directory, owner in (("/var/lib/regalia-sync", "regalia-sync"), ("/var/lib/regalia-admission", "root")):
-        os.makedirs(directory, exist_ok=True)
+    # the modes the units' StateDirectoryMode gives them; the store must be regalia-sync's (#190: an
+    # enrolment run as root would leave files sync cannot open)
+    for directory, owner, mode in (("/var/lib/regalia-sync", "regalia-sync", 0o755), ("/var/lib/regalia-admission", "root", 0o700)):
+        os.makedirs(directory)
         shutil.chown(directory, owner, owner)
-    os.chmod("/var/lib/regalia-sync", 0o755)
+        os.chmod(directory, mode)
     # the anchor and the first manifest, written by the user that owns the store; the TPM through its group
     program = ("import json, sys\nsys.path.insert(0, %r)\nfrom deploy.baremetal import membership as m\n"
-               "a = m.HighWater(%r, lock_path='/var/lib/regalia-sync/highwater.lock')\na.define()\n"
+               "a = m.HighWater(%r, %r, lock_path='/var/lib/regalia-sync/highwater.lock')\na.define()\n"
                "s = m.Store('/var/lib/regalia-sync/membership.json', %r, a)\ns.commit(json.load(sys.stdin))\nprint(s.load()['epoch'])\n"
-               % (PREFIX, cfg["nv_epoch"], raw(root)))
+               % (PREFIX, cfg["nv_epoch"], cfg["tcti"], raw(root)))
     epoch = sh("runuser", "-u", "regalia-sync", "-g", "regalia-sync", "-G", "tss", "--", "python3", "-I", "-c", program, input=json.dumps(envelope)).stdout.strip()
     counter = ("import sys\nsys.path.insert(0, %r)\nfrom deploy.baremetal import heartbeat\n"
-               "heartbeat.Counter(%r, lock_path='/var/lib/regalia-sync/heartbeat-counter.lock').define()\n" % (PREFIX, cfg["nv_heartbeat"]))
+               "heartbeat.Counter(%r, %r, lock_path='/var/lib/regalia-sync/heartbeat-counter.lock').define()\n" % (PREFIX, cfg["nv_heartbeat"], cfg["tcti"]))
     sh("runuser", "-u", "regalia-sync", "-g", "regalia-sync", "-G", "tss", "--", "python3", "-I", "-c", counter)
-    return cfg, epoch
+    return cfg, epoch, {n: keys[n][1] for n in keys}
 
 
 def scenario(work):
     header("0  the TPM, as a device, and the controls")
-    how = tpm(work)
+    how, by_test = tpm(work)
     rm = "/dev/tpmrm0"
     ok(os.path.exists(rm) and sh("tpm2_getrandom", "--hex", "-T", "device:" + rm, "8", check=False).returncode == 0,
        "a software TPM answers at /dev/tpmrm0, the device the units allow: %s" % how)
     info = os.stat(rm) if os.path.exists(rm) else None
     ok(info is not None and oct(info.st_mode & 0o777) == "0o660" and sh("stat", "-c", "%G", rm).stdout.strip() == "tss",
-       "the device is the tss group's, 0660, as on a host", sh("ls", "-l", rm, check=False).stdout.strip())
-    probe = sh("systemd-run", "--wait", "--pipe", "--collect", "-p", "User=root", "-p", "CapabilityBoundingSet=", "-p", "DevicePolicy=closed",
-               "-p", "DeviceAllow=/dev/tpmrm0 rw", "-E", "TPM2TOOLS_TCTI=device:/dev/tpmrm0", "--", "tpm2_getrandom", "--hex", "8", check=False)
-    ok(probe.returncode != 0, "control: root with no capability and without the tss group cannot use it", probe.stderr.strip()[-200:])
+       "the device is the tss group's, 0660, as on a host (%s)" % ("SET BY THE TEST: udev did not apply the rule to this device" if by_test
+                                                                  else "by the distribution's udev rule"), sh("ls", "-l", rm, check=False).stdout.strip())
+
+    def probe(*extra):
+        return sh("systemd-run", "--wait", "--pipe", "--collect", "-p", "User=root", "-p", "CapabilityBoundingSet=", "-p", "DevicePolicy=closed",
+                  "-p", "DeviceAllow=/dev/tpmrm0 rw", *extra, "-E", "TPM2TOOLS_TCTI=device:/dev/tpmrm0", "--", "tpm2_getrandom", "--hex", "8", check=False)
+    without, with_group = probe(), probe("-p", "SupplementaryGroups=tss")
+    ok(without.returncode != 0 and "ermission denied" in without.stdout + without.stderr and with_group.returncode == 0,
+       "control: root with no capability is denied by the file's mode, and the same probe with the tss group succeeds",
+       (without.returncode, (without.stdout + without.stderr).strip()[-200:], with_group.returncode, with_group.stderr.strip()[-200:]))
 
     header("1  regalia-authtime: chrony with two NTS servers")
     servers = chrony(work)
     install()
-    cfg, epoch = provision(work)
+    cfg, epoch, public = provision(work)
     sh("systemctl", "start", "regalia-authtime.service")
     status = pathlib.Path("/run/regalia/authtime.json")
     got = until(lambda: json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 120, 2)
@@ -269,7 +292,9 @@ def scenario(work):
     servers[1].terminate()
     servers[1].wait(10)
     gone = until(lambda: not json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 150, 3)
-    ok(isinstance(gone, dict) and gone.get("authenticated") is False, "one server stops: not authenticated (%s)" % (gone.get("reason", "")[:60] if isinstance(gone, dict) else ""), gone)
+    reason = gone.get("reason", "") if isinstance(gone, dict) else ""
+    ok(gone.get("authenticated") is False and reason and not reason.startswith(("chrony could not be asked", "the check failed")) if isinstance(gone, dict) else False,
+       "one server stops: not authenticated, judged from chrony's answer (%s)" % reason[:70], gone)
     servers[1] = None
 
     header("2  provisioning, by hand (#190 is not built)")
@@ -281,26 +306,49 @@ def scenario(work):
     chain = pathlib.Path("/var/lib/regalia-sync/chain.json")
     ok(until(lambda: chain.exists(), 30), "regalia-sync publishes the chain", journal("regalia-sync.service")[-600:])
     ok(oct(os.stat(chain).st_mode & 0o777) == "0o644" and pathlib.Path(chain).owner() == "regalia-sync", "0644, regalia-sync's")
-    applied = until(lambda: show("regalia-wg-apply.service", "Result", "ExecMainStatus").get("ExecMainStatus") == "0"
-                    and sh("ip", "link", "show", "wg-svc", check=False).returncode == 0, 60, 2)
-    ok(applied, "the path unit runs regalia-wg-apply, which verifies the chain against the TPM anchor and brings the tunnels up",
-       journal("regalia-wg-apply.service")[-800:])
+    up = until(lambda: sh("ip", "link", "show", "wg-svc", check=False).returncode == 0 and ":7444" in sh("ss", "-ltn", check=False).stdout
+               and "10.89.0.1:7443" in sh("ss", "-ltn", check=False).stdout, 90, 2)
+    ok(up, "the path unit runs regalia-wg-apply on the published chain; regalia-sync then binds wg-svc (7444) and wg-unlock (7443)",
+       journal("regalia-wg-apply.service")[-800:] + journal("regalia-sync.service")[-600:])
     for name in ("wg-svc", "wg-unlock"):
         state = sh("ip", "-o", "link", "show", name, check=False).stdout
-        ok("UP" in state.split(">")[0] if ">" in state else False, "%s is up" % name, state.strip())
-    peers = sh("wg", "show", "wg-svc", "allowed-ips", check=False).stdout
-    ok(len(peers.splitlines()) == 2 and all(line.split("\t")[1].endswith("/128") for line in peers.splitlines()),
-       "wg-svc's peers are the manifest's two others, one /128 each", peers)
-    listening = until(lambda: ":7444" in sh("ss", "-ltn", check=False).stdout and "10.89.0.1:7443" in sh("ss", "-ltn", check=False).stdout, 60, 2)
-    ok(listening, "regalia-sync listens on wg-svc (7444) and on wg-unlock (7443)", sh("ss", "-ltn", check=False).stdout[-600:])
-    ok(show("regalia-sync.service", "ActiveState")["ActiveState"] == "active", "and stays up", journal("regalia-sync.service")[-600:])
+        flags = state.split("<", 1)[1].split(">", 1)[0].split(",") if "<" in state else []
+        ok("UP" in flags, "%s is up" % name, state.strip())
+    peers = {line.split("\t")[0]: line.split("\t")[1] for line in sh("wg", "show", "wg-svc", "allowed-ips", check=False).stdout.splitlines() if "\t" in line}
+    want = {wgsvc.wg_key(public[n]): "%s/128" % wgsvc.address(public[n]) for n in ("b", "c")}
+    ok(peers == want, "wg-svc's peers are b's and c's keys, each with the one /128 its key derives", peers)
+    # the path unit, on its own: a new chain.json (written as regalia-sync writes it) and nothing else
+    sync_before = show("regalia-sync.service", "NRestarts", "InvocationID")
+    ok(sync_before.get("NRestarts") == "0", "regalia-sync did not restart on its first start (it waits for its tunnel address)",
+       sync_before)
+    before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
+    temporary = chain.with_name(".chain.e2e")
+    temporary.write_bytes(chain.read_bytes())
+    shutil.chown(temporary, "regalia-sync", "regalia-sync")
+    os.chmod(temporary, 0o644)
+    written = time.clock_gettime(time.CLOCK_MONOTONIC)
+    os.rename(temporary, chain)
+    rerun = until(lambda: (lambda now: now["InvocationID"] != before and now["ExecMainStatus"] == "0" and now["ActiveState"] == "inactive"
+                                        and int(now["ExecMainStartTimestampMonotonic"]) / 1e6 >= written and now)(
+                  show("regalia-wg-apply.service", "InvocationID", "ExecMainStatus", "ActiveState", "ExecMainStartTimestampMonotonic")), 30, 1)
+    ok(bool(rerun), "chain.json replaced: the path unit starts a NEW regalia-wg-apply run after the write, and it succeeds",
+       journal("regalia-wg-apply.service")[-600:])
+    time.sleep(10)
+    sync_after = show("regalia-sync.service", "NRestarts", "InvocationID", "ActiveState")
+    ok(sync_after["ActiveState"] == "active" and (sync_after["NRestarts"], sync_after["InvocationID"]) == (sync_before["NRestarts"], sync_before["InvocationID"]),
+       "regalia-sync stays up, the same process, through that and ten seconds more", (sync_before, sync_after))
 
     header("4  regalia-admission")
+    # the CUSE TPM has no resource manager: one unit at a time from here (see the docstring)
+    sh("systemctl", "stop", "regalia-wg-apply.path", "regalia-sync.service")
     sh("systemctl", "start", "regalia-admission.service")
     admission = pathlib.Path("/run/regalia/admission.json")
     doc = until(lambda: json.loads(admission.read_text()), 60, 2)
-    ok(isinstance(doc, dict) and doc.get("serve_until_boottime_ms") == 0, "the admission file says: not admitted (%s)" % (doc.get("reason", "")[:70] if isinstance(doc, dict) else ""),
-       journal("regalia-admission.service")[-600:])
+    doc = doc if isinstance(doc, dict) else {}
+    ok(doc.get("serve_until_boottime_ms") == 0 and doc.get("epoch") == 1 and doc.get("manifest_digest", "00" * 32) != "00" * 32
+       and doc.get("reason", "").startswith("renewal failed: no peer gave a lease"),
+       "not admitted, under epoch 1 verified against the TPM anchor, because no peer answered (%s)" % doc.get("reason", "")[:90],
+       doc or journal("regalia-admission.service")[-600:])
     ok(pathlib.Path("/run/regalia/boot-session").exists() and pathlib.Path("/run/regalia/boot-session.pub").exists(),
        "with no unlock client this boot, it made a session and wrote both files")
 
@@ -311,13 +359,21 @@ def scenario(work):
                        ("regalia-wg-apply.service", {"CapabilityBoundingSet": "cap_net_admin"})):
         have = show(unit, *want)
         ok(all(have.get(k) == v for k, v in want.items()), "%s: %s" % (unit, ", ".join("%s=%s" % kv for kv in want.items())), have)
-    # the measurement: would chronyd accept a group-writable /run/chrony (so regalia-authtime needs no capability)?
+    main_pid = show("regalia-authtime.service", "MainPID")["MainPID"]
+    seen = {p: sh("nsenter", "-t", main_pid, "-m", "--", "test", "-e", p, check=False).returncode == 0
+            for p in ("/etc/regalia/node.json", "/etc/regalia/site.json", "/etc/regalia/wg-service.key", "/var/lib/regalia-sync", "/run/credentials",
+                      "/run/regalia", "/run/chrony")}
+    ok(seen == {"/etc/regalia/node.json": True, "/etc/regalia/site.json": False, "/etc/regalia/wg-service.key": False, "/var/lib/regalia-sync": False,
+                "/run/credentials": False, "/run/regalia": True, "/run/chrony": True},
+       "regalia-authtime's running process sees its configuration, /run/regalia and /run/chrony, and not the keys, the site, the store or credentials", seen)
+    # observed, not asserted: what chrony does with a group-writable /run/chrony
     os.chmod("/run/chrony", 0o770)
     sh("systemctl", "restart", "chrony", check=False)
     accepted = until(lambda: show("chrony.service", "ActiveState")["ActiveState"] == "active" and os.path.exists("/run/chrony/chronyd.sock"), 20)
-    print("  MEASURED: chronyd with /run/chrony 0770 -> %s; mode now %s"
-          % ("starts" if accepted else "does not start", oct(os.stat("/run/chrony").st_mode & 0o777) if os.path.exists("/run/chrony") else "absent"))
+    print("  OBSERVED (%s): chronyd with /run/chrony made 0770 -> %s; mode after the restart %s"
+          % (sh("chronyd", "-v", check=False).stdout.strip(), "starts" if accepted else "does not start", oct(os.stat("/run/chrony").st_mode & 0o777) if os.path.exists("/run/chrony") else "absent"))
     print(journal("chrony.service", 8))
+    print(sh("systemctl", "cat", "chrony.service", check=False).stdout)
     return 1 if failed else 0
 
 

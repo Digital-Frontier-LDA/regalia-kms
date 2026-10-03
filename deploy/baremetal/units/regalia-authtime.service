@@ -1,12 +1,15 @@
 # Whether this host's time is authenticated (#69, #80): asks chrony every 15 s and writes
 # /run/regalia/authtime.json, which the other services believe for 60 s (deploy/baremetal/authtime.py).
-# chronyc answers `authdata` only over chrony's Unix command socket, in /run/chrony (owned by _chrony,
-# mode 0750), and binds a socket of its own there: so this runs as root in the _chrony group with ONE
-# capability, CAP_DAC_OVERRIDE, to write that directory. It writes nothing else but /run/regalia, and has
-# no network at all. (Running as _chrony instead would let a compromised chronyd, which parses NTP from
-# the network, forge the status: the readers accept it only from root.) A group-writable /run/chrony
-# would not remove the capability: measured under systemd (e2e/node-units-systemd.py), chrony 4.5 makes
-# the directory 0700 again when it starts.
+# chronyc answers `authdata` only over chrony's Unix command socket, in /run/chrony (owned by _chrony),
+# and binds a socket of its own there. Observed under systemd on Ubuntu 24.04's chrony 4.5
+# (e2e/node-units-systemd.py): the directory is 0700 after chrony starts, even when made group-writable
+# before, so the _chrony group grants nothing there and access rests on ONE capability,
+# CAP_DAC_OVERRIDE. (The group stays for a distribution that leaves the directory 0750. Running as
+# _chrony instead would let a compromised chronyd, which parses NTP from the network, forge the status:
+# the readers accept it only from root.) What that leaves this service: chronyd's whole command socket
+# (it could add sources or step the clock it vouches for), and, as root, every file in /run/regalia
+# (the admission file and the boot session included). Nothing else: no network, and an empty /etc,
+# /var and /run around it but for its configuration and those two directories.
 [Unit]
 Description=Regalia KMS: is time authenticated (chrony, NTS)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
