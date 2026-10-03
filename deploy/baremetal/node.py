@@ -223,12 +223,14 @@ class Trail:
     """Audit events, one JSON object a line, hash-chained, appended and fsynced (trails.append, #278).
     Raises if it cannot write: callers that must not act unrecorded (sync.Server) refuse to answer then."""
 
-    def __init__(self, path):
+    def __init__(self, path, trail=None):
+        """`trail` names it in trails.TRAILS, so the file takes that trail's reader group (#286)."""
         self.path, self.lock = path, threading.Lock()
+        self.group = trails.TRAILS[trail][3] if trail else None
 
     def __call__(self, event):
         with self.lock:
-            trails.append(self.path, dict(event, at=int(time.time())))
+            trails.append(self.path, dict(event, at=int(time.time())), group=self.group)
 
 
 def heartbeat_counter(cfg, run=subprocess.run):
@@ -395,7 +397,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
     """The lease holder and the admission file, asking peers in turn for a lease over the service tunnel."""
     session, public = boot_session(node.runtime, rand)
     holder = lease.Holder(node.node_id, session, node.clock(), node.tpm_clock(), node.held("lease.json"), run=node.run)
-    trail = Trail(node.held("audit.jsonl"))
+    trail = Trail(node.held("audit.jsonl"), "admission")
 
     class Manifest:
         load = staticmethod(node.manifest)
@@ -424,7 +426,7 @@ class Sync:
 
     def __init__(self, node):
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
-        self.trail = Trail(node.path("sync-audit.jsonl"))
+        self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
         self.published = None
 

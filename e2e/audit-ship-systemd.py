@@ -9,8 +9,8 @@ sysusers files, which stay), so it runs only on a
 GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted), or on a throwaway host whose /etc/machine-id is in
 REGALIA_SHIP_HOST_OK.
 
-  0  the shipper runs as its own user with no capability: without its instance's drop-in (the trail's
-     group) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
+  0  the shipper runs as its own user with no capability: without its instance's drop-in (the trail's own
+     reader group, regalia-audit-sync, #286) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
   1  with units/regalia-audit-ship@sync.service.d as shipped, it reads it through the group and ships it;
   2  a line appended later ships on the next pass, and the collector's stream holds every line;
   2b the client certificate is rotated (#291). Swapped before the hand-over, the shipper refuses to send.
@@ -87,8 +87,10 @@ def journal(unit, lines=30):
 
 def append_as_writer(path, n, start):
     """trails.append, run as regalia-sync, the sync trail's writer: never the shipper."""
-    script = "import sys; sys.path.insert(0, sys.argv[1]); import trails\nfor i in range(int(sys.argv[3])): trails.append(sys.argv[2], {'event': 'sync-pull', 'outcome': 'ALLOW', 'i': int(sys.argv[4]) + i})"
-    sh("setpriv", "--reuid=regalia-sync", "--regid=regalia-sync", "--clear-groups", "--", sys.executable, "-Es", "-c", script, str(WORK / "lib"), str(path), str(n), str(start))
+    script = ("import sys; sys.path.insert(0, sys.argv[1]); import trails\nfor i in range(int(sys.argv[3])): "
+              "trails.append(sys.argv[2], {'event': 'sync-pull', 'outcome': 'ALLOW', 'i': int(sys.argv[4]) + i}, group='regalia-audit-sync')")
+    # as regalia-sync.service runs it: its user, and the trail's reader group beside its own (#286)
+    sh("setpriv", "--reuid=regalia-sync", "--regid=regalia-sync", "--groups=regalia-audit-sync", "--", sys.executable, "-Es", "-c", script, str(WORK / "lib"), str(path), str(n), str(start))
 
 
 def certificates(work):
@@ -144,8 +146,8 @@ def scenario(work, binaries):
     print("\n### 0  its own user, no capability: outside the trail's group it reads nothing")
     append_as_writer(trail, 3, 0)
     info = trail.stat()
-    ok((info.st_mode & 0o777, info.st_uid, info.st_gid) == (0o640, pwd.getpwnam("regalia-sync").pw_uid, grp.getgrnam("regalia-sync").gr_gid),
-       "the trail is regalia-sync's, 0640, in its group", oct(info.st_mode))
+    ok((info.st_mode & 0o777, info.st_uid, info.st_gid) == (0o640, pwd.getpwnam("regalia-sync").pw_uid, grp.getgrnam("regalia-audit-sync").gr_gid),
+       "the trail is regalia-sync's, 0640, in its own reader group regalia-audit-sync (#286)", oct(info.st_mode))
     sh("systemctl", "start", INSTANCE)
     time.sleep(8)
     unit = show(INSTANCE, "ActiveState", "CapabilityBoundingSet", "User")

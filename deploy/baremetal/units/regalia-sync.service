@@ -20,7 +20,8 @@ Restart=always
 RestartSec=5s
 User=regalia-sync
 Group=regalia-sync
-SupplementaryGroups=tss
+# regalia-audit-sync: the reader group of this service's audit trail, which it gives the file (#286)
+SupplementaryGroups=tss regalia-audit-sync
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
