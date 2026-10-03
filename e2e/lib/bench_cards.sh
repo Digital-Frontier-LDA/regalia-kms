@@ -53,7 +53,8 @@ for line in sys.stdin:
         cur = m.group(1); slots += 1
     elif "serial num" in line and line.split(":", 1)[1].strip() == serial:
         hits.append(cur)
-ok = len(hits) == 1 and slots == expected and (not want_slot or hits[0] == want_slot)
+# A slot id given in decimal (the ceremony helpers print 0) or in hex (pkcs11-tool -L prints 0x0).
+ok = len(hits) == 1 and slots == expected and (not want_slot or int(hits[0], 0) == int(want_slot, 0))
 if not ok:
     print("bench_gate: %s is in %s of %d visible slot(s), expected one slot of %d%s: no PIN"
           % (serial, hits or "none", slots, expected, " (slot %s)" % want_slot if want_slot else ""), file=sys.stderr)
