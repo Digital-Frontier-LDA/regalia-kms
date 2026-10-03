@@ -213,12 +213,36 @@ class Pin(Case):
         self.assertEqual(self.fake.logins, [])
 
     def test_the_pin_comes_from_the_named_variable_once_and_leaves_the_environment(self):
-        with unittest.mock.patch.dict(os.environ, {"ROOT_PIN": self.pin}):
+        with unittest.mock.patch.dict(os.environ, {"ROOT_PIN": self.pin, tool.TEST_SWITCH: "1"}):
             reader = tool._pin_reader("ROOT_PIN")
             self.assertNotIn("ROOT_PIN", os.environ)
+            self.refused("not set", tool._pin_reader, "ROOT_PIN")
+            self.refused("names an environment variable", tool._pin_reader, "root pin")
         self.assertEqual(reader(), self.pin)
-        self.refused("not set", tool._pin_reader, "ROOT_PIN")
-        self.refused("names an environment variable", tool._pin_reader, "root pin")
+
+    def test_a_pin_from_the_environment_is_refused_outside_a_test_before_any_token_is_opened(self):
+        """regalia-kms-24's decision: at a ceremony the root PIN is typed at the console."""
+        chain = os.path.join(self.d, "chain.json")
+        with open(chain, "w") as f:
+            json.dump(self.chain, f)
+        proposal = os.path.join(self.d, "p.json")
+        with open(proposal, "w") as f:
+            json.dump(self.proposal(), f)
+        err = io.StringIO()
+        with unittest.mock.patch.dict(os.environ, {"ROOT_PIN": self.pin}), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(tool, "token_signer", side_effect=AssertionError("a token was opened")):
+            os.environ.pop(tool.TEST_SWITCH, None)
+            code = tool.main(["sign", "--chain", chain, "--root-key", json.dumps(self.root), "--expected-epoch", "1",
+                              "--proposal", proposal, "--signer", "root", "--key", URI, "--module", "/usr/lib/opensc-pkcs11.so",
+                              "--pin-env", "ROOT_PIN", "--state-dir", self.state, "--out", os.path.join(self.d, "e2.json")])
+            self.assertEqual(os.environ.get("ROOT_PIN"), self.pin)            # not even read
+        self.assertEqual(code, 2)
+        self.assertIn("typed at the console", err.getvalue())
+        self.assertEqual(self.record(), [])
+
+    def test_the_record_says_where_the_pin_came_from(self):
+        self.sign()
+        self.assertEqual(self.record()[0]["pin_source"], "terminal")
 
     def test_a_pin_that_is_not_a_pin_never_reaches_the_token(self):
         self.refused("not a PIN", self.sign, open_signer=lambda: self.signer(pin=lambda: "12 34"))

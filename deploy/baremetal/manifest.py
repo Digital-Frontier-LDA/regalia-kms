@@ -31,9 +31,12 @@ envelopes), verified from ROOT every time.
      (--signer root) or a revocation key the current manifest names (--signer revocation);
   5. the diff, the epoch and the manifest digest are printed, and the operator types the epoch and the first
      eight hex digits of the digest;
-  6. the token signs: CKM_ECDSA over SHA-256 of DOMAIN + canonical(manifest), r||s, low-S. The PIN comes
-     from --pin-env's variable or from the terminal with no echo, never an argument; a PIN the token
-     refuses latches (DIR/pin-latch.json) and is never presented again until `clear-pin-latch`;
+  6. the token signs: CKM_ECDSA over SHA-256 of DOMAIN + canonical(manifest), r||s, low-S. The PIN is TYPED
+     at the console with no echo, never an argument (regalia-kms-24's decision: at a ceremony the root PIN
+     is never in an environment, a runbook or a shell history). --pin-env exists for tests and bench runs
+     only: it is refused unless REGALIA_MANIFEST_TEST=1 is also set, and the signing record says which
+     source gave the PIN. A PIN the token refuses latches (DIR/pin-latch.json) and is never presented
+     again until `clear-pin-latch`;
   7. the signature is verified and membership.accept() takes the finished envelope; a line is appended to
      DIR/signing-record.jsonl for every signature the token made, and only then is the envelope written
      (--out, and with --chain-out the chain plus it, from which the next proposal of the session is made).
@@ -196,7 +199,8 @@ def check_signer_key(current, root, signer_role, public):
                 "the token's key %s… is not an ecdsa-p256 revocation key of epoch %d" % (public[:16], current["epoch"]))
 
 
-def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confirm, out, state, chain_out=None, say=print):
+def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confirm, out, state, chain_out=None, say=print,
+         pin_source="terminal"):
     """Steps 1 to 7 of the module's docstring. `open_signer()` gives the token's signer (step 4's opening);
     `confirm(prompt)` returns what the operator typed. Returns the envelope written."""
     require(signer_role in ("root", "revocation"), "--signer must be root or revocation")
@@ -223,7 +227,8 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     message = membership.DOMAIN + membership.canonical(candidate)                              # 6
     signature = signer.sign(message)
     _append_record(state, {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,  # 7
-                           "token_serial": signer.serial, "token_label": signer.label, "at": int(time.time())})
+                           "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
+                           "at": int(time.time())})
     envelope = {"manifest": candidate, "signature": {"signer": signer_role, "key": public, "sig": signature.hex()}}
     accepted = membership.accept(current, envelope, root)
     require(membership.digest(accepted) == digest, "the accepted manifest is not the one signed")
@@ -246,9 +251,15 @@ def _states(pairs):
     return changes
 
 
+TEST_SWITCH = "REGALIA_MANIFEST_TEST"
+
+
 def _pin_reader(name):
-    """The PIN from the variable `name` (read once, then removed from this process's environment), or the terminal."""
+    """The PIN typed at the terminal; or, for a test or bench run only (TEST_SWITCH=1), from the variable
+    `name`, read once and then removed from this process's environment."""
     if name:
+        require(os.environ.get(TEST_SWITCH) == "1", "--pin-env is for tests and bench runs only (set %s=1): at a ceremony "
+                "the root PIN is typed at the console" % TEST_SWITCH)
         require(re.fullmatch(r"[A-Z_][A-Z0-9_]{0,63}", name) is not None, "--pin-env names an environment variable")
         require(name in os.environ, "--pin-env %s: the variable is not set" % name)
         pin = os.environ.pop(name)
@@ -281,7 +292,8 @@ def main(argv=None):
     c.add_argument("--key", required=True, metavar="PKCS11-URI")
     c.add_argument("--module", required=True, help="the PKCS#11 module (OpenSC's opensc-pkcs11.so)")
     c.add_argument("--opensc-conf", help="an OpenSC configuration, e.g. one that ignores YubiKey readers")
-    c.add_argument("--pin-env", metavar="NAME", help="read the PIN from this environment variable instead of the terminal")
+    c.add_argument("--pin-env", metavar="NAME", help="TESTS AND BENCH RUNS ONLY (needs %s=1): read the PIN from this "
+                   "environment variable instead of the terminal" % TEST_SWITCH)
     c.add_argument("--state-dir", required=True, help="this user's 0700 directory: the signing record and the PIN latch")
     c.add_argument("--out", required=True, help="the signed envelope (a new file)")
     c.add_argument("--chain-out", help="the chain with the new envelope appended (a new file), for the next proposal")
@@ -316,10 +328,10 @@ def main(argv=None):
             print("\n".join(diff(current, candidate)))
             return 0
         state = state_dir(args.state_dir)
-        pin = _pin_reader(args.pin_env)
+        pin = _pin_reader(args.pin_env)                  # before any token is opened
         sign(chain_doc, root, args.expected_epoch, candidate, args.signer,
              lambda: token_signer(args.key, args.module, args.opensc_conf, pin, os.path.join(state, LATCH)),
-             input, args.out, state, args.chain_out)
+             input, args.out, state, args.chain_out, pin_source="env (test)" if args.pin_env else "terminal")
         return 0
     except (Refused, OSError, ValueError) as error:
         print("regalia-manifest: refused: %s" % error, file=sys.stderr)
