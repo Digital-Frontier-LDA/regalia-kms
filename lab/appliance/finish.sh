@@ -26,6 +26,16 @@ case "$revision" in *[!0-9a-f]*|'') exit 1 ;; esac
 # Only the reviewed six-package kernel closure may come from dated backports.
 # Stable libraries remain on their authenticated Debian/security versions.
 python3 -I lab/appliance/kernel.py --apply >/var/log/regalia-kernel-update.json
+mkdir -p /tmp/regalia-tpm-source
+tar -xf /tmp/regalia-tpm-source.tar -C /tmp/regalia-tpm-source
+python3 -I tools/lab_cli.py appliance-tpm-build --bundle /tmp/regalia-tpm-source \
+  --output /tmp/regalia-tpm-build --install >/var/log/regalia-tpm-build.log
+install -d -m 0700 /usr/local/share/regalia-appliance/tpm-proof
+for name in tpm-source-package.json compiler-packages.tsv first.tpm2 second.tpm2 tpm2-tools.deb second-tpm2-tools.deb; do
+  cp "/tmp/regalia-tpm-build/$name" /usr/local/share/regalia-appliance/tpm-proof/
+done
+cp /usr/bin/tpm2 /usr/local/share/regalia-appliance/tpm-proof/installed.tpm2
+cp /tmp/regalia-tpm-build/tpm-source-package.json /var/log/regalia-tpm-source-package.json
 # Debian authenticates the compiler package. Go's automatic newer toolchain and
 # module downloads use its checksum database; never disable those checks.
 export GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GOTOOLCHAIN=auto
@@ -106,7 +116,7 @@ SystemMaxUse=32M
 EOF
 # No credentials or private configuration are generated in this reusable disk.
 # Remove build-time tools, source, toolchain caches and installer SSH host keys.
-apt-get purge -y golang-go gcc libc6-dev
+apt-get purge -y golang-go gcc libc6-dev make autoconf automake autoconf-archive libtool libtss2-dev libssl-dev pkg-config dpkg-dev
 # The reusable appliance has no interactive administration account. Editors
 # belong on recovery media; remove their parser attack surface from this disk.
 for package in vim-tiny vim-common nano; do
@@ -147,7 +157,8 @@ for binary in /usr/bin/mount /usr/bin/umount; do
   dpkg-statoverride --update --add root root 0755 "$binary"
 done
 apt-get clean
-rm -rf /root/go /root/.cache /tmp/regalia-build /tmp/regalia-source /tmp/regalia-source.tar
+rm -rf /root/go /root/.cache /tmp/regalia-build /tmp/regalia-source /tmp/regalia-source.tar \
+  /tmp/regalia-tpm-build /tmp/regalia-tpm-source /tmp/regalia-tpm-source.tar
 rm -f /etc/ssh/ssh_host_* /var/lib/systemd/random-seed
 rm -rf /var/lib/apt/lists/*
 truncate -s 0 /etc/machine-id

@@ -7,7 +7,8 @@ import subprocess
 CANDIDATES = ('locales', 'libc-l10n', 'util-linux-locales', 'eject', 'fdisk', 'task-english', 'tasksel', 'tasksel-data',
               'libfdisk1', 'installation-report', 'laptop-detect', 'os-prober',
               'binutils', 'binutils-common', 'binutils-x86-64-linux-gnu', 'libbinutils',
-              'libctf0', 'libctf-nobfd0', 'libgprofng0', 'libsframe1')
+              'libctf0', 'libctf-nobfd0', 'libgprofng0', 'libsframe1',
+              'libcurl3t64-gnutls', 'libcurl4t64', 'libtss2-fapi1t64')
 REQUIRED = ('linux-image-amd64', 'systemd-sysv', 'cryptsetup-initramfs', 'wireguard-tools',
             'nftables', 'apparmor', 'apparmor-utils', 'tpm2-tools', 'opensc', 'pcscd',
             'python3', 'ca-certificates', 'util-linux', 'mount')

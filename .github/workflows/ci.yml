@@ -52,6 +52,7 @@ jobs:
         run: |
           python3 -Es -m deploy.images.fetch_debian deploy/images/.artifacts/debian
           python3 -Es -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
+          python3 -Es -m deploy.images.source deploy/images/.artifacts/tpm-source --snapshot deploy/images/.artifacts/package-snapshot
       - name: Install and exercise the actual daemon inside the appliance
         if: steps.recipe.outputs.changed == 'true'
         run: sudo -u "$(id -un)" -g kvm -- python3 -I tools/lab_cli.py appliance-build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
@@ -80,6 +81,8 @@ jobs:
           path: |
             lab/appliance/.artifacts/**/build-report.json
             lab/appliance/.artifacts/**/kernel-update.json
+            lab/appliance/.artifacts/**/tpm-source-package.json
+            lab/appliance/.artifacts/**/compiler-packages.tsv
             lab/appliance/.artifacts/**/install.log
             lab/appliance/.artifacts/**/install.stderr
             lab/appliance/.artifacts/**/acceptance.log

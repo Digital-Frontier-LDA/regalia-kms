@@ -15,6 +15,8 @@ import time
 from deploy.images.verify import VerificationError, hash_regular, require, verify_gpg
 from .probe import normal_boot
 from deploy.images.snapshot import validate as validate_snapshot, check_installed, render_preseed, POLICY as SNAPSHOT_POLICY
+from deploy.images.source import validate as validate_source
+from deploy.images.source_package import validate as validate_source_package, installed_binding
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +59,8 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
     require(hashlib.sha256(snapshot_policy_data).hexdigest() == package_report["policy_sha256"],
             "package snapshot policy changed during verification")
     snapshot_policy = json.loads(snapshot_policy_data)
+    source_bundle = ROOT / "deploy/images/.artifacts/tpm-source"
+    source_report = validate_source(source_bundle)
     policy = json.loads((ROOT / "deploy/images/debian-policy.json").read_text())
     media_report = verify_gpg(media / policy["image"], media / policy["checksum"],
                               media / policy["signature"], media / "debian-cd.pub",
@@ -66,7 +70,8 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
     staging = Path(tempfile.mkdtemp(prefix=".appliance-build-", dir=output.parent))
     report = {"schema": "regalia.appliance-build/v1", "status": "building",
               "evidence_class": "emulated", "production_approved": False, "acceleration": acceleration,
-              "installer": media_report, "package_snapshot": package_report, "sources": {}}
+              "installer": media_report, "package_snapshot": package_report,
+              "authenticated_tpm_source": source_report, "sources": {}}
     try:
         frozen = staging / "inputs"
         frozen.mkdir()
@@ -87,6 +92,13 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
             archive.add(metadata, arcname="BUILD_COMMIT")
         metadata.unlink()
         report["source_archive_sha256"] = hashlib.sha256(source_tar.read_bytes()).hexdigest()
+        # Only freshly authenticated public source inputs enter the guest.
+        # The complete signed index chain stays on the host for final admission.
+        source_input = frozen / "regalia-tpm-source.tar"
+        with tarfile.open(source_input, "w") as archive:
+            for name in (*source_report["files"], "verification.json"):
+                archive.add(source_bundle / name, arcname=name, recursive=False)
+        report["tpm_source_bundle_sha256"] = hash_regular(source_input, "sha256")[0]
         for source, destination in (("/install.amd/vmlinuz", "vmlinuz"), ("/install.amd/initrd.gz", "installer.gz")):
             command(["xorriso", "-osirrox", "on", "-indev", str(media / policy["image"]),
                      "-extract", source, str(staging / destination)], capture_output=True)
@@ -135,7 +147,11 @@ def build(media: Path, output: Path, firmware: Path, variables: Path, timeout: i
             digest = hashlib.file_digest(handle, "sha256").hexdigest()
         report.update({"status": "passed", "elapsed_seconds": round(time.monotonic() - started),
                        "disk_sha256": digest, "acceleration": acceleration})
-        report["installed_package_binding"] = check_installed(export / "packages.tsv", package_inventory)
+        recipe_hashes = {name: hashlib.sha256(command(["git", "show", commit + ":lab/appliance/" + name],
+                                                     cwd=ROOT, capture_output=True).stdout).hexdigest()
+                         for name in ("tpm_build.py", "tpm_profile.py")}
+        admitted = validate_source_package(export, source_bundle, package_inventory, recipe_hashes)
+        report["installed_package_binding"] = installed_binding(export / "packages.tsv", package_inventory, admitted)
         report["export"] = {path.name: hash_regular(path, "sha256")[0] for path in export.iterdir()}
         # Preserve useful final artifacts and evidence, not the compiler source
         # snapshot or installer initramfs. Failed builds retain diagnostics.

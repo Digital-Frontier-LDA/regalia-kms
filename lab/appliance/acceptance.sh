@@ -33,6 +33,14 @@ check ip link delete regalia-wg-test
 # TPM libraries must load; physical attestation still requires the hardware lab.
 check tpm2_getcap --help
 check modprobe tpm_tis
+check test "$(dpkg-query -W -f='${Version}' tpm2-tools)" = 5.7-1+regalia1
+check test -r /var/log/regalia-tpm-source-package.json
+check test ! -e /usr/bin/tpm2_getekcertificate
+check sh -c 'ldd /usr/bin/tpm2 | grep -q "libtss2-esys"'
+check sh -c '! ldd /usr/bin/tpm2 | grep -E "libcurl|libtss2-fapi|not found"'
+for tool in tpm2_quote tpm2_checkquote tpm2_unseal tpm2_import tpm2_nvread tpm2_nvreadpublic; do
+  check test -x "/usr/bin/$tool"
+done
 check test -x /usr/sbin/sulogin
 echo REGALIA_KERNEL_NETWORK_CRYPTO_PASS
 /usr/local/sbin/regalia-kms -version
@@ -53,7 +61,7 @@ check sh -c 'test "$(cat /sys/module/apparmor/parameters/enabled)" = Y'
 check sh -c 'test "$(cat /proc/sys/kernel/dmesg_restrict)" = 1'
 check sh -c 'test "$(cat /proc/sys/kernel/kptr_restrict)" = 2'
 check sh -c 'test -z "$(swapon --noheadings --show)"'
-for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vim-tiny vim-common nano locales libc-l10n util-linux-locales eject fdisk task-english tasksel tasksel-data libfdisk1 installation-report laptop-detect os-prober binutils binutils-common binutils-x86-64-linux-gnu libbinutils libctf0 libctf-nobfd0 libgprofng0 libsframe1; do
+for package in openssh-server docker.io avahi-daemon cups bluez golang-go gcc vim-tiny vim-common nano locales libc-l10n util-linux-locales eject fdisk task-english tasksel tasksel-data libfdisk1 installation-report laptop-detect os-prober binutils binutils-common binutils-x86-64-linux-gnu libbinutils libctf0 libctf-nobfd0 libgprofng0 libsframe1 libcurl3t64-gnutls libcurl4t64 libtss2-fapi1t64; do
   if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -q '^installed$'; then
     fail "unexpected-package-$package"
   fi
@@ -171,6 +179,10 @@ cp /var/log/regalia-packages.tsv /mnt/regalia-export/packages.tsv
 cp /var/log/regalia-go-version.txt /mnt/regalia-export/go-version.txt
 cp /var/log/regalia-binary-build.txt /mnt/regalia-export/binary-build.txt
 cp /var/log/regalia-kernel-update.json /mnt/regalia-export/kernel-update.json
+cp /usr/local/share/regalia-appliance/tpm-proof/* /mnt/regalia-export/
+# Compilation proof is exported for admission, then physically removed before
+# the exact final filesystem is scanned. No duplicate binaries remain in it.
+rm -rf /usr/local/share/regalia-appliance/tpm-proof
 cp /usr/local/sbin/regalia-kms /mnt/regalia-export/regalia-kms
 # Remove the automatic verification boot flag after the successful prototype
 # test; normal boots retain the same commissioning and network restrictions.

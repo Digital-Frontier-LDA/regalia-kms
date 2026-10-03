@@ -103,6 +103,14 @@ remove or weaken that enrollment step.
 
 ## Recommendation
 
+The appliance recipe now proposes a separately admitted local Debian package.
+See [source package qualification](../../deploy/images/VULNERABILITY-REMEDIATION.md).
+The host's verifier remains mandatory: an unsigned local package is not silently
+added to the signed-index inventory. One exact source-built package is bound to
+freshly authenticated sources, the reviewed recipe, archive-bound compiler
+inputs and reproducible executable/package bytes. All other packages retain
+their signed-index checks; the High/Critical gate is unchanged.
+
 Package the candidate with truthful Debian/source metadata, bind it to freshly
 authenticated sources, compiler inputs and reproducible output, and verify its
 complete dependency closure. Then physically remove unused runtime curl/FAPI

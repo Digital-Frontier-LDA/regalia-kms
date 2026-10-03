@@ -24,7 +24,9 @@ Commissioning has two halves:
 2. In RBSU (F9): **Restore Default System Settings**, then **clear the TPM**.
 3. Replace the disks, or securely erase them.
 4. Record them in the evidence: the server serial (`host_serial`), `system_rom_version`,
-   `ilo_firmware_version`, `tpm_ek_certificate_present` (`tpm2_getekcertificate`), and
+   `ilo_firmware_version`, `tpm_ek_certificate_present` (read the RSA/ECC NV certificate
+   with `tpm2_nvread`; the complete signed Debian `tpm2_getekcertificate` tool belongs
+   on separate enrollment/recovery media when a network fetch is required), and
    `used_hardware_intake: true` once steps 1-3 are done.
 
 ## 2. Firmware settings (RBSU / iLO)
