@@ -1,0 +1,103 @@
+{
+  "candidate_origin_receipt_sha256": "53b06ef1e5212e7c9e11e33521f60560d80481d7228b1e64287666149d901c5d",
+  "candidate_package_sha256": {
+    "bsdutils": "5b96078b7d66e5bb5bbfbe9e4a33409159d0b03529526d61a8299048b60ba378",
+    "libblkid1": "3141567091c7bf9569168906474e7b9aa630754f489fa0acf3bdd8bc092db426",
+    "liblastlog2-2": "3f3823761d562b8a30945c247c625983aee6a190386eb24fe19b186a5c74ec6e",
+    "libmount1": "9907fd755337e67c645ce70a22492c10d48324357c233d503549cdb8b289b9e6",
+    "libsmartcols1": "be587c7ca293d8b6b25ecd5dc79c7bdbc55322f5300bcc22623ad9a24c6afc57",
+    "libuuid1": "e13f0ab2fc7fd0d566be9cf2f2c913afeb1d566256ba480f1de364f1aa8593aa",
+    "mount": "28d8fafe295970e32a3ac8576f86b7652506d9c784e75e204b26fd5b80350312",
+    "util-linux": "48ab7d963bf39771826030d2278629539a2f2ec2e1e3694cfbaa7b86d4cdb342",
+    "util-linux-extra": "8a9720e67414bfd50bb75ffcd0f7c35716ff0bb7047d5f706941e0a58261b004"
+  },
+  "decision": "Complete all utility, TPM and Go builds against archive dependencies; purge compiler dependencies and perform bounded minimization before replacing utility runtime libraries. Require apt-get check after local installation.",
+  "failed_ci": {
+    "build_report_sha256": "35ac4d7e75794021bb1b2a916aad524507ee79d29dd2ef64fd9392e21f97c7c8",
+    "failure": "APT compiler cleanup refuses unmet dependencies after local utility installation; no accepted rootfs or scan.",
+    "head": "d6561c7e50410a44e32669f84b1b26ea59544182",
+    "install_log_sha256": "4502e9d7f05a6100a72e1594f68a0507ed643175e0a87c087c483ad37b79c12c",
+    "run": 37150303254
+  },
+  "limitations": [
+    "Native trial uses previously reproduced ARM64 packages on an unsigned cached development base; it does not rebuild source or establish complete appliance qualification.",
+    "The direct trial executes cleanup/install operations, not the complete updated guest helper; full guest qualification is pending.",
+    "No final rootfs, boot, confinement or updated scan is claimed for the failed AMD64 run. The last measured scan remains 105 Critical and 636 High."
+  ],
+  "local_checks": {
+    "actionlint": "passed",
+    "documented_invocation_tests": 2,
+    "image_guard_tests": 111,
+    "python_isolation_tests": 5,
+    "shell_syntax": "passed"
+  },
+  "log_sha256": {
+    "cleanup_before_install": "eded2cc8dcb3d19daf224b9ded163442399b8b9c0d31be186cf0d6c56d740a3f",
+    "image_guards": "99bc7b5ae6fa2d02026edad8b2cfd04684af7546c5b6a70d4c41795f9516eead",
+    "install_before_cleanup": "60a6d57edb7501a6598b4a618cef319aafc0b417da4d57bc997f897925ed4416",
+    "isolation_guards": "c43b7931b7a056a3cea4ed34c1d85aae80de4178abe8e46fce11bffcae209971"
+  },
+  "native_control_failure": {
+    "archive_version": "2.41.5-0+deb13u1",
+    "candidate_version": "2.42.4-0+regalia1",
+    "dpkg_audit_alone_detects_conflict": false,
+    "exact_version_consumers": [
+      "bsdextrautils -> libsmartcols1",
+      "libblkid-dev -> libblkid1",
+      "uuid-dev -> libuuid1"
+    ]
+  },
+  "native_image": {
+    "architecture": "arm64",
+    "host_mounts": "read-only candidate packages and two public Python modules; no socket or hardware mounts",
+    "id": "sha256:79c07a2dc1635fbf3315661c99cb3814b7de0093d37c958684995d8c9eb346d3",
+    "network": "none",
+    "publisher_signature_verified": false
+  },
+  "native_smoke": {
+    "checks": [
+      "UUID API",
+      "LUKS2 header creation",
+      "valid LUKS key",
+      "wrong LUKS key rejected",
+      "blkid LUKS type/UUID",
+      "findmnt fstab parser",
+      "six CLI load checks"
+    ],
+    "limits": [
+      "No dm-crypt mapping, actual mount, measured boot, PAM login or hardware operations."
+    ],
+    "loaded_libraries": [
+      "libmount.so.1",
+      "libblkid.so.1",
+      "libuuid.so.1",
+      "libsmartcols.so.1",
+      "liblastlog2.so.2"
+    ],
+    "packages": {
+      "bsdutils": "1:2.42.4-0+regalia1",
+      "libblkid1": "2.42.4-0+regalia1",
+      "liblastlog2-2": "2.42.4-0+regalia1",
+      "libmount1": "2.42.4-0+regalia1",
+      "libsmartcols1": "2.42.4-0+regalia1",
+      "libuuid1": "2.42.4-0+regalia1",
+      "mount": "2.42.4-0+regalia1",
+      "util-linux": "2.42.4-0+regalia1",
+      "util-linux-extra": "2.42.4-0+regalia1"
+    },
+    "production_approved": false,
+    "schema": "regalia.util-linux-native-smoke/v1",
+    "status": "passed"
+  },
+  "optional_removal": "bsdextrautils: unused supplemental BSD tools, absent from the last qualified appliance SBOM. Required-role and bounded APT closure checks remain enforced.",
+  "production_approved": false,
+  "proposed_recipe_sha256": {
+    "lab/appliance/finish.sh": "3bf92cf3704d2f43fb198330f73b510962b260b7d2a0578a44ce377faac765df",
+    "lab/appliance/minimize.py": "b6d1c57d57c8de647e44896b53f890f721f7d172b8b1a76a1cb8cd7c3594b467",
+    "lab/appliance/util_build.py": "0f62630c395b6072f5d4aa08aa8b4092074e881892b2cc1d7ee6aae230396e31",
+    "lab/appliance/util_smoke.py": "f833b81acd2790ab3ccd7ec9dad1b9c3ba6c037d76b5a7771e74acb02d596220"
+  },
+  "schema": "regalia.util-linux-cleanup-order-review/v1",
+  "status": "native_operations_passed",
+  "tested_native_driver_sha256": "21f70f20fbc8df8e8b467fccb8eb440befa4bb17981ed09f2c0b7137058602de"
+}

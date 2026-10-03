@@ -42,13 +42,6 @@ for name in tpm-source-package.json compiler-packages.tsv first.tpm2 second.tpm2
 done
 cp /usr/bin/tpm2 /usr/local/share/regalia-appliance/tpm-proof/installed.tpm2
 cp /tmp/regalia-tpm-build/tpm-source-package.json /var/log/regalia-tpm-source-package.json
-python3 -I tools/lab_cli.py appliance-util-build --output /tmp/regalia-util-build \
-  --install-built >/var/log/regalia-util-install.log
-python3 -I tools/lab_cli.py appliance-util-smoke >/var/log/regalia-util-smoke.json
-install -d -m 0700 /usr/local/share/regalia-appliance/util-proof
-for name in util-source-build.json compiler-packages.tsv first.log second.log first-packages second-packages; do
-  cp -r "/tmp/regalia-util-build/$name" /usr/local/share/regalia-appliance/util-proof/
-done
 # Debian authenticates the compiler package. Go's automatic newer toolchain and
 # module downloads use its checksum database; never disable those checks.
 export GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GOTOOLCHAIN=auto
@@ -146,6 +139,17 @@ apt-get autoremove --purge -y
 # from compilation. APT must not expand this list or remove required roles.
 python3 -I /tmp/regalia-source/lab/appliance/minimize.py --apply >/var/log/regalia-minimization.json
 apt-get autoremove --purge -y
+# Install the new utility libraries only after every compiler consumer is gone.
+# Debian's libblkid-dev and uuid-dev require the exact archive library version;
+# replacing those libraries earlier leaves a dependency conflict that prevents
+# normal APT cleanup. All source and Go builds above use archive dependencies.
+python3 -I tools/lab_cli.py appliance-util-build --output /tmp/regalia-util-build \
+  --install-built >/var/log/regalia-util-install.log
+python3 -I tools/lab_cli.py appliance-util-smoke >/var/log/regalia-util-smoke.json
+install -d -m 0700 /usr/local/share/regalia-appliance/util-proof
+for name in util-source-build.json compiler-packages.tsv first.log second.log first-packages second-packages; do
+  cp -r "/tmp/regalia-util-build/$name" /usr/local/share/regalia-appliance/util-proof/
+done
 # A fresh baseline carries one current kernel. CURRENT/NEXT overlap belongs to
 # the controlled update procedure, rather than an unreviewed installer fallback.
 keep_kernel=$(dpkg-query -W -f='${Depends}\n' linux-image-amd64 | tr ',' '\n' | awk '$1 ~ /^linux-image-[0-9]/ {print $1}')

@@ -195,6 +195,34 @@ fixtures reject missing aliases, redirected targets, aliases on ARM64 and
 common-path replacement. All nine actual native packages still pass. No AMD64
 scan or complete appliance qualification is claimed for either failed run.
 
+### Compiler cleanup before runtime library replacement
+
+AMD64 run `37150303254` (`d6561c7`) reaches compiler cleanup, then refuses
+because APT sees unmet dependencies. It produces no accepted filesystem or
+new scan. A network-isolated native control reproduces the underlying conflict:
+archive `libblkid-dev`, `uuid-dev` and `bsdextrautils` require their exact old
+library versions. Normal dpkg installation can leave those reverse dependencies
+broken without reporting them through `dpkg --audit`.
+
+The recipe now completes utility, TPM and Go compilation with archive
+dependencies, purges compiler packages, performs the existing bounded
+minimization and only then installs the nine candidate runtime packages.
+Unused `bsdextrautils` is an explicit optional removal candidate; it is absent
+from the last qualified image's SBOM. Required-role checks and refusal of any
+expanded APT removal remain. Installation additionally requires `apt-get check`,
+and failed command diagnostics retain bounded stdout as well as stderr.
+
+The revised direct operations pass in a disposable, network-isolated ARM64
+container: the supplemental-tool removal plan contains only `bsdextrautils`,
+both ordered dpkg batches succeed, dependency checks pass, and the existing
+LUKS/UUID/library smoke tests pass. All 111 image guards, five Python isolation
+guards and two documented-invocation guards pass. The
+[cleanup review receipt](evidence/util-linux-cleanup-order-20261003.json)
+binds the actual failed CI diagnostics, native logs, package bytes and proposed
+recipe. This uses previously reproduced packages and an unsigned cached base;
+the updated complete AMD64 image still needs boot, confinement, rootfs admission
+and the unchanged scanner gate. All last measured findings remain open.
+
 ## Residual Risk
 
 The initial 2.41.6 evaluation built no Debian packages. The 2.42.4 evaluation

@@ -35,7 +35,8 @@ ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C",
 
 def command(args):
     result = subprocess.run(args, env=ENV, capture_output=True, text=True, timeout=900)
-    require(result.returncode == 0, args[0] + " failed: " + result.stderr[-3000:])
+    require(result.returncode == 0, args[0] + " failed: stdout=" + result.stdout[-3000:]
+            + "; stderr=" + result.stderr[-3000:])
     return result.stdout
 
 
@@ -140,6 +141,7 @@ def install(output):
     command(["dpkg", "--install", *(packages[name] for name in libraries)])
     command(["dpkg", "--install", *(packages[name] for name in PACKAGES if name not in libraries)])
     require(command(["dpkg", "--audit"]).strip() == "", "utility installation left broken packages")
+    command(["apt-get", "check"])
     command(["apt-mark", "manual", *PACKAGES])
     for name in PACKAGES:
         expected = ("1:" if name == "bsdutils" else "") + util_package.VERSION
