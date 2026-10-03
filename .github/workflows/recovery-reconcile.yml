@@ -1,0 +1,42 @@
+name: Explicit recovery reconciliation
+on:
+  pull_request:
+    paths:
+      - 'deploy/baremetal/recovery-reconcile.py'
+      - 'deploy/baremetal/recovery_state.py'
+      - 'deploy/baremetal/recovery-key.sh'
+      - 'lab/recovery/**'
+      - 'tests/test_recovery_reconcile.py'
+      - '.github/workflows/recovery-reconcile.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reconcile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install real cryptsetup for private regular-file fixtures
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cryptsetup-bin strace
+      - name: Verify custody, ownership and instance-lock refusals, and a kill inside a retirement
+        env:
+          REGALIA_EXPECT_CRYPTSETUP: '1'
+        run: python3 -Es -m unittest discover -s tests -p test_recovery_reconcile.py -v
+      - name: Interrupt every reconciliation command and repeat explicit selections
+        run: |
+          mkdir -p "$RUNNER_TEMP/recovery-reconcile"
+          python3 -Es lab/recovery/reconcile_matrix.py \
+            --script deploy/baremetal/recovery-reconcile.py \
+            --output "$RUNNER_TEMP/recovery-reconcile/matrix.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: explicit-recovery-reconciliation-evidence
+          path: ${{ runner.temp }}/recovery-reconcile
+          if-no-files-found: error
+          retention-days: 14
