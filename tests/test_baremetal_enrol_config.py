@@ -21,6 +21,7 @@ def example(name):
 
 class Config(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(os.umask, os.umask(0o022))     # root's umask on a host
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         self.prefix = self.d + "/root"
@@ -107,7 +108,11 @@ class Config(unittest.TestCase):
         class Crash(BaseException):
             pass
 
-        def crash(*a, **k):
+        real = os.fchmod
+
+        def crash(fd, mode):
+            if mode != 0o644:                                   # the directories on the way: made as usual
+                return real(fd, mode)
             raise Crash()
         # a kill runs no `finally`: crash where nothing would clean up, after the temporary file was created
         with unittest.mock.patch.object(enrol.os, "fchmod", crash):
@@ -130,3 +135,50 @@ class Config(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrustedDirectories(unittest.TestCase):
+    """Every directory enrolment writes under, and every one above it, is reached one level at a time without
+    following a link and must be closed to group and others (or sticky with our own entry below); missing ones
+    are made inside the descriptor of the one above, never by os.makedirs (read of #256)."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        os.chmod(self.d, 0o755)
+
+    def test_missing_directories_are_made_one_level_at_a_time(self):
+        enrol._ensure_trusted_dir(self.d + "/etc/regalia")
+        self.assertTrue(os.path.isdir(self.d + "/etc/regalia"))
+
+    def test_a_link_anywhere_on_the_way_is_refused(self):
+        elsewhere = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        os.symlink(elsewhere, self.d + "/etc")
+        with self.assertRaisesRegex(enrol.Refused, "is not a real directory"):
+            enrol._ensure_trusted_dir(self.d + "/etc/regalia")
+        self.assertFalse(os.path.exists(elsewhere + "/regalia"), "nothing was made through the link")
+
+    def test_a_directory_open_to_others_on_the_way_is_refused(self):
+        os.mkdir(self.d + "/var", 0o755)
+        os.chmod(self.d + "/var", 0o777)
+        with self.assertRaisesRegex(enrol.Refused, "closed to group and others"):
+            enrol._ensure_trusted_dir(self.d + "/var/lib/regalia")
+        self.assertFalse(os.path.exists(self.d + "/var/lib"), "nothing was made under it")
+
+    def test_the_state_directory_is_handed_over_once_and_resumed_only_at_0755(self):
+        state = self.d + "/var/lib/regalia"
+        enrol._hand_over(state, chown=False)
+        self.assertEqual(stat.S_IMODE(os.stat(state).st_mode), 0o755)
+        enrol._hand_over(state, chown=False)                  # resumed: already "regalia-sync's", at 0755
+        os.chmod(state, 0o777)
+        with self.assertRaisesRegex(enrol.Refused, "not 0755"):
+            enrol._hand_over(state, chown=False)
+
+    def test_a_state_directory_that_is_a_link_is_refused(self):
+        enrol._ensure_trusted_dir(self.d + "/var/lib")
+        target = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, target, True)
+        os.symlink(target, self.d + "/var/lib/regalia")
+        with self.assertRaisesRegex(enrol.Refused, "is not a real directory"):
+            enrol._hand_over(self.d + "/var/lib/regalia", chown=False)
