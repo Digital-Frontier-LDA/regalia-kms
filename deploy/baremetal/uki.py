@@ -727,9 +727,30 @@ def _ours_path(path, files):
     return os.path.basename(path) == RESET_DROPIN[0] and entry is not None and entry[1] == RESET_DROPIN[1]
 
 
+def _as_installed(root, path, entry):
+    """Whether an initrd entry is what the build machine has installed at that path (or at its /lib, /bin, /sbin
+    form on a merged-/usr tree): the same type, and the same bytes or link target."""
+    for candidate in [path] + ([path[4:]] if path.startswith("usr/") else []):
+        full = os.path.join(root, candidate)
+        if not os.path.lexists(full):
+            continue
+        mode = entry[0]
+        if stat_link(mode):
+            return os.path.islink(full) and os.readlink(full) == entry[1].decode("utf-8", "surrogateescape")
+        if stat_regular(mode):
+            if os.path.islink(full) or not os.path.isfile(full):
+                return False
+            with open(full, "rb") as f:
+                return sha256(f.read()) == sha256(entry[1])
+        return stat_dir(mode) and os.path.isdir(full) and not os.path.islink(full)
+    return False
+
+
 def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
     """The inventory of an initrd (`uki initrd-inventory`): every entry, classed "ours", "generated" (no package
-    owns it on the build machine) or "package" (with its owner), sorted so the generated lines read together.
+    owns it on the build machine, or dracut put something else at a package's path: origin "dracut-over:PKG=VER")
+    or "package" (with its owner, and what the build machine has installed there), sorted so the generated lines
+    read together. Only "package" entries are checked against the archive (deploy/baremetal/debverify.py).
     Without `root` (the build machine's root, for its dpkg database) nothing is classed but ours."""
     files = _Files(initrd_files(data, run, tools))
     owners = _owners(root) if root else None
@@ -745,6 +766,10 @@ def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
         else:
             owner = owners.get(raw) or (owners.get(raw[4:]) if raw.startswith("usr/") else None)
             cls, origin = ("package", owner) if owner else ("generated", "dracut")
+            if owner and not _as_installed(root, raw, files[raw]):
+                # a package's path holding what dracut put there instead (its own unit, a link to initrd-release, a
+                # shell where a tool was): dracut's, for the reader, and never "verified" against the package (#246)
+                cls, origin = "generated", "dracut-over:" + owner
         kind, mode, owner_ids, value = state.split(" ")
         rows.append(({"ours": 0, "generated": 1, "unclassified": 1, "package": 2}[cls], path,
                      " ".join((cls, origin, kind, mode, owner_ids, path, value))))

@@ -956,10 +956,19 @@ class InitrdReview(Case):
             f.write("Package: udev\nStatus: install ok installed\nVersion: 257.13-1\n\nPackage: gone\nStatus: deinstall ok config-files\nVersion: 1\n")
         with open(os.path.join(root, "var/lib/dpkg/info/udev.list"), "w") as f:
             f.write("/lib/udev/rules.d/60-block.rules\n/usr/lib/udev\n")
-        data = unlock_initrd({"usr/lib/udev/rules.d/60-block.rules": (0o100644, b"r"), "etc/initrd-release": (0o100644, b"x")})
+        os.makedirs(os.path.join(root, "lib/udev/rules.d"))
+        with open(os.path.join(root, "lib/udev/rules.d/60-block.rules"), "wb") as f:
+            f.write(b"r")                                       # what the build machine has installed
+        with open(os.path.join(root, "var/lib/dpkg/info/udev.list"), "a") as f:
+            f.write("/lib/udev/rules.d/61-other.rules\n")
+        os.symlink("graphical.target", os.path.join(root, "lib/udev/rules.d/61-other.rules"))
+        data = unlock_initrd({"usr/lib/udev/rules.d/60-block.rules": (0o100644, b"r"), "etc/initrd-release": (0o100644, b"x"),
+                              "usr/lib/udev/rules.d/61-other.rules": (0o120777, b"60-block.rules")})
         lines = uki.initrd_inventory_lines(data, root=root)
         by_path = {l.split(" ")[5]: l.split(" ")[:2] for l in lines}
         self.assertEqual(by_path["usr/lib/udev/rules.d/60-block.rules"], ["package", "udev=257.13-1"])
+        # a package's path where dracut put something else (#246): dracut's, read by the reviewer, not "verified"
+        self.assertEqual(by_path["usr/lib/udev/rules.d/61-other.rules"], ["generated", "dracut-over:udev=257.13-1"])
         self.assertEqual(by_path["etc/initrd-release"], ["generated", "dracut"])
         self.assertEqual(by_path["usr/lib/systemd/system/regalia-unlock.service"], ["ours", "regalia-kms"])
         self.assertEqual(by_path["etc/crypttab"], ["ours", "regalia-kms"])
