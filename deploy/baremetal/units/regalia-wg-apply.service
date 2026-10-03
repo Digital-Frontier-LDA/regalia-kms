@@ -9,6 +9,10 @@ Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/depl
 After=network-online.target
 Wants=network-online.target
 
+# Triggered by a file regalia-sync writes: a burst of triggers must not stop the path unit (every run
+# re-verifies the chain, so running again is harmless).
+StartLimitIntervalSec=0
+
 [Service]
 Type=oneshot
 WorkingDirectory=/usr/lib/regalia-kms
@@ -16,6 +20,9 @@ WorkingDirectory=/usr/lib/regalia-kms
 Environment=PATH=/usr/sbin:/usr/bin
 ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json wg-apply
 User=root
+# the TPM (the anchor the published chain is checked against) is the tss group's: root without
+# CAP_DAC_OVERRIDE is held to file modes like anyone
+SupplementaryGroups=tss
 CapabilityBoundingSet=CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN
 NoNewPrivileges=yes
@@ -25,6 +32,10 @@ PrivateTmp=yes
 DevicePolicy=closed
 DeviceAllow=/dev/tpmrm0 rw
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+# it configures the network and sends nothing on it
+IPAddressDeny=any
+# a run that hangs (a TPM call that does not return) must not absorb every later trigger
+TimeoutStartSec=60
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes

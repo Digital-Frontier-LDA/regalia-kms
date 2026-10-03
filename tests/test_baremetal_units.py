@@ -33,8 +33,8 @@ class Units(unittest.TestCase):
         for name in SERVICES:
             self.assertIn('"%s"' % name[len("regalia-"):], choices)
 
-    def test_only_the_tunnel_unit_holds_a_capability_and_only_sync_is_not_root(self):
-        expected = {"regalia-authtime": "", "regalia-wg-apply": "CAP_NET_ADMIN", "regalia-admission": "", "regalia-sync": ""}
+    def test_each_unit_holds_at_most_the_one_capability_it_needs_and_only_sync_is_not_root(self):
+        expected = {"regalia-authtime": "CAP_DAC_OVERRIDE", "regalia-wg-apply": "CAP_NET_ADMIN", "regalia-admission": "", "regalia-sync": ""}
         for name, capabilities in expected.items():
             with self.subTest(name):
                 service = self.service(name)
@@ -49,14 +49,18 @@ class Units(unittest.TestCase):
             self.assertEqual(self.service(name)["User"], "root")
 
     def test_what_each_unit_may_write_and_reach(self):
-        self.assertEqual(self.service("regalia-authtime")["ReadWritePaths"], "/run/regalia")
+        self.assertEqual(self.service("regalia-authtime")["ReadWritePaths"], "/run/regalia /run/chrony")
+        self.assertEqual(self.service("regalia-authtime")["SupplementaryGroups"], "_chrony")
         self.assertEqual(self.service("regalia-authtime")["PrivateNetwork"], "yes")
         self.assertEqual(self.service("regalia-authtime")["RestrictAddressFamilies"], "AF_UNIX")
         admission = self.service("regalia-admission")
         self.assertEqual((admission["ReadWritePaths"], admission["StateDirectory"], admission["StateDirectoryMode"]),
                          ("/run/regalia", "regalia-admission", "0700"))
         self.assertEqual((admission["IPAddressDeny"], admission["IPAddressAllow"]), ("any", "fd72:6567:6c61::/48"))
-        self.assertNotIn("ReadWritePaths", self.service("regalia-wg-apply"))         # it writes nothing but the kernel's state
+        wg_apply = self.service("regalia-wg-apply")
+        self.assertNotIn("ReadWritePaths", wg_apply)                                 # it writes nothing but the kernel's state
+        self.assertEqual((wg_apply["IPAddressDeny"], wg_apply["TimeoutStartSec"]), ("any", "60"))
+        self.assertEqual(unit("regalia-wg-apply.service")["Unit"]["StartLimitIntervalSec"], "0")
         sync = self.service("regalia-sync")
         self.assertEqual((sync["StateDirectory"], sync["SupplementaryGroups"]), ("regalia-sync", "tss"))
         self.assertNotIn("ReadWritePaths", sync)
@@ -67,11 +71,18 @@ class Units(unittest.TestCase):
                 # which systemd removes (boot-session included) when that unit stops
                 self.assertNotIn("RuntimeDirectory", service)
                 if name != "regalia-authtime":
-                    self.assertEqual((service.get("DevicePolicy"), service.get("DeviceAllow")), ("closed", "/dev/tpmrm0 rw"))
+                    # the device cgroup lets it through; the file's mode (tss, 0660) needs the group
+                    self.assertEqual((service.get("DevicePolicy"), service.get("DeviceAllow"), service.get("SupplementaryGroups")),
+                                     ("closed", "/dev/tpmrm0 rw", "tss"))
 
     def test_the_node_configuration_s_directories_are_the_units(self):
-        """The admission service writes in its StateDirectory and sync in its own; node.py's defaults name the
-        same places, and the published chain is where the path unit watches."""
+        """The example configuration names the directories the units give each service, and the published
+        chain is where the path unit watches."""
+        import json
+        example = node.validate(json.loads((UNITS.parent / "node.example.json").read_text()))
+        self.assertEqual(example["state_dir"], "/var/lib/" + self.service("regalia-sync")["StateDirectory"])
+        self.assertEqual(example["admission_dir"], "/var/lib/" + self.service("regalia-admission")["StateDirectory"])
+        self.assertEqual(example["run_dir"], self.service("regalia-admission")["ReadWritePaths"])
         self.assertEqual(unit("regalia-wg-apply.path")["Path"]["PathChanged"], "/var/lib/regalia-sync/" + node.PUBLISHED)
         tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
         self.assertIn("d /run/regalia 0755 root root -", tmpfiles)

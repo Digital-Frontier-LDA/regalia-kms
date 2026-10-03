@@ -1,6 +1,10 @@
 # Whether this host's time is authenticated (#69, #80): asks chrony every 15 s and writes
 # /run/regalia/authtime.json, which the other services believe for 60 s (deploy/baremetal/authtime.py).
-# Root, because chrony's command socket answers root only; and nothing else: no capability, no network.
+# chronyc answers `authdata` only over chrony's Unix command socket, in /run/chrony (owned by _chrony,
+# mode 0750), and binds a socket of its own there: so this runs as root in the _chrony group with ONE
+# capability, CAP_DAC_OVERRIDE, to write that directory. It writes nothing else but /run/regalia, and has
+# no network at all. (Running as _chrony instead would let a compromised chronyd, which parses NTP from
+# the network, forge the status: the readers accept it only from root.)
 [Unit]
 Description=Regalia KMS: is time authenticated (chrony, NTS)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
@@ -16,11 +20,12 @@ ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/no
 Restart=always
 RestartSec=5s
 User=root
-CapabilityBoundingSet=
-AmbientCapabilities=
+SupplementaryGroups=_chrony
+CapabilityBoundingSet=CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_DAC_OVERRIDE
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/run/regalia
+ReadWritePaths=/run/regalia /run/chrony
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

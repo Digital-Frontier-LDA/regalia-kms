@@ -16,6 +16,8 @@ ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/no
 Restart=always
 RestartSec=5s
 User=root
+# the TPM (its quotes, the anchor) is the tss group's: root without capabilities is held to file modes
+SupplementaryGroups=tss
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes

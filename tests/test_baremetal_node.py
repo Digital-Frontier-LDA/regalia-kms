@@ -12,7 +12,7 @@ import unittest
 import unittest.mock
 
 from deploy.baremetal import membership as m
-from deploy.baremetal import node, sitecfg, wgsvc
+from deploy.baremetal import bootnet, node, sitecfg, wgsvc
 import tests.test_baremetal_heartbeat as hbt
 import tests.test_baremetal_replacement as rt
 
@@ -161,8 +161,11 @@ class Publishing(Case):
         n = self.node()
         self.store(n)
         path = n.path(node.PUBLISHED)
-        os.symlink("/etc/hostname", path)
-        self.refused("cannot be read", n.manifest, patience=0)
+        good = n.path("elsewhere.json")                                          # a valid chain, behind a link
+        with open(good, "wb") as f:
+            f.write(m.canonical([self.e1]))
+        os.symlink(good, path)
+        self.refused("cannot be read (OSError)", n.manifest, patience=0)          # ELOOP: the link is not followed
         os.unlink(path)
         os.mkfifo(path)                                                          # a FIFO would hang an open() for reading
         self.refused("is not a regular file", n.manifest, patience=0)
@@ -170,6 +173,13 @@ class Publishing(Case):
         with open(path, "wb") as f:
             f.write(b" " * (m.MAX_CHAIN_BYTES + 10))
         self.refused("at most", n.manifest, patience=0)                           # read up to the bound, and refused
+
+    def test_a_deeply_nested_chain_is_a_refusal(self):
+        n = self.node()
+        self.store(n)
+        with open(n.path(node.PUBLISHED), "wb") as f:
+            f.write(b"[" * 200000 + b"]" * 200000)
+        self.refused("nested too deeply", n.manifest, patience=0)
 
     def test_publishing_is_complete_or_not_at_all(self):
         n = self.node()
@@ -220,39 +230,93 @@ class BootSession(Case):
                 self.refused(reason, node.boot_session, self.run_dir())
 
 
-class Applying(Case):
-    def test_both_tunnels_are_made_what_the_manifest_says(self):
-        class Host:
-            def __init__(self, tpm):
-                self.tpm, self.calls, self.inputs = tpm, [], []
+class Host:
+    """ip, wg and the TPM as wg_apply uses them. `fail` names a command prefix that fails; `raises` one that
+    raises; `stuck` makes taking an interface down (and deleting it) fail."""
 
-            def __call__(self, argv, **kw):
-                if argv[0].startswith("tpm2_"):
-                    return self.tpm(argv, **kw)
-                self.calls.append(argv)
-                self.inputs.append(kw.get("input"))
-                if argv[:3] == ["wg", "show", "wg-svc"]:
-                    peers = [n["wg_service_pub"] for n in hbt.manifest()["nodes"] if n["node_id"] != "a"] + ["5e" * 32]
-                    return subprocess.CompletedProcess(argv, 0, "".join("%s\t%s/128\n" % (wgsvc.wg_key(k), wgsvc.address(k)) for k in peers).encode(), b"")
-                if argv[:3] == ["ip", "link", "show"]:
-                    return subprocess.CompletedProcess(argv, 1, b"", b"")
-                return subprocess.CompletedProcess(argv, 0, b"", b"")
-        host = Host(self.tpm)
+    def __init__(self, tpm, site, fail=None, raises=None, stuck=False):
+        self.tpm, self.site, self.fail, self.raises, self.stuck = tpm, site, fail, raises, stuck
+        self.calls, self.inputs = [], []
+
+    def __call__(self, argv, **kw):
+        if argv[0].startswith("tpm2_"):
+            return self.tpm(argv, **kw)
+        self.calls.append(argv)
+        self.inputs.append(kw.get("input"))
+        if self.raises and argv[:len(self.raises)] == self.raises:
+            raise KeyboardInterrupt()
+        if self.fail and argv[:len(self.fail)] == self.fail:
+            return subprocess.CompletedProcess(argv, 1, b"", b"")
+        if self.stuck and argv[:3] in (["ip", "link", "set"], ["ip", "link", "del"]) and argv[-1] in ("down", "wg-svc", "wg-unlock"):
+            if argv[-1] == "down" or argv[:3] == ["ip", "link", "del"]:
+                return subprocess.CompletedProcess(argv, 1, b"", b"")
+        if argv[:3] == ["wg", "show", "wg-svc"]:
+            peers = [n["wg_service_pub"] for n in hbt.manifest()["nodes"] if n["node_id"] != "a"] + ["5e" * 32]
+            return subprocess.CompletedProcess(argv, 0, "".join("%s\t%s/128\n" % (wgsvc.wg_key(k), wgsvc.address(k)) for k in peers).encode(), b"")
+        if argv[:3] == ["wg", "show", "wg-unlock"]:
+            wanted = wgsvc.expected(bootnet.peer_wg_conf(self.site, hbt.manifest()))
+            return subprocess.CompletedProcess(argv, 0, "".join("%s\t%s\n" % (wgsvc.wg_key(keys[0]), net) for net, keys in wanted.items()).encode(), b"")
+        if argv[:3] == ["ip", "link", "show"]:
+            return subprocess.CompletedProcess(argv, 1, b"", b"")
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+
+class Applying(Case):
+    def ready(self, **how):
+        self.tpm = hbt.FakeTpm()                                                  # a fresh node each time: TPM and state
+        for name in os.listdir(self.cfg["state_dir"]):
+            os.unlink(os.path.join(self.cfg["state_dir"], name))
+        host = Host(self.tpm, None, **how)
         n = self.node(run=host)
+        host.site = n.site
         anchor = n.anchor()
         anchor.define()
         store = m.Store(n.path("membership.json"), ROOT, anchor)
         store.commit(self.e1)
         node.publish(store, n.path(node.PUBLISHED))
+        return host, n
+
+    def downs(self, host):
+        return [c[4] for c in host.calls if c[:3] == ["ip", "link", "set"] and c[-1] == "down"]
+
+    def test_both_tunnels_are_made_what_the_manifest_says_and_read_back(self):
+        host, n = self.ready()
         self.assertEqual(node.wg_apply(n), 1)
         unlock_calls = [c for c in host.calls if "wg-unlock" in c]
         self.assertIn(["ip", "link", "add", "dev", "wg-unlock", "type", "wireguard"], unlock_calls)
         self.assertIn(["ip", "route", "replace", "10.89.0.2/32", "dev", "wg-unlock"], unlock_calls)
         syncconf = host.calls.index(["wg", "syncconf", "wg-unlock", "/dev/stdin"])
         self.assertTrue(host.inputs[syncconf].decode().startswith("[Interface]\nPrivateKey = %s\n" % PRIVATE))
-        self.assertNotIn(["ip", "link", "set", "dev", "wg-unlock", "down"], host.calls)
-        # wg-unlock is brought up only after its peers are applied
-        self.assertLess(unlock_calls.index(["wg", "syncconf", "wg-unlock", "/dev/stdin"]), unlock_calls.index(["ip", "link", "set", "dev", "wg-unlock", "up"]))
+        self.assertEqual(self.downs(host), [])
+        # wg-unlock is read back after its peers are applied, and brought up only then
+        order = [unlock_calls.index(c) for c in (["wg", "syncconf", "wg-unlock", "/dev/stdin"], ["wg", "show", "wg-unlock", "allowed-ips"],
+                                                 ["ip", "link", "set", "dev", "wg-unlock", "up"])]
+        self.assertEqual(order, sorted(order))
+
+    def test_any_refusal_leaves_both_tunnels_down(self):
+        """Found by an independent read: a chain that did not verify was refused before anything ran (the
+        tunnels kept their old peers), there was no read-back of wg-unlock, and a failure on wg-unlock left
+        wg-svc up."""
+        host, n = self.ready()
+        with open(n.path(node.PUBLISHED), "wb") as f:
+            f.write(b"garbage")
+        self.refused("not valid JSON", node.wg_apply, n)
+        self.assertEqual(self.downs(host), ["wg-svc", "wg-unlock"])
+        for label, fail, reason in (("a wg-unlock route", ["ip", "route", "replace", "10.89.0.3/32"], "failed"),
+                                    ("the wg-unlock read-back", ["wg", "show", "wg-unlock"], "cannot be read back"),
+                                    ("wg-svc's apply", ["wg", "syncconf", "wg-svc"], "could not be applied")):
+            with self.subTest(label):
+                host, n = self.ready(fail=fail)
+                self.refused(reason, node.wg_apply, n)
+                self.assertEqual(self.downs(host)[-2:], ["wg-svc", "wg-unlock"])
+
+    def test_an_interrupt_stays_an_interrupt_and_a_stuck_interface_is_said(self):
+        host, n = self.ready(raises=["wg", "syncconf", "wg-unlock"], stuck=True)
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            node.wg_apply(n)
+        self.assertIn("could not be taken down or deleted", " ".join(caught.exception.__notes__))
+        host, n = self.ready(fail=["wg", "syncconf", "wg-unlock"], stuck=True)
+        self.refused("could not be taken down or deleted", node.wg_apply, n)
 
 
 class Trail(Case):

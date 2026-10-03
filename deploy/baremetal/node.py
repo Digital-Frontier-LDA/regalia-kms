@@ -151,7 +151,10 @@ def published(path, root_key, anchor):
         raw = b"".join(chunks)
     finally:
         os.close(fd)
-    envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)
+    try:
+        envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)
+    except RecursionError:      # tens of thousands of nested brackets: what the writer sends is not a chain
+        raise Refused("the published membership chain is not valid JSON (nested too deeply)") from None
     require(isinstance(envelopes, list) and envelopes, "the published membership chain is empty")
     manifest = membership.accept_chain(None, envelopes, root_key)
     floor = anchor()
@@ -320,31 +323,42 @@ class Node:
 # ---- the four services ----
 
 def wg_apply(node):
-    """Make wg-svc and wg-unlock what the current manifest says. Refused leaves both DOWN: a peer list
-    that is not the manifest's is not one to answer on."""
-    manifest, mesh, svc = node.manifest(), node.site["boot_mesh"], node.site["service_mesh"]
-    underlays = {p["node_id"]: p["underlay"] for p in mesh["peers"]}
-    key = node.private_key()
-    wgsvc.reconcile(manifest, node.node_id, underlays, key, svc["authority"], svc["listen_port"], svc["interface"], node.run)
-    name = mesh["interface"]
-    # As wgsvc.reconcile: the interface carries nothing until its peers are applied, and any failure on
-    # the way takes it down (or deletes it, or says that it could do neither).
+    """Make wg-svc and wg-unlock what the current manifest says, and read both back. ANY refusal, the
+    manifest's own included (a chain that does not verify, or is below the TPM anchor), leaves BOTH
+    interfaces down: a peer list that is not the current manifest's is not one to answer on. An interrupt
+    stays an interrupt, with an interface that could not be taken down noted on it."""
+    mesh, svc = node.site["boot_mesh"], node.site["service_mesh"]
+    names = (svc["interface"], mesh["interface"])
     try:
+        manifest = node.manifest()
+        underlays = {p["node_id"]: p["underlay"] for p in mesh["peers"]}
+        key = node.private_key()
+        wgsvc.reconcile(manifest, node.node_id, underlays, key, svc["authority"], svc["listen_port"], svc["interface"], node.run)
+        name, text = mesh["interface"], bootnet.peer_wg_conf(node.site, manifest)
+        # as wgsvc.reconcile: nothing is carried until the peers are applied and read back
         present = node.run(["ip", "link", "show", "dev", name], capture_output=True, timeout=10).returncode == 0
         steps = ([] if present else [["ip", "link", "add", "dev", name, "type", "wireguard"]]) + [
             ["ip", "address", "replace", mesh["address"] + "/32", "dev", name]]
         for argv in steps:
             require(node.run(argv, capture_output=True, timeout=10).returncode == 0, "%s failed" % " ".join(argv[:4]))
-        done = node.run(["wg", "syncconf", name, "/dev/stdin"], capture_output=True, timeout=10,
-                        input=bootnet.with_key(bootnet.peer_wg_conf(node.site, manifest), key).encode())
+        done = node.run(["wg", "syncconf", name, "/dev/stdin"], capture_output=True, timeout=10, input=bootnet.with_key(text, key).encode())
         require(done.returncode == 0, "the unlock tunnel's configuration could not be applied")
+        wgsvc.verify(text, name, node.run)
         for argv in [["ip", "link", "set", "dev", name, "up"]] + [["ip", "route", "replace", p["address"] + "/32", "dev", name] for p in mesh["peers"]]:
             require(node.run(argv, capture_output=True, timeout=10).returncode == 0, "%s failed" % " ".join(argv[:4]))
     except BaseException as failure:
-        try:
-            wgsvc.down(name, node.run)
-        except Refused as stuck:
-            raise Refused("%s; and %s" % (failure, stuck)) from None
+        stuck = []
+        for name in names:
+            try:
+                wgsvc.down(name, node.run)
+            except Refused as refused:
+                stuck.append(str(refused))
+        if stuck and not isinstance(failure, Exception):
+            for note in stuck:
+                failure.add_note(note)
+            raise failure from None
+        if stuck:
+            raise Refused("%s; and %s" % (failure, "; ".join(stuck))) from None
         raise
     return manifest["epoch"]
 
