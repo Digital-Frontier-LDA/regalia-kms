@@ -395,7 +395,7 @@ func assertBaoArtifactsClean(t *testing.T, dir, pluginPath string, tokens ...str
 			if err != nil {
 				return err
 			}
-			if entry.IsDir() || path == pluginPath || strings.HasPrefix(entry.Name(), "bao-config-") {
+			if entry.IsDir() || entry.Type()&os.ModeSocket != 0 || path == pluginPath || strings.HasPrefix(entry.Name(), "bao-config-") {
 				return nil
 			}
 			data, err := os.ReadFile(path)
