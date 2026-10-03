@@ -3,8 +3,8 @@ set -eu
 umask 077
 exec >>/var/log/regalia-image-build.log 2>&1
 trap 'status=$?; if [ "$status" -ne 0 ]; then
-  echo REGALIA_BUILD_FAILED >/dev/ttyS0
   tail -n 60 /var/log/regalia-image-build.log >/dev/ttyS0
+  echo REGALIA_BUILD_FAILED >/dev/ttyS0
 fi' EXIT
 echo REGALIA_BUILD_BEGIN >/dev/ttyS0
 # d-i leaves its cdrom entry active until later installer cleanup. The chroot
@@ -111,6 +111,10 @@ for package in vim-tiny vim-common nano; do
     apt-get purge -y "$package"
   fi
 done
+# Remove automatic compiler dependencies before asking the bounded runtime
+# removal planner to purge binutils. Otherwise it would also have to remove the
+# still-installed compiler packages and correctly refuse an expanded plan.
+apt-get autoremove --purge -y
 # Remove reviewed installer/partition tools, unused libraries and binutils left
 # from compilation. APT must not expand this list or remove required roles.
 python3 -I /tmp/regalia-source/lab/appliance/minimize.py --apply >/var/log/regalia-minimization.json
