@@ -1223,9 +1223,11 @@ class SignedEvidence(unittest.TestCase):
         self.assertEqual((rc, self.judged_against), (0, ("a", ())), report.get("evidence_problems"))
         # and the other direction: recorded peers, a root disk that the TPM alone opens: not the recorded disk
         self.assertTrue(host_probe.root_unlock(FakeHost(), ("a", ()))[0])
-        ok, why = host_probe.root_unlock(FakeHost(), ("a", ("b", "c")))
-        self.assertFalse(ok)
-        self.assertIn("carries no regalia-peer-unlock token, but the unlock record names the peers b, c", why)
+        for control in (host_probe.root_unlock, host_probe.unlock_revocable):     # both controls, about the same disk
+            ok, why = control(FakeHost(), ("a", ("b", "c")))
+            self.assertFalse(ok, control.__name__)
+            self.assertIn("carries no regalia-peer-unlock token, but the unlock record names the peers b, c", why)
+        self.assertNotIn("unlock record", host_probe.unlock_revocable(FakeHost(), ("a", ()))[1])
         self.assertIn("node_id", report["attested_not_measured"])
         self.assertIn("unlock_peers", report["attested_not_measured"])
 

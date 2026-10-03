@@ -521,6 +521,12 @@ def unlock_revocable(host, unlock_record=None, binding=None):
         if dev is None:
             return False, meta
         where = "%s (%s, under %s)" % (name, dev, ", ".join(paths)) if paths != ["/"] and set(paths) != set(SECRET_PATHS) else "%s (%s)" % (name, dev)
+        # as root_unlock: a root volume recorded as opened with peers, and carrying no peer path, is not the
+        # recorded disk, whatever else would release it
+        if "/" in paths and unlock_record is not None and unlock_record[1] \
+                and not any(t.get("type") == PEER_TOKEN for t in meta["tokens"].values()):
+            return False, "%s carries no %s token, but the unlock record names the peers %s: the root disk is not enrolled " \
+                "as recorded. BLOCKING FOR PRODUCTION (#135)" % (where, PEER_TOKEN, ", ".join(unlock_record[1]))
         nv, fixed, named, recovery = 0, [], {}, 0
         for token_id, token in sorted(meta["tokens"].items()):
             if token.get("keyslots") and token_keyslots(token, meta) is None:
