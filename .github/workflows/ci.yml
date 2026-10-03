@@ -67,7 +67,11 @@ jobs:
             --commit "$GITHUB_SHA"
       - name: Preserve Debian triage without waiving the scan verdict
         if: ${{ always() && hashFiles('lab/appliance/.artifacts/scan/scan-report.json') != '' }}
-        run: python3 -m deploy.images.triage lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/triage
+        run: |
+          python3 -m deploy.images.triage lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/triage
+          python3 -m deploy.images.remediation lab/appliance/.artifacts/scan \
+            --review lab/appliance/.artifacts/triage --snapshot deploy/images/.artifacts/package-snapshot \
+            --output lab/appliance/.artifacts/remediation
       - name: Retain public build and boot diagnostics
         if: always() && steps.recipe.outputs.changed == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -83,6 +87,7 @@ jobs:
             lab/appliance/.artifacts/**/normal-boot.stderr
             lab/appliance/.artifacts/scan/*.json
             lab/appliance/.artifacts/triage/*
+            lab/appliance/.artifacts/remediation/*
             deploy/images/.artifacts/package-snapshot/verification.json
             deploy/images/.artifacts/package-snapshot/policy.json
           include-hidden-files: true

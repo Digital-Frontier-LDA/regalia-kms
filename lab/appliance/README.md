@@ -204,3 +204,10 @@ and fdisk. `minimize.py` rejects Essential candidates, unreviewed APT removals a
 loss of required appliance roles. The fresh image uses built-in C.UTF-8 and
 retains 259 authenticated package versions. See [validation](VALIDATION.md) for
 the exact build and remaining blocked scan; this is an uncommissioned template.
+
+Further vulnerability work removes unused partition/account-history libraries
+and residual binutils/installer utilities, then regenerates initramfs and GRUB
+before boot verification. Exact scan reductions require fresh evidence. CI also
+records a [remediation plan](../../deploy/images/VULNERABILITY-REMEDIATION.md)
+against freshly reverified signed package indexes; a newer package candidate is
+never an automatic CVE fix or release exception.

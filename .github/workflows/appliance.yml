@@ -67,6 +67,9 @@ jobs:
         run: |
           python3 -m deploy.images.triage lab/appliance/.artifacts/scan \
             --output lab/appliance/.artifacts/triage
+          python3 -m deploy.images.remediation lab/appliance/.artifacts/scan \
+            --review lab/appliance/.artifacts/triage --snapshot deploy/images/.artifacts/package-snapshot \
+            --output lab/appliance/.artifacts/remediation
       - name: Retain diagnostics, including blocked scans
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -82,6 +85,7 @@ jobs:
             lab/appliance/.artifacts/**/normal-boot.stderr
             lab/appliance/.artifacts/scan/*.json
             lab/appliance/.artifacts/triage/*
+            lab/appliance/.artifacts/remediation/*
             deploy/images/.artifacts/package-snapshot/verification.json
             deploy/images/.artifacts/package-snapshot/policy.json
           include-hidden-files: true

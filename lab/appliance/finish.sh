@@ -111,8 +111,8 @@ for package in vim-tiny vim-common nano; do
     apt-get purge -y "$package"
   fi
 done
-# Retain built-in C.UTF-8; generated locales and installer-only partition/media
-# tools are unnecessary on the running appliance. APT must not expand this list.
+# Remove reviewed installer/partition tools, unused libraries and binutils left
+# from compilation. APT must not expand this list or remove required roles.
 python3 -I /tmp/regalia-source/lab/appliance/minimize.py --apply >/var/log/regalia-minimization.json
 apt-get autoremove --purge -y
 # A fresh baseline carries one current kernel. CURRENT/NEXT overlap belongs to
@@ -122,6 +122,10 @@ case "$keep_kernel" in linux-image-[0-9]*-amd64) ;; *) exit 1 ;; esac
 for package in $(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'linux-image-[0-9]*' | awk '$2 == "installed" {print $1}'); do
   if [ "$package" != "$keep_kernel" ]; then apt-get purge -y "$package"; fi
 done
+# Exercise the update path after removing compilation tools. A freshly generated
+# initramfs and GRUB configuration must still reach guest acceptance/normal boot.
+update-initramfs -u -k all
+update-grub
 # locales post-removal deletes its old config; write the builtin locale after
 # all package cleanup has finished. C.UTF-8 is supplied by libc, without locales.
 printf '%s\n' 'LANG=C.UTF-8' >/etc/locale.conf

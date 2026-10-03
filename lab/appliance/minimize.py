@@ -4,7 +4,10 @@ import hashlib
 import json
 import subprocess
 
-CANDIDATES = ('locales', 'libc-l10n', 'util-linux-locales', 'eject', 'fdisk', 'task-english', 'tasksel', 'tasksel-data')
+CANDIDATES = ('locales', 'libc-l10n', 'util-linux-locales', 'eject', 'fdisk', 'task-english', 'tasksel', 'tasksel-data',
+              'libfdisk1', 'liblastlog2-2', 'installation-report', 'laptop-detect', 'os-prober',
+              'binutils', 'binutils-common', 'binutils-x86-64-linux-gnu', 'libbinutils',
+              'libctf0', 'libctf-nobfd0', 'libgprofng0', 'libsframe1')
 REQUIRED = ('linux-image-amd64', 'systemd-sysv', 'cryptsetup-initramfs', 'wireguard-tools',
             'nftables', 'apparmor', 'apparmor-utils', 'tpm2-tools', 'opensc', 'pcscd',
             'python3', 'ca-certificates')
