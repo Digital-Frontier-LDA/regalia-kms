@@ -65,7 +65,7 @@ class FakeTpm:
     lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes.
     A counter's value is an integer; an ordinary index holds bytes, at most the size it was defined with."""
     COUNTER, WRITTEN, LOCKED = 0x10, 0x20000000, 0x800
-    BITS = {"ownerwrite": 0x2, "authwrite": 0x4, "policywrite": 0x8, "writedefine": 0x2000, "ownerread": 0x20000, "authread": 0x40000}
+    BITS = {"ownerwrite": 0x2, "authwrite": 0x4, "policywrite": 0x8, "ppwrite": 0x1, "writedefine": 0x2000, "ownerread": 0x20000, "authread": 0x40000}
 
     def __init__(self, highest=0):
         self.nv, self.highest, self.broken = {}, highest, False
@@ -382,7 +382,7 @@ class Sequence(Case):
         self.tpm(["tpm2_nvundefine", "0x1500018", "-C", "o"])
         self.refused("fail closed", self.f.check, self.m1)                  # no counter: no decision
         self.refused("already exists", self.counter.define)                 # its base is still there
-        self.tpm(["tpm2_nvdefine", "0x1500018", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite"])
+        self.tpm(["tpm2_nvdefine", "0x1500018", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread"])
         self.refused("is not a written counter", self.f.check, self.m1)
         self.tpm(["tpm2_nvincrement", "0x1500018", "-C", "o"])
         self.assertGreaterEqual(self.counter.value(), 7)                    # above every value it ever held
