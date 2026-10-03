@@ -281,7 +281,7 @@ class Server:
     def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None):
         """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused, as on the authority)."""
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
-        self.enrol = enrol
+        self.enrol, self._offered, self._offered_lock = enrol, {}, threading.Lock()   # ak-public given: caller -> when
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
         self._seen = None       # the manifest of the last request that read the store: see _is_a_node
 
@@ -406,6 +406,8 @@ class Server:
         if op in ENROL_OPS:
             require(self.enrol is not None and self.attester is not None, "this source takes no enrolments")
             self._spend(view.late, caller, "enrol")              # its own class: the enrolment ops cannot use up a pull's
+            # every enrolment op, not only the path: a quarantined or revoked node enrols nothing here
+            require(membership.may(manifest, caller, "request"), "%s may not request under epoch %d: no enrolment" % (caller, manifest["epoch"]))
         answer = getattr(self, "_" + op.replace("-", "_"))(view, manifest, caller, message)
         encoded = membership.canonical(dict({"v": VERSION, "ok": True}, **answer))
         require(len(encoded) <= MAX_ANSWER, "the answer would exceed %d bytes" % MAX_ANSWER)
@@ -502,15 +504,25 @@ class Server:
         return {"credential": None if credential is None else credential.hex()}
 
     def _ak_enroll(self, view, manifest, caller, message):
-        name = self.attester.enroll(caller, self._hex(message["secret"], 32, "secret"))
-        require(name.hex() == pinned_node(manifest, caller)["ak_name"], "the enrolled AK is not the manifest's")
+        # the manifest read for THIS request: an AK it no longer names is not enrolled (attest.Verifier.enroll)
+        name = self.attester.enroll(caller, self._hex(message["secret"], 32, "secret"), ak_name=pinned_node(manifest, caller)["ak_name"])
         return {"ak_name": name.hex()}
 
     def _ak_public(self, view, manifest, caller, message):
         ek_public, ak_public = self.enrol.identity()
+        with self._offered_lock:
+            self._offered[caller] = time.monotonic()
         return {"ek_public": ek_public.hex(), "ak_public": ak_public.hex()}
 
     def _ak_activate(self, view, manifest, caller, message):
+        """This node's TPM opens a credential for the caller: an oracle for whatever a credential to its EK and AK
+        carries (attest.make_credential's invariant: only an AK enrolment challenge). Answered once, and only
+        within NONCE_TTL of this node giving the same caller its public areas, as an enrolment does."""
+        from deploy.baremetal import attest
+        with self._offered_lock:
+            given = self._offered.pop(caller, None)
+        require(given is not None and time.monotonic() - given <= attest.NONCE_TTL,
+                "an activation is answered only just after this node gave %s its AK (ak-public)" % caller)
         return {"secret": self.enrol.activate(self._hex(message["credential"], 1024, "credential")).hex()}
 
     def _path_nonce(self, view, manifest, caller, message):

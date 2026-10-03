@@ -36,6 +36,7 @@ Refused, require = membership.Refused, membership.require
 
 WRAPS_SCHEMA = "regalia.enrol-wraps/v1"
 WRAP_CAP = 3                 # wraps per (target, boot session)
+SESSIONS_KEPT = 8            # boot sessions remembered per target: the oldest goes first, so the journal stays small
 MAX_BYTES = 64 * 1024
 
 
@@ -61,7 +62,10 @@ def challenge(attester, manifest, caller, ek_public, ak_public):
 
 
 class Wraps:
-    """{target: {sha256(boot session): {"epoch": path epoch, "wraps": n}}}, one 0600 file, changed under a lock."""
+    """{target: {sha256(boot session): {"epoch": path epoch, "wraps": n, "seq": order}}}, one 0600 file, changed
+    under a lock. Only the SESSIONS_KEPT latest sessions of a target are kept: a session older than that is a
+    boot long past, whose own cap no longer matters (check_counters refuses its session anyway), and a journal
+    that only grew would one day be too large to read and stop every enrolment."""
 
     def __init__(self, path):
         self.path = path
@@ -103,11 +107,14 @@ class Wraps:
         with membership._exclusive(self.path + ".lock"):
             state = self._read()
             mine = state["targets"].setdefault(target, {})
-            entry = mine.setdefault(session, {"epoch": epoch, "wraps": 0})
+            seq = 1 + max([e.get("seq", 0) for e in mine.values()] + [0])
+            entry = mine.setdefault(session, {"epoch": epoch, "wraps": 0, "seq": seq})
             require(entry["wraps"] < WRAP_CAP, "%s asked for its path %d times in this boot session: refused. The operator "
                     "reboots %s (a new boot session) or rotates its paths (regalia-node reseal)" % (target, WRAP_CAP, target))
             entry["wraps"] += 1
             entry["epoch"] = epoch
+            for old in sorted(mine, key=lambda s: mine[s].get("seq", 0))[:max(0, len(mine) - SESSIONS_KEPT)]:
+                del mine[old]
             self._write(state)
             return entry["wraps"]
 
@@ -128,7 +135,7 @@ def contribution(manifest, peer, target, session_id, evidence, binding, attester
     held = contributions.epochs(target)
     epoch = max([manifest["epoch"]] + held)
     wraps.record(target, session_id, epoch)
-    secret = contributions.get(target, epoch) if epoch in held else contributions.mint(target, epoch)
+    secret = contributions.mint_or_get(target, epoch)       # one secret per path, even for two requests at once
     return unlock.wrap(secret, peer, target, epoch, binding)
 
 
@@ -170,6 +177,10 @@ def with_peer(manifest, node_id, peer, ask, identity, activate, verifier, sessio
     evidence = quote(manifest["epoch"], session_id, session_key, nonce, enrolment.public)
     wrapped = ask("path", session_id=session_id, evidence=evidence, binding=enrolment.public.hex())["enrolment"]
     path_epoch, contribution = enrolment.open(wrapped, peer)
+    # a peer that hands out an OLDER path's secret (stale, or one a since-revoked party saw) is refused before the
+    # header is touched: a path is at this node's manifest epoch or above (regalia-kms-1e on #272)
+    require(path_epoch >= manifest["epoch"], "%s answered path epoch %d, below this node's manifest epoch %d: refused, nothing "
+            "was written to the disk" % (peer, path_epoch, manifest["epoch"]))
     slot = unlock.enrol_path(device, node_id, peer, path_epoch, local, sealed_local, contribution, recovery,
                              **({"run": run} if run else {}))
     return {"path_epoch": path_epoch, "keyslot": slot}

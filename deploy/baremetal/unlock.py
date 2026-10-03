@@ -315,13 +315,16 @@ class Contributions:
     def epochs(self, target):
         return sorted(int(e) for e in self._read()["targets"].get(target, {}))
 
-    def mint(self, target, epoch):
-        """A new contribution for `target` at path epoch `epoch`, above every one held for it."""
+    def mint(self, target, epoch, existing=False):
+        """A new contribution for `target` at path epoch `epoch`, above every one held for it. With `existing`, the
+        one already held at exactly that epoch is returned instead, decided under the same lock (mint_or_get)."""
         node_id(target, "target")
         path_epoch(epoch)
         with membership._exclusive(self.path + ".lock"):
             state = self._read()
             paths = state["targets"].setdefault(target, {})
+            if existing and str(epoch) in paths:
+                return bytes.fromhex(paths[str(epoch)])
             require(all(int(e) < epoch for e in paths), "path epoch %d is not above the ones held for %s (%s): a path epoch is never reused"
                     % (epoch, target, ", ".join(sorted(paths, key=int))))
             require(len(paths) < MAX_PATHS, "%d contributions are held for %s already: drop the ones no keyslot uses" % (len(paths), target))
@@ -330,6 +333,11 @@ class Contributions:
             paths[str(epoch)] = secret.hex()
             self._write(state)
         return secret
+
+    def mint_or_get(self, target, epoch):
+        """The contribution of path (`target`, `epoch`): the one held, or a new one minted, decided under the lock,
+        so two concurrent requests for one path get one secret (enrolpeer.contribution, #190)."""
+        return self.mint(target, epoch, existing=True)
 
     def drop(self, target, epoch=None):
         """Forget one path of `target` (after its keyslot was killed), or all of them (a retired node)."""

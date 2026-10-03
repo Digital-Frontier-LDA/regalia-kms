@@ -100,8 +100,12 @@ class Path(Case):
             self.refusal("no live heartbeat", self.path()[0])
         with unittest.mock.patch.object(m, "may", lambda manifest, node, what: not (node == "b" and what == "authorize")):
             self.refusal("b may not authorize", self.path()[0])
+        nonce = self.ask("b", v=1, op="path-nonce")["nonce"]          # issued while a may still request
         with unittest.mock.patch.object(m, "may", lambda manifest, node, what: not (node == "a" and what == "request")):
-            self.refusal("a may not be unlocked", self.path()[0])
+            enrolment = unlock.Enrolment("a")
+            answer = self.ask("b", v=1, op="path", session_id=lt.SESSION, evidence=self.evidence(nonce, enrolment.public),
+                              binding=enrolment.public.hex())
+            self.refusal("a may not request under epoch 1: no enrolment", answer)
 
 
 class AkEnrolment(Case):
@@ -138,7 +142,7 @@ class Target(Case):
         def enroll(self, peer, secret):
             self.calls.append(("enroll", peer, secret))
 
-    def run_with(self, verifier, header=None, peer="b"):
+    def run_with(self, verifier, header=None, peer="b", manifest=None):
         meta = header or {"keyslots": {"0": {}}, "tokens": {}}
         made = []
 
@@ -150,7 +154,7 @@ class Target(Case):
             return self.evidence(nonce.hex(), binding, session=session_id)
         client = sync.Client("a", self.stores["a"], self.own, {"b": self.wire("b", "a"), "c": self.wire("c", "a")}, self.events.append)
         with unittest.mock.patch.object(unlock, "luks_meta", lambda device: meta), unittest.mock.patch.object(unlock, "enrol_path", enrol_path):
-            result = enrolpeer.with_peer(self.m1, "a", peer, lambda op, **f: client._ask(peer, op, **f),
+            result = enrolpeer.with_peer(manifest or self.m1, "a", peer, lambda op, **f: client._ask(peer, op, **f),
                                          lambda: (b"ek", self.keys["a"].ak_public), lambda credential: b"S" * 32, verifier,
                                          (lt.SESSION, b"ephemeral key of boot " + bytes.fromhex(lt.SESSION)), quote,
                                          b"L" * 32, "sealed", "/dev/root", b"recovery")
@@ -178,13 +182,78 @@ class Target(Case):
         self.assertEqual((result, made), ({"path_epoch": None, "keyslot": None, "existing": True}, []))
         self.assertEqual(self.servers["b"].enrol.contributions.epochs("a"), [])
 
+    def test_a_path_below_this_nodes_manifest_epoch_is_refused_before_the_disk(self):
+        """regalia-kms-1e on #272: a stale or compromised peer handing out an older path's secret."""
+        ahead = self.chain(self.m1, self.m1["nodes"])     # this node already holds epoch 2; b answers at its epoch 1
+        with self.assertRaisesRegex(m.Refused, "b answered path epoch 1, below this node's manifest epoch 2"):
+            self.run_with(self.Verifier(enrolled=self.entry("b")["ak_name"]), manifest=ahead)
+
     def test_no_path_from_a_peer_that_may_not_authorize(self):
         with unittest.mock.patch.object(m, "may", lambda manifest, node, what: not (node == "b" and what == "authorize")):
             with self.assertRaisesRegex(m.Refused, "b may not authorize under epoch 1: no path from it"):
                 self.run_with(self.Verifier())
 
 
+class Activation(Case):
+    """ak-activate opens a credential with this node's TPM: answered once, just after ak-public, to that caller."""
+
+    def test_only_just_after_ak_public_and_only_once(self):
+        self.refusal("only just after this node gave a its AK", self.ask("b", v=1, op="ak-activate", credential="cc" * 16))
+        self.assertTrue(self.ask("b", v=1, op="ak-public")["ok"])
+        self.assertTrue(self.ask("b", v=1, op="ak-activate", credential="cc" * 16)["ok"])
+        self.refusal("only just after", self.ask("b", v=1, op="ak-activate", credential="cc" * 16))
+        self.assertEqual(len(self.activated), 1)
+
+    def test_not_after_the_nonce_lifetime(self):
+        clock = [1000.0]
+        with unittest.mock.patch.object(sync.time, "monotonic", lambda: clock[0]):
+            self.assertTrue(self.ask("b", v=1, op="ak-public")["ok"])
+            clock[0] += attest.NONCE_TTL + 1
+            self.refusal("only just after", self.ask("b", v=1, op="ak-activate", credential="cc" * 16))
+        self.assertEqual(self.activated, [])
+
+    def test_another_callers_ak_public_does_not_open_it(self):
+        self.assertTrue(self.ask("b", caller="c", v=1, op="ak-public")["ok"])
+        self.refusal("only just after", self.ask("b", v=1, op="ak-activate", credential="cc" * 16))
+
+
+class Journal(unittest.TestCase):
+    def test_the_wrap_journal_keeps_only_the_latest_sessions_of_a_target(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        wraps = enrolpeer.Wraps(os.path.join(d, "wraps.json"))
+        sessions = ["%064x" % i for i in range(enrolpeer.SESSIONS_KEPT + 3)]
+        for session in sessions:
+            wraps.record("a", session, 1)
+        kept = wraps._read()["targets"]["a"]
+        import hashlib
+        self.assertEqual(sorted(kept), sorted(hashlib.sha256(bytes.fromhex(s)).hexdigest() for s in sessions[-enrolpeer.SESSIONS_KEPT:]))
+        self.assertLess(os.path.getsize(os.path.join(d, "wraps.json")), enrolpeer.MAX_BYTES // 8)
+        # the cap still holds for the latest session
+        for _ in range(enrolpeer.WRAP_CAP - 1):
+            wraps.record("a", sessions[-1], 1)
+        with self.assertRaisesRegex(m.Refused, "3 times in this boot session"):
+            wraps.record("a", sessions[-1], 1)
+
+    def test_one_secret_per_path_even_for_two_requests(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        store = unlock.Contributions(os.path.join(d, "c.json"))
+        first = store.mint_or_get("a", 4)
+        self.assertEqual(store.mint_or_get("a", 4), first)
+        self.assertEqual(store.epochs("a"), [4])
+        with self.assertRaisesRegex(m.Refused, "is not above"):
+            store.mint("a", 4)                              # mint itself is unchanged: a path epoch is never reused
+
+
 class Gate(Case):
+    def test_a_node_that_may_not_request_enrols_nothing(self):
+        with unittest.mock.patch.object(m, "may", lambda manifest, node, what: not (node == "a" and what == "request")):
+            for op in ("ak-public", "path-nonce"):
+                self.refusal("a may not request under epoch 1: no enrolment", self.ask("b", v=1, op=op))
+
     def test_the_enrolment_ops_are_only_for_a_node_the_tunnel_identifies(self):
         self.denied("no WireGuard peer owns 2001:db8::1", self.ask("b", caller="2001:db8::1", v=1, op="ak-public"))
         self.denied("not pinned to a node", self.ask("b", caller="a2", v=1, op="path-nonce"))

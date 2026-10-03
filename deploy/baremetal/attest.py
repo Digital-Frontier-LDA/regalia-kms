@@ -418,7 +418,12 @@ def locked_state(path):
 
 def make_credential(ek_public, ak_name, secret, run=subprocess.run):
     """TPM2_MakeCredential in software (no TPM): the secret, wrapped to the EK and to the AK's Name. The
-    secret goes to the tool on stdin and is never written to disk."""
+    secret goes to the tool on stdin and is never written to disk.
+
+    INVARIANT (#190): a credential to a node's EK and AK carries an AK enrolment challenge and NOTHING ELSE. A
+    node activates such a credential for any node of the manifest that asks (sync's ak-activate, so that peers
+    can enrol its AK), which makes activation an oracle for whatever the credential wraps. Never use
+    MakeCredential to transport a secret to a node."""
     with tempfile.TemporaryDirectory(prefix="attest-") as d:
         ek, credential = os.path.join(d, "ek.pub"), os.path.join(d, "credential")
         with open(os.open(ek, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
@@ -476,8 +481,10 @@ class Verifier:
             save()
         return credential
 
-    def enroll(self, node_id, secret):
-        """Step 2: the node returned the secret, so the AK lives in the TPM with the recorded EK."""
+    def enroll(self, node_id, secret, ak_name=None):
+        """Step 2: the node returned the secret, so the AK lives in the TPM with the recorded EK. With `ak_name`
+        (the manifest's, read NOW), the pending AK must still be that one: a manifest that moved between the
+        challenge and this answer leaves no AK it does not name enrolled."""
         self.node(node_id)
         with locked_state(self.state_path) as (state, save):
             record = state["nodes"].get(node_id, {})
@@ -487,6 +494,9 @@ class Verifier:
             require(self.now() <= pending["expires"], "the enrollment challenge expired")
             require(hmac.compare_digest(hashlib.sha256(secret).hexdigest(), pending["secret_sha256"]),
                     "the activated credential is not the secret that was wrapped: the AK is not in the TPM with this EK")
+            if ak_name is not None:
+                require(is_hex(ak_name, 68) and hmac.compare_digest(ak_identity(bytes.fromhex(pending["ak_public"]))[0].hex(), ak_name),
+                        "the AK challenged is not the one the manifest names for this node now: nothing was enrolled")
             # the counters and the session history are kept: a new AK must not rewind the node's boot history
             record["ak_public"] = pending["ak_public"]
             save()
