@@ -12,16 +12,18 @@ secret mechanism:
 
 ```sh
 REGALIA_COSMOS_PKCS11_MODULE=/absolute/path/to/pkcs11.so \
-REGALIA_COSMOS_PKCS11_TOKEN_LABEL='Pico-HSM' \
-REGALIA_COSMOS_PKCS11_SLOT=4 \
+REGALIA_COSMOS_PKCS11_SERIAL=ESP41D722E2 \
 REGALIA_COSMOS_PKCS11_OBJECT_ID=01 \
 REGALIA_COSMOS_PKCS11_PIN="$STAGING_PIN" \
 e2e/run.sh --mode cosmos-hardware
 ```
 
-Because both PicoHSM2 tokens use the label `Pico-HSM`, always pass the slot resolved from the
-registry serial (`REGALIA_COSMOS_PKCS11_SLOT`) when both are attached; the script accepts either
-that selector or a token label.
+With OpenSC's module (`opensc-pkcs11.so`) the card is chosen by its serial and nothing else:
+`REGALIA_COSMOS_PKCS11_SERIAL` is required, the label and slot are ignored, OpenSC is shown only that
+card (`e2e/lib/bench_cards.sh`), and the PIN is presented only while that serial is the one card
+visible (regalia-kms#174). A label is shared by every token left at its default (both PicoHSM2 tokens
+are `Pico-HSM`), and a slot index moves when another reader comes or goes. Other modules (SoftHSM)
+still take the label or the slot.
 
 The command first runs the normal software battery, then hashes
 `internal/policy/testdata/signdoc-akashnet2-msgsend.hex`, signs that digest through the token, and

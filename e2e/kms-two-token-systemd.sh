@@ -69,14 +69,16 @@ IGNORE="$HERE/deploy/opensc/ignore-yubikey.conf"; SHIPPED_RULE="$HERE/deploy/pol
 W="$(mktemp -d)"; collector=""; made_user=0; made_key=0
 # This user's own token tools run with OpenSC told to leave the YubiKey alone, as the daemon's does.
 # By slot, found by serial: SmartCard-HSMs often share a label, and --token-label takes the first match.
-hsm(){ OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --slot "$HSM_SLOT" "$@"; }
+hsm(){ pkcs11-tool --module "$MODULE" --slot "$HSM_SLOT" "$@"; }
+# Every login is gated on the serial (e2e/lib/bench_cards.sh, regalia-kms#174).
+hsm_login(){ bench_gate "$HSM_SERIAL" "$HSM_SLOT" || return 97; P_="$HSM_PIN" hsm --login --pin env:P_ "$@"; }
 delete_key(){
   [ "$made_key" = 1 ] || return 0
-  P_="$HSM_PIN" hsm --login --pin env:P_ --delete-object --type privkey --id "$KEY_ID" >/dev/null 2>&1
-  P_="$HSM_PIN" hsm --login --pin env:P_ --delete-object --type pubkey --id "$KEY_ID" >/dev/null 2>&1
+  hsm_login --delete-object --type privkey --id "$KEY_ID" >/dev/null 2>&1
+  hsm_login --delete-object --type pubkey --id "$KEY_ID" >/dev/null 2>&1
   # "None left" counts only from a listing that worked: the login succeeded (pkcs11-tool exits non-zero
   # otherwise) and nothing in it is an error.
-  if listing="$(P_="$HSM_PIN" hsm --login --pin env:P_ --list-objects 2>&1)" && ! grep -qi "error\|CKR_" <<< "$listing"; then
+  if listing="$(hsm_login --list-objects 2>&1)" && ! grep -qi "error\|CKR_" <<< "$listing"; then
     if ! grep -q "ID:[[:space:]]*$KEY_ID\$" <<< "$listing" && ! grep -q "$KEY_LABEL" <<< "$listing"; then
       echo "kms-two-token-systemd: the throwaway HSM key $KEY_LABEL (id $KEY_ID) is deleted; a listing that read the token shows none left"; made_key=0; return 0
     fi
@@ -98,8 +100,12 @@ cleanup(){
 trap cleanup EXIT
 
 # ---- the tokens, as this user sees them ----------------------------------------------------------------
-HSM_SLOT="$(OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | awk -v s="$HSM_SERIAL" '
-  /^Slot [0-9]+ \(0x[0-9a-f]+\)/{slot=$3; gsub(/[():]/, "", slot)} /serial num/{v=$0; sub(/.*: */, "", v); gsub(/[ \t]/, "", v); if (v==s) {print slot; exit}}')"
+# This script's own token tools see ONLY the HSM: the YubiKey under test is never opened by OpenSC
+# here, and no other card can take the HSM's slot (e2e/lib/bench_cards.sh, regalia-kms#174).
+# shellcheck source=lib/bench_cards.sh
+. "$HERE/e2e/lib/bench_cards.sh"
+bench_isolate "$W/bench-opensc.conf" "$MODULE" "$HSM_SERIAL" || die "cannot isolate $HSM_SERIAL in OpenSC"
+HSM_SLOT="$(bench_slot "$HSM_SERIAL")"
 [ -n "$HSM_SLOT" ] || die "no PKCS#11 token with serial $HSM_SERIAL is attached"
 HSM_LABEL="$(hsm --list-token-slots 2>/dev/null | awk -v s="$HSM_SLOT" '/^Slot /{on=(index($0, "(" s ")")>0)} on && /token label/{v=$0; sub(/.*: */, "", v); print v; exit}')"
 # A PIN is presented only to a token that can afford a wrong one.
@@ -114,12 +120,12 @@ echo "kms-two-token-systemd: HSM $HSM_SERIAL (slot $HSM_SLOT, label ${HSM_LABEL:
 # ONE login before anything is created: it proves the PIN (a wrong one costs one try, and the script
 # stops before the cleanup could spend more on deleting a key that was never made), and it lists the
 # private objects too, so a key already holding the id is seen and never deleted by mistake.
-existing="$(P_="$HSM_PIN" hsm --login --pin env:P_ --list-objects 2>&1)" \
+existing="$(hsm_login --list-objects 2>&1)" \
   || die "the logged-in listing failed (a refused PIN spends one try; pcscd or the token may also have refused): nothing was created"
 grep -q "$KEY_LABEL" <<< "$existing" || grep -q "ID:[[:space:]]*$KEY_ID\$" <<< "$existing" \
   && die "an object with label $KEY_LABEL or id $KEY_ID is already on the HSM (an earlier run?): delete it by hand first"
 made_key=1   # the PIN is good and the id is free: from here on the cleanup looks for the key, whatever happens
-P_="$HSM_PIN" hsm --login --pin env:P_ --keypairgen --key-type EC:prime256v1 --usage-sign --label "$KEY_LABEL" --id "$KEY_ID" >/dev/null 2>&1 \
+hsm_login --keypairgen --key-type EC:prime256v1 --usage-sign --label "$KEY_LABEL" --id "$KEY_ID" >/dev/null 2>&1 \
   || die "cannot generate the throwaway P-256 key on the HSM (is the PIN the token's?)"
 hsm --read-object --type pubkey --id "$KEY_ID" --output-file "$W/hsm.der" >/dev/null 2>&1 || die "cannot read the HSM key's public half"
 openssl pkey -pubin -inform DER -in "$W/hsm.der" -out "$W/hsm.pem" 2>/dev/null || die "the HSM's public key is not a SubjectPublicKeyInfo"
@@ -354,13 +360,13 @@ sign_both "under the shipped rule"
 # control: same tool, same pcscd, only the user differs. What this does NOT show is the rule's own NO:
 # a user with no session is refused by Debian's default policy as well. The refusal of a user WITH an
 # active console session is not measured on this bench (see below).
-seen_as(){ sudo systemd-run --quiet --wait --pipe --collect -p User="$1" -E OPENSC_CONF="$IGNORE" \
+seen_as(){ sudo systemd-run --quiet --wait --pipe --collect -p User="$1" -E OPENSC_CONF="$OPENSC_CONF" \
   pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | grep -c "$HSM_SERIAL"; }
 kms_sees="$(seen_as regalia-kms)"; nobody_sees="$(seen_as nobody)"
 [ "$kms_sees" -ge 1 ] && [ "$nobody_sees" = 0 ] \
   && P "regalia-kms in a unit of its own sees the HSM, and nobody in the same kind of unit does not" \
   || F "positive control and refusal: regalia-kms sees the HSM $kms_sees time(s), nobody $nobody_sees"
-mine="$(OPENSC_CONF="$IGNORE" pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | grep -c "$HSM_SERIAL")"
+mine="$(pkcs11-tool --module "$MODULE" --list-token-slots 2>/dev/null | grep -c "$HSM_SERIAL")"
 if id -nG | tr ' ' '\n' | grep -qx qubes; then
   echo "  (this user, $(id -un), is in the qubes group, which a Qubes polkit rule allows everything: it sees $mine line(s) for the HSM, and that says nothing about the shipped rule)"
 else

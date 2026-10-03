@@ -17,10 +17,21 @@ TOKEN_LABEL="${REGALIA_COSMOS_PKCS11_TOKEN_LABEL:-}"
 SLOT="${REGALIA_COSMOS_PKCS11_SLOT:-}"
 PIN="${REGALIA_COSMOS_PKCS11_PIN:-}"
 OBJECT_ID="${REGALIA_COSMOS_PKCS11_OBJECT_ID:-}"
+SERIAL="${REGALIA_COSMOS_PKCS11_SERIAL:-}"
+# A REAL CARD THROUGH OPENSC IS NAMED BY ITS SERIAL (regalia-kms#174). A label is shared by every
+# SmartCard-HSM left at its default, and a slot index moves when another reader comes or goes, so with
+# OpenSC's module the token is found by serial, OpenSC is shown only that card, and the PIN is
+# presented only while that serial is the one card visible. Other modules (SoftHSM in CI) keep the
+# label or slot selector.
+OPENSC=0; case "$(basename "$MODULE")" in opensc-pkcs11.so) OPENSC=1;; esac
 
 [ -n "$MODULE" ] || { echo "REGALIA_COSMOS_PKCS11_MODULE is required" >&2; exit 2; }
 [ -f "$MODULE" ] || { echo "PKCS#11 module does not exist: $MODULE" >&2; exit 2; }
-[ -n "$TOKEN_LABEL" ] || [ -n "$SLOT" ] || { echo "REGALIA_COSMOS_PKCS11_TOKEN_LABEL or REGALIA_COSMOS_PKCS11_SLOT is required" >&2; exit 2; }
+if [ "$OPENSC" = 1 ]; then
+  [ -n "$SERIAL" ] || { echo "REGALIA_COSMOS_PKCS11_SERIAL is required with OpenSC's module: a real card is chosen by serial" >&2; exit 2; }
+else
+  [ -n "$TOKEN_LABEL" ] || [ -n "$SLOT" ] || { echo "REGALIA_COSMOS_PKCS11_TOKEN_LABEL or REGALIA_COSMOS_PKCS11_SLOT is required" >&2; exit 2; }
+fi
 [ -z "$SLOT" ] || [[ "$SLOT" =~ ^[0-9]+$ ]] || { echo "PKCS#11 slot must be a decimal number: $SLOT" >&2; exit 2; }
 [ -n "$OBJECT_ID" ] || { echo "REGALIA_COSMOS_PKCS11_OBJECT_ID is required" >&2; exit 2; }
 case "$OBJECT_ID" in *[!0-9A-Fa-f]*) echo "REGALIA_COSMOS_PKCS11_OBJECT_ID must be hexadecimal" >&2; exit 2;; esac
@@ -48,10 +59,20 @@ pathlib.Path(sys.argv[2]).write_bytes(hashlib.sha256(raw).digest())
 PY
 
 SELECTOR=()
-if [ -n "$SLOT" ]; then SELECTOR=(--slot "$SLOT"); else SELECTOR=(--token-label "$TOKEN_LABEL"); fi
+gate(){ :; }
+if [ "$OPENSC" = 1 ]; then
+  # shellcheck source=lib/bench_cards.sh
+  . "$ROOT/e2e/lib/bench_cards.sh"
+  bench_isolate "$STATE/opensc.conf" "$MODULE" "$SERIAL" || { echo "cannot isolate $SERIAL in OpenSC" >&2; exit 2; }
+  CARD_SLOT="$(bench_slot "$SERIAL")"; [ -n "$CARD_SLOT" ] || { echo "no single slot holds $SERIAL" >&2; exit 2; }
+  SELECTOR=(--slot "$CARD_SLOT")
+  gate(){ bench_gate "$SERIAL" "$CARD_SLOT" || { echo "$SERIAL is not the one card visible: no PIN presented" >&2; exit 2; }; }
+elif [ -n "$SLOT" ]; then SELECTOR=(--slot "$SLOT"); else SELECTOR=(--token-label "$TOKEN_LABEL"); fi
+gate
 PKCS11_PIN="$PIN" pkcs11-tool --module "$MODULE" "${SELECTOR[@]}" \
   --login --pin env:PKCS11_PIN --read-object --type pubkey --id "$OBJECT_ID" \
   --output-file "$STATE/public.der" >/dev/null
+gate
 PKCS11_PIN="$PIN" pkcs11-tool --module "$MODULE" "${SELECTOR[@]}" \
   --login --pin env:PKCS11_PIN --sign --mechanism ECDSA --id "$OBJECT_ID" \
   --input-file "$STATE/digest.bin" --output-file "$STATE/signature.raw" >/dev/null

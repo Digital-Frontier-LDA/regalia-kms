@@ -93,7 +93,17 @@ if [ -n "${REGALIA_COSMOS_TOKEN_SERIAL:-}" ]; then
       END { if (n > 1) print "AMBIGUOUS"; else if (n == 1) print found }')"
   [ "$SLOT_ID" != AMBIGUOUS ] || fail "more than one slot reports serial $SERIAL — refusing to guess which token signs"
   [ -n "$SLOT_ID" ] || fail "no slot reports serial $SERIAL"
-  P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$SLOT_ID" --login --pin env:REGALIA_E2E_PIN "$@"; }
+  # Through OpenSC, OpenSC is shown ONLY this card (here and in the KMS path below, which inherits
+  # OPENSC_CONF), and the PIN goes only to a slot that holds this serial alone (e2e/lib/bench_cards.sh,
+  # regalia-kms#174).
+  case "$(basename "$MODULE")" in opensc-pkcs11.so)
+    # shellcheck source=lib/bench_cards.sh
+    . "$(dirname "$0")/lib/bench_cards.sh"
+    bench_isolate "$STATE/opensc.conf" "$MODULE" "$SERIAL" || fail "cannot isolate $SERIAL in OpenSC"
+    SLOT_ID="$(bench_slot "$SERIAL")"; [ -n "$SLOT_ID" ] || fail "no slot reports serial $SERIAL after isolation";;
+  esac
+  P11() { if [ -n "${BENCH_CARDS[*]:-}" ]; then bench_gate "$SERIAL" "$SLOT_ID" || fail "$SERIAL is not the one card visible: no PIN"; fi
+          REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$SLOT_ID" --login --pin env:REGALIA_E2E_PIN "$@"; }
   P11 --read-object --type pubkey --id "$OBJECT_ID" --output-file "$STATE/pub.der" >/dev/null 2>&1 \
     || fail "no public key at object $OBJECT_ID on $SERIAL"
 else
@@ -102,6 +112,7 @@ else
   printf 'directories.tokendir = %s\nobjectstore.backend = file\nlog.level = ERROR\nslots.removable = false\n' "$STATE/tokens" > "$STATE/softhsm2.conf"
   export SOFTHSM2_CONF="$STATE/softhsm2.conf"
   PIN="$(openssl rand -hex 16)"
+  # emulated token: no real card (SoftHSM)
   softhsm2-util --init-token --free --label regalia-kms-tx --so-pin "$(openssl rand -hex 16)" --pin "$PIN" >/dev/null
   P11() { REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-tx --login --pin env:REGALIA_E2E_PIN "$@"; }
   P11 --keypairgen --key-type EC:secp256k1 --usage-sign --label regalia-kms-tx --id 01 >/dev/null

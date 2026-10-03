@@ -58,6 +58,16 @@ tries(){ ykman --device "$1" piv info 2>/dev/null | sed -n 's/^PIN tries remaini
 counters(){ say "  counters: $PRIMARY=$(tries "$PRIMARY" || echo absent) $REPLACEMENT=$(tries "$REPLACEMENT" || echo absent)"; }
 for s in "$PRIMARY" "$REPLACEMENT"; do [ "$(tries "$s")" = 3 ] || die "$s does not start at 3 PIN tries: a drill that starts low cannot measure what it spends"; done
 say "cards $PRIMARY (primary) and $REPLACEMENT (replacement), registered and pinned; state $STATE"
+# OPENSC IS USED ONLY TO SEE THE NITROKEY, and it is shown ONLY the Nitrokey (e2e/lib/bench_cards.sh,
+# regalia-kms#174): with its defaults it would enumerate the YubiKeys under test too, open them, and
+# leave their PIV applet selected while the drill counts their PIN tries. Every PIN in this drill goes
+# to a YubiKey named by serial (ykman --device, and the provider, which checks the serial first).
+if [ -n "$NITROKEY" ]; then
+  # shellcheck source=lib/bench_cards.sh
+  . "$ROOT/e2e/lib/bench_cards.sh"
+  NK_MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
+  bench_isolate "$STATE/opensc.conf" "$NK_MODULE" "$NITROKEY" || die "cannot isolate the Nitrokey $NITROKEY in OpenSC"
+fi
 
 # ---- helpers ------------------------------------------------------------------------------------
 # USB device of a YubiKey, by serial: de-authorise each candidate until that serial vanishes.
@@ -174,10 +184,10 @@ if [ -n "$NITROKEY" ]; then
   NK=""; for d in /sys/bus/usb/devices/*; do grep -q "^${NITROKEY}" "$d/serial" 2>/dev/null && NK="$d"; done
   [ -n "$NK" ] || die "cannot find Nitrokey $NITROKEY on USB"
   authorize "$NK" 0
-  pkcs11-tool --list-slots 2>/dev/null | grep -q "$NITROKEY" && die "the Nitrokey is still visible"
+  pkcs11-tool --module "$NK_MODULE" --list-slots 2>/dev/null | grep -q "$NITROKEY" && die "the Nitrokey is still visible"
   phase serve "$PRIMARY" "$STATE/v3.cred" || die "YubiKey custody failed while the HSM was out"
   authorize "$NK" 1; sleep 2
-  pkcs11-tool --list-slots 2>/dev/null | grep -q "$NITROKEY" && say "  Nitrokey back" || say "  WARNING: Nitrokey not visible again yet"
+  pkcs11-tool --module "$NK_MODULE" --list-slots 2>/dev/null | grep -q "$NITROKEY" && say "  Nitrokey back" || say "  WARNING: Nitrokey not visible again yet"
 else
   say "O1 — skipped: no Nitrokey serial given"
 fi

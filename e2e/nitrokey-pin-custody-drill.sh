@@ -54,6 +54,15 @@ CARDS="$PRIMARY${REPLACEMENT:+ $REPLACEMENT}"
 
 # ---- the gate: registered staging cards, pinned by C.DevAut ---------------------------------------
 for s in $CARDS; do hsm_assert_staging_card "$s" || die "$s is not a registered staging Nitrokey: refusing"; done
+# OpenSC sees ONLY the drill's cards, as this user and as root in the drill's services (passed with
+# --setenv), and every command that presents a PIN runs only while that card's serial is where it is
+# expected (e2e/lib/bench_cards.sh, regalia-kms#174). Before readers and slots are resolved: isolation
+# renumbers them.
+# shellcheck source=lib/bench_cards.sh
+. "$ROOT/e2e/lib/bench_cards.sh"
+# shellcheck disable=SC2086  # CARDS is one or two serials, split on purpose
+bench_isolate "$STATE/opensc.conf" "$MODULE" $CARDS || die "cannot isolate $CARDS in OpenSC"
+gate(){ bench_gate "$1" ${2:+"$2"} || die "$1 is not where it is expected: no PIN presented"; }
 # Readers and slots resolve in the MAIN shell: a failed inline lookup would pass "" (= reader 0).
 declare -A READER SLOT
 for s in $CARDS; do
@@ -74,20 +83,26 @@ done
 say "cards: $CARDS; state $STATE"
 
 # ---- helpers ------------------------------------------------------------------------------------
-p11(){ local card="$1"; shift; PKCS11_PIN="$(pin_of "$card")" pkcs11-tool --module "$MODULE" --slot "${SLOT[$card]}" "$@"; }
+# p11 and change_pin RETURN on a failed gate (they also run from restore(), which must go on to put
+# the host key and USB back); their callers stop the drill on that failure.
+p11(){ local card="$1"; shift; bench_gate "$card" "${SLOT[$card]}" || return 97; PKCS11_PIN="$(pin_of "$card")" pkcs11-tool --module "$MODULE" --slot "${SLOT[$card]}" "$@"; }
 change_pin(){ # change_pin <card> <old> <new>
+  bench_gate "$1" "${SLOT[$1]}" || return 97
   PKCS11_PIN="$2" NEW_PIN="$3" pkcs11-tool --module "$MODULE" --slot "${SLOT[$1]}" --login --pin env:PKCS11_PIN \
     --change-pin --new-pin env:NEW_PIN >>"$LOG" 2>&1; }
 seal(){ sudo systemd-creds encrypt --with-key=host --name="$1" - "$2" 2>>"$LOG" >/dev/null; }
 say "building the drill test binary"
 go -C "$ROOT" test -c -o "$STATE/drill.test" ./internal/integration >>"$LOG" 2>&1 || die "build"
 declare -A PINNED
-commission(){ local out; out="$(REGALIA_NKDRILL_PHASE=commission REGALIA_NKDRILL_MODULE="$MODULE" REGALIA_NKDRILL_SERIAL="$1" \
+commission(){ local out; gate "$1"; out="$(REGALIA_NKDRILL_PHASE=commission REGALIA_NKDRILL_MODULE="$MODULE" REGALIA_NKDRILL_SERIAL="$1" \
     REGALIA_NKDRILL_OBJECT_ID="$OBJECT_ID" "$STATE/drill.test" -test.count=1 -test.v -test.run '^TestNitrokeyPINCustodyDrill$' 2>&1)"
   PINNED[$1]="$(sed -n 's/.*PUBKEY_SHA256=\(sha256:[0-9a-f]*\).*/\1/p' <<< "$out" | head -1)"
   [ -n "${PINNED[$1]}" ] || { printf '%s\n' "$out" >> "$LOG"; die "could not commission the drill key on $1"; }; }
 phase(){ # phase <name> <serial> <credential blob> ; returns the test's status
+  # "absent" is run with the card out on purpose, and must present nothing: it is the one phase not gated.
+  [ "$1" = absent ] || gate "$2"
   local out rc; out="$(sudo systemd-run --quiet --pipe --wait --collect -p LimitMEMLOCK=1M \
+      --setenv=OPENSC_CONF="$OPENSC_CONF" \
       -p "LoadCredentialEncrypted=nk-drill.pin:$3" \
       --setenv=REGALIA_NKDRILL_PHASE="$1" --setenv=REGALIA_NKDRILL_MODULE="$MODULE" --setenv=REGALIA_NKDRILL_SERIAL="$2" \
       --setenv=REGALIA_NKDRILL_OBJECT_ID="$OBJECT_ID" --setenv=REGALIA_NKDRILL_CREDENTIAL=nk-drill.pin \
