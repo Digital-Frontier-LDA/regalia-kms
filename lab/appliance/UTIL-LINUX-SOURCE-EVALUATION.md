@@ -160,8 +160,24 @@ missing/substituted files, redirected links, changed ownership/modes,
 hardlinks and duplicates. All 111 image guards pass locally. The first new
 native harness run correctly refused package production: its nologin build
 account supplied the wrong shell to two `script` test groups. The test process
-now receives explicit `/bin/sh`; a fresh two-build run is pending. No vendor
-test is removed or reclassified. AMD64 image integration is also pending.
+now receives explicit `/bin/sh`; the fresh two-build run passes the unchanged
+Debian gates and reproduces all nine reviewed packages byte for byte. All nine
+hashes also match the earlier UID 10001 build. Each log retains 181 SKIPPED lines
+and eight KNOWN FAILED lines (including summaries); the "368 tests PASSED"
+vendor summary does not mean every operation executed successfully.
+
+The installation trial also correctly refused APT's `--no-download` local
+epoch-version handling, then rejected an unordered dpkg batch against exact
+Pre-Depends. The updated installer configures five libraries first, then the
+four utility packages, without force flags or downloads. Those same operations
+pass directly in a network-isolated native container, leave `dpkg --audit`
+empty and pass the existing userspace smoke checks. The nine runtime packages
+are explicitly retained through later compiler cleanup. The
+[native helper receipt](evidence/util-linux-build-helper-native-20261003.json)
+binds exact tested build recipes, fresh source signatures and signed compiler
+version records, package hashes, test logs and the limits of these checks.
+No vendor test is removed or reclassified. The complete updated helper and
+AMD64 image integration still require the workflow qualification.
 
 ## Residual Risk
 

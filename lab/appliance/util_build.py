@@ -123,18 +123,24 @@ def install(output):
     architecture = command(["dpkg", "--print-architecture"]).strip()
     require(report.get("status") == "built" and report.get("architecture") == architecture
             and report.get("recipe_inputs") == recipe_inputs(), "utility install recipe differs")
-    packages = []
+    packages = {}
     for name in PACKAGES:
         package = output / "first-packages" / (name + ".deb")
         require(util_package.inspect(package, architecture) == report["builds"][0]["packages"][name],
                 "utility package changed before installation")
         require(hash_regular(output / "second-packages" / (name + ".deb"), "sha256")
                 == hash_regular(package, "sha256"), "utility reproduced package changed")
-        packages.append(str(package))
-    # Normal dependency resolution; no forced Essential removal, dependency
-    # override, unauthenticated option or downloads during local installation.
-    command(["apt-get", "install", "-y", "--no-install-recommends", "--no-download", *packages])
+        packages[name] = str(package)
+    # Dpkg enforces the declared relationships and never downloads packages.
+    # APT --no-download mishandles local epoch-versioned bsdutils on this base;
+    # do not relax dependencies or permit network retrieval to work around it.
+    # Configure the five reviewed libraries first. mount and util-linux have
+    # exact-version Pre-Depends; a single unordered dpkg batch must refuse.
+    libraries = ("libblkid1", "libuuid1", "libsmartcols1", "liblastlog2-2", "libmount1")
+    command(["dpkg", "--install", *(packages[name] for name in libraries)])
+    command(["dpkg", "--install", *(packages[name] for name in PACKAGES if name not in libraries)])
     require(command(["dpkg", "--audit"]).strip() == "", "utility installation left broken packages")
+    command(["apt-mark", "manual", *PACKAGES])
     for name in PACKAGES:
         expected = ("1:" if name == "bsdutils" else "") + util_package.VERSION
         require(command(["dpkg-query", "-W", "-f=${Version}", name]) == expected,
