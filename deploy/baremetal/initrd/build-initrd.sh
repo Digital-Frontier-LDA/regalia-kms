@@ -72,7 +72,7 @@ EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [ -n "$OUT" ] || die "--out DIR is required"
 [ -n "$GO" ] && [ -x "$GO" ] || die "no go to launch the pinned toolchain with (put go on PATH, or --go FILE)"
 for t in mmdebstrap git python3 gpgv curl dpkg-deb; do command -v "$t" >/dev/null || die "$t is required"; done
-python3 -Es -c 'import cryptography' 2>/dev/null || die "python3-cryptography is required (the inventory and its check, deploy/baremetal/uki.py)"
+python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is required (the inventory and its check, deploy/baremetal/uki.py)"
 [ -z "$KEYRING" ] || [ -r "$KEYRING" ] || die "--keyring $KEYRING cannot be read"
 
 # the commit, clean: what this builder compiles and installs is exactly what the commit holds
@@ -100,7 +100,8 @@ trap cleanup EXIT
 # the keyring the archive is trusted by: the pinned one, by hash, before anything is fetched with it (#246)
 [ -n "$KEYRING" ] || KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")" || die "the pinned Debian archive keyring could not be fetched"
 KEYRING="$(readlink -f "$KEYRING")"
-PINNED_KEYRING="$(python3 -Es -c 'from deploy.baremetal import debverify; print(debverify.KEYRING_SHA256)')"
+PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
+[ -n "$PINNED_KEYRING" ] || die "deploy/baremetal/debverify.py names no KEYRING_SHA256"
 [ "$(sha256sum < "$KEYRING" | cut -d' ' -f1)" = "$PINNED_KEYRING" ] \
   || die "$KEYRING is not the pinned Debian archive keyring (sha256 $PINNED_KEYRING, deploy/baremetal/debverify.py)"
 
