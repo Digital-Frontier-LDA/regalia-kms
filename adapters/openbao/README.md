@@ -42,8 +42,17 @@ storage and the original recovery share still work. Fixtures use software RSA.
 The fixture builds both entrypoints under its temporary `openbao-plugin-kms-regalia-poc`
 filename; the native plugin/seal Type remains `regalia`.
 
-Remaining #121 work includes typed KMS errors/retry semantics, plugin-crash
-reconciliation, release packaging and production environment qualification.
+Native calls return typed, redacted KMS errors with request IDs. Only the four
+contract transient codes with `retryable=true` are retried, at most three total
+attempts (two for signing), with 40/80 ms backoff inside the caller deadline.
+Every retry has a fresh request ID and nonce. Network ambiguity, malformed
+responses, unknown codes and terminal errors are never retried. API v1 additive
+response fields are ignored; duplicate keys and trailing documents are refused.
+Across the SDK RPC boundary, error code/correlation text survives, while the
+concrete Go error type does not.
+
+Remaining #121 work includes plugin-crash reconciliation, release packaging
+and production environment qualification.
 The native entrypoint has no External Keys factory. Physical custody, HA,
 upgrades and migration from the experimental outer frames remain unqualified.
 

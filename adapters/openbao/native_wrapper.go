@@ -10,7 +10,7 @@ import (
 )
 
 // NativeWrapper experiments with the accepted seal blob contract. It remains
-// development-only; typed errors/retries and production qualification are open.
+// development-only; production hardware qualification remains open.
 type NativeWrapper struct {
 	mu      sync.RWMutex
 	client  *versionedClient
@@ -74,7 +74,7 @@ func (w *NativeWrapper) Encrypt(ctx context.Context, plaintext []byte, options .
 	}
 	doc, err := c.seal(ctx, req, nativeMaxEnvelope)
 	if err != nil {
-		return nil, errOperation
+		return nil, err
 	}
 	e, err := nativeEnvelope(doc, b)
 	if err != nil || len(e.Ciphertext) != len(plaintext)+16 || ctx.Err() != nil {
@@ -105,7 +105,11 @@ func (w *NativeWrapper) Decrypt(ctx context.Context, blob *wrapping.BlobInfo, op
 	// KeyInfo is informational. Only the native envelope and KMS registry route
 	// the historical generation; no configured generation or allowlist is used.
 	plain, err := c.callBounded(ctx, req, "release-secret", versionedRequest{Payload: blob.Ciphertext}, "application/vnd.regalia.secret", nativeMaxPlaintext)
-	if err != nil || len(plain) != len(e.Ciphertext)-16 || ctx.Err() != nil {
+	if err != nil {
+		clear(plain)
+		return nil, err
+	}
+	if len(plain) != len(e.Ciphertext)-16 || ctx.Err() != nil {
 		clear(plain)
 		return nil, errOperation
 	}

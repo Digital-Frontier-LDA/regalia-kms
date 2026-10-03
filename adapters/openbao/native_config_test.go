@@ -3,6 +3,7 @@ package openbaopoc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestNativeCallerDeadlineBoundsRequest(t *testing.T) {
 		return nil, r.Context().Err()
 	})
 	started := time.Now()
-	if blob, err := w.Encrypt(ctx, []byte{1}); blob != nil || err != errOperation {
+	if blob, err := w.Encrypt(ctx, []byte{1}); blob != nil || !errors.Is(err, errOperation) {
 		t.Fatal("deadline failure returned a blob")
 	}
 	if time.Since(started) > time.Second {

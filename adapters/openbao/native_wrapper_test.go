@@ -3,6 +3,7 @@ package openbaopoc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	wrapping "github.com/openbao/go-kms-wrapping/v2"
@@ -60,7 +61,7 @@ func TestNativeWrapperGenerationDiscoveryAndRecovery(t *testing.T) {
 	}
 	f.generations("revoked", "active")
 	denials := f.audit.outcomes("release-secret", "denied-kek-revoked")
-	if out, err := w.Decrypt(ctx, old); err != errOperation || len(out) != 0 {
+	if out, err := w.Decrypt(ctx, old); !errors.Is(err, errOperation) || len(out) != 0 {
 		t.Fatal("revoked generation released plaintext")
 	}
 	if f.audit.outcomes("release-secret", "denied-kek-revoked") <= denials {
@@ -83,10 +84,10 @@ func TestNativeWrapperRefusesCallerOptionsAndTampering(t *testing.T) {
 	}
 	for _, options := range [][]wrapping.Option{{wrapping.WithAad([]byte{1})}, {wrapping.WithKeyId("another-object@g1")}, {wrapping.WithKeyId("poc-seal-key@")}, {wrapping.WithConfigMap(map[string]string{"key_version": "g1"})}} {
 		before := f.audit.successful("seal-envelope") + f.audit.successful("release-secret")
-		if got, err := w.Encrypt(ctx, []byte{1}, options...); got != nil || err != errOperation {
+		if got, err := w.Encrypt(ctx, []byte{1}, options...); got != nil || !errors.Is(err, errOperation) {
 			t.Fatal("invalid encrypt options accepted")
 		}
-		if got, err := w.Decrypt(ctx, blob, options...); len(got) != 0 || err != errOperation {
+		if got, err := w.Decrypt(ctx, blob, options...); len(got) != 0 || !errors.Is(err, errOperation) {
 			t.Fatal("invalid decrypt options accepted")
 		}
 		if f.audit.successful("seal-envelope")+f.audit.successful("release-secret") != before {
@@ -123,13 +124,13 @@ func TestNativeWrapperRefusesCallerOptionsAndTampering(t *testing.T) {
 			if part == "oversize" {
 				bad.Ciphertext = bytes.Repeat([]byte{'x'}, nativeMaxEnvelope+1)
 			}
-			if out, err := w.Decrypt(ctx, bad); len(out) != 0 || err != errOperation {
+			if out, err := w.Decrypt(ctx, bad); len(out) != 0 || !errors.Is(err, errOperation) {
 				t.Fatal("tampered native blob released plaintext")
 			}
 		})
 	}
 	for _, plain := range [][]byte{nil, {}, bytes.Repeat([]byte{1}, nativeMaxPlaintext+1)} {
-		if blob, err := w.Encrypt(ctx, plain); blob != nil || err != errOperation {
+		if blob, err := w.Encrypt(ctx, plain); blob != nil || !errors.Is(err, errOperation) {
 			t.Fatal("empty or oversized payload accepted")
 		}
 	}

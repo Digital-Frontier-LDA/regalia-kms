@@ -68,7 +68,7 @@ func (w *NativeWrapper) SetConfig(ctx context.Context, options ...wrapping.Optio
 	if err != nil || ctx.Err() != nil {
 		return nil, errConfig
 	}
-	w.client = &versionedClient{base: c["address"], http: httpClient, binding: b}
+	w.client = &versionedClient{base: c["address"], http: httpClient, binding: b, native: true}
 	w.binding, w.timeout = b, timeout
 	return &wrapping.WrapperConfig{Metadata: map[string]string{"mode": "development-poc", "format": "regalia-envelope-v2"}}, nil
 }

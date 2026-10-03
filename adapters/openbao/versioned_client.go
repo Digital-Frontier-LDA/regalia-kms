@@ -19,6 +19,7 @@ type versionedClient struct {
 	base    string
 	http    *http.Client
 	binding binding
+	native  bool
 }
 
 type versionedRequest struct {
@@ -66,7 +67,7 @@ func (c *versionedClient) seal(ctx context.Context, req sops.Request, resultLimi
 	doc := versionedRequest{Ciphertext: aead.Seal(nil, nonce, req.Data, aad), Nonce: nonce, DataKey: key}
 	result, err := c.callBounded(ctx, req, "seal-envelope", doc, "application/vnd.regalia.envelope", resultLimit)
 	if err != nil {
-		return nil, errOperation
+		return nil, err
 	}
 	e, err := nativeEnvelope(result, c.binding)
 	if err != nil || !bytes.Equal(e.Nonce, nonce) || !bytes.Equal(e.Ciphertext, doc.Ciphertext) {
@@ -91,6 +92,9 @@ func (c *versionedClient) call(ctx context.Context, req sops.Request, operation 
 }
 
 func (c *versionedClient) callBounded(ctx context.Context, req sops.Request, operation string, doc versionedRequest, contentType string, resultLimit int) ([]byte, error) {
+	if c.native {
+		return c.nativeCall(ctx, req, operation, doc, contentType, resultLimit)
+	}
 	if req.ObjectID != c.binding.ObjectID || req.Purpose != c.binding.Purpose || req.Environment != c.binding.Environment {
 		return nil, errOperation
 	}
