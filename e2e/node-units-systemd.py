@@ -157,7 +157,7 @@ def chrony(work):
                         "cmdport 0\nbindcmdaddress %s\npidfile %s\nntsdumpdir %s\n"
                         % (21120 + n, 21460 + n, address, work / ("s%d.key" % n), work / ("s%d.crt" % n), work / ("s%d.sock" % n),
                            work / ("s%d.pid" % n), work))
-        servers.append(subprocess.Popen([str(copy), "-x", "-n", "-f", str(conf)], stdout=open(work / ("s%d.log" % n), "w"), stderr=subprocess.STDOUT))
+        servers.append(subprocess.Popen([str(copy), "-x", "-U", "-u", "root", "-n", "-f", str(conf)], stdout=open(work / ("s%d.log" % n), "w"), stderr=subprocess.STDOUT))
     text = authtime.conf(["127.0.0.2", "127.0.0.3"])
     for n, address in enumerate(("127.0.0.2", "127.0.0.3"), 1):
         text = text.replace("server %s nts iburst\n" % address, "server %s port %d nts ntsport %d iburst minpoll 0 maxpoll 1\n" % (address, 21120 + n, 21460 + n))
@@ -262,6 +262,9 @@ def scenario(work):
     if not isinstance(got, dict):
         print(journal("regalia-authtime.service"))
         print(sh("chronyc", "-N", "sources", check=False).stdout)
+        print(sh("chronyc", "-N", "authdata", check=False).stdout)
+        for n in (1, 2):
+            print((work / ("s%d.log" % n)).read_text()[-600:])
     ok(os.stat(status).st_uid == 0 and oct(os.stat(status).st_mode & 0o777) == "0o644", "root's, 0644, in root's /run/regalia")
     servers[1].terminate()
     servers[1].wait(10)

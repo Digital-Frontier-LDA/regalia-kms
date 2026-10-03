@@ -4,8 +4,9 @@
 # mode 0750), and binds a socket of its own there: so this runs as root in the _chrony group with ONE
 # capability, CAP_DAC_OVERRIDE, to write that directory. It writes nothing else but /run/regalia, and has
 # no network at all. (Running as _chrony instead would let a compromised chronyd, which parses NTP from
-# the network, forge the status: the readers accept it only from root.) If chronyd accepts a group-
-# writable /run/chrony, a tmpfiles line could make the capability unnecessary: to be measured on a host.
+# the network, forge the status: the readers accept it only from root.) A group-writable /run/chrony
+# would not remove the capability: measured under systemd (e2e/node-units-systemd.py), chrony 4.5 makes
+# the directory 0700 again when it starts.
 [Unit]
 Description=Regalia KMS: is time authenticated (chrony, NTS)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
