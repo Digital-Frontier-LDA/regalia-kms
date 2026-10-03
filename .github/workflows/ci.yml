@@ -477,10 +477,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 mmdebstrap debian-archive-keyring \
-            swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs
+            swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs ovmf dosfstools openssl
       - name: Build the pre-root client (static, no cgo)
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: A guest boots through a peer (QEMU, swtpm, dracut, LUKS2, WireGuard before root)
+      - name: A guest boots a measured UKI through a peer (QEMU, OVMF, swtpm, dracut, LUKS2, WireGuard before root, PCR 12)
         run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/unlock-boot-qemu.sh
 
   # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
