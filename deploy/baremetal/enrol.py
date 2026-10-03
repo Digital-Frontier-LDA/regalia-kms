@@ -925,6 +925,43 @@ def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):
     return files
 
 
+def render_credentials(journal, esp, site, chain, root_key, anchor, device=None):
+    """The ESP files rendered from the manifest and the site (bootcreds.esp_files, #271: the ONE call enrol and the
+    update path make; what it returns depends on #66's B3 stage, so its paths are taken as they come), published
+    under the same rules as the sealed ones: never replacing a file, journalled, resumable. A file already there
+    with exactly the rendered bytes is accepted (they are public and deterministic). Then the record of EVERY
+    credential the stub will measure (espcreds.record over the ESP's loader/credentials as uki reads it): the PCR 12
+    the peers must expect, journalled as "espcreds". Returns that record."""
+    from deploy.baremetal import bootcreds, uki
+    envelopes = chain if isinstance(chain, list) else [chain]
+    files = bootcreds.esp_files(site, envelopes, root_key, device or "/dev/disk/by-partlabel/regalia-root", anchor)
+    if journal.state("render") is None:
+        _journal_facts(journal, "render", {})
+    written = {}
+    for path, data in sorted(files.items()):
+        relative = os.path.normpath(path.lstrip("/"))
+        require(not relative.startswith("..") and "\0" not in relative, "bootcreds named %r, outside the ESP" % path)
+        directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
+        _ensure_trusted_dir(directory)
+        target = os.path.join(directory, filename)
+        digest = hashlib.sha256(data).hexdigest()
+        if os.path.isfile(target) and not os.path.islink(target):
+            with open(target, "rb") as f:
+                same = hashlib.sha256(f.read(len(data) + 1)).hexdigest() == digest
+            if same:                                  # the rendered bytes, already there: nothing to replace
+                facts = {k: v for k, v in journal.get("render").items() if k not in ("state", "at")}
+                facts[filename] = digest
+                _journal_facts(journal, "render", facts)
+                written[relative] = {"sha256": digest, "size": len(data)}
+                continue
+        _publish_esp(journal, "render", directory, filename, data)     # anything else there is refused and left
+        written[relative] = {"sha256": digest, "size": len(data)}
+    journal.done("render", files=written)
+    record = espcreds.record(uki.credential_files(esp))
+    journal.done("espcreds", **record)
+    return record
+
+
 def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
            out=sys.stdout):
     """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
@@ -954,8 +991,13 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         files = seal_credentials(journal, directory, boot["esp"], initrd_pub, run)
         print("SEALED to this TPM and the initrd key, on the ESP: %s" % ", ".join(
             "%s (sha256 %s, %d bytes)" % (f, v["sha256"][:16], v["size"]) for f, v in sorted(files.items())), file=out)
-        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled (not built "
-              "yet, #190); the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
+        from deploy.baremetal import node as node_module
+        anchor = node_module.Node(node_module.load(prefix + NODE_JSON), run).anchor()
+        record = render_credentials(journal, boot["esp"], site, chain, root_key, anchor)
+        print("RENDERED the boot credentials onto the ESP; PCR 12 the peers must expect: %s (from %s)" % (
+            record["pcr12"], ", ".join(c["file"] for c in record["credentials"])), file=out)
+        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled: run "
+              "`enrol paths` next; the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
     return epoch, digest
 
 
