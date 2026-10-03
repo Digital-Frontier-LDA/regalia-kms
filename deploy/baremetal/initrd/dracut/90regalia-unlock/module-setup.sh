@@ -2,9 +2,10 @@
 # dracut module: the pre-root disk unlock of a KMS host (regalia-kms#66, #67).
 #
 # What it puts in the initrd: the unlock client and its socket-activated unit, the boot mesh unit and
-# its script, and the three tools the script runs (ip, wg, nft). The files that differ per host and per
-# manifest are under /etc/regalia: the boot configuration, the two TPM-sealed credentials, the
-# WireGuard configuration, the ruleset and boot.env. They are taken when present.
+# its script, the three tools the script runs (ip, wg, nft), and one crypttab line. The image is the
+# same for every host: what differs per host and per manifest (the boot configuration, the two
+# TPM-sealed credentials, the WireGuard configuration, the ruleset, boot.env) comes at boot as system
+# credentials, from the ESP through systemd-stub.
 #
 # Not included by default: add it with `dracut --add regalia-unlock` (or add_dracutmodules+=).
 #
@@ -62,15 +63,11 @@ install() {
     for unit in regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done
-    # Taken when present, and said when not: an image without them builds, and every boot of it ends at
-    # the recovery-key prompt.
-    for file in /etc/regalia/unlock.json /etc/regalia/unlock-local.cred /etc/regalia/wg-boot.cred \
-        /etc/regalia/wg-boot.conf /etc/regalia/boot.nft /etc/regalia/boot.env /etc/crypttab; do
-        if [ -e "$file" ]; then
-            inst_simple "$file"
-        else
-            dwarn "regalia-unlock: $file is not there: this image cannot unlock the root volume unattended"
-        fi
-    done
+    # The one crypttab line, the same on every host: the root partition is found by its GPT label. Nothing
+    # per host is taken from the machine that builds the image (not /etc/regalia, not its /etc/crypttab):
+    # what differs per host comes as system credentials at boot (the units say which).
+    # (in place of any other: dracut's crypt modules copy the build machine's in hostonly mode)
+    rm -f -- "${initdir:?}/etc/crypttab"
+    inst_simple "${moddir:?}/crypttab" /etc/crypttab
     "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket
 }

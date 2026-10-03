@@ -11,7 +11,7 @@
 // It runs no other program and writes no secret anywhere. Three things reach it from systemd:
 //
 //   - the local half of the credential, unsealed by systemd with the TPM and passed as the unit's
-//     credential regalia-unlock-local ($CREDENTIALS_DIRECTORY);
+//     credential regalia.unlock-local ($CREDENTIALS_DIRECTORY);
 //   - the listening socket systemd-cryptsetup reads the volume key from (crypttab's key file is that
 //     socket's path; the unit is socket-activated, LISTEN_FDS);
 //   - the boot configuration (-config).
@@ -96,7 +96,7 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	}
 	flags := flag.NewFlagSet("regalia-unlock", flag.ContinueOnError)
 	flags.SetOutput(out)
-	configPath := flags.String("config", "/etc/regalia/unlock.json", "the boot configuration (deploy/baremetal/unlock.py, boot_config)")
+	configPath := flags.String("config", "", "the boot configuration (deploy/baremetal/unlock.py, boot_config): the unit passes the system credential regalia.unlock-config")
 	var o options
 	flags.StringVar(&o.tpm, "tpm", "/dev/tpmrm0", "the TPM: the resource-manager device, or unix:PATH for a software TPM in tests")
 	flags.StringVar(&o.sessionDir, "session-dir", "/run/regalia", "where the boot session's ID and public key are left for the running system")
