@@ -692,7 +692,7 @@ def part2(work, binaries, user, ctx, servers, status):
     # notes each request's operation and b's answer, to tell a's renewals from its pulls
     requests, answer = [], server.handle
 
-    started = []
+    started, raised = [], []
 
     def handle(raw, address):
         try:
@@ -701,7 +701,12 @@ def part2(work, binaries, user, ctx, servers, status):
             op = None
         who = address[0] if isinstance(address, tuple) else address
         started.append((time.monotonic(), op, who))          # a request that never answers shows here only
-        out = answer(raw, address)
+        try:
+            out = answer(raw, address)
+        except BaseException:
+            import traceback
+            raised.append((op, traceback.format_exc()[-1500:]))
+            raise
         requests.append((op, who, out))
         return out
     server.handle = handle
@@ -767,6 +772,7 @@ def part2(work, binaries, user, ctx, servers, status):
     if not renewals:                     # diagnostics: what b was doing instead
         import faulthandler
         print("  b: %d requests started, %d answered; last started: %s" % (len(started), len(requests), started[-4:]))
+        print("  b raised %d times; the last: %s" % (len(raised), raised[-1] if raised else None))
         print("  b's trail since the revocation: %s" % [(e.get("event"), e.get("subject"), e.get("outcome"), e.get("reason", "")[:80]) for e in events[mark:]][-8:])
         print("  a's lease service: %s" % journal("regalia-admission.service", 15)[-1500:])
         faulthandler.dump_traceback(all_threads=True)
