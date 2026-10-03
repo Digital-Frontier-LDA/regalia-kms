@@ -25,13 +25,15 @@
 # LC_ALL=C and TZ=UTC). Only a proxy setting (GOPROXY, HTTPS_PROXY) passes to `go`: it decides where a module
 # is fetched from, never what it holds (go.sum and the checksum database do).
 #
-# --keyring FILE: the Debian archive keyring the archive is verified with (default: the system's); it decides
-# whether the archive is trusted, never what it holds.
+# --keyring FILE: the Debian archive keyring the archive is verified with. It must be the pinned one
+# (deploy/baremetal/debverify.py KEYRING_SHA256), never the system's, which may predate trixie's keys or hold
+# others; without --keyring the builder fetches the pinned one itself (e2e/lib/debian-keyring.sh, by hash).
 #
 # OUT, written last and all together: DIR/initrd.img, DIR/regalia-unlock (the client it compiled, which
 # `uki.py build --unlock-client` takes), DIR/initrd-listing.txt (one line per entry: path,
 # type, mode, uid, gid, size, links, sha256, link target) and DIR/initrd-build.json (regalia.initrd-build/v1: the inputs
-# and the result), the record moved in last; a refusal leaves DIR empty.
+# and the result, and verified_packages: every package file of the initrd checked against its .deb along
+# Debian's signed chain by deploy/baremetal/debverify.py, #246), the record moved in last; a refusal leaves DIR empty.
 # Measured on two runners and a Debian 13 container, in two directories and in a hostile environment
 # (e2e/initrd-reproducible.sh): byte-identical.
 set -euo pipefail
@@ -45,12 +47,12 @@ SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
 SUITE=trixie
 PACKAGES="systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,libtss2-tcti-device0t64"
-REPO_FILES=("$SCRIPT" go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
+REPO_FILES=("$SCRIPT" deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
             deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
 die(){ echo "build-initrd: $*" >&2; exit 2; }
-SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
+SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --snapshot) SNAPSHOT="${2:-}"; shift 2 ;;
@@ -69,9 +71,9 @@ EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [[ "$EPOCH" =~ ^[0-9]{1,11}$ ]] || die "--epoch must be seconds since 1970"
 [ -n "$OUT" ] || die "--out DIR is required"
 [ -n "$GO" ] && [ -x "$GO" ] || die "no go to launch the pinned toolchain with (put go on PATH, or --go FILE)"
-for t in mmdebstrap git python3; do command -v "$t" >/dev/null || die "$t is required"; done
-[ -r "$KEYRING" ] || die "$KEYRING is required (debian-archive-keyring, or --keyring FILE)"
-KEYRING="$(readlink -f "$KEYRING")"
+for t in mmdebstrap git python3 gpgv curl dpkg-deb; do command -v "$t" >/dev/null || die "$t is required"; done
+python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is required (the inventory and its check, deploy/baremetal/uki.py)"
+[ -z "$KEYRING" ] || [ -r "$KEYRING" ] || die "--keyring $KEYRING cannot be read"
 
 # the commit, clean: what this builder compiles and installs is exactly what the commit holds
 # (run as root on a checkout another user owns: git is told to trust exactly this path, and reads without
@@ -94,6 +96,14 @@ cleanup(){
   else rm -rf --one-file-system -- "$W"; fi
 }
 trap cleanup EXIT
+
+# the keyring the archive is trusted by: the pinned one, by hash, before anything is fetched with it (#246)
+[ -n "$KEYRING" ] || KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")" || die "the pinned Debian archive keyring could not be fetched"
+KEYRING="$(readlink -f "$KEYRING")"
+PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
+[ -n "$PINNED_KEYRING" ] || die "deploy/baremetal/debverify.py names no KEYRING_SHA256"
+[ "$(sha256sum < "$KEYRING" | cut -d' ' -f1)" = "$PINNED_KEYRING" ] \
+  || die "$KEYRING is not the pinned Debian archive keyring (sha256 $PINNED_KEYRING, deploy/baremetal/debverify.py)"
 
 echo "### the unlock client, by $GO_VERSION, from commit $COMMIT"
 mkdir -p "$W/go/home" "$W/go/path" "$W/go/cache" "$W/go/mod" "$W/stage"
@@ -156,6 +166,24 @@ inroot sh -c 'cd /tmp/unpacked && lsinitrd --unpack /tmp/initrd.img' >/dev/null 
 linked="$(awk -F'\t' '$2 == "f" && $7 > 1 {print $1 " (" $7 " links)"}' "$W/stage/initrd-listing.txt" | head -5)"
 [ -z "$linked" ] || die "the initrd holds hard-linked files, which make the archive depend on the build's timing (#248): $(tr '\n' ' ' <<< "$linked")"
 inroot dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
+# #246: every file the initrd holds that a package owns, checked against that package's .deb along Debian's signed
+# chain (InRelease by the pinned keyring, Packages by its hash, the .deb by its hash), on this builder, by this
+# builder. What is checked is the COMMITTED inventory, the reviewed one: this initrd's inventory, classed against
+# this root tree, must first equal it line for line, CLASS and ORIGIN included, so no line is verified under one
+# class and reviewed under another.
+echo "### every package file of the initrd, against its .deb (#246)"
+INVENTORY=deploy/baremetal/initrd/initrd-inventory.txt
+python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/stage/initrd.img" --root "$ROOT" > "$W/inventory.txt" \
+  || die "the initrd's inventory could not be written"
+if ! grep -v '^#' "$INVENTORY" | cmp -s - "$W/inventory.txt"; then
+  diff <(grep -v '^#' "$INVENTORY") "$W/inventory.txt" | head -60 || true
+  die "this initrd's inventory is not $INVENTORY (the lines above: < committed, > built)"
+fi
+python3 -Es -m deploy.baremetal.debverify --inventory "$INVENTORY" --keyring "$KEYRING" --cache "$W/debs" --out "$W/verified.json" \
+  --source "$MAIN" "$SUITE" --source "$MAIN" "$SUITE-updates" --source "$SECURITY" "$SUITE-security" >"$W/debverify.log" 2>&1 \
+  || { tail -40 "$W/debverify.log"; die "a package file of the initrd is not what its .deb holds"; }
+tail -1 "$W/debverify.log"
+rm -rf "$W/debs"
 DRACUT_VERSION="$(inroot dpkg-query -W -f '${Version}' dracut)"
 for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
@@ -170,7 +198,7 @@ for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
   echo "initrd_size=$(stat -c %s "$W/stage/initrd.img")"
   echo "initrd_entries=$(wc -l < "$W/stage/initrd-listing.txt")"
 } > "$W/record.txt"
-python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/initrd-build.json" <<'PY'
+python3 -I - "$W/record.txt" "$W/packages.txt" "$W/stage/initrd-build.json" "$W/verified.json" <<'PY'
 import json, sys
 record, files = {}, {}
 for line in open(sys.argv[1]):
@@ -183,6 +211,7 @@ for line in open(sys.argv[1]):
 record["packages_requested"] = record["packages_requested"].split(",")
 record["repository_files"] = files
 record["packages"] = [l.strip() for l in open(sys.argv[2]) if l.strip()]
+record["verified_packages"] = json.load(open(sys.argv[4]))
 with open(sys.argv[3], "w") as f:
     json.dump(record, f, indent=1, sort_keys=True)
     f.write("\n")
