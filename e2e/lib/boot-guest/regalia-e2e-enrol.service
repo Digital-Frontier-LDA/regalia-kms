@@ -1,6 +1,8 @@
 [Unit]
 Description=regalia e2e: seal the boot credentials on this machine (only when the enrolment disk is attached)
 ConditionPathExists=/dev/vdb
+Requires=systemd-pcrphase.service
+After=systemd-pcrphase.service
 Before=regalia-e2e-report.service
 
 [Service]

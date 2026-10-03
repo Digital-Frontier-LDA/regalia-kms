@@ -1,6 +1,9 @@
 [Unit]
 Description=regalia e2e: report that the root filesystem is up, and power off
-After=regalia-e2e-enrol.service
+# Read PCR 11 only after systemd has extended the ready phase. Otherwise the
+# report can race that extension and power off before the system value exists.
+Requires=systemd-pcrphase.service
+After=regalia-e2e-enrol.service systemd-pcrphase.service
 
 [Service]
 Type=oneshot
