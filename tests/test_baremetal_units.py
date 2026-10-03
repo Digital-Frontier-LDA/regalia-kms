@@ -221,10 +221,13 @@ class AuditPruneUnit(unittest.TestCase):
     def test_it_prunes_from_the_shipper_s_head_file_with_no_capability(self):
         service = unit("regalia-audit-prune@.service")["Service"]
         ship = unit("regalia-audit-ship@.service")["Service"]
-        self.assertEqual(service["ExecStart"], "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune "
-                                               "${TRAIL_PATH} /var/lib/regalia-audit-ship/%i.head.json")
+        self.assertEqual(" ".join(service["ExecStart"].replace("\\\n", " ").split()),
+                         "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} "
+                         "/var/lib/regalia-audit-ship/%i.head.json --trail %i --site ${SITE} --client-cert "
+                         "/etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub")
         self.assertIn("-head /var/lib/regalia-audit-ship/%i.head.json", ship["ExecStart"])   # the file the shipper writes
-        self.assertEqual(service["EnvironmentFile"], "/etc/regalia/audit-ship/%i.env")            # the shipper's TRAIL_PATH
+        self.assertIn("/etc/regalia/audit-ship/%i.env", open(UNITS / "regalia-audit-prune@.service").read())  # TRAIL_PATH
+        self.assertIn("EnvironmentFile=/etc/regalia/audit-ship.env", open(UNITS / "regalia-audit-prune@.service").read())  # SITE
         self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]), ("", "", "yes"))
         self.assertNotIn("User", service)                                          # each instance's owner, from its drop-in
         self.assertEqual((service["ProtectSystem"], service["PrivateNetwork"]), ("strict", "yes"))

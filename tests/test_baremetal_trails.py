@@ -227,12 +227,12 @@ class Registry(Case):
 
 class PinnedVector(Case):
     def test_the_pinned_trail_is_one_trails_py_accepts_line_for_line(self):
-        """#283 (regalia-kms-24): tests/vectors/trail-events-v1.json pins a trail to the events the Go
+        """#283 (regalia-kms-24): tests/vectors/trail-events-v2.json pins a trail to the events the Go
         shipper maps it to (internal/audit/trail.go's TestTheTrailMappingIsPinned). Its lines are ones
         this writer makes and this verify accepts, with the line hashes the events carry."""
-        with open(os.path.join(HERE, "..", "..", "tests", "vectors", "trail-events-v1.json")) as f:
+        with open(os.path.join(HERE, "..", "..", "tests", "vectors", "trail-events-v2.json")) as f:
             vector = json.load(f)
-        self.assertEqual(vector["format"], "regalia.trail/v1")
+        self.assertEqual(vector["format"], "regalia.trail/v2")
         data = "".join(line + "\n" for line in vector["lines"]).encode()
         with open(self.path, "wb") as f:
             f.write(data)
@@ -380,49 +380,129 @@ class Rotation(Case):
         self.assertEqual(report["chained"], 100)
         self.assertGreater(len(self.archives()), 3)
 
-    def head(self, committed, upto=None):
-        """What the shipper records after a pass: the committed line, and each archive wholly behind it."""
+    IDENTITY, SITE, TRAIL = "ab" * 32, "sitea", "authority"                         # authority's trail is audit.jsonl
+
+    def keys(self, *names):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization as _s
+        if not hasattr(self, "_keys"):
+            self._keys = {}
+        for name in names:
+            self._keys.setdefault(name, Ed25519PrivateKey.generate())
+        return [self._keys[n].public_key().public_bytes(_s.Encoding.Raw, _s.PublicFormat.Raw).hex() for n in names]
+
+    def receipt(self, sequence, line_sha256, key="old", stream=None):
+        """What the collector signs (internal/audit/collector.go ReceiptPreimage)."""
+        self.keys(key)
+        event_hash = "sha256:" + hashlib.sha256(b"event %d" % sequence).hexdigest()
+        preimage = "%s\n%s\n%s\n%d\n%s\n%s" % (trails.RECEIPT_DOMAIN, self.IDENTITY, stream or "%s.%s" % (self.SITE, self.TRAIL),
+                                                sequence, event_hash, line_sha256)
+        return {"sequence": sequence, "event_hash": event_hash, "line_sha256": line_sha256,
+                "signature": self._keys[key].sign(preimage.encode()).hex()}
+
+    def head(self, committed, upto=None, key="old", bend=None):
+        """The shipper's head file after a pass: each archive wholly behind the committed line, with the
+        collector's receipt for its last line. `bend(i, receipt)` alters one, for the refusals."""
         entries, sequence = [], 0
-        for name in self.archives():
+        for i, name in enumerate(self.archives()):
             data = open(os.path.join(self.d, name), "rb").read()
             sequence += data.count(b"\n")
+            if sequence > committed:
+                break
             last = data.splitlines(keepends=True)[-1]
-            entries.append({"name": name, "seq": int(name.rsplit(".", 1)[1]), "sequence": sequence,
-                            "event_hash": "sha256:" + hashlib.sha256(b"event %d" % sequence).hexdigest(),
-                            "line_sha256": hashlib.sha256(last).hexdigest(), "timestamp": 1790000000 + sequence})
-        entries = [e for e in entries if e["sequence"] <= committed][:upto]
+            receipt = self.receipt(sequence, hashlib.sha256(last).hexdigest(), key=key if isinstance(key, str) else key[i])
+            if bend:
+                receipt = bend(i, receipt)
+            entries.append({"name": name, "seq": int(name.rsplit(".", 1)[1]), "timestamp": 1790000000 + sequence, "receipt": receipt,
+                            "sequence": sequence})
+        entries = entries[:upto]
         path = os.path.join(self.d, "head.json")
         with open(path, "w") as f:
-            json.dump({"trail": "sync", "committed": committed, "archives": entries}, f)
+            json.dump({"trail": self.TRAIL, "committed": committed, "archives": entries}, f)
         return path, entries
 
-    def test_prune_removes_only_what_the_collector_committed_and_the_chain_still_verifies(self):
+    def prune(self, head, keys=("old",)):
+        return trails.prune(self.path, head, self.TRAIL, self.SITE, self.IDENTITY, self.keys(*keys))
+
+    def test_prune_removes_only_what_the_collector_signed_for_and_the_chain_still_verifies(self):
         for i in range(20):
             trails.append(self.path, {"event": "e", "i": i})
         archives = self.archives()
         self.assertGreaterEqual(len(archives), 3)
         second = sum(open(os.path.join(self.d, n), "rb").read().count(b"\n") for n in archives[:2])
-        head, entries = self.head(second)                                           # committed: the first two archives
-        self.assertEqual(trails.prune(self.path, head), 2)
+        head, entries = self.head(second)                                           # receipts for the first two archives
+        self.assertEqual(self.prune(head), 2)
         self.assertEqual(self.archives(), archives[2:])
         marker = json.load(open(self.path + ".pruned"))
-        self.assertEqual((marker["seq"], marker["sequence"]), (entries[-1]["seq"], second))
+        self.assertEqual((marker["seq"], marker["sequence"], marker["event_hash"]), (entries[-1]["seq"], second, entries[-1]["receipt"]["event_hash"]))
         self.assertEqual(trails.verify_trail(self.path)["chained"], 20 - entries[-1]["seq"])
-        self.assertEqual(trails.prune(self.path, head), 0)                         # nothing more is committed
+        self.assertEqual(self.prune(head), 0)                                       # nothing more is receipted
         os.unlink(head)
 
-    def test_prune_refuses_an_archive_that_is_not_the_one_recorded(self):
+    def test_a_receipt_that_does_not_hold_prunes_nothing(self):
+        """#288 (regalia-kms-51, decided by regalia-kms-24): a compromised shipper's head file cannot remove
+        a line the collector does not hold. Each way a receipt can fail to hold refuses, and nothing goes."""
         for i in range(12):
             trails.append(self.path, {"event": "e", "i": i})
-        head, entries = self.head(10 ** 6)
-        record = json.load(open(head))
-        record["archives"][0]["line_sha256"] = "0" * 64
-        with open(head, "w") as f:
-            json.dump(record, f)
         before = self.archives()
-        self.refused("not the archive the shipper recorded", trails.prune, self.path, head)
-        self.assertEqual(self.archives(), before)
-        self.assertFalse(os.path.exists(self.path + ".pruned"))
+        bends = {
+            "another line": lambda i, r: dict(r, line_sha256="0" * 64),
+            "another position": lambda i, r: self.receipt(r["sequence"] + 1, r["line_sha256"]),
+            "another stream": lambda i, r: self.receipt(r["sequence"], r["line_sha256"], stream="sitea.sync"),
+            "an unpinned key": lambda i, r: self.receipt(r["sequence"], r["line_sha256"], key="stranger"),
+            "a forged signature": lambda i, r: dict(r, signature="00" * 64),
+            "a claimed line count": lambda i, r: dict(self.receipt(r["sequence"] + 50, r["line_sha256"]), sequence=r["sequence"] + 50),
+        }
+        for label, bend in bends.items():
+            with self.subTest(label):
+                head, _ = self.head(10 ** 6, bend=lambda i, r: bend(i, r) if i == 0 else r)
+                self.refused("does not hold", self.prune, head)
+                self.assertEqual(self.archives(), before)
+                self.assertFalse(os.path.exists(self.path + ".pruned"))
+        os.unlink(head)
+
+    def test_the_receipt_key_can_rotate_with_an_overlap(self):
+        """#288 (regalia-kms-24): the pinned keys are a set. With old and new pinned, receipts by either
+        hold; once the old is dropped, a receipt it signed is refused."""
+        for i in range(16):
+            trails.append(self.path, {"event": "e", "i": i})
+        archives = self.archives()
+        lines = [open(os.path.join(self.d, n), "rb").read().count(b"\n") for n in archives]
+        head, _ = self.head(lines[0] + lines[1], key=["old", "new", "new"])          # the collector switched keys between them
+        self.refused("does not hold", self.prune, head, ("new",))                    # old dropped too early: refused
+        self.assertEqual(self.prune(head, ("old", "new")), 2)                        # the overlap
+        os.unlink(head)
+
+    def test_prune_runs_from_the_command_line_with_a_real_certificate(self):
+        """The unit's own command: the identity is the SHA-256 of the client certificate's DER."""
+        import datetime
+        import ssl
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization as _s
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        from cryptography.x509.oid import NameOID
+        key = _ec.generate_private_key(_ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "shipper")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        certificate = x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(1) \
+            .not_valid_before(now).not_valid_after(now + datetime.timedelta(days=1)).sign(key, hashes.SHA256())
+        pem = certificate.public_bytes(_s.Encoding.PEM)
+        with open(self.d + "/client.crt", "wb") as f:
+            f.write(pem)
+        self.IDENTITY = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem.decode())).hexdigest()
+        self.assertEqual(trails.client_identity(self.d + "/client.crt"), self.IDENTITY)
+        with open(self.d + "/receipt.pub", "w") as f:
+            f.write("# the collector's receipt keys\n%s\n" % self.keys("old")[0])
+        for i in range(12):
+            trails.append(self.path, {"event": "e", "i": i})
+        first = open(os.path.join(self.d, self.archives()[0]), "rb").read().count(b"\n")
+        head, _ = self.head(first)
+        argv = ["prune", self.path, head, "--trail", self.TRAIL, "--site", self.SITE, "--client-cert", self.d + "/client.crt",
+                "--receipt-keys", self.d + "/receipt.pub"]
+        with unittest.mock.patch("sys.stdout") as out:
+            self.assertEqual(trails.main(argv), 0)
+        self.assertEqual(out.write.call_args_list[0][0][0], "1")
+        self.assertEqual(trails.main(argv[:-1] + [self.d + "/empty.pub"]), 1)        # no pinned key file: refused
         os.unlink(head)
 
     def test_a_prune_cut_after_its_marker_leaves_a_trail_that_still_verifies(self):
@@ -433,12 +513,12 @@ class Rotation(Case):
         head, entries = self.head(first)
         with unittest.mock.patch.object(trails.os, "unlink", side_effect=OSError("cut")):
             with self.assertRaises(OSError):
-                trails.prune(self.path, head)
+                self.prune(head)
         self.assertEqual(self.archives(), archives)                                # the marker is in, the archive too
         marker, remaining, _ = trails.segments(self.path)
         self.assertEqual((marker["seq"], [os.path.basename(r) for r in remaining]), (entries[0]["seq"], archives[1:]))
         self.assertEqual(trails.verify_trail(self.path)["chained"], 16 - entries[0]["seq"])
-        self.assertEqual(trails.prune(self.path, head), 1)                         # the one the cut left is removed now
+        self.assertEqual(self.prune(head), 1)                                      # the one the cut left is removed now
         self.assertEqual(self.archives(), archives[1:])
         self.assertEqual(trails.verify_trail(self.path)["chained"], 16 - entries[0]["seq"])
         os.unlink(head)

@@ -3,11 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +31,14 @@ type fakeSink struct {
 	unreachable bool
 	alarms      []string
 	sends       int
+	sent        []string
 }
 
-func (sink *fakeSink) Send(context.Context, audit.Event) error { sink.sends++; return nil }
+func (sink *fakeSink) Send(_ context.Context, event audit.Event) error {
+	sink.sends++
+	sink.sent = append(sink.sent, event.Hash)
+	return nil
+}
 func (sink *fakeSink) CommittedHead(context.Context, string) (uint64, string, error) {
 	if sink.unreachable {
 		return 0, "", audit.ErrSinkUnavailable
@@ -131,46 +145,170 @@ func TestARotatedAndPrunedTrailShipsTheSameEvents(t *testing.T) {
 	}
 	trails("trails.ROTATE_BYTES = 500\nfor i in range(30): trails.append(sys.argv[2], {'event': 'sync-pull', 'outcome': 'ALLOW', 'i': i}, now=lambda: 1790000000 + i)", path)
 
-	read, err := readSegments(path)
+	// The whole trail, as one chain: the archives in order, then the current file.
+	names, _ := filepath.Glob(path + ".*")
+	sort.Strings(names)
+	var whole []byte
+	archives := 0
+	for _, name := range append(names, path) {
+		if name != path && !archiveSuffix.MatchString(strings.TrimPrefix(name, path)) {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		whole = append(whole, data...)
+		if name != path {
+			archives++
+		}
+	}
+	events, err := audit.TrailEvents("sync", whole)
+	if err != nil || len(events) != 30 || archives < 3 {
+		t.Fatalf("the trail is not one chain of 30 over 3 or more archives: %d events, %d archives, %v", len(events), archives, err)
+	}
+	first2, _ := os.ReadFile(names[0])
+	second, _ := os.ReadFile(names[1])
+	committed := uint64(bytes.Count(first2, []byte("\n")) + bytes.Count(second, []byte("\n"))) // the collector holds two archives
+
+	// A collector that holds the first two archives and signs receipts as the real one does. A pass whose
+	// sends all fail writes no head file; the next one commits everything and receipts every archive.
+	head := filepath.Join(dir, "sync.head.json")
+	public, private, _ := ed25519.GenerateKey(rand.Reader)
+	identity := strings.Repeat("cd", 32)
+	sink := &receiptSink{fakeSink: fakeSink{head: committed, hash: events[committed-1].Hash}, key: private, identity: identity,
+		stream: "sitea.sync", events: events, refuseSends: true}
+	o := options{trail: "sync", path: path, site: "sitea", head: head, interval: time.Hour, once: true}
+	if err := loop(context.Background(), sink, o, &bytes.Buffer{}); err == nil {
+		t.Fatal("a pass whose sends all fail reported success")
+	}
+	if _, err := os.Stat(head); err == nil {
+		t.Fatal("a failed pass wrote a head file")
+	}
+	sink.refuseSends = false
+	if err := loop(context.Background(), sink, o, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if want := events[committed:]; len(sink.sent) != len(want) || sink.sent[0] != want[0].Hash || sink.sent[len(want)-1] != want[len(want)-1].Hash {
+		t.Fatalf("the pass sent %d events, not the %d after the collector's head", len(sink.sent), len(want))
+	}
+	// The real trails.py checks each receipt (Go's ReceiptPreimage, signed here) and removes every archive.
+	pinned := hex.EncodeToString(public)
+	if removed := trails("print(trails.prune(sys.argv[2], sys.argv[3], 'sync', 'sitea', sys.argv[4], [sys.argv[5]]))", path, head, identity, pinned); removed != strconv.Itoa(archives) {
+		t.Fatalf("prune removed %s archives, not the %d the collector receipted", removed, archives)
+	}
+	marker, err := os.ReadFile(path + ".pruned")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(read.archives) < 3 {
-		t.Fatalf("%d archives: the trail did not rotate", len(read.archives))
-	}
-	whole, err := audit.TrailEvents("sync", read.data)
-	if err != nil || len(whole) != 30 {
-		t.Fatalf("the archives and the current file are not one chain of 30: %d, %v", len(whole), err)
-	}
-	committed := read.archives[0].lines + read.archives[1].lines // the collector holds the first two archives
-	head := filepath.Join(dir, "sync.head.json")
-	if err := writeHead(head, "sync", read, committed); err != nil {
+	var start audit.TrailStart
+	if err := json.Unmarshal(marker, &start); err != nil {
 		t.Fatal(err)
 	}
-	if removed := trails("print(trails.prune(sys.argv[2], sys.argv[3]))", path, head); removed != "2" {
-		t.Fatalf("prune removed %s archives, not the 2 the collector holds", removed)
+	committed = start.Sequence
+	if start.EventHash != events[committed-1].Hash {
+		t.Fatal("the marker's event hash is not the collector's (receipted) event at that line")
 	}
 	trails("print(trails.verify_trail(sys.argv[2])['chained'])", path)
 
-	after, err := readSegments(path)
-	if err != nil {
+	// From the marker: the same events, hash for hash, as from the first line.
+	again := &fakeSink{head: committed, hash: events[committed-1].Hash}
+	if err := loop(context.Background(), again, options{trail: "sync", path: path, site: "sitea", interval: time.Hour, once: true}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if after.start.Sequence != committed || len(after.archives) != len(read.archives)-2 {
-		t.Fatalf("after the prune: from line %d with %d archives", after.start.Sequence, len(after.archives))
+	if len(again.sent) != len(events)-int(committed) {
+		t.Fatalf("from the marker %d events were sent, want %d", len(again.sent), len(events)-int(committed))
 	}
-	rest, err := audit.TrailEventsFrom("sync", after.start, after.data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if uint64(len(rest)) != 30-committed {
-		t.Fatalf("%d events after the marker, want %d", len(rest), 30-committed)
-	}
-	for i, event := range rest {
-		if want := whole[committed+uint64(i)]; event.Hash != want.Hash || event.Sequence != want.Sequence {
-			t.Fatalf("line %d rebuilt from the marker is not the line rebuilt from the start", want.Sequence)
+	for i, hash := range again.sent {
+		if hash != events[int(committed)+i].Hash {
+			t.Fatalf("line %d rebuilt from the marker is not the line rebuilt from the start", int(committed)+i+1)
 		}
 	}
+}
+
+// TestATrailOfAnySizeShipsInBoundedMemory: the shipper walks a trail line by line (#288, regalia-kms-51:
+// a trail larger than a fixed bound must never strand). 4 MiB of chained lines from a generator, not
+// a file, pass through the walker; the heap does not grow with them (holding them would take ~24 MiB).
+func TestATrailOfAnySizeShipsInBoundedMemory(t *testing.T) {
+	generator := &chainedLines{left: 4 << 20}
+	walker, err := audit.NewTrailWalker("sync", audit.TrailStart{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	var before, peak runtime.MemStats
+	runtime.ReadMemStats(&before)
+	count := 0
+	err = walker.Feed(generator, false, func(audit.Event) error {
+		count++
+		if count%5000 == 0 {
+			var now runtime.MemStats
+			runtime.ReadMemStats(&now)
+			if now.HeapInuse > peak.HeapInuse {
+				peak = now
+			}
+		}
+		return nil
+	})
+	if err != nil || count < 25000 {
+		t.Fatalf("%d lines walked: %v", count, err)
+	}
+	if grown := int64(peak.HeapInuse) - int64(before.HeapInuse); grown > 4<<20 {
+		t.Fatalf("the heap grew by %d MiB walking 4 MiB: the trail is being held", grown>>20)
+	}
+}
+
+// chainedLines yields lines as trails.append writes them, chained, until left bytes have been read.
+type chainedLines struct {
+	left    int
+	seq     int
+	prev    string
+	pending []byte
+}
+
+func (g *chainedLines) Read(p []byte) (int, error) {
+	if len(g.pending) == 0 {
+		if g.left <= 0 {
+			return 0, io.EOF
+		}
+		g.seq++
+		line := fmt.Sprintf(`{"at":%d,"event":"sync-pull","outcome":"ALLOW","peer":"node-b","prev":%q,"seq":%d}`+"\n", 1790000000+g.seq, g.prev, g.seq)
+		sum := sha256.Sum256([]byte(line))
+		g.prev, g.pending = hex.EncodeToString(sum[:]), []byte(line)
+		g.left -= len(line)
+	}
+	n := copy(p, g.pending)
+	g.pending = g.pending[n:]
+	return n, nil
+}
+
+// receiptSink is a collector that also signs receipts, as internal/audit/collector.go does.
+type receiptSink struct {
+	fakeSink
+	key         ed25519.PrivateKey
+	identity    string
+	stream      string
+	events      []audit.Event
+	refuseSends bool
+}
+
+func (sink *receiptSink) Send(ctx context.Context, event audit.Event) error {
+	if sink.refuseSends {
+		return audit.ErrSinkUnavailable
+	}
+	return sink.fakeSink.Send(ctx, event)
+}
+
+func (sink *receiptSink) Receipt(_ context.Context, sequence uint64) (audit.Receipt, error) {
+	event := sink.events[sequence-1]
+	var detail struct {
+		LineSHA256 string `json:"line_sha256"`
+	}
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		return audit.Receipt{}, err
+	}
+	signature := ed25519.Sign(sink.key, audit.ReceiptPreimage(sink.identity, sink.stream, sequence, event.Hash, detail.LineSHA256))
+	return audit.Receipt{Sequence: sequence, EventHash: event.Hash, LineSHA256: detail.LineSHA256, Signature: hex.EncodeToString(signature)}, nil
 }
 
 func TestAPruneAheadOfTheCollectorIsTampering(t *testing.T) {

@@ -450,38 +450,102 @@ def verify_trail(path, expected_head=None):
     return _verify_data(b"".join(parts), marker, expected_head)
 
 
-def prune(path, head_path):
-    """Remove the archives the collector has committed, oldest first, and only those. head_path is the
-    shipper's record of its last pass (cmd/regalia-audit-ship -head): the collector's committed line, and
-    for each archive wholly behind it, that archive's last line and the event it shipped as. An archive is
-    removed only if it is named there, behind the committed line, and its last line on disk is the one
-    named. The marker is written (and synced) first, so a cut leaves files the marker covers, which
-    segments() skips. Returns how many were removed."""
+RECEIPT_DOMAIN = "regalia.collector.receipt/v1"         # internal/audit/collector.go ReceiptPreimage
+STREAM = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def receipt_keys(path):
+    """The pinned set of the collector's receipt keys: one Ed25519 public key a line, 64 hex, '#' for
+    comments. A set, so the collector's key can rotate: pin the new one beside the old, then drop the old."""
+    keys = []
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                if not re.fullmatch(r"[0-9a-f]{64}", line):
+                    raise Refused("%s: %r is not an Ed25519 public key in hex" % (path, line))
+                keys.append(line)
+    if not keys:
+        raise Refused("%s pins no receipt key" % path)
+    return keys
+
+
+def client_identity(certificate_path):
+    """The collector keys a stream by the SHA-256 of the client certificate's DER: this host's identity."""
+    import ssl
+    with open(certificate_path) as f:
+        return hashlib.sha256(ssl.PEM_cert_to_DER_cert(f.read())).hexdigest()
+
+
+def _receipt_signed(receipt, keys, identity, stream):
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    preimage = ("%s\n%s\n%s\n%d\n%s\n%s" % (RECEIPT_DOMAIN, identity, stream, receipt["sequence"], receipt["event_hash"],
+                                            receipt["line_sha256"])).encode()
+    try:
+        signature = bytes.fromhex(receipt["signature"])
+    except (TypeError, ValueError):
+        return False
+    for key in keys:
+        try:
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(key)).verify(signature, preimage)
+            return True
+        except (InvalidSignature, ValueError):
+            continue
+    return False
+
+
+def prune(path, head_path, trail, site, identity, keys):
+    """Remove the archives the collector holds, oldest first, and only those (#288). The shipper's head
+    file (cmd/regalia-audit-ship -head) names, for each archive, the collector's SIGNED RECEIPT for its
+    last line; nothing else in it is trusted but the line's time. An archive is removed only if:
+      * the trail is the registry's `trail`, and the receipt is for this host's stream (`identity`, the
+        SHA-256 of its client certificate, and <site>.<trail>), so another stream's receipt is useless;
+      * the receipt verifies under one of `keys` (receipt_keys);
+      * its position is the one counted here, from the marker through the archives' lines on disk;
+      * its line hash is that of the archive's last line on disk.
+    The collector checks every trail event's content against the line hash it names, so a receipt is
+    for the line itself. A missing receipt leaves the archive (and every later one) waiting; a receipt
+    that does not hold is refused, since only a forged head file makes one. The marker is written (and
+    synced) first, so a cut leaves files the marker covers, which segments() skips and the next prune
+    removes. Returns how many were removed."""
+    registered = TRAILS.get(trail)
+    if registered is None or os.path.basename(path) != os.path.basename(registered[0]):
+        raise Refused("%s is not the %r trail of the registry" % (path, trail))
+    stream = "%s.%s" % (site, trail)
+    if not STREAM.fullmatch(stream) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+        raise Refused("the stream %r or the identity is not one the collector keys" % stream)
     with open(head_path, "rb") as f:
         head = json.loads(f.read(1 << 20))
-    committed = head.get("committed")
-    named = {entry.get("name"): entry for entry in head.get("archives", []) if isinstance(entry, dict)}
+    named = {entry.get("name"): entry for entry in head.get("archives", []) if isinstance(entry, dict)} if isinstance(head, dict) else {}
     marker, archives, _ = segments(path)
     left = _left_behind(path, marker)                     # covered by the marker, left by a prune that was cut
+    position = marker["sequence"] if marker else 0
     covered = []
     for archive in archives:
-        entry = named.get(os.path.basename(archive))
-        if not entry or not isinstance(committed, int) or not isinstance(entry.get("sequence"), int) or entry["sequence"] > committed:
-            break
         data = _read_whole(archive)
+        position += data.count(b"\n")
+        entry = named.get(os.path.basename(archive))
+        receipt = entry.get("receipt") if isinstance(entry, dict) else None
+        if not isinstance(receipt, dict):
+            break                                         # not yet held at the collector, or not yet receipted
         last = data[data.rstrip(b"\n").rfind(b"\n") + 1:]
-        if not data.endswith(b"\n") or hashlib.sha256(last).hexdigest() != entry.get("line_sha256") or \
-                int(ARCHIVE.fullmatch(archive[len(path):]).group(1)) != entry.get("seq"):
-            raise Refused("%s is not the archive the shipper recorded: not pruned" % archive)
-        covered.append((archive, entry))
+        fields = (receipt.get("sequence"), receipt.get("event_hash"), receipt.get("line_sha256"), receipt.get("signature"))
+        if not data.endswith(b"\n") or not isinstance(fields[0], int) or not all(isinstance(v, str) for v in fields[1:]) or \
+                not isinstance(entry.get("timestamp"), int) or fields[0] != position or \
+                fields[2] != hashlib.sha256(last).hexdigest() or not re.fullmatch(r"sha256:[0-9a-f]{64}", fields[1]) or \
+                not _receipt_signed(receipt, keys, identity, stream):
+            raise Refused("%s: its receipt does not hold (position %d, its last line, the stream %s, or the collector's "
+                          "signature): not pruned" % (archive, position, stream))
+        covered.append((archive, {"seq": int(ARCHIVE.fullmatch(archive[len(path):]).group(1)), "sequence": position,
+                                  "event_hash": fields[1], "line_sha256": fields[2], "timestamp": entry["timestamp"]}))
     for archive in left:
         os.unlink(archive)
     if not covered:
         if left:
             _sync_directory(os.path.dirname(os.path.abspath(path)))
         return len(left)
-    last = covered[-1][1]
-    new = {k: last[k] for k in ("seq", "sequence", "event_hash", "line_sha256", "timestamp")}
+    new = covered[-1][1]
     staged = path + ".pruned.next"
     fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
     try:
@@ -541,7 +605,15 @@ def main(argv):
         except (Refused, OSError, ValueError) as failure:
             print("REFUSED: %s" % failure, file=sys.stderr)
             return 1
-    print("usage: trails.py append <trail> < event.json | verify <path> [<expected head>] | unanswered <trail> [key=value ...]", file=sys.stderr)
+    if len(argv) == 11 and argv[0] == "prune" and argv[3::2] == ["--trail", "--site", "--client-cert", "--receipt-keys"]:
+        try:
+            print(prune(argv[1], argv[2], argv[4], argv[6], client_identity(argv[8]), receipt_keys(argv[10])))
+            return 0
+        except (Refused, OSError, ValueError) as failure:
+            print("REFUSED: %s" % failure, file=sys.stderr)
+            return 1
+    print("usage: trails.py append <trail> < event.json | verify <path> [<expected head>] | unanswered <trail> [key=value ...]"
+          " | prune <path> <shipper head file> --trail <name> --site <site> --client-cert <pem> --receipt-keys <file>", file=sys.stderr)
     return 2
 
 

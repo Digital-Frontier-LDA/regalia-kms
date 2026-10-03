@@ -1,7 +1,9 @@
 # Removes the archived files of the audit trail %i that the audit collector has committed
 # (deploy/baremetal/trails.py prune; #278). A trail rotates into <trail>.<last seq> files as it grows.
-# An archive is removed only when regalia-audit-ship@%i's last pass recorded it as wholly behind the
-# collector's committed line, and its last line on disk is the one recorded. The prune marker
+# An archive is removed only with the collector's SIGNED RECEIPT for its last line (fetched by
+# regalia-audit-ship@%i into its head file), verified against the pinned receipt keys
+# (collector-receipt.pub, one a line, so the collector's key can rotate), for this host's client
+# certificate and this trail's stream, at the position prune counts itself. The prune marker
 # (<trail>.pruned) is written first, so the shipper goes on from it and still checks the collector's
 # head. Run daily by regalia-audit-prune@%i.timer.
 #
@@ -16,8 +18,10 @@ Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/depl
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/regalia/audit-ship.env
 EnvironmentFile=/etc/regalia/audit-ship/%i.env
-ExecStart=/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} /var/lib/regalia-audit-ship/%i.head.json
+ExecStart=/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} /var/lib/regalia-audit-ship/%i.head.json \
+    --trail %i --site ${SITE} --client-cert /etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub
 CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes

@@ -13,10 +13,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -104,13 +102,26 @@ func run(arguments []string, out io.Writer) error {
 func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) error {
 	stream := o.site + "." + o.trail
 	for {
-		trail, err := readSegments(o.path)
 		var committed, total uint64
+		var boundaries []boundary
+		trail, err := openSegments(o.path)
 		if err == nil {
-			committed, total, err = audit.ShipTrailFrom(ctx, sink, stream, o.trail, trail.start, trail.data)
+			committed, total, err = audit.ShipTrailLines(ctx, sink, stream, o.trail, trail.start, func(walker *audit.TrailWalker, each func(audit.Event) error) error {
+				for _, archive := range trail.archives {
+					if err := walker.Feed(archive.file, true, each); err != nil {
+						return err
+					}
+					boundaries = append(boundaries, boundary{archive.name, archive.seq, walker.Last()})
+				}
+				if trail.current == nil {
+					return nil
+				}
+				return walker.Feed(trail.current, false, each)
+			})
+			trail.close()
 		}
 		if err == nil {
-			if headErr := writeHead(o.head, o.trail, trail, committed); headErr != nil {
+			if headErr := writeHead(ctx, sink, o.head, o.site+"."+o.trail, o.trail, boundaries, committed); headErr != nil {
 				fmt.Fprintf(out, "regalia-audit-ship: the head file could not be written: %v\n", headErr)
 			}
 		}
@@ -135,43 +146,62 @@ func loop(ctx context.Context, sink audit.TrailSink, o options, out io.Writer) e
 	}
 }
 
-// segmentsRead is a trail as trails.py's segments() lays it out: where it continues from (the prune
-// marker), and its archives then its current file, concatenated.
-type segmentsRead struct {
+// openedTrail is a trail as trails.py's segments() lays it out, open: where it continues from (the
+// prune marker), its archives in order, then its current file. It holds descriptors, not bytes, so a
+// trail of any size ships (#288); and a rotation or a prune while it ships cannot take lines from under
+// it (a renamed or unlinked file stays readable through its descriptor).
+type openedTrail struct {
 	start    audit.TrailStart
-	data     []byte
-	archives []archiveRead
+	archives []openedArchive
+	current  *os.File
 }
 
-type archiveRead struct {
-	name     string
-	seq      uint64
-	lines    uint64 // complete lines in it
-	lastLine []byte
+type openedArchive struct {
+	name string
+	seq  uint64
+	file *os.File
+}
+
+func (trail openedTrail) close() {
+	for _, archive := range trail.archives {
+		archive.file.Close()
+	}
+	if trail.current != nil {
+		trail.current.Close()
+	}
+}
+
+// boundary is where an archive ends in the stream: what prune records for it.
+type boundary struct {
+	name string
+	seq  uint64
+	at   audit.TrailStart
 }
 
 var archiveSuffix = regexp.MustCompile(`^\.([0-9]{20})$`)
 
-// readSegments reads the whole trail. A rotation or a prune running meanwhile would hand it a
-// concatenation with lines missing, which would read as tampering: so it takes the directory's
-// listing, the marker and the current file's identity before and after, and reads again when they
-// moved. A trail still moving after a few tries is an ordinary error, retried at the next pass.
-func readSegments(path string) (segmentsRead, error) {
+// openSegments opens the whole trail. A rotation or a prune running meanwhile would hand it a set of
+// files with lines missing, which would read as tampering: so it takes the directory's listing and the
+// marker before and after, and opens again when they moved. A trail still moving after a few tries is
+// an ordinary error, retried at the next pass.
+func openSegments(path string) (openedTrail, error) {
 	for attempt := 0; attempt < 5; attempt++ {
 		before, err := segmentsState(path)
 		if err != nil {
-			return segmentsRead{}, err
+			return openedTrail{}, err
 		}
-		read, err := readSegmentsOnce(path, before)
+		trail, err := openSegmentsOnce(path, before)
 		after, stateErr := segmentsState(path)
 		if stateErr != nil {
-			return segmentsRead{}, stateErr
+			trail.close()
+			return openedTrail{}, stateErr
 		}
 		if before == after {
-			return read, err
+			return trail, err
 		}
+		trail.close()
 	}
-	return segmentsRead{}, fmt.Errorf("%s kept rotating while it was read", path)
+	return openedTrail{}, fmt.Errorf("%s kept rotating while it was opened", path)
 }
 
 // segmentsState names what a rotation or a prune changes: the files beside the trail, by name and
@@ -204,23 +234,29 @@ func segmentsState(path string) (string, error) {
 	return state.String(), nil
 }
 
-func readSegmentsOnce(path, state string) (segmentsRead, error) {
-	var read segmentsRead
+func openSegmentsOnce(path, state string) (openedTrail, error) {
+	var trail openedTrail
 	directory, base := filepath.Split(path)
 	if marker, err := readRegular(path+".pruned", 4096); err == nil {
 		decoder := json.NewDecoder(bytes.NewReader(marker))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&read.start); err != nil || read.start == (audit.TrailStart{}) {
-			return read, fmt.Errorf("%w: %s.pruned is not a prune marker", audit.ErrTrailTampered, path)
+		if err := decoder.Decode(&trail.start); err != nil || trail.start == (audit.TrailStart{}) {
+			return trail, fmt.Errorf("%w: %s.pruned is not a prune marker", audit.ErrTrailTampered, path)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return read, err
+		return trail, err
 	}
-	current, err := os.Lstat(path)
+	current, err := openRegular(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return read, err
+		return trail, err
 	}
-	var archives []archiveRead
+	trail.current = current
+	var currentInfo os.FileInfo
+	if current != nil {
+		if currentInfo, err = current.Stat(); err != nil {
+			return trail, err
+		}
+	}
 	for _, line := range strings.Split(state, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 {
@@ -230,62 +266,52 @@ func readSegmentsOnce(path, state string) (segmentsRead, error) {
 		if match == nil {
 			continue
 		}
-		info, err := os.Lstat(filepath.Join(directory, fields[0]))
-		if err != nil {
-			return read, err
-		}
-		if current != nil && os.SameFile(info, current) {
-			continue // a rotation cut after its link: this is the current file
-		}
 		seq, _ := strconv.ParseUint(match[1], 10, 64)
-		if read.start.Sequence > 0 && seq <= read.start.Seq {
+		if trail.start.Sequence > 0 && seq <= trail.start.Seq {
 			continue // a prune cut before it removed this: the marker covers it
 		}
-		archives = append(archives, archiveRead{name: fields[0], seq: seq})
-	}
-	sort.Slice(archives, func(i, j int) bool { return archives[i].seq < archives[j].seq })
-	var data bytes.Buffer
-	for i := range archives {
-		content, err := readRegular(filepath.Join(directory, archives[i].name), maxTrail)
+		file, err := openRegular(filepath.Join(directory, fields[0]))
 		if err != nil {
-			return read, err
+			return trail, err
 		}
-		if len(content) > 0 && content[len(content)-1] != '\n' {
-			return read, fmt.Errorf("%w: %s does not end with a whole line: not an archive rotation made", audit.ErrTrailTampered, archives[i].name)
+		if info, err := file.Stat(); err != nil || (currentInfo != nil && os.SameFile(info, currentInfo)) {
+			file.Close() // a rotation cut after its link: this is the current file
+			if err != nil {
+				return trail, err
+			}
+			continue
 		}
-		archives[i].lines = uint64(bytes.Count(content, []byte("\n")))
-		archives[i].lastLine = content[bytes.LastIndexByte(content[:max(len(content)-1, 0)], '\n')+1:]
-		data.Write(content)
-		if data.Len() > maxTrail {
-			return read, fmt.Errorf("%s and its archives are larger than %d bytes: prune them", path, maxTrail)
-		}
+		trail.archives = append(trail.archives, openedArchive{name: fields[0], seq: seq, file: file})
 	}
-	content, err := readRegular(path, maxTrail)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return read, err
-	}
-	data.Write(content)
-	if data.Len() > maxTrail {
-		return read, fmt.Errorf("%s and its archives are larger than %d bytes: prune them", path, maxTrail)
-	}
-	read.data, read.archives = data.Bytes(), archives
-	return read, nil
+	sort.Slice(trail.archives, func(i, j int) bool { return trail.archives[i].seq < trail.archives[j].seq })
+	return trail, nil
 }
 
-// readRegular reads a file as trails.append opens it: never through a link, a regular file only.
-func readRegular(path string, limit int64) ([]byte, error) {
+// openRegular opens a file as trails.append does: never through a link, a regular file only.
+func openRegular(path string) (*os.File, error) {
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
+		file.Close()
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
+		file.Close()
 		return nil, fmt.Errorf("%s is not a regular file", path)
 	}
+	return file, nil
+}
+
+// readRegular reads a file as trails.append opens it: never through a link, a regular file only.
+func readRegular(path string, limit int64) ([]byte, error) {
+	file, err := openRegular(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
@@ -305,39 +331,42 @@ func readTrail(path string) ([]byte, error) {
 	return data, err
 }
 
-// writeHead records, for trails.py prune, the line the collector has committed and each archive
-// wholly behind it: its last line's hash and the event that line shipped as. prune removes an archive
-// only if it is named here and its last line on disk is the one named.
-func writeHead(path, trail string, read segmentsRead, committed uint64) error {
+// receipter is a sink that can fetch the collector's signed receipts (HTTPSink).
+type receipter interface {
+	Receipt(context.Context, uint64) (audit.Receipt, error)
+}
+
+// writeHead records, for trails.py prune, each archive the collector holds wholly: its name, the
+// time of its last line, and the collector's SIGNED RECEIPT for that line (#288). prune trusts the
+// receipt, verified against the keys it pins, and its own count of positions, never this file's
+// word: a compromised shipper cannot make it remove a line the collector does not hold. An archive
+// whose receipt cannot be had is left out, and waits.
+func writeHead(ctx context.Context, sink audit.TrailSink, path, stream, trail string, boundaries []boundary, committed uint64) error {
 	if path == "" {
 		return nil
 	}
-	events, err := audit.TrailEventsFrom(trail, read.start, read.data)
-	if err != nil {
-		return err
-	}
 	type entry struct {
-		Name       string `json:"name"`
-		Seq        uint64 `json:"seq"`
-		Sequence   uint64 `json:"sequence"`
-		EventHash  string `json:"event_hash"`
-		LineSHA256 string `json:"line_sha256"`
-		Timestamp  int64  `json:"timestamp"`
+		Name      string        `json:"name"`
+		Seq       uint64        `json:"seq"`
+		Timestamp int64         `json:"timestamp"`
+		Receipt   audit.Receipt `json:"receipt"`
 	}
 	record := struct {
 		Trail     string  `json:"trail"`
+		Stream    string  `json:"stream"`
 		Committed uint64  `json:"committed"`
 		Archives  []entry `json:"archives"`
-	}{Trail: trail, Committed: committed, Archives: []entry{}}
-	sequence := read.start.Sequence
-	for _, archive := range read.archives {
-		sequence += archive.lines
-		if archive.lines == 0 || sequence > committed || sequence-read.start.Sequence > uint64(len(events)) {
+	}{Trail: trail, Stream: stream, Committed: committed, Archives: []entry{}}
+	receipts, ok := sink.(receipter)
+	for _, b := range boundaries {
+		if !ok || b.at.Sequence == 0 || b.at.Sequence > committed {
 			break
 		}
-		event := events[sequence-read.start.Sequence-1]
-		sum := sha256.Sum256(archive.lastLine)
-		record.Archives = append(record.Archives, entry{archive.name, archive.seq, sequence, event.Hash, hex.EncodeToString(sum[:]), event.Timestamp.Unix()})
+		receipt, err := receipts.Receipt(ctx, b.at.Sequence)
+		if err != nil {
+			break
+		}
+		record.Archives = append(record.Archives, entry{b.name, b.seq, b.at.Timestamp, receipt})
 	}
 	encoded, err := json.Marshal(record)
 	if err != nil {
