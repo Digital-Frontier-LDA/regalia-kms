@@ -148,6 +148,108 @@ class _Callable:
             setattr(self.tpm, name, value)
 
 
+class DefineAt(unittest.TestCase):
+    """heartbeat.Counter.define_at (#190 --replace, decided by regalia-kms-24 with regalia-kms-d9): a fresh
+    counter that reads a verified sequence at once, by its write-once base, with no increment loop."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def counter(self, tpm):
+        return hb.Counter("0x1500018", lock_path=self.d + "/lock", run=tpm)
+
+    def test_it_reads_the_sequence_at_once_whether_the_counter_lands_below_or_above(self):
+        for highest, sequence in ((0, 52000), (10 ** 6, 10), (2 ** 63, 7)):
+            with self.subTest(highest=highest, sequence=sequence):
+                tpm = FakeTpm(highest=highest)
+                increments = []
+                counter = self.counter(lambda argv, **kw: (increments.append(argv) if argv[0] == "tpm2_nvincrement" else None, tpm(argv, **kw))[1])
+                self.assertEqual(counter.define_at(sequence), sequence)
+                self.assertEqual(len(increments), 1)                            # one write, not one per heartbeat
+                self.assertEqual(counter.value(), sequence)
+                self.assertEqual(counter.advance(sequence + 1), sequence + 1)  # and it counts on from there
+                self.assertEqual(counter.remains()[0], sequence + 1)            # recount's floor reads it the same way
+
+    def test_a_complete_counter_is_never_redefined(self):
+        tpm = FakeTpm()
+        counter = self.counter(tpm)
+        counter.define_at(100)
+        with self.assertRaises(m.Refused) as caught:
+            counter.define_at(5)
+        self.assertIn("already defined", str(caught.exception))
+        self.assertEqual(counter.value(), 100)
+
+    def test_a_kill_before_or_after_the_base_write_is_done_again(self):
+        for stop in ("tpm2_nvwrite", "tpm2_nvwritelock"):
+            with self.subTest(killed_at=stop):
+                tpm = FakeTpm()
+                armed = {"on": True}
+
+                def killing(argv, **kw):
+                    if armed["on"] and argv[0] == stop:
+                        raise OSError("power cut at %s" % stop)
+                    return tpm(argv, **kw)
+                counter = self.counter(killing)
+                with self.assertRaises(OSError):
+                    counter.define_at(4000)
+                armed["on"] = False
+                self.assertEqual(counter.define_at(4000), 4000)
+                self.assertEqual(counter.value(), 4000)
+
+    def test_a_replacement_takes_its_first_heartbeat_at_the_network_s_sequence(self):
+        tpm = FakeTpm()
+        counter = self.counter(tpm)                                     # not defined yet: a node being replaced
+        man = manifest()
+        fresh = hb.Freshness(counter, lambda: (T0 + 60, True), lambda: 5000, self.d + "/f.json")
+        self.assertEqual(fresh.accept_first(beat(man, 52000, issued=T0), man), hb.MAX_LIFETIME - 60)
+        self.assertEqual(counter.value(), 52000)
+        fresh.accept(beat(man, 52001, issued=T0 + 30), man)           # then the ordinary rule
+        self.assertEqual(counter.value(), 52001)
+        with self.assertRaises(m.Refused) as caught:
+            fresh.accept_first(beat(man, 60000, issued=T0 + 40), man)
+        self.assertIn("already held", str(caught.exception))
+
+    def test_a_damaged_counter_is_recount_s_case_not_a_first_heartbeat_s(self):
+        """#261 (regalia-kms-3e): a counter whose base is gone, on a node whose disk state is lost, is not
+        redefined by a first heartbeat: that would skip recount's floor, phrase, audit and proofs."""
+        man = manifest()
+        for damage in ("base gone", "complete"):
+            with self.subTest(damage):
+                tpm = FakeTpm()
+                counter = hb.Counter("0x1500018", lock_path=self.d + "/" + damage + ".lock", run=tpm)
+                counter.define_at(5000)
+                if damage == "base gone":
+                    tpm.nv.pop(counter.base_index)
+                before = {k: list(v) for k, v in tpm.nv.items()}
+                fresh = hb.Freshness(counter, lambda: (T0 + 60, True), lambda: 5000, self.d + "/" + damage + ".json")
+                with self.assertRaises(m.Refused) as caught:
+                    fresh.accept_first(beat(man, 70000, issued=T0), man)
+                self.assertIn("use recount", str(caught.exception))
+                self.assertEqual({k: list(v) for k, v in tpm.nv.items()}, before)      # nothing touched
+                self.assertFalse(os.path.exists(self.d + "/" + damage + ".json"))       # nothing held
+
+    def test_a_first_heartbeat_is_checked_like_any_other(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        man = manifest()
+        for label, envelope, clock in (("a stranger's", beat(man, 50000, issued=T0, key=Ed25519PrivateKey.generate()), (T0 + 60, True)),
+                                       ("expired", beat(man, 50000, issued=T0), (T0 + hb.MAX_LIFETIME + 1, True)),
+                                       ("from the future", beat(man, 50000, issued=T0 + 3600), (T0 + 60, True)),
+                                       ("time not authenticated", beat(man, 50000, issued=T0), (T0 + 60, False))):
+            with self.subTest(label):
+                tpm = FakeTpm()
+                counter = hb.Counter("0x1500018", lock_path=self.d + "/" + label + ".lock", run=tpm)
+                fresh = hb.Freshness(counter, lambda clock=clock: clock, lambda: 5000, self.d + "/" + label + ".json")
+                with self.assertRaises(m.Refused):
+                    fresh.accept_first(envelope, man)
+                self.assertNotIn(counter.index, tpm.nv)                    # nothing defined
+
+    def test_a_sequence_out_of_range_is_refused(self):
+        for bad in (-1, 1 << 63, True, 1.5):
+            with self.subTest(bad=bad), self.assertRaises(m.Refused):
+                self.counter(FakeTpm()).define_at(bad)
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()

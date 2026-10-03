@@ -231,6 +231,12 @@ class Trail:
             trails.append(self.path, dict(event, at=int(time.time())))
 
 
+def heartbeat_counter(cfg, run=subprocess.run):
+    """This node's heartbeat sequence counter, with the lock its users take: the one construction the
+    services and the recovery command (recount.py) share."""
+    return heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "heartbeat-counter.lock"))
+
+
 # ---- the node ----
 
 class Node:
@@ -284,7 +290,7 @@ class Node:
         return membership.Store(self.path("membership.json"), self.cfg["root_key"], self.anchor())
 
     def freshness(self):
-        counter = heartbeat.Counter(self.cfg["nv_heartbeat"], self.tcti, self.run, lock_path=self.path("heartbeat-counter.lock"))
+        counter = heartbeat_counter(self.cfg, self.run)
         return heartbeat.Freshness(counter, self.clock(), self.tpm_clock(), self.path("freshness.json"))
 
     def attester_for(self, manifest):
