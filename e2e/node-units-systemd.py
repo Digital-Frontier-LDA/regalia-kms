@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""The node's four units under a real systemd, part 1 (#80, step 3b): they start, reach what their sandboxes
-let them reach, and do their first job.
+"""The node's four units under a real systemd (#80, step 3b): they start, reach what their sandboxes let
+them reach, and do their jobs, up to a peer's lease, the KMS daemon serving on it, and a revocation ending it.
 
-    sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/node-units-systemd.py
+    REGALIA_E2E_BIN=<dir with regalia-kms, regalia-audit-collector> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py
 
 IT CHANGES THE MACHINE, so it runs only on a GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted: not
 a self-hosted one, where GITHUB_ACTIONS is set too), or where REGALIA_NODE_HOST_OK equals the machine's
@@ -15,8 +15,9 @@ THE TPM is swtpm. Where the kernel has the vTPM proxy it sits behind the kernel'
 host; GitHub's Azure kernel has none, and there it is swtpm's CUSE device, which has NO resource manager:
 one command buffer, no per-connection context, so two processes using it at once could receive each
 other's responses, and sessions survive between processes (on a host the kernel flushes them when a
-connection closes). The test therefore lets one unit at a time use the TPM after the first one, and part 2
-must not rest anything on a session kept across processes (attest.activate does that: #190).
+connection closes). The test therefore lets one unit at a time use the TPM after the first one, and rests
+nothing on a session kept across processes (attest.activate does that: #190; a's AK is enrolled at b by
+hand, as the rest of the provisioning is).
 
 What part 1 shows, on the units as shipped (deploy/baremetal/units):
 
@@ -35,25 +36,48 @@ What part 1 shows, on the units as shipped (deploy/baremetal/units):
   5  each unit's sandbox as systemd applied it (systemctl show), what regalia-authtime's process really
      sees, and what chrony does with a group-writable /run/chrony (observed, not asserted)
 
-Part 2 adds the peers, the authority and the KMS daemon: a lease from a peer, the daemon ready, and a
-revocation reaching the daemon.
+Part 2: peer b, in a network namespace, on its own software TPM (a socket: it is the fixture, not what is
+tested), running the product's sync.Server with a real attestation verifier and lease signer, reached
+over real WireGuard. No revocation authority is configured: b receives what the root and the revocation
+key sign, by hand.
+
+  6  b's tunnel to node a comes up from the same manifest
+  7  catch-up: b holds epoch 2 and its heartbeat; regalia-sync pulls both over the tunnel, publishes, and
+     the path unit runs regalia-wg-apply for the new chain
+  8  the KMS daemon (SoftHSM, as a unit named regalia-kms.service) is up and NOT ready; regalia-admission
+     re-attests to b with a's TPM, b's TPM signs a lease, the admission file admits, and the daemon signs
+  9  b receives the manifest that revokes a: it refuses to renew, by name, and the daemon stops serving at
+     the end of the lease it holds, with nobody touching it. (A revoked node is told nothing by its peers,
+     so a's own chain never shows the revocation: the lease running out is what stops it.)
 """
+import base64
+import datetime
+import hashlib
+import http.client
 import json
 import os
 import pathlib
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import authtime, measurements, membership, node, wgsvc        # noqa: E402
+from deploy.baremetal import admission, attest, authtime, heartbeat, lease, measurements, membership, node, sync, wgsvc   # noqa: E402
+import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
 
 PREFIX = "/usr/lib/regalia-kms"
 UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-admission.service", "regalia-sync.service")
+DAEMON_UNITS = ("regalia-kms.service", "regalia-audit-collector.service")
+NS, A_TCTI = "regalia-e2e-b", "device:/dev/tpmrm0"
+SITE, DEVICE, OBJECT, PRINCIPAL = "e2e-site", "softhsm-e2e", "e2e-signing-key", "spiffe://regalia/workload/e2e"
 passed, failed = 0, 0
 
 
@@ -102,6 +126,76 @@ def show(unit, *properties):
     return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
 
+STOP = []
+
+
+def inside(fn):
+    """fn() in a thread that has entered b's network namespace: sockets it makes, threads it starts and
+    commands it runs live there."""
+    out = {}
+
+    def enter():
+        try:
+            fd = os.open("/run/netns/" + NS, os.O_RDONLY)
+            try:
+                os.setns(fd, os.CLONE_NEWNET)
+            finally:
+                os.close(fd)
+            out["value"] = fn()
+        except BaseException as failure:                                   # noqa: BLE001 - handed to the caller
+            out["error"] = failure
+    thread = threading.Thread(target=enter)
+    thread.start()
+    thread.join()
+    if "error" in out:
+        raise out["error"]
+    return out["value"]
+
+
+def in_ns(argv, **kw):
+    return subprocess.run(["ip", "netns", "exec", NS] + list(argv), **kw)
+
+
+def signed(manifest, key=None, signer="root"):
+    key = key or hbt.ROOT
+    return {"manifest": manifest, "signature": {"signer": signer, "key": hbt.pub(key),
+                                                "sig": key.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
+
+
+def identity(tcti, out):
+    """An EK and a persistent AK, as attest.node_init makes them: (EK name, AK name, AK public area hex)."""
+    out.mkdir()
+    before = os.environ.get("TPM2TOOLS_TCTI")
+    os.environ["TPM2TOOLS_TCTI"] = tcti
+    try:
+        attest.node_init(str(out))
+        sh("tpm2_flushcontext", "-t", check=False)        # a TPM with no resource manager keeps what each call loaded
+    finally:
+        os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
+    ek, ak = (out / "ek.pub").read_bytes(), (out / "ak.pub").read_bytes()
+    return attest.name_of(attest.public_area(ek, "the EK public area")).hex(), attest.ak_identity(ak)[0].hex(), ak.hex()
+
+
+def reference(work, tcti, pcrs):
+    """a's accepted measurement set, read from a's TPM: what pcr_survey.py would record on a host."""
+    sh("tpm2_pcrread", "-T", tcti, "sha256:" + ",".join(str(i) for i in pcrs), "-o", str(work / "pcrs.bin"))
+    raw = (work / "pcrs.bin").read_bytes()
+    sh("tpm2_quote", "-T", tcti, "-c", attest.AK_HANDLE, "-g", "sha256", "-l", "sha256:%d" % pcrs[0], "-q", "00" * 32,
+       "-m", str(work / "ref.quote"), "-s", str(work / "ref.sig"), "-f", "plain")
+    sh("tpm2_flushcontext", "-T", tcti, "-t", check=False)
+    return {"label": "e2e-a", "tpm_firmware_version": attest.parse_quote((work / "ref.quote").read_bytes())["firmware_version"],
+            "pcrs": {str(i): raw[32 * n:32 * (n + 1)].hex() for n, i in enumerate(pcrs)}}
+
+
+def peer_tpm(work):
+    """b's TPM: swtpm on a socket of the test's own (b is the fixture here, not what is tested)."""
+    (work / "b-tpm").mkdir()
+    sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % (work / "b-tpm.sock"), "--ctrl", "type=unixio,path=%s" % (work / "b-tpm.ctrl"),
+       "--tpmstate", "dir=%s" % (work / "b-tpm"), "--flags", "not-need-init,startup-clear", "--daemon")
+    until(lambda: (work / "b-tpm.sock").exists(), 10, 0.2)
+    return "swtpm:path=%s" % (work / "b-tpm.sock")
+
+
 def main():
     try:
         machine = pathlib.Path("/etc/machine-id").read_text().strip()
@@ -118,13 +212,21 @@ def main():
     if os.geteuid() != 0:
         print("node-units-systemd: run as root")
         return 2
+    binaries = pathlib.Path(os.environ.get("REGALIA_E2E_BIN", "/nonexistent"))
+    if not all((binaries / name).is_file() for name in ("regalia-kms", "regalia-audit-collector")) or not os.environ.get("SUDO_USER"):
+        print("node-units-systemd: REGALIA_E2E_BIN must name a directory with regalia-kms and regalia-audit-collector built, "
+              "and it must run under sudo (the daemon runs as the invoking user)")
+        return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="node-units-"))
     os.chmod(work, 0o711)                  # the software TPM runs as tss, under it
     try:
-        return scenario(work)
+        return scenario(work, binaries, os.environ["SUDO_USER"])
     finally:
-        for name in reversed(UNITS):
+        STOP.append(True)
+        for name in DAEMON_UNITS + tuple(reversed(UNITS)):
             sh("systemctl", "stop", name, check=False)
+        sh("ip", "netns", "del", NS, check=False)
+        sh("ip", "link", "del", "e2e-b0", check=False)
         print("\nnode-units-systemd: %d passed, %d failed" % (passed, failed))
 
 
@@ -160,21 +262,28 @@ def tpm(work):
     return how, by_test
 
 
-def chrony(work):
-    """Two NTS servers on the loopback (each with its own certificate), and the system chrony configured as
-    authtime.conf() renders it, pointed at them."""
-    servers, copy = [], work / "chronyd-server"
-    shutil.copy(shutil.which("chronyd") or "/usr/sbin/chronyd", copy)           # unconfined by the distribution's profile
-    for n, address in enumerate(("127.0.0.2", "127.0.0.3"), 1):
+def nts_server(work, n):
+    """One NTS server on 127.0.0.<n+1>, from a copy of chronyd (unconfined by the distribution's profile)."""
+    copy = work / "chronyd-server"
+    if not copy.exists():
+        shutil.copy(shutil.which("chronyd") or "/usr/sbin/chronyd", copy)
+    address = "127.0.0.%d" % (n + 1)
+    if not (work / ("s%d.crt" % n)).exists():
         sh("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-days", "2",
            "-keyout", str(work / ("s%d.key" % n)), "-out", str(work / ("s%d.crt" % n)), "-subj", "/CN=" + address,
            "-addext", "subjectAltName=IP:" + address)
-        conf = work / ("s%d.conf" % n)
-        conf.write_text("local stratum 8\nport %d\nntsport %d\nbindaddress %s\nntsserverkey %s\nntsservercert %s\nallow 127.0.0.0/8\n"
-                        "cmdport 0\nbindcmdaddress %s\npidfile %s\nntsdumpdir %s\n"
-                        % (21120 + n, 21460 + n, address, work / ("s%d.key" % n), work / ("s%d.crt" % n), work / ("s%d.sock" % n),
-                           work / ("s%d.pid" % n), work))
-        servers.append(subprocess.Popen([str(copy), "-x", "-U", "-u", "root", "-n", "-f", str(conf)], stdout=open(work / ("s%d.log" % n), "w"), stderr=subprocess.STDOUT))
+    conf = work / ("s%d.conf" % n)
+    conf.write_text("local stratum 8\nport %d\nntsport %d\nbindaddress %s\nntsserverkey %s\nntsservercert %s\nallow 127.0.0.0/8\n"
+                    "cmdport 0\nbindcmdaddress %s\npidfile %s\nntsdumpdir %s\n"
+                    % (21120 + n, 21460 + n, address, work / ("s%d.key" % n), work / ("s%d.crt" % n), work / ("s%d.sock" % n),
+                       work / ("s%d.pid" % n), work))
+    return subprocess.Popen([str(copy), "-x", "-U", "-u", "root", "-n", "-f", str(conf)], stdout=open(work / ("s%d.log" % n), "a"), stderr=subprocess.STDOUT)
+
+
+def chrony(work):
+    """Two NTS servers on the loopback (each with its own certificate), and the system chrony configured as
+    authtime.conf() renders it, pointed at them."""
+    servers = [nts_server(work, n) for n in (1, 2)]
     text = authtime.conf(["127.0.0.2", "127.0.0.3"])
     for n, address in enumerate(("127.0.0.2", "127.0.0.3"), 1):
         text = text.replace("server %s nts iburst\n" % address, "server %s port %d nts ntsport %d iburst minpoll 0 maxpoll 1\n" % (address, 21120 + n, 21460 + n))
@@ -203,28 +312,32 @@ def install():
 
 
 def provision(work):
-    """What enrolment (#190) will do, by hand: keys, the site configuration, the measurements document, the
-    first manifest committed under the TPM anchor (as the regalia-sync user owns its store)."""
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-    os.makedirs("/etc/regalia", exist_ok=True)
+    """What enrolment (#190) will do, by hand: a's and b's TPM identities, keys, the site configuration, the
+    measurements document (a's set read from a's TPM), the first manifest committed under the TPM anchor
+    (as the regalia-sync user owns its store)."""
+    os.makedirs("/etc/regalia")
     keys = {}
     for name in ("a", "b", "c"):
         private = sh("wg", "genkey").stdout.strip()
         keys[name] = (private, wgsvc.hex_key(sh("wg", "pubkey", input=private + "\n").stdout.strip()))
     pathlib.Path("/etc/regalia/wg-service.key").write_text(keys["a"][0] + "\n")
     os.chmod("/etc/regalia/wg-service.key", 0o600)
-    root, revoke = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
-    raw = lambda k: k.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()   # noqa: E731
-    reference = {"label": "e2e", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}
-    document = {"schema": measurements.SCHEMA, "name": "e2e", "nodes": {n: {"accepted": [dict(reference)]} for n in ("a", "b", "c")}}
+    cfg = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
+    cfg.update(node_id="a", root_key=hbt.pub(hbt.ROOT), time_servers=["127.0.0.2", "127.0.0.3"], pull_interval=10)
+    b_tcti = peer_tpm(work)
+    ids = {"a": identity(cfg["tcti"], work / "a-ids"), "b": identity(b_tcti, work / "b-ids"),
+           "c": ("000b" + "42" * 32, "000b" + "43" * 32, None)}
+    mine = reference(work, cfg["tcti"], cfg["pcrs"])
+    other = {"label": "e2e", "tpm_firmware_version": "0" * 16, "pcrs": {str(i): "00" * 32 for i in cfg["pcrs"]}}
+    document = {"schema": measurements.SCHEMA, "name": "e2e", "nodes": {"a": {"accepted": [mine]}, "b": {"accepted": [dict(other)]},
+                                                                       "c": {"accepted": [dict(other)]}}}
     pathlib.Path("/etc/regalia/measurements.json").write_text(json.dumps(document))
     manifest = {"schema": membership.SCHEMA, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(document),
-                "issued_at": "2026-10-01T00:00:00Z", "revocation_keys": [raw(revoke)],
-                "nodes": [{"node_id": n, "state": "ACTIVE", "ek_name": "000b" + ("%02x" % (0x10 + i)) * 32, "ak_name": "000b" + ("%02x" % (0x40 + i)) * 32,
+                "issued_at": "2026-10-01T00:00:00Z", "revocation_keys": [hbt.pub(hbt.REVOKE)],
+                "nodes": [{"node_id": n, "state": "ACTIVE", "ek_name": ids[n][0], "ak_name": ids[n][1],
                            "wg_boot_pub": ("%02x" % (0x70 + i)) * 32, "wg_service_pub": keys[n][1], "hsm_serials": ["E2E%d" % i]}
                           for i, n in enumerate(("a", "b", "c"))]}
-    envelope = {"manifest": manifest, "signature": {"signer": "root", "key": raw(root), "sig": root.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}}
+    envelope = signed(manifest)
     site = {"schema": "regalia.baremetal-site/v1", "site": "e2e", "host_ipv4": "192.0.2.10", "kms_port": 8443, "ssh_port": 22,
             "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["203.0.113.128/32"], "admin_cidrs": ["203.0.113.0/28"],
             "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
@@ -234,8 +347,6 @@ def provision(work):
                                     {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]},
             "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": None}}
     pathlib.Path("/etc/regalia/site.json").write_text(json.dumps(site))
-    cfg = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
-    cfg.update(node_id="a", root_key=raw(root), time_servers=["127.0.0.2", "127.0.0.3"])
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
     # the modes the units' StateDirectoryMode gives them; the store must be regalia-sync's (#190: an
     # enrolment run as root would leave files sync cannot open)
@@ -247,15 +358,16 @@ def provision(work):
     program = ("import json, sys\nsys.path.insert(0, %r)\nfrom deploy.baremetal import membership as m\n"
                "a = m.HighWater(%r, %r, lock_path='/var/lib/regalia-sync/highwater.lock')\na.define()\n"
                "s = m.Store('/var/lib/regalia-sync/membership.json', %r, a)\ns.commit(json.load(sys.stdin))\nprint(s.load()['epoch'])\n"
-               % (PREFIX, cfg["nv_epoch"], cfg["tcti"], raw(root)))
+               % (PREFIX, cfg["nv_epoch"], cfg["tcti"], cfg["root_key"]))
     epoch = sh("runuser", "-u", "regalia-sync", "-g", "regalia-sync", "-G", "tss", "--", "python3", "-I", "-c", program, input=json.dumps(envelope)).stdout.strip()
     counter = ("import sys\nsys.path.insert(0, %r)\nfrom deploy.baremetal import heartbeat\n"
                "heartbeat.Counter(%r, %r, lock_path='/var/lib/regalia-sync/heartbeat-counter.lock').define()\n" % (PREFIX, cfg["nv_heartbeat"], cfg["tcti"]))
     sh("runuser", "-u", "regalia-sync", "-g", "regalia-sync", "-G", "tss", "--", "python3", "-I", "-c", counter)
-    return cfg, epoch, {n: keys[n][1] for n in keys}
+    return {"cfg": cfg, "epoch": epoch, "public": {n: keys[n][1] for n in keys}, "private": {n: keys[n][0] for n in keys},
+            "manifest": manifest, "envelope": envelope, "document": document, "b_tcti": b_tcti, "ids": ids}
 
 
-def scenario(work):
+def scenario(work, binaries, user):
     header("0  the TPM, as a device, and the controls")
     how, by_test = tpm(work)
     rm = "/dev/tpmrm0"
@@ -277,7 +389,8 @@ def scenario(work):
     header("1  regalia-authtime: chrony with two NTS servers")
     servers = chrony(work)
     install()
-    cfg, epoch, public = provision(work)
+    ctx = provision(work)
+    cfg, epoch, public = ctx["cfg"], ctx["epoch"], ctx["public"]
     sh("systemctl", "start", "regalia-authtime.service")
     status = pathlib.Path("/run/regalia/authtime.json")
     got = until(lambda: json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 120, 2)
@@ -295,7 +408,6 @@ def scenario(work):
     reason = gone.get("reason", "") if isinstance(gone, dict) else ""
     ok(gone.get("authenticated") is False and reason and not reason.startswith(("chrony could not be asked", "the check failed")) if isinstance(gone, dict) else False,
        "one server stops: not authenticated, judged from chrony's answer (%s)" % reason[:70], gone)
-    servers[1] = None
 
     header("2  provisioning, by hand (#190 is not built)")
     ok(epoch == "1", "the first manifest is committed under the TPM anchor, by regalia-sync's user through the tss group", epoch)
@@ -374,7 +486,248 @@ def scenario(work):
           % (sh("chronyd", "-v", check=False).stdout.strip(), "starts" if accepted else "does not start", oct(os.stat("/run/chrony").st_mode & 0o777) if os.path.exists("/run/chrony") else "absent"))
     print(journal("chrony.service", 8))
     print(sh("systemctl", "cat", "chrony.service", check=False).stdout)
+    if failed:
+        print("node-units-systemd: part 1 failed; part 2 not run")
+        return 1
+    part2(work, binaries, user, ctx, servers, status)
     return 1 if failed else 0
+
+
+class Daemon:
+    """The KMS daemon on SoftHSM, as e2e/runtime-admission.py runs it, but as a systemd unit named
+    regalia-kms.service (so regalia-admission sees when it started), as the invoking user, reading the
+    admission file regalia-admission writes in /run/regalia."""
+
+    def __init__(self, work, binaries, user):
+        self.w = w = work / "kms"
+        w.mkdir(mode=0o700)
+        etc, state = w / "etc", w / "state"
+        for d in (etc, state, state / "tokens", w / "collector"):
+            d.mkdir(mode=0o700)
+        module = next(c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so") if os.path.exists(c))
+        self.env = dict(os.environ, SOFTHSM2_CONF=str(etc / "softhsm2.conf"))
+        (etc / "softhsm2.conf").write_text("directories.tokendir = %s\nobjectstore.backend = file\nlog.level = ERROR\nslots.removable = false\n" % (state / "tokens"))
+        pin = os.urandom(8).hex()
+        sh("softhsm2-util", "--init-token", "--free", "--label", "regalia-e2e", "--so-pin", os.urandom(8).hex(), "--pin", pin, env=self.env)
+        token = ["pkcs11-tool", "--module", module, "--token-label", "regalia-e2e"]
+        sh(*token, "--login", "--pin", "env:P", "--keypairgen", "--key-type", "EC:prime256v1", "--usage-sign", "--label", "regalia-e2e", "--id", "01",
+           env=dict(self.env, P=pin))
+        sh(*token, "--read-object", "--type", "pubkey", "--id", "01", "--output-file", str(w / "pub.der"), env=self.env)
+        sh("openssl", "pkey", "-pubin", "-inform", "DER", "-in", str(w / "pub.der"), "-out", str(w / "pub.pem"))
+        serial = next(line.split(":", 1)[1].strip() for line in sh(*token, "--list-slots", env=self.env).stdout.splitlines() if "serial num" in line)
+        keypin = "sha256:" + hashlib.sha256((w / "pub.der").read_bytes()).hexdigest()
+        (etc / "card.pin").write_text(pin)
+        sh("openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", str(etc / "ca.key"))
+        sh("openssl", "req", "-new", "-x509", "-key", str(etc / "ca.key"), "-subj", "/CN=regalia e2e CA", "-days", "2", "-out", str(etc / "ca.pem"),
+           "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
+        for name, ext in (("server", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\nkeyUsage=critical,digitalSignature"),
+                          ("collector", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature"),
+                          ("client", "subjectAltName=URI:%s\nextendedKeyUsage=clientAuth\nkeyUsage=critical,digitalSignature" % PRINCIPAL)):
+            sh("openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", str(etc / (name + ".key")))
+            sh("openssl", "req", "-new", "-key", str(etc / (name + ".key")), "-subj", "/CN=regalia e2e " + name, "-out", str(etc / (name + ".csr")))
+            (etc / (name + ".ext")).write_text(ext + "\n")
+            sh("openssl", "x509", "-req", "-in", str(etc / (name + ".csr")), "-CA", str(etc / "ca.pem"), "-CAkey", str(etc / "ca.key"), "-set_serial",
+               str(int.from_bytes(os.urandom(8), "big")), "-days", "2", "-extfile", str(etc / (name + ".ext")), "-out", str(etc / (name + ".pem")))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        self.stamp, tomorrow = now.strftime("%Y-%m-%dT%H:%M:%SZ"), (now + datetime.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.port, sink = 18453, 18454
+        documents = {
+            "secure-channel.json": {"schema_version": 1, "devices": [{"device_serial": serial, "verified_by": "e2e", "verified_at": self.stamp,
+                                                                       "expires_at": tomorrow, "firmware": "softhsm", "secure_messaging_established": True}]},
+            "manifest.json": {"schema_version": 1, "manifest_id": "node-units-e2e", "generated_at": self.stamp, "objects": [{
+                "id": OBJECT, "name": "E2E P-256 signing key", "kind": "asymmetric-key", "classification": "restricted",
+                "environment": "staging", "owner": "security", "purpose": "e2e-signing", "custody": "direct-hardware",
+                "algorithm": "p256", "operations": ["sign"], "policy_id": "e2e-sign",
+                "bindings": [{"site": SITE, "backend": "nitrokey-pkcs11", "device_id": DEVICE, "device_serial": serial, "object_id": "01",
+                              "public_key_sha256": keypin, "public_fingerprint": keypin, "state": "active"}],
+                "recovery": {"mode": "shamir-4-of-6", "authority_id": "e2e", "minimum_replicas": 2, "status": "tested"},
+                "rotation": {"maximum_age_days": 90, "last_rotated": None}, "migration": {"status": "migrated", "source": "e2e"},
+                "verification": {"status": "verified", "last_verified": self.stamp[:10], "evidence": "e2e"}}]},
+            "policy.json": {"schema_version": 1, "policies": [{"id": "e2e-sign", "object_id": OBJECT, "purpose": "e2e-signing", "environment": "staging",
+                                                               "operation": "sign", "algorithm": "p256", "content_types": ["application/vnd.regalia.digest"],
+                                                               "max_payload_bytes": 32, "max_future_seconds": 300, "required_approvals": 0,
+                                                               "approvers": ["spiffe://regalia/approver/e2e"]}]},
+            "rbac.json": {"schema_version": 1, "principals": [{"uri": PRINCIPAL, "grants": [
+                {"objects": [OBJECT], "operations": ["sign"], "environments": ["staging"]}]}]},
+            "config.json": {
+                "listen_address": "127.0.0.1:%d" % self.port, "site": SITE,
+                "registry_path": str(etc / "manifest.json"), "rbac_policy_path": str(etc / "rbac.json"),
+                "policy_path": str(etc / "policy.json"), "policy_state_path": str(state / "policy-state.jsonl"),
+                "tls_certificate_path": str(etc / "server.pem"), "tls_private_key_path": str(etc / "server.key"), "tls_client_ca_path": str(etc / "ca.pem"),
+                "pkcs11_module_path": module, "secure_channel_evidence_path": str(etc / "secure-channel.json"),
+                "pin_paths": {DEVICE: str(etc / "card.pin")},
+                "audit_journal_path": str(state / "audit.jsonl"), "audit_sink_url": "https://127.0.0.1:%d" % sink,
+                # what this test is about: the files regalia-admission writes, as the daemon finds them on a host
+                "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission.json",
+                "node_id": "a", "boot_session_path": "/run/regalia/boot-session"}}
+        for name, document in documents.items():
+            (etc / name).write_text(json.dumps(document, indent=1) + "\n")
+        for path in etc.iterdir():
+            path.chmod(0o600)
+        sh("chown", "-R", "%s:" % user, str(w))
+        common = ["systemd-run", "--collect", "-p", "User=" + user, "-p", "WorkingDirectory=" + str(w)]
+        sh(*common, "--unit=regalia-audit-collector", "--", str(binaries / "regalia-audit-collector"), "-state", str(w / "collector"),
+           "-listen", "127.0.0.1:%d" % sink, "-tls-cert", str(etc / "collector.pem"), "-tls-key", str(etc / "collector.key"), "-client-ca", str(etc / "ca.pem"))
+        time.sleep(2)
+        sh(*common, "--unit=regalia-kms", "-E", "SOFTHSM2_CONF=" + self.env["SOFTHSM2_CONF"], "--", str(binaries / "regalia-kms"), "-config", str(etc / "config.json"))
+        self.context = ssl.create_default_context(cafile=str(etc / "ca.pem"))
+        self.context.load_cert_chain(str(etc / "client.pem"), str(etc / "client.key"))
+
+    def call(self, method, path, body=None, nonce=None):
+        connection = http.client.HTTPSConnection("127.0.0.1", self.port, context=self.context, timeout=60)
+        headers = {"X-Request-ID": str(uuid.uuid4())}
+        if body is not None:
+            headers.update({"Content-Type": "application/json", "Idempotency-Key": nonce})
+        connection.request(method, path, body=json.dumps(body) if body is not None else None, headers=headers)
+        response = connection.getresponse()
+        payload = response.read()
+        connection.close()
+        try:
+            return response.status, json.loads(payload) if payload else {}
+        except ValueError:
+            return response.status, {"raw": payload.decode(errors="replace")}
+
+    def ready(self):
+        try:
+            return self.call("GET", "/v1/health/ready")[0]
+        except OSError:
+            return None
+
+    def sign(self, message):
+        nonce = "e2e-nonce-" + os.urandom(12).hex()
+        expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return self.call("POST", "/v1/operations/sign", {
+            "object_id": OBJECT, "context": {"environment": "staging", "purpose": "e2e-signing", "expires_at": expires, "nonce": nonce},
+            "content_type": "application/vnd.regalia.digest", "payload_base64": base64.b64encode(hashlib.sha256(message).digest()).decode()}, nonce)
+
+    def verifies(self, message, result):
+        raw = base64.b64decode(result["result_base64"], validate=True)
+
+        def integer(value):
+            value = value.lstrip(b"\x00") or b"\x00"
+            value = (b"\x00" + value) if value[0] & 0x80 else value
+            return b"\x02" + bytes([len(value)]) + value
+        body = integer(raw[:32]) + integer(raw[32:])
+        (self.w / "sig.der").write_bytes(b"\x30" + bytes([len(body)]) + body)
+        (self.w / "message").write_bytes(message)
+        return len(raw) == 64 and subprocess.run(["openssl", "dgst", "-sha256", "-verify", str(self.w / "pub.pem"), "-signature", str(self.w / "sig.der"),
+                                                  str(self.w / "message")], capture_output=True).returncode == 0
+
+    def wait_for(self, want, seconds):
+        got = until(lambda: self.ready() == want, seconds, 0.5)
+        return want if got is True else self.ready()
+
+    def log(self):
+        return journal("regalia-kms.service", 40)
+
+
+def chain_epoch():
+    raw = pathlib.Path("/var/lib/regalia-sync/chain.json").read_bytes()
+    return membership.load(raw, membership.MAX_CHAIN_BYTES)[-1]["manifest"]["epoch"]
+
+
+def part2(work, binaries, user, ctx, servers, status):
+    cfg, public, document = ctx["cfg"], ctx["public"], ctx["document"]
+    m1 = ctx["manifest"]
+    address = {n: wgsvc.address(public[n]) for n in public}
+
+    header("6  peer b: its own namespace and TPM, its tunnel to a from the same manifest")
+    sh("systemctl", "stop", "regalia-admission.service")
+    servers[1] = nts_server(work, 2)                     # both time sources again
+    again = until(lambda: json.loads(status.read_text())["authenticated"], 120, 2)
+    ok(again is True, "the stopped NTS server is back: authenticated again", status.read_text() if status.exists() else "")
+    sh("ip", "netns", "add", NS)
+    sh("ip", "link", "add", "e2e-b0", "type", "veth", "peer", "name", "eth0", "netns", NS)
+    sh("ip", "address", "add", "192.0.2.10/24", "dev", "e2e-b0")
+    sh("ip", "link", "set", "e2e-b0", "up")
+    for argv in (["ip", "link", "set", "lo", "up"], ["ip", "address", "add", "192.0.2.20/24", "dev", "eth0"], ["ip", "link", "set", "eth0", "up"]):
+        in_ns(argv, check=True, capture_output=True)
+    own = wgsvc.reconcile(m1, "b", {"a": "192.0.2.10", "c": "192.0.2.30"}, ctx["private"]["b"], None, run=in_ns)
+    ok(own == address["b"], "b's wg-svc is up at its key's address, with a and c as its peers, read back", own)
+    # b's side, as a node holds it: the store under its TPM anchor, a heartbeat, the verifier, the signer
+    b_tcti = ctx["b_tcti"]
+    anchor = membership.HighWater(cfg["nv_epoch"], b_tcti, lock_path=str(work / "b-highwater.lock"))
+    anchor.define()
+    store = membership.Store(str(work / "b-membership.json"), cfg["root_key"], anchor)
+    store.commit(ctx["envelope"])
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], b_tcti, lock_path=str(work / "b-counter.lock"))
+    counter.define()
+    freshness = heartbeat.Freshness(counter, authtime.clock(str(status)), heartbeat.TpmClock(b_tcti), str(work / "b-freshness.json"))
+    freshness.accept(hbt.beat(m1, 1, issued=int(time.time())), m1)
+    verifier = attest.Verifier(measurements.attest_policy(m1, document, "b"), str(work / "b-attest.json"))
+    with attest.locked_state(str(work / "b-attest.json")) as (state, save):       # a's AK, enrolled by hand (#190)
+        state["nodes"].setdefault("a", {})["ak_public"] = ctx["ids"]["a"][2]
+        save()
+    events = []
+    server = sync.Server("b", store, freshness, verifier, lease.TpmSigner(b_tcti), wgsvc.key_at, events.append)
+    listener = inside(lambda: socket.create_server((address["b"], cfg_port(ctx)), family=socket.AF_INET6))
+    listener.settimeout(0.5)
+    inside(lambda: threading.Thread(target=sync.serve, args=(server, listener, lambda: bool(STOP)), daemon=True).start())
+    reached = until(lambda: sh("ping", "-6", "-c", "1", "-W", "2", address["b"], check=False).returncode == 0, 30, 1)
+    ok(reached is True, "a reaches b's tunnel address through a's wg-svc (a WireGuard handshake on the underlay)",
+       sh("wg", "show", "wg-svc", check=False).stdout)
+
+    header("7  catch-up: b holds epoch 2; regalia-sync pulls it over the tunnel, and wg-apply runs for it")
+    m2 = dict(m1, epoch=2, prev_digest=membership.digest(m1), issued_at="2026-10-02T00:00:00Z",
+              nodes=[dict(n, state="DRAINING") if n["node_id"] == "c" else n for n in m1["nodes"]])
+    store.commit(signed(m2))
+    freshness.accept(hbt.beat(m2, 2, issued=int(time.time())), m2)
+    before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
+    sh("systemctl", "start", "regalia-wg-apply.path", "regalia-sync.service")
+    caught = until(lambda: chain_epoch() == 2, 90, 2)
+    ok(caught is True, "regalia-sync pulled epoch 2 from b and published it", journal("regalia-sync.service")[-800:])
+    pulled = [e for e in events if e.get("event") == "sync-pull" and e.get("subject") == "a"]
+    ok(pulled and pulled[-1].get("outcome") == "ALLOW", "b recorded the caller as node a, by the tunnel address its key derives", pulled[-1:] or events[-3:])
+    held = until(lambda: json.loads(pathlib.Path("/var/lib/regalia-sync/freshness.json").read_text())["envelope"]["heartbeat"]["epoch"] == 2, 60, 2)
+    ok(held is True, "and a holds b's heartbeat for epoch 2 (regalia-sync's freshness state)")
+    rerun = until(lambda: (lambda now: now["InvocationID"] != before and now["ExecMainStatus"] == "0" and now["ActiveState"] == "inactive")(
+        show("regalia-wg-apply.service", "InvocationID", "ExecMainStatus", "ActiveState")), 60, 1)
+    ok(rerun is True, "the path unit ran regalia-wg-apply for the new chain, and it succeeded", journal("regalia-wg-apply.service")[-600:])
+    # one TPM user at a time from here (the CUSE device: see the docstring)
+    sh("systemctl", "stop", "regalia-wg-apply.path", "regalia-sync.service")
+
+    header("8  the KMS daemon, and a lease from b over the tunnel")
+    daemon = Daemon(work, binaries, user)
+    ok(daemon.wait_for(503, 90) == 503, "regalia-kms.service is up and NOT ready (503): no admission yet", daemon.log()[-900:])
+    sh("systemctl", "start", "regalia-admission.service")
+    admitted_doc = until(lambda: (lambda d: d["serve_until_boottime_ms"] > admission.boottime_ms() and d)(
+        json.loads(pathlib.Path("/run/regalia/admission.json").read_text())), 120, 2)
+    admitted_doc = admitted_doc if isinstance(admitted_doc, dict) else {}
+    left = (admitted_doc.get("serve_until_boottime_ms", 0) - admission.boottime_ms()) / 1000
+    ok(admitted_doc.get("epoch") == 2 and 200 < left <= lease.MAX_LIFETIME,
+       "regalia-admission re-attested to b with a's TPM; b's TPM signed a lease; admitted for %.0f s under epoch 2" % left,
+       admitted_doc or json.loads(pathlib.Path("/run/regalia/admission.json").read_text()))
+    issued = [e for e in events if e.get("event") == "sync-lease" and e.get("subject") == "a"]
+    ok(issued and issued[-1].get("outcome") == "ALLOW", "b's trail: a lease for a", issued[-1:] or events[-3:])
+    ok(daemon.wait_for(200, 30) == 200, "the daemon is ready (200)", daemon.log()[-900:])
+    message = b"regalia-kms node units e2e " + daemon.stamp.encode()
+    code, answer = daemon.sign(message)
+    ok(code == 200 and daemon.verifies(message, answer), "it signs, and openssl verifies the signature against the token's key", (code, answer))
+
+    header("9  b revokes a: no renewal, and the daemon stops at the end of the lease it holds")
+    m3 = dict(m2, epoch=3, prev_digest=membership.digest(m2), issued_at="2026-10-02T01:00:00Z",
+              nodes=[dict(n, state="REVOKED_STOLEN") if n["node_id"] == "a" else n for n in m2["nodes"]])
+    store.commit(signed(m3, hbt.REVOKE, "revocation"))
+    freshness.accept(hbt.beat(m3, 3, issued=int(time.time())), m3)
+    end = admitted_doc.get("serve_until_boottime_ms", 0)
+    seen = []
+
+    def lapsed():
+        seen.append(json.loads(pathlib.Path("/run/regalia/admission.json").read_text()))
+        return admission.boottime_ms() > end + 2000 and daemon.ready() == 503
+    stopped = until(lapsed, lease.MAX_LIFETIME + 60, 3)
+    refused = [e for e in events if e.get("subject") == "a" and e.get("outcome") == "DENY"]
+    ok(any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in refused),
+       "a asked b to renew; b refused it by name, under epoch 3", refused[-2:] or events[-4:])
+    ok(all(d["serve_until_boottime_ms"] <= end for d in seen), "the admission was never extended after the revocation reached b",
+       [d["serve_until_boottime_ms"] for d in seen][-5:])
+    code, answer = daemon.sign(b"after the lease")
+    ok(stopped is True and code == 503, "at the end of the lease the daemon refuses (503) and reports not ready, with nobody touching it",
+       (code, answer, daemon.log()[-600:]))
+
+
+def cfg_port(ctx):
+    return json.loads(pathlib.Path("/etc/regalia/site.json").read_text())["service_mesh"]["sync_port"]
 
 
 if __name__ == "__main__":
