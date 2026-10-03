@@ -235,6 +235,14 @@ class Unanswered(unittest.TestCase):
             with open(path, "ab") as f:
                 f.write(b'{"torn')                                                           # a torn line answers nothing
             self.assertEqual(trails.unanswered(path, device="/dev/a")["seq"], killed)
+            # a final line with no newline is skipped even when it parses: it may still be being written
+            with open(path, "rb") as f:
+                kept = f.read()
+            with open(path, "wb") as f:
+                f.write(kept[:-len(b'{"torn')] + json.dumps({"outcome": "ALLOW", "device": "/dev/a", "request": killed}).encode())
+            self.assertEqual(trails.unanswered(path, device="/dev/a")["seq"], killed)
+            with open(path, "wb") as f:
+                f.write(kept[:-len(b'{"torn')])
             trails.append(path, {"outcome": "INCOMPLETE", "device": "/dev/a", "request": killed})
             self.assertIsNone(trails.unanswered(path, device="/dev/a"))
             trails.verify(path)

@@ -1017,6 +1017,21 @@ class RecoveryKey(unittest.TestCase):
         self.assertEqual(self.pairs()[killed["seq"]], ["INCOMPLETE"])
         self.assertTrue(all(len(outcomes) == 1 for outcomes in self.pairs().values()), self.pairs())
 
+    def test_a_killed_request_is_closed_whatever_name_the_disk_is_given_next(self):
+        """d9: the request is matched on the device's identity, not the path typed: a run killed on one name
+        is closed by the next run on another name for the same disk."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertEqual(self.run_script("replace", KEY, NEW_KEY, kill="luksAddKey").returncode, -9)
+        killed = self.trail()[-1]
+        alias = os.path.join(self.dir, "by-partlabel-regalia-root")
+        os.symlink(self.img, alias)
+        done = subprocess.run(["bash", self.script, "--replace", alias], input=KEY + "\n" + NEW_KEY + "\n",
+                              capture_output=True, text=True, env=self.env(), timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.pairs()[killed["seq"]], ["INCOMPLETE"])
+        self.assertEqual({e["device_id"] for e in self.trail()}, {killed["device_id"]})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -281,14 +281,15 @@ def main():
                 # cannot be (nothing is done unrecorded); then exactly one outcome: ALLOW, DENY (the header
                 # byte for byte as it was) or INCOMPLETE (it changed: repeat the same selection). Never a key.
                 before = header(args.device)
-                event = {'event': 'recovery-reconcile', 'device': str(args.device), 'keep': args.keep_slot,
+                identity = recovery_state.device_id(args.device)
+                event = {'event': 'recovery-reconcile', 'device': str(args.device), 'device_id': identity, 'keep': args.keep_slot,
                          'retire': list(args.retire_slot), 'state_before': describe(before)['header_state']}
                 try:
                     # a run killed after its request left it unanswered: closed first, so every request on the
                     # trail has exactly one outcome
-                    stale = trails.unanswered(TRAIL, event='recovery-reconcile', device=str(args.device))
+                    stale = trails.unanswered(TRAIL, event='recovery-reconcile', device_id=identity)   # whatever name it was given
                     if stale is not None:
-                        trails.append(TRAIL, {'event': 'recovery-reconcile', 'device': str(args.device), 'keep': stale.get('keep'),
+                        trails.append(TRAIL, {'event': 'recovery-reconcile', 'device': str(args.device), 'device_id': identity, 'keep': stale.get('keep'),
                                               'retire': stale.get('retire'), 'outcome': 'INCOMPLETE', 'request': stale['seq'],
                                               'reason': 'the previous run was killed: no outcome was recorded',
                                               'state_after': describe(before)['header_state']})

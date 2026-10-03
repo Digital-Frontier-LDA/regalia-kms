@@ -95,6 +95,7 @@ STATE_PY="$HERE/recovery_state.py"
 [ -f "$STATE_PY" ] || fail "$STATE_PY is missing"
 # ONE RUN AT A TIME per device, this script and recovery-reconcile.py alike: the same lock file.
 LOCK="$(python3 -Es "$STATE_PY" lock "$DEV")" || fail "cannot take the recovery lock for $DEV"
+DEVICE_ID="$(python3 -Es "$STATE_PY" device-id "$DEV")" || fail "cannot identify $DEV"
 exec 9<"$LOCK" || fail "cannot open $LOCK"
 flock -n 9 || fail "another recovery-key.sh or recovery-reconcile.py is working on $DEV; wait for it"
 
@@ -236,7 +237,7 @@ TRAILS_PY="$HERE/trails.py"
 # prints the line's seq. An outcome names the request it answers (its seq), so the two are paired on the trail.
 trail(){ read_state 2>/dev/null || STATE=unreadable
   python3 -I -c 'import json, sys
-keys = ("outcome", "reason", "request", "mode", "device", "state", "recovery", "unnamed", "keyslots")
+keys = ("outcome", "reason", "request", "mode", "device", "device_id", "state", "recovery", "unnamed", "keyslots")
 event = dict(zip(keys, sys.argv[1:]))
 event["reason"] = event["reason"][:240]
 if event["request"]:
@@ -246,7 +247,7 @@ else:
 for k in ("recovery", "unnamed", "keyslots"):
     event[k] = event[k].split()
 event["event"] = "recovery-key"
-print(json.dumps(event, sort_keys=True))' "$1" "$2" "${3:-}" "${4:-$MODE}" "$DEV" "$STATE" "$RECOVERY" "$UNNAMED" "$ALL" \
+print(json.dumps(event, sort_keys=True))' "$1" "$2" "${3:-}" "${4:-$MODE}" "$DEV" "$DEVICE_ID" "$STATE" "$RECOVERY" "$UNNAMED" "$ALL" \
     | python3 -Es "$TRAILS_PY" append recovery-key; }
 # the outcome, once: an outcome that cannot be written is said, and the run's status is a failure
 REQUEST=""
@@ -259,7 +260,8 @@ requested(){ local open seq mode
   [ -f "$TRAILS_PY" ] || fail "$TRAILS_PY is missing: nothing is done unrecorded"
   # A run killed after its request (SIGKILL, the OOM killer, a power cut) left it unanswered: it is closed
   # first, under this run's lock, so every request on the trail has exactly one outcome.
-  open="$(python3 -Es "$TRAILS_PY" unanswered recovery-key "device=$DEV")" || fail "the audit trail cannot be read: nothing was done"
+  # matched on the device's identity, not the name it was given this time (d9)
+  open="$(python3 -Es "$TRAILS_PY" unanswered recovery-key "device_id=$DEVICE_ID")" || fail "the audit trail cannot be read: nothing was done"
   if [ -n "$open" ]; then
     read -r seq mode <<< "$(python3 -I -c 'import json, sys; e = json.loads(sys.argv[1]); print(e["seq"], e["mode"])' "$open")"
     trail INCOMPLETE "the previous run was killed: no outcome was recorded" "$seq" "$mode" >/dev/null \

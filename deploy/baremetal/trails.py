@@ -242,11 +242,14 @@ def unanswered(path, **match):
     except FileNotFoundError:
         return None
     try:
+        fcntl.flock(fd, fcntl.LOCK_SH)             # append holds LOCK_EX: never a line half written, never a writer blocked long
         data = os.pread(fd, os.fstat(fd).st_size, 0)
     finally:
         os.close(fd)
     found, answered = None, set()
-    for body in data.split(b"\n"):
+    lines = data.split(b"\n")
+    lines.pop()                                    # what follows the last newline: "" or a line still being written, skipped
+    for body in lines:
         try:
             value = json.loads(body)
         except ValueError:
