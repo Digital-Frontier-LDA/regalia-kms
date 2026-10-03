@@ -752,9 +752,8 @@ removing only what it can prove it made.
   keys (`"signing"`, #267), so a re-signed copy of an approved image is refused.
 - **What stays on disk in the clear, and for how long.**
   - The WG-BOOT private key stays only until its sealed copy is on the ESP.
-  - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until the peers'
-    LUKS paths are enrolled. That step is not built yet, so today it stays indefinitely: **the paths step
-    must land before any production enrolment.**
+  - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until
+    `enrol paths` has a path from every peer.
   - Both live on the root volume, which at enrolment is open with the recovery key: encrypted at rest,
     readable by root while the host runs. Host backups must exclude `/var/lib/regalia-enrol`.
   - Removal is a plain unlink. Overwriting first buys nothing on ext4 over an SSD with TRIM.
@@ -762,9 +761,19 @@ removing only what it can prove it made.
   sealed file is published by checking the target is absent and renaming onto it; that check assumes no
   other writer.
 
+- `paths` (after `commit`, root, at the console; run again until it finishes):
+  - the AKs go both ways, as `regalia-sync`, over the service tunnel. Each AK is checked against the
+    manifest's `ak_name`, and the peer's TPM activates the credential;
+  - then this node's LUKS path from every peer that may authorize. The node quotes over its boot session,
+    and the quote binds a one-time enrolment key. The peer re-wraps the same secret on a rerun, and gives
+    at most 3 wraps per boot session;
+  - the recovery key is typed at the console, never on argv or in the environment;
+  - each path is journalled;
+  - `local.bin` is removed only after every peer's path is journalled, as the last step. A peer that is
+    down is named, and `local.bin` stays until a rerun completes.
+  The peers answer through `sync`'s enrolment operations (`enrolpeer.py`).
+
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):
-- each peer's AK in the attestation state (`attest.Verifier`);
-- the LUKS paths with the peers' contributions (`unlock.enrol_path`);
 - `chrony.conf` as `authtime.conf()` renders it;
 - the enrolment record signed by the AK's quote;
 - `commit --replace` (#76).
