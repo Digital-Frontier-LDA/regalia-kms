@@ -43,9 +43,9 @@ down(){ tpm2_shutdown -c >/dev/null 2>&1; kill "$(cat "$W/$cur.pid")" 2>/dev/nul
 # get <property>: in decimal (tpm2_getcap prints hexadecimal, which awk's %d reads as 0).
 get(){ local v; v="$(tpm2_getcap properties-variable 2>/dev/null | awk -v n="$1:" '$1==n{print $2; exit}')"; [ -n "$v" ] && printf '%d' "$v"; }
 lockout(){ sudo env TPM2TOOLS_TCTI="$D" "$LOCKOUT" "$@" 2>&1; }
-probe(){ PYTHONPATH="$HERE" python3 -BPs -c 'from deploy.baremetal import host_probe
+probe(){ python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1)); from deploy.baremetal import host_probe
 ok, why = host_probe.lockout_policy(host_probe.Host())
-print(("true" if ok else "false") + "\t" + why)'; }
+print(("true" if ok else "false") + "\t" + why)' "$HERE"; }
 AUTH="lockout-auth-for-this-test-0001"
 
 hdr "1  tpm-lockout.sh sets the policy and a lockout authorization"
