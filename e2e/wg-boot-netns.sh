@@ -72,6 +72,9 @@ for h in "${NS[@]}"; do
   x "$h" ip link set lo up; x "$h" ip link set eth0 up
   x "$h" ip addr add "${IP[$h]}/32" dev eth0; x "$h" ip route add default dev eth0
 done
+# the booting node's card, by the address regalia.boot-env names it with (its name may differ in an initrd)
+LISBON_MAC=52:54:00:ab:cd:01
+x lisbon ip link set eth0 address "$LISBON_MAC"
 
 # Keys: a WG-BOOT and a WG-SERVICE pair per node, as the manifest lists them (hex), and one for the outsider.
 umask 077
@@ -103,6 +106,7 @@ def site(node):
                              "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514},
                                           {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
                              "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUN[node], "unlock_port": 7443,
+                                           "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                                            "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]},
                              "service_mesh": None})
 m1 = manifest(1, "")
@@ -277,8 +281,8 @@ x lisbon ip addr flush dev eth0; x lisbon nft delete table inet regalia_boot
 C="$T/creds"; mkdir "$C"; cp "$T/lisbon.boot.conf" "$C/regalia.wg-boot-conf"; cp "$T/lisbon.boot.nft" "$C/regalia.boot-nft"; cp "$T/lisbon.boot.key" "$C/regalia.wg-boot-key"
 # boot.env is data to the script, not its environment: a line that would be code if it were sourced or
 # exported (LD_PRELOAD, a command substitution) is in it, and must change nothing.
-printf 'BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_PRELOAD=%s/evil.so\nBOOT_EXTRA=$(touch %s/sourced)\n' \
-  "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$C/regalia.boot-env"
+printf 'BOOT_NIC_MAC=%s\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_PRELOAD=%s/evil.so\nBOOT_EXTRA=$(touch %s/sourced)\n' \
+  "$LISBON_MAC" "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$C/regalia.boot-env"
 R="$T/run-wg-boot"; mkdir "$R"
 # the script runs with only the programs the dracut module puts in the image on its PATH, as in the initrd
 mkdir "$T/initrd-bin"; for t in ip wg nft sed cat sleep; do ln -s "$(command -v "$t")" "$T/initrd-bin/$t"; done
@@ -287,6 +291,17 @@ initrd up && P "the initrd's script brings the boot mesh up" || F "deploy/bareme
 [ "$(x lisbon wg show wg-boot private-key)" = "$(cat "$T/lisbon.boot.key")" ] && [ "$(x lisbon wg show wg-boot peers | wc -l)" = 2 ] \
   && P "wg-boot has the node's key and its two peers" || F "wg-boot is not configured as rendered"
 [ ! -e "$T/sourced" ] && P "boot.env was read as data: nothing in it ran" || F "a line of boot.env was executed"
+[ "$(cat "$R/boot-nic")" = eth0 ] && P "the card was found by its address (eth0, $LISBON_MAC)" || F "wg-boot recorded $(cat "$R/boot-nic") for $LISBON_MAC"
+# the card's address in another spelling, or on two interfaces: refused, never guessed
+cp "$C/regalia.boot-env" "$T/good.env"
+sed -i "s|^BOOT_NIC_MAC=.*|BOOT_NIC_MAC=$(echo "$LISBON_MAC" | tr a-f A-F)|" "$C/regalia.boot-env"     # the same card, upper case
+initrd up 2>"$T/up.err" && F "a MAC address in upper case was taken" || { grep -q "BOOT_NIC_MAC must be a MAC address" "$T/up.err" \
+  && P "a MAC address that is not lower case is refused" || F "refused for another reason: $(cat "$T/up.err")"; }
+cp "$T/good.env" "$C/regalia.boot-env"
+x lisbon ip link add regalia-twin type dummy && x lisbon ip link set regalia-twin address "$LISBON_MAC" || F "no dummy interface: the shared-address case did not run"
+initrd up 2>"$T/up.err" && F "an address on two interfaces was taken" || { grep -q "more than one interface has the address" "$T/up.err" \
+  && P "an address on two interfaces is refused (which card is meant is not guessed)" || F "refused for another reason: $(cat "$T/up.err")"; }
+x lisbon ip link del regalia-twin
 # a start that fails part-way leaves nothing behind: here the key is not a key, after the ruleset would have loaded
 cp "$C/regalia.wg-boot-key" "$T/good"; echo "not-a-wireguard-key" > "$C/regalia.wg-boot-key"
 initrd up 2>"$T/up.err" && F "the script accepted a credential that is not a key" || P "a credential that is not a key is refused"
