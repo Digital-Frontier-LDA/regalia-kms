@@ -178,6 +178,8 @@ def install():
     units = ROOT / "deploy" / "baremetal" / "units"
     for name in UNITS:
         shutil.copy(units / name, "/etc/systemd/system/" + name)
+    for directory in ("/etc/sysusers.d", "/etc/tmpfiles.d"):
+        os.makedirs(directory, exist_ok=True)
     shutil.copy(units / "regalia.sysusers.conf", "/etc/sysusers.d/regalia.conf")
     shutil.copy(units / "regalia.tmpfiles.conf", "/etc/tmpfiles.d/regalia.conf")
     sh("systemd-sysusers")
