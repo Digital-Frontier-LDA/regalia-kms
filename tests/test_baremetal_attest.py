@@ -734,7 +734,9 @@ class ReportedValues(Verification):
 class ReportedValuesVector(unittest.TestCase):
     """tests/vectors/pcr-values-v2.json, the vector the Go client's test reads too: a real quote from a software
     TPM and the values read beside it. The verifier takes those values, and refuses each case the vector
-    lists with the very reason it records, so the two sides of the exchange agree on one file."""
+    lists with the very reason it records, so the two sides of the exchange agree on one file. The reasons were
+    written by check_reported_values itself when the vector was made: they pin today's wording against drift,
+    they are not an outside oracle. The independent part is the real swtpm quote and the values read beside it."""
 
     def setUp(self):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "pcr-values-v2.json")
