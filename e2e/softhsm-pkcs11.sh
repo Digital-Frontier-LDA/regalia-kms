@@ -98,6 +98,15 @@ REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-
 REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
   --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:edwards25519 \
   --usage-sign --label regalia-kms-ed25519-e2e --id 0f >/dev/null
+# An approver and the release key it approves for (regalia#530, ADR-0002 D25). Key 10 is the
+# approver: an Ed25519 key that regalia-approve signs with through pkcs11-tool, the path a YubiKey
+# approver takes. Key 11 is a release key whose policy requires that approval.
+REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
+  --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:edwards25519 \
+  --usage-sign --label regalia-kms-approver-e2e --id 10 >/dev/null
+REGALIA_E2E_PIN="$E2E_PIN" pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e \
+  --login --pin env:REGALIA_E2E_PIN --keypairgen --key-type EC:secp384r1 \
+  --usage-sign --label regalia-kms-release-approved-e2e --id 11 >/dev/null
 
 slots="$(pkcs11-tool --module "$MODULE" --token-label regalia-kms-e2e --list-slots 2>/dev/null)"
 serial="$(printf '%s\n' "$slots" | awk -F: '/serial num/{gsub(/[[:space:]]/, "", $2); print $2; exit}')"
@@ -150,6 +159,10 @@ REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_
 # regalia#530: the regalia-sign executable, over mTLS, signs on the token; GnuPG verifies.
 REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_PKCS11_E2E_PIN="$E2E_PIN" \
   go -C "$ROOT" test -count=1 -run '^TestDeployedRegaliaSignExecutableThroughMTLS$' ./internal/integration
+# regalia#530, ADR-0002 D25: a release signature under a policy that requires approval. regalia-sign
+# prepares, regalia-approve signs the binding on the token through pkcs11-tool, regalia-sign completes.
+REGALIA_PKCS11_E2E_MODULE="$MODULE" REGALIA_PKCS11_E2E_SERIAL="$serial" REGALIA_PKCS11_E2E_PIN="$E2E_PIN" \
+  go -C "$ROOT" test -count=1 -run '^TestAReleaseSignatureNeedsAHardwareKeyApprovalAtTheRealDaemon$' ./internal/integration
 # ADR-0002 D1 through the PRODUCTION driver constructor and the real probes: SoftHSM exposes no
 # device certificate, exactly like a genuine SmartCard-HSM, so it is identified by serial plus the
 # commissioned public key. "public-key" only — it never logs in.
