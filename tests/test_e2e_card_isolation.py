@@ -242,6 +242,23 @@ def script_problems(text, script=None):
             arg = m.group(1)
             if not (re.match(r"'[^']*'", line[m.start(1):]) or re.fullmatch(r"[A-Za-z_][\w-]*", arg) or arg == "-"):
                 found.append((n, "trap with code that is not one single-quoted literal or a function's name"))
+        # builtins switched off, functions removed, commands skipped (51's fourth read)
+        if re.search(CALL_START + r"enable\b", b):
+            found.append((n, "enable: it can switch a builtin (exit, return) off"))
+        for m in re.finditer(CALL_START + r"unset\b(.*)", line):
+            words = re.findall(r"[^\s;&|]+", re.split(r"[;&|]", m.group(1))[0])
+            if "-f" in words or any(w.strip("\"'") in SHADOWED | {"die", "fail"} | set(LIB_GATE_NAMES + GATES) for w in words):
+                found.append((n, "unset of a function, or of die, fail, a gate or a builtin's name: a \"|| die\" would go on"))
+        if re.search(r"\bshopt\s+-s\s+(?:\w+\s+)*extdebug\b", b) or re.search(r"\bset\s+-o\s+functrace\b|\bset\s+-\w*T", b):
+            found.append((n, "extdebug or functrace: a DEBUG trap could skip the next command, a gate"))
+        if re.search(CALL_START + r"trap\b.*\b(?:DEBUG|RETURN|ERR)\b", line):
+            found.append((n, "a DEBUG, RETURN or ERR trap: it runs between commands, and can skip one"))
+        # an interpreter's script chosen by a variable: only a path under the drill's own directories
+        for m in re.finditer(r"(?<![\w.-])(?:python[\d.]*|perl|ruby|node)\s+(?:-\w+\s+)*(\"?\$[^\s;&|]*)", line):
+            operand = m.group(1)
+            own = OWN_PATH.match(operand) or re.match(r'"\$\(dirname "\$0"\)/[\w./-]*"', line[m.start(1):])
+            if not (own and "/.." not in own.group(0)):
+                found.append((n, "an interpreter runs a script chosen by a variable that is not a path under the drill's own directories"))
         # the drill's own directories are set only by their known initialisations
         for m in re.finditer(r"(?:^|[;&|\s])(?:local\s+|declare\s+)?(W|STATE|ROOT|HERE)=", line):
             known = DIR_INIT.match(line, m.end())
@@ -710,6 +727,10 @@ class TheCheckItself(unittest.TestCase):
             '"$W/../../usr/bin/pkcs11-tool" --login\n': "used as a command", "W=/usr/bin\n": "W set to",
             'W="$X"\n': "W set to", 'export OPENSC_CONF="$X"\n': "OPENSC_CONF with a value",
             'env OPENSC_CONF="$X" pkcs11-tool -L\n': "OPENSC_CONF with a value", 'export PATH="$W:$PATH"\n': "PATH with a value",
+            # 51's fourth read
+            "enable -n exit\n": "enable", "unset -f die\n": "unset of a function", "unset die\n": "unset of a function",
+            "shopt -s extdebug\n": "extdebug", "trap 'return 1' DEBUG\n": "DEBUG", "trap cleanup ERR\n": "ERR",
+            'python3 "$X"\n': "script chosen by a variable", 'python3 -Es "$W/../x.py"\n': "script chosen by a variable", 'python3 "$(dirname "$0")/../x.py"\n': "script chosen by a variable",
         }
         for script, why in cases.items():
             with self.subTest(script):
@@ -728,7 +749,8 @@ class TheCheckItself(unittest.TestCase):
                      "python3 -I - x <<'PY'\nprint(1)\nPY\n", 'W="$(mktemp -d)"\n', 'STATE="$(mktemp -d "${TMPDIR:-/tmp}/x.XXXX")"\n',
                      'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\n', "STATE=/var/lib/regalia-kms\n",
                      'export OPENSC_CONF="$W/opensc.conf"\n', 'export PATH="$PATH:/usr/sbin:/sbin"\n',
-                     'export HSM_PKCS11_MODULE="$MODULE"\n', "awk '{print $1}' f\n"):
+                     'export HSM_PKCS11_MODULE="$MODULE"\n', "awk '{print $1}' f\n",
+                     'python3 -Es "$ROOT/e2e/cosmos_kms_tx.py" build\n', 'python3 -Es "$(dirname "$0")/lib/opensc_isolate.py" "$SLOT"\n', "unset HSM_USER_PIN\n", "trap cleanup EXIT HUP INT TERM\n"):
             with self.subTest(fine):
                 self.assertEqual(self.problems(fine), [])
         # an allow-listed line passes only in its own script
