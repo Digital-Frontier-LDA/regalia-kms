@@ -32,12 +32,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
             openssl python3-cryptography
-          # tpm_vtpm_proxy is in the extra modules on the runner's kernel
-          sudo apt-get install -y -qq --no-install-recommends "linux-modules-extra-$(uname -r)" || true
-          uname -r
-          grep -i VTPM "/boot/config-$(uname -r)" || true
-          find "/lib/modules/$(uname -r)" -name 'tpm_vtpm_proxy*' || true
-          sudo modprobe -v tpm_vtpm_proxy || true
+          # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel has no vTPM proxy
+          # (CONFIG_TCG_VTPM_PROXY is not set), so the test makes the device with swtpm's CUSE mode.
+          sudo apt-get install -y -qq --no-install-recommends tpm-udev
       - name: The four units, as shipped, under systemd (part 1)
         run: |
           set -o pipefail

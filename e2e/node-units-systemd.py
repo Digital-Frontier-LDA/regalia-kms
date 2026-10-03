@@ -107,17 +107,34 @@ def main():
 
 
 def tpm(work):
-    """A software TPM behind the kernel's vTPM proxy: a real /dev/tpmrm device, a real udev rule."""
-    loaded = sh("modprobe", "tpm_vtpm_proxy", check=False)
-    if loaded.returncode != 0:
-        raise SystemExit("node-units-systemd: the kernel's vTPM proxy cannot be loaded: %s" % loaded.stderr.strip())
+    """A software TPM as a character device the units open as a host's: /dev/tpmrm0, the tss group's, 0660.
+    The kernel's vTPM proxy where the kernel has it; else (GitHub's Azure kernel is built without it)
+    swtpm's CUSE device under that name, which needs no kernel module but FUSE's CUSE, and is a TPM
+    without the kernel's resource manager (the units use it one at a time). Returns how it was made."""
+    if os.path.exists("/dev/tpmrm0") or os.path.exists("/dev/tpm0"):
+        raise SystemExit("node-units-systemd: this machine has a TPM; the test gives a software one that name")
     state = work / "tpm"
     state.mkdir()
-    done = sh("swtpm", "chardev", "--vtpm-proxy", "--tpm2", "--tpmstate", "dir=%s" % state, "--flags", "not-need-init,startup-clear",
-              "--daemon", "--pid", "file=%s" % (work / "swtpm.pid"), "--log", "file=%s" % (work / "swtpm.log"))
-    device = next((w for w in (done.stdout + done.stderr).split() if w.startswith("/dev/tpm")), None)
-    sh("udevadm", "settle")
-    return device
+    shutil.chown(state, "tss", "tss")
+    if sh("modprobe", "tpm_vtpm_proxy", check=False).returncode == 0:
+        done = sh("swtpm", "chardev", "--vtpm-proxy", "--tpm2", "--tpmstate", "dir=%s" % state, "--flags", "not-need-init,startup-clear",
+                  "--daemon", "--log", "file=%s" % (work / "swtpm.log"))
+        how = "the kernel's vTPM proxy (%s)" % (done.stdout + done.stderr).strip()
+    else:
+        sh("modprobe", "cuse", check=False)
+        sh("swtpm", "cuse", "-n", "tpmrm0", "--tpm2", "--tpmstate", "dir=%s" % state, "--log", "file=%s" % (work / "swtpm.log"),
+           "--runas", "tss")
+        until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2)
+        sh("swtpm_ioctl", "-i", "/dev/tpmrm0")
+        sh("tpm2_startup", "-c", "-T", "device:/dev/tpmrm0")
+        how = "swtpm's CUSE device"
+    sh("udevadm", "settle", check=False)
+    # the distribution's rule (tpm-udev: KERNEL=="tpmrm[0-9]*", tss, 0660) where udev applied it to this device
+    if sh("stat", "-c", "%G %a", "/dev/tpmrm0", check=False).stdout.strip() != "tss 660":
+        shutil.chown("/dev/tpmrm0", "tss", "tss")
+        os.chmod("/dev/tpmrm0", 0o660)
+        how += "; tss 0660 set by the test, as tpm-udev's rule sets it on a host"
+    return how
 
 
 def chrony(work):
@@ -216,13 +233,13 @@ def provision(work):
 
 def scenario(work):
     header("0  the TPM, as a device, and the controls")
-    device = tpm(work)
-    ok(device is not None and os.path.exists(device), "a software TPM behind the kernel's vTPM proxy: %s" % device, device)
-    rm = (device or "").replace("/dev/tpm", "/dev/tpmrm")
-    ok(rm == "/dev/tpmrm0", "its resource manager is /dev/tpmrm0, the device the units allow", rm)
+    how = tpm(work)
+    rm = "/dev/tpmrm0"
+    ok(os.path.exists(rm) and sh("tpm2_getrandom", "-T", "device:" + rm, "8", check=False).returncode == 0,
+       "a software TPM answers at /dev/tpmrm0, the device the units allow: %s" % how)
     info = os.stat(rm) if os.path.exists(rm) else None
     ok(info is not None and oct(info.st_mode & 0o777) == "0o660" and sh("stat", "-c", "%G", rm).stdout.strip() == "tss",
-       "the device is the tss group's, 0660 (the udev rule a host has)", sh("ls", "-l", rm, check=False).stdout.strip())
+       "the device is the tss group's, 0660, as on a host", sh("ls", "-l", rm, check=False).stdout.strip())
     probe = sh("systemd-run", "--wait", "--pipe", "--collect", "-p", "User=root", "-p", "CapabilityBoundingSet=", "-p", "DevicePolicy=closed",
                "-p", "DeviceAllow=/dev/tpmrm0 rw", "-E", "TPM2TOOLS_TCTI=device:/dev/tpmrm0", "--", "tpm2_getrandom", "8", check=False)
     ok(probe.returncode != 0, "control: root with no capability and without the tss group cannot use it", probe.stderr.strip()[-200:])
