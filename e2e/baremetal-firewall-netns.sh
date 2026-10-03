@@ -212,7 +212,7 @@ cat > "$T/site-mesh.json" <<EOF
  "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["${IP[mon]}/32"], "admin_cidrs": ["203.0.113.0/28"],
  "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514},
               {"name": "ntp", "cidr": "${IP[ntp]}/32", "proto": "udp", "port": 123}],
- "boot_mesh": {"node_id": "kms", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443,
+ "boot_mesh": {"node_id": "kms", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443, "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": null,
                "peers": [{"node_id": "peer", "underlay": "${IP[peer]}", "address": "10.89.0.2"}]},
  "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": null}}
 EOF

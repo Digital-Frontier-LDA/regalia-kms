@@ -544,7 +544,13 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   | `regalia.unlock-config` | `unlock.boot_config` | no |
   | `regalia.wg-boot-conf` | `bootnet.boot_wg_conf` | no |
   | `regalia.boot-nft` | `bootnet.boot_ruleset` | no |
-  | `regalia.boot-env` | `BOOT_NIC`, `BOOT_ADDRESS`, `BOOT_GATEWAY`, `BOOT_TUNNEL` (read as data) | no |
+  | `regalia.boot-env` | `BOOT_NIC_MAC` (the card, by its MAC address: its name can differ in the initrd), `BOOT_ADDRESS`, `BOOT_GATEWAY`, `BOOT_TUNNEL` (read as data; from the site config's `boot_mesh`: `nic_mac`, `prefix`, `gateway`) | no |
+
+  The four unsealed ones are rendered by **`deploy/baremetal/bootcreds.py`**: `render(manifest, site, device)`
+  is deterministic (a peer recomputes them, and the PCR 12 they give), and `esp_files(site, envelopes, root_key,
+  device)` is the one call enrolment and the update path make, for a chain it verifies itself (#66). B3 moves
+  the three derived from the manifest into the initrd, rendered there from the signed chain, so that a
+  membership change does not move PCR 12; esp_files' callers do not change.
 
   **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
   carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,

@@ -25,6 +25,11 @@ network_probe.py checks the result from each zone, so the two can never describe
       "listen_port": 51820,                          # its UDP port, reachable from the peers' declared addresses only
       "address": "10.89.0.1",                        # this node's address inside the tunnel
       "unlock_port": 7443,                           # TCP, inside the tunnel only: deploy/baremetal/unlock.py's serve()
+      "nic_mac": "52:54:00:12:34:56",                # the initrd's network card, by its MAC address (lower case): its
+                                                     #   name can differ between the installed system and the initrd
+      "prefix": 24,                                  # host_ipv4's prefix length on that card, in the initrd
+      "gateway": "192.0.2.1",                        # the initrd's gateway to the peers' underlays, inside that
+                                                     #   prefix; null when they are on the link
       "peers": [                                     # the other nodes: where each is, outside and inside the tunnel
         {"node_id": "porto", "underlay": "198.51.100.7", "address": "10.89.0.2"},
         {"node_id": "faro", "underlay": "198.51.100.9", "address": "10.89.0.3"}
@@ -54,7 +59,8 @@ SCHEMA = "regalia.baremetal-site/v1"
 KEYS = ("schema", "site", "host_ipv4", "kms_port", "ssh_port", "client_cidrs", "monitoring_cidrs", "admin_cidrs",
         "outbound", "boot_mesh", "service_mesh")
 OUTBOUND_KEYS = ("name", "cidr", "proto", "port")
-MESH_KEYS = ("node_id", "interface", "listen_port", "address", "unlock_port", "peers")
+MESH_KEYS = ("node_id", "interface", "listen_port", "address", "unlock_port", "nic_mac", "prefix", "gateway", "peers")
+MAC = r"[0-9a-f]{2}(:[0-9a-f]{2}){5}"
 MESH_PEER_KEYS = ("node_id", "underlay", "address")
 SERVICE_KEYS = ("interface", "listen_port", "sync_port", "authority")
 SERVICE_AUTHORITY_KEYS = ("key", "underlay", "port")
@@ -158,6 +164,22 @@ def _boot_mesh(mesh, cfg):
     require(unlock not in (cfg["kms_port"], cfg["ssh_port"]), "boot_mesh.unlock_port must differ from kms_port and ssh_port")
     out = {"node_id": mesh["node_id"], "interface": mesh["interface"], "listen_port": listen, "unlock_port": unlock,
            "address": _address(mesh["address"], "boot_mesh.address"), "peers": []}
+    # Where the initrd's own traffic goes (#66, regalia.boot-env): its card by MAC address (an interface name
+    # can differ between the installed system and the initrd, and a wrong one strands the host), the prefix
+    # host_ipv4 has on it, and the gateway to the peers, if any. A unicast card address, never all zeros.
+    require(isinstance(mesh["nic_mac"], str) and re.fullmatch(MAC, mesh["nic_mac"]) and mesh["nic_mac"] != "00:00:00:00:00:00"
+            and not int(mesh["nic_mac"][:2], 16) & 1, "boot_mesh.nic_mac must be a unicast MAC address, lower case and colon-separated")
+    require(isinstance(mesh["prefix"], int) and not isinstance(mesh["prefix"], bool) and 1 <= mesh["prefix"] <= 32,
+            "boot_mesh.prefix must be a prefix length from 1 to 32")
+    out.update(nic_mac=mesh["nic_mac"], prefix=mesh["prefix"], gateway=None)
+    if mesh["gateway"] is not None:
+        gateway = _address(mesh["gateway"], "boot_mesh.gateway")
+        link = ipaddress.IPv4Network("%s/%d" % (cfg["host_ipv4"], mesh["prefix"]), strict=False)
+        require(ipaddress.IPv4Address(gateway) in link and gateway != cfg["host_ipv4"],
+                "boot_mesh.gateway must be another address inside %s (host_ipv4 and its prefix), or null" % link)
+        require(link.prefixlen >= 31 or gateway not in (str(link.network_address), str(link.broadcast_address)),
+                "boot_mesh.gateway must be a host of %s, not its network or broadcast address" % link)
+        out["gateway"] = gateway
     require(isinstance(mesh["peers"], list) and 1 <= len(mesh["peers"]) <= 8, "boot_mesh.peers must list 1 to 8 nodes")
     nodes, inside, outside = {out["node_id"]}, {out["address"]}, {cfg["host_ipv4"]}
     require(out["address"] != cfg["host_ipv4"], "boot_mesh.address is the tunnel's address, not host_ipv4")

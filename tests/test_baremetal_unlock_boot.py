@@ -23,7 +23,7 @@ import threading
 import time
 import unittest
 
-from deploy.baremetal import attest, bootnet, espcreds, firewall, sitecfg, uki, unlock
+from deploy.baremetal import attest, bootcreds, bootnet, espcreds, firewall, sitecfg, uki, unlock
 import tests.test_baremetal_unlock as tub
 
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
@@ -73,6 +73,7 @@ class OnQemu(tub.OnSwtpm):
             "client_cidrs": ["198.18.0.0/24"], "monitoring_cidrs": ["198.18.1.1/32"], "admin_cidrs": ["198.18.2.0/28"],
             "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514}, {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
             "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUNNEL[node], "unlock_port": 7443,
+                          "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                           "peers": [{"node_id": p, "underlay": UNDERLAY[p], "address": TUNNEL[p]} for p in "abc" if p != node]},
             "service_mesh": None})
 
@@ -208,7 +209,7 @@ class OnQemu(tub.OnSwtpm):
                 "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=%s/OVMF_CODE_4M.fd" % OVMF,
                 "-drive", "if=pflash,format=raw,unit=1,file=" + variables,
                 "-drive", "file=%s,format=raw,if=virtio" % self.image,
-                "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0",
+                "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56",
                 "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
         if enrol_disk:
             argv += ["-drive", "file=%s,format=raw,if=virtio" % enrol_disk]
@@ -341,9 +342,8 @@ class OnQemu(tub.OnSwtpm):
         device = "/dev/disk/by-partlabel/regalia-root"
         credentials = {
             "regalia.unlock-local": sealed["unlock-local.cred"].encode() + b"\n", "regalia.wg-boot-key": sealed["wg-boot.cred"].encode() + b"\n",
-            "regalia.unlock-config": json.dumps(unlock.boot_config(self.m1, "a", device, [7, 11, 12], bootnet.unlock_endpoints(cfg, self.m1))).encode(),
-            "regalia.wg-boot-conf": bootnet.boot_wg_conf(cfg, self.m1).encode(), "regalia.boot-nft": bootnet.boot_ruleset(cfg, self.m1).encode(),
-            "regalia.boot-env": ("BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\n" % (UNDERLAY["a"], TUNNEL["a"])).encode()}
+            # the four a host renders after each accepted manifest (bootcreds.render), the guest's card by its MAC
+            **bootcreds.render(self.m1, cfg, device)}
 
         expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
 
