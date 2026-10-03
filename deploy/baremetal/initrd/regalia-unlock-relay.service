@@ -1,0 +1,43 @@
+# The relay on the root volume's key socket (regalia-kms#66). It holds no credential, no TPM and no network,
+# and depends on nothing that can keep it from starting: so every connection systemd-cryptsetup makes is
+# answered, with the key the real client gives (exactly one whole key) or with nothing, within a bounded
+# wait. With nothing, systemd-cryptsetup asks for the recovery key. It never logs, keeps or writes the key
+# anywhere but to the connection that asked.
+
+[Unit]
+Description=Key socket relay of the root volume (TPM plus one peer)
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+DefaultDependencies=no
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+
+[Service]
+Type=exec
+# The wait covers the real client's rounds (five rounds of two peers, about two minutes with every peer
+# unreachable); a client that hangs beyond it yields the prompt.
+ExecStart=/usr/bin/regalia-unlock -relay /run/regalia-unlock-core/core.sock -relay-wait 150s
+LimitCORE=0
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX
+UMask=0077

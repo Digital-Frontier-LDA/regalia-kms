@@ -332,9 +332,20 @@ class OnQemu(tub.OnSwtpm):
             "regalia.boot-env": ("BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\n" % (UNDERLAY["a"], TUNNEL["a"])).encode()}
 
         expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
-        self.reference = reference(expected["pcr12"])
+
+        # boot 1b, A SEALED CREDENTIAL THAT DOES NOT DECRYPT (another machine's, or damaged): the real client cannot
+        # start, the relay on the key socket gives nothing, and the console asks, promptly (#66)
+        broken = dict(credentials, **{"regalia.unlock-local": b"bm90IGEgY3JlZGVudGlhbA==\n"})
+        self.reference = reference(espcreds.pcr12({n + ".cred": c for n, c in broken.items()}))
+        said = self.boot("1b-undecryptable", broken, recovery=True)
+        self.assertRegex(said, PROMPT.pattern.decode())
+        self.assertIn("nothing is given, and the console asks for the recovery key", said)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        print("boot 1b: the console asked %.0f s after the guest started" % self.prompted_after, file=sys.stderr)
+        self.assertLess(self.prompted_after, 120)
 
         # boot 2, UNATTENDED: nobody types anything
+        self.reference = reference(expected["pcr12"])
         since = len(self.events)
         said = self.boot("2-unattended", credentials)
         self.assertNotRegex(said, PROMPT.pattern.decode())

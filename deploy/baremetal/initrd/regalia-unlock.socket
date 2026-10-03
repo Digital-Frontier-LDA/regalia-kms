@@ -4,9 +4,11 @@
 #
 #     root  UUID=…  /run/regalia-unlock/key.sock  luks
 #
-# systemd-cryptsetup connects to it; that connection starts regalia-unlock.service, which asks a peer and
-# writes the key to the connection, or closes it with nothing. The path is unlock.KEY_SOCKET in
-# deploy/baremetal/unlock.py, and host_probe checks crypttab against it.
+# systemd-cryptsetup connects to it; that connection starts regalia-unlock-relay.service, which holds no
+# credential and so always starts, asks the real client (regalia-unlock.service, on its own socket) and
+# passes on the key, or closes the connection with nothing, after which systemd-cryptsetup asks for the
+# recovery key. The recovery key's path does not depend on the real client starting (#66). The path is
+# unlock.KEY_SOCKET in deploy/baremetal/unlock.py, and host_probe checks crypttab against it.
 
 [Unit]
 Description=Key socket of the root volume (TPM plus one peer)
@@ -21,6 +23,7 @@ ListenStream=/run/regalia-unlock/key.sock
 SocketMode=0600
 DirectoryMode=0700
 RemoveOnStop=yes
+Service=regalia-unlock-relay.service
 
 [Install]
 WantedBy=sockets.target

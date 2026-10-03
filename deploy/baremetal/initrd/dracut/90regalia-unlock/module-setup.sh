@@ -72,7 +72,8 @@ installkernel() {
 install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
-    for unit in regalia-unlock.socket regalia-unlock.service regalia-wg-boot.service; do
+    for unit in regalia-unlock.socket regalia-unlock-relay.service regalia-unlock-core.socket regalia-unlock.service \
+        regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done
     # The one crypttab line, the same on every host: the root partition is found by its GPT label. Nothing
@@ -92,5 +93,5 @@ install() {
         mkdir -p "${initdir:?}${systemdsystemunitdir:?}/$service.d"
         printf '[Service]\nImportCredential=\n' > "${initdir:?}${systemdsystemunitdir:?}/$service.d/50-regalia-no-credentials.conf"
     done
-    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket
+    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket regalia-unlock-core.socket
 }

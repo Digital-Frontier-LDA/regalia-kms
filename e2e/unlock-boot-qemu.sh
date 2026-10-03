@@ -16,6 +16,8 @@
 #           (PoC 6.5: the manual path works with no peer and no credential). The running guest seals
 #           the local half and the WG-BOOT key to its own TPM (PCR 7, and PCR 11 through the image's
 #           initrd-phase signature), and reports its PCRs: PCR 11 must be the build record's.
+#   boot 1b AN UNDECRYPTABLE SEALED CREDENTIAL: the real client cannot start; the relay on the key socket
+#           gives nothing, and the console asks for the recovery key, promptly.
 #   boot 2  UNATTENDED. Nobody types anything. systemd unseals both credentials in the initrd, the boot
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key from the socket, the root filesystem comes up, and the boot
@@ -97,7 +99,7 @@ chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-
   || { tail -40 "$W/dracut.log"; echo "unlock-boot-qemu: dracut failed"; exit 2; }
 grep -i "regalia" "$W/dracut.log" | head -5 || true
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
-for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.socket$' 'regalia-unlock\.service$' 'regalia-wg-boot\.service$' \
+for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.socket$' 'regalia-unlock\.service$' 'regalia-unlock-relay\.service$' 'regalia-unlock-core\.socket$' 'regalia-wg-boot\.service$' \
          'systemd-pcrphase-initrd\.service$' 'initrd\.target\.wants/systemd-pcrphase-initrd\.service' 'systemd-pcrextend$' \
          'bin/wg$' 'bin/nft$' 'bin/ip$' 'wireguard\.ko' 'nf_tables\.ko' 'nft_ct\.ko' 'virtio_net\.ko'; do
   grep -q "$f" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: the initrd lacks $f"; grep -c . "$W/lsinitrd.txt"; exit 2; }
@@ -159,7 +161,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### seven boots"
+echo "### eight boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
@@ -170,4 +172,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 7 boots passed (enrolment with the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, three planted ESP credentials refused, no peer and the recovery key)"
+echo "unlock-boot-qemu: 8 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, three planted ESP credentials refused, no peer and the recovery key)"

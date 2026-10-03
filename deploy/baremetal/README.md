@@ -473,6 +473,14 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     names), for a bounded number of rounds;
   - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
     file (`/run/regalia-unlock/key.sock`). If no peer helps, it gives nothing.
+- **The relay** (`regalia-unlock-relay.service`, behind `regalia-unlock.socket`): the key socket's own
+  service holds no credential, no TPM and no network, and depends on nothing, so it always starts. It
+  asks the real client on its own socket (`regalia-unlock-core.socket`) and passes on exactly one whole
+  key, or gives nothing after any failure or after 150 s; with nothing, systemd-cryptsetup asks for
+  the recovery key. Before it, a real client that could not start (a sealed credential that did not
+  decrypt) left systemd-cryptsetup with a reset connection, and it failed without asking (#66). Shown
+  with the real systemd and systemd-cryptsetup: a client that hangs, one that crashes mid-answer, an
+  undecryptable credential and an absent one each end with no key and the prompt.
 - **The units** (`deploy/baremetal/initrd/regalia-unlock.socket` and `.service`): systemd-cryptsetup's
   connection to the socket starts the client, sandboxed (no capability, no write anywhere but its own
   `/run/regalia`, no device but the TPM and the disks, read-only). Shown with a running systemd and

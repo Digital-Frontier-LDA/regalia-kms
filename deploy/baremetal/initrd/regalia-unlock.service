@@ -1,4 +1,5 @@
-# The pre-root unlock client (cmd/regalia-unlock), started by a connection on regalia-unlock.socket.
+# The pre-root unlock client (cmd/regalia-unlock), started by a connection on regalia-unlock-core.socket,
+# which only the relay on the key socket (regalia-unlock-relay.service) connects to.
 #
 # systemd does two things for it, and the program does neither itself:
 #   - it unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On
@@ -14,7 +15,7 @@
 Description=Give the root volume's key: TPM plus one peer
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
 DefaultDependencies=no
-Requires=regalia-unlock.socket
+Requires=regalia-unlock-core.socket
 # the local half is unsealed with the TPM: not before its device is there
 Wants=tpm2.target
 # and, in a measured boot, not before the initrd's phase is in PCR 11: the quote must show that phase
