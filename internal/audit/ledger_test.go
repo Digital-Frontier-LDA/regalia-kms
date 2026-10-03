@@ -14,7 +14,7 @@ package audit
 //     must add a failing test M alone does not -- Compose must STRICTLY CONTAIN MAlone. Rows
 //     satisfying the bucket but not the claim are classified "M-sufficient" by
 //     TestLedgerControlArmClassifications, which computes the real comparison. Five rows are in
-//     that position once the drift guard is filtered out, and audit.go:366[0] is a sixth under
+//     that position once the drift guard is filtered out, and audit.go:367[0] is a sixth under
 //     the conjunctive reading of its mask.
 //   - "killed-on-compose" — the operand SURVIVES alone but a sibling operand
 //     catches it; the existing tests are sufficient when both are neutralised.
@@ -37,8 +37,8 @@ package audit
 // A row reading MAlone: []string{} now means no BEHAVIOURAL test detected the masking guard
 // alone — which is what a reader was entitled to assume it already meant.
 //
-// M-ALONE IS AMBIGUOUS WHEN Masking NAMES A CONJUNCTION. For audit.go:366[0], whose mask is
-// audit.go:384[0]+audit.go:387[0], each guard singly SURVIVES while the two together KILL. So
+// M-ALONE IS AMBIGUOUS WHEN Masking NAMES A CONJUNCTION. For audit.go:367[0], whose mask is
+// audit.go:385[0]+audit.go:388[0], each guard singly SURVIVES while the two together KILL. So
 // "M alone" reads as [] under one interpretation and as {TestDurableIsFalseWhenTheWriteItselfFailed} under the other, and
 // the two give opposite verdicts. The claim the arm tests is "X cannot be the sole refuser
 // because M catches it", and M is the mask AS NAMED — so the conjunction is the correct reading.
@@ -63,6 +63,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -81,7 +82,7 @@ import (
 // "killed-on-compose" from "needs-fixing": the first has non-empty Compose,
 // the second has Compose == [] && MAlone == [].
 type ledgerRow struct {
-	ID      string // e.g. "audit.go:268[0]"
+	ID      string // e.g. "audit.go:269[0]"
 	Verdict string // see bucket key above
 	Site    string // verbatim source line text
 	Notes   string // bucket-specific prose (defect + masking guard + test name, etc.)
@@ -122,7 +123,7 @@ func ledgerRows() []ledgerRow {
 		// measuring the Send twin of httpsink.go:127[0], and shipper.go:191[0] was recorded as
 		// unreachable when one direction of it is a behaviour change.
 		{
-			ID: "audit.go:301[0]", Verdict: "reachable-untested-test-added",
+			ID: "audit.go:302[0]", Verdict: "reachable-untested-test-added",
 			Site:  "\t\tcase errors.Is(statErr, os.ErrNotExist):",
 			Notes: "Measured on 363ce16: FALSE KILLED / TRUE SURVIVED. Forced true, every case takes the absent arm, so a mark that is PRESENT but behind the collector's acknowledged head -- a forged sidecar -- is reported as durability loss. Both arms refuse; only the diagnosis differs, and the existing tests pinned the absent diagnosis alone.",
 			Test:  "TestAMarkBehindTheCollectorIsDiagnosedAsForgedRatherThanLost",
@@ -174,63 +175,63 @@ func ledgerRows() []ledgerRow {
 		// killed-on-compose sub-bucket (10). MAlone / Compose are the 3-arm
 		// measurement from the control-arm script.
 		{
-			ID: "audit.go:323[0]", Verdict: "killed-on-compose",
+			ID: "audit.go:324[0]", Verdict: "killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "Open's redo of the journal's collector-side position (the readShippedMark call is on line 322; the if check is on 323); the joint bypass with the audit.go:268[0] masking guard is caught by the test in Test and Compose.",
+			Notes:   "Open's redo of the journal's collector-side position (the readShippedMark call is just above the if check); the joint bypass with the audit.go:269[0] masking guard is caught by the test in Test and Compose.",
 			Test:    "TestACorruptShippedMarkIsRefusedNotIgnored",
-			Masking: "audit.go:268[0]",
+			Masking: "audit.go:269[0]",
 			MAlone:  []string{"TestACorruptShippedMarkIsRefusedNotIgnored"},
 			Compose: []string{"TestACorruptShippedMarkIsRefusedNotIgnored"},
 		},
 		{
-			ID: "audit.go:384[0]", Verdict: "killed-on-compose",
+			ID: "audit.go:385[0]", Verdict: "killed-on-compose",
 			Site:    "\tif _, err := recorder.file.Write(line); err != nil {",
-			Notes:   "Append-then-Sync; the masking guard at audit.go:387[0] catches the joint bypass; the measured detector is in Test and Compose.",
+			Notes:   "Append-then-Sync; the masking guard at audit.go:388[0] catches the joint bypass; the measured detector is in Test and Compose.",
 			Test:    "TestDurableIsFalseWhenTheWriteItselfFailed",
-			Masking: "audit.go:387[0]",
+			Masking: "audit.go:388[0]",
 			MAlone:  []string{},
 			Compose: []string{"TestDurableIsFalseWhenTheWriteItselfFailed"},
 		},
 		{
-			ID: "audit.go:387[0]", Verdict: "killed-on-compose",
+			ID: "audit.go:388[0]", Verdict: "killed-on-compose",
 			Site:    "\tif err := recorder.file.Sync(); err != nil {",
-			Notes:   "Sync after Write; the masking guard at audit.go:384[0] catches the joint bypass; the measured detector is in Test and Compose.",
+			Notes:   "Sync after Write; the masking guard at audit.go:385[0] catches the joint bypass; the measured detector is in Test and Compose.",
 			Test:    "TestDurableIsFalseWhenTheWriteItselfFailed",
-			Masking: "audit.go:384[0]",
+			Masking: "audit.go:385[0]",
 			MAlone:  []string{},
 			Compose: []string{"TestDurableIsFalseWhenTheWriteItselfFailed"},
 		},
 		{
-			ID: "audit.go:487[0]", Verdict: "killed-on-compose",
+			ID: "audit.go:488[0]", Verdict: "killed-on-compose",
 			Site:    "\t\tif err := decoder.Decode(&event); err != nil {",
-			Notes:   "Per-event decoder; the masking guard at audit.go:494[0] catches the joint bypass; the measured detector is in Test and Compose.",
+			Notes:   "Per-event decoder; the masking guard at audit.go:495[0] catches the joint bypass; the measured detector is in Test and Compose.",
 			Test:    "TestAnEventDeletedFromTheMiddleAndRelinkedIsRefused",
-			Masking: "audit.go:494[0]",
+			Masking: "audit.go:495[0]",
 			MAlone:  []string{"TestAnEventDeletedFromTheMiddleAndRelinkedIsRefused"},
 			Compose: []string{"TestAnEventDeletedFromTheMiddleAndRelinkedIsRefused"},
 		},
 		{
 			ID: "reconcile.go:56[0]", Verdict: "killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "Local shipped mark read in ReconcileContinuity; the masking guard at audit.go:268[0] catches the joint bypass; the measured detector is in Test and Compose.",
+			Notes:   "Local shipped mark read in ReconcileContinuity; the masking guard at audit.go:269[0] catches the joint bypass; the measured detector is in Test and Compose.",
 			Test:    "TestACorruptShippedMarkIsRefusedNotIgnored",
-			Masking: "audit.go:268[0]",
+			Masking: "audit.go:269[0]",
 			MAlone:  []string{"TestACorruptShippedMarkIsRefusedNotIgnored"},
 			Compose: []string{"TestACorruptShippedMarkIsRefusedNotIgnored"},
 		},
 		{
 			ID: "reconcile.go:91[0]", Verdict: "killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "readShippedForReconcile inner read; the masking guard at audit.go:268[0] catches the joint bypass; the measured detector is in Test and Compose.",
+			Notes:   "readShippedForReconcile inner read; the masking guard at audit.go:269[0] catches the joint bypass; the measured detector is in Test and Compose.",
 			Test:    "TestACorruptShippedMarkIsRefusedNotIgnored",
-			Masking: "audit.go:268[0]",
+			Masking: "audit.go:269[0]",
 			MAlone:  []string{"TestACorruptShippedMarkIsRefusedNotIgnored"},
 			Compose: []string{"TestACorruptShippedMarkIsRefusedNotIgnored"},
 		},
 		{
 			ID: "verifier.go:74[0]", Verdict: "killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "VerifyNow's os.Open failure check (the os.Open call is on line 73; the if check is on 74); the masking guard at verifier.go:80[0] catches the joint bypass via the verifyEvents error path. The 3-arm protocol shows TestVerifyNowOnAMissingJournalReturnsUnreadableRatherThanPanicking fires ONLY on the joint bypass, not on M-alone — proof the masking guard's tests do NOT cover X alone.",
+			Notes:   "VerifyNow's os.Open failure check (the os.Open call is just above the if check); the masking guard at verifier.go:80[0] catches the joint bypass via the verifyEvents error path. The 3-arm protocol shows TestVerifyNowOnAMissingJournalReturnsUnreadableRatherThanPanicking fires ONLY on the joint bypass, not on M-alone — proof the masking guard's tests do NOT cover X alone.",
 			Test:    "TestVerifyNowOnAMissingJournalReturnsUnreadableRatherThanPanicking",
 			Masking: "verifier.go:80[0]",
 			MAlone:  []string{"TestVerifierClassifiesAReadFailureAsUnreadableNotBroken"},
@@ -256,48 +257,48 @@ func ledgerRows() []ledgerRow {
 		},
 		// 3-way compose (1)
 		{
-			ID: "audit.go:366[0]", Verdict: "killed-on-compose",
+			ID: "audit.go:367[0]", Verdict: "killed-on-compose",
 			Site:    "\tif recorder.closed {",
-			Notes:   "Record's recorder-closed refusal. CONJUNCTIVE MASK: audit.go:384[0] and :387[0] each SURVIVE alone; the two together KILL TestDurableIsFalseWhenTheWriteItselfFailed. MAlone above uses the mask as NAMED, the reading the claim requires -- under it Compose == MAlone, the compose adds nothing, and this row is M-sufficient. Under the singles reading MAlone is [] and the row reads informative. Two defensible readings, opposite verdicts; recorded because singles-survive-but-conjunction-kills locates the masking in the PAIR, which is more than either number says.",
+			Notes:   "Record's recorder-closed refusal. CONJUNCTIVE MASK: audit.go:385[0] and :387[0] each SURVIVE alone; the two together KILL TestDurableIsFalseWhenTheWriteItselfFailed. MAlone above uses the mask as NAMED, the reading the claim requires -- under it Compose == MAlone, the compose adds nothing, and this row is M-sufficient. Under the singles reading MAlone is [] and the row reads informative. Two defensible readings, opposite verdicts; recorded because singles-survive-but-conjunction-kills locates the masking in the PAIR, which is more than either number says.",
 			Test:    "TestDurableIsFalseWhenTheWriteItselfFailed",
-			Masking: "audit.go:384[0]+audit.go:387[0]",
+			Masking: "audit.go:385[0]+audit.go:388[0]",
 			MAlone:  []string{"TestDurableIsFalseWhenTheWriteItselfFailed"}, // the mask AS NAMED; each guard singly SURVIVES
 			Compose: []string{"TestDurableIsFalseWhenTheWriteItselfFailed"},
 		},
 		// panic-killed-on-compose sub-bucket (4)
 		{
-			ID: "audit.go:327[0]", Verdict: "panic-killed-on-compose",
+			ID: "audit.go:328[0]", Verdict: "panic-killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "Open's file-open err check (the OpenFile call is on line 326); the masking guard at audit.go:331[0] catches the joint bypass. The panic propagates through defer file.Close() on a nil handle.",
+			Notes:   "Open's file-open err check (the OpenFile call is just above it); the masking guard at audit.go:332[0] catches the joint bypass. The panic propagates through defer file.Close() on a nil handle.",
 			Test:    "TestTheAcceptedFileModesAreTheOnesTheMessageDescribes",
-			Masking: "audit.go:331[0]",
+			Masking: "audit.go:332[0]",
 			MAlone:  []string{},
 			Compose: []string{"TestTheAcceptedFileModesAreTheOnesTheMessageDescribes", "TestTheAcceptedFileModesAreTheOnesTheMessageDescribes/owner_cannot_write, _so_the_append-only_open_fails_first"},
 		},
 		{
-			ID: "audit.go:331[0]", Verdict: "panic-killed-on-compose",
+			ID: "audit.go:332[0]", Verdict: "panic-killed-on-compose",
 			Site:    "\tif err != nil {",
-			Notes:   "Open's file-Stat err check (the Stat call is on line 330); the masking guard at audit.go:327[0] catches the joint bypass. With both operands neutralised, the nil file deref panics.",
+			Notes:   "Open's file-Stat err check (the Stat call is just above it); the masking guard at audit.go:328[0] catches the joint bypass. With both operands neutralised, the nil file deref panics.",
 			Test:    "TestTheAcceptedFileModesAreTheOnesTheMessageDescribes",
-			Masking: "audit.go:327[0]",
+			Masking: "audit.go:328[0]",
 			MAlone:  []string{},
 			Compose: []string{"TestTheAcceptedFileModesAreTheOnesTheMessageDescribes", "TestTheAcceptedFileModesAreTheOnesTheMessageDescribes/owner_cannot_write, _so_the_append-only_open_fails_first"},
 		},
 		{
-			ID: "audit.go:426[1]", Verdict: "panic-killed-on-compose",
+			ID: "audit.go:427[1]", Verdict: "panic-killed-on-compose",
 			Site:    "\treturn recorder != nil && recorder.sink != nil && recorder.shipper != nil &&",
 			Notes:   "Readiness conjunction. RE-MEASURED with -vet=off, because go test runs vet and vet refuses the same-chain compose `false && false`: in the FALSE direction X alone is KILLED by 4 tests and X+M kills the same 4, so the masking claim is vacuous THERE -- the operand is detected on its own. The surviving direction is TRUE, which the compose arms do not exercise. As with hangs-on-bypass, a compose verdict is direction-dependent and this row does not say which direction it describes.",
 			Test:    "TestAnUnwiredRecorderIsNeverReady",
-			Masking: "audit.go:426[2]",
+			Masking: "audit.go:427[2]",
 			MAlone:  []string{},
 			Compose: []string{"TestAnUnwiredRecorderIsNeverReady"},
 		},
 		{
-			ID: "audit.go:426[2]", Verdict: "panic-killed-on-compose",
+			ID: "audit.go:427[2]", Verdict: "panic-killed-on-compose",
 			Site:    "\treturn recorder != nil && recorder.sink != nil && recorder.shipper != nil &&",
 			Notes:   "Readiness conjunction. RE-MEASURED with -vet=off, because go test runs vet and vet refuses the same-chain compose `false && false`: in the FALSE direction X alone is KILLED by 4 tests and X+M kills the same 4, so the masking claim is vacuous THERE -- the operand is detected on its own. The surviving direction is TRUE, which the compose arms do not exercise. As with hangs-on-bypass, a compose verdict is direction-dependent and this row does not say which direction it describes.",
 			Test:    "TestAnUnwiredRecorderIsNeverReady",
-			Masking: "audit.go:426[1]",
+			Masking: "audit.go:427[1]",
 			MAlone:  []string{},
 			Compose: []string{"TestAnUnwiredRecorderIsNeverReady"},
 		},
@@ -325,27 +326,27 @@ func ledgerRows() []ledgerRow {
 			Notes: "Durable is the public classification helper; the err operand is the only way to reach errors.Is(err, ErrDurable).",
 		},
 		{
-			ID: "audit.go:177[0]", Verdict: "unreachable",
+			ID: "audit.go:178[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "json.Marshal(highWaterMark) cannot fail for a struct of strings and numbers (the Marshal call is on line 176; the if check is on 177).",
+			Notes: "json.Marshal(highWaterMark) cannot fail for a struct of strings and numbers (the Marshal call is just above the if check).",
 		},
 		{
-			ID: "audit.go:304[0]", Verdict: "unreachable",
+			ID: "audit.go:305[0]", Verdict: "unreachable",
 			Site:  "\t\tcase statErr != nil:",
 			Notes: "Case-init operand in the mark-existence stat's else branch (handled by the case statErr == nil and the explicit os.ErrNotExist branch).",
 		},
 		{
-			ID: "audit.go:338[0]", Verdict: "unreachable",
+			ID: "audit.go:339[0]", Verdict: "unreachable",
 			Site:  "\tif !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {",
 			Notes: "Open's mode-bits check; the audit buffer is created by Open itself with 0o600, so no test construct in this package reaches the wrong side of this branch.",
 		},
 		{
-			ID: "audit.go:380[0]", Verdict: "unreachable",
+			ID: "audit.go:381[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "json.Marshal(event) cannot fail for the Event struct's string/number/time fields (the Marshal call is on line 379; the if check is on 380).",
+			Notes: "json.Marshal(event) cannot fail for the Event struct's string/number/time fields (the Marshal call is just above the if check).",
 		},
 		{
-			ID: "audit.go:470[0]", Verdict: "unreachable",
+			ID: "audit.go:471[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil || !info.Mode().IsRegular() {",
 			Notes: "Verify's info.Mode().IsRegular() check; Verify is called only on a journal the daemon opened itself or that an operator passed via VerifyIntegrity.",
 		},
@@ -357,7 +358,7 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "httpsink.go:89[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "ValidateSinkURL pre-rejects malformed URLs; NewRequestWithContext with valid input and a method/URL cannot fail (the NewRequestWithContext call is on line 88; the if check is on 89).",
+			Notes: "ValidateSinkURL pre-rejects malformed URLs; NewRequestWithContext with valid input and a method/URL cannot fail (the NewRequestWithContext call is just above the if check).",
 		},
 		{
 			ID: "httpsink.go:102[0]", Verdict: "unreachable",
@@ -367,17 +368,17 @@ func ledgerRows() []ledgerRow {
 		{
 			ID: "httpsink.go:124[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "Same shape as httpsink.go:74[0] — pre-rejected by ValidateSinkURL (the NewRequestWithContext call is on line 123; the if check is on 124).",
+			Notes: "Same shape as httpsink.go:89[0] — pre-rejected by ValidateSinkURL (the NewRequestWithContext call is just above the if check).",
 		},
 		{
 			ID: "httpsink.go:136[0]", Verdict: "unreachable",
 			Site:  "\t\tif response.Body != nil {",
-			Notes: "Same shape as httpsink.go:84[0].",
+			Notes: "Same shape as httpsink.go:102[0].",
 		},
 		{
 			ID: "httpsink.go:182[0]", Verdict: "unreachable",
 			Site:  "\tif err != nil {",
-			Notes: "Ready's err check after sink.client.Do (the Do call is on line 181); the client/baseURL are validated by NewHTTPSink so no test construct produces the wrong side.",
+			Notes: "Ready's err check after sink.client.Do (the Do call is just above it); the client/baseURL are validated by NewHTTPSink so no test construct produces the wrong side.",
 		},
 		{
 			ID: "httpsink.go:185[0]", Verdict: "unreachable",
@@ -385,7 +386,7 @@ func ledgerRows() []ledgerRow {
 			Notes: "Same shape — Ready follows the same Do/Body pattern.",
 		},
 		{
-			ID: "audit.go:224[0]", Verdict: "unreachable",
+			ID: "audit.go:225[0]", Verdict: "unreachable",
 			Site:  "\tcase errors.Is(statErr, os.ErrNotExist):",
 			Notes: "Round three, measured on 363ce16: FALSE KILLED / TRUE SURVIVED. Section 17: the operand is false only for a stat error other than not-exist, and readMark refuses every such error on the same path one call earlier, so reaching it needs the path's stat class to change between the two calls. Pinned where it is enforced by TestAMarkWhoseFileCannotBeStattedIsRefusedByTheReadBeforeTheStat (a symlink loop and an over-long mark name). Compose measured: forced true alone, that test PASSES; readMark relaxed to treat every read failure as absent, it FAILS on the classification's default arm ('cannot be classified'); both together, a one-event journal with an unstattable mark VERIFIES CLEAN. Defence in depth, keep.",
 		},
@@ -397,19 +398,19 @@ func ledgerRows() []ledgerRow {
 
 		// ===== Bucket 4: cannot-pin (4) =====
 		{
-			ID: "audit.go:181[0]", Verdict: "cannot-pin",
+			ID: "audit.go:182[0]", Verdict: "cannot-pin",
 			Site:  "\tif err := os.WriteFile(temporary, encoded, 0o600); err != nil {",
 			Notes: "os.WriteFile(.tmp, …) failure requires an OS-level fault (full disk, read-only mount); the masking guard at os.Rename swallows the same fault and we cannot fake just one.",
 		},
 		{
-			ID: "audit.go:246[0]", Verdict: "cannot-pin",
+			ID: "audit.go:247[0]", Verdict: "cannot-pin",
 			Site:  "\tif len(events) >= 1 && markFileExists && mark.Sequence == 0 {",
 			Notes: "verifyMark boundary check requires a sidecar that is structurally valid but semantically wrong; every codepath that writes such a mark is itself guarded.",
 		},
 		{
-			ID: "audit.go:258[1]", Verdict: "cannot-pin",
+			ID: "audit.go:259[1]", Verdict: "cannot-pin",
 			Site:  "\tif reached == mark.Sequence && mark.Hash != genesisHash && reachedHash != mark.Hash {",
-			Notes: "Same shape as audit.go:246[0] for the second mark kind; documented in source as §17 unreachable.",
+			Notes: "Same shape as audit.go:247[0] for the second mark kind; documented in source as §17 unreachable.",
 		},
 		{
 			ID: "shipper.go:99[0]", Verdict: "cannot-pin",
@@ -419,7 +420,7 @@ func ledgerRows() []ledgerRow {
 
 		// ===== Bucket 5: hangs-on-bypass (6) =====
 		{
-			ID: "audit.go:451[0]", Verdict: "hangs-on-bypass",
+			ID: "audit.go:452[0]", Verdict: "hangs-on-bypass",
 			Site:      "\tif verifyStop != nil {",
 			Direction: "deleted (false &&) HANGS; forced true PANICS",
 			Notes:     "Close() without prior StartVerifier() leaves verifyStop nil. DELETED, the stop is never called, the verifier goroutine is never wound down and Close waits on it: measured `panic: test timed out after 1m30s` with TestRecorderPersistsOrderedIntegrityChainAndShipsOffHost still running. FORCED TRUE, the nil verifyStop is called and the run nil-derefs. So the two directions have different defect SHAPES -- a missing shutdown path one way, a missing nil guard the other -- and the earlier direction-less verdict pointed at the wrong one.",
@@ -513,7 +514,7 @@ func TestLedgerRowNamesLiveSource(t *testing.T) {
 // 1 cannot-be-sole-refuser = 50). The two shipper.go:115 rows moved from
 // killed-on-compose to hangs-on-bypass on re-measurement (#453); the count moved with them.
 // The seven round-three rows left "unclassified" when they got verdicts: six gained tests and
-// audit.go:224[0] is unreachable, httpsink.go:95[0] joined as a new row, and shipper.go:181[0]
+// audit.go:225[0] is unreachable, httpsink.go:95[0] joined as a new row, and the row formerly shipper.go:181[0]
 // left unreachable for a test (it is now shipper.go:191[0]).
 //
 // The sums are computed at test time, so a row dropped from ledgerRows() or a
@@ -602,19 +603,19 @@ func TestLedgerControlArmClassifications(t *testing.T) {
 	rows := ledgerRows()
 	want := map[string]string{
 		// informative (Compose non-empty AND Compose != MAlone)
-		"audit.go:323[0]":    "M-sufficient",
-		"audit.go:384[0]":    "informative",
-		"audit.go:387[0]":    "informative",
-		"audit.go:487[0]":    "M-sufficient",
+		"audit.go:324[0]":    "M-sufficient",
+		"audit.go:385[0]":    "informative",
+		"audit.go:388[0]":    "informative",
+		"audit.go:488[0]":    "M-sufficient",
 		"reconcile.go:56[0]": "M-sufficient",
 		"reconcile.go:91[0]": "M-sufficient",
 		"verifier.go:74[0]":  "informative",
 		"verifier.go:96[0]":  "informative",
-		"audit.go:327[0]":    "informative",
-		"audit.go:331[0]":    "informative",
-		"audit.go:426[1]":    "informative",
-		"audit.go:426[2]":    "informative",
-		"audit.go:366[0]":    "M-sufficient", // 3-way; MAlone empty, Compose non-empty
+		"audit.go:328[0]":    "informative",
+		"audit.go:332[0]":    "informative",
+		"audit.go:427[1]":    "informative",
+		"audit.go:427[2]":    "informative",
+		"audit.go:367[0]":    "M-sufficient", // 3-way; MAlone empty, Compose non-empty
 		// M-sufficient (Compose == MAlone)
 		"verifier.go:127[0]": "M-sufficient",
 		// not-killed (Compose == [] AND MAlone == [])
@@ -651,4 +652,55 @@ func equalStringSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestLedgerCitationsNameLiveSource extends the drift guard from the rows' IDs to every other
+// "file.go:N[k]" this package's tests cite (a row's Masking, its Notes, the comments): each names a
+// row, or a line of that file that is still a branch (if, case, for, switch, && or ||). A
+// citation marked as history ("Was …", "formerly …") is exempt: it names where a row used to be.
+// (#283, regalia-kms-3e: renumbering after an edit must not leave a citation pointing at a
+// different line unseen. #282 replaces line numbers with symbols.)
+func TestLedgerCitationsNameLiveSource(t *testing.T) {
+	rows := map[string]bool{}
+	for _, row := range ledgerRows() {
+		rows[row.ID] = true
+	}
+	_, thisFile, _, _ := runtime.Caller(0)
+	auditDir := filepath.Dir(thisFile)
+	citation := regexp.MustCompile(`(?i)(was |formerly )?\b([a-z_]+\.go):(\d+)\[\d+\]`)
+	branch := regexp.MustCompile(`\bif\b|\bcase\b|\bfor\b|\bswitch\b|&&|\|\|`)
+	sources := map[string][]string{}
+	tests, _ := filepath.Glob(filepath.Join(auditDir, "*_test.go"))
+	for _, test := range tests {
+		data, err := os.ReadFile(test)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for number, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, `ID:`) || strings.Contains(line, "regexp.MustCompile") {
+				continue
+			}
+			for _, match := range citation.FindAllStringSubmatch(line, -1) {
+				cited := match[0][len(match[1]):]
+				if match[1] != "" || rows[cited] {
+					continue
+				}
+				file, lineNo := match[2], 0
+				fmt.Sscan(match[3], &lineNo)
+				lines, ok := sources[file]
+				if !ok {
+					source, err := os.ReadFile(filepath.Join(auditDir, file))
+					if err != nil {
+						t.Errorf("%s:%d cites %s, which is not a file of this package", filepath.Base(test), number+1, cited)
+						continue
+					}
+					lines = strings.Split(sweeptext.StripMutationWrappers(string(source)), "\n")
+					sources[file] = lines
+				}
+				if lineNo < 1 || lineNo > len(lines) || !branch.MatchString(lines[lineNo-1]) {
+					t.Errorf("%s:%d cites %s: not a row, and that line is not a branch", filepath.Base(test), number+1, cited)
+				}
+			}
+		}
+	}
 }

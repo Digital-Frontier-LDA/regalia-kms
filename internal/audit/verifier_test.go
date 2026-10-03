@@ -102,7 +102,7 @@ func TestStoppedVerifierStopsAdvancing(t *testing.T) {
 	// end of the test would leave it open, and the trailing Close() was on the success path only.
 	//
 	// BUT THE CLEANUP MUST NOT RUN WHEN THE VERIFIER IS STUCK. Close() waits on the same
-	// WaitGroup, unbounded (audit.go:426). If the goroutine is not exiting, a cleanup that closes
+	// WaitGroup, unbounded (audit.go:427). If the goroutine is not exiting, a cleanup that closes
 	// hangs the package -- turning the bounded failure below into exactly the ten-minute timeout
 	// the bound exists to prevent. Measured, with cancellation mutated away: the package timed out
 	// at 40s and the 5s message never printed at all, so the failure reported as infrastructure

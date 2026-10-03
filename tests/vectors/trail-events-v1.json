@@ -1,0 +1,35 @@
+{
+ "about": "#278: the regalia.trail/v1 mapping, pinned. A trail exactly as deploy/baremetal/trails.py writes it (a legacy object, a legacy non-object, chained lines, a line torn by a crash, a DENY, HTML-sensitive and non-ASCII text, a 2^64-1 integer, a withheld line, an unsafe operation and outcome) and the audit events internal/audit/trail.go must map it to. Changing any expected hash means every stream already shipped reads as rewritten: it needs a new TrailFormat and a new stream, never an edit here.",
+ "format": "regalia.trail/v1",
+ "trail": "sync",
+ "lines": [
+  "{\"at\":1790000000,\"event\":\"before the chain\"}",
+  "[\"a legacy line that is not an object\"]",
+  "{\"at\":1790000100,\"event\":\"sync-pull\",\"outcome\":\"ALLOW\",\"peer\":\"node-b\",\"prev\":\"0c3c034eec84651966437a4d0b523d4fdf28c52c4045ba346d22fbd26bf1c3b6\",\"seq\":1}",
+  "{\"at\":1790000200,\"event\":\"sync-pull\",\"outcome\":\"DENY\",\"prev\":\"790399dc0c77de096a3d02cbfe412636f8f38c7ecce0040f0cf2c7d8f4ae9ad4\",\"reason\":\"<script>&\\u00e9\\u2603\",\"seq\":2}",
+  "{\"event\":\"cut by a cra",
+  "{\"at\":1790000300,\"counter\":18446744073709551615,\"event\":\"after-a-crash\",\"outcome\":\"REFUSED\",\"prev\":\"4d21ffd204a6f2044b8e374c125cdbb1019d651d43c7cb27aece7dcdbd613453\",\"seq\":3}",
+  "{\"at\":1790000400,\"event\":\"lease\",\"note\":\"the PRIVATE KEY of the node\",\"outcome\":\"ALLOW\",\"prev\":\"f11878a04f391b99fefe18d82cb4d50c5c62d4d483a05c663cc05fb9f516e141\",\"seq\":4}",
+  "{\"at\":1790000500,\"event\":\"a\\u0001control\",\"outcome\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"prev\":\"474354750e37711ac6115b22b1bf0f57a46b27fb1b8d656f1acc74bee14d6b42\",\"seq\":5}"
+ ],
+ "line_sha256": [
+  "5504115bef13204f9c25e48338d501fb94bd3abc06ba5d1808b8cf4845afbe39",
+  "0c3c034eec84651966437a4d0b523d4fdf28c52c4045ba346d22fbd26bf1c3b6",
+  "790399dc0c77de096a3d02cbfe412636f8f38c7ecce0040f0cf2c7d8f4ae9ad4",
+  "d5be33e1a70b5117abc7941020e133aae7c13fe4a5fa6f4ea7f92555d3ba6ea9",
+  "4d21ffd204a6f2044b8e374c125cdbb1019d651d43c7cb27aece7dcdbd613453",
+  "f11878a04f391b99fefe18d82cb4d50c5c62d4d483a05c663cc05fb9f516e141",
+  "474354750e37711ac6115b22b1bf0f57a46b27fb1b8d656f1acc74bee14d6b42",
+  "a44299f98560068c4b296292d4399d1d7fa4166c79b4c04ffd66638ea5739103"
+ ],
+ "event_hashes": [
+  "sha256:d0cb32e45af757551393c69992c73745420df40ff2b6a96857eba4faa8e38d82",
+  "sha256:dc01446badc748ecfd6314bc836ef8370103aa2684f06251bfbb037c73d15186",
+  "sha256:4c7dc4122a4a88de995a7a6a1ac477696ac65e0205b32a6bc9d81ddeb82f0b0b",
+  "sha256:4e802d812e5a83a1a31a4ae6b367b728a07f1413f796c1414cc6f2258676c72f",
+  "sha256:0f7de34dd3c63ed2fa9ef0fed272203dd245af6da82896dab6194512f518fe26",
+  "sha256:1a20da56ba0e8a5fb327fadac08990f2930f930966a9ffc7ffb4acd107081c18",
+  "sha256:c1d70618ed59904c44077f21ff703ba95d29a5f16a0927a250d566111c939349",
+  "sha256:b45b2ebc940ff6f3e545d8469662f195fd383e2cb9aaf0b662af021cedb96286"
+ ]
+}

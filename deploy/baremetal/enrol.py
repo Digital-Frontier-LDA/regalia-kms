@@ -7,8 +7,17 @@ WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied 
   * the EK and a restricted signing AK, persistent in the TPM (attest.node_init, 0x81010001/0x81010002);
   * the WG-SERVICE key, /etc/regalia/wg-service.key, root 0600;
   * the WG-BOOT key, kept root 0600 in the enrolment directory until `commit` seals it to this TPM.
-The local unlock contribution is NOT made here: it is made and sealed in one step at `commit`, so it is
-never on disk in the clear between the two phases.
+The local unlock contribution is NOT made here: `commit` makes it and seals it in one step, so it is never
+on disk in the clear between the two phases. It then stays root 0600 in the enrolment directory (local.bin)
+only until the peers' LUKS paths are enrolled, which need it; its sealed copy opens only in the initrd.
+
+PHASE 2, `commit` (root, at the console): the manifest chain checked under the root fingerprint typed by
+hand; the boot image checked (uki.verify on the image, its signed record, both PCR keys and the Secure Boot
+certificate, and its PCR 11 among the sets the measurements accept for this node); the configuration; the
+anchor, the store and the heartbeat counter as regalia-sync; then regalia.unlock-local and
+regalia.wg-boot-key sealed to this TPM (PCR 7, and PCR 11 through the initrd key) onto the ESP's
+loader/credentials, never replacing a file, with their SHA-256 and size journalled for PCR 12
+(espcreds.record). The WG-BOOT private key file is removed once its sealed copy is published.
 
 WHAT IT PRINTS: the identity bundle (bundle.json in the enrolment directory), public values only: the EK
 and AK public areas and Names, the EK certificate when the TPM carries one (checked here to certify THIS
@@ -20,7 +29,8 @@ WHAT IT REFUSES: a persistent object at the EK or AK handle, or a WG-SERVICE key
 not make. A host that was enrolled is re-enrolled only as a new node, through replacement (#76).
 
 BETWEEN THE PHASES the WG-BOOT private key is in the clear on the encrypted root, 0600 in a root-only
-directory; `commit` seals it to the TPM and removes it. Host backups must exclude /var/lib/regalia-enrol.
+directory; `commit` seals it to the TPM and removes it. Host backups must exclude /var/lib/regalia-enrol
+(the local contribution is there too, until the peers' paths are enrolled).
 
 A CRASH AT ANY STEP: every step is recorded in the journal (journal.json, root, in a 0700 directory)
 as started before it acts and as done, with what it produced, after. Run `init` again: a done step is
@@ -40,7 +50,7 @@ import sys
 import tempfile
 import time
 
-from deploy.baremetal import attest, measurements, membership
+from deploy.baremetal import attest, espcreds, measurements, membership
 
 SCHEMA_JOURNAL = "regalia.enrol-journal/v1"
 SCHEMA_BUNDLE = "regalia.enrol-bundle/v1"
@@ -325,7 +335,7 @@ def wg_key(journal, step, path, run):
     private, public = _wg_pair(run)
     journal.doc["steps"][step] = {"state": "started", "at": int(time.time()), "public": public}
     _atomic_json(journal.path, journal.doc)                     # one write: recorded BEFORE the private file exists
-    os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+    _ensure_trusted_dir(os.path.dirname(path))
     _write_private(path, (private + "\n").encode())
     journal.done(step, public=public, path=path)
     return public
@@ -340,35 +350,88 @@ def firmware_version(run):
     return "%08x%08x" % tuple(words) if None not in words else None
 
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _check_ancestor(name, st, child_uid):
+    """One directory on the way down: owned by root (or this user) and closed to group and others, OR sticky
+    (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's owner
+    can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
+    (#233, Go); kept identical by hand until one shared helper exists."""
+    me = os.geteuid()                    # root, in production: main() refuses anything else, and _hand_over requires it
+    open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
+            and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_uid in (0, me))),
+            "%s is not a root-owned directory closed to group and others (nor a sticky one): what enrolment puts "
+            "under it could be replaced" % name)
+
+
+def _open_trusted(path, create=None):
+    """A descriptor on the directory `path`, reached from / one component at a time, each opened without
+    following a link (O_NOFOLLOW at EVERY level, not only the last) and each checked by _check_ancestor before
+    anything is made in it or below it. With `create`, a missing component is made with that mode, inside the
+    descriptor of the one above (never os.makedirs, which follows links). The last directory is checked as an
+    ancestor of what will be put in it, by this user."""
+    path = os.path.abspath(path)
+    fd, name, st = os.open("/", _DIR_FLAGS), "/", None
+    try:
+        st = os.fstat(fd)
+        for part in [p for p in path.split("/") if p]:
+            below = os.path.join(name, part)
+            try:
+                child = os.open(part, _DIR_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                require(create is not None, "%s does not exist" % below)
+                _check_ancestor(name, st, os.geteuid())        # before anything is made in it
+                os.mkdir(part, create, dir_fd=fd)
+                child = os.open(part, _DIR_FLAGS, dir_fd=fd)
+                os.fchmod(child, create)                        # the mode asked for, whatever the umask
+            except OSError as error:                            # ELOOP: a link; ENOTDIR: not a directory
+                raise Refused("%s is not a real directory (%s): enrolment does not follow it" % (below, error.strerror))
+            child_st = os.fstat(child)
+            _check_ancestor(name, st, child_st.st_uid)
+            os.close(fd)
+            fd, name, st = child, below, child_st
+        _check_ancestor(name, st, os.geteuid())
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _ensure_trusted_dir(path, mode=0o755):
+    """`path` and every directory above it trusted (see _open_trusted), missing ones made with `mode`. Only root
+    can then change what lies there, so the path-based writes after it cannot be redirected."""
+    os.close(_open_trusted(path, create=mode))
+
+
 def _safe_directory(directory):
     """The enrolment directory holds the journal and, between the phases, the WG-BOOT private key: it must be a
-    real directory (not a link), owned by root, 0700, and every directory above it root's and not writable by
-    group or others (otherwise someone could swap it). Created if absent; never trusted if it is not so."""
+    real directory (not a link), owned by root, 0700, and every directory above it trusted (_check_ancestor:
+    otherwise someone could swap it). Created if absent; never trusted if it is not so."""
     directory = os.path.abspath(directory)
-    me = os.geteuid()                    # root, in production: main() refuses anything else
-    # Every directory above it is owned by root (or this user) and closed to group and others, OR is sticky
-    # (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's
-    # owner can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
-    # (#233, Go); kept identical by hand until one shared helper exists.
-    below, walk = directory, os.path.dirname(directory)
-    while True:
-        st = os.lstat(walk)
-        open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-        child_owner = os.lstat(below).st_uid if os.path.lexists(below) else me
-        require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
-                and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_owner in (0, me))),
-                "%s is not a root-owned directory closed to group and others (nor a sticky one): the enrolment "
-                "directory under it could be replaced" % walk)
-        if walk == "/":
-            break
-        below, walk = walk, os.path.dirname(walk)
-    if not os.path.lexists(directory):
-        os.mkdir(directory, 0o700)
-    st = os.lstat(directory)
-    require(stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode) and st.st_uid == me,
-            "%s is not a real directory owned by this user (root)" % directory)
-    os.chmod(directory, 0o700)
-    require(stat.S_IMODE(os.lstat(directory).st_mode) == 0o700, "%s could not be made 0700" % directory)
+    parent = _open_trusted(os.path.dirname(directory))
+    try:
+        base = os.path.basename(directory)
+        try:
+            os.mkdir(base, 0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(base, _DIR_FLAGS, dir_fd=parent)
+        except OSError as error:
+            raise Refused("%s is not a real directory (%s)" % (directory, error.strerror))
+        try:
+            st = os.fstat(fd)
+            _check_ancestor(os.path.dirname(directory), os.fstat(parent), st.st_uid)
+            require(stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid(),
+                    "%s is not a real directory owned by this user (root)" % directory)
+            os.fchmod(fd, 0o700)
+            require(stat.S_IMODE(os.fstat(fd).st_mode) == 0o700, "%s could not be made 0700" % directory)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
 
 
 def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
@@ -417,11 +480,7 @@ def check_manifest(directory, chain, root_key, typed, document):
     require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
     require(typed == fingerprint(root_key), "the root key's fingerprint is not the one typed: this is not the root "
             "key the ceremony made. Nothing was written")
-    with open(os.path.join(directory, "bundle.json")) as f:
-        bundle = json.load(f)
-    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE
-            and all(isinstance(bundle.get(k), str) for k in ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub")),
-            "bundle.json is not a complete identity bundle")
+    bundle = _bundle(directory)
     envelopes = chain if isinstance(chain, list) else [chain]
     require(envelopes, "the chain is empty")
     try:
@@ -491,7 +550,7 @@ def _install(journal, step, path, data, prefix=""):
         existing()
     else:
         directory = os.path.dirname(target)
-        os.makedirs(directory, mode=0o755, exist_ok=True)
+        _ensure_trusted_dir(directory)
         facts["tmp:" + path] = os.path.basename(tmp)
         journal.done(step, **facts)       # the temporary name, recorded before the file exists
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
@@ -533,6 +592,455 @@ def install_config(journal, node_id, root_key, example, site, document, prefix="
     return config
 
 
+SYNC_USER = "regalia-sync"
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def anchor_and_store(config_path, chain, run=subprocess.run):
+    """Phase 2's trust anchors, run AS regalia-sync (the user that owns them from then on, #214): the
+    membership epoch anchor (membership.HighWater: the counter, its base and the two record slots, #68),
+    the store committed with the whole chain, so the anchor stands at its last epoch N, and the heartbeat
+    counter. Returns (epoch, digest of the last manifest).
+
+    RESUMED, it never takes over indices it cannot prove are this chain's: a store that exists must load
+    (Store checks it against the anchor) and be a PREFIX of `chain`, and the rest is committed; indices
+    without a store are accepted only as `define` leaves them (epoch 0, the zero record), the state of an
+    enrolment stopped before its first commit. Anything else is refused and left."""
+    from deploy.baremetal import heartbeat, node as node_module
+    with open(config_path, "rb") as f:
+        cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
+    n = node_module.Node(cfg, run)
+    hw, store = n.anchor(), n.store()
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"))
+    envelopes = chain if isinstance(chain, list) else [chain]
+
+    def defined(owner, indices):
+        return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
+    anchor_indices = hw._indices()
+    # Every refusal before the first write: the heartbeat counter is checked BEFORE the anchor is defined or the
+    # store committed, so a counter someone else advanced leaves the TPM and the store as they were.
+    counter_present = defined(counter, (counter.index, counter.base_index))
+    require(not counter_present or (len(counter_present) == 2 and counter.value() == 0),
+            "the TPM already holds the heartbeat counter's indices (%s) at a value other than a fresh one: enrolment "
+            "does not take them over" % ", ".join(counter_present))
+    already = 0
+    if os.path.exists(store.path):
+        store.load()                                   # refuses a store the TPM anchor does not vouch for
+        held = [membership.digest(m) for m in store.manifests]
+        current, mine = None, []
+        for envelope in envelopes:
+            current = membership.accept(current, envelope, cfg["root_key"])
+            mine.append(membership.digest(current))
+        require(held == mine[:len(held)], "%s holds a chain that is not the beginning of this one: an enrolment of "
+                "another manifest, or a node already in service. Enrolment does not touch it (re-enrolment is #76)" % store.path)
+        already = len(held)
+    else:
+        present = defined(hw, anchor_indices)
+        if present:
+            require(len(present) == len(anchor_indices) and hw.value() == 0 and hw.record() == (0, membership.HighWater.ZERO),
+                    "the TPM already holds the anchor's indices (%s) and no store goes with them: they are not an enrolment "
+                    "stopped before its first commit. Enrolment does not take them over (re-enrolment is replacement, #76)"
+                    % ", ".join(present))
+        else:
+            hw.define()
+    for envelope in envelopes[already:]:            # what the store holds already is this chain's beginning (checked)
+        store.commit(envelope)
+    manifest = store.load()
+    if not counter_present:
+        counter.define()
+    return manifest["epoch"], membership.digest(manifest)
+
+
+def run_as_sync(config_path, chain, run=subprocess.run):
+    """anchor_and_store, in a process of regalia-sync with the tss group (the TPM), started from the package
+    root so `-m` finds it. The chain goes on its standard input: the enrolment directory is root's (0700),
+    and regalia-sync could not read a file there. The journal stays with the caller."""
+    # env -i: nothing of root's environment reaches the step (the TCTI comes from node.json, not from here)
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"],
+               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode())
+    require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
+    m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
+    require(m is not None, "the anchor step did not report its result")
+    return int(m.group(1)), m.group(2)
+
+
+def _hand_over(state, chown=True):
+    """The state directory, made regalia-sync's: every directory above it trusted and made one level at a time
+    (_open_trusted), then the directory itself opened without following a link and judged by descriptor, so what
+    is checked is what is changed. Taken over only when it is root's and empty; one that is regalia-sync's
+    already (an enrolment resumed) only at 0755, the mode this step gives it. `chown` False (tests, which
+    cannot change an owner): the user that owns it is taken to be regalia-sync."""
+    if chown:
+        # _check_ancestor trusts directories of this user as well as root's: right for root, which main()
+        # requires, and for tests; a handover to regalia-sync is never done by anyone else
+        require(os.geteuid() == 0, "the state directory is handed to %s by root only" % SYNC_USER)
+        import pwd
+        user = pwd.getpwnam(SYNC_USER)
+        uid, gid = user.pw_uid, user.pw_gid
+    else:
+        uid, gid = os.geteuid(), os.getegid()
+    parent = _open_trusted(os.path.dirname(os.path.abspath(state)), create=0o755)
+    try:
+        base, created = os.path.basename(state), False
+        try:
+            os.mkdir(base, 0o700, dir_fd=parent)
+            created = True
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(base, _DIR_FLAGS, dir_fd=parent)
+        except OSError as error:
+            raise Refused("%s is not a real directory (%s): enrolment does not follow it" % (state, error.strerror))
+    finally:
+        os.close(parent)
+    try:
+        st = os.fstat(fd)
+        if created:                                      # ours, just made (root's on a host): handed over below
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o755)
+        elif (st.st_uid, st.st_gid) == (uid, gid):
+            require(stat.S_IMODE(st.st_mode) == 0o755, "%s is %s's but mode %o, not 0755: enrolment did not leave it so, "
+                    "and does not take it over" % (state, SYNC_USER, stat.S_IMODE(st.st_mode)))
+        else:
+            require(st.st_uid == 0 and not os.listdir(fd), "%s is neither %s's nor an empty directory of root's: "
+                    "enrolment does not take it over" % (state, SYNC_USER))
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o755)
+    finally:
+        os.close(fd)
+
+
+def _bundle(directory):
+    with open(os.path.join(directory, "bundle.json"), "rb") as f:
+        bundle = membership.load(f.read(membership.MAX_BYTES + 1))
+    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE
+            and all(isinstance(bundle.get(k), str) for k in ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub")),
+            "bundle.json is not a complete identity bundle")
+    return bundle
+
+
+def approved_image(image, record_path, initrd_pub, system_pub, secure_boot_cert, document, node_id, run=subprocess.run):
+    """The boot image this host's sealed credentials will open in, and the key they are sealed to, taken ONLY
+    from the root's chain. uki.verify checks the image against its record, both PCR keys and the Secure Boot
+    certificate against the record and the image's own signatures. That proves the files given are consistent,
+    not that anyone approved them: PCR 11 does not cover .pcrsig, so a re-signed copy of an approved image,
+    with its own key and record, measures the same (regalia-kms-d9 on #265). So the set the measurements
+    document accepts for this node (the document the root-signed manifest commits to, measurements.bind) must
+    match the image's PCR 11 per phase AND name, under "signing", the very keys verified here: both PCR keys'
+    pkfp and the Secure Boot certificate's SHA-256 (#267). A set without "signing" is refused: there is no
+    second, typed path to trust a key. Returns the initrd-phase public key (PEM bytes) to seal to."""
+    from deploy.baremetal import uki
+    with open(record_path, "rb") as f:
+        record = membership.load(f.read(membership.MAX_BYTES + 1))
+    keys = {}
+    for phase, path in (("initrd", initrd_pub), ("system", system_pub)):
+        with open(path, "rb") as f:
+            keys[phase] = f.read(65537)
+    try:
+        pcr11 = uki.verify(image, record, keys, secure_boot_cert, run)
+    except (uki.Refused, membership.Refused) as refusal:
+        raise Refused("the boot image is refused: %s" % refusal)
+    # what uki.verify has just proven the given files to be: the keys' pkfp and the certificate's SHA-256
+    verified = {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"], "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
+                "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}
+    sets = measurements.validate(document).get(node_id, [])
+    matched = [s for s in sets if {phase: values.get("11") for phase, values in (s.get("phases") or {}).items()} == pcr11]
+    require(matched, "the measurements the manifest commits to accept no set with this image's PCR 11 (%s) for %s: "
+            "the credentials would be sealed to an image this node may not run" % (
+                ", ".join("%s %s" % (p, v[:16]) for p, v in sorted(pcr11.items())), node_id))
+    require(any("signing" in s for s in matched), "the set the measurements accept for this image names no signing keys: the "
+            "initrd key cannot be taken from the root's chain. Regenerate the set from the SIGNED record (uki.py set, #267)")
+    require(any(s.get("signing") == verified for s in matched),
+            "the image is signed with keys the approved set does not name (initrd %s, system %s, Secure Boot %s): a re-signed "
+            "copy of an approved image is not an approved image. Nothing was sealed" % (
+                verified["initrd"][:16], verified["system"][:16], verified["secure_boot_cert"][:16]))
+    return keys["initrd"]
+
+
+LOCAL_FILE = "local.bin"
+SEALED = (("regalia.unlock-local", "local"), ("regalia.wg-boot-key", "wg_boot"))
+
+
+def local_contribution(journal, directory):
+    """The local unlock contribution, 32 random bytes made here (unlock.SECRET_BYTES). Its SHA-256 is journalled
+    BEFORE the file exists, so a resumed run removes only the file it made. It stays root 0600 in the enrolment
+    directory until the LUKS paths with the peers are enrolled (they need it, and its sealed copy opens only in
+    the initrd); then it is removed."""
+    from deploy.baremetal import unlock
+    path, step = os.path.join(directory, LOCAL_FILE), "local"
+    digest = lambda data: hashlib.sha256(data).hexdigest()      # noqa: E731
+    if journal.state(step) == "done":
+        with open(path, "rb") as f:
+            local = f.read(unlock.SECRET_BYTES + 1)
+        require(digest(local) == journal.get(step)["sha256"], "%s no longer holds the contribution this enrolment made" % path)
+        return local
+    if os.path.lexists(path):
+        recorded = journal.get(step).get("sha256") if journal.state(step) == "started" else None
+        mine = recorded is not None and os.path.isfile(path) and not os.path.islink(path)
+        if mine and os.path.getsize(path):
+            with open(path, "rb") as f:
+                mine = digest(f.read(unlock.SECRET_BYTES + 1)) == recorded
+        require(mine, "%s already exists and this enrolment did not make it; a stray file is removed by hand: rm %s" % (path, path))
+        os.unlink(path)
+    local = os.urandom(unlock.SECRET_BYTES)
+    journal.doc["steps"][step] = {"state": "started", "at": int(time.time()), "sha256": digest(local)}
+    _atomic_json(journal.path, journal.doc)                     # recorded BEFORE the file exists
+    _write_private(path, local)
+    journal.done(step, sha256=digest(local))
+    return local
+
+
+def _seal(name, plaintext, initrd_pub, run):
+    """`plaintext` as a systemd credential named `name`, bound to this TPM: PCR 7 directly, PCR 11 through the
+    initrd-phase signature (e2e-enrol's binding). The bytes systemd-creds prints, exactly as the ESP gets them."""
+    from deploy.baremetal import unlock
+    with tempfile.NamedTemporaryFile(prefix="initrd-pub.", suffix=".pem") as key:
+        key.write(initrd_pub)
+        key.flush()
+        done = run(["systemd-creds", "encrypt", "--name=" + name, "--with-key=tpm2-with-public-key", "--tpm2-pcrs=7",
+                    "--tpm2-public-key=" + key.name, "--tpm2-public-key-pcrs=11", "-", "-"], input=plaintext, capture_output=True)
+    require(done.returncode == 0, "systemd-creds could not seal %s to the TPM (exit %d)" % (name, done.returncode))
+    try:
+        kind = unlock.local_key_type(done.stdout.decode("ascii", "replace"))
+    except unlock.Refused:
+        kind = None
+    require(kind == "tpm2-with-public-key", "systemd-creds did not seal %s to the TPM and the initrd key (it does that "
+            "silently when it is not root): nothing was written" % name)
+    return done.stdout
+
+
+def _publish_esp(journal, step, directory, filename, data):
+    """`data` to directory/filename on the ESP, never replacing a file. The ESP is FAT: no link(2), so the
+    target's absence is checked and the temporary file renamed onto it (only root writes the ESP). Its digest
+    is journalled as PENDING before the rename and as the file's after it, so a resumed run accepts exactly
+    what this enrolment published, and refuses anything else there."""
+    facts = {k: v for k, v in journal.get(step).items() if k not in ("state", "at")}
+    target, tmp = os.path.join(directory, filename), os.path.join(os.path.dirname(directory), "." + filename + ".enrol-new")
+    if facts.get("tmp:" + filename) and os.path.lexists(tmp):
+        os.unlink(tmp)                   # this step's own temporary file, by the exact name it journalled
+    if os.path.lexists(target):
+        with open(target, "rb") as f:
+            held = hashlib.sha256(f.read(1 << 20)).hexdigest()
+        require(os.path.isfile(target) and not os.path.islink(target)
+                and held in (facts.get(filename), facts.get("pending:" + filename)),
+                "%s already exists and this enrolment did not write it. Enrolment does not replace a node's sealed "
+                "credentials (re-enrolment is replacement, #76); a leftover is removed by hand: rm %s" % (target, target))
+        facts[filename] = held
+    else:
+        facts["tmp:" + filename], facts["pending:" + filename] = os.path.basename(tmp), hashlib.sha256(data).hexdigest()
+        _journal_facts(journal, step, facts)          # the temporary name and the digest, before the file exists
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        require(not os.path.lexists(target), "%s appeared while it was being written" % target)
+        os.rename(tmp, target)
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+        facts[filename] = facts["pending:" + filename]
+    facts.pop("tmp:" + filename, None)
+    facts.pop("pending:" + filename, None)
+    _journal_facts(journal, step, facts)
+    return facts[filename]
+
+
+def _journal_facts(journal, step, facts):
+    """`facts` for a step still under way: written at once, the state kept "started"."""
+    journal.doc["steps"][step] = dict(facts, state="started", at=int(time.time()))
+    _atomic_json(journal.path, journal.doc)
+
+
+def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):
+    """Design step 4 of #190: regalia.unlock-local (the local contribution, made here) and regalia.wg-boot-key (the
+    WG-BOOT private key init made) sealed to this TPM and the initrd key (approved_image), on the ESP in
+    loader/credentials. Returns {file: {"sha256", "size"}} of the two sealed files as read back off the ESP: the
+    part of PCR 12 a peer cannot render from the manifest and the site (espcreds.record).
+
+    THE CLEAR COPIES. The WG-BOOT private key file is removed once its sealed copy is published (or, after a
+    crash between the two, on the next run). The local contribution (local.bin) stays until the peers' LUKS
+    paths are enrolled (step "paths", which removes it): they need it, and its sealed copy opens only in the
+    initrd. If local.bin is gone before then, the sealed copy could never be paired with a path, so it is made
+    again and resealed: this enrolment's unlock-local.cred (by its journalled digest) is replaced, and the
+    returned record changes with it (no stranding)."""
+    directory_esp = os.path.join(esp, "loader", "credentials")
+    local_path = os.path.join(directory, LOCAL_FILE)
+    unlock_file = SEALED[0][0] + espcreds.SUFFIX
+    if journal.state("local") == "done" and not os.path.lexists(local_path) and journal.state("paths") != "done":
+        # ORDER: a reseal changes PCR 12, so it is possible only before the enrolment record publishes the sealed
+        # files' digests to the peers (the record comes after "paths"; regalia-kms-d9 on #265)
+        require(journal.state("record") is None, "local.bin is gone after the enrolment record was written: resealing now would "
+                "change the PCR 12 the peers expect. This is a re-enrolment (#76)")
+        target = os.path.join(directory_esp, unlock_file)
+        facts = {k: v for k, v in journal.get("seal").items() if k not in ("state", "at")}
+        recorded = ((facts.get("files") or {}).get(unlock_file, {}).get("sha256") or facts.get(unlock_file)
+                    or facts.get("pending:" + unlock_file))     # published, then a crash before the digest moved
+        if os.path.lexists(target):
+            with open(target, "rb") as f:
+                require(recorded is not None and hashlib.sha256(f.read(1 << 20)).hexdigest() == recorded,
+                        "%s is not the one this enrolment sealed, and local.bin is gone: remove it by hand" % target)
+            os.unlink(target)
+        journal.doc["steps"].pop("local")
+        kept = {k: v for k, v in facts.items() if k != "files" and not k.endswith(unlock_file)}
+        kept.update({f: v["sha256"] for f, v in (facts.get("files") or {}).items() if f != unlock_file})
+        _journal_facts(journal, "seal", kept)    # sealed again below, from a new contribution
+    if journal.state("seal") == "done":
+        files = journal.get("seal")["files"]
+        for filename, fact in files.items():
+            path = os.path.join(directory_esp, filename)
+            with open(path, "rb") as f:
+                require(hashlib.sha256(f.read(1 << 20)).hexdigest() == fact["sha256"], "%s changed since this enrolment sealed it" % path)
+    else:
+        _ensure_trusted_dir(directory_esp)
+        if journal.state("seal") is None:
+            _journal_facts(journal, "seal", {})
+        boot_key = journal.get("wg_boot")["path"]
+        for name, source in SEALED:
+            filename = name + espcreds.SUFFIX
+            if os.path.lexists(os.path.join(directory_esp, filename)):
+                _publish_esp(journal, "seal", directory_esp, filename, None)    # ours (journalled) is kept; anything else refused
+                continue
+            if source == "local":
+                plain = local_contribution(journal, directory)
+            else:
+                with open(boot_key, "rb") as f:
+                    plain = f.read(4096)
+                require(WG_KEY.fullmatch(plain.decode("ascii", "replace").strip()), "%s does not hold a WireGuard key" % boot_key)
+            _publish_esp(journal, "seal", directory_esp, filename, _seal(name, plain, initrd_pub, run))
+        files = {}
+        for name, _ in SEALED:
+            filename = name + espcreds.SUFFIX
+            with open(os.path.join(directory_esp, filename), "rb") as f:
+                data = f.read(1 << 20)
+            files[filename] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+        journal.done("seal", files=files)
+    boot_key = journal.get("wg_boot").get("path")
+    if boot_key and os.path.lexists(boot_key):
+        os.unlink(boot_key)              # sealed and published: the clear copy goes
+    return files
+
+
+RENDERED_DIRS = ("loader/credentials/", "EFI/regalia/")   # where bootcreds.esp_files may write or remove, at any B3 stage
+
+
+def _rendered_path(path):
+    """`path` from esp_files, normalized and confined: under loader/credentials/ or EFI/regalia/ (FAT compares names
+    without case), never absolute, never climbing out."""
+    require(isinstance(path, str) and path and "\0" not in path, "bootcreds named %r" % (path,))
+    relative = os.path.normpath(path.lstrip("/"))
+    require(not os.path.isabs(relative) and relative != ".." and not relative.startswith("../")
+            and any((os.path.dirname(relative) + "/").lower() == d.lower() for d in RENDERED_DIRS),   # one level, no deeper
+            "bootcreds named %r, outside %s" % (path, " and ".join(RENDERED_DIRS)))
+    return relative
+
+
+def _replace_esp(directory, filename, data):
+    """A RENDERED file (public, re-derivable from the anchored chain) written over whatever is there: a temporary
+    file in the same directory, fsynced, renamed onto the name, the directory fsynced. The sealed files are never
+    replaced (_publish_esp); a rendered one must be, after every manifest change (regalia-kms-ed on #276)."""
+    target, tmp = os.path.join(directory, filename), os.path.join(directory, "." + filename + ".enrol-new")
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, target)
+    dfd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def render_credentials(journal, esp, site, chain, root_key, anchor, device=None):
+    """The ESP files rendered from the anchored chain and the site (bootcreds.esp_files, #271: the ONE call enrol and
+    the update path make; what it returns depends on #66's B3 stage, so its paths are taken as they come, confined
+    to RENDERED_DIRS). {path: bytes} is written, replacing what is there (public, re-derivable: a resumed enrolment
+    whose manifest moved on is not stranded); {path: None} is removed if present (the B3 switch retires files the
+    peers no longer expect). Each is journalled. Then the record of EVERY credential the stub will measure
+    (espcreds.record over loader/credentials as uki reads it): the PCR 12 the peers must expect, journalled as
+    "espcreds". A chain the TPM did not anchor is refused by esp_files before anything is written."""
+    from deploy.baremetal import bootcreds, uki
+    envelopes = chain if isinstance(chain, list) else [chain]
+    files = bootcreds.esp_files(site, envelopes, root_key, device or "/dev/disk/by-partlabel/regalia-root", anchor)
+    planned = sorted((_rendered_path(path), data) for path, data in files.items())
+    require(all(data is None or isinstance(data, bytes) for _, data in planned), "bootcreds gave something that is neither bytes nor None")
+    journal.started("render")
+    done = {}
+    for relative, data in planned:
+        directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
+        _ensure_trusted_dir(directory)
+        target = os.path.join(directory, filename)
+        if data is None:
+            removed = False
+            for name in (target, os.path.join(directory, "." + filename + ".enrol-new")):    # and a crash's leftover
+                if os.path.lexists(name):
+                    require(not os.path.islink(name) and os.path.isfile(name), "%s is not a regular file" % name)
+                    os.unlink(name)
+                    removed = True
+            if removed:                                 # durable: a retired credential must not come back after a power cut
+                dfd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            done[relative] = None
+        else:
+            _replace_esp(directory, filename, data)
+            done[relative] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    journal.done("render", files=done)
+    record = espcreds.record(uki.credential_files(esp))
+    journal.done("espcreds", **record)
+    return record
+
+
+def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
+           out=sys.stdout):
+    """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
+    from an earlier `check`), the boot image checked (approved_image), the configuration installed, the state
+    directory made regalia-sync's, the anchor, the store and the heartbeat counter set up AS regalia-sync, and the
+    two boot credentials sealed onto the ESP. `boot` = {"image", "record", "initrd_pub", "system_pub",
+    "secure_boot_cert", "esp"}; the CLI always gives it, and only tests of the earlier steps leave it out, which
+    stops after the anchors. The peers' paths and the enrolment record follow in later steps."""
+    journal = Journal(directory, _bundle(directory)["node_id"])
+    require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
+    identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
+    manifest = check_manifest(directory, chain, root_key, typed, document)
+    initrd_pub = None
+    if boot is not None:                                            # checked before anything is written
+        initrd_pub = approved_image(boot["image"], boot["record"], boot["initrd_pub"], boot["system_pub"],
+                                    boot["secure_boot_cert"], document, journal.doc["node_id"], run)
+    config = install_config(journal, journal.doc["node_id"], root_key, example, site, document, prefix)
+    _hand_over(prefix + config["state_dir"], as_sync is None)
+    journal.started("anchor")
+    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
+    require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
+            "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
+    journal.done("anchor", epoch=epoch, digest=digest)
+    print("ENROLLED (trust anchors): node %s, membership epoch %d (%s) anchored in the TPM and committed as %s"
+          % (journal.doc["node_id"], epoch, digest[:16], SYNC_USER), file=out)
+    if boot is not None:
+        files = seal_credentials(journal, directory, boot["esp"], initrd_pub, run)
+        print("SEALED to this TPM and the initrd key, on the ESP: %s" % ", ".join(
+            "%s (sha256 %s, %d bytes)" % (f, v["sha256"][:16], v["size"]) for f, v in sorted(files.items())), file=out)
+        from deploy.baremetal import node as node_module
+        anchor = node_module.Node(node_module.load(prefix + NODE_JSON), run).anchor()
+        record = render_credentials(journal, boot["esp"], site, chain, root_key, anchor)
+        print("RENDERED the boot credentials onto the ESP; PCR 12 the peers must expect: %s (from %s)" % (
+            record["pcr12"], ", ".join(c["file"] for c in record["credentials"])), file=out)
+        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled: run "
+              "`enrol paths` next; the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
+    return epoch, digest
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -546,7 +1054,53 @@ def main(argv=None):
     c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
     c.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
     c.add_argument("--enrol-dir", default=ENROL_DIR)
+    k = sub.add_parser("commit", help="enrol this host's trust anchors from the checked manifest chain")
+    k.add_argument("--manifest", required=True, help="the root-signed envelope, or the JSON list of envelopes from epoch 1")
+    k.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
+    k.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
+    k.add_argument("--site", required=True, help="this host's site configuration (with boot_mesh and service_mesh)")
+    k.add_argument("--example", default=os.path.join(PACKAGE_ROOT, "deploy", "baremetal", "node.example.json"),
+                   help="the node configuration this enrolment starts from (default: the shipped example)")
+    k.add_argument("--image", required=True, help="the signed boot image (UKI) on the ESP")
+    k.add_argument("--image-record", required=True, help="its signed record (uki.py sign)")
+    k.add_argument("--initrd-pub", required=True, help="the initrd-phase PCR key's public half: the sealed credentials are bound to it")
+    k.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half")
+    k.add_argument("--secure-boot-cert", required=True, help="the Secure Boot certificate the record names")
+    k.add_argument("--esp", required=True, help="the ESP's mount point: the sealed credentials go to ESP/loader/credentials")
+    k.add_argument("--enrol-dir", default=ENROL_DIR)
+    a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
+    a.add_argument("--config", required=True)
+    a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
+    if args.command == "_anchor":                    # run by commit, as regalia-sync
+        try:
+            chain = membership.load(sys.stdin.buffer.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
+            epoch, digest = anchor_and_store(args.config, chain)
+        except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        print("ANCHORED epoch %d digest %s" % (epoch, digest))
+        return 0
+    if args.command == "commit":
+        if os.geteuid() != 0:
+            print("REFUSED: enrolment runs as root, at the host's console", file=sys.stderr)
+            return 2
+        try:
+            with open(args.manifest, "rb") as f:
+                chain = membership.load(f.read())
+            loaded = {}
+            for name in ("measurements", "site", "example"):
+                with open(getattr(args, name)) as f:
+                    loaded[name] = json.load(f)
+            require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
+            typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
+            boot = {"image": args.image, "record": args.image_record, "initrd_pub": args.initrd_pub, "system_pub": args.system_pub,
+                    "secure_boot_cert": args.secure_boot_cert, "esp": args.esp}
+            commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "check":
         try:
             with open(args.manifest) as f:

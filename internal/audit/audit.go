@@ -95,23 +95,24 @@ type Draft struct {
 }
 
 type Event struct {
-	Sequence            uint64    `json:"sequence"`
-	Timestamp           time.Time `json:"timestamp"`
-	RequestID           string    `json:"request_id"`
-	Principal           string    `json:"principal"`
-	Decision            string    `json:"decision"`
-	ObjectID            string    `json:"object_id,omitempty"`
-	Purpose             string    `json:"purpose,omitempty"`
-	Operation           string    `json:"operation"`
-	DeviceID            string    `json:"device_id,omitempty"`
-	Outcome             string    `json:"outcome"`
-	LatencyMilliseconds int64     `json:"latency_ms"`
-	RegistryDigest      string    `json:"registry_digest"`
-	PolicyDigest        string    `json:"policy_digest"`
-	RBACDigest          string    `json:"rbac_digest"`
-	VerifiedApprovers   []string  `json:"verified_approvers,omitempty"`
-	PreviousHash        string    `json:"previous_hash"`
-	Hash                string    `json:"hash"`
+	Sequence            uint64          `json:"sequence"`
+	Timestamp           time.Time       `json:"timestamp"`
+	RequestID           string          `json:"request_id"`
+	Principal           string          `json:"principal"`
+	Decision            string          `json:"decision"`
+	ObjectID            string          `json:"object_id,omitempty"`
+	Purpose             string          `json:"purpose,omitempty"`
+	Operation           string          `json:"operation"`
+	DeviceID            string          `json:"device_id,omitempty"`
+	Outcome             string          `json:"outcome"`
+	LatencyMilliseconds int64           `json:"latency_ms"`
+	RegistryDigest      string          `json:"registry_digest"`
+	PolicyDigest        string          `json:"policy_digest"`
+	RBACDigest          string          `json:"rbac_digest"`
+	VerifiedApprovers   []string        `json:"verified_approvers,omitempty"`
+	Detail              json.RawMessage `json:"detail,omitempty"` // trail.go: what it carries and how it is bounded
+	PreviousHash        string          `json:"previous_hash"`
+	Hash                string          `json:"hash"`
 }
 
 type Sink interface {

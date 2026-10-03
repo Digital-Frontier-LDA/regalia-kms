@@ -188,3 +188,42 @@ func (sink *HTTPSink) Ready(ctx context.Context) bool {
 	}
 	return response.StatusCode == http.StatusNoContent
 }
+
+// ReportAlarm raises an alarm at the collector about this sink's own stream (its site), for
+// what the collector cannot see itself (handleReportedAlarm). Success is the 204 and nothing
+// less: an alarm that may not have landed is reported to the caller as not raised.
+func (sink *HTTPSink) ReportAlarm(ctx context.Context, sequence uint64, hash, reason string) error {
+	if sink == nil || sink.client == nil {
+		return ErrSinkUnavailable
+	}
+	body, err := json.Marshal(struct {
+		Sequence uint64 `json:"sequence"`
+		Hash     string `json:"hash"`
+		Reason   string `json:"reason"`
+	}{sequence, hash, reason})
+	if err != nil {
+		return ErrSinkUnavailable
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, sink.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, sink.baseURL+"/v1/alarms", bytes.NewReader(body))
+	if err != nil {
+		return ErrSinkUnavailable
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if sink.site != "" {
+		request.Header.Set("X-Regalia-Site", sink.site)
+	}
+	response, err := sink.client.Do(request)
+	if err != nil {
+		return ErrSinkUnavailable
+	}
+	if response.Body != nil {
+		defer response.Body.Close()
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	}
+	if response.StatusCode != http.StatusNoContent {
+		return ErrSinkUnavailable
+	}
+	return nil
+}

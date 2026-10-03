@@ -21,9 +21,12 @@ import sys
 # python3 -I, the script's own directory is not on sys.path, so it is added explicitly, last.
 sys.path.append(str(Path(__file__).resolve().parent))
 import recovery_state  # noqa: E402
+import trails  # noqa: E402
 
 CRYPTSETUP = '/usr/sbin/cryptsetup'
 LOCKDIR = Path('/run/lock')
+# The audit trail (#278): the registry's fixed path, root's. Tests point it elsewhere, as they do LOCKDIR.
+TRAIL = trails.where('recovery-reconcile')
 ENV = {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C'}
 KEY = re.compile(r'(?:[cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}')
 
@@ -274,11 +277,57 @@ def main():
                 if args.retire_slot: raise Refused('--retire-slot requires --keep-slot')
                 result = 0 if describe(header(args.device))['state'] == 'clean' else 1
             else:
-                kept = secret('Recovery key to KEEP, read from its card: ')
-                retired = [secret(f'Recovery key to RETIRE from slot {slot}: ') for slot in args.retire_slot]
-                reconcile(args.device, args.keep_slot, args.retire_slot, kept, retired)
-                kept = ''; retired.clear()
-                result = 0 if describe(header(args.device))['state'] == 'clean' else 1
+                # The custodian's choice is recorded before a card is asked for, and the run refuses if it
+                # cannot be (nothing is done unrecorded); then exactly one outcome: ALLOW, DENY (the header
+                # byte for byte as it was) or INCOMPLETE (it changed: repeat the same selection). Never a key.
+                before = header(args.device)
+                identity = recovery_state.device_id(args.device)
+                event = {'event': 'recovery-reconcile', 'device': str(args.device), 'device_id': identity, 'keep': args.keep_slot,
+                         'retire': list(args.retire_slot), 'state_before': describe(before)['header_state']}
+                try:
+                    # a run killed after its request left it unanswered: closed first, so every request on the
+                    # trail has exactly one outcome
+                    stale = trails.unanswered(TRAIL, event='recovery-reconcile', device_id=identity)   # whatever name it was given
+                    if stale is not None:
+                        trails.append(TRAIL, {'event': 'recovery-reconcile', 'device': str(args.device), 'device_id': identity, 'keep': stale.get('keep'),
+                                              'retire': stale.get('retire'), 'outcome': 'INCOMPLETE', 'request': stale['seq'],
+                                              'reason': 'the previous run was killed: no outcome was recorded',
+                                              'state_after': describe(before)['header_state']})
+                        print('the audit trail held an unanswered request (seq %d): it is closed as INCOMPLETE' % stale['seq'], file=sys.stderr)
+                    request = trails.append(TRAIL, dict(event, outcome='REQUESTED', reason=''))
+                except (trails.Refused, OSError) as error:
+                    raise Refused('the audit trail cannot be written, nothing was done: %s' % error)
+                # TERM and HUP raise, so the finally below records the outcome; from here a kill -9 is closed by the
+                # next run (above)
+                def stop(signum, frame):
+                    raise KeyboardInterrupt('signal %d' % signum)
+                for sig in (signal.SIGTERM, signal.SIGHUP):
+                    signal.signal(sig, stop)
+                outcome, reason = 'DENY', ''
+                try:
+                    kept = secret('Recovery key to KEEP, read from its card: ')
+                    retired = [secret(f'Recovery key to RETIRE from slot {slot}: ') for slot in args.retire_slot]
+                    reconcile(args.device, args.keep_slot, args.retire_slot, kept, retired)
+                    kept = ''; retired.clear()
+                    outcome = 'ALLOW'
+                except BaseException as error:
+                    reason = str(error)[:240] or type(error).__name__
+                    raise
+                finally:
+                    try:
+                        after = header(args.device)
+                        if outcome != 'ALLOW' and after != before:
+                            outcome = 'INCOMPLETE'
+                        state_after = describe(after)['header_state']
+                    except (Refused, OSError, subprocess.SubprocessError):
+                        state_after = 'unreadable'
+                        outcome = 'INCOMPLETE' if outcome != 'ALLOW' else outcome
+                    try:
+                        trails.append(TRAIL, dict(event, outcome=outcome, reason=reason, state_after=state_after, request=request))
+                    except (trails.Refused, OSError) as error:
+                        print('REFUSED: the outcome (%s) could not be written to the audit trail: %s' % (outcome, error), file=sys.stderr)
+                        outcome = 'UNRECORDED'
+                result = 0 if outcome == 'ALLOW' and describe(header(args.device))['state'] == 'clean' else 1
     except (Refused, OSError, subprocess.SubprocessError) as error:
         print(f'REFUSED: {error}', file=sys.stderr)
     finally:
