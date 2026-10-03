@@ -18,7 +18,7 @@ import (
 
 const (
 	tokenType   = "regalia-peer-unlock"
-	localName   = "regalia-unlock-local"
+	localName   = "regalia.unlock-local"
 	maxReported = 16 // unusable tokens named in the diagnostics
 )
 
