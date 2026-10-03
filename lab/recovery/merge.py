@@ -1,8 +1,8 @@
 """Merge the sharded matrix reports (#175) and check them as one run.
 
 Fails unless: every expected shard of every mode is present and passed, all shards of a mode agree
-on the level-1 total and the sync table (one script, one cryptsetup), and the level-1 scenarios they
-ran add up to that total exactly. Prints the merged summary.
+on the level-1 total, the full scenario list and the sync table (one script, one cryptsetup), and the
+scenarios they ran are disjoint and together exactly that list. Prints the merged summary.
 """
 import argparse
 import json
@@ -24,6 +24,14 @@ def merge(paths, shards, modes=('enrol', 'replace')):
         tables = {json.dumps(r.get('syncs', {}).get(mode), sort_keys=True) for r in mine}
         if len(totals) != 1: problems.append('%s: the shards disagree on the level-1 total: %s' % (mode, sorted(totals)))
         if len(tables) != 1: problems.append('%s: the shards disagree on the sync table' % mode)
+        # Which scenarios ran, not only how many (d9): disjoint per shard, and together the full list.
+        full = {json.dumps(r.get('first_level_all_ids', {}).get(mode)) for r in mine}
+        if len(full) != 1: problems.append('%s: the shards disagree on the full scenario list' % mode)
+        ran = [i for r in mine for i in r.get('first_level_ids', {}).get(mode, [])]
+        if len(ran) != len(set(ran)): problems.append('%s: a scenario ran in more than one shard' % mode)
+        expected_ids = set(json.loads(next(iter(full))) or []) if len(full) == 1 else set()
+        if set(ran) != expected_ids:
+            problems.append('%s: %d scenarios not run, %d run that are not in the list' % (mode, len(expected_ids - set(ran)), len(set(ran) - expected_ids)))
         executed = sum(r.get('first_level_executed', {}).get(mode, 0) for r in mine)
         total = next(iter(totals)) if totals else None
         if executed != total: problems.append('%s: level 1 ran %d of %s scenarios' % (mode, executed, total))

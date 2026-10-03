@@ -91,7 +91,9 @@ class ShardMerge(unittest.TestCase):
                 report = {'shard': '%d/3' % shard, 'status': 'passed', 'cryptsetup': 'cryptsetup 2.7.0', 'script_sha256': 'abc',
                           'first_level_total': {mode: 30}, 'first_level_executed': {mode: 10},
                           'second_level_executed': {mode: 4}, 'second_level_baselines': {mode: 1},
-                          'syncs': {mode: {'luksAddKey --batch-mode': [3]}}, 'finding_cases': 0}
+                          'syncs': {mode: {'luksAddKey --batch-mode': [3]}}, 'finding_cases': 0,
+                          'first_level_all_ids': {mode: ['%s-%d' % (mode, i) for i in range(30)]},
+                          'first_level_ids': {mode: ['%s-%d' % (mode, i) for i in range(30) if i % 3 == shard - 1]}}
                 report.update(changes.get((mode, shard), {}))
                 path = Path(temp) / ('%s-%d.json' % (mode, shard))
                 path.write_text(json.dumps(report))
@@ -111,6 +113,9 @@ class ShardMerge(unittest.TestCase):
             ('a shard with findings', {('replace', 1): {'status': 'completed-with-findings'}}, None),
             ('shards on different cryptsetup', {('enrol', 1): {'cryptsetup': 'cryptsetup 2.7.5'}}, None),
             ('a header-writing call with no sync counted', {('enrol', 1): {'syncs': {'enrol': {'token import': [0]}}}}, None),
+            # the counts add up, but one scenario ran twice and another never ran
+            ('a scenario swapped for a duplicate', {('enrol', 1): {'first_level_ids': {'enrol': ['enrol-0', 'enrol-3', 'enrol-6', 'enrol-9', 'enrol-12',
+                                                                                              'enrol-15', 'enrol-18', 'enrol-21', 'enrol-24', 'enrol-1']}}}, None),
         ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
                 paths = [p for p in self.reports(temp, changes) if p.name != drop]

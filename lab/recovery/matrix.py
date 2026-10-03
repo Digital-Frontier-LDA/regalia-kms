@@ -431,6 +431,11 @@ def build_fixture(executable, directory, script, values):
     return base, enrolled, work
 
 
+def scenario_id(scenario):
+    index, fault, primary, operation, sync = scenario
+    return '%d:%s:%d:%s:%d' % (index, fault, primary, operation, sync)
+
+
 def shard_of(items, shard):
     index, count = shard
     return [item for n, item in enumerate(items) if n % count == index - 1]
@@ -478,7 +483,13 @@ def run(script, output, mode='all', shard=(1, 1), reconciler=None):
                     raise ValueError('the successful %s run does not finish with the right key: %s' % (name, why or 'exit %s' % code))
                 report.setdefault('syncs',{})[name]=table
                 report['first_level_total'][name]=len(scenarios)
+                # Which scenarios, not only how many: merge.py checks that the shards' sets are
+                # disjoint and that their union is this full list.
+                ids=[scenario_id(s) for s in scenarios]
+                if len(set(ids)) != len(ids): raise ValueError('two %s scenarios share an id' % name)
+                report.setdefault('first_level_all_ids',{})[name]=ids
                 mine = shard_of(scenarios, shard)
+                report.setdefault('first_level_ids',{})[name]=[scenario_id(s) for s in mine]
                 with ThreadPoolExecutor(WORKERS) as pool:
                     for case in pool.map(lambda s: trial(ctx, baseline, s, 1), mine):
                         report['cases'].append(case)
