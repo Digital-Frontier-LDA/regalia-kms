@@ -925,6 +925,83 @@ def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):
     return files
 
 
+RENDERED_DIRS = ("loader/credentials/", "EFI/regalia/")   # where bootcreds.esp_files may write or remove, at any B3 stage
+
+
+def _rendered_path(path):
+    """`path` from esp_files, normalized and confined: under loader/credentials/ or EFI/regalia/ (FAT compares names
+    without case), never absolute, never climbing out."""
+    require(isinstance(path, str) and path and "\0" not in path, "bootcreds named %r" % (path,))
+    relative = os.path.normpath(path.lstrip("/"))
+    require(not os.path.isabs(relative) and relative != ".." and not relative.startswith("../")
+            and any((os.path.dirname(relative) + "/").lower() == d.lower() for d in RENDERED_DIRS),   # one level, no deeper
+            "bootcreds named %r, outside %s" % (path, " and ".join(RENDERED_DIRS)))
+    return relative
+
+
+def _replace_esp(directory, filename, data):
+    """A RENDERED file (public, re-derivable from the anchored chain) written over whatever is there: a temporary
+    file in the same directory, fsynced, renamed onto the name, the directory fsynced. The sealed files are never
+    replaced (_publish_esp); a rendered one must be, after every manifest change (regalia-kms-ed on #276)."""
+    target, tmp = os.path.join(directory, filename), os.path.join(directory, "." + filename + ".enrol-new")
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, target)
+    dfd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def render_credentials(journal, esp, site, chain, root_key, anchor, device=None):
+    """The ESP files rendered from the anchored chain and the site (bootcreds.esp_files, #271: the ONE call enrol and
+    the update path make; what it returns depends on #66's B3 stage, so its paths are taken as they come, confined
+    to RENDERED_DIRS). {path: bytes} is written, replacing what is there (public, re-derivable: a resumed enrolment
+    whose manifest moved on is not stranded); {path: None} is removed if present (the B3 switch retires files the
+    peers no longer expect). Each is journalled. Then the record of EVERY credential the stub will measure
+    (espcreds.record over loader/credentials as uki reads it): the PCR 12 the peers must expect, journalled as
+    "espcreds". A chain the TPM did not anchor is refused by esp_files before anything is written."""
+    from deploy.baremetal import bootcreds, uki
+    envelopes = chain if isinstance(chain, list) else [chain]
+    files = bootcreds.esp_files(site, envelopes, root_key, device or "/dev/disk/by-partlabel/regalia-root", anchor)
+    planned = sorted((_rendered_path(path), data) for path, data in files.items())
+    require(all(data is None or isinstance(data, bytes) for _, data in planned), "bootcreds gave something that is neither bytes nor None")
+    journal.started("render")
+    done = {}
+    for relative, data in planned:
+        directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
+        _ensure_trusted_dir(directory)
+        target = os.path.join(directory, filename)
+        if data is None:
+            removed = False
+            for name in (target, os.path.join(directory, "." + filename + ".enrol-new")):    # and a crash's leftover
+                if os.path.lexists(name):
+                    require(not os.path.islink(name) and os.path.isfile(name), "%s is not a regular file" % name)
+                    os.unlink(name)
+                    removed = True
+            if removed:                                 # durable: a retired credential must not come back after a power cut
+                dfd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            done[relative] = None
+        else:
+            _replace_esp(directory, filename, data)
+            done[relative] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    journal.done("render", files=done)
+    record = espcreds.record(uki.credential_files(esp))
+    journal.done("espcreds", **record)
+    return record
+
+
 def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
            out=sys.stdout):
     """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
@@ -954,8 +1031,13 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         files = seal_credentials(journal, directory, boot["esp"], initrd_pub, run)
         print("SEALED to this TPM and the initrd key, on the ESP: %s" % ", ".join(
             "%s (sha256 %s, %d bytes)" % (f, v["sha256"][:16], v["size"]) for f, v in sorted(files.items())), file=out)
-        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled (not built "
-              "yet, #190); the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
+        from deploy.baremetal import node as node_module
+        anchor = node_module.Node(node_module.load(prefix + NODE_JSON), run).anchor()
+        record = render_credentials(journal, boot["esp"], site, chain, root_key, anchor)
+        print("RENDERED the boot credentials onto the ESP; PCR 12 the peers must expect: %s (from %s)" % (
+            record["pcr12"], ", ".join(c["file"] for c in record["credentials"])), file=out)
+        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled: run "
+              "`enrol paths` next; the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
     return epoch, digest
 
 
