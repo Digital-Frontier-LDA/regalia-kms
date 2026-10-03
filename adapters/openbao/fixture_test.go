@@ -165,6 +165,9 @@ func newKMSFixtureMode(t *testing.T, versioned bool) *kmsFixture {
 	if versioned {
 		wrap.Algorithm, unwrap.Algorithm = "opaque", "opaque"
 		wrap.Operation, unwrap.Operation = "seal-envelope", "release-secret"
+		// Native seal blobs carry the payload directly rather than just a DEK.
+		// The purpose policy must admit its bounded encoded envelope on release.
+		wrap.MaxPayloadBytes, unwrap.MaxPayloadBytes = nativeMaxEnvelope, nativeMaxEnvelope
 	}
 	semantic, err := policy.New([]policy.Policy{wrap, unwrap}, state, time.Now)
 	if err != nil {
