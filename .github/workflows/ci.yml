@@ -521,16 +521,24 @@ jobs:
       - name: Install the root-tree builder
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
-      - name: Build the initrd twice from nothing (the second in a hostile environment, host apt configuration included); both must be identical
-        run: |
-          sudo REGALIA_GO="$(command -v go)" REGALIA_HOSTILE_APT=1 bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 2
-          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/repro"
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring zstd
+      - name: Build the initrd three times from nothing (the second in a hostile environment, host apt configuration included); all must be identical
+        run: sudo REGALIA_GO="$(command -v go)" REGALIA_HOSTILE_APT=1 bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 3
+      - name: Make the builds readable
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/repro" || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: initrd-${{ matrix.builder }}
           path: ${{ runner.temp }}/repro/build-1
           retention-days: 7
+      # on a difference, every build, to diff offline (#248: two builds once differed by 161 bytes with the same files)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: initrd-${{ matrix.builder }}-every-build
+          path: ${{ runner.temp }}/repro
+          retention-days: 14
 
   initrd-reproducible-debian:
     runs-on: ubuntu-latest
@@ -542,7 +550,7 @@ jobs:
       - name: Install what a Debian 13 builder has
         run: |
           apt-get update -qq
-          apt-get install -y -qq --no-install-recommends ca-certificates curl git gpgv mmdebstrap debian-archive-keyring python3 python3-cryptography cpio
+          apt-get install -y -qq --no-install-recommends ca-certificates curl git gpgv mmdebstrap debian-archive-keyring python3 python3-cryptography cpio zstd
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

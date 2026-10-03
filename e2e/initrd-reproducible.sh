@@ -52,8 +52,10 @@ for n in $(seq 2 "$BUILDS"); do
   if ! cmp -s "$OUT/build-1/initrd.img" "$OUT/build-$n/initrd.img"; then
     same=no
     echo "initrd-reproducible: build $n DIFFERS from build 1"
-    echo "--- listing lines that differ (path, type, mode, uid, gid, size, sha256, link):"
+    echo "--- listing lines that differ (path, type, mode, uid, gid, size, links, sha256, link target):"
     diff "$OUT/build-1/initrd-listing.txt" "$OUT/build-$n/initrd-listing.txt" | head -200 || true
+    echo "--- where the two archives differ (segments decompressed, cpio headers compared):"
+    python3 -Es e2e/lib/initrd-cpio-diff.py "$OUT/build-1/initrd.img" "$OUT/build-$n/initrd.img" || true
   fi
   if ! cmp -s "$OUT/build-1/initrd-build.json" "$OUT/build-$n/initrd-build.json"; then
     same=no

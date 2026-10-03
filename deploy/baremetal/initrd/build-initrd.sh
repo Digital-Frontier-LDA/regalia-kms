@@ -31,7 +31,7 @@
 #
 # OUT, written last and all together: DIR/initrd.img, DIR/regalia-unlock (the client it compiled, which
 # `uki.py build --unlock-client` takes), DIR/initrd-listing.txt (one line per entry: path,
-# type, mode, uid, gid, size, sha256, link) and DIR/initrd-build.json (regalia.initrd-build/v1: the inputs
+# type, mode, uid, gid, size, links, sha256, link target) and DIR/initrd-build.json (regalia.initrd-build/v1: the inputs
 # and the result, and verified_packages: every package file of the initrd checked against its .deb along
 # Debian's signed chain by deploy/baremetal/debverify.py, #246), the record moved in last; a refusal leaves DIR empty.
 # Measured on two runners and a Debian 13 container, in two directories and in a hostile environment
@@ -145,17 +145,26 @@ KVER="$(find "$ROOT/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -
 # and systemd mounts devtmpfs on /dev before anything else.
 inroot(){ chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C TZ=UTC HOME=/root SOURCE_DATE_EPOCH="$EPOCH" DRACUT_NO_MKNOD=1 "$@"; }
 echo "### dracut --reproducible, kernel $KVER, SOURCE_DATE_EPOCH=$EPOCH"
-inroot dracut --force --reproducible --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /tmp/initrd.img \
+# --nohardlink: dracut otherwise runs util-linux `hardlink` over its tree BEFORE it clamps the mtimes, and hardlink
+# links two identical files only when their mtimes are equal (measured, util-linux 2.41). Two identical files
+# written during the build then become one hard-linked entry or two, as their writes fall in one second or two:
+# the same files, another archive (#248, run 37145757537: 58682888 vs 58683049 bytes).
+inroot dracut --force --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /tmp/initrd.img \
   >"$W/dracut.log" 2>&1 || { tail -40 "$W/dracut.log"; die "dracut failed"; }
 cp "$ROOT/tmp/initrd.img" "$W/stage/initrd.img"
 
 mkdir "$ROOT/tmp/unpacked"
 inroot sh -c 'cd /tmp/unpacked && lsinitrd --unpack /tmp/initrd.img' >/dev/null 2>&1 || die "cannot unpack the initrd"
-# (no mtime: the unpacked copy carries the time it was unpacked; the archive's own times are covered by its sha256)
-(cd "$ROOT/tmp/unpacked" && find . -mindepth 1 -printf '%P\t%y\t%m\t%U\t%G\t%s\t%l\n' | sort | while IFS=$'\t' read -r p y m u g s l; do
+# (no mtime: the unpacked copy carries the time it was unpacked; the archive's own times are covered by its sha256.
+# The link count IS listed: cpio restores hard links, and a file stored once or twice is another archive, #248)
+(cd "$ROOT/tmp/unpacked" && find . -mindepth 1 -printf '%P\t%y\t%m\t%U\t%G\t%s\t%n\t%l\n' | sort | while IFS=$'\t' read -r p y m u g s n l; do
    h=""; [ "$y" = f ] && h="$(sha256sum < "$p" | cut -d' ' -f1)"
-   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$y" "$m" "$u" "$g" "$s" "$h" "$l"
+   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$y" "$m" "$u" "$g" "$s" "$n" "$h" "$l"
  done) > "$W/stage/initrd-listing.txt"
+# No hard-linked file: whether dracut links two identical files depended on the clock (#248), so a file with
+# more than one link means --nohardlink was dropped or a dracut update links some other way. Refused.
+linked="$(awk -F'\t' '$2 == "f" && $7 > 1 {print $1 " (" $7 " links)"}' "$W/stage/initrd-listing.txt" | head -5)"
+[ -z "$linked" ] || die "the initrd holds hard-linked files, which make the archive depend on the build's timing (#248): $(tr '\n' ' ' <<< "$linked")"
 inroot dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
 # #246: every file the initrd holds that a package owns, checked against that package's .deb along Debian's signed
 # chain (InRelease by the pinned keyring, Packages by its hash, the .deb by its hash), on this builder, by this

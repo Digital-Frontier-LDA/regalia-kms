@@ -246,6 +246,23 @@ class Verification(unittest.TestCase):
         self.assertNotEqual(self.secrets[0][1], self.secrets[1][1])
         self.assertEqual(len(self.secrets[1][1]), 32)
 
+    def test_the_ak_offered_must_be_the_one_the_manifest_names(self):
+        """#190: given the manifest's AK Name, the challenge refuses any other AK, before anything is wrapped or held."""
+        manifest_ak = attest.ak_identity(self.other_pub)[0].hex()
+        made = len(self.secrets)
+        with self.assertRaises(attest.Refused) as caught:
+            self.v.challenge("site-a", EK_PUB, self.ak_pub, replace=True, ak_name=manifest_ak)
+        self.assertIn("not the one the manifest names", str(caught.exception))
+        self.assertEqual(len(self.secrets), made, "no credential is made for an AK the manifest does not name")
+        for spelling in (manifest_ak.upper(), manifest_ak[:-2] + "\u00e9a", manifest_ak[:-2], None.__class__.__name__):
+            with self.assertRaises(attest.Refused) as caught:     # never a TypeError, never another spelling
+                self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=spelling)
+            self.assertIn("must be 68 lowercase hex", str(caught.exception))
+        self.assertEqual(len(self.secrets), made)
+        self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=manifest_ak)
+        self.assertEqual(self.secrets[-1][0], manifest_ak)
+        self.assertEqual(self.v.enroll("site-a", self.secrets[-1][1]).hex(), manifest_ak)
+
     def test_enrollment_refusals(self):
         def refused(reason, fn, *args, **kw):
             with self.assertRaises(attest.Refused) as caught:

@@ -25,6 +25,7 @@ SITE = {"schema": sitecfg.SCHEMA, "site": "site-a", "host_ipv4": "192.0.2.10", "
         "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
                      {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}],
         "boot_mesh": {"node_id": "a", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443,
+                      "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                       "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
                                 {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]},
         "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444,

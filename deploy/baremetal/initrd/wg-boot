@@ -3,7 +3,8 @@
 #
 # From the system credentials systemd passes to the unit ($CREDENTIALS_DIRECTORY), all per host and
 # written after each accepted manifest; the image holds none of them. regalia.boot-env:
-#   BOOT_NIC       the network interface, e.g. eno1
+#   BOOT_NIC_MAC   the network interface's MAC address, lower case, e.g. 52:54:00:12:34:56: an interface name
+#                  can differ between the installed system and the initrd, the card's address does not
 #   BOOT_ADDRESS   this node's declared address with its prefix, e.g. 198.51.100.4/24
 #   BOOT_GATEWAY   the gateway to the peers' declared addresses; empty or absent when they are on the link
 #   BOOT_TUNNEL    this node's address inside the tunnel, e.g. 10.89.0.1
@@ -30,11 +31,14 @@ C="${CREDENTIALS_DIRECTORY:-}"
 R="${RUNTIME_DIRECTORY:-}"
 fail() { echo "wg-boot: $*" >&2; exit 1; }
 nic_name() { case "$1" in ""|*[!A-Za-z0-9._-]*|????????????????*) return 1 ;; esac; }
+mac_form() { case "$1" in [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) return 0 ;; *) return 1 ;; esac; }
+# the interfaces whose address is $1, one per line (the kernel writes it lower case, colon-separated)
+nics_of() { for d in /sys/class/net/*; do [ -r "$d/address" ] && [ "$(cat "$d/address")" = "$1" ] && printf '%s\n' "${d##*/}"; done; return 0; }
 ENV="$C/regalia.boot-env" NFT="$C/regalia.boot-nft" CONF="$C/regalia.wg-boot-conf" KEY="$C/regalia.wg-boot-key"
 setting() { [ -n "$C" ] && [ -r "$ENV" ] && sed -n "s/^$1=\([A-Za-z0-9.:/_-]*\)\$/\1/p" "$ENV" | sed -n 1p; }
-BOOT_NIC="$(setting BOOT_NIC || true)"; BOOT_ADDRESS="$(setting BOOT_ADDRESS || true)"
+BOOT_NIC_MAC="$(setting BOOT_NIC_MAC || true)"; BOOT_NIC=""; BOOT_ADDRESS="$(setting BOOT_ADDRESS || true)"
 BOOT_GATEWAY="$(setting BOOT_GATEWAY || true)"; BOOT_TUNNEL="$(setting BOOT_TUNNEL || true)"
-if [ -z "$BOOT_NIC" ] && [ "${1:-}" = down ] && [ -n "$R" ] && [ -r "$R/boot-nic" ]; then BOOT_NIC="$(sed -n 1p "$R/boot-nic")"; fi
+if [ "${1:-}" = down ] && [ -n "$R" ] && [ -r "$R/boot-nic" ]; then BOOT_NIC="$(sed -n 1p "$R/boot-nic")"; fi
 down() {
   ip link del "$IF" 2>/dev/null || true
   if [ -n "$BOOT_NIC" ]; then
@@ -48,8 +52,7 @@ down() {
 case "${1:-}" in
   up)
     [ -n "$C" ] || fail "no credentials directory: run by regalia-wg-boot.service"
-    nic_name "$BOOT_NIC" || fail "regalia.boot-env: BOOT_NIC must name a network interface"
-    if [ -n "$R" ]; then printf '%s\n' "$BOOT_NIC" > "$R/boot-nic"; fi
+    mac_form "$BOOT_NIC_MAC" || fail "regalia.boot-env: BOOT_NIC_MAC must be a MAC address, lower case and colon-separated"
     if [ -z "$BOOT_ADDRESS" ] || [ -z "$BOOT_TUNNEL" ]; then fail "regalia.boot-env: BOOT_ADDRESS and BOOT_TUNNEL are needed"; fi
     [ -s "$NFT" ] || fail "the credential regalia.boot-nft is missing"
     [ -s "$CONF" ] || fail "the credential regalia.wg-boot-conf is missing"
@@ -58,10 +61,15 @@ case "${1:-}" in
     case "$key" in *[!A-Za-z0-9+/=]*) fail "the credential regalia.wg-boot-key is not a WireGuard key" ;; esac
     [ "${#key}" -eq 44 ] || fail "the credential regalia.wg-boot-key is not a WireGuard key"
     i=0
-    until ip link show "$BOOT_NIC" >/dev/null 2>&1; do      # the driver may still be loading
-      i=$((i + 1)); [ "$i" -le 150 ] || fail "no interface $BOOT_NIC after 30 s"
+    until [ -n "$(nics_of "$BOOT_NIC_MAC")" ]; do        # the driver may still be loading
+      i=$((i + 1)); [ "$i" -le 150 ] || fail "no interface has the address $BOOT_NIC_MAC after 30 s"
       sleep 0.2
     done
+    # exactly one: an address on two interfaces (a VLAN or a bond over the card) does not say which to use
+    BOOT_NIC="$(nics_of "$BOOT_NIC_MAC")"
+    [ "$(printf '%s\n' "$BOOT_NIC" | sed -n '$=')" = 1 ] || fail "more than one interface has the address $BOOT_NIC_MAC"
+    nic_name "$BOOT_NIC" || fail "the interface with the address $BOOT_NIC_MAC has a name this script will not use"
+    if [ -n "$R" ]; then printf '%s\n' "$BOOT_NIC" > "$R/boot-nic"; fi
     down                                  # whatever an earlier attempt of this boot left
     trap 'down' EXIT                      # and whatever this one leaves, unless it gets to the end
     # The ruleset is a credential from the ESP, which whoever holds the machine can write: it may hold one
@@ -73,6 +81,9 @@ case "${1:-}" in
     done < "$NFT"
     nft -f "$NFT" 2>/dev/null || fail "nft refused regalia.boot-nft"
     [ "$(nft list tables 2>/dev/null)" = "table inet regalia_boot" ] || fail "regalia.boot-nft made other tables than inet regalia_boot"
+    # once more, at the last moment: a bond or a VLAN made over the card since the first look (a driver still
+    # settling) would share its address, and the card would be taken from under it
+    [ "$(nics_of "$BOOT_NIC_MAC")" = "$BOOT_NIC" ] || fail "the interfaces with the address $BOOT_NIC_MAC changed as the mesh came up"
     ip link set "$BOOT_NIC" up
     ip addr add "$BOOT_ADDRESS" dev "$BOOT_NIC"
     if [ -n "${BOOT_GATEWAY:-}" ]; then ip route add default via "$BOOT_GATEWAY" dev "$BOOT_NIC"; else ip route add default dev "$BOOT_NIC"; fi

@@ -11,15 +11,15 @@
 # update changes it in a pull request whose diff is read: the "generated" lines first.
 #
 # Reviewed image: Debian 13 (trixie) from snapshot.debian.org 20261003T121500Z (main, updates, security), kernel 6.12.111+deb13-amd64, built by
-# deploy/baremetal/initrd/build-initrd.sh (#248: dracut --reproducible --no-hostonly --no-hostonly-cmdline --add
-# regalia-unlock, DRACUT_NO_MKNOD=1, so no dev/* nodes), the client compiled by it from this repository's
-# cmd/regalia-unlock (CGO_ENABLED=0, -trimpath, -buildvcs=false, the go.mod Go release). Initrd sha256
-# f36b7962b1a8de86c77e633f435bcad85fff5921772b404b4fdb92ebdcd4bea1, identical on every builder CI runs.
+# deploy/baremetal/initrd/build-initrd.sh (#248: dracut --reproducible --nohardlink --no-hostonly --no-hostonly-cmdline
+# --add regalia-unlock, DRACUT_NO_MKNOD=1, so no dev/* nodes and no hard links), the client compiled by it from this
+# repository's cmd/regalia-unlock (CGO_ENABLED=0, -trimpath, -buildvcs=false, the go.mod Go release). The initrd's
+# sha256 moves with the client's source; every builder CI runs gets the same one (initrd-reproducible).
 ours regalia-kms f 0644 0:0 etc/crypttab 2285d917152e2b7db793e7e7397e83586d3d735b9fdf7e1184485939ca1c0894
 ours regalia-kms l 0777 0:0 etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service /usr/lib/systemd/system/regalia-unlock-relay.service
 ours regalia-kms l 0777 0:0 etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket /usr/lib/systemd/system/regalia-unlock-core.socket
 ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled
-ours regalia-kms f 0755 0:0 usr/lib/regalia/wg-boot cdb3c06809245d4bf8492a6ec03ee3842e73540e8981e86fcd0e9af7c8acd075
+ours regalia-kms f 0755 0:0 usr/lib/regalia/wg-boot 73427ea38a3d34b1f8796811943a06a41ab62b9c97456650853cdb26cafa4386
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock-core.socket f8e474073cfe4c94958ef0057ad80036e35349f7d1c30e901c9f1a823e755c52
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock-relay.service 36892d783b6df368ba9f490a89bf64baf2544727bddd433f3d3e179541361374
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock.service 3314788318da98a45981524f266bb793d50041db24f9beaf1cefc5abe6b6f3f5
@@ -81,7 +81,7 @@ generated dracut-over:systemd=257.13-1~deb13u1 l 0777 0:0 usr/bin/loginctl true
 generated dracut f 0755 0:0 usr/lib/dracut-crypt-lib.sh d21702eb9dee0e3d748b72aaf0a02bff9a3da1675abaa3321d377c267a010eb9
 generated dracut f 0755 0:0 usr/lib/dracut-dev-lib.sh 948fa5cd4250f03df0fbaa6e3cab3f2bb82270df8d47f38a5b57399c299d7a60
 generated dracut f 0755 0:0 usr/lib/dracut-lib.sh b4736104e821e2e6c13ad21717d08467629c7accfa3b67cedd56385d5cc04f1f
-generated dracut f 0644 0:0 usr/lib/dracut/build-parameter.txt 098261a1e48aa9b7eb37e6cd3ebcde3ea6afbbd02d7728e4590890de8ba5909b
+generated dracut f 0644 0:0 usr/lib/dracut/build-parameter.txt f14bb2d18fff9509bb7ef40ec86beb43afc6926acd9635c29235c3fb503f0712
 generated dracut f 0644 0:0 usr/lib/dracut/dracut-106-6 2e446eac7298ea391cb3e0e10ce78c50fb99c1e370c23cabb4cdb9f60b5a7e98
 generated dracut l 0777 0:0 usr/lib/dracut/hooks ../../../var/lib/dracut/hooks
 generated dracut f 0644 0:0 usr/lib/dracut/modules.txt 9ab4d68fd9d9b6a7f5ed71f5be86eb63b9f39e57af264c531da2b5ab48e703e7
