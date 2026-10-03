@@ -13,8 +13,10 @@
 [Unit]
 Description=Regalia KMS: is time authenticated (chrony, NTS)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+# After=, never Wants=: chronyd that has exited (maxchange, #303) stays down until an operator starts it. A
+# Wants= here would start it again whenever this unit restarts, and a fresh chronyd steps to whatever two
+# sources agree on during its first updates.
 After=chrony.service
-Wants=chrony.service
 
 [Service]
 Type=simple

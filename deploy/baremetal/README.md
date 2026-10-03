@@ -211,7 +211,15 @@ Commissioning has two halves:
   `pool`, no `sourcedir` (the distribution's default takes servers from DHCP that way), no `refclock`;
   the clock stepped only during the first three updates, and after them chronyd **exits** on an offset
   over a second, `maxchange 1 3 0`, which only two sources agreeing on a jump can cause: it stays down,
-  time stops being authenticated and the node stops serving until an operator looks), and the firewall
+  time stops being authenticated and the node stops serving until an operator looks. NOTHING RESTARTS
+  IT: chrony's unit has no `Restart=`, and `regalia-authtime` is ordered `After=` chrony, never `Wants=`
+  it (a fresh chronyd steps during its first updates, so a restart would take the jumped time; the
+  systemd e2e kills chronyd, restarts `regalia-authtime` and checks chronyd stays down). The signal is the
+  node going unready (the KMS readiness alert) and chrony's journal line "Adjustment of … seconds exceeds
+  the allowed maximum"; the operator checks the declared servers against an independent clock before
+  `systemctl start chrony`. A reboot starts chronyd as an operator would, and so does nothing a node can
+  refuse: two declared servers that agree on a wrong time are believed at boot, which is why they must
+  belong to independent operators), and the firewall
   opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
   either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`
   (installed in `/etc/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`

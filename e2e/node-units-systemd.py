@@ -447,6 +447,20 @@ def scenario(work, binaries, user):
     reason = gone.get("reason", "") if isinstance(gone, dict) else ""
     ok(gone.get("authenticated") is False and reason and not reason.startswith(("chrony could not be asked", "the check failed")) if isinstance(gone, dict) else False,
        "one server stops: not authenticated, judged from chrony's answer (%s)" % reason[:70], gone)
+    # #303: chronyd that has exited (maxchange: two sources agreeing on a jump) must stay down until an operator
+    # starts it, because a fresh chronyd steps during its first updates and would take the jumped time. Nothing
+    # here may start it again: not its own unit (no Restart=), and not regalia-authtime (After=, never Wants=).
+    sh("systemctl", "kill", "-s", "KILL", "chrony.service", check=False)
+    down = until(lambda: show("chrony.service", "ActiveState")["ActiveState"] in ("failed", "inactive"), 20)
+    sh("systemctl", "restart", "regalia-authtime.service")
+    time.sleep(20)
+    still = show("chrony.service", "ActiveState")["ActiveState"]
+    refused = until(lambda: json.loads(status.read_text())["reason"].startswith("chrony could not be asked") and json.loads(status.read_text()), 60, 3)
+    ok(down and still in ("failed", "inactive") and isinstance(refused, dict) and refused["authenticated"] is False,
+       "chronyd that exited stays down when regalia-authtime restarts (%s), and time is not authenticated: %s"
+       % (still, refused.get("reason", "")[:50] if isinstance(refused, dict) else refused), refused)
+    sh("systemctl", "reset-failed", "chrony.service", check=False)
+    sh("systemctl", "start", "chrony.service")         # the operator, after looking
 
     header("2  provisioning, by hand (#190 is not built)")
     ok(epoch == "1", "the first manifest is committed under the TPM anchor, by regalia-sync's user through the tss group", epoch)

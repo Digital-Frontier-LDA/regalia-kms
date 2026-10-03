@@ -34,6 +34,12 @@ class ChronyDropIn(unittest.TestCase):
         self.assertTrue(enrol.CHRONY_CONF.startswith("/etc/chrony/") and enrol.CHRONY_CONF != "/etc/chrony/chrony.conf")
         self.assertIn("Conflicts=systemd-timesyncd.service", lines)
         self.assertFalse([line for line in lines if line.startswith("Restart")])     # an exit on maxchange stays down
+        # and nothing of ours starts it again: regalia-authtime orders itself after chrony, never Wants= or Requires= it
+        authtime_unit = unit("regalia-authtime.service")["Unit"]
+        self.assertIn("chrony.service", authtime_unit["After"])
+        self.assertFalse({"Wants", "Requires", "BindsTo", "Requisite", "Upholds"} & set(authtime_unit))
+        for name in UNITS.glob("*.service"):
+            self.assertNotRegex(name.read_text(), r"(?m)^(Wants|Requires|BindsTo|Upholds|OnFailure)=.*chrony", name.name)
 
 
 class Units(unittest.TestCase):
