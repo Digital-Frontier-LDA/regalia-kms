@@ -446,6 +446,68 @@ def check_manifest(directory, chain, root_key, typed, document):
     return manifest
 
 
+NODE_JSON = "/etc/regalia/node.json"
+
+
+def node_config(node_id, root_key, example):
+    """The node configuration enrolment writes: the shipped example (deploy/baremetal/node.example.json) with
+    this host's node ID and the root key whose fingerprint was typed. Checked by node.validate."""
+    from deploy.baremetal import node as node_module           # imported here: node imports most of the package
+    doc = dict(example, node_id=node_id, root_key=root_key)
+    node_module.validate(doc)
+    return doc
+
+
+def _install(journal, step, path, data, prefix=""):
+    """Write `data` to `path` (0644, root's, atomically), recording its SHA-256 in the journal. A file already
+    there is accepted only if it is byte-for-byte what this step would write (a resumed run); anything else is
+    refused and left, so enrolment never overwrites a node's configuration (re-enrolment is #76)."""
+    target = prefix + path
+    digest = hashlib.sha256(data).hexdigest()
+    if os.path.lexists(target):
+        require(os.path.isfile(target) and not os.path.islink(target), "%s exists and is not a regular file" % path)
+        with open(target, "rb") as f:
+            require(hashlib.sha256(f.read()).hexdigest() == digest, "%s already exists with other content. Enrolment does "
+                    "not overwrite a node's configuration (re-enrolment is replacement, #76); remove it by hand if it "
+                    "is a leftover: rm %s" % (path, path))
+        recorded = journal.get(step).get(path)
+        require(recorded in (None, digest), "%s changed since this enrolment wrote it" % path)
+    else:
+        directory = os.path.dirname(target)
+        os.makedirs(directory, mode=0o755, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".enrol-")
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+            os.fchmod(fd, 0o644)
+        finally:
+            os.close(fd)
+        os.rename(tmp, target)
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    facts = dict(journal.get(step), **{path: digest})
+    facts.pop("state", None)
+    facts.pop("at", None)
+    journal.done(step, **facts)
+    return digest
+
+
+def install_config(journal, node_id, root_key, example, site, document, prefix=""):
+    """Phase 2's configuration: node.json, the site configuration and the measurements document the manifest
+    commits to, each where node.json says, each refused if something else is already there."""
+    from deploy.baremetal import sitecfg
+    sitecfg.validate(site)
+    config = node_config(node_id, root_key, example)
+    pretty = lambda doc: (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()        # noqa: E731
+    _install(journal, "config", config["site"], pretty(site), prefix)
+    _install(journal, "config", config["measurements"], pretty(document), prefix)
+    _install(journal, "config", NODE_JSON, pretty(config), prefix)
+    return config
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
