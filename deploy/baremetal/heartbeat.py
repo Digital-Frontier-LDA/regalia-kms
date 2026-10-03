@@ -6,7 +6,7 @@ A newer manifest proves ordering, not that nothing restrictive happened since. A
 revocation authority would go on helping a node that was revoked an hour ago. So the authority signs a
 short-lived statement that a manifest is still the current one, and a peer without a live one refuses.
 
-    envelope  = {"heartbeat": {...}, "signature": {"key": "<hex Ed25519 public key>", "sig": "<hex signature>"}}
+    envelope  = {"heartbeat": {...}, "signature": {"key": "<hex revocation key, as the manifest names it>", "sig": "<hex signature>"}}
 
     heartbeat = {"schema": "regalia.heartbeat/v1", "epoch": <the manifest's epoch>, "sequence": <int >= 1>,
                  "issued_at": "YYYY-MM-DDTHH:MM:SSZ", "expires_at": "YYYY-MM-DDTHH:MM:SSZ",
@@ -64,8 +64,6 @@ import subprocess
 import tempfile
 import time
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from deploy.baremetal import membership
 
@@ -161,17 +159,18 @@ def signed(envelope, manifest):
     membership.exact(envelope, ("heartbeat", "signature"), "envelope")
     sig = envelope["signature"]
     membership.exact(sig, ("key", "sig"), "signature")
-    membership.hex_field(sig["key"], 64, "signature.key")
+    require(isinstance(sig["key"], str) and re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{130}", sig["key"]) is not None,
+            "signature.key must be 64 or 130 lowercase hex")
     membership.hex_field(sig["sig"], 128, "signature.sig")
     heartbeat = envelope["heartbeat"]
     issued, expires = validate(heartbeat)
     membership.validate(manifest)
-    require(sig["key"] in manifest["revocation_keys"], "the signing key is not a revocation key named by the current manifest")
+    alg = membership.revocation_alg(manifest, sig["key"])      # the manifest's entry says how, never the signature
+    require(alg is not None, "the signing key is not a revocation key named by the current manifest")
     try:
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(sig["key"])).verify(
-            bytes.fromhex(sig["sig"]), DOMAIN + membership.canonical(heartbeat))
-    except (InvalidSignature, ValueError):
-        raise Refused("the heartbeat signature does not verify")
+        membership.verify_revocation(alg, sig["key"], DOMAIN + membership.canonical(heartbeat), sig["sig"], "heartbeat")
+    except Refused:
+        raise Refused("the heartbeat signature does not verify") from None
     return heartbeat, issued, expires
 
 

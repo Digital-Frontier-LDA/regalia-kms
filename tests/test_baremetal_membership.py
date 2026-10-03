@@ -216,12 +216,12 @@ class SchemaV2(unittest.TestCase):
         self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three())), ROOT), ROOT_PUB)["schema"], m.SCHEMA_V2)
 
     def test_an_unknown_schema_is_refused(self):
-        for bad in ("regalia.membership/v3", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
+        for bad in ("regalia.membership/v4", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
             with self.subTest(schema=bad):
-                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, dict(self.next2(v2(three())), schema=bad))
+                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, dict(self.next2(v2(three())), schema=bad))
         missing = self.next2(v2(three()))
         del missing["schema"]
-        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2", self.m2, missing)
+        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, missing)
         with self.assertRaisesRegex(m.Refused, "manifest must be an object"):
             m.validate([missing])
 

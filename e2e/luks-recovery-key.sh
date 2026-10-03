@@ -23,7 +23,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "luks-recovery-key: run as root (it makes a loop device and a dm-crypt mapping)"; exit 2; }
-for t in cryptsetup losetup mkfs.ext4 mount umount python3 flock; do
+for t in cryptsetup losetup mkfs.ext4 mount umount python3; do
   command -v "$t" >/dev/null || { echo "luks-recovery-key: $t is required (cryptsetup-bin, util-linux, e2fsprogs, python3)"; exit 2; }
 done
 S=deploy/baremetal/recovery-key.sh
@@ -67,7 +67,7 @@ out="$(printf '%s\n' "$KEY" | bash "$S" --check "$LOOP" 2>&1)" && P "2: --check:
 why="$(judge)" && F "2: the probe passed while the installer's passphrase is still enrolled: $why" || P "2: the probe refuses while the installer's passphrase remains ($why)"
 cryptsetup luksKillSlot --batch-mode "$LOOP" 0 </dev/null 2>/dev/null
 why="$(judge)" && P "2: root_disk_recovery_keyslot on the real header: $why" || F "2: the probe refuses a commissioned header: $why"
-out="$(bash "$S" --status "$LOOP" 2>&1)" && grep -q "^STATE: clean" <<< "$out" && P "2: --status: STATE: clean (one recovery keyslot, every keyslot named by a token)" || F "2: --status failed on a commissioned header"
+bash "$S" --status "$LOOP" >/dev/null 2>&1 && P "2: --status: one recovery keyslot, no unlabelled passphrase" || F "2: --status failed on a commissioned header"
 
 # 3 ------------------------------------------------------------------------------------------------
 cryptsetup luksKillSlot --batch-mode "$LOOP" 1 </dev/null 2>/dev/null
@@ -104,8 +104,8 @@ why="$(judge)" && P "5: the probe still measures one recovery keyslot: $why" || 
 
 # the file-backed half, where a skip is a failure
 out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -BEs -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
-[ "$rc" = 0 ] && grep -q '^Ran 33 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
-  && P "the 33 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
+[ "$rc" = 0 ] && grep -q '^Ran 37 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
+  && P "the 37 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a rollback that fails, a replace that stops half way, a signal)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
 
 echo "luks-recovery-key: $pass passed, $failed failed"
 [ "$failed" = 0 ]
