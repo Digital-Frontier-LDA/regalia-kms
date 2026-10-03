@@ -111,17 +111,21 @@ if grep -q 'systemd-debug-generator' "$W/lsinitrd.txt"; then echo "unlock-boot-q
 # every unit in the finished image that takes credentials by name has its reset, and systemd-cryptsetup's too
 mkdir "$ROOT/tmp/ird"
 chroot "$ROOT" sh -c 'cd /tmp/ird && lsinitrd --unpack /boot/initrd.e2e' >/dev/null 2>&1 || { echo "unlock-boot-qemu: cannot unpack the initrd"; exit 2; }
-uncovered=""
+uncovered=""; taking=""
+[ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-journald.service" ] || { echo "unlock-boot-qemu: the unpacked initrd has no systemd units"; exit 2; }
 for unit in "$ROOT"/tmp/ird/usr/lib/systemd/system/*.service; do
   name="${unit##*/}"; case "$name" in regalia-*) continue ;; esac
   # the unit with all its drop-ins, as systemd reads it; the reset must be there and must sort last
-  cat "$unit" "$unit.d/"*.conf 2>/dev/null | grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=[^[:space:]]' || continue
+  grep -qsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=[^[:space:]]' "$unit" "$unit.d/"*.conf || continue
+  taking="$taking $name"
   last="$(ls "$unit.d/"*.conf 2>/dev/null | sort | tail -1)"
   [ "${last##*/}" = 99-regalia-no-credentials.conf ] || uncovered="$uncovered $name"
 done
 [ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-cryptsetup@.service.d/99-regalia-no-credentials.conf" ] || uncovered="$uncovered systemd-cryptsetup@.service"
 [ -z "$uncovered" ] || { echo "unlock-boot-qemu: units in the image that take credentials by name, with no reset:$uncovered"; exit 2; }
-echo "units with a credential reset: $(find "$ROOT/tmp/ird/usr/lib/systemd/system" -name 99-regalia-no-credentials.conf | wc -l)"
+# not vacuous: journald takes credentials in every systemd 257 initrd, and it was found and reset
+case " $taking " in *" systemd-journald.service "*) ;; *) echo "unlock-boot-qemu: the check found no credential-taking unit (journald):$taking"; exit 2 ;; esac
+echo "units that take credentials, each reset last:$taking systemd-cryptsetup@.service"
 rm -rf "$ROOT/tmp/ird"
 chroot "$ROOT" lsinitrd -f etc/crypttab /boot/initrd.e2e | grep -v '^#' > "$W/crypttab.txt"
 cmp -s "$W/crypttab.txt" <(grep -v '^#' deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab) \

@@ -931,7 +931,8 @@ class Units(unittest.TestCase):
         self.assertIn('rm -f -- "${initdir:?}${systemdutildir:?}/system-generators/systemd-debug-generator"', install)
         # every unit in the image that takes credentials by name, found (not listed), and systemd-cryptsetup's
         self.assertIn('for unit in "${initdir:?}${systemdsystemunitdir:?}"/*.service systemd-cryptsetup@.service; do', install)
-        self.assertIn("grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)='", install)
+        self.assertIn("grep -qsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)='", install)
+        self.assertNotIn("| grep", install)                          # no pipe: under pipefail a missing drop-in dir would fail it
         self.assertIn("printf '[Service]\\nImportCredential=\\nLoadCredential=\\nLoadCredentialEncrypted=\\n'", install)
         with open(os.path.join(here, "dracut/90regalia-unlock/crypttab")) as f:
             lines = [l.split() for l in f if l.strip() and not l.startswith("#")]

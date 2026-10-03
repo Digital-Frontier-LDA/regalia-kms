@@ -95,9 +95,11 @@ install() {
         unit="${unit##*/}"
         case "$unit" in regalia-*) continue ;; esac
         # (the unit file and its vendor drop-ins; the reset is named to sort last, so it wins over them)
+        # (grep over the files themselves, not a pipe: under pipefail a missing drop-in directory would fail
+        # the pipe even on a match; -q exits 0 on a match whatever else it could not read)
         if [ "$unit" != systemd-cryptsetup@.service ] \
-            && ! cat "${initdir:?}${systemdsystemunitdir:?}/$unit" "${initdir:?}${systemdsystemunitdir:?}/$unit.d/"*.conf 2>/dev/null \
-            | grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)='; then
+            && ! grep -qsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=' \
+                "${initdir:?}${systemdsystemunitdir:?}/$unit" "${initdir:?}${systemdsystemunitdir:?}/$unit.d/"*.conf; then
             continue
         fi
         mkdir -p "${initdir:?}${systemdsystemunitdir:?}/$unit.d"
