@@ -77,7 +77,7 @@ EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [ -n "$OUT" ] || die "--out DIR is required"
 [ -n "$ROOT_KEY" ] && [ -f "$ROOT_KEY" ] && [ -r "$ROOT_KEY" ] || die "--root-key FILE is required: the membership root the initrd trusts (#156)"
 # the root, as the client will read it (membership.LoadRoot): well-formed, and canonical as given
-PYTHONPATH="$HERE" python3 -Ps - "$ROOT_KEY" <<'PY' || die "--root-key $ROOT_KEY is not a membership root in canonical form"
+env -i PATH="$PATH" LC_ALL=C TZ=UTC PYTHONPATH="$HERE" python3 -Ps - "$ROOT_KEY" <<'PY' || die "--root-key $ROOT_KEY is not a membership root in canonical form"
 import sys
 from deploy.baremetal import membership
 raw = open(sys.argv[1], "rb").read(65537)
