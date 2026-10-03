@@ -80,5 +80,37 @@ class OnKernelResourceManager(unittest.TestCase):
             self.assertIn(ak.hex(), f.read(), "the AK was not enrolled")
 
 
+    def test_the_test_would_see_a_resource_manager_that_drops_the_session(self):
+        """A negative control: the same activation, with the session flushed between policysecret and
+        activatecredential (what a resource manager that dropped a closed connection's session would do),
+        must FAIL. Otherwise the test above could not tell such a manager from this one."""
+        os.environ["TPM2TOOLS_TCTI"] = "device:" + self.rm
+        self.addCleanup(os.environ.pop, "TPM2TOOLS_TCTI", None)
+        node = self.d + "/node"
+        os.mkdir(node)
+        attest.node_init(node)
+        with open(node + "/ek.pub", "rb") as f:
+            ek = f.read()
+        with open(node + "/ak.pub", "rb") as f:
+            ak = f.read()
+        policy = {"schema": attest.POLICY_SCHEMA, "nodes": {"a": {
+            "tpm_firmware_version": "00" * 8, "pcrs": {"7": "00" * 32},
+            "ek_name": attest.name_of(attest.public_area(ek, "the EK")).hex()}}}
+        verifier = attest.Verifier(policy, self.d + "/attest.json")
+        with open(self.d + "/cred", "wb") as f:
+            f.write(verifier.challenge("a", ek, ak))
+        flushed = []
+
+        def dropping(argv, *args, **kwargs):
+            if argv and argv[0] == "tpm2_activatecredential":
+                session = argv[argv.index("-P") + 1].split(":", 1)[1]
+                flushed.append(subprocess.run(["tpm2_flushcontext", session], capture_output=True).returncode)
+            return subprocess.run(argv, *args, **kwargs)
+        with self.assertRaises(attest.Refused):
+            attest.node_activate(self.d + "/cred", self.d + "/secret", run=dropping)
+        self.assertEqual(flushed, [0], "the control did not flush the session")
+        self.assertFalse(os.path.exists(self.d + "/secret"))
+
+
 if __name__ == "__main__":
     unittest.main()
