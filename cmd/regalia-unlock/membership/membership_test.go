@@ -10,6 +10,29 @@ import (
 
 // envelopeOf assembles an envelope the vector stores in parts: its signature's public key beside it, as
 // "signature_public" (a public key written as "key" reads as a credential to the secret scanner).
+// restoreTyped undoes the vector's composition: every "public" field is "key" again, as the Python signed
+// it (make-membership-v1.py, compose).
+func restoreTyped(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for k, x := range v {
+			if k == "public" {
+				k = "key"
+			}
+			out[k] = restoreTyped(x)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, x := range v {
+			out[i] = restoreTyped(x)
+		}
+		return out
+	}
+	return value
+}
+
 func envelopeOf(value any) any {
 	stored := value.(map[string]any)
 	document := stored["document"]
@@ -32,6 +55,7 @@ func TestEveryRecordedDecisionIsTheSame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	document = restoreTyped(document)
 	calls := document.(map[string]any)["calls"].([]any)
 	if len(calls) < 100 {
 		t.Fatalf("only %d recorded calls", len(calls))
@@ -40,7 +64,7 @@ func TestEveryRecordedDecisionIsTheSame(t *testing.T) {
 	for i, value := range calls {
 		call := value.(map[string]any)
 		current, _ := call["current"].(map[string]any)
-		got, err := Accept(current, envelopeOf(call["envelope"]), call["root_public"].(string))
+		got, err := Accept(current, envelopeOf(call["envelope"]), call["root_public"])
 		if want, ok := call["accepted"].(string); ok {
 			accepted++
 			if err != nil || Digest(got) != want {
@@ -58,6 +82,40 @@ func TestEveryRecordedDecisionIsTheSame(t *testing.T) {
 	t.Logf("%d accepted and %d refused, as the Python decided", accepted, refused)
 }
 
+// verify_envelope as the tests call it, typed keys included (#156, #199): the same manifest and signer, or a
+// refusal.
+func TestEveryRecordedEnvelopeIsVerifiedAlike(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "vectors", "membership-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := load(raw, 64<<20, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document = restoreTyped(document)
+	records := document.(map[string]any)["verified"].([]any)
+	typedSeen := 0
+	for i, value := range records {
+		record := value.(map[string]any)
+		current, _ := record["current"].(map[string]any)
+		if _, bare := record["root_public"].(string); !bare {
+			typedSeen++
+		}
+		manifest, signer, err := VerifyEnvelope(envelopeOf(record["envelope"]), record["root_public"], current)
+		if want, ok := record["verified"].(string); ok {
+			if err != nil || Digest(manifest) != want || signer != record["signer"] {
+				t.Errorf("verification %d: Python %s by %s; Go: %v", i, want[:12], record["signer"], err)
+			}
+		} else if _, ok := err.(*Refused); !ok {
+			t.Errorf("verification %d: Python refused (%s); Go: %v", i, record["refused"], err)
+		}
+	}
+	if len(records) < 100 || typedSeen < 5 {
+		t.Fatalf("%d recorded verifications, %d under a typed root", len(records), typedSeen)
+	}
+}
+
 // The crafted cases: one change to a valid manifest, signed again, so only the rule in question refuses it.
 // And documents as bytes: what the reader itself refuses, and the canonical form of one it takes.
 func TestEveryCraftedCaseAndDocumentIsDecidedAlike(t *testing.T) {
@@ -66,12 +124,13 @@ func TestEveryCraftedCaseAndDocumentIsDecidedAlike(t *testing.T) {
 		t.Fatal(err)
 	}
 	document, _ := load(raw, 64<<20, true)
+	document = restoreTyped(document)
 	crafted := document.(map[string]any)["crafted"].([]any)
 	for _, value := range crafted {
 		c := value.(map[string]any)
 		current, _ := c["current"].(map[string]any)
 		envelope := envelopeOf(c["envelope"])
-		_, err := Accept(current, envelope, c["root_public"].(string))
+		_, err := Accept(current, envelope, c["root_public"])
 		if _, accepted := c["accepted"]; accepted != (err == nil) {
 			t.Errorf("%s: Python %v, Go %v", c["name"], c["accepted"] != nil, err)
 		}
@@ -104,6 +163,7 @@ func TestAnInvalidCurrentManifestIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	document, _ := load(raw, 64<<20, true)
+	document = restoreTyped(document)
 	var next map[string]any
 	for _, value := range document.(map[string]any)["crafted"].([]any) {
 		if c := value.(map[string]any); c["name"] == "the next epoch" {
@@ -114,7 +174,7 @@ func TestAnInvalidCurrentManifestIsRefused(t *testing.T) {
 		t.Fatal("no crafted case named \"the next epoch\"")
 	}
 	current := next["current"].(map[string]any)
-	if _, err := Accept(current, envelopeOf(next["envelope"]), next["root_public"].(string)); err != nil {
+	if _, err := Accept(current, envelopeOf(next["envelope"]), next["root_public"]); err != nil {
 		t.Fatalf("the unchanged case is refused: %v", err)
 	}
 	for name, change := range map[string]func(map[string]any){
@@ -135,7 +195,7 @@ func TestAnInvalidCurrentManifestIsRefused(t *testing.T) {
 					t.Errorf("%s: panicked: %v", name, r)
 				}
 			}()
-			_, err := Accept(broken, envelopeOf(next["envelope"]), next["root_public"].(string))
+			_, err := Accept(broken, envelopeOf(next["envelope"]), next["root_public"])
 			if refused, ok := err.(*Refused); !ok || !strings.Contains(refused.Reason, "the current manifest is not valid") {
 				t.Errorf("%s: %v, not a refusal of the current manifest", name, err)
 			}
