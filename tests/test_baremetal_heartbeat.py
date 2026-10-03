@@ -106,6 +106,42 @@ class FakeTpm:
         return no
 
 
+def hbt_killing(after):
+    """A FakeTpm whose `after`-th counter increment, once armed, kills the caller (raises)."""
+    tpm = FakeTpm()
+    tpm.armed, tpm.count = False, 0
+    real = tpm.__call__
+
+    class Killing(FakeTpm):
+        pass
+
+    def call(argv, input=None, **kw):
+        if tpm.armed and argv[0] == "tpm2_nvincrement":
+            tpm.count += 1
+            if tpm.count == after:
+                raise OSError("killed at increment %d" % after)
+        return real(argv, input=input, **kw)
+    tpm.call = call
+    return _Callable(tpm)
+
+
+class _Callable:
+    def __init__(self, tpm):
+        self.tpm = tpm
+
+    def __call__(self, argv, input=None, **kw):
+        return self.tpm.call(argv, input=input, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self.tpm, name)
+
+    def __setattr__(self, name, value):
+        if name == "tpm":
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.tpm, name, value)
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
@@ -386,6 +422,56 @@ class Sequence(Case):
         self.f.accept(beat(self.m1, 1 + allowed, issued=skew), self.m1)
         self.assertEqual(self.counter.value(), 1 + allowed)
 
+    def test_a_node_killed_at_any_increment_of_a_catch_up_is_not_stranded(self):
+        """#199 (regalia-kms-51, decided by regalia-kms-24): the long advance is killed at EVERY increment; the
+        node must finish on the same heartbeat (check), or on the next one (accept)."""
+        days, interval = 12, 900
+        target = 1 + days * 86400 // interval                       # 1153: more than MAX_JUMP away
+        for kill in range(1, target):
+            for finish in ("check", "next"):
+                with self.subTest(kill=kill, finish=finish):
+                    tpm = hbt_killing(kill)
+                    counter = hb.Counter("0x1500018", lock_path=self.d + "/k.lock", run=tpm)
+                    counter.define()
+                    state = os.path.join(self.d, "k-%d-%s.json" % (kill, finish))
+                    clock = {"now": T0 + 60, "ticks": 5000}
+                    fresh = hb.Freshness(counter, lambda: (clock["now"], True), lambda: clock["ticks"], state)
+                    fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+                    clock["now"] += days * 86400
+                    clock["ticks"] += days * 86400 * 1000
+                    tpm.armed = True
+                    with self.assertRaises(OSError):
+                        fresh.accept(beat(self.m1, target, issued=T0 + days * 86400), self.m1)
+                    tpm.armed = False
+                    self.assertLess(counter.value(), target)
+                    if finish == "check":
+                        self.assertGreater(fresh.check(self.m1), 0)
+                        self.assertEqual(counter.value(), target)
+                    else:
+                        clock["now"] += interval
+                        clock["ticks"] += interval * 1000
+                        fresh.accept(beat(self.m1, target + 1, issued=T0 + days * 86400 + interval), self.m1)
+                        self.assertEqual(counter.value(), target + 1)
+                    os.unlink(state)
+
+    def test_an_issue_time_before_the_held_one_buys_nothing(self):
+        held = beat(self.m1, 1, issued=T0 + 86400)
+        self.assertEqual(hb.allowed_jump(beat(self.m1, 2, issued=T0)["heartbeat"], held, 1000), 1000)
+
+    def test_the_allowance_is_capped_however_long_the_node_was_away(self):
+        held = beat(self.m1, 1, issued=T0)
+        self.assertEqual(hb.allowed_jump(beat(self.m1, 2, issued=T0 + 10 * 366 * 86400)["heartbeat"], held, 1000), hb.MAX_ALLOWANCE)
+        self.refused("exceeds the bound", self.counter.advance, hb.MAX_ALLOWANCE + 2, hb.MAX_ALLOWANCE)
+
+    def test_a_state_written_before_the_allowance_is_still_read(self):
+        self.f.accept(beat(self.m1, 1), self.m1)
+        with open(self.state) as f:
+            state = json.load(f)
+        del state["allowance"]
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        self.assertGreater(self.f.check(self.m1), 0)
+
     def test_without_the_held_heartbeat_the_bound_is_the_fixed_one(self):
         self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
         os.unlink(self.state)                              # the state is lost; the TPM counter is not
@@ -478,11 +564,13 @@ class State(Case):
         self.f.accept(beat(self.m1, 1), self.m1)
         with open(self.state) as f:
             good = json.load(f)
-        self.assertEqual(sorted(good), ["envelope", "floor"])
+        self.assertEqual(sorted(good), ["allowance", "envelope", "floor"])
         self.assertEqual(os.stat(self.state).st_mode & 0o777, 0o600)
         for label, reason, doc in (("unknown field", "freshness state fields mismatch", dict(good, extra=1)),
                                    ("floor field", "floor fields mismatch", dict(good, floor={"time": 1})),
                                    ("negative floor", "floor must be integers", dict(good, floor={"time": -1, "tpm_clock": 0})),
+                                   ("allowance too large", "allowance is out of range", dict(good, allowance=hb.MAX_ALLOWANCE + 1)),
+                                   ("allowance zero", "allowance is out of range", dict(good, allowance=0)),
                                    ("float floor", "floats are not allowed", None)):
             with self.subTest(label):
                 with open(self.state, "w") as f:

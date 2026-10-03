@@ -2,8 +2,10 @@
 # authorizing, and publishes them with the membership chain on its service-tunnel address. It runs on the
 # authority host, not on a KMS node. Its own user, no capability; the TPM (the chain's anchor and the
 # heartbeat sequence counter) through the tss group; the revocation key in its state directory, 0600.
-# Revocations are requested with `authority revoke`, as root on this host (revoke_requesters: local-root):
-# nothing here takes one from the network. Its tunnel is made by `authority wg-apply` (root, CAP_NET_ADMIN).
+# Revocations are requested with `authority revoke`, as root on this host (revoke_requesters: local-root),
+# which asks THIS service over its control socket (RuntimeDirectory, 0600, root peers only by SO_PEERCRED):
+# one process signs. Nothing takes a revocation from the network. Its tunnel is made by
+# `authority wg-apply` (root, CAP_NET_ADMIN).
 [Unit]
 Description=Regalia KMS: revocation authority (heartbeats and revocations)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
@@ -27,6 +29,9 @@ ProtectSystem=strict
 StateDirectory=regalia-authority
 # 0700: the directory holds the revocation key (0600) and the store; the heartbeat is served over the tunnel
 StateDirectoryMode=0700
+# the control socket (control_socket: /run/regalia-authority/control.sock)
+RuntimeDirectory=regalia-authority
+RuntimeDirectoryMode=0700
 ProtectHome=yes
 PrivateTmp=yes
 DevicePolicy=closed

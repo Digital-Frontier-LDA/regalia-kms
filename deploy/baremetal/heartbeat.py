@@ -88,6 +88,8 @@ MAX_BYTES = 16 * 1024
 # catches up (the counter steps what it would have stepped online), while a sequence that runs faster
 # than real time is still an anomaly. Decided on #199.
 MIN_INTERVAL_S = 600
+# The largest allowance ever used, however long a node was away: a year of MIN_INTERVAL_S steps.
+MAX_ALLOWANCE = 1000 + math.ceil(366 * 86400 / MIN_INTERVAL_S)
 
 
 def parse_time(text, label):
@@ -123,7 +125,19 @@ def allowed_jump(heartbeat, held, base):
     except (Refused, KeyError, TypeError):
         return base
     issued = parse_time(heartbeat["issued_at"], "issued_at")
-    return base + math.ceil((issued - before) / MIN_INTERVAL_S) if issued > before else base
+    return min(base + math.ceil((issued - before) / MIN_INTERVAL_S), MAX_ALLOWANCE) if issued > before else base
+
+
+def pending(state, held, base):
+    """How far the counter is still owed toward the held heartbeat (0 when it is not above the counter),
+    never more than the allowance that heartbeat was accepted under (`base` for a state that has none):
+    a planted state widens nothing past what a real acceptance could have."""
+    envelope = state.get("envelope")
+    try:
+        gap = envelope["heartbeat"]["sequence"] - held
+    except (KeyError, TypeError):
+        return 0
+    return max(0, min(gap, state.get("allowance") or base)) if isinstance(gap, int) else 0
 
 
 def validate(heartbeat):
@@ -252,11 +266,16 @@ class Freshness:
             with open(self.state_path, "rb") as f:
                 raw = f.read(MAX_BYTES + 1)
         except FileNotFoundError:
-            return {"envelope": None, "floor": None}
+            return {"envelope": None, "floor": None, "allowance": None}
         require(len(raw) <= MAX_BYTES, "the freshness state is oversized")
         state = membership.load(raw)
-        membership.exact(state, ("envelope", "floor"), "freshness state")
+        # "allowance" (the bound the held heartbeat was accepted under) was added for #199; a state written
+        # before it has none, and is read as the fixed bound
+        state.setdefault("allowance", None)
+        membership.exact(state, ("envelope", "floor", "allowance"), "freshness state")
         validate_floor(state["floor"])
+        require(state["allowance"] is None or (isinstance(state["allowance"], int) and not isinstance(state["allowance"], bool)
+                                                and 1 <= state["allowance"] <= MAX_ALLOWANCE), "the stored allowance is out of range")
         return state
 
     def _write(self, state):
@@ -305,13 +324,17 @@ class Freshness:
         now = self._now(state)
         left = self._live(heartbeat, now)
         held = self.counter.value()
-        allowance = allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP)
+        # An advance a crash interrupted (the held heartbeat is above the counter) is still owed: its gap is
+        # added to this heartbeat's allowance, at most the allowance it was accepted under, so a node that
+        # stopped at ANY increment of a long catch-up is not stranded by the counter it left behind.
+        owed = pending(state, held, self.counter.MAX_JUMP)
+        allowance = allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP) + owed
         require(heartbeat["sequence"] > held, "REPLAY: sequence %d is not above the TPM counter %d" % (heartbeat["sequence"], held))
         require(heartbeat["sequence"] - held <= allowance, "sequence jump %d exceeds the bound %d: anomaly"
                 % (heartbeat["sequence"] - held, allowance))
-        state["envelope"] = envelope
-        self._write(state)                                       # disk first, durably
-        self.counter.advance(heartbeat["sequence"], allowance)  # then the counter
+        state["envelope"], state["allowance"] = envelope, min(allowance, MAX_ALLOWANCE)
+        self._write(state)                                                # disk first, durably
+        self.counter.advance(heartbeat["sequence"], state["allowance"])  # then the counter
         return left
 
     def check(self, manifest):
@@ -359,7 +382,7 @@ class Freshness:
         # every check above (signature, a key of the current manifest, lifetime, expiry) moves the counter:
         # a file planted on the disk cannot push it forward and strand the node.
         if heartbeat["sequence"] > held:
-            self.counter.advance(heartbeat["sequence"])
+            self.counter.advance(heartbeat["sequence"], state["allowance"] or self.counter.MAX_JUMP)
         return now, heartbeat
 
 

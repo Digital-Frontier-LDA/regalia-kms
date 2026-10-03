@@ -19,7 +19,8 @@ def config(d, **override):
     cfg = {"schema": authority.SCHEMA, "root_key": hbt.pub(hbt.ROOT), "tcti": None, "nv_epoch": "0x01500016", "nv_sequence": "0x01500020",
            "state_dir": d, "run_dir": d, "signer": {"kind": "file", "path": d + "/revocation.pem"}, "interval_s": 900, "lifetime_s": None,
            "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"], "wg_service_key": d + "/wg.key",
-           "underlays": {"a": "192.0.2.11", "b": "192.0.2.12", "c": "192.0.2.13"}, "listen_port": 51821, "sync_port": 7444}
+           "underlays": {"a": "192.0.2.11", "b": "192.0.2.12", "c": "192.0.2.13"}, "listen_port": 51821, "sync_port": 7444,
+           "control_socket": d + "/control.sock"}
     cfg.update(override)
     return cfg
 
@@ -61,18 +62,20 @@ def m_sign(man, key=None, signer="root"):
 
 
 class Configuration(unittest.TestCase):
-    def test_the_interval_has_a_floor_times_the_number_of_authorities(self):
+    def test_the_interval_has_a_floor(self):
         d = "/nonexistent"
         authority.validate(config(d, interval_s=600))
-        with self.assertRaises(m.Refused) as caught:
-            authority.validate(config(d, interval_s=900, sequence_stride=2, sequence_offset=1))
-        self.assertIn("at least 1200 s", str(caught.exception))
         with self.assertRaises(m.Refused):
             authority.validate(config(d, interval_s=599))
 
+    def test_one_authority_until_takeover_exists(self):
+        with self.assertRaises(m.Refused) as caught:
+            authority.validate(config("/x", interval_s=1200, sequence_stride=2, sequence_offset=1))
+        self.assertIn("#231", str(caught.exception))
+
     def test_only_local_root_may_request_and_only_known_signers(self):
         for bad in ({"revoke_requesters": ["anyone"]}, {"revoke_requesters": []}, {"signer": {"kind": "vault"}},
-                    {"sequence_offset": 2, "sequence_stride": 2}):
+                    {"sequence_offset": 1, "sequence_stride": 1}):
             with self.subTest(bad), self.assertRaises(m.Refused):
                 authority.validate(config("/x", **bad))
 
@@ -119,18 +122,59 @@ class Heartbeats(Case):
         self.refused("time is not authenticated", self.a.beat)
         self.assertEqual((self.a.counter.value(), self.a.held()), (0, None))
 
-    def test_a_crash_after_the_counter_moved_loses_a_number_and_never_reuses_it(self):
+    def test_a_failure_before_signing_retries_the_same_number(self):
+        """#230 (decided by regalia-kms-24): nothing was signed under the reserved number, so it is retried."""
+        with unittest.mock.patch.object(self.a.signer, "sign", side_effect=OSError("token busy")):
+            for _ in range(5):
+                with self.assertRaises(OSError):
+                    self.a.beat()
+        self.assertEqual((self.a.counter.value(), self.a.held()), (1, None))
+        self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 1)
+        # a new process does not know the reservation: that number is lost, never reused
         with unittest.mock.patch.object(self.a.signer, "sign", side_effect=OSError("power lost")):
             with self.assertRaises(OSError):
                 self.a.beat()
-        self.assertEqual((self.a.counter.value(), self.a.held()), (1, None))
-        self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 2)
+        self.assertEqual(self.authority().beat()["heartbeat"]["sequence"], 3)
 
-    def test_several_authorities_share_the_sequence_by_offset_and_stride(self):
-        second = self.authority(interval_s=1200, sequence_offset=1, sequence_stride=2)
-        self.assertEqual([second.beat()["heartbeat"]["sequence"] for _ in range(3)], [1, 3, 5])
-        first = self.authority(interval_s=1200, sequence_offset=0, sequence_stride=2)
-        self.assertEqual(first.beat()["heartbeat"]["sequence"], 6)
+    def test_a_failure_after_signing_republishes_the_same_bytes(self):
+        with unittest.mock.patch.object(authority.Authority, "_publish", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.a.beat()
+        with open(self.d + "/pending-heartbeat.json", "rb") as f:
+            signed = f.read()
+        self.assertEqual(self.a.counter.value(), 1)
+        restarted = self.authority()                       # across a restart too
+        restarted.beat()
+        with open(self.d + "/heartbeat.json", "rb") as f:
+            self.assertEqual(f.read(), signed)             # byte for byte: one signature under number 1
+        self.assertFalse(os.path.exists(self.d + "/pending-heartbeat.json"))
+        self.assertEqual(restarted.counter.value(), 1)
+
+    def test_signed_bytes_that_expire_unpublished_are_dropped_and_the_number_is_lost(self):
+        with unittest.mock.patch.object(authority.Authority, "_publish", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.a.beat()
+        self.now += hb.MAX_LIFETIME + 1
+        self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 2)
+        self.assertIn(("authority-heartbeat", "DROPPED"), [(e["event"], e["outcome"]) for e in self.events])
+
+    def test_a_signer_failing_for_a_day_reserves_one_number(self):
+        clock = {"t": 0.0}
+        failing = unittest.mock.patch.object(self.a.signer, "sign", side_effect=OSError("token gone"))
+        with failing:
+            self.a.run_loop(lambda: clock["t"] > 86400, sleep=lambda s: clock.__setitem__("t", clock["t"] + s), clock=lambda: clock["t"])
+        attempts = sum(1 for e in self.events if e.get("outcome") == "FAILED")
+        self.assertEqual(self.a.counter.value(), 1)
+        self.assertLessEqual(attempts, 86400 // 900 + 6)   # backed off to the interval
+        self.assertEqual([authority.retry_delay(n, 900) for n in range(6)], [60, 120, 240, 480, 900, 900])
+
+    def test_a_key_the_manifest_does_not_name_reserves_nothing(self):
+        stranger = authority.FileSigner(self.d + "/revocation.pem")
+        stranger._key = Ed25519PrivateKey.generate()
+        a = authority.Authority(authority.validate(config(self.d)), signer=stranger, clock=lambda: (self.now, True), run=self.tpm, trail=self.events.append)
+        for _ in range(5):
+            self.refused("is not named by the manifest", a.beat)
+        self.assertEqual(a.counter.value(), 0)
 
     def test_the_interval_is_at_most_a_quarter_of_the_lifetime(self):
         short = self.authority(lifetime_s=3600, interval_s=1200)
@@ -183,26 +227,101 @@ class Revocation(Case):
         self.assertEqual((beat["heartbeat"]["epoch"], beat["heartbeat"]["sequence"]), (2, 2))
         self.assertIsNone(restarted.catch_up())                          # nothing more to do
 
+    def test_a_revocation_drops_pending_bytes_for_the_old_epoch(self):
+        with unittest.mock.patch.object(authority.Authority, "_publish", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.a.beat()                              # epoch 1, number 1: signed, not published
+        _, beat = self.a.revoke("c", "REVOKED_STOLEN", "stolen", "local-root")
+        self.assertEqual((beat["heartbeat"]["epoch"], beat["heartbeat"]["sequence"]), (2, 2))
+        self.assertEqual(self.a.held()["heartbeat"]["epoch"], 2)
+        self.a.beat()
+        self.assertEqual(self.a.held()["heartbeat"]["epoch"], 2)          # the old bytes never go out
+
+    def test_a_beat_in_flight_cannot_publish_after_the_revocation(self):
+        import threading
+        signing, release, published = threading.Event(), threading.Event(), []
+        real_sign, real_publish = self.a.signer.sign, self.a._publish
+
+        def slow_sign(message):
+            if not signing.is_set():
+                signing.set()
+                release.wait(10)
+            return real_sign(message)
+        self.a.signer.sign = slow_sign
+        self.a._publish = lambda raw: (published.append((json.loads(raw)["heartbeat"]["epoch"], json.loads(raw)["heartbeat"]["sequence"])), real_publish(raw))
+        first = threading.Thread(target=self.a.beat)
+        first.start()
+        signing.wait(10)
+        second = threading.Thread(target=self.a.revoke, args=("c", "REVOKED_STOLEN", "stolen", "local-root"))
+        second.start()
+        second.join(1)                                     # the revocation finishes, or (correctly) waits for the beat
+        release.set()
+        first.join(10)
+        second.join(10)
+        self.assertEqual([epoch for epoch, _ in published], [1, 2])
+        self.assertEqual([sequence for _, sequence in published], [1, 2])          # never two signatures under one number
+        self.assertEqual(self.a.held()["heartbeat"]["epoch"], 2)
+
     def test_unauthenticated_time_signs_no_revocation(self):
         self.authenticated = False
         self.refused("time is not authenticated", self.a.revoke, "c", "QUARANTINED", "x-ray", "local-root")
         self.assertEqual(self.a.store.load()["epoch"], 1)
 
 
+class Control(Case):
+    def test_root_only_and_the_requests_it_answers(self):
+        refused = self.a.control(b'{"op":"status"}', peer_uid=1000)
+        self.assertEqual(refused, {"ok": False, "refused": "only root on this host may ask"})
+        self.assertEqual(self.a.control(b'{"op":"status"}', peer_uid=0)["status"]["signer"], "file")
+        answer = self.a.control(json.dumps({"op": "revoke", "node": "c", "state": "QUARANTINED", "reason": "over the socket"}).encode(), 0)
+        self.assertEqual((answer["ok"], answer["epoch"]), (True, 2))
+        self.assertFalse(self.a.control(b'{"op":"revoke","node":"c","state":"ACTIVE","reason":"no"}', 0)["ok"])
+        self.assertFalse(self.a.control(b'{"op":"rotate"}', 0)["ok"])
+
+    def test_over_a_real_socket_with_the_peer_s_credentials(self):
+        stop = []
+        thread = self.a.control_listener(lambda: bool(stop), allowed_uid=os.getuid())
+        self.addCleanup(lambda: (stop.append(True), thread.join(5)))
+        self.assertEqual(os.stat(self.d + "/control.sock").st_mode & 0o777, 0o600)
+        self.assertEqual(authority.ask(self.d + "/control.sock", {"op": "status"})["status"]["epoch"], 1)
+        answer = authority.ask(self.d + "/control.sock", {"op": "revoke", "node": "b", "state": "QUARANTINED", "reason": "socket"})
+        self.assertEqual((answer["ok"], answer["sequence"]), (True, 1))
+        stop.append(True)
+        thread.join(5)
+        other = self.a.control_listener(lambda: False, allowed_uid=os.getuid() + 1)
+        self.assertFalse(authority.ask(self.d + "/control.sock", {"op": "status"})["ok"])
+
+
 class CommandLine(Case):
-    def test_status_and_revoke(self):
+    def path(self):
         path = self.d + "/authority.json"
         with open(path, "w") as f:
             json.dump(config(self.d), f)
-        with unittest.mock.patch.object(authority, "Authority", lambda cfg: self.a), \
-                unittest.mock.patch("sys.stdout") as out:
-            self.assertEqual(authority.main(["--config", path, "status"]), 0)
-        printed = "".join(c.args[0] for c in out.write.call_args_list)
-        self.assertIn('"signer": "file"', printed)
-        with unittest.mock.patch.object(authority, "Authority", lambda cfg: self.a), unittest.mock.patch.object(authority.os, "geteuid", return_value=1000), \
-                unittest.mock.patch("sys.stderr") as err:
-            self.assertEqual(authority.main(["--config", path, "revoke", "--node", "c", "--state", "QUARANTINED", "--reason", "test"]), 2)
-        self.assertIn("as root", "".join(c.args[0] for c in err.write.call_args_list))
+        return path
+
+    def run_main(self, *argv):
+        with unittest.mock.patch("sys.stdout") as out, unittest.mock.patch("sys.stderr") as err:
+            code = authority.main(["--config", self.path()] + list(argv))
+        return code, "".join(c.args[0] for c in out.write.call_args_list), "".join(c.args[0] for c in err.write.call_args_list)
+
+    def test_revoke_and_status_are_root_only_clients_of_serve(self):
+        with unittest.mock.patch.object(authority.os, "geteuid", return_value=1000):
+            code, _, err = self.run_main("revoke", "--node", "c", "--state", "QUARANTINED", "--reason", "test")
+        self.assertEqual(code, 2)
+        self.assertIn("as root", err)
+        with unittest.mock.patch.object(authority.os, "geteuid", return_value=0), \
+                unittest.mock.patch.object(authority, "ask", return_value={"ok": True, "status": {"signer": "file"}}) as asked:
+            code, out, _ = self.run_main("status")
+        self.assertEqual((code, asked.call_args.args[1]), (0, {"op": "status"}))
+        self.assertIn('"signer": "file"', out)
+
+    def test_init_and_accept_only_as_the_service_s_own_user(self):
+        with open(self.d + "/chain.json", "w") as f:
+            json.dump([m_sign(self.m1)], f)
+        with unittest.mock.patch.object(authority.os, "geteuid", return_value=os.getuid() + 1):
+            code, _, err = self.run_main("accept", "--chain", self.d + "/chain.json")
+        self.assertEqual(code, 2)
+        self.assertIn("run as the authority's own user", err)
 
 
 if __name__ == "__main__":

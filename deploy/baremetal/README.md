@@ -717,15 +717,18 @@ it (`service_mesh.authority`).
 
 | Command | What it does |
 |---|---|
-| `init --chain F` | first start: defines the TPM anchor and the sequence counter, takes the root's chain |
-| `accept --chain F` | takes root-signed manifests from the ceremony (the Store verifies them) |
-| `serve` | publishes, and signs a heartbeat every `interval_s` |
-| `revoke --node N --state QUARANTINED\|REVOKED_STOLEN --reason R` | as root on this host: signs and commits the restrictive manifest, then a heartbeat for it at once |
-| `status` | epoch, sequence, last heartbeat, signer kind |
+| `init --chain F` | first start, as the service's own user: defines the TPM anchor and the sequence counter, takes the root's chain |
+| `accept --chain F` | as the service's own user: takes root-signed manifests from the ceremony (the Store verifies them) |
+| `serve` | the one process that signs: publishes, a heartbeat every `interval_s`, and answers the control socket |
+| `revoke --node N --state QUARANTINED\|REVOKED_STOLEN --reason R` | as root on this host, asks the running `serve` (control socket, root peers only): it signs and commits the restrictive manifest, then a heartbeat for it at once |
+| `status` | the same way: epoch, sequence, last heartbeat, pending, signer kind |
 | `wg-apply` | its `wg-svc`, every node a peer |
 
-- **Sequence:** a TPM NV counter of its own, advanced before each heartbeat is signed. A crash loses a
-  number and never reuses one, and a restored disk cannot move it back. No TPM, no authority.
+- **Sequence, signed once:** a number is reserved on its own TPM counter before signing (a crash loses it,
+  never reuses it; a restored disk cannot move the counter back; no TPM, no authority). It is signed at
+  most once: a failure before signing retries that number, a failure after it republishes the same bytes
+  (kept in the state directory), and bytes that expire unpublished are dropped with their number. The key
+  is checked against the manifest before reserving, and failures back off from 60 s to `interval_s`.
 - **Time:** it signs only while `authtime` says the clock is authenticated.
 - **Interval:** at least `heartbeat.MIN_INTERVAL_S` (600 s) times the number of authorities, and at most a
   quarter of the heartbeat's lifetime. A node accepts a sequence jump that grows by one per 600 s since
@@ -738,7 +741,8 @@ it (`service_mesh.authority`).
 - **The owner's decisions are settings in `/etc/regalia/authority.json`:**
   - `signer.kind`: `file` now, a stopgap recorded on every trail line and in `status`; `pkcs11` once a
     token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19);
-  - `sequence_offset`/`sequence_stride`: several authorities;
+  - `sequence_offset`/`sequence_stride`: kept for several authorities, refused above one until a second can
+    take over (#231);
   - `interval_s`, `lifetime_s`;
   - `revoke_requesters`: `local-root` only. Nothing takes a revocation request from the network.
 - **Not decided here:** where the authority runs (#199, with the fencing authority's A4).

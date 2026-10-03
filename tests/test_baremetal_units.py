@@ -126,6 +126,7 @@ class AuthorityUnit(unittest.TestCase):
                          ("regalia-authority", "", "", "yes"))
         self.assertEqual((service["SupplementaryGroups"], service["DevicePolicy"], service["DeviceAllow"]), ("tss", "closed", "/dev/tpmrm0 rw"))
         self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0700", "0077"))
+        self.assertEqual((service["RuntimeDirectory"], service["RuntimeDirectoryMode"]), ("regalia-authority", "0700"))   # the control socket
         users = (UNITS / "regalia-authority.sysusers.conf").read_text()
         self.assertIn("u regalia-authority - ", users)
         self.assertNotIn("regalia-authority", (UNITS / "regalia.sysusers.conf").read_text())    # not created on the nodes
