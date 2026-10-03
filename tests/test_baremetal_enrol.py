@@ -351,7 +351,7 @@ class InitOnSwtpm(unittest.TestCase):
                    "wg_service_key": self.wg, "measurements": etc + "measurements.json", "pcrs": [7, 11],
                    "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60}
         with unittest.mock.patch.object(enrol, "CONFIG_DIR", etc), unittest.mock.patch.object(enrol, "NODE_JSON", etc + "node.json"):
-            in_process = lambda config, chain: enrol.anchor_and_store(config, m.load(open(chain, "rb").read()))   # noqa: E731
+            in_process = lambda config, chain: enrol.anchor_and_store(config, chain)   # noqa: E731
             epoch, digest = enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
                                          as_sync=in_process, out=io.StringIO())
             self.assertEqual((epoch, digest), (1, m.digest(man)))

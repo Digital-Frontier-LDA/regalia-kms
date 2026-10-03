@@ -591,12 +591,13 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     return manifest["epoch"], membership.digest(manifest)
 
 
-def run_as_sync(config_path, chain_path, run=subprocess.run):
+def run_as_sync(config_path, chain, run=subprocess.run):
     """anchor_and_store, in a process of regalia-sync with the tss group (the TPM), started from the package
-    root so `-m` finds it. The journal is root's and stays with the caller."""
+    root so `-m` finds it. The chain goes on its standard input: the enrolment directory is root's (0700),
+    and regalia-sync could not read a file there. The journal stays with the caller."""
     done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", sys.executable, "-Es", "-m",
-                "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", chain_path],
-               cwd=PACKAGE_ROOT, capture_output=True, text=True)
+                "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"],
+               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode())
     require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
     require(m is not None, "the anchor step did not report its result")
@@ -623,11 +624,8 @@ def commit(directory, chain, root_key, typed, document, site, example, run=subpr
         if st.st_uid != user.pw_uid:
             require(not os.listdir(state), "%s is not %s's and is not empty: enrolment does not take it over" % (state, SYNC_USER))
             os.chown(state, user.pw_uid, user.pw_gid)
-    chain_path = os.path.join(directory, "chain.json")
-    _write_private(chain_path, membership.canonical(chain if isinstance(chain, list) else [chain]), exclusive=False)
-    os.chmod(chain_path, 0o644)                       # public values; regalia-sync reads it
     journal.started("anchor")
-    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain_path)
+    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
             "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
     journal.done("anchor", epoch=epoch, digest=digest)
@@ -663,8 +661,11 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if args.command == "_anchor":                    # run by commit, as regalia-sync
         try:
-            with open(args.chain, "rb") as f:
-                chain = membership.load(f.read())
+            if args.chain == "-":
+                chain = membership.load(sys.stdin.buffer.read())
+            else:
+                with open(args.chain, "rb") as f:
+                    chain = membership.load(f.read())
             epoch, digest = anchor_and_store(args.config, chain)
         except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
