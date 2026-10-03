@@ -10,8 +10,15 @@ SIGNED MEMBERSHIP MANIFEST COMMITS TO, with one or two sets per node.
                 "name": "<a short human name, e.g. 2026.11-kernel-6.12.57>",
                 "nodes": {"<node_id>": {"accepted": [
                     {"label": "<image name>", "tpm_firmware_version": "<16 hex>", "pcrs": {"0": "<64 hex>", ...},
-                     "phases": {"initrd": {"11": "<64 hex>"}, "system": {"11": "<64 hex>"}}},    # optional
+                     "phases": {"initrd": {"11": "<64 hex>"}, "system": {"11": "<64 hex>"}},     # optional
+                     "signing": {"initrd": "<pkfp>", "system": "<pkfp>", "secure_boot_cert": "<sha256>"}},  # optional
                     ...]}}}                     # one set, or two while an update rolls through
+
+SIGNING KEYS. A signed image's set (`uki.py set`, from its SIGNED record) names the keys the image is signed with:
+the two PCR-signing keys by fingerprint and the Secure Boot certificate by SHA-256. A peer judges PCR values and
+never reads them. They are for whoever SEALS to a PCR-signing key (enrol, #190): PCR 11 does not cover an image's
+.pcrsig, so a re-signed copy of an approved image measures the same; taking only a key the root-approved set
+names is what keeps a node's secrets off a key nobody approved (#265).
 
 PER BOOT PHASE. A host that boots a unified kernel image has two PCR 11 values for one image: in the
 initrd, where it asks a peer for its disk, and once booted, where it asks for a lease (attest.py, "PCR

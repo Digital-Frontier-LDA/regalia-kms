@@ -1299,7 +1299,7 @@ def measurement_set(record, label, firmware, pcrs, credentials):
     in the unlock boot test, #215). It is never given by hand: a set that should hold it is made from the
     files. It is REQUIRED: a set without it would leave PCR 12 unattested, the gap #66 closed, and after
     stage B2 a host with no credentials cannot be unlocked unattended anyway."""
-    load_record(membership.canonical(record))
+    load_record(membership.canonical(record), signed=True)
     require(isinstance(pcrs, dict) and "11" not in pcrs, "the host's PCR values must not give PCR 11: it comes from the image's record, per phase")
     require("12" not in pcrs, "the host's PCR values must not give PCR 12: it is computed from the node's credential files (--credentials)")
     require(isinstance(credentials, dict), "the node's credential files are required: PCR 12 is attested, and comes from them")
@@ -1307,7 +1307,11 @@ def measurement_set(record, label, firmware, pcrs, credentials):
             "be all zero, which is a host with no per-host configuration")
     pcrs = dict(pcrs, **{"12": espcreds.pcr12(credentials)})
     entry = {"label": label, "tpm_firmware_version": firmware, "pcrs": pcrs,
-             "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}
+             "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES},
+             # the keys the image is signed with, from its SIGNED record: what enrol may seal to (#190, #265)
+             "signing": {"initrd": record["signed"]["pcr_signatures"]["initrd"]["pkfp"],
+                         "system": record["signed"]["pcr_signatures"]["system"]["pkfp"],
+                         "secure_boot_cert": record["signed"]["secure_boot_cert_sha256"]}}
     try:
         attest.validate_sets([entry], "set")
     except attest.Refused as refusal:
