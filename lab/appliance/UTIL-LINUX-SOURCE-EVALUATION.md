@@ -179,6 +179,13 @@ version records, package hashes, test logs and the limits of these checks.
 No vendor test is removed or reclassified. The complete updated helper and
 AMD64 image integration still require the workflow qualification.
 
+The first AMD64 run (`37147424785`, head `540a95e`) refuses package production
+because one output's file layout differs from the native policy. It reaches
+this check before installation. Detailed, bounded missing/extra-path diagnostics
+are now included; the exact layout requirement remains unchanged. Review that
+architecture-specific difference before approving any policy update. No AMD64
+scan or complete appliance qualification is claimed for this failed run.
+
 ## Residual Risk
 
 The initial 2.41.6 evaluation built no Debian packages. The 2.42.4 evaluation

@@ -68,7 +68,9 @@ def inspect_frozen(package, architecture):
                           privileged_modes=PRIVILEGED_MODES)
     normalized = {path.replace(triplet, "{triplet}"): value for path, value in payload.items()}
     require(len(normalized) == len(payload) and set(normalized) == set(reviewed["payload_members"]),
-            "utility package file layout differs")
+            "utility package file layout differs: " + name
+            + "; missing=" + repr(sorted(set(reviewed["payload_members"]) - set(normalized))[:32])
+            + "; extra=" + repr(sorted(set(normalized) - set(reviewed["payload_members"]))[:32]))
     hashes = {}
     for path, (item, content) in normalized.items():
         descriptor = metadata(item, content, triplet, payload=True)
