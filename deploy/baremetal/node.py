@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """A KMS node's running services, assembled from one configuration file (#80, step 3b).
 
-    python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json authtime | wg-apply | admission | sync
+    python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json authtime | wg-apply | boot-session | admission | sync
 
-Four processes, each the smallest one that can do its part. Only the first three are root, and none of
-them parses what a peer sends except `sync`, which holds no capability and is not root:
+Five processes, each the smallest one that can do its part. Only the first three are root, and none of
+them parses what a peer sends except `sync` and `admission`, which hold no capability and are not root:
 
     authtime   root, CAP_DAC_OVERRIDE   asks chrony whether time is authenticated; writes
                                         /run/regalia/authtime.json (authtime.py)
     wg-apply   root, CAP_NET_ADMIN      makes wg-svc and wg-unlock what the CURRENT manifest says, and
                                         reads the result back (wgsvc.py, bootnet.py); a oneshot, run at
                                         boot and again whenever the published chain changes
-    admission  root, no capability      holds this node's runtime lease, asking peers through the
-                                        service tunnel; writes /run/regalia/admission.json for the KMS
-                                        daemon (admission.py)
+    boot-session  root, no capability   a oneshot: on a boot where the unlock client presented no
+                                        session (the disk opened with the recovery key), makes one and
+                                        leaves the pair in /run/regalia, as the client would have
+    admission  its own user (regalia-admission, #191), no capability, the TPM through its group
+                                        holds this node's runtime lease, asking peers through the
+                                        service tunnel; writes /run/regalia/admission/admission.json
+                                        for the KMS daemon (admission.py)
     sync       its own user, no capability, the TPM through its group
                                         answers peers on wg-svc (sync.py) and booting nodes on
                                         wg-unlock (unlock.py), pulls manifests and heartbeats from the
@@ -21,19 +25,21 @@ them parses what a peer sends except `sync`, which holds no capability and is no
                                         and runs the heartbeat watch (heartbeat_watch.py)
 
 ONE WRITER OF THE MEMBERSHIP CHAIN. `sync` owns the store (membership.Store: its files are its own, 0600).
-After every change it PUBLISHES the verified chain, 0644, beside it (publish()). The root services read
+After every change it PUBLISHES the verified chain, 0644, beside it (publish()). The other services read
 that copy and verify it themselves (published()): every signature and transition from the root key, and
 the TPM anchor, which only goes up. A `sync` that is compromised can therefore withhold a newer chain or
-publish an older one, and either way the root services see a chain below the anchor and refuse it: the
+publish an older one, and either way the other services see a chain below the anchor and refuse it: the
 node stops serving, it does not go on under an old manifest.
 
 THE BOOT SESSION. A runtime lease is asked for with a quote over this boot's session, and a peer allows
 one session per boot of a node's TPM. If the unlock client presented one in the initrd it left
 /run/regalia/boot-session (64 hex) and boot-session.pub (hex of the key's DER); `boot-session` is written
-last and is the marker. boot_session() uses that pair; with no `boot-session` at all (the disk opened with
-the recovery key before any peer was asked) it makes a session of its own and writes the pair, the same
-way. A `boot-session` without its key, or either malformed, is a refusal: the right session cannot be
-guessed, and a wrong one would be refused by the peer that holds the right one.
+last and is the marker. boot_session() uses that pair. With no `boot-session` at all (the disk opened with
+the recovery key before any peer was asked) the root oneshot `boot-session` makes a session and writes the
+pair, the same way, before `admission` starts; `admission` only reads it, since it is not root and
+/run/regalia is root's, and the KMS daemon accepts the session only from root (#191). A `boot-session`
+without its key, or either malformed, is a refusal: the right session cannot be guessed, and a wrong one
+would be refused by the peer that holds the right one.
 
 THE TRAIL. Each service appends its audit events to its own file (one JSON object per line, fsynced) in
 its own state directory. Shipping them off the host is the audit pipeline's job, not this module's.
@@ -94,7 +100,7 @@ def validate(doc):
     require(abs(int(epoch, 16) - int(beat, 16)) >= 2, "nv_epoch and nv_heartbeat take two indices each and must not overlap")
     for key in ("site", "state_dir", "admission_dir", "run_dir", "wg_service_key", "measurements"):
         _absolute(doc[key], key)
-    # each directory has ONE writer: sync's, admission's (root), and the run directory (root)
+    # each directory has ONE writer: sync's, admission's (regalia-admission, #191), and the run directory (root)
     require(len({doc["state_dir"], doc["admission_dir"], doc["run_dir"]}) == 3, "state_dir, admission_dir and run_dir must be three directories")
     pcrs = doc["pcrs"]
     require(isinstance(pcrs, list) and pcrs and all(isinstance(i, int) and not isinstance(i, bool) and 0 <= i <= 23 for i in pcrs)
@@ -165,8 +171,9 @@ def published(path, root_key, anchor):
 
 # ---- the boot session ----
 
-def boot_session(run_dir, rand=os.urandom):
-    """(session ID, the key's DER) of this boot: the unlock client's, or one made now. See the module."""
+def boot_session(run_dir, rand=os.urandom, make=False):
+    """(session ID, the key's DER) of this boot: the unlock client's, or, with `make` (the root oneshot
+    only), one made now. Without `make`, no session is a refusal. See the module."""
     marker, key = os.path.join(run_dir, "boot-session"), os.path.join(run_dir, "boot-session.pub")
 
     def read(path, label, pattern):
@@ -179,6 +186,7 @@ def boot_session(run_dir, rand=os.urandom):
         require(os.path.exists(key), "boot-session names a session whose key is missing: it cannot be presented again")
         public = bytes.fromhex(read(key, "boot-session.pub", r"([0-9a-f]{2}){1,512}\n"))
         return session, public
+    require(make, "this boot has no session in %s: regalia-boot-session.service makes one before the lease service starts" % run_dir)
     session, public = rand(32).hex(), b"regalia-kms runtime session " + rand(32)
     for path, text in ((key, public.hex()), (marker, session)):      # the key first: the marker says both are there
         fd, tmp = tempfile.mkstemp(dir=run_dir, prefix=".boot-session-")
@@ -364,6 +372,12 @@ def wg_apply(node):
     return manifest["epoch"]
 
 
+def admission_file(run_dir):
+    """Where the lease service writes and the daemon reads: a directory of the lease service's own user
+    inside root's run directory (regalia.tmpfiles.conf), so it can replace the file and nothing else there."""
+    return os.path.join(run_dir, "admission", "admission.json")
+
+
 def admission_service(node, daemon_started=None, rand=os.urandom):
     """The lease holder and the admission file, asking peers in turn for a lease over the service tunnel."""
     session, public = boot_session(node.runtime, rand)
@@ -388,7 +402,7 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
             except Refused as refused:
                 failures.append("%s: %s" % (name, refused))
         raise Refused("no peer gave a lease (%s)" % "; ".join(failures))
-    return admission.Service(holder, node.manifest, renew, os.path.join(node.runtime, "admission.json"),
+    return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
                              daemon_started=daemon_started or admission.unit_started())
 
 
@@ -498,11 +512,18 @@ def authtime_service(cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="/etc/regalia/node.json")
-    parser.add_argument("service", choices=("authtime", "wg-apply", "admission", "sync", "check"))
+    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check"))
     args = parser.parse_args(argv)
     try:
         if args.service == "authtime":
             authtime_service(load(args.config)).run(lambda: False)
+            return 0
+        if args.service == "boot-session":
+            # takes the configuration only, like authtime: it needs the run directory and nothing else
+            run_dir = load(args.config)["run_dir"]
+            had = os.path.exists(os.path.join(run_dir, "boot-session"))
+            session, _ = boot_session(run_dir, make=True)
+            print("boot session %s…, %s" % (session[:16], "the unlock client's" if had else "made now: the unlock client presented none"))
             return 0
         node = Node(load(args.config))
         if args.service == "check":

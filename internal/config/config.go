@@ -25,6 +25,9 @@ const (
 
 var nodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
+// userNamePattern is a system user name as sysusers.d and useradd accept it (no leading digit or dash).
+var userNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
 // Config contains operational limits only. Credentials, PINs and key material
 // are deliberately not representable in this format.
 type Config struct {
@@ -83,10 +86,14 @@ type Config struct {
 	// below) or "disabled-for-lab" must be written, so a production host cannot end up serving with no
 	// lease because a block was left out. NodeID is this node as the membership manifest spells it;
 	// BootSessionPath is the root-owned file holding this boot's attested session.
-	RuntimeAdmission     string
-	RuntimeAdmissionPath string
-	NodeID               string
-	BootSessionPath      string
+	// RuntimeAdmissionOwner is the user the lease service runs as (regalia-kms#191): the admission
+	// file and its directory must be that user's or root's. It is a user name, resolved when the daemon
+	// starts; there is no default, so the daemon never falls back to root without being told to.
+	RuntimeAdmission      string
+	RuntimeAdmissionPath  string
+	RuntimeAdmissionOwner string
+	NodeID                string
+	BootSessionPath       string
 
 	// Revocation list. One serial per line; the file is cached behind a
 	// stat+ModTime guard, so an entry added at runtime is observed on the next
@@ -132,6 +139,7 @@ type document struct {
 	RevokedSerialsPath      *string            `json:"revoked_serials_path"`
 	RuntimeAdmission        *string            `json:"runtime_admission"`
 	RuntimeAdmissionPath    *string            `json:"runtime_admission_path"`
+	RuntimeAdmissionOwner   *string            `json:"runtime_admission_owner"`
 	NodeID                  *string            `json:"node_id"`
 	BootSessionPath         *string            `json:"boot_session_path"`
 	MetricsReaderPrincipals *[]string          `json:"metrics_reader_principals"`
@@ -270,6 +278,9 @@ func Decode(reader io.Reader) (Config, error) {
 	}
 	if input.RuntimeAdmissionPath != nil {
 		result.RuntimeAdmissionPath = *input.RuntimeAdmissionPath
+	}
+	if input.RuntimeAdmissionOwner != nil {
+		result.RuntimeAdmissionOwner = *input.RuntimeAdmissionOwner
 	}
 	if input.NodeID != nil {
 		result.NodeID = *input.NodeID
@@ -437,18 +448,21 @@ func (cfg Config) Validate() error {
 	}
 	// RUNTIME ADMISSION IS STATED, NEVER ASSUMED. With a token configured, leaving the setting out is
 	// refused: the default would be a daemon that serves with no lease, and on a production host
-	// nothing would say so. "required" needs all three of its settings; "disabled-for-lab" needs none
+	// nothing would say so. "required" needs all four of its settings; "disabled-for-lab" needs none
 	// of them, so a half-written block cannot pass as either.
 	admissionFields := 0
-	for _, value := range []string{cfg.RuntimeAdmissionPath, cfg.NodeID, cfg.BootSessionPath} {
+	for _, value := range []string{cfg.RuntimeAdmissionPath, cfg.RuntimeAdmissionOwner, cfg.NodeID, cfg.BootSessionPath} {
 		if value != "" {
 			admissionFields++
 		}
 	}
 	switch cfg.RuntimeAdmission {
 	case RuntimeAdmissionRequired:
-		if admissionFields != 3 {
-			return errors.New("runtime_admission \"required\" needs runtime_admission_path, node_id and boot_session_path")
+		if admissionFields != 4 {
+			return errors.New("runtime_admission \"required\" needs runtime_admission_path, runtime_admission_owner, node_id and boot_session_path")
+		}
+		if !userNamePattern.MatchString(cfg.RuntimeAdmissionOwner) {
+			return errors.New("runtime_admission_owner must be the name of the user the lease service runs as")
 		}
 		if !filepath.IsAbs(cfg.RuntimeAdmissionPath) || !filepath.IsAbs(cfg.BootSessionPath) {
 			return errors.New("runtime_admission_path and boot_session_path must be absolute")
@@ -458,11 +472,11 @@ func (cfg Config) Validate() error {
 		}
 	case RuntimeAdmissionDisabledForLab:
 		if admissionFields != 0 {
-			return errors.New("runtime_admission \"disabled-for-lab\" takes no runtime_admission_path, node_id or boot_session_path")
+			return errors.New("runtime_admission \"disabled-for-lab\" takes no runtime_admission_path, runtime_admission_owner, node_id or boot_session_path")
 		}
 	case "":
 		if admissionFields != 0 {
-			return errors.New("runtime_admission_path, node_id and boot_session_path need runtime_admission \"required\"")
+			return errors.New("runtime_admission_path, runtime_admission_owner, node_id and boot_session_path need runtime_admission \"required\"")
 		}
 		if hardwareFields > 0 {
 			return errors.New("a configuration with a token must state runtime_admission: \"required\", or \"disabled-for-lab\" on a lab or CI host; there is no default")

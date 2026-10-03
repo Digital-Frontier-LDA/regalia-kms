@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -36,13 +37,18 @@ import (
 // caller: the daemon would then serve with no runtime lease and every admission test would be green,
 // which is how internal/fencing once sat unwired. This fails if admitRunner stops gating the runner.
 //
-// The file here is owned by whoever runs the test, so the gate that admits is built with that owner;
-// the wiring under test (admitRunner) is exercised on the refusing side, which needs no file at all,
-// and on a file that root does not own.
+// The lease service's user (runtime_admission_owner) is the one running the test, so the admission
+// file the test writes is trusted; the boot session it writes is not, because that file stays root's
+// whoever the lease service runs as (regalia-kms#191). So as anyone but root the gate refuses on the
+// session, and as root (CI's privileged job) it admits.
 func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	directory := t.TempDir()
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
 	settings := config.Config{
-		RuntimeAdmission: config.RuntimeAdmissionRequired, NodeID: "site-a",
+		RuntimeAdmission: config.RuntimeAdmissionRequired, NodeID: "site-a", RuntimeAdmissionOwner: me.Username,
 		RuntimeAdmissionPath: filepath.Join(directory, "admission.json"), BootSessionPath: filepath.Join(directory, "boot-session"),
 	}
 	var seen []admission.Status
@@ -67,7 +73,7 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	if len(seen) != 1 || seen[0].Admitted || !strings.Contains(seen[0].Reason, "the admission file") {
 		t.Fatalf("transitions = %+v, want one refusal naming the admission file", seen)
 	}
-	// A file that says "admitted" but that root did not write is still a refusal (unless the test IS root).
+	// A current admission file of the lease service's user, beside a boot session root did not write: still a refusal.
 	now, err := admission.Boottime()
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +100,8 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 		}
 	}
 	if os.Getuid() != 0 {
-		if gate.Ready(context.Background()) {
-			t.Fatal("an admission file root did not write admitted the node")
+		if status := gate.Check(context.Background()); status.Admitted || !strings.Contains(status.Reason, "the boot session") {
+			t.Fatalf("a boot session root did not write was accepted, or the admission file of the lease service's user was refused: %+v", status)
 		}
 		return
 	}
@@ -127,8 +133,11 @@ func TestWithoutRequiredAdmissionTheRunnerIsUnchanged(t *testing.T) {
 // same as one that is correctly waiting for its lease.
 func TestRequiredAdmissionWithAnUnusableSettingRefusesAtStartup(t *testing.T) {
 	for name, settings := range map[string]config.Config{
-		"a relative path": {RuntimeAdmission: config.RuntimeAdmissionRequired, NodeID: "site-a", RuntimeAdmissionPath: "admission.json", BootSessionPath: "/run/regalia/boot-session"},
-		"no node ID":      {RuntimeAdmission: config.RuntimeAdmissionRequired, RuntimeAdmissionPath: "/run/regalia/admission.json", BootSessionPath: "/run/regalia/boot-session"},
+		"a relative path":       {RuntimeAdmission: config.RuntimeAdmissionRequired, NodeID: "site-a", RuntimeAdmissionOwner: "root", RuntimeAdmissionPath: "admission.json", BootSessionPath: "/run/regalia/boot-session"},
+		"no node ID":            {RuntimeAdmission: config.RuntimeAdmissionRequired, RuntimeAdmissionOwner: "root", RuntimeAdmissionPath: "/run/regalia/admission.json", BootSessionPath: "/run/regalia/boot-session"},
+		"no lease service user": {RuntimeAdmission: config.RuntimeAdmissionRequired, NodeID: "site-a", RuntimeAdmissionPath: "/run/regalia/admission/admission.json", BootSessionPath: "/run/regalia/boot-session"},
+		"a lease service user this host does not have": {RuntimeAdmission: config.RuntimeAdmissionRequired, NodeID: "site-a", RuntimeAdmissionOwner: "regalia-no-such-user-191",
+			RuntimeAdmissionPath: "/run/regalia/admission/admission.json", BootSessionPath: "/run/regalia/boot-session"},
 	} {
 		if _, _, err := admitRunner(settings, &passthroughRunner{}, nil); err == nil || !strings.Contains(err.Error(), "runtime admission") {
 			t.Fatalf("%s: admitRunner = %v, want a startup refusal", name, err)

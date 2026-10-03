@@ -15,9 +15,11 @@ the daemon reads. No hardware.
   5  a file from another boot, with times that look valid, is refused
   6  the node is revoked: the next round writes serve_until 0 and the daemon refuses at once
 
-Needs sudo, for one thing only: the admission file and its directory must be root's (the daemon refuses
-anything else), so they are placed with `sudo install`. The daemon itself runs as the invoking user, in a
-temporary directory, and nothing is installed on the machine.
+Needs sudo, for one thing only: the boot session and the run directory must be root's, with nothing above
+them anyone else could swap (the daemon refuses anything else), so they are placed with `sudo install`,
+in a directory directly under /tmp. The lease service is played by the invoking user, as on a host it is
+its own user (#191): the daemon is told so (runtime_admission_owner) and is given that user's directory
+inside root's. The daemon itself runs as the invoking user too, and nothing is installed on the machine.
 """
 import base64
 import datetime
@@ -25,6 +27,7 @@ import hashlib
 import http.client
 import json
 import os
+import pwd
 import shutil
 import signal
 import ssl
@@ -84,7 +87,9 @@ def main():
         die("libsofthsm2.so not found")
 
     w = Path(tempfile.mkdtemp(dir="/tmp"))               # 0700, this user's: only the root-owned run/ inside it is the gate's concern
-    etc, state, runtime = w / "etc", w / "state", w / "run"
+    # root's run directory, directly under /tmp (root's, sticky): under this user's w/ it would not be
+    # trusted, since this user could swap it
+    etc, state, runtime = w / "etc", w / "state", Path("/tmp") / ("regalia-run-" + w.name)
     for d in (etc, state, state / "tokens", w / "collector"):
         d.mkdir(mode=0o700)
     processes = []
@@ -178,7 +183,8 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
         "pin_paths": {DEVICE: str(etc / "card.pin")},
         "audit_journal_path": str(state / "audit.jsonl"), "audit_sink_url": "https://127.0.0.1:%d" % sink,
         # what this test is about: the node is "a", as the membership manifest spells it
-        "runtime_admission": "required", "runtime_admission_path": str(runtime / "admission.json"),
+        "runtime_admission": "required", "runtime_admission_path": str(runtime / "admission" / "admission.json"),
+        "runtime_admission_owner": pwd.getpwuid(os.getuid()).pw_name,
         "node_id": "a", "boot_session_path": str(runtime / "boot-session")}
     for name, document in documents.items():
         (etc / name).write_text(json.dumps(document, indent=1) + "\n")
@@ -191,6 +197,8 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
         run(["sudo", "install", "-m", "0644", "-o", "root", "-g", "root", source, runtime / ("." + name + ".new")])
         run(["sudo", "mv", "-f", runtime / ("." + name + ".new"), runtime / name])
     run(["sudo", "install", "-d", "-m", "0755", "-o", "root", "-g", "root", runtime])
+    # the lease service's own directory inside root's, as regalia.tmpfiles.conf makes it on a host
+    run(["sudo", "install", "-d", "-m", "0755", "-o", str(os.getuid()), "-g", str(os.getgid()), runtime / "admission"])
     (w / "boot-session").write_text(lt.SESSION + "\n")
     as_root(w / "boot-session", "boot-session")
 
@@ -287,13 +295,11 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     # As on a host: the service knows when the daemon's process started, from the kernel, by its PID.
     def daemon_started():
         return admission.process_started_ms(daemon.pid)
-    service = admission.Service(holder, lambda: world["manifest"], renew, str(w / "admission.staged"), daemon_started=daemon_started)
+    service = admission.Service(holder, lambda: world["manifest"], renew, str(runtime / "admission" / "admission.json"), daemon_started=daemon_started)
 
     def round_():
-        """One round of the lease service, and its file placed as root."""
-        document = service.step()
-        as_root(w / "admission.staged", "admission.json")
-        return document
+        """One round of the lease service, which writes its file itself, as its own user."""
+        return service.step()
 
     # ---- 2 ------------------------------------------------------------------------------------------------
     header("2  the lease service's first round: admitted, ready, serving")
@@ -368,8 +374,7 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     ok(ready() == 200, "(admitted before the file is swapped)")
     forged = dict(document, boot_id="0f3a9c1e-1111-4222-8333-444455556666", serve_until_boottime_ms=admission.boottime_ms() + 200_000,
                   requested_boottime_ms=1, lease_issued_at=stamp, reason="")
-    (w / "forged.json").write_text(json.dumps(forged))
-    as_root(w / "forged.json", "admission.json")
+    admission.write(str(runtime / "admission" / "admission.json"), forged)
     status, answer = sign(b"another boot")
     ok(status == 503 and ready() == 503, "refused (503), not ready", "%s %s" % (status, answer))
     ok("from another boot" in log(), "the daemon's log: the admission file is from another boot")

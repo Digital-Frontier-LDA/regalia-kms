@@ -129,7 +129,9 @@ class Profile(unittest.TestCase):
                 ("/run/credentials/regalia-sops-kms.service/workload-key.pem", "r"),
                 ("/run/credentials/regalia-kms.service/hsm-site-a.pin", "w"),
                 ("/run/regalia-kms/site-lease.json", "w"), ("/run/pcscd/pcscd.pid", "r"),
-                ("/run/regalia/admission.json", "w"), ("/run/regalia/boot-session", "w"), ("/run/regalia/admission.json.requests", "r"),
+                ("/run/regalia/admission/admission.json", "w"), ("/run/regalia/boot-session", "w"),
+                ("/run/regalia/admission/admission.json.requests", "r"), ("/run/regalia/admission/.admission-x", "w"),
+                ("/run/regalia/admission.json", "r"), ("/run/regalia/authtime.json", "r"),
                 ("/bin/sh", "x"), ("/usr/bin/pkcs11-tool", "x"), ("/tmp/x", "w"), ("/proc/1/environ", "r")):
             with self.subTest(path=path, perms=perms):
                 self.assertFalse(allowed(path, perms))

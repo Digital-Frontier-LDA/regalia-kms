@@ -93,8 +93,13 @@ type Options struct {
 	Path        string
 	NodeID      string
 	SessionPath string
-	// OwnerUID is who must own the two files and their directories. Zero is root, the default.
+	// OwnerUID is the lease service's user (regalia-kms#191): the admission file and its directory
+	// must be that user's or root's. Zero is root.
 	OwnerUID uint32
+	// SessionOwnerUID is who writes the boot session: root (the unlock client, or
+	// regalia-boot-session.service), the default. Only tests set it. The lease service's user is
+	// never trusted for this file: it would then choose the session its own admission is checked against.
+	SessionOwnerUID uint32
 	// Boottime returns CLOCK_BOOTTIME in milliseconds.
 	Boottime func() (int64, error)
 	// BootID returns the kernel's boot ID.
@@ -244,7 +249,7 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if document.BootID != gate.bootID {
 		return refuse("the admission file is from another boot")
 	}
-	session, err := readTrusted(gate.options.SessionPath, gate.options.OwnerUID)
+	session, err := readTrusted(gate.options.SessionPath, gate.options.SessionOwnerUID)
 	if err != nil {
 		return refuse("the boot session: " + err.Error())
 	}
@@ -282,17 +287,24 @@ func (gate *Gate) read() (Document, error) {
 	return Parse(contents)
 }
 
-// readTrusted reads a small file that only its owner could have written: opened without following
-// a link, regular, owned by ownerUID, not writable by group or others, in a directory with the same
-// owner and the same restriction. The checks run on the opened descriptor, so the file that is
-// checked is the file that is read.
+// readTrusted reads a small file that only its writer (ownerUID) or root could have written: opened
+// without following a link, regular, owned by one of the two, not writable by group or others, in a
+// directory with the same owner and the same restriction. Above that directory nobody else may be able
+// to swap it: every ancestor is a real directory owned by one of the two, and one that group or others
+// can write must be sticky (as /tmp is) with the next component down owned by one of the two, so
+// nobody else can rename it away. The file's own checks run on the opened descriptor, so the file that
+// is checked is the file that is read.
 func readTrusted(path string, ownerUID uint32) ([]byte, error) {
+	trusted := func(uid uint32) bool { return uid == ownerUID || uid == 0 }
 	var directory unix.Stat_t
 	if err := unix.Lstat(filepath.Dir(path), &directory); err != nil {
 		return nil, errors.New("its directory cannot be examined")
 	}
-	if directory.Mode&unix.S_IFMT != unix.S_IFDIR || directory.Uid != ownerUID || directory.Mode&0o022 != 0 {
-		return nil, errors.New("its directory is not one only its owner can write")
+	if directory.Mode&unix.S_IFMT != unix.S_IFDIR || !trusted(directory.Uid) || directory.Mode&0o022 != 0 {
+		return nil, errors.New("its directory is not one only its owner or root can write")
+	}
+	if err := ancestorsTrusted(filepath.Dir(path), directory.Uid, trusted); err != nil {
+		return nil, err
 	}
 	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
@@ -307,8 +319,8 @@ func readTrusted(path string, ownerUID uint32) ([]byte, error) {
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, errors.New("it is not a regular file")
 	}
-	if stat.Uid != ownerUID || stat.Mode&0o022 != 0 {
-		return nil, errors.New("it is not a file only its owner can write")
+	if !trusted(stat.Uid) || stat.Mode&0o022 != 0 {
+		return nil, errors.New("it is not a file only its owner or root can write")
 	}
 	contents, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
 	if err != nil {
@@ -318,6 +330,26 @@ func readTrusted(path string, ownerUID uint32) ([]byte, error) {
 		return nil, errors.New("it is oversized")
 	}
 	return contents, nil
+}
+
+// ancestorsTrusted walks from directory's parent up to "/". childUID is the owner of the component
+// below the one examined.
+func ancestorsTrusted(directory string, childUID uint32, trusted func(uint32) bool) error {
+	for current := directory; current != "/"; {
+		parent := filepath.Dir(current)
+		var stat unix.Stat_t
+		if err := unix.Lstat(parent, &stat); err != nil {
+			return fmt.Errorf("%s, above it, cannot be examined", parent)
+		}
+		if stat.Mode&unix.S_IFMT != unix.S_IFDIR || !trusted(stat.Uid) {
+			return fmt.Errorf("%s, above it, is not a directory of its owner or root", parent)
+		}
+		if stat.Mode&0o022 != 0 && (stat.Mode&unix.S_ISVTX == 0 || !trusted(childUID)) {
+			return fmt.Errorf("%s, above it, lets someone else replace what is below it", parent)
+		}
+		current, childUID = parent, stat.Uid
+	}
+	return nil
 }
 
 // Parse validates the bytes of an admission file: one JSON object with exactly the schema's

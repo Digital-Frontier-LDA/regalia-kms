@@ -10,6 +10,7 @@ on:
       - e2e/node-units-systemd.py
       - .github/workflows/node-units.yml
       - internal/admission/**
+      - internal/config/**
       - cmd/regalia-kms/**
       - cmd/regalia-audit-collector/**
   push:
@@ -19,6 +20,7 @@ on:
       - e2e/node-units-systemd.py
       - .github/workflows/node-units.yml
       - internal/admission/**
+      - internal/config/**
       - cmd/regalia-kms/**
       - cmd/regalia-audit-collector/**
 
