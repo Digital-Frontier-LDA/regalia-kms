@@ -104,7 +104,11 @@ SNAPSHOT="${REGALIA_BOOT_SNAPSHOT:-}"
 if [ -z "$SNAPSHOT" ] && [[ "${REGALIA_BOOT_MIRROR:-}" =~ snapshot\.debian\.org/archive/debian/([0-9]{8}T[0-9]{6}Z) ]]; then SNAPSHOT="${BASH_REMATCH[1]}"; fi
 [ -n "$SNAPSHOT" ] || { echo "unlock-boot-qemu: the initrd is built from a pinned archive snapshot: set REGALIA_BOOT_MIRROR to a snapshot.debian.org URL, or REGALIA_BOOT_SNAPSHOT"; exit 2; }
 [ -n "${KEYRING:-}" ] || KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"
-deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --out "$W/initrd-build" \
+# the membership root the initrd trusts (#156): the fixed TEST root whose chains tests/vectors/highwater-v1.json
+# holds, as its canonical file (the JSON string, no newline), as a ceremony record would give the real one
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
+  tests/vectors/highwater-v1.json "$W/root-key.json"
+deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --root-key "$W/root-key.json" --out "$W/initrd-build" \
   || { echo "unlock-boot-qemu: the initrd builder failed"; exit 2; }
 BIN="$W/initrd-build/regalia-unlock"          # the client the builder compiled: the initrd's, and the host's
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
@@ -180,9 +184,10 @@ done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
 cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
 cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
+cp "$W/root-key.json" "$ROOT/tmp/uki/root-key.json"                           # the membership root it trusts, an input (#156)
 printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
-IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json"
+IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json --root-key /tmp/uki/root-key.json"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
 KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/uki/keys/TEST-secure-boot.key --secure-boot-cert /tmp/uki/keys/TEST-secure-boot.crt"
 # #198: the review build records, run alone first, so that a refusal says what. The image is checked
@@ -190,7 +195,7 @@ KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/u
 # differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
 # before a pull request changes the inventory.
 cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
-if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled" >"$W/review.json" 2>&1; then
+if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled --root-key /tmp/uki/root-key.json" >"$W/review.json" 2>&1; then
   python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
     || cat "$W/review.json"
   chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true

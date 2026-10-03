@@ -54,6 +54,7 @@ NOT HERE: where the authority runs, the root key's ceremony, and a networked rev
 """
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -66,6 +67,7 @@ import threading
 import time
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from deploy.baremetal import authtime, convergence, heartbeat, membership, node, sitecfg, sync, wgsvc
@@ -94,7 +96,7 @@ def validate(doc):
     """The configuration. Refused names the first thing wrong."""
     membership.exact(doc, KEYS, "authority configuration")
     require(doc["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
-    membership.hex_field(doc["root_key"], 64, "root_key")
+    membership.root_entries(doc["root_key"], "root_key")
     require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
             "tcti must be null (the kernel's resource manager) or a TCTI string")
     for k in ("nv_epoch", "nv_sequence"):
@@ -107,6 +109,15 @@ def validate(doc):
     if signer["kind"] == "file":
         membership.exact(signer, ("kind", "path"), "signer")
         require(isinstance(signer["path"], str) and signer["path"].startswith("/"), "signer.path must be an absolute path")
+    else:
+        membership.exact(signer, ("kind", "module", "serial", "key_id", "pin_credential", "opensc_conf"), "signer")
+        require(isinstance(signer["module"], str) and signer["module"].startswith("/"), "signer.module must be an absolute path")
+        require(isinstance(signer["serial"], str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", signer["serial"]) is not None, "signer.serial is a token serial")
+        require(isinstance(signer["key_id"], str) and re.fullmatch(r"([0-9a-f]{2}){1,20}", signer["key_id"]) is not None, "signer.key_id is lowercase hex")
+        require(isinstance(signer["pin_credential"], str) and re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", signer["pin_credential"]) is not None,
+                "signer.pin_credential is the name of a systemd credential")
+        require(signer["opensc_conf"] is None or (isinstance(signer["opensc_conf"], str) and signer["opensc_conf"].startswith("/")),
+                "signer.opensc_conf is null or an absolute path")
     _int(doc["interval_s"], heartbeat.MIN_INTERVAL_S, 7 * 86400, "interval_s")
     if doc["lifetime_s"] is not None:
         _int(doc["lifetime_s"], 3600, heartbeat.HARD_MAX_LIFETIME, "lifetime_s")
@@ -140,7 +151,7 @@ def load(path):
 class FileSigner:
     """The revocation key in a file: Ed25519, PEM (PKCS#8), owned by this process's user and readable by no
     one else. A STOPGAP until the owner chooses a token (#199): `kind` is recorded on every signature."""
-    kind = "file"
+    kind, alg = "file", "ed25519"
 
     def __init__(self, path):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -162,10 +173,89 @@ class FileSigner:
         return self._key.sign(message)
 
 
+class Pkcs11Signer:
+    """The revocation key on a token (owner, 2026-10-03: a Nitrokey HSM 2, the key generated on the token,
+    recovered by a DKEK-share ceremony under ADR-0002 D19). ECDSA P-256: the token's PKCS#11 offers no
+    EdDSA (measured on the bench). Driven through pkcs11-tool, as the rest of the bench tooling is:
+      * the token is chosen by SERIAL and its slot re-checked before every signature, never by label;
+      * the PIN comes from a systemd credential ($CREDENTIALS_DIRECTORY/<pin_credential>) and reaches
+        pkcs11-tool through `env:`, never argv;
+      * `opensc_conf` (e.g. deploy/opensc/ignore-yubikey.conf) keeps OpenSC off every other reader, so a
+        PIN cannot reach another card;
+      * the signature is CKM_ECDSA over SHA-256 of the message, returned as r || s and normalised to low-S
+        (the verifier refuses high-S)."""
+    kind, alg = "pkcs11", "ecdsa-p256"
+
+    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, run=None, credentials=None):
+        import subprocess
+        self.module, self.serial, self.key_id, self.run = module, serial, key_id, run or subprocess.run
+        self.credentials = credentials or os.environ.get("CREDENTIALS_DIRECTORY")
+        self.pin_credential = pin_credential
+        self.env = dict(os.environ, **({"OPENSC_CONF": opensc_conf} if opensc_conf else {}))
+        self._public = self._read_public()
+
+    def _tool(self, *args, env=None):
+        done = self.run(["pkcs11-tool", "--module", self.module, *args], capture_output=True, timeout=60, env=env or self.env)
+        require(done.returncode == 0, "pkcs11-tool %s failed: %s" % (args[0] if args else "", done.stderr.decode(errors="replace").strip()[-200:]))
+        return done.stdout.decode(errors="replace")
+
+    def _slot(self):
+        """The one slot whose token has this serial; refused if none or several."""
+        slots, current = [], None
+        for line in self._tool("--list-slots").splitlines():
+            found = re.match(r"Slot \d+ \((0x[0-9a-fA-F]+)\):", line)
+            if found:
+                current = int(found.group(1), 16)
+            elif current is not None and re.match(r"\s*serial num\s*:\s*(\S+)\s*$", line):
+                if re.match(r"\s*serial num\s*:\s*(\S+)\s*$", line).group(1) == self.serial:
+                    slots.append(current)
+        require(len(slots) == 1, "%s token with serial %s is present" % ("no" if not slots else "more than one", self.serial))
+        return str(slots[0])
+
+    def _read_public(self):
+        with tempfile.TemporaryDirectory(prefix="revocation-pub-") as d:
+            self._tool("--slot", self._slot(), "--read-object", "--type", "pubkey", "--id", self.key_id, "--output-file", d + "/pub.der")
+            with open(d + "/pub.der", "rb") as f:
+                key = serialization.load_der_public_key(f.read())
+        require(isinstance(key, ec.EllipticCurvePublicKey) and isinstance(key.curve, ec.SECP256R1), "the token's key %s is not a P-256 key" % self.key_id)
+        return key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+
+    def _pin(self):
+        require(self.credentials, "no systemd credentials directory: the PIN comes from LoadCredentialEncrypted=")
+        path = os.path.join(self.credentials, self.pin_credential)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            pin = os.read(fd, 256).decode().strip()
+        finally:
+            os.close(fd)
+        require(re.fullmatch(r"[0-9A-Za-z]{4,64}", pin) is not None, "the PIN credential is not a PIN")
+        return pin
+
+    def public(self):
+        return self._public
+
+    def sign(self, message):
+        slot = self._slot()                              # the serial, re-checked before the PIN is presented
+        with tempfile.TemporaryDirectory(prefix="revocation-sig-") as d:
+            with open(d + "/digest", "wb") as f:
+                f.write(hashlib.sha256(message).digest())
+            self._tool("--slot", slot, "--login", "--pin", "env:REGALIA_REVOCATION_PIN", "--sign", "--mechanism", "ECDSA", "--id", self.key_id,
+                       "--input-file", d + "/digest", "--output-file", d + "/sig", env=dict(self.env, REGALIA_REVOCATION_PIN=self._pin()))
+            with open(d + "/sig", "rb") as f:
+                raw = f.read()
+        require(len(raw) == 64, "the token returned a %d-byte ECDSA signature, not r || s" % len(raw))
+        r, s = int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")
+        s = min(s, membership.P256_ORDER - s)            # low-S: the verifiers refuse the other form
+        signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+        membership.verify_revocation(self.alg, self._public, message, signature.hex(), "token")
+        return signature
+
+
 def signer_for(cfg):
-    if cfg["signer"]["kind"] == "file":
-        return FileSigner(cfg["signer"]["path"])
-    raise Refused("signer kind pkcs11 is not built yet: the owner's choice of token comes first (#199)")
+    signer = cfg["signer"]
+    if signer["kind"] == "file":
+        return FileSigner(signer["path"])
+    return Pkcs11Signer(signer["module"], signer["serial"], signer["key_id"], signer["pin_credential"], signer["opensc_conf"])
 
 
 # ---- the authority ----
@@ -286,8 +376,9 @@ class Authority:
                     return pending
             lifetime = self.lifetime(manifest)
             # checked BEFORE a number is reserved: a key the manifest does not name would burn one per retry
-            require(self.signer.public() in manifest["revocation_keys"], "the revocation key %s... is not named by the manifest at epoch %d: "
-                    "no heartbeat is signed" % (self.signer.public()[:16], manifest["epoch"]))
+            require(membership.revocation_alg(manifest, self.signer.public()) == self.signer.alg,
+                    "the revocation key %s... (%s) is not named by the manifest at epoch %d: "
+                    "no heartbeat is signed" % (self.signer.public()[:16], self.signer.alg, manifest["epoch"]))
             sequence = self.next_sequence()
             body = {"schema": heartbeat.SCHEMA, "epoch": manifest["epoch"], "sequence": sequence, "issued_at": stamp(seconds),
                     "expires_at": stamp(seconds + lifetime), "manifest_digest": membership.digest(manifest)}

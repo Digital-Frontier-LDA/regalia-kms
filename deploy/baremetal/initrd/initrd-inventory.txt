@@ -19,6 +19,7 @@ ours regalia-kms f 0644 0:0 etc/crypttab 2285d917152e2b7db793e7e7397e83586d3d735
 ours regalia-kms l 0777 0:0 etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service /usr/lib/systemd/system/regalia-unlock-relay.service
 ours regalia-kms l 0777 0:0 etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket /usr/lib/systemd/system/regalia-unlock-core.socket
 ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled
+ours regalia-kms f 0644 0:0 usr/lib/regalia/root-key.json =root-key
 ours regalia-kms f 0755 0:0 usr/lib/regalia/wg-boot 73427ea38a3d34b1f8796811943a06a41ab62b9c97456650853cdb26cafa4386
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock-core.socket f8e474073cfe4c94958ef0057ad80036e35349f7d1c30e901c9f1a823e755c52
 ours regalia-kms f 0644 0:0 usr/lib/systemd/system/regalia-unlock-relay.service 36892d783b6df368ba9f490a89bf64baf2544727bddd433f3d3e179541361374

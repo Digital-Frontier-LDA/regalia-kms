@@ -311,7 +311,7 @@ def cmdline_text(raw):
 #   build machine's dpkg database). `uki initrd-inventory` writes it from a build; a dracut or distribution
 #   update is a pull request whose diff is read. (Checking every "package" file against the archive-signed
 #   .deb is a follow-up, required before the first production image.)
-INITRD_REVIEW = "regalia.initrd-review/v4"
+INITRD_REVIEW = "regalia.initrd-review/v5"
 INITRD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initrd")
 INVENTORY = os.path.join(INITRD_DIR, "initrd-inventory.txt")
 UNIT_DIR = "usr/lib/systemd/system"
@@ -322,6 +322,13 @@ UNLOCK_BINARIES = ("usr/bin/regalia-unlock",)
 # reviewed, and `build --unlock-client` (required) holds the image's client to the binary the build compiled.
 # sign and verify hold it to the hash the record states, which two builders compiled alike.
 COMPILED = "=compiled"
+# The membership root the initrd trusts (#156, read by the client with membership.LoadRoot): canonical JSON, one
+# key or, during a root rotation, a list. Its line in the inventory says "the root this build was given", not a
+# hash: a deployment's root is not this repository's to pin. build --root-key gives it, and every review holds
+# the initrd's file to it byte for byte; sign and verify hold it to the hash the record states.
+ROOT_KEY_PATH = "usr/lib/regalia/root-key.json"
+ROOT_KEY_MARK = "=root-key"
+BOUND = {UNLOCK_BINARIES[0]: COMPILED, ROOT_KEY_PATH: ROOT_KEY_MARK}
 UNLOCK_ENABLED = {"etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket": "/usr/lib/systemd/system/regalia-unlock-core.socket",
                   "etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service": "/usr/lib/systemd/system/regalia-unlock-relay.service"}
 # the module's drop-ins (module-setup.sh writes exactly these bytes): the relay ordering for
@@ -722,7 +729,7 @@ def ours():
 
 def _ours_path(path, files):
     """Whether an entry of the image is this repository's (for the inventory's CLASS column)."""
-    if path in ours() or path in UNLOCK_BINARIES or path == "etc/crypttab":
+    if path in ours() or path in BOUND or path == "etc/crypttab":
         return True
     entry = files.get(path)
     return os.path.basename(path) == RESET_DROPIN[0] and entry is not None and entry[1] == RESET_DROPIN[1]
@@ -736,8 +743,8 @@ def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
     owners = _owners(root) if root else None
     rows = []
     for path, state in entries(files).items():
-        if path in UNLOCK_BINARIES:          # bound to the binary the build compiled, not to a hash here
-            state = " ".join(state.split(" ")[:3] + [COMPILED])
+        if path in BOUND:                    # bound to the build's input (the compiled client, the root), not a hash here
+            state = " ".join(state.split(" ")[:3] + [BOUND[path]])
         raw = path
         if _ours_path(raw, files):
             cls, origin = "ours", "regalia-kms"
@@ -775,15 +782,15 @@ def _instructions(files, findings):
                     findings.append("%s: %r acts at the unlock client's paths" % (path, line))
 
 
-def review_initrd(path, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None):
+def review_initrd(path, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None, root_key_sha256=None):
     """The review of the initrd at `path` (see above)."""
-    return review_initrd_data(read(path), run, tools, inventory, client_sha256)
+    return review_initrd_data(read(path), run, tools, inventory, client_sha256, root_key_sha256)
 
 
-def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None):
+def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, client_sha256=None, root_key_sha256=None):
     """The same review, of an initrd's bytes (an image's .initrd section). `client_sha256`: the unlock client
     the build compiled, when it is given."""
-    empty = {"schema": INITRD_REVIEW, "passed": False, "findings": [], "crypttab": None, "units": {}, "clients": {}, "inventory_sha256": None}
+    empty = {"schema": INITRD_REVIEW, "passed": False, "findings": [], "crypttab": None, "units": {}, "clients": {}, "root_key": None, "inventory_sha256": None}
     try:
         files = _Files(initrd_files(data, run, tools))
     except Refused as refused:
@@ -849,6 +856,19 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
             findings.append("%s cannot be held to the client the build compiled: it was not given (build --unlock-client)" % path)
         elif clients[path] != client_sha256:
             findings.append("%s is not the client this build compiled (%s, not %s)" % (path, clients[path], client_sha256))
+    root_key = None
+    try:
+        root_body = _regular(files, ROOT_KEY_PATH)
+    except Refused as refused:
+        root_body, findings = None, findings + ["%s: %s" % (ROOT_KEY_PATH, refused)]
+    if root_body is None:
+        findings.append("%s, the membership root the client trusts, is not in the image" % ROOT_KEY_PATH)
+    else:
+        root_key = sha256(root_body)
+        if root_key_sha256 is None:
+            findings.append("%s cannot be held to the root this build was given: it was not given (--root-key)" % ROOT_KEY_PATH)
+        elif root_key != root_key_sha256:
+            findings.append("%s is not the root this build was given (%s, not %s)" % (ROOT_KEY_PATH, root_key, root_key_sha256))
     units, scripts, seen = {}, set(), set()
     for name in UNLOCK_UNITS:
         body = _regular(files, UNIT_DIR + "/" + name)
@@ -869,18 +889,18 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
                 findings.append("inventory: + %s %s (not in the inventory)" % (path, state[path]))
             elif path not in state:
                 findings.append("inventory: - %s %s (in the inventory, not in the image)" % (path, expected[path]))
-            elif state[path] != expected[path] and not (path in UNLOCK_BINARIES and expected[path].endswith(" " + COMPILED)
+            elif state[path] != expected[path] and not (path in BOUND and expected[path].endswith(" " + BOUND[path])
                                                         and state[path].split(" ")[:3] == expected[path].split(" ")[:3]):
                 findings.append("inventory: ~ %s %s, the inventory says %s" % (path, state[path], expected[path]))
     canonical = "".join("%s %s\n" % (p, state[p]) for p in sorted(state))
     return {"schema": INITRD_REVIEW, "passed": not findings, "findings": sorted(set(findings))[:200],
-            "crypttab": got[0] if got and len(got) == 1 else None, "units": units, "clients": clients,
+            "crypttab": got[0] if got and len(got) == 1 else None, "units": units, "clients": clients, "root_key": root_key,
             "inventory_sha256": sha256(canonical.encode())}
 
 
 def check_review(review):
     """A record's initrd review, checked for shape: the fields, and passed only with no finding."""
-    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units", "clients", "inventory_sha256"), "record.initrd_review")
+    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units", "clients", "root_key", "inventory_sha256"), "record.initrd_review")
     require(review["schema"] == INITRD_REVIEW, "record.initrd_review is not a %s" % INITRD_REVIEW)
     require(isinstance(review["passed"], bool) and isinstance(review["findings"], list)
             and all(isinstance(f, str) for f in review["findings"]) and review["passed"] == (not review["findings"]),
@@ -891,8 +911,9 @@ def check_review(review):
     require(isinstance(review["clients"], dict) and set(review["clients"]) <= set(UNLOCK_BINARIES)
             and all(attest.is_hex(v, 64) for v in review["clients"].values()), "record.initrd_review.clients is not a map of the client binaries")
     require(review["inventory_sha256"] is None or attest.is_hex(review["inventory_sha256"], 64), "record.initrd_review.inventory_sha256 is not a sha256")
+    require(review["root_key"] is None or attest.is_hex(review["root_key"], 64), "record.initrd_review.root_key is not a sha256")
 
-INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey", "initrd_build")
+INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey", "initrd_build", "root_key")
 OPTIONAL_INPUTS = ("microcode",)
 # The initrd's build record (deploy/baremetal/initrd/build-initrd.sh, #248). Every builder builds the initrd
 # itself, from pinned inputs, and gets the same bytes and the same record; the record names what the initrd
@@ -901,7 +922,22 @@ OPTIONAL_INPUTS = ("microcode",)
 # initrd and THIS client, or the image is not built and not signed.
 INITRD_BUILD_SCHEMA = "regalia.initrd-build/v1"
 INITRD_BUILD_KEYS = ("schema", "commit", "go", "snapshot", "source_date_epoch", "suite", "kernel", "dracut", "packages_requested",
-                     "client_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size", "initrd_entries")
+                     "client_sha256", "root_key_sha256", "repository_files", "packages_sha256", "packages", "initrd_sha256", "initrd_size",
+                     "initrd_entries")
+
+
+def check_root_key(inputs):
+    """The membership root given (--root-key): the canonical bytes of one root, or of a list of one to eight for a
+    rotation's overlap (membership.root_entries). Returns [(alg, key hex), ...]; None when none was given (a
+    library caller's fixture: the build and sign commands require one)."""
+    if not inputs.get("root_key"):
+        return None
+    raw = read(inputs["root_key"], 65536)
+    value = membership.load(raw, 65536)
+    entries = membership.root_entries(value, "--root-key")
+    require(membership.canonical(value) == raw, "--root-key is not canonical JSON (sorted keys, no whitespace, no newline): "
+            "the image's file must be the ceremony record's bytes, and nothing rewrites them")
+    return entries
 
 
 def check_initrd_build(inputs, client_sha256):
@@ -918,12 +954,15 @@ def check_initrd_build(inputs, client_sha256):
             "the initrd's build record names no exact Go release")
     require(isinstance(built["snapshot"], str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", built["snapshot"]) is not None,
             "the initrd's build record names no archive snapshot")
-    for field in ("client_sha256", "initrd_sha256", "packages_sha256"):
+    for field in ("client_sha256", "root_key_sha256", "initrd_sha256", "packages_sha256"):
         require(attest.is_hex(built[field], 64), "the initrd's build record has no %s" % field)
     require(built["initrd_sha256"] == sha256(read(inputs["initrd"])),
             "the initrd's build record is for another initrd (%s, not --initrd's %s)" % (built["initrd_sha256"], sha256(read(inputs["initrd"]))))
     require(client_sha256 is not None and built["client_sha256"] == client_sha256,
             "the initrd's build record names another unlock client (%s, not %s)" % (built["client_sha256"], client_sha256))
+    if inputs.get("root_key"):
+        require(built["root_key_sha256"] == sha256(read(inputs["root_key"], 65536)),
+                "the initrd's build record names another membership root (%s, not --root-key's)" % built["root_key_sha256"])
     return built
 
 
@@ -1025,7 +1064,9 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS, invento
         _check_sections(parts, inputs, uname)
         values, _ = _predict(parts, run, tools, work)
         # the staged copy: the bytes just measured
-        review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None)
+        check_root_key(inputs)
+        review = review_initrd(inputs["initrd"], run, tools, inventory, sha256(read(unlock_client)) if unlock_client else None,
+                               sha256(read(inputs["root_key"], 65536)) if inputs.get("root_key") else None)
         check_initrd_build(inputs, sha256(read(unlock_client)) if unlock_client else None)
         record = {
             "schema": SCHEMA, "name": name, "uname": uname,
@@ -1194,15 +1235,17 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         require(not os.path.lexists(path), "%s already exists: nothing is overwritten" % path)
     # what is about to be signed, shown before any key is touched
     (report or (lambda line: print(line, file=sys.stderr)))(
-        "signing %s: unsigned image %s; inputs %s" % (name, record["unsigned_sha256"],
-                                                       ", ".join("%s %s" % (k, e["sha256"][:16]) for k, e in sorted(record["inputs"].items()))))
+        "signing %s: unsigned image %s; inputs %s; the initrd trusts membership root %s" % (name, record["unsigned_sha256"],
+            ", ".join("%s %s" % (k, e["sha256"][:16]) for k, e in sorted(record["inputs"].items())),
+            ", ".join("%s %s" % (alg, key[:16]) for alg, key in (check_root_key(inputs) or [])) or "NONE GIVEN"))
     with tempfile.TemporaryDirectory(dir=out_dir) as work:
         inputs = _stage(inputs, work)
         for key, entry in record["inputs"].items():               # the copies, not the originals, are what is built
             require(sha256(read(inputs[key])) == entry["sha256"], "the input --%s changed while it was copied" % key.replace("_", "-"))
         # the review again, here, on the copy that is about to be built and signed: not taken on the record's word
         # the client held to the hash the record states: the one both builders compiled
-        mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
+        mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]),
+                             record["initrd_review"]["root_key"])
         require(mine == record["initrd_review"],
                 "this machine's review of the initrd is not the record's: nothing is signed")
         check_initrd_build(inputs, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
@@ -1277,7 +1320,8 @@ def verify(image, record, public_keys, secure_boot_cert, run=subprocess.run, too
     # and the initrd it carries reviewed again, here, on the operator's machine (#198): the signatures say
     # the reviewed record was signed, this says the bytes still pass the same rules
     require(record["initrd_review"]["passed"] and review_initrd_data(parts["initrd"], run, tools, inventory,
-                                                                     record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0])) == record["initrd_review"],
+                                                                     record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]),
+                                                                     record["initrd_review"]["root_key"]) == record["initrd_review"],
             "the image's initrd does not pass the review its record states")
     return dict(record["pcr11"])
 
@@ -1405,6 +1449,7 @@ def main(argv=None):
     c = sub.add_parser("initrd-review", help="review an initrd as build does, and print the findings")
     c.add_argument("--initrd", required=True)
     c.add_argument("--unlock-client", required=True, help="the unlock client the build compiled")
+    c.add_argument("--root-key", required=True, help="the membership root the build was given (#156)")
     c.add_argument("--initrd-inventory", default=None)
     c = sub.add_parser("initrd-inventory", help="print an initrd's inventory (every entry, classed), to read in a pull request")
     c.add_argument("--initrd", required=True)
@@ -1412,7 +1457,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "initrd-review":
-            review = review_initrd(args.initrd, inventory=args.initrd_inventory, client_sha256=sha256(read(args.unlock_client)))
+            check_root_key({"root_key": args.root_key})
+            review = review_initrd(args.initrd, inventory=args.initrd_inventory, client_sha256=sha256(read(args.unlock_client)),
+                                   root_key_sha256=sha256(read(args.root_key, 65536)))
             print(json.dumps(review, indent=2, sort_keys=True))
             return 0 if review["passed"] else 1
         if args.command == "initrd-inventory":
