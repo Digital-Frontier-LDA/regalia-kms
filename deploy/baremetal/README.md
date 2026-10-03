@@ -473,16 +473,21 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     names), for a bounded number of rounds;
   - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
     file (`/run/regalia-unlock/key.sock`). If no peer helps, it gives nothing.
-- **The relay** (`regalia-unlock-relay.service`, behind `regalia-unlock.socket`): the key socket's own
-  service holds no credential, no TPM and no network, and depends on nothing, so it always starts. It
-  asks the real client on its own socket (`regalia-unlock-core.socket`) and passes on exactly one whole
-  key, or gives nothing after any failure or after 330 s (the real client ends its own attempt within
-  240 s, so its answer comes first; a client that hangs yields the prompt). With nothing,
-  systemd-cryptsetup asks for the recovery key. Stopped, it exits at once. Before it, a real client that could not start (a sealed credential that did not
-  decrypt) left systemd-cryptsetup with a reset connection, and it failed without asking (#66). Shown
-  with the real systemd and systemd-cryptsetup: a client that hangs, one that crashes mid-answer, an
-  undecryptable credential and an absent one each end with no key and the prompt.
-- **The units** (`deploy/baremetal/initrd/regalia-unlock.socket` and `.service`): systemd-cryptsetup's
+- **The relay** (`regalia-unlock-relay.service`): it makes the key socket crypttab names, holds no
+  credential, no TPM and no network, and needs nothing that can fail. It asks the real client on its
+  own socket (`regalia-unlock-core.socket`) and passes on exactly one whole key, or gives nothing after
+  any failure or after 330 s (the real client ends its own attempt within 240 s, so its answer comes
+  first; a client that hangs yields the prompt). With nothing, systemd-cryptsetup asks for the
+  recovery key. It makes the socket ITSELF, with no `.socket` unit, because systemd-cryptsetup asks for
+  the recovery key when the key file does not exist, and fails without asking when a connection is
+  refused or reset (systemd 257): so if the relay cannot start, or is gone, there is no socket, and the
+  console asks. It is restarted without limit; its runtime directory, the socket in it, goes when it
+  stops; systemd-cryptsetup is ordered after it, weakly. Before it, a real client that could not start
+  (a sealed credential that did not decrypt) left systemd-cryptsetup with a reset connection, and it
+  failed without asking (#66). Shown with the real systemd and systemd-cryptsetup: a client that hangs,
+  one that crashes mid-answer, an undecryptable credential, an absent one, and the relay unable to
+  start each end with no key and the prompt's path.
+- **The real client's units** (`deploy/baremetal/initrd/regalia-unlock-core.socket` and `regalia-unlock.service`): the relay's
   connection to the socket starts the client, sandboxed (no capability, no write anywhere but its own
   `/run/regalia`, no device but the TPM and the disks, read-only). Shown with a running systemd and
   the real systemd-cryptsetup: the volume is mapped with the key from the socket; with no peer,
@@ -533,9 +538,14 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   one is refused), the four others as data. A missing file keeps its unit from starting, and the
   console asks for the recovery key (within seconds in the boot test). Second layer, for an image built
   without that switch: the dracut module leaves out systemd-debug-generator (which makes units and
-  drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles, sysctl, journald and
-  sysusers services. fstab-generator (`fstab.extra`; it mounts the root) and PID 1 itself are covered
-  by the first layer only. The boot test reads systemd's own message ("systemd.import_credentials=no
+  drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles, sysctl, journald,
+  sysusers, udev rule-credential and systemd-cryptsetup services (the last imports `cryptsetup.*`: a
+  planted passphrase would be tried before the key socket). It is partial: fstab-generator
+  (`fstab.extra`; it mounts the root), the network generator and PID 1 itself are covered by the
+  first layer only. A PE addon on the ESP could add a command line (systemd-stub appends it, and only
+  PCR 12 changes); with Secure Boot on, the stub loads only addons signed by a key in db, and the
+  peers refuse any changed PCR 12, so it gains no contribution. Enforcement of the switch in
+  `uki.py build` is d9's follow-up. The boot test reads systemd's own message ("systemd.import_credentials=no
   is set") from the booted journal, and passes an extra unit through SMBIOS that is never started.
   The machine that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
 

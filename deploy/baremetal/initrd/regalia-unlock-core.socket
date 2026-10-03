@@ -1,4 +1,5 @@
-# The real unlock client's own socket (regalia-kms#66): only the relay on the key socket connects to it.
+# The real unlock client's own socket (regalia-kms#66): only the relay (regalia-unlock-relay.service, which
+# makes the key socket crypttab names) connects to it.
 # A connection starts regalia-unlock.service, with its credentials. If that service cannot start (a
 # credential absent or refused), this socket fails, the relay's connection is reset, and the relay gives
 # systemd-cryptsetup nothing: the console asks for the recovery key.

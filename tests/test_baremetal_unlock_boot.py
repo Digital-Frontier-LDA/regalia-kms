@@ -363,10 +363,10 @@ class OnQemu(tub.OnSwtpm):
         self.assertIsNotNone(left, "the booted guest did not report the boot session")
         self.assertEqual((left.group(1), left.group(3), left.group(4)), ("root:root:755", through, slot))
         self.assertEqual(hashlib.sha256(bytes.fromhex(left.group(2))).hexdigest(), self.recorded_session(through)[0])
-        # the long-running client did not outlive the initrd: systemd stopped it (the unit's Conflicts=), before the socket closed
+        # the long-running client and the relay did not outlive the initrd: systemd stopped both (their Conflicts=)
         self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
-        stopped, closed = said.find("Stopped regalia-unlock.service"), said.find("Closed regalia-unlock.socket")
-        self.assertTrue(0 <= stopped < closed, "the client was not stopped before the root filesystem took over")
+        self.assertIn("Stopped regalia-unlock.service", said)
+        self.assertIn("Stopped regalia-unlock-relay.service", said)
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
         booted = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
         self.assertIsNotNone(booted)

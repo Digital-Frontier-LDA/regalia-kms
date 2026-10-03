@@ -82,6 +82,9 @@ type options struct {
 }
 
 func run(arguments []string, out, diagnostics io.Writer) error {
+	if len(arguments) > 0 && arguments[0] == "-relay" {
+		return runRelay(arguments, out, diagnostics)
+	}
 	// The socket first, before anything that can fail. A start that cannot serve still answers whoever
 	// waits on it, with nothing: systemd-cryptsetup then asks at the console, and systemd does not start
 	// this program again for a connection left waiting. That holds for a bad flag or a bad configuration too.
@@ -102,8 +105,6 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	flags.StringVar(&o.tpm, "tpm", "/dev/tpmrm0", "the TPM: the resource-manager device, or unix:PATH for a software TPM in tests")
 	flags.StringVar(&o.sessionDir, "session-dir", "/run/regalia", "where the boot session's ID and public key are left for the running system")
 	flags.BoolVar(&o.once, "once", false, "answer one connection and exit (tests); without it the program serves until it is stopped")
-	relayTo := flags.String("relay", "", "serve the key socket as a relay to the real client on this socket: no credential, no TPM, no network")
-	relayWait := flags.Duration("relay-wait", 150*time.Second, "with -relay: the longest wait for the real client's answer")
 	flags.IntVar(&o.rounds, "rounds", 5, "how many times to go round the peers before giving up")
 	flags.DurationVar(&o.budget, "budget", 240*time.Second, "the longest one attempt may take, all rounds together: less than the relay's wait")
 	flags.DurationVar(&o.wait, "wait", 5*time.Second, "pause between rounds")
@@ -115,21 +116,6 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	}
 	if listenerError != nil {
 		return listenerError
-	}
-	if *relayTo != "" {
-		if *relayWait <= 0 || *relayWait > 30*time.Minute {
-			return errors.New("-relay-wait must be positive and at most 30m")
-		}
-		serving = true
-		// Stopped (shutdown, or switch-root): at once, whatever it waits on. An asker in progress reads
-		// nothing, which is the relay's answer for every failure.
-		stopped := make(chan os.Signal, 1)
-		signal.Notify(stopped, syscall.SIGTERM, syscall.SIGINT)
-		go func() {
-			<-stopped
-			os.Exit(0)
-		}()
-		return relay(listener, *relayTo, *relayWait, diagnostics)
 	}
 	// Everything that can be refused without a peer is refused first: nothing is asked of a peer, and no
 	// boot session is spent, by a start that could not have used the answer.

@@ -81,7 +81,7 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
 # What a KMS host has installed: the client, the units, the script, the dracut module.
 install -D -m 0755 "$BIN" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
-install -m 0644 deploy/baremetal/initrd/regalia-unlock.socket deploy/baremetal/initrd/regalia-unlock.service \
+install -m 0644 deploy/baremetal/initrd/regalia-unlock.service \
   deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
@@ -99,7 +99,7 @@ chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-
   || { tail -40 "$W/dracut.log"; echo "unlock-boot-qemu: dracut failed"; exit 2; }
 grep -i "regalia" "$W/dracut.log" | head -5 || true
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
-for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.socket$' 'regalia-unlock\.service$' 'regalia-unlock-relay\.service$' 'regalia-unlock-core\.socket$' 'regalia-wg-boot\.service$' \
+for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'regalia-unlock-relay\.service$' 'regalia-unlock-core\.socket$' 'regalia-wg-boot\.service$' \
          'systemd-pcrphase-initrd\.service$' 'initrd\.target\.wants/systemd-pcrphase-initrd\.service' 'systemd-pcrextend$' \
          'bin/wg$' 'bin/nft$' 'bin/ip$' 'wireguard\.ko' 'nf_tables\.ko' 'nft_ct\.ko' 'virtio_net\.ko'; do
   grep -q "$f" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: the initrd lacks $f"; grep -c . "$W/lsinitrd.txt"; exit 2; }
@@ -108,9 +108,19 @@ done
 if grep -q 'etc/regalia' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds files under /etc/regalia"; exit 2; fi
 # nothing in it acts on a credential by name: no generator of units from credentials, the imports reset
 if grep -q 'systemd-debug-generator' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds systemd-debug-generator"; exit 2; fi
-for s in systemd-tmpfiles-setup systemd-tmpfiles-setup-dev-early systemd-tmpfiles-setup-dev systemd-sysctl systemd-journald systemd-sysusers; do
-  grep -q "$s.service.d/50-regalia-no-credentials.conf" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: no credential reset for $s"; exit 2; }
+# every unit in the finished image that takes credentials by name has its reset, and systemd-cryptsetup's too
+mkdir "$ROOT/tmp/ird"
+chroot "$ROOT" sh -c 'cd /tmp/ird && lsinitrd --unpack /boot/initrd.e2e' >/dev/null 2>&1 || { echo "unlock-boot-qemu: cannot unpack the initrd"; exit 2; }
+uncovered=""
+for unit in "$ROOT"/tmp/ird/usr/lib/systemd/system/*.service; do
+  name="${unit##*/}"; case "$name" in regalia-*) continue ;; esac
+  grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=' "$unit" || continue
+  [ -f "$unit.d/50-regalia-no-credentials.conf" ] || uncovered="$uncovered $name"
 done
+[ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-cryptsetup@.service.d/50-regalia-no-credentials.conf" ] || uncovered="$uncovered systemd-cryptsetup@.service"
+[ -z "$uncovered" ] || { echo "unlock-boot-qemu: units in the image that take credentials by name, with no reset:$uncovered"; exit 2; }
+echo "units with a credential reset: $(find "$ROOT/tmp/ird/usr/lib/systemd/system" -name 50-regalia-no-credentials.conf | wc -l)"
+rm -rf "$ROOT/tmp/ird"
 chroot "$ROOT" lsinitrd -f etc/crypttab /boot/initrd.e2e | grep -v '^#' > "$W/crypttab.txt"
 cmp -s "$W/crypttab.txt" <(grep -v '^#' deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab) \
   || { cat "$W/crypttab.txt"; echo "unlock-boot-qemu: the initrd's crypttab is not the module's"; exit 2; }

@@ -72,8 +72,7 @@ installkernel() {
 install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
-    for unit in regalia-unlock.socket regalia-unlock-relay.service regalia-unlock-core.socket regalia-unlock.service \
-        regalia-wg-boot.service; do
+    for unit in regalia-unlock-relay.service regalia-unlock-core.socket regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done
     # The one crypttab line, the same on every host: the root partition is found by its GPT label. Nothing
@@ -84,15 +83,29 @@ install() {
     inst_simple "${moddir:?}/crypttab" /etc/crypttab
     # Nothing in the initrd acts on a credential by name. The image's command line already stops systemd
     # importing any (systemd.import_credentials=no); this is the second layer, for an image built without
-    # it, and covers the consumers named here only: no unit or drop-in from a credential (the generator that
-    # makes them is left out), and the tmpfiles, sysctl, journald and sysusers services import none.
-    # fstab-generator (which mounts the root) and PID 1 itself still read some: the first layer covers those.
+    # it: no unit or drop-in from a credential (the generator that makes them is left out), and no unit
+    # imports or loads one by name (below). fstab-generator (which mounts the root), the network
+    # generator and PID 1 itself still read some: the first layer covers those.
     rm -f -- "${initdir:?}${systemdutildir:?}/system-generators/systemd-debug-generator"
-    local service
-    for service in systemd-tmpfiles-setup.service systemd-tmpfiles-setup-dev-early.service systemd-tmpfiles-setup-dev.service \
-        systemd-sysctl.service systemd-journald.service systemd-sysusers.service; do
-        mkdir -p "${initdir:?}${systemdsystemunitdir:?}/$service.d"
-        printf '[Service]\nImportCredential=\n' > "${initdir:?}${systemdsystemunitdir:?}/$service.d/50-regalia-no-credentials.conf"
+    # Every unit already in the image that takes credentials by name, found rather than listed, and
+    # systemd-cryptsetup's (its generator writes ImportCredential=cryptsetup.* into units made at boot):
+    # all three settings reset. The boot test checks the finished image for any unit left out.
+    local unit
+    for unit in "${initdir:?}${systemdsystemunitdir:?}"/*.service systemd-cryptsetup@.service; do
+        unit="${unit##*/}"
+        case "$unit" in regalia-*) continue ;; esac
+        if [ "$unit" != systemd-cryptsetup@.service ] \
+            && ! grep -qE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=' "${initdir:?}${systemdsystemunitdir:?}/$unit"; then
+            continue
+        fi
+        mkdir -p "${initdir:?}${systemdsystemunitdir:?}/$unit.d"
+        printf '[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n' \
+            > "${initdir:?}${systemdsystemunitdir:?}/$unit.d/50-regalia-no-credentials.conf"
     done
-    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket regalia-unlock-core.socket
+    # systemd-cryptsetup waits for the relay's socket to listen, and does not need the relay to start: if it
+    # does not, the key file is missing and systemd-cryptsetup asks for the recovery key
+    mkdir -p "${initdir:?}${systemdsystemunitdir:?}/systemd-cryptsetup@.service.d"
+    printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' \
+        > "${initdir:?}${systemdsystemunitdir:?}/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
+    "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock-relay.service regalia-unlock-core.socket
 }
