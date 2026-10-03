@@ -344,9 +344,10 @@ def differences(reported, sets, phase):
     parts = []
     for entry in sets:
         want = values(entry, phase)
+        # never empty: this is called only when the quoted digest matches no set's values
         diff = ["PCR %s is %s, expected %s" % (i, reported[i], want[i]) for i in sorted(want, key=int) if reported[i] != want[i]]
         where = entry["label"] + (" (%s phase)" % phase if "phases" in entry and phase else "")
-        parts.append("%s: %s" % (where or "the set", "; ".join(diff) if diff else "every PCR matches (the TPM firmware differs)"))
+        parts.append("%s: %s" % (where or "the set", "; ".join(diff)))
     return ". " + " | ".join(parts)
 
 
@@ -484,7 +485,9 @@ class Verifier:
         the CALLER is deciding, never something the node said. `pcr_values` ({"<index>": "<64 hex>"},
         protocol v2) are the values the node read beside its quote: unauthenticated, so used only once they
         hash to the quoted digest under THIS verifier's selection, and then only to say which PCR differs
-        when the quote matches no accepted set. Returns the verdict, or raises Refused with the reason."""
+        when the quote matches no accepted set. Such a reason carries the expected PCR values in hex: it goes to
+        the caller's audit trail (the operator's), never to the node, which is answered only DENIED. Returns the
+        verdict, or raises Refused with the reason."""
         expected = self.node(node_id)
         require(phase is None or (isinstance(phase, str) and phase in PHASES), "the phase must be one of %s" % ", ".join(PHASES))
         phased = [s["label"] for s in expected["accepted"] if "phases" in s]
