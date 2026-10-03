@@ -12,8 +12,8 @@ on:
 permissions:
   contents: read
 jobs:
-  # #175: each mode's level-1 scenarios in five shards (position modulo 5; one eighth of replace took
-  # 32 minutes on 2 CPUs with level 2), each shard running
+  # #175: each mode's level-1 scenarios in eight shards (position modulo 8; one eighth of replace took
+  # 32 minutes on 2 CPUs with level 2, so a slow runner still has room in 60), each shard running
   # level 2 from the unfinished headers its own faults left. recovery-reconcile.py is the repair.
   matrix:
     runs-on: ubuntu-24.04
@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         mode: [enrol, replace]
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -38,7 +38,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/recovery-evidence"
           python3 -Es lab/recovery/matrix.py --script deploy/baremetal/recovery-key.sh \
             --reconciler deploy/baremetal/recovery-reconcile.py \
-            --mode "${{ matrix.mode }}" --shard "${{ matrix.shard }}/5" \
+            --mode "${{ matrix.mode }}" --shard "${{ matrix.shard }}/8" \
             --output "$RUNNER_TEMP/recovery-evidence/matrix-${{ matrix.mode }}-${{ matrix.shard }}.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -63,4 +63,4 @@ jobs:
           path: ${{ runner.temp }}/shards
           merge-multiple: true
       - name: Every shard passed and the level-1 total is complete
-        run: python3 -Es lab/recovery/merge.py --shards 5 "$RUNNER_TEMP"/shards/matrix-*.json
+        run: python3 -Es lab/recovery/merge.py --shards 8 "$RUNNER_TEMP"/shards/matrix-*.json

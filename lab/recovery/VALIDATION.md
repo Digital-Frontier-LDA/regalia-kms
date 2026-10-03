@@ -77,4 +77,4 @@ CPUs.
 - proof that every sync fault fired;
 - `recovery-reconcile.py` as the repair.
 
-Under all of them, one replace shard (1/8) on cryptsetup 2.7.5 passed 110/110: 24 level-1 cases and 86 level-2 cases, 0 findings, every fault proven fired. Its first run caught a harness defect, now fixed: observing an image let cryptsetup repair a stale secondary header before the run (see README, "Observing never touches a run's image"). The full result is CI's merged report of 2 modes × 5 shards on cryptsetup 2.7.0, recorded on #236.
+Under all of them, one replace shard (1/8) on cryptsetup 2.7.5 passed 110/110: 24 level-1 cases and 86 level-2 cases, 0 findings, every fault proven fired. Its first run caught a harness defect, now fixed: observing an image let cryptsetup repair a stale secondary header before the run (see README, "Observing never touches a run's image"). The full result is CI's merged report of 2 modes × 8 shards on cryptsetup 2.7.0, recorded on #236.

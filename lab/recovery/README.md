@@ -70,7 +70,7 @@ repair is used.
 **Shards.** `--mode enrol|replace` and `--shard i/n` run the level-1 scenarios whose position modulo n
 is i-1, and level 2 from the headers those scenarios left. `lab/recovery/merge.py` checks the shards
 as one run: all present and passed, they agree on the level-1 total and the sync table, and together
-they ran that total exactly. CI (`recovery-matrix.yml`) runs 2 modes × 5 shards and the merge.
+they ran that total exactly. CI (`recovery-matrix.yml`) runs 2 modes × 8 shards and the merge.
 
 A failed enrollment leaving its original uncommissioned header is an expected
 refusal. A changed header needing repair, an unchanged claim contradicted by the
