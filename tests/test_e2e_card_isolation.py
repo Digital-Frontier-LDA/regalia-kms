@@ -221,8 +221,9 @@ def script_problems(text, script=None):
             word = line[m.end():]
             if allowed or not re.match(r'"?\$', word) or (continued and m.start() == 0):
                 continue
-            if re.match(r'(?:"[^"]*"|\$\{?\w+\}?)(?:\s*\|\s*(?:"[^"]*"|\S+))*\s*\)', word):
+            if re.match(r'(?:"[^"]*"|\$\{?\w+\}?)(?:\s*\|\s*(?:"[^"]*"|[^\s|)"]+))*\s*\)', word):
                 continue                                     # a case label: "$A") or "$A:so"|"$B")
+                                                             # (a bare label holds no | ) or ": linear, py/redos)
             name = re.match(r'"?\$\{?(\w*)', word).group(1)
             if (script, name) in COMMAND_VARIABLES or (OWN_PATH.match(word) and "/.." not in OWN_PATH.match(word).group(0)):
                 continue
