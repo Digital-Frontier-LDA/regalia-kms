@@ -106,6 +106,9 @@ profile regalia-kms {
   /run/regalia/admission/admission.json r,
   /run/regalia/boot-session r,
   @{PROC}/sys/kernel/random/boot_id r,
+  # runtime_admission_owner is a user name, resolved to its uid when the daemon starts (os/user:
+  # /etc/passwd, or through NSS with nsswitch.conf, granted below). The user database only; never shadow.
+  /etc/passwd r,
 
   # ---- the token: PKCS#11 over PC/SC ----
   # pkcs11_module_path, dlopen()ed.  internal/backend/nitrokey/pkcs11_driver.go, probes.go

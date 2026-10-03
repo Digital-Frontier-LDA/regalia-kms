@@ -33,6 +33,10 @@ const (
 //	  loop Token error, value Decode    refused by a later check with the same answer ("not one flat
 //	                                    JSON object"); the cases below cover each such input.
 //
+// THE ANCESTOR WALK SEES THE TEST'S OWN TEMPORARY DIRECTORY. With TMPDIR (or GOTMPDIR) under a group- or
+// world-writable directory without the sticky bit (a umask 002 home, ~/.cache at 0775), the tests that
+// expect an admission are refused: that is the rule working, not a fault. /tmp, or any 0755/0700 chain, passes.
+//
 // world is one node's /run: a directory only its owner or root can write, the admission file and the boot
 // session file in it, and a CLOCK_BOOTTIME the test moves.
 type world struct {
@@ -436,6 +440,8 @@ func TestOpenRefusesAnIncompleteOrUnusableConfiguration(t *testing.T) {
 		{"no admission path", "needs the admission file path", Options{NodeID: "a", SessionPath: "/run/regalia/boot-session", BootID: boot}},
 		{"no session path", "needs the admission file path", Options{Path: "/run/regalia/admission.json", NodeID: "a", BootID: boot}},
 		{"a relative path", "must be absolute", Options{Path: "admission.json", NodeID: "a", SessionPath: "/run/regalia/boot-session", BootID: boot}},
+		{"a path with .. in it", "must be clean", Options{Path: "/run/regalia/admission/l/../admission.json", NodeID: "a", SessionPath: "/run/regalia/boot-session", BootID: boot}},
+		{"a session path with a repeated slash", "must be clean", Options{Path: "/run/regalia/admission/admission.json", NodeID: "a", SessionPath: "/run/regalia//boot-session", BootID: boot}},
 		{"a relative session path", "must be absolute", Options{Path: "/run/regalia/admission.json", NodeID: "a", SessionPath: "boot-session", BootID: boot}},
 		{"no node ID", "needs this node's ID", Options{Path: "/run/regalia/admission.json", SessionPath: "/run/regalia/boot-session", BootID: boot}},
 		{"a node ID the manifest could not hold", "needs this node's ID", Options{Path: "/run/regalia/admission.json", NodeID: "Site A", SessionPath: "/run/regalia/boot-session", BootID: boot}},

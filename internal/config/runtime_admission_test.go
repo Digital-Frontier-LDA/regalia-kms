@@ -59,6 +59,8 @@ func TestRuntimeAdmissionMustBeStatedWhereThereIsAToken(t *testing.T) {
 		}}, `"disabled-for-lab" takes no`},
 		{"a relative admission path", []func(*Config){required, func(c *Config) { c.RuntimeAdmissionPath = "admission.json" }}, "must be absolute"},
 		{"a relative boot session path", []func(*Config){required, func(c *Config) { c.BootSessionPath = "run/boot-session" }}, "must be absolute"},
+		{"an admission path with .. in it", []func(*Config){required, func(c *Config) { c.RuntimeAdmissionPath = "/run/regalia/admission/l/../admission.json" }}, "must be clean paths"},
+		{"a boot session path with a trailing slash", []func(*Config){required, func(c *Config) { c.BootSessionPath = "/run/regalia/boot-session/" }}, "must be clean paths"},
 		{"a node ID the manifest could not hold", []func(*Config){required, func(c *Config) { c.NodeID = "Site A" }}, "node_id must be this node's ID"},
 		{"disabled for the lab, with a path left in", []func(*Config){withToken, required, func(c *Config) { c.RuntimeAdmission = RuntimeAdmissionDisabledForLab }}, `"disabled-for-lab" takes no`},
 		{"disabled for the lab, with only a node ID", []func(*Config){func(c *Config) { c.RuntimeAdmission, c.NodeID = RuntimeAdmissionDisabledForLab, "site-a" }}, `"disabled-for-lab" takes no`},

@@ -82,6 +82,8 @@ class Units(unittest.TestCase):
         self.assertEqual((boot_session["PrivateNetwork"], boot_session["PrivateDevices"], boot_session["RestrictAddressFamilies"]),
                          ("yes", "yes", "AF_UNIX"))
         self.assertIn("regalia-admission.service", unit("regalia-boot-session.service")["Unit"]["Before"].split())
+        # never in an initrd, where the unlock client owns the pair, whatever an image builder copies
+        self.assertEqual(unit("regalia-boot-session.service")["Unit"]["ConditionPathExists"], "!/etc/initrd-release")
         self.assertEqual((admission["IPAddressDeny"], admission["IPAddressAllow"]), ("any", "fd72:6567:6c61::/48"))
         wg_apply = self.service("regalia-wg-apply")
         self.assertNotIn("ReadWritePaths", wg_apply)                                 # it writes nothing but the kernel's state

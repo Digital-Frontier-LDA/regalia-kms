@@ -127,6 +127,11 @@ func Open(options Options) (*Gate, error) {
 	if !filepath.IsAbs(options.Path) || !filepath.IsAbs(options.SessionPath) {
 		return nil, errors.New("admission paths must be absolute")
 	}
+	// readTrusted checks the cleaned directory and opens the path as given: the two must be the same
+	// path, or a ".." after a link would open a file outside the directories that were checked.
+	if filepath.Clean(options.Path) != options.Path || filepath.Clean(options.SessionPath) != options.SessionPath {
+		return nil, errors.New("admission paths must be clean, with no \"..\", \".\" or repeated \"/\"")
+	}
 	if !nodeIDPattern.MatchString(options.NodeID) {
 		return nil, errors.New("admission needs this node's ID as the membership manifest spells it")
 	}

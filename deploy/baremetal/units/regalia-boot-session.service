@@ -12,6 +12,8 @@ Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/depl
 # /run/regalia is made by tmpfiles (regalia.tmpfiles.conf) when the initrd did not leave it
 After=systemd-tmpfiles-setup.service
 Before=regalia-admission.service
+# never in the initrd, even in an image that copied every regalia-* unit: there the unlock client owns the pair
+ConditionPathExists=!/etc/initrd-release
 
 [Service]
 Type=oneshot

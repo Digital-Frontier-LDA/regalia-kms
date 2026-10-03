@@ -467,6 +467,10 @@ func (cfg Config) Validate() error {
 		if !filepath.IsAbs(cfg.RuntimeAdmissionPath) || !filepath.IsAbs(cfg.BootSessionPath) {
 			return errors.New("runtime_admission_path and boot_session_path must be absolute")
 		}
+		// Written as they are read: a ".." after a link would leave the directories the gate checks.
+		if filepath.Clean(cfg.RuntimeAdmissionPath) != cfg.RuntimeAdmissionPath || filepath.Clean(cfg.BootSessionPath) != cfg.BootSessionPath {
+			return errors.New("runtime_admission_path and boot_session_path must be clean paths, with no \"..\", \".\" or repeated \"/\"")
+		}
 		if !nodeIDPattern.MatchString(cfg.NodeID) {
 			return errors.New("node_id must be this node's ID as the membership manifest spells it")
 		}
