@@ -51,10 +51,8 @@ func TestEveryRenderIsTheSameBytes(t *testing.T) {
 			continue
 		}
 		refused++
-		if _, ok := err.(*Refused); !ok {
-			if _, ok := err.(*membership.Refused); !ok {
-				t.Errorf("%s: Python refused (%s), Go: %v", name, r["refused"], err)
-			}
+		if got, ok := err.(*Refused); !ok || got.Class != r["class"] {
+			t.Errorf("%s: Python refused, for %s (%s); Go: %#v", name, r["class"], r["refused"], err)
 		}
 	}
 	if rendered < 80 || refused < 20 {
@@ -71,6 +69,8 @@ func TestEverySiteDocumentIsReadAlike(t *testing.T) {
 		_, err := ReadSite(raw)
 		if taken := d["taken"].(bool); taken != (err == nil) {
 			t.Errorf("%s: Python took it: %v (%v); Go: %v", d["name"], taken, d["refused"], err)
+		} else if got, ok := err.(*Refused); !taken && (!ok || got.Class != d["class"]) {
+			t.Errorf("%s: Python refused it for %s (%s); Go: %#v", d["name"], d["class"], d["refused"], err)
 		}
 	}
 	if len(documents) < 25 {

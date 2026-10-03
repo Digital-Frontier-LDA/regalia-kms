@@ -51,24 +51,35 @@ type Site struct {
 	Peers                              []Peer
 }
 
-// Refused is a refusal, with the reason.
-type Refused struct{ Reason string }
+// Refused is a refusal: the class of its reason (the same classes as bootcreds-v1.json's, so a refusal for
+// another reason than the Python's fails the vector test) and the reason itself.
+type Refused struct{ Class, Reason string }
 
 func (r *Refused) Error() string { return r.Reason }
 
-func refuse(format string, args ...any) error { return &Refused{Reason: fmt.Sprintf(format, args...)} }
+func refuse(class, format string, args ...any) error {
+	return &Refused{Class: class, Reason: fmt.Sprintf(format, args...)}
+}
+
+// rewrap keeps the class of a refusal under a longer reason.
+func rewrap(err error, prefix string) error {
+	if r, ok := err.(*Refused); ok {
+		return &Refused{Class: r.Class, Reason: prefix + r.Reason}
+	}
+	return refuse("manifest", "%s%v", prefix, err)
+}
 
 func exact(value any, keys []string, label string) (map[string]any, error) {
 	object, ok := value.(map[string]any)
 	if !ok {
-		return nil, refuse("%s must be an object", label)
+		return nil, refuse("fields", "%s must be an object", label)
 	}
 	if len(object) != len(keys) {
-		return nil, refuse("%s fields mismatch", label)
+		return nil, refuse("fields", "%s fields mismatch", label)
 	}
 	for _, k := range keys {
 		if _, has := object[k]; !has {
-			return nil, refuse("%s fields mismatch", label)
+			return nil, refuse("fields", "%s fields mismatch", label)
 		}
 	}
 	return object, nil
@@ -79,27 +90,27 @@ func exact(value any, keys []string, label string) (map[string]any, error) {
 func address(value any, label string) (netip.Addr, error) {
 	text, ok := value.(string)
 	if !ok {
-		return netip.Addr{}, refuse("%s must be an IPv4 address, as text", label)
+		return netip.Addr{}, refuse("address", "%s must be an IPv4 address, as text", label)
 	}
 	a, err := netip.ParseAddr(text)
 	if err != nil || !a.Is4() || a.String() != text {
-		return netip.Addr{}, refuse("%s must be an IPv4 address", label)
+		return netip.Addr{}, refuse("address", "%s must be an IPv4 address", label)
 	}
 	reserved := netip.MustParsePrefix("240.0.0.0/4").Contains(a)
 	if a.IsUnspecified() || a.IsLoopback() || a.IsMulticast() || a.IsLinkLocalUnicast() || reserved {
-		return netip.Addr{}, refuse("%s must be a host address", label)
+		return netip.Addr{}, refuse("address", "%s must be a host address", label)
 	}
 	return a, nil
 }
 
 // port is sitecfg._port (and _boot_mesh's prefix): an integer in range, never a boolean.
-func integer(value any, low, high int, message string) (int, error) {
+func integer(value any, low, high int, class, message string) (int, error) {
 	if _, isBool := value.(bool); isBool {
-		return 0, refuse("%s", message)
+		return 0, refuse(class, "%s", message)
 	}
 	n, ok := asInt(value)
 	if !ok || n < low || n > high {
-		return 0, refuse("%s", message)
+		return 0, refuse(class, "%s", message)
 	}
 	return n, nil
 }
@@ -116,29 +127,31 @@ func asInt(value any) (int, bool) {
 }
 
 // ReadSite is bootcreds.read_site: strict JSON in canonical bytes, its boot_mesh checked by sitecfg's own
-// rules (the zone and port checks need the whole site config, made when the file was written).
+// rules. Not re-made here, because they need the whole site config: the zones' disjointness from the tunnel,
+// and unlock_port against kms_port and ssh_port. sitecfg.validate made them when the file was written, and
+// PCR 12 attests the file.
 func ReadSite(raw []byte) (Site, error) {
 	var site Site
 	if len(raw) > siteMaxBytes {
-		return site, refuse("regalia.site is at most %d bytes", siteMaxBytes)
+		return site, refuse("size", "regalia.site is at most %d bytes", siteMaxBytes)
 	}
 	document, err := membership.LoadDocument(raw)
 	if err != nil {
-		return site, refuse("regalia.site: %v", err)
+		return site, refuse("not-json", "regalia.site: %v", err)
 	}
 	if string(membership.Canonical(document)) != string(raw) {
-		return site, refuse("regalia.site is not in canonical form")
+		return site, refuse("not-canonical", "regalia.site is not in canonical form")
 	}
 	doc, err := exact(document, siteKeys, "regalia.site")
 	if err != nil {
 		return site, err
 	}
 	if doc["schema"] != SiteSchema {
-		return site, refuse("regalia.site: schema must be %s", SiteSchema)
+		return site, refuse("schema", "regalia.site: schema must be %s", SiteSchema)
 	}
 	device, ok := doc["device"].(string)
 	if !ok || !devicePattern.MatchString(device) {
-		return site, refuse("regalia.site: device must be a plain path")
+		return site, refuse("device", "regalia.site: device must be a plain path")
 	}
 	host, err := address(doc["host_ipv4"], "host_ipv4")
 	if err != nil {
@@ -146,7 +159,7 @@ func ReadSite(raw []byte) (Site, error) {
 	}
 	site.HostIPv4, site.Device = host.String(), device
 	if doc["boot_mesh"] == nil {
-		return site, refuse("regalia.site: boot_mesh must not be null")
+		return site, refuse("no-mesh", "regalia.site: boot_mesh must not be null")
 	}
 	return site, readMesh(doc["boot_mesh"], host, &site)
 }
@@ -155,75 +168,75 @@ func ReadSite(raw []byte) (Site, error) {
 func readMesh(value any, host netip.Addr, site *Site) error {
 	mesh, err := exact(value, meshKeys, "boot_mesh")
 	if err != nil {
-		return refuse("regalia.site: boot_mesh must be null or hold exactly %v", meshKeys)
+		return refuse("fields", "regalia.site: boot_mesh must be null or hold exactly %v", meshKeys)
 	}
 	id, _ := mesh["node_id"].(string)
 	if !nodeIDPattern.MatchString(id) {
-		return refuse("regalia.site: boot_mesh.node_id is not a node ID")
+		return refuse("node-id", "regalia.site: boot_mesh.node_id is not a node ID")
 	}
 	iface, _ := mesh["interface"].(string)
 	if !interfacePattern.MatchString(iface) || iface == bootIF {
-		return refuse("regalia.site: boot_mesh.interface must be a WireGuard interface of its own")
+		return refuse("interface", "regalia.site: boot_mesh.interface must be a WireGuard interface of its own")
 	}
-	if site.ListenPort, err = integer(mesh["listen_port"], 1, 65535, "regalia.site: boot_mesh.listen_port must be a port number 1-65535"); err != nil {
+	if site.ListenPort, err = integer(mesh["listen_port"], 1, 65535, "port", "regalia.site: boot_mesh.listen_port must be a port number 1-65535"); err != nil {
 		return err
 	}
-	if site.UnlockPort, err = integer(mesh["unlock_port"], 1, 65535, "regalia.site: boot_mesh.unlock_port must be a port number 1-65535"); err != nil {
+	if site.UnlockPort, err = integer(mesh["unlock_port"], 1, 65535, "port", "regalia.site: boot_mesh.unlock_port must be a port number 1-65535"); err != nil {
 		return err
 	}
 	tunnel, err := address(mesh["address"], "boot_mesh.address")
 	if err != nil {
-		return refuse("regalia.site: %v", err)
+		return rewrap(err, "regalia.site: ")
 	}
 	mac, _ := mesh["nic_mac"].(string)
 	if !macPattern.MatchString(mac) || mac == "00:00:00:00:00:00" || first(mac)&1 == 1 {
-		return refuse("regalia.site: boot_mesh.nic_mac must be a unicast MAC address, lower case and colon-separated")
+		return refuse("mac", "regalia.site: boot_mesh.nic_mac must be a unicast MAC address, lower case and colon-separated")
 	}
-	if site.Prefix, err = integer(mesh["prefix"], 1, 32, "regalia.site: boot_mesh.prefix must be a prefix length from 1 to 32"); err != nil {
+	if site.Prefix, err = integer(mesh["prefix"], 1, 32, "prefix", "regalia.site: boot_mesh.prefix must be a prefix length from 1 to 32"); err != nil {
 		return err
 	}
 	if mesh["gateway"] != nil {
 		gateway, err := address(mesh["gateway"], "boot_mesh.gateway")
 		if err != nil {
-			return refuse("regalia.site: %v", err)
+			return rewrap(err, "regalia.site: ")
 		}
 		link := netip.PrefixFrom(host, site.Prefix).Masked()
 		if !link.Contains(gateway) || gateway == host {
-			return refuse("regalia.site: boot_mesh.gateway must be another address inside %s (host_ipv4 and its prefix), or null", link)
+			return refuse("gateway", "regalia.site: boot_mesh.gateway must be another address inside %s (host_ipv4 and its prefix), or null", link)
 		}
 		if site.Prefix < 31 && (gateway == link.Addr() || gateway == broadcast(link)) {
-			return refuse("regalia.site: boot_mesh.gateway must be a host of %s, not its network or broadcast address", link)
+			return refuse("gateway", "regalia.site: boot_mesh.gateway must be a host of %s, not its network or broadcast address", link)
 		}
 		site.Gateway = gateway.String()
 	}
 	peers, ok := mesh["peers"].([]any)
 	if !ok || len(peers) < 1 || len(peers) > 8 {
-		return refuse("regalia.site: boot_mesh.peers must list 1 to 8 nodes")
+		return refuse("peer-count", "regalia.site: boot_mesh.peers must list 1 to 8 nodes")
 	}
 	if tunnel == host {
-		return refuse("regalia.site: boot_mesh.address is the tunnel's address, not host_ipv4")
+		return refuse("tunnel-is-host", "regalia.site: boot_mesh.address is the tunnel's address, not host_ipv4")
 	}
 	nodes, inside, outside := map[string]bool{id: true}, map[netip.Addr]bool{tunnel: true}, map[netip.Addr]bool{host: true}
 	for i, value := range peers {
 		label := fmt.Sprintf("boot_mesh.peers[%d]", i)
 		peer, err := exact(value, peerKeys, label)
 		if err != nil {
-			return refuse("regalia.site: %s needs exactly %v", label, peerKeys)
+			return refuse("fields", "regalia.site: %s needs exactly %v", label, peerKeys)
 		}
 		pid, _ := peer["node_id"].(string)
 		if !nodeIDPattern.MatchString(pid) || nodes[pid] {
-			return refuse("regalia.site: %s.node_id must be another node's ID, listed once", label)
+			return refuse("peer-id", "regalia.site: %s.node_id must be another node's ID, listed once", label)
 		}
 		underlay, err := address(peer["underlay"], label+".underlay")
 		if err != nil {
-			return refuse("regalia.site: %v", err)
+			return rewrap(err, "regalia.site: ")
 		}
 		inner, err := address(peer["address"], label+".address")
 		if err != nil {
-			return refuse("regalia.site: %v", err)
+			return rewrap(err, "regalia.site: ")
 		}
 		if inside[inner] || outside[underlay] || outside[inner] || inside[underlay] || inner == underlay {
-			return refuse("regalia.site: %s: no two nodes share an address, inside or outside the tunnel, and no address is both", label)
+			return refuse("shared-address", "regalia.site: %s: no two nodes share an address, inside or outside the tunnel, and no address is both", label)
 		}
 		nodes[pid], inside[inner], outside[underlay] = true, true, true
 		site.Peers = append(site.Peers, Peer{pid, underlay.String(), inner.String()})
@@ -254,10 +267,10 @@ type authorizer struct {
 func others(site Site, manifest map[string]any) ([]authorizer, error) {
 	nodes, err := membership.Validate(manifest)
 	if err != nil {
-		return nil, err
+		return nil, rewrap(err, "")
 	}
 	if _, named := nodes[site.NodeID]; !named {
-		return nil, refuse("%s is not in the manifest", site.NodeID)
+		return nil, refuse("node-absent", "%s is not in the manifest", site.NodeID)
 	}
 	where := map[string]Peer{}
 	for _, p := range site.Peers {
@@ -272,7 +285,7 @@ func others(site Site, manifest map[string]any) ([]authorizer, error) {
 		}
 		p, known := where[id]
 		if !known {
-			return nil, refuse("the site config has no boot-mesh address for %s, which the manifest lets authorize", id)
+			return nil, refuse("no-address", "the site config has no boot-mesh address for %s, which the manifest lets authorize", id)
 		}
 		out = append(out, authorizer{node, p})
 	}
@@ -308,19 +321,19 @@ func Render(manifest map[string]any, site Site) (map[string][]byte, error) {
 		}
 		for _, k := range []string{"ek_name", "ak_name"} {
 			if !tpmNamePattern.MatchString(node[k].(string)) {
-				return nil, refuse("peer.%s must be a SHA-256 TPM Name", k)
+				return nil, refuse("tpm-name", "peer.%s must be a SHA-256 TPM Name", k)
 			}
 		}
 		pins = append(pins, map[string]any{"node_id": id, "endpoint": endpoint, "ek_name": node["ek_name"], "ak_name": node["ak_name"]})
 	}
 	if len(pins) == 0 {
-		return nil, refuse("the manifest leaves %s no peer with an address", site.NodeID)
+		return nil, refuse("no-peer", "the manifest leaves %s no peer with an address", site.NodeID)
 	}
 	if len(pins) > 8 {
-		return nil, refuse("peers must list 1 to 8 peers")
+		return nil, refuse("peer-count", "peers must list 1 to 8 peers")
 	}
 	if !devicePattern.MatchString(site.Device) {
-		return nil, refuse("device must be a plain path")
+		return nil, refuse("device", "device must be a plain path")
 	}
 	pcrs := make([]any, len(UnlockPCRs))
 	for i, p := range UnlockPCRs {

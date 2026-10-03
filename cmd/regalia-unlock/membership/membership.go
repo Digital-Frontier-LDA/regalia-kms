@@ -546,7 +546,9 @@ func LoadDocument(raw []byte) (any, error) {
 }
 
 // May is membership.may: whether node may `serve`, `request` (be unlocked) or `authorize` (give a
-// contribution) under a manifest; false for a manifest that does not validate or a node it does not name.
+// contribution) under a manifest; false for a node it does not name. One difference: Python's may() RAISES
+// for a manifest that does not validate, and May returns false. Call it only on a manifest Validate (or
+// Accept) has passed, as bootcfg does; never rely on it to refuse one.
 func May(manifest map[string]any, node, action string) bool {
 	nodes, err := Validate(manifest)
 	if err != nil {

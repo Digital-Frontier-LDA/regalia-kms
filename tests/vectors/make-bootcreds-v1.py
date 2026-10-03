@@ -12,6 +12,7 @@ render() takes a manifest the chain verification already accepted; the Go side r
 import copy
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -73,6 +74,26 @@ MANIFESTS = {
                                                               for n in manifest()["nodes"]]),
 }
 
+# Every refusal carries the CLASS of its reason, from Python's message: the Go side sets the same class where
+# it refuses, and the test compares them, so a refusal for the wrong reason fails (48's read of #275).
+CLASSES = [("not-json", r"duplicate field|floats are not allowed|not valid JSON|not UTF-8"), ("size", r"is at most \d+ bytes"),
+           ("not-canonical", r"not in canonical form"), ("fields", r"fields mismatch|needs exactly|must be null or hold exactly"),
+           ("schema", r"schema must be"), ("device", r"device must be a plain path"), ("no-mesh", r"boot_mesh must not be null"),
+           ("mac", r"nic_mac must be"), ("prefix", r"prefix must be"), ("gateway", r"gateway must"), ("peer-count", r"peers must list"),
+           ("peer-id", r"must be another node's ID"), ("shared-address", r"no two nodes share an address"),
+           ("tunnel-is-host", r"is the tunnel's address, not host_ipv4"), ("interface", r"interface must be"),
+           ("port", r"must be a port number"), ("node-id", r"is not a node ID"), ("address", r"must be an IPv4 address|must be a host address"),
+           ("node-absent", r"is not in the manifest"), ("no-address", r"has no boot-mesh address for"), ("no-peer", r"no peer"),
+           ("tpm-name", r"must be a SHA-256 TPM Name")]
+
+
+def reason_class(message):
+    for name, pattern in CLASSES:
+        if re.search(pattern, message):
+            return name
+    raise SystemExit("no class for the refusal %r: add one to CLASSES (and to bootcfg)" % message)
+
+
 renders = []
 for site_name, cfg in SITES.items():
     raw = bootcreds.site_document(cfg, DEVICE)
@@ -83,7 +104,7 @@ for site_name, cfg in SITES.items():
             outcome = {"files": {name: body.decode("ascii") for name, body in sorted(files.items())}}
             assert files == bootcreds.render(man, cfg, DEVICE)            # the document carries all render() needs
         except membership.Refused as refusal:
-            outcome = {"refused": str(refusal)}
+            outcome = {"refused": str(refusal), "class": reason_class(str(refusal))}
         renders.append({"site": site_name, "manifest": man_name, **outcome})
 
 # regalia.site documents the initrd must refuse, each one change from a valid one
@@ -134,7 +155,7 @@ for name, raw in raw_sites.items():
         bootcreds.read_site(raw)
         outcome = {"taken": True}
     except membership.Refused as refusal:
-        outcome = {"taken": False, "refused": str(refusal)}
+        outcome = {"taken": False, "refused": str(refusal), "class": reason_class(str(refusal))}
     assert outcome["taken"] == (name == "valid"), (name, outcome)
     documents.append({"name": name, "hex": raw.hex(), **outcome})
 
