@@ -64,7 +64,10 @@ def header(text):
 
 
 def sh(*argv, check=True, **kw):
-    return subprocess.run(list(argv), capture_output=True, text=True, check=check, **kw)
+    done = subprocess.run(list(argv), capture_output=True, text=True, **kw)
+    if check and done.returncode != 0:
+        raise SystemExit("node-units-systemd: %s failed (%d): %s %s" % (" ".join(argv[:3]), done.returncode, done.stdout.strip()[-800:], done.stderr.strip()[-800:]))
+    return done
 
 
 def until(what, seconds, interval=1.0):
@@ -98,6 +101,7 @@ def main():
         print("node-units-systemd: run as root")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="node-units-"))
+    os.chmod(work, 0o711)                  # the software TPM runs as tss, under it
     try:
         return scenario(work)
     finally:
@@ -122,6 +126,8 @@ def tpm(work):
         how = "the kernel's vTPM proxy (%s)" % (done.stdout + done.stderr).strip()
     else:
         sh("modprobe", "cuse", check=False)
+        (work / "swtpm.log").touch()
+        shutil.chown(work / "swtpm.log", "tss", "tss")
         sh("swtpm", "cuse", "-n", "tpmrm0", "--tpm2", "--tpmstate", "dir=%s" % state, "--log", "file=%s" % (work / "swtpm.log"),
            "--runas", "tss")
         until(lambda: os.path.exists("/dev/tpmrm0"), 10, 0.2)
