@@ -452,8 +452,17 @@ replace)
     if opens "$B" "$old" && opens "$A" "$new"; then
       end 1 "the key typed as USED opens the NEW keyslot ($new) and the key typed as new opens the used one ($old): they were typed in the wrong order. Nothing was changed"
     fi
-    opens "$A" "$old" && proven "$B" "$new" \
+    proven "$B" "$new" \
       || end 1 "$DEV has 2 recovery keyslots, and these are not the used key of keyslot $old and the new key of keyslot $new; nothing was changed"
+    # luksKillSlot wipes a keyslot's key material BEFORE it updates the metadata: a destroy killed
+    # between the two leaves keyslot $old listed (and marked as the replaced one) while the used key
+    # opens nothing. The header's mark and the new key's proof say what to do; cryptsetup's own
+    # "no key available" (never a read failure) says the used key is already spent.
+    if ! opens "$A" "$old"; then
+      opens_nothing "$A" \
+        || end 1 "$DEV has 2 recovery keyslots, and these are not the used key of keyslot $old and the new key of keyslot $new; nothing was changed"
+      say "the used key opens nothing: keyslot $old's key material was wiped by a destroy that stopped before it reached the header; it is removed now"
+    fi
     writes; sweep
     retire "$old"; spent
     end 0 "REPLACED: an unfinished --replace was completed: the used keyslot $old is destroyed, the new recovery key is keyslot $new of $DEV; the used key opens nothing."

@@ -291,10 +291,14 @@ class RecoveryKey(unittest.TestCase):
                 self.assertEqual(self.state(status), "added-unproven")
                 self.assertIn("run --replace again with the used key and the new key, in that order", status.stdout)
                 self.assertIn("a --replace that stopped", self.run_script("check", NEW_KEY).stderr)
-                for wrong in ((THIRD_KEY, NEW_KEY), (KEY, THIRD_KEY)):
+                # a new key that is not the new keyslot's, or a used key that opens a keyslot other
+                # than the used one, is refused
+                header = self.header()
+                for wrong in ((KEY, THIRD_KEY),):
                     refused = self.run_script("replace", *wrong)
                     self.assertEqual(refused.returncode, 1)
                     self.assertIn("these are not the used key of keyslot", refused.stderr)
+                    self.assertEqual(self.header(), header)
                 # THE KEYS TYPED IN THE WRONG ORDER: without the header's record of which keyslot is
                 # new, this would destroy the NEW key and keep the one that was seen.
                 header = self.header()
@@ -803,6 +807,31 @@ class RecoveryKey(unittest.TestCase):
         self.assertIn("already holds the new key", done.stderr)
         self.assertTrue(self.opens(NEW_KEY) and not self.opens(KEY))
         self.assertEqual(self.state(done), "clean")
+
+    def test_a_destroy_stopped_after_it_wiped_the_used_keyslot_is_finished(self):
+        """lab/recovery/matrix.py found it (#175): luksKillSlot wipes a keyslot's key material, syncs,
+        and only then removes it from the metadata. Killed between the two, the used keyslot is still
+        listed and marked as the replaced one, and the used key opens nothing. The identical retry
+        must finish it, not refuse because the used key no longer opens its keyslot."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertNotEqual(self.run_script("replace", KEY, NEW_KEY, fail_subcommand="luksKillSlot --key-file").returncode, 0)
+        old = next(s for s, g in self.generations().items() if g == 1)
+        area = self.header()["keyslots"][old]["area"]
+        with open(self.img, "r+b") as f:     # what luksKillSlot's first sync leaves: the area wiped
+            f.seek(int(area["offset"]))
+            f.write(b"\0" * int(area["size"]))
+        self.assertFalse(self.opens(KEY), "the premise: the used key opens nothing")
+        status = self.run_script("status")
+        self.assertEqual(self.state(status), "added-unproven")
+        # a new key that is not the new keyslot's is still refused
+        self.assertIn("these are not the used key", self.run_script("replace", KEY, THIRD_KEY).stderr)
+        done = self.run_script("replace", KEY, NEW_KEY)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("key material was wiped by a destroy that stopped", done.stderr)
+        self.assertEqual(self.state(done), "clean")
+        self.assertEqual(list(self.header()["keyslots"]), [next(iter(self.generations()))])
+        self.assertTrue(self.opens(NEW_KEY))
 
     def test_a_signal_during_the_writes_does_not_stop_the_run(self):
         """No undo (#175): once the first header write starts, INT, TERM and HUP are ignored, a closed
