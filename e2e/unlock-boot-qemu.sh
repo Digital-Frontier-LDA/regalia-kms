@@ -77,10 +77,24 @@ if [ -n "${REGALIA_BOOT_ROOTFS:-}" ]; then
   cp -a "$REGALIA_BOOT_ROOTFS" "$ROOT"
 else
   command -v mmdebstrap >/dev/null || { echo "unlock-boot-qemu: mmdebstrap is required (or REGALIA_BOOT_ROOTFS)"; exit 2; }
-  mmdebstrap --variant=minbase \
+  # a snapshot of the archive (REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/<time>/ in CI) gives
+  # the same packages on every run, so the initrd matches its reviewed inventory (#198); its Release file is
+  # past its Valid-Until, which only a snapshot may be
+  APTOPT=()
+  case "${REGALIA_BOOT_MIRROR:-}" in *snapshot.debian.org*) APTOPT=(--aptopt='Acquire::Check-Valid-Until "false"') ;; esac
+  # the main suite, its updates and its SECURITY suite (REGALIA_BOOT_SECURITY_MIRROR, the security archive's
+  # snapshot at the same time in CI): a reviewed baseline without security updates is not one to ship (#198)
+  MIRROR="${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}"
+  # (explicit lines name their keyring: mmdebstrap only picks one by itself for a bare mirror URL)
+  KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"      # Debian's own, pinned: the runner's predates trixie's keys
+  SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
+           "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
+  mmdebstrap --variant=minbase "${APTOPT[@]}" \
     --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
-    "$SUITE" "$ROOT" "${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}" >"$W/mmdebstrap.log" 2>&1 \
+    "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
+  # the guest's own apt reads the same lines: the keyring at the same path inside it
+  install -D -m 0644 "$KEYRING" "$ROOT$KEYRING"
 fi
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
@@ -159,10 +173,27 @@ IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmd
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
 KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/uki/keys/TEST-secure-boot.key --secure-boot-cert /tmp/uki/keys/TEST-secure-boot.crt"
+# #198: the review build records, run alone first, so that a refusal says what. The image is checked
+# against deploy/baremetal/initrd/initrd-inventory.txt, every entry pinned; on a difference the lines that
+# differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
+# before a pull request changes the inventory.
+cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
+if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled" >"$W/review.json" 2>&1; then
+  python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
+    || cat "$W/review.json"
+  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true
+  { grep -v '^#' deploy/baremetal/initrd/initrd-inventory.txt || true; } | sed '/^$/d' | sort > "$W/pinned.txt"
+  sort "$W/inventory.txt" > "$W/found.txt"
+  echo "### the image's inventory lines the reviewed inventory does not hold (+) and the reverse (-):"
+  comm -23 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY+ /' || true
+  comm -13 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY- /' || true
+  echo "unlock-boot-qemu: the image's initrd does not pass uki.py's review"; exit 2
+fi
+echo "the initrd passes uki.py's review (#198): inventory $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["inventory_sha256"][:16])' "$W/review.json")"
 # shellcheck disable=SC2086  # the two lists are words on purpose
 # two builds (the signer requires a second builder's identical record), then the signature
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out \
-  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN --record /tmp/uki/out/e2e.record.json --second-record /tmp/uki/second/e2e.record.json --out /tmp/uki/out $KEYS" >"$W/uki.log" 2>&1 \
   || { cat "$W/uki.log"; echo "unlock-boot-qemu: the image did not build or sign"; exit 2; }
 grep 'PCR 11' "$W/uki.log" || true
@@ -172,8 +203,8 @@ grep 'PCR 11' "$W/uki.log" || true
 printf '%s regalia.e2e-image=old\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-old"
 IN_OLD="${IN/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-old }"
 # shellcheck disable=SC2086  # the two lists are words on purpose
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out \
-  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN_OLD --record /tmp/uki/out/e2e-old.record.json --second-record /tmp/uki/second/e2e-old.record.json --out /tmp/uki/out $KEYS" >"$W/uki-old.log" 2>&1 \
   || { cat "$W/uki-old.log"; echo "unlock-boot-qemu: the second image did not build or sign"; exit 2; }
 cp "$ROOT/tmp/uki/out/e2e.efi" "$W/e2e.efi"; cp "$ROOT/tmp/uki/out/e2e.signed.json" "$W/e2e.record.json"; cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"

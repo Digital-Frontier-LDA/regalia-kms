@@ -21,7 +21,8 @@
 # NOT HERE: a boot. That the firmware and systemd-stub of a real machine measure these sections in this
 # order is systemd's documented behaviour and this script's assumption; the first boot of such an image
 # is the unlock test's (#66) and then a DL360 (#65). No hardware token is used: SoftHSM stands for it.
-# The initrd is whatever INITRD names, or a stand-in: the real one is built by #66's dracut module.
+# The initrd is whatever INITRD names (with UNLOCK_CLIENT, the client it holds), or a stand-in: the real one is
+# built by #66's dracut module.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 pass=0; fail=0
@@ -44,7 +45,11 @@ W="$(mktemp -d)"; cd "$HERE" || exit 2
 stop(){ [ -f "$W/tpm.pid" ] || return 0; TPM2TOOLS_TCTI="$D" tpm2_shutdown -c >/dev/null 2>&1; kill "$(cat "$W/tpm.pid")" 2>/dev/null; rm -f "$W/tpm.pid"; }
 trap 'stop; $SUDO rm -rf "$W"' EXIT
 D="swtpm:path=$W/tpm.sock"
-uki(){ python3 -Es -m deploy.baremetal.uki "$@"; }
+# build, sign and verify review the initrd against an inventory (#198): here, the stand-in's own (written
+# below), since the reviewed image's inventory is e2e/unlock-boot-qemu.sh's to check
+uki(){ case "$1" in build) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" --unlock-client "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" ;;
+                    sign|verify) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" ;;
+                    *) python3 -Es -m deploy.baremetal.uki "$@" ;; esac; }
 field(){ python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): v=v[k]
 print(v)' "$1" "$2"; }
@@ -52,7 +57,22 @@ print(v)' "$1" "$2"; }
 # ---- inputs and TEST keys ------------------------------------------------------------------------------
 UNAME="$(basename "$LINUX" | sed 's/^vmlinuz-//')"
 if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
-  mkdir "$W/ird"; printf '#!/bin/sh\n' > "$W/ird/init"; (cd "$W/ird" && printf 'init\n' | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
+  # a stand-in that passes uki.py's initrd review (#198): the module's crypttab, this repository's unlock
+  # units and script, a stand-in client, and the two enable links. Nothing in it boots.
+  I="$W/ird"; U="$I/usr/lib/systemd/system"; E="$I/etc/systemd/system"
+  mkdir -p "$U" "$E/sockets.target.wants" "$E/cryptsetup.target.wants" "$I/usr/bin" "$I/usr/lib/regalia" "$I/etc"
+  printf '#!/bin/sh\n' > "$I/init"; printf 'stand-in\n' | tee "$I/usr/bin/regalia-unlock" > "$I/usr/bin/sh"; chmod 0755 "$I/init" "$I/usr/bin/regalia-unlock" "$I/usr/bin/sh"
+  ln -s usr/bin "$I/bin"; ln -s usr/lib "$I/lib"
+  cp deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$I/etc/crypttab"
+  cp deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket \
+     deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
+  install -m 0755 deploy/baremetal/initrd/wg-boot "$I/usr/lib/regalia/wg-boot"
+  ln -s /usr/lib/systemd/system/regalia-unlock-core.socket "$E/sockets.target.wants/regalia-unlock-core.socket"
+  ln -s /usr/lib/systemd/system/regalia-unlock-relay.service "$E/cryptsetup.target.wants/regalia-unlock-relay.service"
+  mkdir "$U/systemd-cryptsetup@.service.d"   # the module's relay ordering, its bytes
+  printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' > "$U/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
+  (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
+python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
 printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
