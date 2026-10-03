@@ -62,6 +62,10 @@ hashes and signing authorities. It grants no package or image admission. See the
 [Python evaluation](../../lab/appliance/PYTHON-SOURCE-EVALUATION.md) for the
 remaining package-build, compatibility and scan requirements.
 
+Add `--packaging-suite sid` to evaluate the separately pinned Debian 3.13.15
+source packaging. This uses the same signing authority and requires Release
+expiry; the appliance binary package policy remains trixie/security.
+
 The util-linux candidate is upstream 2.42.4 with authenticated Debian 2.41.5 packaging.
 The Debian packaging anchors the upstream primary fingerprint; the vendored
 public key supplies its reviewed current self-certification. The verifier checks

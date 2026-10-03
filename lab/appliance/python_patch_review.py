@@ -28,10 +28,10 @@ def series_names(data):
     return names
 
 
-def review(bundle, output, patch_binary="patch"):
+def review(bundle, output, patch_binary="patch", *, packaging_suite="trixie"):
     require(not output.exists() and not output.is_symlink(), 'patch review output already exists')
-    authenticated = python_source.validate(bundle)
-    names = ('Python-3.13.16.tar.xz', 'python3.13_3.13.5-2+deb13u5.debian.tar.xz')
+    authenticated = python_source.validate(bundle, packaging_suite=packaging_suite)
+    names = ('Python-3.13.16.tar.xz', f"python3.13_{authenticated['debian_packaging_version']}.debian.tar.xz")
     expected = {name: (authenticated['files'][name]['sha256'], authenticated['files'][name]['bytes'])
                 for name in names}
     frozen = python_source.inputs(bundle, expected)
@@ -87,9 +87,10 @@ def main():
     parser.add_argument('bundle', type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--patch', default='patch', help='GNU patch executable')
+    parser.add_argument('--packaging-suite', choices=('trixie', 'sid'), default='trixie')
     args = parser.parse_args()
     try:
-        report = review(args.bundle, args.output, args.patch)
+        report = review(args.bundle, args.output, args.patch, packaging_suite=args.packaging_suite)
         print(json.dumps({'patches': len(report['patches']), 'production_approved': False,
                           'package_admitted': False}, sort_keys=True))
     except (VerificationError, OSError, ValueError, subprocess.SubprocessError) as error:

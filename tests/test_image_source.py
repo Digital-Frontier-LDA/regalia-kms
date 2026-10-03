@@ -33,6 +33,20 @@ class ReviewedSourceInputs(unittest.TestCase):
             with self.subTest(data=data[:80]), self.assertRaises(VerificationError):
                 source.source_record(data.encode())
 
+    def test_source_only_sid_requires_expiry_and_unknown_suites_refuse(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'policy.json').write_bytes(snapshot.POLICY.read_bytes())
+            with patch.object(source, 'verify_release', return_value=({'valid_until': None}, {})) as verify:
+                with self.assertRaisesRegex(VerificationError, 'sid Release expiry missing'):
+                    source.archive_source_index(root, suite='sid')
+                verify.assert_called_once_with(root / 'InRelease', root / 'archive-key-13.asc',
+                                               snapshot.ARCHIVES['debian'][2], 'sid')
+                verify.reset_mock()
+                with self.assertRaises(VerificationError):
+                    source.archive_source_index(root, suite='testing')
+                verify.assert_not_called()
+
     def test_source_file_bytes_are_checked_after_index_authentication(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

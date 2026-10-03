@@ -54,12 +54,16 @@ def source_record(data, *, package=None, version=None, reviewed_files=None):
     return directory, files
 
 
-def archive_source_index(directory, policy_path=POLICY):
+def archive_source_index(directory, policy_path=POLICY, *, suite=None):
     policy_bytes = read_regular(policy_path)
     config = policy(json.loads(policy_bytes))
     require(read_regular(directory / "policy.json") == policy_bytes, "source policy differs from reviewed policy")
-    suite, key, fingerprint = ARCHIVES["debian"]
+    default_suite, key, fingerprint = ARCHIVES["debian"]
+    suite = default_suite if suite is None else suite
+    require(suite in {default_suite, "sid"}, "unsupported source-only suite")
     release, sums = verify_release(directory / "InRelease", directory / key, fingerprint, suite)
+    if suite == "sid":
+        require(release.get("valid_until") is not None, "source-only sid Release expiry missing")
     compressed = read_regular(directory / "Sources.xz", 64 * 1024 * 1024)
     digest = hashlib.sha256(compressed).hexdigest()
     require(sums.get(INDEX) == (digest, len(compressed)), "source index hash or length mismatch")

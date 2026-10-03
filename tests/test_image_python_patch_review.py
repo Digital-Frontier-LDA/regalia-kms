@@ -68,7 +68,7 @@ class PythonPatchReviewBoundaries(unittest.TestCase):
         frozen = {source_name: archive({'Python-3.13.16/example.txt': b'old\n'}),
                   debian_name: archive({'debian/patches/series': b'fix.patch\n',
                                         'debian/patches/fix.patch': b'--- a/example.txt\n+++ b/example.txt\n@@ -1 +1 @@\n-old\n+new\n'})}
-        fixture = {'files': {name: {'sha256': 'fixture', 'bytes': len(data)} for name, data in frozen.items()}}
+        fixture = {'debian_packaging_version': '3.13.5-2+deb13u5', 'files': {name: {'sha256': 'fixture', 'bytes': len(data)} for name, data in frozen.items()}}
         with tempfile.TemporaryDirectory() as temp, \
              patch.object(python_patch_review.python_source, 'validate', return_value=fixture), \
              patch.object(python_patch_review.python_source, 'inputs', return_value=frozen):

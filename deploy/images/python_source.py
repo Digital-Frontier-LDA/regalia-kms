@@ -29,6 +29,19 @@ DEBIAN_FILES = {
     "python3.13_3.13.5.orig.tar.xz.asc": ("da6e013d98dcf8fc6696cdb2872b0051fc8fdeb632f73ef9f54d7b5a68647401", 963),
     "python3.13_3.13.5-2+deb13u5.debian.tar.xz": ("a51f456e654ce2c9b40cc1db8005e5041cdb0b2c3aa96ab0871c49fe95280366", 299640),
 }
+NEWER_DEBIAN_VERSION = "3.13.15-1"
+NEWER_DEBIAN_FILES = {
+    "python3.13_3.13.15-1.dsc": ("4078ff651ea7096e6933f794b854054cda195d600e02ac83306cee524da31b87", 4040),
+    "python3.13_3.13.15.orig.tar.xz": ("1e66a7945a48390ee4c2a4268a0e4185884059a13c4aab6d148aa208deea4a76", 23160540),
+    "python3.13_3.13.15-1.debian.tar.xz": ("1cf592dd51de735ff73644743e8959fb16bd50714168855509b709fdeede8342", 261776),
+}
+
+
+def packaging_profile(suite):
+    require(suite in {"trixie", "sid"}, "unreviewed Python packaging suite")
+    return (DEBIAN_VERSION, DEBIAN_FILES) if suite == "trixie" else (NEWER_DEBIAN_VERSION, NEWER_DEBIAN_FILES)
+
+
 UPSTREAM_FILES = {
     "Python-3.13.16.tar.xz": ("f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d", 23225704),
     "Python-3.13.16.tar.xz.asc": ("34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8", 833),
@@ -62,18 +75,19 @@ def packaged_authority(packaging):
     return data
 
 
-def validate(directory, policy_path=POLICY):
-    index_proof, data = archive_source_index(directory, policy_path)
-    source_directory, files = source_record(data, package=PACKAGE, version=DEBIAN_VERSION,
-                                           reviewed_files=DEBIAN_FILES)
+def validate(directory, policy_path=POLICY, *, packaging_suite="trixie"):
+    version, reviewed = packaging_profile(packaging_suite)
+    index_proof, data = archive_source_index(directory, policy_path, suite=packaging_suite)
+    source_directory, files = source_record(data, package=PACKAGE, version=version,
+                                           reviewed_files=reviewed)
     frozen = inputs(directory, {**files, **UPSTREAM_FILES, "upstream-authority.asc": AUTHORITY})
-    packaged_authority(frozen["python3.13_3.13.5-2+deb13u5.debian.tar.xz"])
+    packaged_authority(frozen[f"python3.13_{version}.debian.tar.xz"])
     signature = verify_detached(frozen["Python-3.13.16.tar.xz"],
                                 frozen["Python-3.13.16.tar.xz.asc"],
                                 frozen["upstream-authority.asc"], SIGNER)
     return {"schema": "regalia.python-authenticated-source/v1", "status": "verified",
             "production_approved": False, "package_admitted": False, "package": PACKAGE,
-            "upstream_version": UPSTREAM_VERSION, "debian_packaging_version": DEBIAN_VERSION,
+            "upstream_version": UPSTREAM_VERSION, "debian_packaging_version": version, "packaging_suite": packaging_suite,
             "directory": source_directory, **index_proof,
             "files": {name: {"sha256": value[0], "bytes": value[1]}
                       for name, value in {**files, **UPSTREAM_FILES}.items()},
@@ -84,7 +98,8 @@ def validate(directory, policy_path=POLICY):
             "sigstore_signature_verified": False}
 
 
-def fetch(destination, snapshot, policy_path=POLICY):
+def fetch(destination, snapshot, policy_path=POLICY, *, packaging_suite="trixie"):
+    version, reviewed = packaging_profile(packaging_suite)
     policy_bytes = read_regular(policy_path)
     config = policy(json.loads(policy_bytes))
     require(not destination.exists() and not destination.is_symlink(), "Python source output already exists")
@@ -92,23 +107,28 @@ def fetch(destination, snapshot, policy_path=POLICY):
     staging = Path(tempfile.mkdtemp(prefix=".python-source-", dir=destination.parent))
     try:
         (staging / "policy.json").write_bytes(policy_bytes)
-        suite, key, fingerprint = ARCHIVES["debian"]
-        for name in ("InRelease", key):
-            (staging / name).write_bytes(read_regular(snapshot / "debian" / name))
+        _, key, fingerprint = ARCHIVES["debian"]
+        base = archive_url("debian", config["timestamp"])
+        (staging / key).write_bytes(read_regular(snapshot / "debian" / key))
+        if packaging_suite == "trixie":
+            (staging / "InRelease").write_bytes(read_regular(snapshot / "debian" / "InRelease"))
+        else:
+            # Source packaging only; the appliance's binary suites do not change.
+            download(base + "dists/sid/InRelease", staging / "InRelease", 4 * 1024 * 1024)
+        suite = packaging_suite
         _, sums = verify_release(staging / "InRelease", staging / key, fingerprint, suite)
         require(INDEX in sums, "signed Python source index absent")
-        base = archive_url("debian", config["timestamp"])
         download(base + f"dists/{suite}/" + INDEX, staging / "Sources.xz", 64 * 1024 * 1024)
-        _, data = archive_source_index(staging, policy_path)
-        source_directory, files = source_record(data, package=PACKAGE, version=DEBIAN_VERSION,
-                                               reviewed_files=DEBIAN_FILES)
+        _, data = archive_source_index(staging, policy_path, suite=packaging_suite)
+        source_directory, files = source_record(data, package=PACKAGE, version=version,
+                                               reviewed_files=reviewed)
         for name, (_, size) in files.items():
             download(base + source_directory + "/" + name, staging / name, size)
-        packaged_authority(inputs(staging, files)["python3.13_3.13.5-2+deb13u5.debian.tar.xz"])
+        packaged_authority(inputs(staging, files)[f"python3.13_{version}.debian.tar.xz"])
         for name, (_, size) in UPSTREAM_FILES.items():
             download(UPSTREAM_URL + name, staging / name, size)
         (staging / "upstream-authority.asc").write_bytes(read_regular(AUTHORITY_PATH, AUTHORITY[1]))
-        report = validate(staging, policy_path)
+        report = validate(staging, policy_path, packaging_suite=packaging_suite)
         (staging / "verification.json").write_text(json.dumps(report, sort_keys=True, indent=2) + "\n")
         require(not destination.exists() and not destination.is_symlink(), "Python source output appeared during capture")
         staging.rename(destination)
@@ -122,9 +142,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
     parser.add_argument("--snapshot", type=Path, required=True)
+    parser.add_argument("--packaging-suite", choices=("trixie", "sid"), default="trixie")
     args = parser.parse_args()
     try:
-        print(json.dumps(fetch(args.destination, args.snapshot), sort_keys=True, indent=2))
+        print(json.dumps(fetch(args.destination, args.snapshot, packaging_suite=args.packaging_suite), sort_keys=True, indent=2))
     except (VerificationError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         parser.exit(1, f"REFUSED: {error}\n")
 

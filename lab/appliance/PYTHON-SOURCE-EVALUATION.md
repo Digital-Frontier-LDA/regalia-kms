@@ -47,13 +47,14 @@ members and failed signature verification. Source authentication explicitly
 grants neither package admission nor production approval. The maintainer DSC
 signature and the optional Sigstore signature are not separately verified.
 
-The [source review receipt](evidence/python-source-review-20261003.json) binds
+The original [source review receipt](evidence/python-source-review-20261003.json),
+at `f4226a5`, binds
 source verification, reviewed source-file hashes and the implementation. These
 are authenticated input checks; runtime exploit regression remains required.
 
-### Downstream patch applicability
+### Original stable-packaging patch applicability
 
-The authenticated Debian series contains 62 enabled patches. GNU patch 2.8
+The original authenticated Debian 3.13.5 packaging contains 62 enabled patches. GNU patch 2.8
 runs each independently against clean 3.13.16, with `--dry-run`, zero fuzz and
 forced direction. Eighteen apply forward, 18 apply only in reverse and 26 fail
 both directions. No patch has been applied, omitted or approved by this check.
@@ -73,11 +74,56 @@ python3 -I tools/lab_cli.py appliance-python-patch-review PYTHON_SOURCE_OUTPUT -
 ```
 
 On macOS with Homebrew GNU patch, add `--patch /opt/homebrew/bin/gpatch`.
-The [patch review receipt](evidence/python-patch-review-20261003.json) records all
+The original [patch review receipt](evidence/python-patch-review-20261003.json),
+at `f4226a5`, records all
 62 patch hashes and verdicts. The repository command freshly authenticates the
 complete source bundle; an independent ordinary-user, network-disabled,
 readonly development container produces the same patch verdicts. That cached
 container is unsigned. Neither trial compiles or installs Python.
+
+### Newer Debian packaging and source profile
+
+Debian also publishes `3.13.15-1` packaging. It is an explicit source-only
+candidate, authenticated from the fixed October 3 sid InRelease and Sources
+index under the existing Debian 13 primary signer
+`04B54C3CDCA79751B16BC6B5225629DF75B188BD`. No additional authority is enrolled.
+The source-only sid index must carry an unexpired Valid-Until. Each of its three
+source files has a pinned SHA-256 and length; its packaged upstream key has the
+same pinned hash and primary identity. The upstream 3.13.16 signature is freshly
+verified again. The appliance binary package policy remains trixie/security.
+
+Capture and review the newer candidate from the repository root:
+
+```sh
+python3 -Es -m deploy.images.python_source PYTHON_NEWER_OUTPUT --snapshot SNAPSHOT_DIR --packaging-suite sid
+python3 -I tools/lab_cli.py appliance-python-patch-review PYTHON_NEWER_OUTPUT --packaging-suite sid --output PATCH_REVIEW_OUTPUT
+```
+
+This series has 26 enabled patches: 22 apply independently; four need review.
+`python_profile` retains all 26 patches and the complete vendor build/test rules.
+It rebases the turtle import diagnostic and freeze libdir filter without
+changing their behavior, and updates the deletion context for the regenerated
+SSL error table. Multiarch succeeds after its preceding prerequisite patch.
+Actual sequential application of all 26 patches succeeds with zero fuzz.
+Reapplying preparation refuses; changed input hashes refuse before edits.
+
+```sh
+python3 -I tools/lab_cli.py appliance-python-profile EXTRACTED_CANDIDATE_SOURCE
+```
+
+Prepare a freshly extracted upstream/packaging tree. The profile changes local
+version/maintainer metadata truthfully and grants no package admission.
+The [newer-packaging review receipt](evidence/python-newer-packaging-review-20261003.json)
+binds signed inputs, the three reviewed patch edits and the exact profile.
+The earlier 62-patch receipt remains historical evidence.
+
+The SSL rebase preserves Debian's `_ssl_data_34.h` path. Upstream's newer 3.6
+error table differs in legacy compression reason names and numeric fallbacks;
+it must not be described as an exact superset. This candidate needs explicit
+error-mapping and SSL regression checks with the actual Debian runtime library.
+A native package compilation trial has started with pinned trixie/security apt
+authorities and a dedicated non-root build UID. Its cached base is unsigned,
+so it cannot qualify production compiler payloads or an appliance image.
 
 ## Residual Risk
 

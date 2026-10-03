@@ -53,6 +53,25 @@ class PythonSourceBoundaries(unittest.TestCase):
             path.symlink_to(root / "missing")
             with self.assertRaises((OSError, VerificationError)): python_source.inputs(root, expected)
 
+    def test_unknown_suite_and_cross_suite_source_are_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(python_source, 'archive_source_index') as index:
+                with self.assertRaises(VerificationError):
+                    python_source.validate(root, packaging_suite='testing')
+                index.assert_not_called()
+            # An authenticated stable record cannot substitute for the pinned sid version.
+            record = ('Package: python3.13\nVersion: 3.13.5-2+deb13u5\n'
+                      'Directory: pool/main/p/python3.13\nChecksums-Sha256:\n'
+                      + ''.join(f' {digest} {size} {name}\n'
+                                for name, (digest, size) in python_source.DEBIAN_FILES.items())).encode()
+            with patch.object(python_source, 'archive_source_index', return_value=({}, record)) as index, \
+                 patch.object(python_source, 'inputs') as inputs:
+                with self.assertRaises(VerificationError):
+                    python_source.validate(root, packaging_suite='sid')
+                index.assert_called_once_with(root, python_source.POLICY, suite='sid')
+                inputs.assert_not_called()
+
     def test_source_authentication_grants_no_package_or_image_admission(self):
         tar = b"upstream tar fixture"
         signature = b"signature fixture"
