@@ -218,15 +218,15 @@ class AuditShipUnit(unittest.TestCase):
 class AuditPruneUnit(unittest.TestCase):
     """regalia-audit-prune@.service and .timer: archives removed only behind the collector (#278)."""
 
-    def test_it_prunes_from_the_shipper_s_head_file_as_root_with_dac_override_only(self):
+    def test_it_prunes_from_the_shipper_s_head_file_with_no_capability(self):
         service = unit("regalia-audit-prune@.service")["Service"]
         ship = unit("regalia-audit-ship@.service")["Service"]
         self.assertEqual(service["ExecStart"], "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune "
                                                "${TRAIL_PATH} /var/lib/regalia-audit-ship/%i.head.json")
         self.assertIn("-head /var/lib/regalia-audit-ship/%i.head.json", ship["ExecStart"])   # the file the shipper writes
         self.assertEqual(service["EnvironmentFile"], "/etc/regalia/audit-ship/%i.env")            # the shipper's TRAIL_PATH
-        self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
-                         ("root", "CAP_DAC_OVERRIDE", "", "yes"))
+        self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]), ("", "", "yes"))
+        self.assertNotIn("User", service)                                          # each instance's owner, from its drop-in
         self.assertEqual((service["ProtectSystem"], service["PrivateNetwork"]), ("strict", "yes"))
         from deploy.baremetal import trails
         writable = service["ReadWritePaths"].split()
@@ -236,6 +236,20 @@ class AuditPruneUnit(unittest.TestCase):
             if directory:
                 self.assertIn("-" + directory, writable, name)
         self.assertEqual(unit("regalia-audit-prune@.timer")["Timer"]["OnCalendar"], "daily")
+
+    def test_each_trail_s_prune_runs_as_its_directory_s_owner(self):
+        """#288 (regalia-kms-24): no DAC override. A service's trail is pruned by its writer, which owns the
+        directory; the operator tools' by root, which owns /var/log/regalia. One drop-in per trail."""
+        from deploy.baremetal import trails
+        dropins = sorted(p.name for p in UNITS.glob("regalia-audit-prune@*.service.d"))
+        self.assertEqual(dropins, sorted("regalia-audit-prune@%s.service.d" % name for name in trails.TRAILS))
+        for name, (where, _, _, group) in trails.TRAILS.items():
+            with self.subTest(name):
+                parser = configparser.ConfigParser(strict=False, interpolation=None, delimiters=("=",))
+                parser.optionxform = str
+                parser.read(UNITS / ("regalia-audit-prune@%s.service.d" % name) / "owner.conf")
+                owner = "root" if where.startswith(trails.TOOL_DIR + "/") else group      # a service's user is named as its group
+                self.assertEqual(dict(parser["Service"]), {"User": owner})
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_it_and_scores_it_well_exposed_at_most_a_little(self):

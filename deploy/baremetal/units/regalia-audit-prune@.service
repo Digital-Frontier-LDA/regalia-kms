@@ -5,8 +5,11 @@
 # (<trail>.pruned) is written first, so the shipper goes on from it and still checks the collector's
 # head. Run daily by regalia-audit-prune@%i.timer.
 #
-# Root with CAP_DAC_OVERRIDE only: the archives are in their writers' directories. It may write only
-# the trail directories (the ones a host has; the others are skipped).
+# As the trail directory's owner, with no capability: each writer owns its trail's directory, so it may
+# remove its own archives and write the marker; the operator tools' directory is root's. The owner comes
+# from regalia-audit-prune@%i.service.d/owner.conf (trails.py's registry). Without it the unit runs as
+# root with no capability, which can write no service's directory: it fails, it does not widen. It may
+# write only the trail directories (the ones a host has; the others are skipped).
 [Unit]
 Description=Regalia KMS: remove the committed archives of the %i audit trail
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
@@ -15,8 +18,7 @@ Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/depl
 Type=oneshot
 EnvironmentFile=/etc/regalia/audit-ship/%i.env
 ExecStart=/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} /var/lib/regalia-audit-ship/%i.head.json
-User=root
-CapabilityBoundingSet=CAP_DAC_OVERRIDE
+CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict

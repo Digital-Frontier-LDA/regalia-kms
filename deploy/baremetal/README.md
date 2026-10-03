@@ -796,7 +796,7 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
   verify as one chain (`trails.py verify <trail>`), and a writer killed at any step of a rotation leaves
   it so. The shipper reads them in order. `regalia-audit-prune@<trail>.timer` removes, daily, only the
   archives the shipper's last pass recorded as wholly committed at the collector, and only if each one's
-  last line is the one recorded. It writes `<trail>.pruned` first; the shipper goes on from that marker
+  last line is the one recorded, as the trail directory's owner with no capability. It writes `<trail>.pruned` first; the shipper goes on from that marker
   and still checks the collector's head, and a marker ahead of the collector raises the tamper alarm.
 - **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
   records one "alarm flood" alarm of its own and answers 429.
