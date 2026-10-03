@@ -213,3 +213,57 @@ class AuditShipUnit(unittest.TestCase):
                 self.skipTest("this systemd-analyze has no offline security scoring")
             score = float(re.search(r"exposure level for \S+: (\d+\.\d+)", done.stdout).group(1))
             self.assertLessEqual(score, 3.0)
+
+
+class AuditPruneUnit(unittest.TestCase):
+    """regalia-audit-prune@.service and .timer: archives removed only behind the collector (#278)."""
+
+    def test_it_prunes_from_the_shipper_s_head_file_with_no_capability(self):
+        service = unit("regalia-audit-prune@.service")["Service"]
+        ship = unit("regalia-audit-ship@.service")["Service"]
+        self.assertEqual(" ".join(service["ExecStart"].replace("\\\n", " ").split()),
+                         "/usr/bin/python3 -Es /usr/lib/regalia-kms/deploy/baremetal/trails.py prune ${TRAIL_PATH} "
+                         "/var/lib/regalia-audit-ship/%i.head.json --trail %i --site ${SITE} --client-cert "
+                         "/etc/regalia/audit-ship/client.crt --receipt-keys /etc/regalia/audit-ship/collector-receipt.pub")
+        self.assertIn("-head /var/lib/regalia-audit-ship/%i.head.json", ship["ExecStart"])   # the file the shipper writes
+        self.assertIn("/etc/regalia/audit-ship/%i.env", open(UNITS / "regalia-audit-prune@.service").read())  # TRAIL_PATH
+        self.assertIn("EnvironmentFile=/etc/regalia/audit-ship.env", open(UNITS / "regalia-audit-prune@.service").read())  # SITE
+        self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]), ("", "", "yes"))
+        self.assertNotIn("User", service)                                          # each instance's owner, from its drop-in
+        self.assertEqual((service["ProtectSystem"], service["PrivateNetwork"]), ("strict", "yes"))
+        from deploy.baremetal import trails
+        writable = service["ReadWritePaths"].split()
+        for name, (where, _, _, _) in trails.TRAILS.items():                   # every trail's directory, and nothing else
+            base = where.partition("/")[0]
+            directory = os.path.dirname(where) if where.startswith("/") else {"state_dir": None, "admission_dir": "/run/regalia/admission"}[base]
+            if directory:
+                self.assertIn("-" + directory, writable, name)
+        self.assertEqual(unit("regalia-audit-prune@.timer")["Timer"]["OnCalendar"], "daily")
+
+    def test_each_trail_s_prune_runs_as_its_directory_s_owner(self):
+        """#288 (regalia-kms-24): no DAC override. A service's trail is pruned by its writer, which owns the
+        directory; the operator tools' by root, which owns /var/log/regalia. One drop-in per trail."""
+        from deploy.baremetal import trails
+        dropins = sorted(p.name for p in UNITS.glob("regalia-audit-prune@*.service.d"))
+        self.assertEqual(dropins, sorted("regalia-audit-prune@%s.service.d" % name for name in trails.TRAILS))
+        for name, (where, _, _, group) in trails.TRAILS.items():
+            with self.subTest(name):
+                parser = configparser.ConfigParser(strict=False, interpolation=None, delimiters=("=",))
+                parser.optionxform = str
+                parser.read(UNITS / ("regalia-audit-prune@%s.service.d" % name) / "owner.conf")
+                owner = "root" if where.startswith(trails.TOOL_DIR + "/") else group      # a service's user is named as its group
+                self.assertEqual(dict(parser["Service"]), {"User": owner})
+
+    @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
+    def test_systemd_accepts_it_and_scores_it_well_exposed_at_most_a_little(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name in ("regalia-audit-prune@.service", "regalia-audit-prune@.timer"):
+                shutil.copy(UNITS / name, d)
+            instance = os.path.join(d, "regalia-audit-prune@sync.service")
+            done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no", instance, os.path.join(d, "regalia-audit-prune@sync.timer")],
+                                  capture_output=True, text=True)
+            self.assertEqual([line for line in done.stderr.splitlines() if "regalia-audit-prune" in line], [])
+            done = subprocess.run(["systemd-analyze", "security", "--offline=yes", "--no-pager", instance], capture_output=True, text=True)
+            if done.returncode != 0 and "offline" in done.stderr:
+                self.skipTest("this systemd-analyze has no offline security scoring")
+            self.assertLessEqual(float(re.search(r"exposure level for \S+: (\d+\.\d+)", done.stdout).group(1)), 3.0)

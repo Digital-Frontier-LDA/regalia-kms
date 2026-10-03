@@ -3,6 +3,8 @@ package audit
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
@@ -172,7 +174,7 @@ func TestTrailContentIsWithheldNotShippedWhenItCarriesAKeyOrIsTooLong(t *testing
 	for i, want := range []string{"secret key marker", "longer than an event"} {
 		var detail trailDetail
 		_ = json.Unmarshal(events[i].Detail, &detail)
-		if !strings.Contains(detail.Withheld, want) || detail.Content != nil || validateDetail(events[i].Detail) != nil {
+		if !strings.Contains(detail.Withheld, want) || detail.Line != "" || detail.LineBase64 != "" || validateDetail(events[i].Detail) != nil {
 			t.Fatalf("line %d: %s", i+1, events[i].Detail)
 		}
 		if strings.Contains(events[i].Operation, "PRIVATE") || len(events[i].Operation) > 512 {
@@ -314,14 +316,14 @@ func TestReportAlarmIsRefusedOutOfBounds(t *testing.T) {
 	}
 }
 
-// TestTheTrailMappingIsPinned holds tests/vectors/trail-events-v1.json: fixed trail bytes, as
+// TestTheTrailMappingIsPinned holds tests/vectors/trail-events-v2.json: fixed trail bytes, as
 // trails.py wrote them, to the fixed event hashes they map to (#283, regalia-kms-3e). The
 // determinism test proves two builds agree; this proves today's build agrees with every shipped
 // stream. A refactor here, or a Go release that compacts or escapes a RawMessage differently,
 // fails this test instead of stopping every shipper in production with a tamper alarm.
 func TestTheTrailMappingIsPinned(t *testing.T) {
 	_, here, _, _ := runtime.Caller(0)
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", "tests", "vectors", "trail-events-v1.json"))
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(here), "..", "..", "tests", "vectors", "trail-events-v2.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,5 +406,126 @@ func TestReportedAlarmsAreCappedPerIdentity(t *testing.T) {
 	clock = clock.Add(time.Hour)
 	if code := report(first); code != 204 {
 		t.Fatalf("a new window refused: %d", code)
+	}
+}
+
+func TestTheCollectorSignsReceiptsForTheCallersOwnStreamOnly(t *testing.T) {
+	_, first, _, _ := collectorTestTLS(t)
+	second := collectorTestCertificate(t, "second")
+	collector, err := OpenCollector(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	ask := func(certificate *x509.Certificate, site string, sequence string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest("GET", "/v1/receipt?sequence="+sequence, nil)
+		request.Header.Set("X-Regalia-Site", site)
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}}
+		recorder := httptest.NewRecorder()
+		collector.Handler().ServeHTTP(recorder, request)
+		return recorder
+	}
+	events, err := TrailEvents("sync", trailLines(nil, 3, "sync-pull"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if code := postCollectorEvent(t, collector.Handler(), first, "sitea.sync", event).Code; code != 204 {
+			t.Fatalf("event %d: %d", event.Sequence, code)
+		}
+	}
+	if code := ask(first, "sitea.sync", "2").Code; code != 404 {
+		t.Fatalf("a collector without a receipt key answered %d", code)
+	}
+	public, private, _ := ed25519.GenerateKey(rand.Reader)
+	collector.SetReceiptKey(private)
+	answer := ask(first, "sitea.sync", "2")
+	var receipt Receipt
+	if answer.Code != 200 || json.Unmarshal(answer.Body.Bytes(), &receipt) != nil {
+		t.Fatalf("receipt: %d %s", answer.Code, answer.Body.String())
+	}
+	var detail trailDetail
+	_ = json.Unmarshal(events[1].Detail, &detail)
+	signature, _ := hex.DecodeString(receipt.Signature)
+	if receipt.EventHash != events[1].Hash || receipt.LineSHA256 != detail.LineSHA256 ||
+		receipt.LineChain != LineChain(LineChain(LineChainStart, mustLineHash(t, events[0])), detail.LineSHA256) ||
+		!ed25519.Verify(public, ReceiptPreimage(fingerprintOf(first), "sitea.sync", 2, events[1].Hash, detail.LineSHA256, receipt.LineChain), signature) {
+		t.Fatalf("the receipt does not sign what the collector holds at 2: %+v", receipt)
+	}
+	for label, recorder := range map[string]*httptest.ResponseRecorder{
+		"past the head":           ask(first, "sitea.sync", "4"),
+		"position 0":              ask(first, "sitea.sync", "0"),
+		"another site":            ask(first, "sitea.admission", "2"),
+		"another client's stream": ask(second, "sitea.sync", "2"),
+	} {
+		if recorder.Code == 200 {
+			t.Errorf("%s: a receipt was signed", label)
+		}
+	}
+	// After a restart the line hashes are rebuilt from the stream file.
+	stateDir := t.TempDir()
+	reloaded, _ := OpenCollector(stateDir)
+	for _, event := range events {
+		postCollectorEvent(t, reloaded.Handler(), first, "sitea.sync", event)
+	}
+	reloaded.Close()
+	reopened, err := OpenCollector(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopened.SetReceiptKey(private)
+	collector = reopened
+	if answer := ask(first, "sitea.sync", "3"); !strings.Contains(answer.Body.String(), `"line_sha256":"`+mustLineHash(t, events[2])) {
+		t.Fatalf("after a reload: %s", answer.Body.String())
+	}
+}
+
+func mustLineHash(t *testing.T, event Event) string {
+	t.Helper()
+	var detail trailDetail
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	return detail.LineSHA256
+}
+
+// TestATrailEventWhoseContentIsNotItsLineIsRefused: regalia-kms-24 on #288. A receipt binds a line
+// hash, so the collector holds each event's content to it: a shipper cannot ship the right hash with
+// other content, only withhold it.
+func TestATrailEventWhoseContentIsNotItsLineIsRefused(t *testing.T) {
+	_, certificate, _, _ := collectorTestTLS(t)
+	collector, err := OpenCollector(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer collector.Close()
+	events, _ := TrailEvents("sync", trailLines(nil, 1, "sync-pull"))
+	honest := events[0]
+	var detail map[string]any
+	_ = json.Unmarshal(honest.Detail, &detail)
+	for label, change := range map[string]func(map[string]any){
+		"other content":             func(d map[string]any) { d["line"] = `{"event":"forged"}` },
+		"other length":              func(d map[string]any) { d["line_bytes"] = 3 },
+		"content and base64":        func(d map[string]any) { d["line_base64"] = "eA==" },
+		"withheld but carried":      func(d map[string]any) { d["withheld"] = "reasons" },
+		"an older format":           func(d map[string]any) { d["format"] = "regalia.trail/v1" },
+		"no line hash":              func(d map[string]any) { delete(d, "line_sha256") },
+		"base64 of another content": func(d map[string]any) { delete(d, "line"); d["line_base64"] = "eyJ4IjoxfQ==" },
+	} {
+		forged := map[string]any{}
+		for k, v := range detail {
+			forged[k] = v
+		}
+		change(forged)
+		event := honest
+		event.Detail, _ = json.Marshal(forged)
+		event.Hash = eventHash(event)
+		if code := postCollectorEvent(t, collector.Handler(), certificate, "sitea.sync", event).Code; code != 400 {
+			t.Errorf("%s: the collector answered %d", label, code)
+		}
+	}
+	if code := postCollectorEvent(t, collector.Handler(), certificate, "sitea.sync", honest).Code; code != 204 {
+		t.Fatalf("the honest event: %d", code)
 	}
 }

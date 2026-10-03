@@ -791,6 +791,26 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
   the operator tools' trails use `regalia-audit`. Trails are 0640, and `/var/log/regalia` is
   root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory is 0750 for this.
   The client key in `/etc/regalia/audit-ship/` is 0640 root:regalia-audit-ship.
+- **Rotation.** A trail past 16 MiB is archived as `<trail>.<last seq>` (20 digits) and a new file begun.
+  Its first line continues the chain (seq and prev), so the archives and the current file verify as one
+  chain (`trails.py verify <trail>`), and a writer killed at any step of a rotation leaves it so. The
+  shipper streams them in order, line by line, so a trail of any size ships after an outage.
+- **Pruning only on the collector's signed word.** The collector, started with `-receipt-key` (Ed25519,
+  root 0600, on its host; THREE-SITE-SECRETS), signs receipts. A receipt says "this collector holds, in
+  this client's stream, at this position, this event and this line". It checks every trail event's
+  content against the line hash it names (`regalia.trail/v2` carries the exact line), so a receipt is
+  for the line itself. After each pass the shipper fetches a receipt for each archive the collector
+  holds wholly, into `/var/lib/regalia-audit-ship/<trail>.head.json`. Each receipt also signs the
+  collector's running digest of every line of the stream up to that one (the line chain), so a receipt
+  for an archive's last line commits to every line before it.
+  `regalia-audit-prune@<trail>.timer` (daily, as the trail directory's owner, no capability) removes an
+  archive only if its receipt verifies against `/etc/regalia/audit-ship/collector-receipt.pub` (one
+  key a line, so the collector's key can rotate with an overlap), names this host's client certificate
+  and `<site>.<trail>`, names the position prune counts itself, and names the archive's last line on
+  disk. A compromised shipper therefore cannot get a line removed that the collector does not hold.
+  `<trail>.pruned` is written first; the shipper goes on from that marker and still checks the
+  collector's head, and a marker ahead of the collector raises the tamper alarm. Without a receipt key
+  nothing is pruned, and archives wait. Rotating the audit client certificate starts new streams (#291).
 - **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
   records one "alarm flood" alarm of its own and answers 429.
 

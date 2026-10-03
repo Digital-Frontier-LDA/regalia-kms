@@ -227,3 +227,39 @@ func (sink *HTTPSink) ReportAlarm(ctx context.Context, sequence uint64, hash, re
 	}
 	return nil
 }
+
+// Receipt asks the collector for its signed receipt of the event at sequence in this sink's stream
+// (handleReceipt). The signature is not checked here: the receipt is evidence for a third party,
+// deploy/baremetal/trails.py prune, which verifies it against the keys it pins.
+func (sink *HTTPSink) Receipt(ctx context.Context, sequence uint64) (Receipt, error) {
+	if sink == nil || sink.client == nil {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, sink.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, fmt.Sprintf("%s/v1/receipt?sequence=%d", sink.baseURL, sequence), nil)
+	if err != nil {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	if sink.site != "" {
+		request.Header.Set("X-Regalia-Site", sink.site)
+	}
+	response, err := sink.client.Do(request)
+	if err != nil {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		response.Body.Close()
+	}()
+	if response.StatusCode != http.StatusOK {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	var receipt Receipt
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil || receipt.Sequence != sequence {
+		return Receipt{}, ErrSinkUnavailable
+	}
+	return receipt, nil
+}

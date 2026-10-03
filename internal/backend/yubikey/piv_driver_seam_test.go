@@ -81,7 +81,7 @@ func newDriver(devices map[string]string) *PIVDriver {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:43 op1 — driver == nil in Open
+// piv_driver.go:(*PIVDriver).Open{err := ctx.Err()}[1] — driver == nil in Open
 // ----------------------------------------------------------------------------
 
 // Open must not dereference a nil driver. A nil-driver dereference would crash
@@ -110,7 +110,7 @@ func TestOpenRefusesBeforeTouchingADriverThatIsNil(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:47 — target == "" (deviceID not commissioned)
+// piv_driver.go:(*PIVDriver).Open{target == ""} — target == "" (deviceID not commissioned)
 // ----------------------------------------------------------------------------
 
 // Open must refuse a deviceID that is not in the commissioned map. The fixture
@@ -140,7 +140,7 @@ func TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned(t *testing
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:51 — err != nil from pivCards
+// piv_driver.go:(*PIVDriver).Open{pivCards() then err != nil} — err != nil from pivCards
 // ----------------------------------------------------------------------------
 
 // Open must refuse when pivCards itself errors. The error is the reader
@@ -163,7 +163,7 @@ func TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned(t *testing
 // runs to disambiguate them.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:56 — ctx.Err() in the loop  ::  RECORDED, MASKED BY :43 op0
+// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} — ctx.Err() in the loop  ::  RECORDED, MASKED BY :43 op0
 // ----------------------------------------------------------------------------
 
 // :56 checks ctx.Err() at the top of every loop iteration. A cancelled context
@@ -177,7 +177,7 @@ func TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned(t *testing
 // falsifier would require pivOpen to consult ctx, which the seam does not.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:57 — selected != nil mid-loop  ::  RECORDED, NEEDS PRE-SET SELECTED
+// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil then selected != nil} — selected != nil mid-loop  ::  RECORDED, NEEDS PRE-SET SELECTED
 // ----------------------------------------------------------------------------
 
 // :57 closes the previously-selected card when ctx.Err() is observed mid-loop.
@@ -192,7 +192,7 @@ func TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned(t *testing
 // seam for Serial() too, which #237 round two did not introduce.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:64 — openErr != nil from pivOpen
+// piv_driver.go:(*PIVDriver).Open{openErr != nil} — openErr != nil from pivOpen
 // ----------------------------------------------------------------------------
 
 // Open must refuse on a per-card open error and continue to the next card.
@@ -223,7 +223,7 @@ func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:67 op0, :67 op1  ::  RECORDED, MASKED BY THE NIL-HANDED CARD
+// piv_driver.go:(*PIVDriver).Open{serialErr != nil}[0] and [1]  ::  RECORDED, MASKED BY THE NIL-HANDED CARD
 // ----------------------------------------------------------------------------
 
 // :67 op0 (serialErr != nil) and :67 op1 (format != target) check the result
@@ -237,7 +237,7 @@ func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 // introduced.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:72 — selected != nil (duplicate serial)  ::  RECORDED
+// piv_driver.go:(*PIVDriver).Open{selected != nil#2} — selected != nil (duplicate serial)  ::  RECORDED
 // ----------------------------------------------------------------------------
 
 // :72 refuses when a SECOND card answers to the same commissioned serial.
@@ -248,7 +248,7 @@ func TestOpenContinuesPastACardThatFailsToOpen(t *testing.T) {
 // Recorded as: cannot-be-sole-refuser in this fixture.
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:79 — selected == nil at end of loop
+// piv_driver.go:(*PIVDriver).Open{selected == nil} — selected == nil at end of loop
 // ----------------------------------------------------------------------------
 
 // Open must refuse when no card in pivCards() matched the commissioned
@@ -276,7 +276,7 @@ func TestOpenRefusesWhenNoCardMatchesTheCommissionedSerial(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:86 op0 — driver == nil in Ready
+// piv_driver.go:(*PIVDriver).Ready{driver == nil || ctx.Err() != nil}[0] — driver == nil in Ready
 // ----------------------------------------------------------------------------
 
 // Ready must refuse a nil driver. Without :86 op0, Ready falls through to
@@ -297,7 +297,7 @@ func TestReadyRefusesBeforeTouchingADriverThatIsNil(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:86 op1 — ctx.Err() in Ready
+// piv_driver.go:(*PIVDriver).Ready{driver == nil || ctx.Err() != nil}[1] — ctx.Err() in Ready
 // ----------------------------------------------------------------------------
 
 // Ready must report false on a cancelled context, regardless of what pivCards
@@ -321,7 +321,7 @@ func TestReadyRefusesACancelledContextEvenWhenCardsArePresent(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:90 op0, :90 op1 — the return-value halves of Ready
+// piv_driver.go:(*PIVDriver).Ready{len(cards) > 0}[0] and [1] — the return-value halves of Ready
 // ----------------------------------------------------------------------------
 
 // Ready's return value is `err == nil && len(cards) > 0`. Each operand is the
@@ -377,7 +377,7 @@ func TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn(t *testing.T) {
 }
 
 // ----------------------------------------------------------------------------
-// piv_driver.go:139 op0 — usable in Login
+// piv_driver.go:(*pivSession).Login{len(pin) < 6}[0] — usable in Login
 // ----------------------------------------------------------------------------
 
 // Login must refuse a session that is not usable, before presenting a PIN to
