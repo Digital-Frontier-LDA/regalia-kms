@@ -203,8 +203,8 @@ grep 'PCR 11' "$W/uki.log" || true
 printf '%s regalia.e2e-image=old\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-old"
 IN_OLD="${IN/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-old }"
 # shellcheck disable=SC2086  # the two lists are words on purpose
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out \
-  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN_OLD --record /tmp/uki/out/e2e-old.record.json --second-record /tmp/uki/second/e2e-old.record.json --out /tmp/uki/out $KEYS" >"$W/uki-old.log" 2>&1 \
   || { cat "$W/uki-old.log"; echo "unlock-boot-qemu: the second image did not build or sign"; exit 2; }
 cp "$ROOT/tmp/uki/out/e2e.efi" "$W/e2e.efi"; cp "$ROOT/tmp/uki/out/e2e.signed.json" "$W/e2e.record.json"; cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"
