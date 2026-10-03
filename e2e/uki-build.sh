@@ -74,15 +74,28 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' > "$U/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
 python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
-# the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in that
-# names this initrd and this client, which is all uki.py holds it to (the real one is e2e/unlock-boot-qemu.sh's)
-python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" <<'PY'
-import hashlib, json, sys
-digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
-json.dump({"schema": "regalia.initrd-build/v1", "commit": "0" * 40, "go": "go1.26.6", "snapshot": "20261003T121500Z",
-           "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
-           "client_sha256": digest(sys.argv[2]), "repository_files": {}, "packages_sha256": "0" * 64, "packages": [],
-           "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0}, open(sys.argv[3], "w"))
+# the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in for
+# this stand-in initrd and client, but with THIS checkout's real provenance (its HEAD, build-initrd.sh's
+# REPO_FILES at that commit and their hashes, go.mod's release), which uki.py holds it to (#266). The checkout
+# must be clean, as for a real build. (The real record is e2e/unlock-boot-qemu.sh's.)
+python3 -I - "$HERE" "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" <<'PY'
+import hashlib, json, re, subprocess, sys
+repo, initrd, client, out, inventory = sys.argv[1:6]
+git = lambda *a: subprocess.run(["git", "-c", "safe.directory=" + repo, "-C", repo, *a], check=True, capture_output=True).stdout
+digest = lambda data: hashlib.sha256(data).hexdigest()
+script = git("show", "HEAD:deploy/baremetal/initrd/build-initrd.sh").decode()
+name = re.search(r'^SCRIPT="([^"]+)"$', script, re.M).group(1)
+files = [name if f == '"$SCRIPT"' else f for f in re.search(r"^REPO_FILES=\(([^)]*)\)", script, re.M).group(1).split()]
+go_mod = git("show", "HEAD:go.mod").decode()
+go = (re.search(r"^toolchain (go1\.[0-9]+\.[0-9]+)$", go_mod, re.M) or re.search(r"^go (1\.[0-9]+\.[0-9]+)$", go_mod, re.M)).group(1)
+json.dump({"schema": "regalia.initrd-build/v1", "commit": git("rev-parse", "HEAD").decode().strip(),
+           "go": go if go.startswith("go") else "go" + go, "snapshot": "20261003T121500Z",
+           "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": ["stand-in"],
+           "client_sha256": digest(open(client, "rb").read()),
+           "repository_files": {f: digest(git("show", "HEAD:" + f)) for f in files},
+           "packages_sha256": "0" * 64, "packages": ["stand-in"],
+           "initrd_sha256": digest(open(initrd, "rb").read()), "initrd_size": len(open(initrd, "rb").read()),
+           "initrd_entries": sum(1 for _ in open(inventory))}, open(out, "w"))
 PY
 printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"

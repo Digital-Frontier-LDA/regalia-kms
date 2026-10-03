@@ -155,6 +155,29 @@ class FakeTools:
 
 
 KEYS = None
+CHECKOUT = None        # a small clean git checkout the initrd build record's provenance is held to (#266)
+FIXTURE_SCRIPT = """#!/bin/bash
+SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
+REPO_FILES=("$SCRIPT" go.mod deploy/baremetal/initrd/wg-boot
+            deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
+"""
+
+
+def make_checkout(directory, marker="module"):
+    """A git checkout holding a build-initrd.sh, the files its REPO_FILES names and a go.mod, committed: what
+    uki.py's provenance check reads (as the real repository is, at the commit a record names)."""
+    files = {"deploy/baremetal/initrd/build-initrd.sh": FIXTURE_SCRIPT.encode(), "go.mod": b"module x\n\ngo 1.26.0\n\ntoolchain go1.26.6\n",
+             "deploy/baremetal/initrd/wg-boot": b"#!/bin/sh\n", "deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab": b"root UUID=x none\n"}
+    for path, content in files.items():
+        os.makedirs(os.path.join(directory, os.path.dirname(path)), exist_ok=True)
+        with open(os.path.join(directory, path), "wb") as f:
+            f.write(content)
+    git = lambda *argv: subprocess.run(["git", "-C", directory, "-c", "user.email=test@example.invalid", "-c", "user.name=test", *argv],
+                                       check=True, capture_output=True)
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-q", "-m", "fixture " + marker)                # a test's own checkout is another commit
+    return directory
 
 
 def write_inventory(data, directory):
@@ -182,6 +205,22 @@ def setUpModule():
         run("req", "-new", "-x509", "-key", key + ".key", "-out", key + ".crt", "-subj", "/CN=TEST %s key, not for production/" % name, "-days", "30")
     run("genpkey", "-algorithm", "EC", "-pkeyopt", "ec_paramgen_curve:P-256", "-out", os.path.join(KEYS, "ec.key"))
     run("pkey", "-in", os.path.join(KEYS, "ec.key"), "-pubout", "-out", os.path.join(KEYS, "ec.pub"))
+    global CHECKOUT
+    CHECKOUT = make_checkout(os.path.join(KEYS, "checkout"))
+    checkout = mock.patch.object(uki, "CHECKOUT", CHECKOUT)
+    checkout.start()
+    unittest.addModuleCleanup(checkout.stop)
+
+
+def provenance():
+    """The commit and repository files of the checkout uki.py checks against (uki.CHECKOUT: the module's
+    fixture, or a test's own), as build-initrd.sh would record them from its working tree."""
+    head = subprocess.run(["git", "-C", uki.CHECKOUT, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+    files = {}
+    for path in ("deploy/baremetal/initrd/build-initrd.sh", "go.mod", "deploy/baremetal/initrd/wg-boot", "deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab"):
+        with open(os.path.join(uki.CHECKOUT, path), "rb") as f:
+            files[path] = hashlib.sha256(f.read()).hexdigest()
+    return head, files
 
 
 def newc(entries):
@@ -249,9 +288,10 @@ class Case(unittest.TestCase):
         """An initrd build record (build-initrd.sh, #248) for `initrd` (default: the input's) and `client`."""
         with open(initrd or self.inputs["initrd"], "rb") as f:
             initrd_sha256 = uki.sha256(f.read())
-        record = {"schema": uki.INITRD_BUILD_SCHEMA, "commit": "ab" * 20, "go": "go1.26.6", "snapshot": "20261003T121500Z",
+        commit, files = provenance()
+        record = {"schema": uki.INITRD_BUILD_SCHEMA, "commit": commit, "go": "go1.26.6", "snapshot": "20261003T121500Z",
                   "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "6.12.111+deb13-amd64", "dracut": "106-6",
-                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "repository_files": {},
+                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "repository_files": files,
                   "packages_sha256": "cd" * 32, "packages": ["dracut=106-6"], "initrd_sha256": initrd_sha256,
                   "initrd_size": 1, "initrd_entries": 1}
         record.update(change)
@@ -939,6 +979,51 @@ class InitrdBuildRecord(Case):
         for reason, path in cases.items():
             with self.subTest(reason=reason):
                 self.refused(reason, self.build, inputs={"initrd_build": path}, name="image-%d" % len(reason))
+
+    def test_the_record_s_provenance_is_this_checkout_s(self):
+        """#266 (required before the first production image): a hand-written record that names the right initrd
+        and client is refused unless its commit is this clean checkout's HEAD, its repository files are
+        build-initrd.sh's and each one's hash is the commit's, and its Go release is the commit's go.mod's."""
+        commit, files = provenance()
+        edited = dict(files, **{"deploy/baremetal/initrd/wg-boot": "00" * 32})
+        missing = {k: v for k, v in files.items() if k != "go.mod"}
+        extra = dict(files, **{"README.md": "11" * 32})
+        cases = {
+            "this checkout is at": self.initrd_build("p1.json", commit="ab" * 20),                       # another commit
+            "not the commit's": self.initrd_build("p2.json", repository_files=edited),                   # a file's hash
+            "not build-initrd.sh's": self.initrd_build("p3.json", repository_files=missing),             # a file left out
+            "not build-initrd.sh's ": self.initrd_build("p4.json", repository_files=extra),              # a file added
+            "go.mod at the commit says go1.26.6": self.initrd_build("p5.json", go="go1.26.5"),
+            "not build-initrd.sh's  ": self.initrd_build("p6.json", repository_files={}),                # the stand-in's empty set
+            "initrd_size is not a positive integer": self.initrd_build("p7.json", initrd_size="1"),
+            "initrd_entries is not a positive integer": self.initrd_build("p8.json", initrd_entries=True),
+            "source_date_epoch is not a positive integer": self.initrd_build("p9.json", source_date_epoch=-1),
+            "packages is not a list of names": self.initrd_build("p10.json", packages=["dracut=106-6", 7]),
+            "packages_requested is not a list of names": self.initrd_build("p11.json", packages_requested=[]),
+        }
+        for reason, path in cases.items():
+            with self.subTest(reason=reason):
+                self.refused(reason.strip(), self.build, inputs={"initrd_build": path}, name="image-p")
+        forged = dict(files, **{"deploy/baremetal/initrd/build-initrd.sh": hashlib.sha256(b"another script").hexdigest()})
+        self.refused("not the commit's", self.build, inputs={"initrd_build": self.initrd_build("p12.json", repository_files=forged)}, name="image-q")
+
+    def test_a_checkout_that_is_not_clean_signs_nothing(self):
+        """#266: the record's commit is HEAD, and the tree must be exactly HEAD: an untracked file, or a file
+        changed and not committed (even one the record's hash matches), refuses."""
+        own = make_checkout(os.path.join(self.d, "checkout"), marker="own")
+        with mock.patch.object(uki, "CHECKOUT", own):
+            record = self.initrd_build("own.json")
+            self.build(inputs={"initrd_build": record}, name="image-clean")
+            with open(os.path.join(own, "stray"), "w") as f:
+                f.write("x")
+            self.refused("has changes or untracked files", self.build, inputs={"initrd_build": record}, name="image-u")
+            os.unlink(os.path.join(own, "stray"))
+            path = os.path.join(own, "deploy/baremetal/initrd/wg-boot")
+            with open(path, "w") as f:
+                f.write("#!/bin/sh\necho changed\n")
+            changed = dict(json.load(open(record)), repository_files=dict(provenance()[1]))  # the working copy's hash
+            changed_path = self.write("changed.json", json.dumps(changed).encode())
+            self.refused("has changes or untracked files", self.build, inputs={"initrd_build": changed_path}, name="image-c")
 
     def test_sign_holds_the_record_to_the_inputs_and_rechecks_it(self):
         record = self.build()

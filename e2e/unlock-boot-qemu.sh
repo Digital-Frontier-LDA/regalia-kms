@@ -92,7 +92,7 @@ else
   SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
            "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
   mmdebstrap --variant=minbase "${APTOPT[@]}" \
-    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
+    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography,git \
     "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
   # the guest's own apt reads the same lines: the keyring at the same path inside it
@@ -178,7 +178,12 @@ for k in initrd system secure-boot; do
   openssl req -new -x509 -key "$W/keys/TEST-$k.key" -out "$W/keys/TEST-$k.crt" -subj "/CN=TEST $k key, not for production/" -days 30 2>/dev/null
 done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
-cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
+# a clone of this checkout at its HEAD, not a copy of files: uki.py holds the initrd's build record to the
+# checkout it runs from (#266: a clean tree whose HEAD is the record's commit, its files at that commit)
+rmdir "$ROOT/tmp/uki/src"
+git -c safe.directory="$PWD" clone -q --depth 1 "file://$PWD" "$ROOT/tmp/uki/src" || { echo "unlock-boot-qemu: cannot clone the checkout"; exit 2; }
+[ "$(git -C "$ROOT/tmp/uki/src" rev-parse HEAD)" = "$(git -c safe.directory="$PWD" rev-parse HEAD)" ] || { echo "unlock-boot-qemu: the clone is not at HEAD"; exit 2; }
+cp -r "$W/keys" "$ROOT/tmp/uki/"
 cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
 printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
