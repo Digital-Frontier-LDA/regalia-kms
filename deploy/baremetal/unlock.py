@@ -911,8 +911,17 @@ def contribute(contributions, manifest, peer, target, recipient_der, fingerprint
     require(peer != target, "a node is not its own peer")
     require(isinstance(fingerprint, str) and hmac.compare_digest(hashlib.sha256(recipient_der).hexdigest(), fingerprint.strip().lower()),
             "the enrolment key is not the one whose fingerprint was given: nothing was created")
-    recipient = recipient_key(recipient_der)
+    recipient_key(recipient_der)
     epoch = max([manifest["epoch"]] + [e + 1 for e in contributions.epochs(target)])
     secret = contributions.mint(target, epoch)
-    return {"schema": ENROLMENT_SCHEMA, "target": target, "peer": peer, "path_epoch": epoch,
-            "ciphertext": recipient.encrypt(secret, _oaep(_enrolment_label(target, peer, epoch))).hex()}
+    return wrap(secret, peer, target, epoch, recipient_der)
+
+
+def wrap(secret, peer, target, epoch, recipient_der):
+    """`secret`, the contribution of path `peer` -> `target` at path epoch `epoch`, encrypted to the target's
+    enrolment key: what Enrolment.open takes. contribute() mints and wraps; a peer that already holds the
+    secret of that path re-wraps the same one (enrolpeer.py, #190), never a second distinct secret."""
+    require(isinstance(secret, bytes) and len(secret) == SECRET_BYTES, "a contribution is %d bytes" % SECRET_BYTES)
+    recipient = recipient_key(recipient_der)
+    return {"schema": ENROLMENT_SCHEMA, "target": node_id(target, "target"), "peer": node_id(peer, "peer"),
+            "path_epoch": path_epoch(epoch), "ciphertext": recipient.encrypt(secret, _oaep(_enrolment_label(target, peer, epoch))).hex()}
