@@ -287,10 +287,11 @@ class Arithmetic(unittest.TestCase):
                 uki.cmdline_text(("root=/dev/mapper/root ro %s" % near).encode())
         # the word present, and a contradicting (or repeated) value beside it: the last one would win
         for extra in ("systemd.import_credentials=yes", "systemd.import_credentials=1", "rd.systemd.import_credentials=yes",
-                      "systemd.import_credentials=no"):
+                      "systemd.import_credentials=no", "systemd.import-credentials=yes", "rd.systemd.import-credentials=yes",
+                      "systemd.import-credentials=no", "SYSTEMD.import_credentials=yes"):
             with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no %s" % extra).encode())
-            self.assertIn("gives systemd.import_credentials more than once or with another value", str(caught.exception))
+            self.assertIn("gives systemd.import_credentials more than once or with another value or spelling", str(caught.exception))
 
         # the forms that turn a shell OFF are what an image should carry (the unlock test boots with them)
         hardened = "root=/dev/mapper/root ro systemd.import_credentials=no rd.shell=0 rd.emergency=poweroff systemd.debug_shell=0 rd.systemd.debug-shell=off"
@@ -560,9 +561,17 @@ class Hardening(Case):
         self.assertEqual(len(measures), 2)
         self.assertTrue(all(env is not None and "CREDENTIALS_DIRECTORY" not in env and "ENCRYPTED_CREDENTIALS_DIRECTORY" not in env for env in measures))
         names = [os.path.basename(c[0]) for c in self.tools.calls]
+        purge = ["keyctl", "purge", "user", "measure-private-key-pin"]
         for i, name in enumerate(names):
             if name == "systemd-measure" and self.tools.calls[i][1] == "sign":
-                self.assertEqual(self.tools.calls[i + 1], ["keyctl", "purge", "user", "measure-private-key-pin"])
+                self.assertEqual((self.tools.calls[i - 1], self.tools.calls[i + 1]), (purge, purge))     # before and after
+        # a purge that fails is said, not ignored
+        original = self.tools.__call__
+        failing = lambda argv, **kw: subprocess.CompletedProcess(argv, 1, b"", b"Permission denied") if argv[0] == "keyctl" else original(argv, **kw)
+        self.out = os.path.join(self.d, "again"); os.mkdir(self.out)
+        record = self.build()
+        self.refused("keyctl could not purge the cached token PIN", uki.sign, self.inputs, record, self.signing_keys(), "file", self.out,
+                     run=failing, second_record=dict(record), report=lambda line: None)
 
     def test_nothing_is_overwritten_and_no_record_is_written_through_a_link(self):
         record = self.build()

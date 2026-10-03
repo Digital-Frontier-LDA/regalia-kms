@@ -107,7 +107,21 @@ CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off
 # import every credential on the ESP by name, and a credential named after a unit drop-in, a tmpfiles line
 # or another unit changes what the initrd does (#66). The unlock units load the node's credentials by
 # absolute path instead. A later image that dropped the word would quietly give that back.
+# The words are compared as systemd compares a key: "-" and "_" are the same (proc_cmdline_key_streq), and
+# an "rd." form applies in the initrd; any other spelling of the key beside the required word is refused,
+# since the LAST value wins. WHAT ELSE CAN ADD WORDS on a host: signed addons (*.addon.efi) and, per
+# systemd-stub's documentation, an SMBIOS type 11 io.systemd.stub.kernel-cmdline-extra. Both are measured
+# into PCR 12, which the peers attest (#218), so an appended systemd.import_credentials=yes changes PCR 12
+# and the peers refuse the unlock; and `set --esp` refuses an ESP that holds addons at all. The SMBIOS
+# case is stated from the documentation, not yet shown by a boot.
 CMDLINE_REQUIRED = ("systemd.import_credentials=no",)
+
+
+def _cmdline_key(word):
+    """A command-line word's key as systemd compares it: "-" and "_" alike, without an "rd." prefix,
+    case-folded (systemd's keys are case-sensitive; folding here only refuses more)."""
+    key = word.split("=", 1)[0].casefold().replace("-", "_")
+    return key[3:] if key.startswith("rd.") else key
 TOOLS = {"ukify": "ukify", "measure": "/usr/lib/systemd/systemd-measure", "sbsign": "sbsign", "sbverify": "sbverify", "openssl": "openssl"}
 
 
@@ -189,11 +203,15 @@ def _clean_env():
 
 
 def _purge_pin(run):
-    """systemd-measure keeps the PIN it asked for in the user keyring; it does not outlive the signature."""
+    """systemd-measure keeps the PIN it asked for in the user keyring, and asks with ACCEPT_CACHED: a PIN
+    cached by anything else under this user would be used with no prompt. Purged BEFORE each signature
+    and after it; a purge that fails is a refusal, so nobody believes a PIN gone that is not."""
     try:
-        run(["keyctl", "purge", "user", "measure-private-key-pin"], capture_output=True)
+        done = run(["keyctl", "purge", "user", "measure-private-key-pin"], capture_output=True)
     except OSError:
-        pass                                    # no keyctl: nothing could have been cached through it either
+        return                                  # no keyctl: nothing could have been cached through it either
+    require(done.returncode == 0, "keyctl could not purge the cached token PIN (measure-private-key-pin): %s"
+            % (done.stderr or b"").decode("utf-8", "replace").strip()[-200:])
 
 
 def _run(run, argv, what, **kw):
@@ -232,10 +250,10 @@ def cmdline_text(raw):
         require(needed in words, "the command line does not carry %s, which every KMS host's image must" % needed)
         # ... and nothing that says otherwise: the kernel and systemd take the LAST value of a repeated word,
         # so a second systemd.import_credentials= (any value, the same one included) is refused
-        key = needed.split("=", 1)[0] + "="
-        given = [w for w in words if w.startswith(key) or w.startswith("rd." + key)]
-        require(given == [needed], "the command line gives %s more than once or with another value (%s): it must say %s, once"
-                % (key[:-1], " ".join(given), needed))
+        key = _cmdline_key(needed)
+        given = [w for w in words if _cmdline_key(w) == key]
+        require(given == [needed], "the command line gives %s more than once or with another value or spelling (%s): it must say %s, once"
+                % (needed.split("=", 1)[0], " ".join(given), needed))
     for word in words:
         if re.fullmatch(CMDLINE_HARDENING, word):
             continue
@@ -524,6 +542,7 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
                 argv.append("--private-key-source=" + source)
             if pcrsig:
                 argv.append("--append=" + pcrsig)
+            _purge_pin(run)
             try:
                 out = _run(run, argv, "signing the %s-phase PCR 11" % phase, env=_clean_env())
             finally:
