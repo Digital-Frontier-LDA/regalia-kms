@@ -68,6 +68,16 @@ class GPGImageTests(unittest.TestCase):
         self.sign(f"{self.digest} *{self.image.name}\n")
         self.assertEqual(self.check()["status"], "verified")
 
+    def test_detached_input_is_bound_to_exact_bytes(self):
+        data, signature, public = self.manifest.read_bytes(), self.signature.read_bytes(), self.key.read_bytes()
+        proof = verify.verify_detached(data, signature, public, self.fingerprints[0])
+        self.assertEqual(proof["signed_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(proof["signing_fingerprint"], self.fingerprints[0])
+        with self.assertRaises(verify.VerificationError):
+            verify.verify_detached(data + b"modified", signature, public, self.fingerprints[0])
+        with self.assertRaises(verify.VerificationError):
+            verify.verify_detached(data, signature, public, self.fingerprints[1])
+
     def test_wrong_signer_and_wrong_key_pin(self):
         with self.assertRaisesRegex(verify.VerificationError, "fingerprint"):
             self.check(fingerprint=self.fingerprints[1])

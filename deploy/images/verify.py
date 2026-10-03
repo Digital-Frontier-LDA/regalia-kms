@@ -52,17 +52,16 @@ def hash_regular(path: Path, algorithm: str) -> tuple[str, int]:
     return digest.hexdigest(), before.st_size
 
 
-def verify_gpg(image: Path, manifest: Path, signature: Path, key: Path,
-               fingerprint: str, algorithm: str = "sha512") -> dict:
+def verify_detached(signed_data: bytes, signature_data: bytes, key_data: bytes,
+                    fingerprint: str) -> dict:
     require(re.fullmatch(r"[A-F0-9]{40}|[A-F0-9]{64}", fingerprint) is not None,
             "a full uppercase signing-key fingerprint is required")
-    require(algorithm in {"sha256", "sha512"}, "only SHA-256 and SHA-512 are supported")
-    require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", image.name) is not None,
-            "unsafe image basename")
+    require(all(isinstance(data, bytes) for data in (signed_data, signature_data, key_data))
+            and len(signed_data) <= 256 * 1024 * 1024
+            and len(signature_data) <= 4 * 1024 * 1024 and len(key_data) <= 4 * 1024 * 1024,
+            "signature input type or size exceeds bounds")
     # Verify private copies: concurrent replacement of metadata cannot change the
     # data parsed after its signature has been checked. Never consult ambient trust.
-    signed_data = read_regular(manifest)
-    key_data, signature_data = read_regular(key), read_regular(signature)
     with tempfile.TemporaryDirectory(prefix="regalia-image-gpg-") as directory:
         home = Path(directory)
         copies = {"key": key_data, "signature": signature_data, "manifest": signed_data}
@@ -95,6 +94,22 @@ def verify_gpg(image: Path, manifest: Path, signature: Path, key: Path,
                 "signature is not from the approved primary key")
         require(record[8] in {"8", "9", "10"}, "weak signature digest rejected")
         signing_fingerprint = record[1]
+    return {"primary_fingerprint": fingerprint, "signing_fingerprint": signing_fingerprint,
+            "signed_sha256": hashlib.sha256(signed_data).hexdigest(),
+            "signature_sha256": hashlib.sha256(signature_data).hexdigest()}
+
+
+def verify_gpg(image: Path, manifest: Path, signature: Path, key: Path,
+               fingerprint: str, algorithm: str = "sha512") -> dict:
+    require(re.fullmatch(r"[A-F0-9]{40}|[A-F0-9]{64}", fingerprint) is not None,
+            "a full uppercase signing-key fingerprint is required")
+    require(algorithm in {"sha256", "sha512"}, "only SHA-256 and SHA-512 are supported")
+    require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", image.name) is not None,
+            "unsafe image basename")
+    signed_data = read_regular(manifest)
+    signature_data = read_regular(signature)
+    proof = verify_detached(signed_data, signature_data, read_regular(key), fingerprint)
+    signing_fingerprint = proof["signing_fingerprint"]
     try:
         lines = signed_data.decode("ascii").splitlines()
     except UnicodeError as error:

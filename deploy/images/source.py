@@ -28,9 +28,12 @@ FILES = {
 INDEX = "main/source/Sources.xz"
 
 
-def source_record(data):
+def source_record(data, *, package=None, version=None, reviewed_files=None):
+    package = PACKAGE if package is None else package
+    version = VERSION if version is None else version
+    reviewed_files = FILES if reviewed_files is None else reviewed_files
     records = [fields(block) for block in data.decode("utf-8").strip().split("\n\n")]
-    matches = [row for row in records if row.get("Package") == PACKAGE and row.get("Version") == VERSION]
+    matches = [row for row in records if row.get("Package") == package and row.get("Version") == version]
     require(len(matches) == 1, "reviewed source version absent or duplicated")
     row = matches[0]
     directory = row.get("Directory", "")
@@ -47,11 +50,11 @@ def source_record(data):
                 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+~-]*", name) is not None
                 and name not in files, "unsafe or duplicate source file")
         files[name] = (digest, int(size))
-    require(files == FILES, "source inputs differ from reviewed hashes and lengths")
+    require(files == reviewed_files, "source inputs differ from reviewed hashes and lengths")
     return directory, files
 
 
-def validate(directory, policy_path=POLICY):
+def archive_source_index(directory, policy_path=POLICY):
     policy_bytes = read_regular(policy_path)
     config = policy(json.loads(policy_bytes))
     require(read_regular(directory / "policy.json") == policy_bytes, "source policy differs from reviewed policy")
@@ -63,6 +66,12 @@ def validate(directory, policy_path=POLICY):
     with lzma.LZMAFile(io.BytesIO(compressed)) as handle:
         data = handle.read(256 * 1024 * 1024 + 1)
     require(len(data) <= 256 * 1024 * 1024, "source index expansion exceeds bounds")
+    return {"timestamp": config["timestamp"], "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
+            "release": release, "sources_index_sha256": digest}, data
+
+
+def validate(directory, policy_path=POLICY):
+    index_proof, data = archive_source_index(directory, policy_path)
     source_directory, files = source_record(data)
     for name, expected in files.items():
         content = read_regular(directory / name, expected[1])
@@ -70,8 +79,7 @@ def validate(directory, policy_path=POLICY):
                 "source file hash or length mismatch")
     return {"schema": "regalia.authenticated-source/v1", "status": "verified",
             "production_approved": False, "package": PACKAGE, "version": VERSION,
-            "timestamp": config["timestamp"], "policy_sha256": hashlib.sha256(policy_bytes).hexdigest(),
-            "release": release, "sources_index_sha256": digest,
+            **index_proof,
             "directory": source_directory,
             "files": {name: {"sha256": value[0], "bytes": value[1]} for name, value in files.items()},
             "authentication": "pinned GPG InRelease -> SHA256 Sources -> SHA256 source files",

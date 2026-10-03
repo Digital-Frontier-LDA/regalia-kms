@@ -32,6 +32,10 @@ checksum-only and is not an approved deployment path.
 - `fetch_debian.py`: fetch, authenticate and atomically publish installer media.
 - `inventory.py`: enumerate repository image inputs and report trust gaps.
 - `tests/test_image_verification.py`: real GPG adversarial integration tests.
+- `source.py`: authenticate the reviewed TPM source through Debian's signed index.
+- `util_source.py`: authenticate the reviewed util-linux candidate and its Debian
+  packaging, including upstream detached signatures and the pinned public key in
+  `keys/util-linux.asc`. This verifies sources; it does not admit binary packages.
 
 Run tests with `python3 -Es -m unittest discover -s tests -p 'test_image_*.py'`.
 From the repository root, fetch verified Debian media with
@@ -39,6 +43,21 @@ From the repository root, fetch verified Debian media with
 Dependencies: Python 3.11+, GnuPG; Cosign for OCI verification and PyYAML 6.0.3
 for the inventory (already pinned in the lab harness requirements). Tests create and
 destroy disposable signing keys and never access personal GPG keyrings.
+
+Capture the reviewed util-linux source candidate using an already verified
+package snapshot (the source index and every input are verified again):
+
+```sh
+python3 -Es -m deploy.images.util_source SOURCE_OUTPUT --snapshot SNAPSHOT_DIR
+```
+
+The fixed candidate is upstream 2.42.4 with authenticated Debian 2.41.5 packaging.
+The Debian packaging anchors the upstream primary fingerprint; the vendored
+public key supplies its reviewed current self-certification. The verifier checks
+the exact compressed and uncompressed source bytes, signature bytes, public key,
+changelog and release notes. It rejects expired/revoked signatures and altered
+inputs even if a saved verification report says they were previously verified.
+Candidate source verification grants no production approval or scanner waiver.
 
 Repeat a downloaded or exported disk check immediately before use:
 

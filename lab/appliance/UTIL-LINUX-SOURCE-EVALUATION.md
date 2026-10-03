@@ -62,7 +62,17 @@ laboratory evidence; it is not an approved appliance build entry point.
 
 ## Residual Risk
 
-No util-linux Debian packages are built, admitted or installed into the appliance.
+The initial 2.41.6 evaluation built no Debian packages. A subsequent native
+ARM64 2.42.4 trial builds actual Debian binary packages, preserving the package
+identities and `bsdutils` epoch/Essential flag; none are admitted or installed
+into the appliance. Its first build ran as root, causing Debian's non-root test
+suite to skip itself. That result does not qualify its tests. The ordinary-user
+build then ran 368 upstream tests and failed `setarch/setarch`: Docker refused
+the personality flags in its options sub-test. The build correctly stopped
+rather than ignoring that result. Container syscall denial and the test's
+expected behavior need to be distinguished before qualification; package
+reproduction is also outstanding. Tests skipped by upstream for missing root
+permissions or tools are not evidence that those operations work.
 All 36 matches remain. This is one development builder with an unsigned cached
 base, not independent reproduction or complete signed compiler admission.
 Version/load checks and symbol equality do not prove structure/calling ABI,
@@ -70,6 +80,21 @@ mount security, PAM/login, initramfs recovery, cgroup descriptor behavior or
 actual exploit resistance. Debian downstream patches and package scripts still
 need explicit review. The existing source-package verifier admits only the
 reviewed TPM package and cannot admit this candidate.
+
+The repeatable source verifier is now `deploy.images.util_source`. It freshly
+verified upstream 2.42.4's tar, changelog and release notes using the same pinned
+primary authority as the authenticated Debian packaging. The exact refreshed
+public key is vendored; runtime keyserver responses are not accepted as policy
+updates. The compressed source SHA-256 is
+`fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec`,
+and the signed uncompressed tar SHA-256 is
+`5eec78fac0908c1bc18dbe91478741115a3209156dc6105a78ec46dce0f590b3`.
+Source substitution tests reject a different Debian version, duplicate records,
+unsafe source paths, modified inputs, duplicate/symlinked authority members,
+unreviewed tar expansion and unauthenticated downloads. These fixtures test
+boundary handling; fresh verification of the actual bundle establishes its
+signature evidence. The TPM source report remains byte-for-byte equivalent as
+a JSON object after the shared verifier refactor.
 
 ## Recommendation
 
