@@ -90,7 +90,7 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 | 2.3 | Compute the document's version from the file in hand, at signing time: `python3 -Es -m deploy.baremetal.rollout version --measurements BOTH.json` | **exists** |
 | 2.4 | Write manifest N+1, unsigned: `python3 -Es -m deploy.baremetal.rollout propose --membership CHAIN.json --root-key HEX --old CURRENT.json --new BOTH.json`. It prints the current manifest with `epoch + 1`, `prev_digest`, and `policy_version` set to that version, and signs nothing | writing the proposal **exists**; signing it is step 2.6 |
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
-| 2.6 | Sign with the offline root key | **NOT BUILT**: the root key is "proposed" (THREE-SITE-SECRETS.md); no ceremony generates it and no tool signs with it |
+| 2.6 | Sign with the offline root key | `python3 -Es -m deploy.baremetal.manifest sign --expected-epoch N --signer root --key 'pkcs11:serial=…;token=…;id=…;type=private' …` signs on the root's Nitrokey (#156); `--chain-out` gives the chain the retiring manifest is proposed from. **NOT BUILT**: no ceremony generates the root key yet (option C on #156: P-256 on its own offline Nitrokey) |
 | 2.7 | Bring manifest N+1 and the document to all three hosts; each commits the manifest (its TPM epoch counter rises) and rebuilds its attestation policy from the document | commit **exists** (`membership.Store`), exchange between nodes **exists** (`convergence.py`); installing the document and reloading the policy on a running host is **NOT BUILT** |
 | 2.8 | Check that all three hold epoch N+1: on each host, `python3 -Es -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced; a chain that is not the one the TPM recorded is refused; the TPM read is `--tcti`'s, default `device:/dev/tpmrm0`, the output names it, and a `TPM2TOOLS_TCTI` left in the shell is refused), and compare the three answers | **exists**, one host at a time; nothing collects the three |
 
@@ -151,7 +151,7 @@ ceremony (a ceremony prerequisite).
 |---|---|---|
 | A host does not come back, before step 5 | boot the current image from the boot menu; it is still accepted | **manual** |
 | A host does not come back and no peer will unlock it | open its disk with its recovery key at the console (PIN-CUSTODY.md, "The disk recovery key") | **exists** (`recovery-key.sh`) |
-| A host is down and must not hold the others up | a manifest that sets it QUARANTINED; the revocation key may sign it. The others then update without it | rule **exists**; signing tool **NOT BUILT** |
+| A host is down and must not hold the others up | a manifest that sets it QUARANTINED; the revocation key may sign it. The others then update without it | rule **exists**; signed with `deploy.baremetal.manifest sign --signer revocation` on the revocation key's token |
 | The CURRENT image is found compromised | the emergency path: one manifest whose document drops it on every host at once (`python3 -Es -m deploy.baremetal.rollout propose … --emergency`). Every host still running it is locked out until it boots the new image. Root key | writing the proposal **exists**; signing it does not |
 | All three hosts are down | total-outage recovery: PIN-CUSTODY.md and the recovery keys | **manual** |
 
