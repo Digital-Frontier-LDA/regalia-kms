@@ -273,7 +273,9 @@ Decisions (#77, 2026-10-02; regalia-kms-24 under the owner's delegation):
   names remains.
 
 *Verified by:* `tests/test_baremetal_recovery_key.py` (a real LUKS2 header in a file: enrolment, the
-refusals, replacement, no secret on a command line) and `e2e/luks-recovery-key.sh` in CI (a real
+refusals, replacement, no secret on a command line), `lab/recovery/matrix.py` (every cryptsetup call
+and every header sync inside it under KILL, TERM and a failing write: a key on a card always opens,
+the state printed is the header's, and the same command finishes the run) and `e2e/luks-recovery-key.sh` in CI (a real
 dm-crypt volume on a loop device: every other keyslot destroyed, the recovery key alone opens and
 mounts it; a wrong key, one wrong letter, no dashes, other grouping and capitals do not);
 `host_probe.py` (`root_disk_recovery_keyslot`) on the host. **Not verified: any KMS host, a real boot
