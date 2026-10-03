@@ -190,7 +190,7 @@ def reference(work, tcti, pcrs):
 def peer_tpm(work):
     """b's TPM: swtpm on a socket of the test's own (b is the fixture here, not what is tested)."""
     (work / "b-tpm").mkdir()
-    sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % (work / "b-tpm.sock"), "--ctrl", "type=unixio,path=%s" % (work / "b-tpm.ctrl"),
+    sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % (work / "b-tpm.sock"), "--ctrl", "type=unixio,path=%s.ctrl" % (work / "b-tpm.sock"),
        "--tpmstate", "dir=%s" % (work / "b-tpm"), "--flags", "not-need-init,startup-clear", "--daemon")
     until(lambda: (work / "b-tpm.sock").exists(), 10, 0.2)
     return "swtpm:path=%s" % (work / "b-tpm.sock")
