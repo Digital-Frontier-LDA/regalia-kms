@@ -59,7 +59,11 @@ def anchored(envelopes, root_key, anchor):
     as Store.load does before it writes (cmd/regalia-unlock/membership.Anchored, the initrd's, decides alike):
     a chain below the high-water is a ROLLBACK, one whose manifest at the recorded epoch is not the recorded
     one is a CONFLICT (the crash window, a record one epoch behind the counter, is accepted as verify does),
-    and one further ahead than advance() would go is an anomaly. Reads the TPM; changes nothing."""
+    and one further ahead than advance() would go is an anomaly. Reads the TPM; changes nothing.
+
+    It reads without the writer's lock (it runs as root, the writer as regalia-sync): a commit racing it can
+    show as the crash window (accepted), as "the anchor changed during the read", or as a CONFLICT that is the
+    commit and not a fork. Enrolment and the update path are rerun, and a second read decides."""
     require(isinstance(envelopes, list) and envelopes, "the membership chain must be a non-empty list of envelopes")
     current, manifests = None, []
     for envelope in envelopes:
@@ -70,7 +74,15 @@ def anchored(envelopes, root_key, anchor):
     high = anchor.value()
     require(current["epoch"] >= high, "ROLLBACK: the chain ends at epoch %d but the TPM high-water is %d; fetch the chain from a peer"
             % (current["epoch"], high))
-    high = anchor.verify(membership.Store._digests(manifests), lock=False)
+    digests = membership.Store._digests(manifests)
+
+    def digest_of(epoch):
+        # a commit between the two reads can move the high-water past this chain: that is a ROLLBACK too,
+        # never an IndexError
+        require(epoch <= len(manifests), "ROLLBACK: the chain ends at epoch %d but the TPM recorded epoch %d; fetch the chain from a peer"
+                % (len(manifests), epoch))
+        return digests(epoch)
+    high = anchor.verify(digest_of, lock=False)
     require(current["epoch"] - high <= anchor.MAX_JUMP, "epoch jump %d exceeds the bound %d: anomaly" % (current["epoch"] - high, anchor.MAX_JUMP))
     return current
 

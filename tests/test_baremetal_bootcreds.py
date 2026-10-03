@@ -128,6 +128,11 @@ class EspFiles(unittest.TestCase):
             bootcreds.esp_files(self.cfg, fork, self.root, DEVICE, self.anchor)
         ahead = chain(hbt.manifest(), hbt.manifest(a="MAINTENANCE"), hbt.manifest(a="MAINTENANCE", c="REVOKED_STOLEN"), hbt.manifest(c="REVOKED_STOLEN"))
         self.assertNotIn("# c", bootcreds.esp_files(self.cfg, ahead, self.root, DEVICE, self.anchor)["loader/credentials/regalia.wg-boot-conf.cred"].decode())
+        # a commit between the floor and the verify (value() read before the TPM moved on): a ROLLBACK, not a crash
+        stale_value, self.anchor.value = self.anchor.value, lambda: 2
+        with self.assertRaisesRegex(m.Refused, "ROLLBACK: the chain ends at epoch 2 but the TPM recorded epoch 3"):
+            bootcreds.esp_files(self.cfg, stale, self.root, DEVICE, self.anchor)
+        self.anchor.value = stale_value
         self.tpm.broken = True
         with self.assertRaisesRegex(m.Refused, "does not answer"):
             bootcreds.esp_files(self.cfg, current, self.root, DEVICE, self.anchor)
