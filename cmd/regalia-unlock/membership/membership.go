@@ -544,3 +544,23 @@ func LoadDocument(raw []byte) (any, error) {
 	}
 	return Load(raw, MaxBytes)
 }
+
+// May is membership.may: whether node may `serve`, `request` (be unlocked) or `authorize` (give a
+// contribution) under a manifest; false for a manifest that does not validate or a node it does not name.
+func May(manifest map[string]any, node, action string) bool {
+	nodes, err := Validate(manifest)
+	if err != nil {
+		return false
+	}
+	entry, named := nodes[node]
+	if !named {
+		return false
+	}
+	state, _ := entry["state"].(string)
+	for _, allowed := range capabilities[state] {
+		if allowed == action {
+			return true
+		}
+	}
+	return false
+}
