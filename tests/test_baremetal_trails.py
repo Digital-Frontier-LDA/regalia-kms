@@ -258,3 +258,34 @@ class ByPath(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Unanswered(unittest.TestCase):
+    """trails.unanswered (#281, d9): the open request a killed run left, for the next run to close."""
+
+    def test_the_last_request_with_no_outcome_naming_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "t.jsonl")
+            self.assertIsNone(trails.unanswered(path, device="/dev/a"))                       # no trail, none
+            first = trails.append(path, {"outcome": "REQUESTED", "device": "/dev/a"})
+            trails.append(path, {"outcome": "ALLOW", "device": "/dev/a", "request": first})
+            self.assertIsNone(trails.unanswered(path, device="/dev/a"))                       # answered
+            other = trails.append(path, {"outcome": "REQUESTED", "device": "/dev/b"})
+            killed = trails.append(path, {"outcome": "REQUESTED", "device": "/dev/a"})
+            self.assertEqual(trails.unanswered(path, device="/dev/a")["seq"], killed)
+            self.assertEqual(trails.unanswered(path, device="/dev/b")["seq"], other)
+            self.assertIsNone(trails.unanswered(path, device="/dev/c"))
+            with open(path, "ab") as f:
+                f.write(b'{"torn')                                                           # a torn line answers nothing
+            self.assertEqual(trails.unanswered(path, device="/dev/a")["seq"], killed)
+            # a final line with no newline is skipped even when it parses: it may still be being written
+            with open(path, "rb") as f:
+                kept = f.read()
+            with open(path, "wb") as f:
+                f.write(kept[:-len(b'{"torn')] + json.dumps({"outcome": "ALLOW", "device": "/dev/a", "request": killed}).encode())
+            self.assertEqual(trails.unanswered(path, device="/dev/a")["seq"], killed)
+            with open(path, "wb") as f:
+                f.write(kept[:-len(b'{"torn')])
+            trails.append(path, {"outcome": "INCOMPLETE", "device": "/dev/a", "request": killed})
+            self.assertIsNone(trails.unanswered(path, device="/dev/a"))
+            trails.verify(path)

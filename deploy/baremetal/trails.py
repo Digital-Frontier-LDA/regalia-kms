@@ -268,6 +268,37 @@ def verify(path, expected_head=None):
     return report
 
 
+def unanswered(path, **match):
+    """The last REQUESTED event in the trail at `path` whose fields include `match`, if no later event answers
+    it (an event whose "request" is its seq), or None. For the operator tools' request/outcome pairs: a run
+    killed after its request (SIGKILL, the OOM killer, a power cut) leaves one, which the next run closes
+    before it writes its own, so every request has exactly one outcome. A missing trail has none."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)             # append holds LOCK_EX: never a line half written, never a writer blocked long
+        data = os.pread(fd, os.fstat(fd).st_size, 0)
+    finally:
+        os.close(fd)
+    found, answered = None, set()
+    lines = data.split(b"\n")
+    lines.pop()                                    # what follows the last newline: "" or a line still being written, skipped
+    for body in lines:
+        try:
+            value = json.loads(body)
+        except ValueError:
+            continue                                   # a torn line answers nothing
+        if not isinstance(value, dict):
+            continue
+        if isinstance(value.get("request"), int):
+            answered.add(value["request"])
+        if value.get("outcome") == "REQUESTED" and all(value.get(k) == v for k, v in match.items()):
+            found = value
+    return found if found is not None and found.get("seq") not in answered else None
+
+
 def main(argv):
     if len(argv) == 2 and argv[0] == "append":
         name = argv[1]
@@ -286,7 +317,18 @@ def main(argv):
         except (Refused, OSError) as failure:
             print("BROKEN: %s" % failure, file=sys.stderr)
             return 1
-    print("usage: trails.py append <trail> < event.json | verify <path> [<expected head>]", file=sys.stderr)
+    if len(argv) >= 2 and argv[0] == "unanswered":
+        # unanswered <trail> [key=value ...]: the open request, as JSON, or nothing
+        try:
+            match = dict(item.split("=", 1) for item in argv[2:])
+            found = unanswered(where(argv[1]), **match)
+            if found is not None:
+                print(json.dumps(found, sort_keys=True))
+            return 0
+        except (Refused, OSError, ValueError) as failure:
+            print("REFUSED: %s" % failure, file=sys.stderr)
+            return 1
+    print("usage: trails.py append <trail> < event.json | verify <path> [<expected head>] | unanswered <trail> [key=value ...]", file=sys.stderr)
     return 2
 
 

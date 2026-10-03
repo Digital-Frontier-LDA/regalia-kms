@@ -195,6 +195,67 @@ class Counter(membership.HighWater):
 
     RECORD = False     # a sequence has no manifest to record: membership's record index is not defined here
 
+    WRAP = 1 << 64
+
+    def _epoch(self, base):
+        # The value is the counter's distance from its base, modulo 2^64: define_at() sets the base so a fresh
+        # counter reads a chosen sequence at once, which may put the base above the counter's raw reading.
+        # Both only rise and the base is write-once, so the value only rises too. (The membership anchor
+        # keeps HighWater's own rule; this is the heartbeat counter's.)
+        return (self._read8(self.index) - base) % self.WRAP
+
+    def remains(self):
+        """What the old counter still reads, whatever its attributes (for recount's floor), modulo 2^64 as
+        _epoch reads it; None when the pair cannot be read."""
+        with membership._exclusive(self.lock_path):
+            defined = self._defined()
+            if int(self.index, 16) not in defined or int(self.base_index, 16) not in defined:
+                return None, []
+            (a, a_size), (b, b_size) = self._public(self.index), self._public(self.base_index)
+            if not (a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN and b & self.WRITTEN and (a_size, b_size) == (8, 8)):
+                return None, []
+            counter = int.from_bytes(self._read_any(self.index, 8, a), "big")
+            base = int.from_bytes(self._read_any(self.base_index, 8, b), "big")
+            return (counter - base) % self.WRAP, []
+
+    def define_at(self, sequence):
+        """Define this counter so it reads `sequence` at once: one increment, then a write-once base of
+        (where the counter landed - sequence) mod 2^64. No increment loop (one TPM write per heartbeat ever
+        issued would be an hour of calls and real NV wear). For a node replacing another (#190 --replace),
+        gated by its caller on a heartbeat that verifies and is live, and for recount.py's floor.
+
+        Refused if the pair is complete (the base written and write-locked): a counter in use is never
+        redefined here. An incomplete pair, an earlier define_at cut short (no base, or a base not yet
+        locked), is deleted and done again. Returns the value read back."""
+        with membership._exclusive(self.lock_path):
+            return self._define_at(sequence)
+
+    def _define_at(self, sequence):
+        """define_at under the counter's lock, which the caller holds (recount holds it across deleting the
+        old pair and defining the new one, so no service advance falls between the two)."""
+        require(isinstance(sequence, int) and not isinstance(sequence, bool) and 0 <= sequence < 1 << 63,
+                "a sequence must be an integer from 0 to 2^63 - 1")
+        defined = self._defined()
+        if int(self.base_index, 16) in defined:
+            b, _ = self._public(self.base_index)
+            require(not (b & self.WRITTEN and b & self.WRITELOCKED),
+                    "the counter %s is already defined (its base is written and locked): it is not redefined" % self.index)
+        for index in (self.index, self.base_index):
+            if int(index, 16) in defined:
+                require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+        r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread")
+        require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
+        require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+        base = (self._read8(self.index) - sequence) % self.WRAP
+        r = self._tpm("nvdefine", self.base_index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|writedefine")
+        require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
+        r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
+        require(r.returncode == 0, "cannot write the base index")
+        require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
+        value = self._epoch(self._base())
+        require(value == sequence, "the counter reads %d after define_at(%d)" % (value, sequence))
+        return value
+
     def advance(self, sequence, allowance=None):
         """Move the counter up to `sequence`, at most `allowance` (default MAX_JUMP) above where it is."""
         with membership._exclusive(self.lock_path):
@@ -358,6 +419,32 @@ class Freshness:
         self._write(state)                                                # disk first, durably
         self.counter.advance(heartbeat["sequence"], state["allowance"])  # then the counter
         return left
+
+    def accept_first(self, envelope, manifest):
+        """A replacement node's FIRST heartbeat (#190 --replace, decided by regalia-kms-24): its counter is
+        defined AT the heartbeat's sequence (Counter.define_at, no increment loop), and the heartbeat becomes
+        the held one, so the time-derived rule applies from its issue time on. Only for a node that holds no
+        heartbeat and whose counter's indices do not exist at all (neither the counter nor its base: a damaged
+        counter is recount.py's case): the same checks as accept() (signed by a revocation
+        key the manifest names, for this manifest, live by authenticated time, issued no later than now +
+        FUTURE_SKEW). Disk first, then the counter: a cut between leaves a held heartbeat over a counter
+        that is missing, which recount.py redefines at that floor. Returns the seconds it has left."""
+        with membership._exclusive(self.lock_path):
+            heartbeat = verify(envelope, manifest)
+            state = self._read()
+            require(state["envelope"] is None, "a heartbeat is already held: the first one is taken only by a node that holds none")
+            # a genuinely new counter only: a damaged one (a base gone or unlocked) is recount's case, with its
+            # floor, its typed phrase, its audit and its proof of the TPM and the chain (a wiped disk also holds
+            # no heartbeat, which is exactly what the TPM counter defends against)
+            defined = self.counter._defined()
+            require(not {int(i, 16) for i in self.counter._indices()} & defined,
+                    "the counter %s exists (complete or not): a first heartbeat defines only a new one; use recount" % self.counter.index)
+            now = self._now(state)
+            left = self._live(heartbeat, now)
+            state["envelope"], state["allowance"] = envelope, None
+            self._write(state)
+            self.counter.define_at(heartbeat["sequence"])
+            return left
 
     def check(self, manifest):
         """Whether this peer may authorize under `manifest` right now. Returns the seconds the heartbeat has
