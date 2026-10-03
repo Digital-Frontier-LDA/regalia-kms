@@ -157,6 +157,20 @@ class Publishing(Case):
                     n.manifest()
                 self.assertIn(reason, str(caught.exception))
 
+    def test_the_reader_follows_no_link_and_reads_nothing_but_a_regular_file(self):
+        n = self.node()
+        self.store(n)
+        path = n.path(node.PUBLISHED)
+        os.symlink("/etc/hostname", path)
+        self.refused("cannot be read", n.manifest, patience=0)
+        os.unlink(path)
+        os.mkfifo(path)                                                          # a FIFO would hang an open() for reading
+        self.refused("is not a regular file", n.manifest, patience=0)
+        os.unlink(path)
+        with open(path, "wb") as f:
+            f.write(b" " * (m.MAX_CHAIN_BYTES + 10))
+        self.refused("at most", n.manifest, patience=0)                           # read up to the bound, and refused
+
     def test_publishing_is_complete_or_not_at_all(self):
         n = self.node()
         store = self.store(n)

@@ -48,6 +48,7 @@ import json
 import os
 import re
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -132,11 +133,24 @@ def publish(store, path):
 def published(path, root_key, anchor):
     """The current manifest by the published chain, verified here: every envelope from the root key, and
     an epoch not below the TPM anchor (`anchor()` returns it). A chain below the anchor is refused."""
+    # The file is written by a process that parses what other machines send, and read here by root: no
+    # symlink is followed, and nothing but a regular file is read (a FIFO would hang the reader).
     try:
-        with open(path, "rb") as f:
-            raw = f.read(membership.MAX_CHAIN_BYTES + 1)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError as failure:
         raise Refused("the published membership chain cannot be read (%s)" % type(failure).__name__) from None
+    try:
+        require(stat.S_ISREG(os.fstat(fd).st_mode), "the published membership chain is not a regular file")
+        chunks, size = [], 0
+        while size <= membership.MAX_CHAIN_BYTES:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(fd)
     envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)
     require(isinstance(envelopes, list) and envelopes, "the published membership chain is empty")
     manifest = membership.accept_chain(None, envelopes, root_key)
