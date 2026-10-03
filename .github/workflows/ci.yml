@@ -634,8 +634,10 @@ jobs:
           if cmp -s /tmp/initrd-1.img /tmp/initrd-2.img; then echo "dracut: the two builds are identical" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
           # where: list each image's members with their sizes and digests, and show the first difference
           for n in 1 2; do
-            mkdir -p "/tmp/x$n" && (cd "/tmp/x$n" && /usr/lib/dracut/skipcpio "/tmp/initrd-$n.img" 2>/dev/null | zstdcat -f 2>/dev/null | cpio -idm --quiet 2>/dev/null \
-              || lsinitrd --unpack "/tmp/initrd-$n.img" >/dev/null 2>&1)
+            mkdir -p "/tmp/x$n"
+            if ! (cd "/tmp/x$n" && lsinitrd --unpack "/tmp/initrd-$n.img" >/dev/null 2>&1); then
+              echo "lsinitrd could not unpack initrd-$n.img" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
             (cd "/tmp/x$n" && find . -type f -exec sha256sum {} + | sort -k2) > "/tmp/members-$n.txt"
           done
           { echo "dracut: the two builds DIFFER; first differing members:"; diff /tmp/members-1.txt /tmp/members-2.txt | head -20; } | tee -a "$GITHUB_STEP_SUMMARY"
