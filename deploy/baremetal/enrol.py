@@ -446,6 +446,93 @@ def check_manifest(directory, chain, root_key, typed, document):
     return manifest
 
 
+NODE_JSON = "/etc/regalia/node.json"
+
+
+def node_config(node_id, root_key, example):
+    """The node configuration enrolment writes: the shipped example (deploy/baremetal/node.example.json) with
+    this host's node ID and the root key whose fingerprint was typed. Checked by node.validate."""
+    from deploy.baremetal import node as node_module           # imported here: node imports most of the package
+    doc = dict(example, node_id=node_id, root_key=root_key)
+    node_module.validate(doc)
+    return doc
+
+
+CONFIG_DIR = "/etc/regalia/"
+
+
+def _same(target, digest):
+    with open(target, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest() == digest
+
+
+def _install(journal, step, path, data, prefix=""):
+    """Write `data` to `path` (0644, root's), recording its SHA-256 in the journal, WITHOUT EVER REPLACING a file:
+    the bytes go to a temporary file whose exact name is journalled first, and are published with link(2),
+    which fails if the target exists (a rename would replace it silently). A file already there, or one that
+    appears meanwhile, is accepted only if it is byte-for-byte what this step writes (a resumed run); anything
+    else is refused and left. Enrolment never overwrites a node's configuration (re-enrolment is #76)."""
+    require(path.startswith(CONFIG_DIR) and os.path.normpath(path) == path and "\0" not in path,
+            "%s is not under %s: enrolment writes configuration only there" % (path, CONFIG_DIR))
+    target = prefix + path
+    digest = hashlib.sha256(data).hexdigest()
+    facts = {k: v for k, v in journal.get(step).items() if k not in ("state", "at")}
+
+    def existing():
+        require(os.path.isfile(target) and not os.path.islink(target), "%s exists and is not a regular file" % path)
+        require(_same(target, digest), "%s already exists with other content. Enrolment does not overwrite a node's "
+                "configuration (re-enrolment is replacement, #76); remove it by hand if it is a leftover: rm %s" % (path, path))
+        require(facts.get(path) in (None, digest), "%s changed since this enrolment wrote it" % path)
+
+    tmp = target + ".enrol-new"
+    if facts.get("tmp:" + path) and os.path.lexists(tmp):
+        os.unlink(tmp)                   # this step's own temporary file, by the exact name it journalled
+    if os.path.lexists(target):
+        existing()
+    else:
+        directory = os.path.dirname(target)
+        os.makedirs(directory, mode=0o755, exist_ok=True)
+        facts["tmp:" + path] = os.path.basename(tmp)
+        journal.done(step, **facts)       # the temporary name, recorded before the file exists
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+            os.fchmod(fd, 0o644)
+        finally:
+            os.close(fd)
+        try:
+            os.link(tmp, target)          # no-clobber publish
+        except FileExistsError:
+            existing()
+        finally:
+            os.unlink(tmp)
+        dfd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    facts.pop("tmp:" + path, None)
+    facts[path] = digest
+    journal.done(step, **facts)
+    return digest
+
+
+def install_config(journal, node_id, root_key, example, site, document, prefix=""):
+    """Phase 2's configuration: node.json, the site configuration and the measurements document the manifest
+    commits to, each where node.json says, each refused if something else is already there."""
+    from deploy.baremetal import sitecfg
+    sitecfg.validate(site)
+    config = node_config(node_id, root_key, example)
+    for key in ("site", "measurements"):
+        require(config[key].startswith(CONFIG_DIR), "node.json puts %s at %s, outside %s" % (key, config[key], CONFIG_DIR))
+    pretty = lambda doc: (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()        # noqa: E731
+    _install(journal, "config", config["site"], pretty(site), prefix)
+    _install(journal, "config", config["measurements"], pretty(document), prefix)
+    _install(journal, "config", NODE_JSON, pretty(config), prefix)
+    return config
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
