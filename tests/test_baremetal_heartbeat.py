@@ -371,6 +371,21 @@ class Sequence(Case):
         self.f.accept(beat(self.m1, 1 + 1006, issued=T0 + 3600), self.m1)
         self.assertEqual(self.counter.value(), 1007)
 
+    def test_a_forged_future_issue_time_buys_no_bigger_jump(self):
+        """#199 (regalia-kms-24): the issue time the allowance uses has already passed the authenticated-time
+        check, so a signer claiming a later time is refused before the bound is computed; inside the
+        FUTURE_SKEW it gains at most one step."""
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(60)                                     # now = T0 + 120
+        self.refused("issued in the future", self.f.accept, beat(self.m1, 1 + 1000 + 4320, issued=T0 + 30 * 86400), self.m1)
+        self.assertEqual(self.counter.value(), 1)
+        skew = self.now + hb.FUTURE_SKEW                   # the latest issue time accepted now
+        allowed = 1000 + -(-(skew - T0) // hb.MIN_INTERVAL_S)
+        self.assertLessEqual(allowed, 1000 + 1)
+        self.refused("exceeds the bound %d" % allowed, self.f.accept, beat(self.m1, 1 + allowed + 1, issued=skew), self.m1)
+        self.f.accept(beat(self.m1, 1 + allowed, issued=skew), self.m1)
+        self.assertEqual(self.counter.value(), 1 + allowed)
+
     def test_without_the_held_heartbeat_the_bound_is_the_fixed_one(self):
         self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
         os.unlink(self.state)                              # the state is lost; the TPM counter is not
