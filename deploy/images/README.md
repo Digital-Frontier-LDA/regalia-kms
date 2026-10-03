@@ -51,7 +51,18 @@ package snapshot (the source index and every input are verified again):
 python3 -Es -m deploy.images.util_source SOURCE_OUTPUT --snapshot SNAPSHOT_DIR
 ```
 
-The fixed candidate is upstream 2.42.4 with authenticated Debian 2.41.5 packaging.
+The CPython source evaluation also has a fixed authenticated input command:
+
+```sh
+python3 -Es -m deploy.images.python_source PYTHON_SOURCE_OUTPUT --snapshot SNAPSHOT_DIR
+```
+
+This verifies upstream 3.13.16 and Debian 3.13.5-2+deb13u5 packaging with exact
+hashes and signing authorities. It grants no package or image admission. See the
+[Python evaluation](../../lab/appliance/PYTHON-SOURCE-EVALUATION.md) for the
+remaining package-build, compatibility and scan requirements.
+
+The util-linux candidate is upstream 2.42.4 with authenticated Debian 2.41.5 packaging.
 The Debian packaging anchors the upstream primary fingerprint; the vendored
 public key supplies its reviewed current self-certification. The verifier checks
 the exact compressed and uncompressed source bytes, signature bytes, public key,

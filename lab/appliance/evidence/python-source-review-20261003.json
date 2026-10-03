@@ -1,0 +1,133 @@
+{
+  "limits": [
+    "No Python compilation, package installation, ABI qualification or scanner clearance.",
+    "Release issue references and source hashes establish review inputs, not runtime regression success.",
+    "The optional Sigstore bundle is not verified or admitted as an authority."
+  ],
+  "live_checks": {
+    "complete_repository_capture": "passed",
+    "expired_packaged_key": "refused without an expiry exception",
+    "negative_boundary_tests": 3,
+    "refreshed_exact_primary": "verified"
+  },
+  "package_admitted": false,
+  "production_approved": false,
+  "recipe_sha256": {
+    "python-313.asc": "1de2bbd31e2dd10aab4098c3ab2f937c530d924ddbfa2dd091f0c7cfb2ee182a",
+    "python_source.py": "e48e9de569d240dd237bb9abd5360423bb09d9ded60ef09e1adce9d6c8eea987"
+  },
+  "schema": "regalia.python-source-review/v1",
+  "source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed CPython tar",
+    "authority_sha256": "1de2bbd31e2dd10aab4098c3ab2f937c530d924ddbfa2dd091f0c7cfb2ee182a",
+    "debian_packaging_version": "3.13.5-2+deb13u5",
+    "directory": "pool/main/p/python3.13",
+    "files": {
+      "Python-3.13.16.tar.xz": {
+        "bytes": 23225704,
+        "sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d"
+      },
+      "Python-3.13.16.tar.xz.asc": {
+        "bytes": 833,
+        "sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8"
+      },
+      "python3.13_3.13.5-2+deb13u5.debian.tar.xz": {
+        "bytes": 299640,
+        "sha256": "a51f456e654ce2c9b40cc1db8005e5041cdb0b2c3aa96ab0871c49fe95280366"
+      },
+      "python3.13_3.13.5-2+deb13u5.dsc": {
+        "bytes": 4298,
+        "sha256": "4be84e20fb902354fa86955e2fbea6e8bdbd158f54833423488308a9b3532662"
+      },
+      "python3.13_3.13.5.orig.tar.xz": {
+        "bytes": 22856016,
+        "sha256": "93e583f243454e6e9e4588ca2c2662206ad961659863277afcdb96801647d640"
+      },
+      "python3.13_3.13.5.orig.tar.xz.asc": {
+        "bytes": 963,
+        "sha256": "da6e013d98dcf8fc6696cdb2872b0051fc8fdeb632f73ef9f54d7b5a68647401"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "python3.13",
+    "package_admitted": false,
+    "packaged_authority_sha256": "f0116877747ac7bb245815039fa864b944195a5e52fa9f60103c6448bddc0bf7",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+    "production_approved": false,
+    "release": {
+      "date": "2026-09-12T07:55:41+00:00",
+      "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "trixie",
+      "valid_until": null
+    },
+    "schema": "regalia.python-authenticated-source/v1",
+    "sigstore_signature_verified": false,
+    "sources_index_sha256": "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signature": {
+      "primary_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+      "signature_sha256": "34ca55d174d627771a78db0bdb4838243791cd1f23eb2f3a1cc284dcd75672c8",
+      "signed_sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d",
+      "signing_fingerprint": "7169605F62C751356D054A26A821E680E5FA6305"
+    },
+    "upstream_version": "3.13.16"
+  },
+  "status": "authenticated_inputs_only",
+  "upstream_file_review": {
+    "Include/patchlevel.h": {
+      "bytes": 1301,
+      "sha256": "fe193cc6d1c016cf6baaf60c4e7d26a4fdb8eb85d5d4e9c883de5b2808cea4ca"
+    },
+    "Lib/html/parser.py": {
+      "bytes": 23058,
+      "sha256": "4274e9112adf3fa57c7f9afa7c9b5c631456b18b7403cc627cc5027d02cdd2ae"
+    },
+    "Lib/ssl.py": {
+      "bytes": 53287,
+      "sha256": "3ea103be59b47ad58cb53b249e5b74d00c87b54b20650e208e3b4b9ca533e9e8"
+    },
+    "Lib/tarfile.py": {
+      "bytes": 118060,
+      "sha256": "0fd87b49826f745c16e3ee68b2390a206b2dfcfe9a0b1118bd7fcd7c06deaff1"
+    },
+    "Misc/NEWS": {
+      "CVE-2026-15308": {
+        "issue": "gh-153030",
+        "issue_present": true
+      },
+      "CVE-2026-19445": {
+        "issue": "gh-156293",
+        "issue_present": true
+      },
+      "CVE-2026-19553": {
+        "issue": "gh-156793",
+        "issue_present": true
+      },
+      "CVE-2026-7210": {
+        "issue": "gh-149018",
+        "issue_present": true
+      },
+      "CVE-2026-82049": {
+        "issue": "gh-157190",
+        "issue_present": true
+      },
+      "bytes": 2106278,
+      "sha256": "524c54d54e2e6351b24d631dc1c7b10b154b9b85f686f05bfe09e75d34243b9f"
+    },
+    "Modules/_elementtree.c": {
+      "bytes": 128970,
+      "sha256": "5a842145c8dce16a29b7bda51ee7660b40deec90c82c0b017e341374f0a75562"
+    },
+    "Modules/_ssl.c": {
+      "bytes": 204909,
+      "sha256": "119656998f549bf2985e438b8d5544f471cbf18e91affb15f5adaa649142f49a"
+    },
+    "Modules/pyexpat.c": {
+      "bytes": 77442,
+      "sha256": "04d9cf7133f604cd291e6b07c80b7e96ed5c8bf0245d742034a803cc382fba2c"
+    }
+  }
+}
