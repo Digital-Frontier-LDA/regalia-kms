@@ -34,12 +34,13 @@ PIN = re.compile(r"--login\b|--pin\b|--so-pin\b|--new-pin\b|--change-pin\b|--unl
 # REGALIA_X_PIN, PIN; not KEYPIN), not only REGALIA_*: a Go test or a unit reads it from there (#225). Searched
 # on the view with every quoted string blanked to one word, so a quoted value is one token and only an
 # assignment followed by a command word is one; reading a PIN into a shell variable is not presenting it.
-PIN_PREFIX = re.compile(r"(?<![\w$-])(?<!export )(?:[A-Z0-9_]*_)?PIN(?:_[A-Z0-9_]+)?=[^\s;&|]*\s+(?=[^\s;&|#)])")
+PIN_PREFIX = re.compile(r"(?<![\w$-])(?<!export )([A-Za-z_]\w*)=[^\s;&|]*\s+(?=[^\s;&|#)])")
 
 
 def pin_at(line, bare_line):
     """The first PIN use on a line: PIN (on the line) or PIN_PREFIX (on its blanked view, same positions)."""
-    found = [m for m in (PIN.search(line), PIN_PREFIX.search(bare_line)) if m]
+    prefixes = [m for m in PIN_PREFIX.finditer(bare_line) if pin_name(m.group(1))]
+    found = [m for m in [PIN.search(line)] + prefixes[:1] if m]
     return min(found, key=lambda m: m.start()) if found else None
 
 
@@ -68,73 +69,162 @@ def softhsm_only(text):
     return "libsofthsm2" in text and "opensc-pkcs11" not in text
 
 
-# A shell that could be handed a command: sh, bash, dash, zsh, ksh, or one named in a variable.
-SHELL = r"(?:(?<![\w/.-])(?:ba|da|z|k)?sh\b|\"?\$\{?\w+\}?\"?)"
+# ACCEPT ONLY KNOWN-GOOD FORMS (#225, after 51's reads): listing bad spellings lost to new spellings, so in a
+# real-card script every shell invocation (any shell, by name or by path, piped into or given -c), every
+# variable used as a command, every eval, every source/. of a script, every alias and every export is
+# refused, except the exact lines below, each with why it is safe. A changed line is reviewed again.
+ALLOWED_LINES = {
+    ("kms-two-token-systemd.sh", "sudo sh -c 'for f in \"$1\"/*.pin; do [ -f \"$f\" ] && shred -u \"$f\"; done' sh \"$ETC\" 2>/dev/null"):
+        "shreds the PIN files this drill wrote under /etc: a fixed literal, its only input the directory as $1",
+    ("kms-two-token-systemd.sh", "if sudo sh -c 'ls /etc/polkit-1/rules.d/ /usr/share/polkit-1/rules.d/ 2>/dev/null' | grep -q qubes; then"):
+        "lists two fixed polkit directories as root: a fixed literal, no input",
+}
+# Variables a drill may run as a command, each with what it holds. Anything else in a command word's place
+# ("$X", $X, "$(…)") is refused, except a path under the drill's own directories ("$W/…", "$STATE/…",
+# "$ROOT/…", "$HERE/…": a binary it built or this repository's own script).
+COMMAND_VARIABLES = {
+    ("nitrokey-pin-import-drill.sh", "SEAL"): "deploy/seal-hsm-pin.sh in this repository, run inside the drill's gated wrapper",
+    ("cosmos-simapp-kms-tx.sh", "PY"): "the operator's Python with cosmpy (REGALIA_COSMOS_PYTHON, default python3), run -I/-Es on this repository's script",
+    ("nitrokey-two-site-failover-drill.sh", "IMPORT"): "the ceremony repository's import tool the drill is pointed at, run after gate and bench_reader_gate on the line above",
+    ("cosmos-simapp-kms-tx.sh", "SIMD"): "the simd binary the operator built (REGALIA_COSMOS_SIMD_BIN); it drives SoftHSM's chain, not a card",
+}
+def quoted_blanked(lines):
+    """The script's code lines with every quoted string's contents blanked to the same length, by a lexer that
+    follows quotes ACROSS lines (an awk program in a multi-line '…') and back into code inside "$( … )" (a
+    "…" nested in a command substitution): what a line-by-line view gets wrong."""
+    text, out, stack, i = "\n".join(lines), [], ["C"], 0
+    while i < len(text):
+        c, top = text[i], stack[-1]
+        if c == "\n":
+            out.append(c)
+        elif top == "S":
+            out.append(c if c == "'" else "_")
+            if c == "'":
+                stack.pop()
+        elif top == "D":
+            if c == "\\" and i + 1 < len(text):
+                out.append("__")
+                i += 2
+                continue
+            if c == '"':
+                stack.pop()
+                out.append(c)
+            elif text.startswith("$(", i) and not text.startswith("$((", i):
+                stack.append("P")
+                out.append("$(")
+                i += 2
+                continue
+            else:
+                out.append("_")
+        else:                                          # code, or code inside a $( … ) ("P")
+            if c == "\\" and i + 1 < len(text):
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if c == "'":
+                stack.append("S")
+            elif c == '"':
+                stack.append("D")
+            elif text.startswith("$(", i):
+                stack.append("P")
+                out.append("$(")
+                i += 2
+                continue
+            elif c == "(":
+                stack.append("C")
+            elif c == ")" and len(stack) > 1:
+                stack.pop()
+            out.append(c)
+        i += 1
+    return "".join(out).split("\n")
 
 
-def outside_names(body):
-    """The variables a shell command string reads that it does not set itself (a for loop's name, an
-    assignment) and that are not its positional parameters: what the caller's environment decides."""
-    read = set(re.findall(r"\$\{?([A-Za-z_]\w*)", body))
-    set_here = set(re.findall(r"\bfor\s+([A-Za-z_]\w*)\s+in\b", body)) | set(re.findall(r"(?:^|[;\s])([A-Za-z_]\w*)=", body))
-    return sorted(read - set_here)
+# CALL_START, with a "(" a command start only after a line start, a blank or an operator (a subshell), not
+# after a quote: the blanked view is not nesting-aware, and s="($SERIAL" inside "$(…)" is not a subshell.
+COMMAND_START = r"(?:^|[;&|]|(?:^|(?<=[\s;&|]))\(|(?<!\$)\{|\bthen\b|\bdo\b|\belse\b|\bif\b|\b!)\s*"
+OWN_PATH = re.compile(r'"\$\{?(?:W|STATE|ROOT|HERE)\}?/[\w./-]+"')
+# Sources: the bench helpers and the ceremony repository's two reader helpers, by their own names. The
+# directory is the drill's own (ROOT/HERE, from $0) or the ceremony checkout the drill was pointed at.
+ALLOWED_SOURCES = re.compile(r'\.\s+"\$(?:ROOT|HERE)/e2e/lib/bench_cards\.sh"|\.\s+"\$\(dirname "\$0"\)/lib/bench_cards\.sh"'
+                             r'|\.\s+"\$(?:CEREMONY|REGALIA_CEREMONY_DIR)/(?:tools/hsm-reader-select\.sh|qubes/scripts/ceremony-kcv\.sh)"')
+# What a real-card script may put in the environment of every later command: none of it secret.
+ALLOWED_EXPORTS = {"OPENSC_CONF", "PCSCLITE_CSOCK_NAME", "HSM_PKCS11_MODULE", "SOFTHSM2_CONF", "PATH", "LANG", "LC_CTYPE",
+                   "LC_COLLATE", "LC_ALL",
+                   # cosmos-simapp-kms-tx.sh hands the Go node test two file paths: where to read the sign doc,
+                   # where to write the signature
+                   "REGALIA_COSMOS_NODE_SIGNDOC", "REGALIA_COSMOS_NODE_SIGNATURE_OUT"}
+SHELL_WORD = re.compile(r"(?<![\w.$-])(?:/[\w.-]+)*/?(?:ba|da|z|k)?sh(?![\w.-])")
+GATE_NAMES = LIB_GATE_NAMES = ("bench_gate", "bench_reader_gate", "bench_isolate", "bench_slot")
 
 
 def pin_name(name):
-    """A variable named for a PIN, whatever its case: PIN as one of its words (NK_PIN, so_pin, Pin), not a
-    path to one (*_FILE, *_PATH, *_DIR) and not a word that merely contains it (KEYPIN)."""
+    """A variable named for a secret, whatever its case: pin, puk, secret, pass, password or passphrase as one
+    of its words (NK_PIN, so_pin, Pin, HSM_PUK, X_SECRET); not a path to one (*_FILE, *_PATH, *_DIR) and not a
+    word that merely contains it (KEYPIN)."""
     words = name.lower().split("_")
-    return "pin" in words and words[-1] not in ("file", "path", "dir")
+    return bool({"pin", "puk", "secret", "pass", "password", "passphrase"} & set(words)) and words[-1] not in ("file", "path", "dir")
 
 
-# What a real-card script may not do, each a way past the gate check (#225). Each finding: (line, why).
-LIB_GATE_NAMES = ("bench_gate", "bench_reader_gate", "bench_isolate", "bench_slot")
-
-
-def script_problems(text):
+def script_problems(text, script=None):
+    """What a real-card script may not do, each a way past the gate check (#225): [(line, why)]."""
     lines, bare = code_lines(text), code_lines(text, blank_strings=True)
+    lexed = quoted_blanked(lines)
     found = []
     for name, start, end, _ in functions(bare):
         body = " ".join(bare[start:end])
         if name in LIB_GATE_NAMES:
-            found.append((start + 1, "redefines %s, e2e/lib/bench_cards.sh's gate" % name))
+            found.append((start + 1, "shadows %s, a gate e2e/lib/bench_cards.sh defines" % name))
         if name in ("die", "fail") and not re.search(r"\bexit\b", body):
             found.append((start + 1, "%s does not exit: a gate's \"|| %s\" would go on to the PIN" % (name, name)))
     for n, (line, b) in enumerate(zip(lines, bare), 1):
-        if re.search(r"\beval\b", b):
+        if not line.strip():
+            continue
+        allowed = (script, line.strip()) in ALLOWED_LINES
+        if SHELL_WORD.search(b) and not allowed:
+            found.append((n, "invokes a shell (by name, by path, piped into, or with -c): not on the allow-list"))
+        # a command word that is a variable or a command's output ("$X", $X, "$(…)"): found at a command
+        # position on the blanked view (a "(" or "|" in a quoted pattern or a [[ =~ ]] regex is not one),
+        # then read in the line itself at the same position
+        view = re.sub(r"\[\[.*?\]\]", lambda m: "_" * len(m.group(0)), lexed[n - 1])
+        continued = n >= 2 and lines[n - 2].rstrip().endswith("\\")      # this line is the one above's arguments
+        for m in re.finditer(COMMAND_START + r'(?=["$])', view):
+            word = line[m.end():]
+            if allowed or not re.match(r'"?\$', word) or (continued and m.start() == 0):
+                continue
+            if re.match(r'(?:"[^"]*"|\$\{?\w+\}?)(?:\s*\|\s*(?:"[^"]*"|\S+))*\s*\)', word):
+                continue                                     # a case label: "$A") or "$A:so"|"$B")
+            name = re.match(r'"?\$\{?(\w*)', word).group(1)
+            if (script, name) in COMMAND_VARIABLES or OWN_PATH.match(word):
+                continue
+            found.append((n, "a variable (or a command's output) used as a command: not on the allow-list"))
+            break
+        if re.search(r"\benv\s+(?:-\S+\s+)*-S", line):
+            found.append((n, "env -S: it runs a whole command line given as a string"))
+        if re.search(r"(?<![\w.-])eval\b", b):
             found.append((n, "eval: what it runs is not read by this check"))
-        if re.search(r"\b(bash|sh)\b[^|;&]*<<", b):
-            found.append((n, "a here-document fed to a shell: its body is not read by this check"))
-        # a shell given a command string: any shell, or one named in a variable, with any options before -c
-        for m in re.finditer(SHELL + r"\s+(?:-[-\w]+\s+)*-[a-z]*c\s+(\S)", line):
-            literal = re.match(r"'([^']*)'", line[m.start(1):])
-            if not literal:
-                found.append((n, "a shell -c with a command that is not one single-quoted literal"))
-            elif TOOLS.search(literal.group(1)) or PIN.search(literal.group(1)) or re.search(r"`|\beval\b", literal.group(1)) \
-                    or outside_names(literal.group(1)):
-                found.append((n, "a shell -c runs a card tool, a PIN line, an expansion or eval inside a string"))
-        if re.search(r"\|\s*" + SHELL + r"(?:\s|$)", b) or re.search(r"\b(?:source|\.)\s+<\(", b) or "/dev/stdin" in b:
-            found.append((n, "a command piped into, or sourced by, a shell: what it runs is not read by this check"))
-        for m in re.finditer(CALL_START + r"(export|declare|typeset|readonly|local)\b(.*)", line):   # the builtin, not "ykman … export"
+        for m in re.finditer(CALL_START + r"(?:source|\.)\s+\S", line):
+            if not ALLOWED_SOURCES.match(line[m.start() + len(m.group(0)) - len(m.group(0).lstrip()):].lstrip()) \
+                    and not ALLOWED_SOURCES.search(line):
+                found.append((n, "sources a script not on the allow-list: what it runs is not read by this check"))
+        if re.search(CALL_START + r"alias\b", b) or re.search(r"\bshopt\s+-s\s+expand_aliases\b", b):
+            found.append((n, "aliases: a gate's name could run something else"))
+        if re.search(r"\b(if|while|until)\s+(!\s*)?(false|true|:)\s*;", b):
+            found.append((n, "a constant condition: a gate under it may never run"))
+        if re.search(r"\bset\s+(?:-\w*a\w*\b|-o\s+allexport\b)", b):
+            found.append((n, "allexport: every variable set later, a PIN too, is exported"))
+        for m in re.finditer(CALL_START + r"(export|declare|typeset|readonly|local|env)\b(.*)", line):
             words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", re.split(r"[;&|]", m.group(2))[0])
             flags = [w for w in words if w.startswith("-")]
-            if m.group(1) != "export" and not any("x" in f for f in flags):
+            if m.group(1) in ("declare", "typeset", "readonly", "local") and not any("x" in f for f in flags):
                 continue                                     # not exported
             if m.group(1) == "export" and "-n" in flags:
                 continue                                     # export -n UN-exports
             for word in (w for w in words if not w.startswith("-")):
-                bare_word = word.strip("\"'")
-                if bare_word.startswith("$") or "$(" in bare_word.split("=")[0]:
-                    found.append((n, "an exported name that is not a literal: it could be a PIN"))
-                elif pin_name(bare_word.split("=")[0]):
-                    found.append((n, "a PIN exported to every later command: hand it to the one gated command that uses it"))
-        if re.search(r"\bset\s+(?:-\w*a\w*\b|-o\s+allexport\b)", b):
-            found.append((n, "allexport: every variable set later, a PIN too, is exported"))
-        if re.search(r"\bshopt\s+-s\s+expand_aliases\b", b) or re.search(r"\balias\s+(?:%s)=" % "|".join(LIB_GATE_NAMES + GATES), b):
-            found.append((n, "aliases: a gate's name could run something else"))
-        if re.search(r"\b(if|while|until)\s+(!\s*)?(false|true|:)\s*;", b):
-            found.append((n, "a constant condition: a gate under it may never run"))
-
+                if m.group(1) == "env" and "=" not in word:
+                    break                                    # env's command: its assignments are done
+                exported = word.strip("\"'").split("=")[0]
+                if exported not in ALLOWED_EXPORTS:
+                    found.append((n, "exports %s, which is not on the allow-list of non-secret names" % (exported or word)))
     return found
 
 
@@ -392,7 +482,7 @@ class RealCardScriptsAreIsolatedAndGated(unittest.TestCase):
 
     def test_no_real_card_script_has_a_way_past_the_gate_check(self):
         for path, text, _ in real_card_scripts():
-            for number, why in script_problems(text):
+            for number, why in script_problems(text, path.name):
                 with self.subTest(script=path.name, line=number):
                     self.fail(f"{path.name}:{number}: {why}")
 
@@ -529,60 +619,63 @@ class TheCheckItself(unittest.TestCase):
         self.assertEqual(len(self.ungated(yk + 'yk_gate S || exit\npkcs11-tool --login\n')), 1)
         self.assertEqual(self.ungated(yk + 'yk_gate S || exit\nsystemd-run -p LoadCredentialEncrypted=x.pin:/c t\n'), [])
 
-    def test_a_pin_in_any_variable_before_a_command_is_a_pin_line(self):
-        for line in ('NK_PIN="$P" go test ./x', "PIN=1234 ./cmd", 'MY_SO_PIN="$S" ./tool --x'):
+    def problems(self, script, name=None):
+        return [why for _, why in script_problems(script, name)]
+
+    def test_every_way_past_the_check_found_so_far_is_refused(self):
+        """Each spelling a read found (#225, 51's two reads of #287), and the general forms they belong to."""
+        cases = {
+            # a shell, by name, by path, piped into, with -c in every spelling
+            "sh -c '$CMD'\n": "invokes a shell", "sh -c 'eval \"$1\"' _ \"$X\"\n": "invokes a shell",
+            'echo "$CMD" | bash\n': "invokes a shell", "printf x | sh -s\n": "invokes a shell",
+            'bash -e -c "$X"\n': "invokes a shell", 'bash --norc -c "$X"\n': "invokes a shell",
+            'dash -c "$X"\n': "invokes a shell", '/usr/bin/bash -c "$X"\n': "invokes a shell", "/bin/sh x\n": "invokes a shell",
+            "exec bash -c x\n": "invokes a shell", "command bash -c x\n": "invokes a shell", "env -S 'bash -c x'\n": "env -S",
+            'sudo sh -c "$X"\n': "invokes a shell", "bash <<EOF\npkcs11-tool --login\nEOF\n": "invokes a shell",
+            "bash /dev/stdin <<< x\n": "invokes a shell",
+            # a variable, or a command's output, as the command
+            '"$SH" -c "$X"\n': "used as a command", "${CMD}\n": "used as a command", '"$(printf bash)" -c x\n': "used as a command",
+            '"$IMPORT" --pin-file f\n': "used as a command",
+            # eval, sources, aliases
+            'eval "$CMD"\n': "eval", 'source <(printf %s "$CMD")\n': "sources a script", ". /dev/stdin\n": "sources a script",
+            '. "$X/x.sh"\n': "sources a script", "shopt -s expand_aliases\n": "aliases", "alias bench_gate=true\n": "aliases",
+            # gates and their failure path
+            "bench_gate(){ :; }\n": "shadows bench_gate", "function bench_gate { :; }\n": "shadows bench_gate",
+"die(){ echo no; }\n": "die does not exit",
+            "if false; then bench_gate S; fi\n": "constant condition",
+            # exports: every form, every name not on the allow-list
+            'export NK_PIN="$P"\n': "exports NK_PIN", 'declare -x NK_PIN="$P"\n': "exports NK_PIN",
+            'typeset -gx so_pin="$P"\n': "exports so_pin", "readonly -x PIN=1\n": "exports PIN", "local -x x=1\n": "exports x",
+            'export "NK_PIN=$P"\n': "exports NK_PIN", 'export A NK_PIN="$P"\n': "exports A", 'export "$name"\n': "exports $name",
+            'pin="$P"; export pin\n': "exports pin", "export SOMETHING=1\n": "exports SOMETHING",
+            "env NK_PIN=1 cmd\n": "exports NK_PIN", "set -a\n": "allexport", "set -o allexport\n": "allexport",
+        }
+        for script, why in cases.items():
+            with self.subTest(script):
+                self.assertTrue(any(why in w for w in self.problems(script)), self.problems(script))
+
+    def test_the_known_good_forms_pass(self):
+        for fine in ("export -n NK_PIN\n", "export OPENSC_CONF=/x\n", "export PATH=\"$PATH:/sbin\"\n", "declare -A SLOT\n",
+                     "local pin=1\n", '. "$ROOT/e2e/lib/bench_cards.sh"\n', '. "$CEREMONY/tools/hsm-reader-select.sh"\n',
+                     "set -euo pipefail\n", "die(){ echo no; exit 2; }\n", "x=$(ls)\n", 'for f in "$@"; do :; done\n',
+                     "printf '%s' x | grep -q y\n", "./scripts/build.sh\n", "ssh host true\n",
+                     # not commands: case labels, a "…" nested in "$(…)", an awk program over several lines
+                     'f(){ case "$1" in "$A") echo a;; "$B:so"|"$C") echo b;; esac; }\n',
+                     'n="$(grep -cE "ID: *($X|$Y)" <<< "$l")"\n', "r=\"$(awk '\n  { if ($NF == w) print $1 }' f)\"\n",
+                     '"$W/regalia-audit-collector" -state "$W/s"\n'):
+            with self.subTest(fine):
+                self.assertEqual(self.problems(fine), [])
+        # an allow-listed line passes only in its own script
+        line = "sudo sh -c 'ls /etc/polkit-1/rules.d/ /usr/share/polkit-1/rules.d/ 2>/dev/null' | grep -q qubes\n"
+        self.assertTrue(self.problems(line))
+        self.assertEqual(self.problems("if " + line.rstrip("\n") + "; then\n", "kms-two-token-systemd.sh"), [])
+
+    def test_a_secret_in_any_variable_before_a_command_is_a_pin_line(self):
+        for line in ('NK_PIN="$P" go test ./x', "PIN=1234 ./cmd", 'MY_SO_PIN="$S" ./tool --x', "pin=1 ./cmd",
+                     'HSM_PUK="$P" ./x', 'APP_SECRET="$S" ./x', 'DB_PASSWORD="$P" ./x'):
             with self.subTest(line):
                 self.assertEqual(self.ungated("true\n" + line + "\n"), [line])
-        self.assertEqual(self.ungated('true\nHSM_PIN="$(cat f)"\nX_PIN=1; echo ok\n'), [])   # reading a PIN is not presenting it
-
-    def test_the_ways_past_the_check_are_refused(self):
-        cases = {
-            "bench_gate(){ :; }\n": "redefines bench_gate",
-            "die(){ echo no; }\n": "die does not exit",
-            'eval "$CMD"\n': "eval",
-            "bash <<EOF\npkcs11-tool --login\nEOF\n": "here-document fed to a shell",
-            'sh -c "$X"\n': "not one single-quoted literal",
-            "sh -c 'pkcs11-tool --login'\n": "card tool, a PIN line",
-            "if false; then bench_gate S; fi\n": "constant condition",
-            'export NK_PIN="$P"\n': "PIN exported",
-        }
-        for script, why in cases.items():
-            with self.subTest(script):
-                self.assertTrue(any(why in w for _, w in script_problems(script)), script_problems(script))
-        self.assertEqual(script_problems("sh -c 'ls /etc' sh x\ndie(){ echo no; exit 2; }\n"), [])
-
-
-    def test_the_dodges_51_found_are_refused(self):
-        """51's read of #287: the shell, export and alias rules, each in the spellings that got past them."""
-        cases = {
-            "sh -c '$CMD'\n": "expansion or eval inside a string",
-            "sh -c 'eval \"$1\"' _ \"$X\"\n": "expansion or eval inside a string",
-            'echo "$CMD" | bash\n': "piped into, or sourced by, a shell",
-            'source <(printf %s "$CMD")\n': "piped into, or sourced by, a shell",
-            "bash /dev/stdin <<< x\n": "piped into, or sourced by, a shell",
-            'bash -e -c "$X"\n': "not one single-quoted literal",
-            'bash --norc -c "$X"\n': "not one single-quoted literal",
-            'dash -c "$X"\n': "not one single-quoted literal",
-            '"$SH" -c "$X"\n': "not one single-quoted literal",
-            'declare -x NK_PIN="$P"\n': "PIN exported",
-            'typeset -gx so_pin="$P"\n': "PIN exported",
-            'readonly -x PIN=1\n': "PIN exported",
-            'export "NK_PIN=$P"\n': "PIN exported",
-            'export A NK_PIN="$P"\n': "PIN exported",
-            'export "$name"\n': "not a literal",
-            'pin="$P"; export pin\n': "PIN exported",
-            "set -a\n": "allexport",
-            "set -o allexport\n": "allexport",
-            "shopt -s expand_aliases\n": "aliases",
-            "alias bench_gate=true\n": "aliases",
-        }
-        for script, why in cases.items():
-            with self.subTest(script):
-                self.assertTrue(any(why in w for _, w in script_problems(script)), script_problems(script))
-        for fine in ("export -n NK_PIN\n", "export HSM_PIN_FILE=/x\n", "export KEYPIN=x\n", "declare -A SLOT\n",
-                     "local pin=1\n", "sh -c 'ls /etc' sh x\n", "set -euo pipefail\n"):
-            with self.subTest(fine):
-                self.assertEqual(script_problems(fine), [])
+        self.assertEqual(self.ungated('true\nHSM_PIN="$(cat f)"\nX_PIN=1; echo ok\nHSM_KEYPIN=1 ./x\nPIN_FILE=f ./x\n'), [])
 
 
 if __name__ == "__main__":
