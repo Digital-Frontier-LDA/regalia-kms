@@ -836,7 +836,8 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
               "peers": [{"peer": p, "ak_name": nodes[p]["ak_name"]} for p in peers], "paths": paths,
               "tool": tool(), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now()))}
     payload = membership.canonical(record)
-    trail = node_module.Trail(os.path.join(directory, "enrol-audit.jsonl"))
+    from deploy.baremetal import trails
+    trail = node_module.Trail(trails.where("enrol"))     # the registry's one path for this trail (#278)
     # requested, then the outcome (reanchor's order): a crash before the file is in place leaves INCOMPLETE, and the
     # rerun's ALLOW names the one record that exists (regalia-kms-3e on #277)
     trail({"event": "enrol", "node": record["node_id"], "epoch": record["epoch"], "manifest_digest": record["manifest_digest"],

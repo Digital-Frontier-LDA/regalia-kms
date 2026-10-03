@@ -44,13 +44,12 @@ so it is the one an attacker would want, and it is fenced accordingly:
 It needs the TPM's owner authorization, as defining the anchor did at commissioning.
 """
 import argparse
-import json
 import os
 import re
 import sys
 import time
 
-from deploy.baremetal import convergence, membership
+from deploy.baremetal import convergence, membership, trails
 
 Refused, require = membership.Refused, membership.require
 
@@ -160,7 +159,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     ap.add_argument("--node-id", required=True, help="this node's ID")
     ap.add_argument("--authority", required=True, metavar="CHAIN.json", help="the whole chain, as the revocation authority gave it")
     ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain ANOTHER node gave; at least one, repeat for more")
-    ap.add_argument("--audit-log", required=True, help="the file the audit events are appended to (one JSON object a line)")
+    ap.add_argument("--audit-log", default=trails.where("reanchor"),
+                    help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
     args = ap.parse_args(argv)
     # The TPM is named on the command line or is the default, never taken from the environment: a
@@ -168,14 +168,11 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     # indices are missing, and the audit log would record an ALLOW that did nothing to this host's anchor.
     tpm = args.tcti or "the default TPM"
 
-    def record(event):
-        line = json.dumps(dict(event, tpm=tpm, time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), sort_keys=True)
-        fd = os.open(args.audit_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    def record(event):                 # hash-chained, whole or not at all, never through a link (trails.py, #278)
         try:
-            os.write(fd, (line + "\n").encode())
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            trails.append(args.audit_log, dict(event, tpm=tpm, time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+        except trails.Refused as refused:  # an unwritable trail, as an OSError from the file would be
+            raise OSError(str(refused)) from refused
 
     def typed(planned):
         print("TPM: %s, NV index %s." % (tpm, args.tpm_index))

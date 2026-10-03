@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('recovery_reconcile', Path(__file__).resolve().parents[1] / 'deploy/baremetal/recovery-reconcile.py')
 module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+from deploy.baremetal import trails  # noqa: E402
 
 
 def metadata():
@@ -68,7 +69,7 @@ NEW = 'vvuuttrr-nnllkkjj-iihhggff-eeddccbb-cbdefghi-jklnrtuv-bcdefghi-jklnrtuc'
 WORKER = '''import importlib.util,sys
 p=sys.argv.pop(1); c=sys.argv.pop(1); l=sys.argv.pop(1)
 s=importlib.util.spec_from_file_location('reconcile',p);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
-m.CRYPTSETUP=c; m.LOCKDIR=m.Path(l)
+m.CRYPTSETUP=c; m.LOCKDIR=m.Path(l); m.TRAIL=str(m.Path(l)/'trail.jsonl')   # the registry's path is root's: here, the test's own
 raise SystemExit(m.main())
 '''
 # KILL at the first fsync of luksKillSlot (its key material is wiped, its metadata not yet written),
@@ -150,6 +151,19 @@ class KilledInsideTheRetirement(unittest.TestCase):
         self.assertEqual(list(meta['tokens'].values()), [{'type': 'systemd-recovery', 'keyslots': ['2']}])
         self.assertEqual(self.opens(OLD), 2)
         self.assertEqual(self.opens(NEW), 0)
+        # #278: each run recorded before a card was asked for, and its outcome after: the cut one INCOMPLETE
+        with open(os.path.join(self.dir, 'trail.jsonl'), encoding='utf-8') as f:
+            events = [json.loads(line) for line in f]
+        # the killed run's request is closed by the rerun (INCOMPLETE, naming it) before the rerun's own
+        self.assertEqual([(e['outcome'], e.get('request')) for e in events],
+                         [('REQUESTED', None), ('INCOMPLETE', events[0]['seq']), ('REQUESTED', None), ('ALLOW', events[2]['seq'])])
+        self.assertEqual((events[-1]['keep'], events[-1]['retire'], events[-1]['state_after']), ('2', ['1'], 'orphan-keyslot'))
+        trails.verify(os.path.join(self.dir, 'trail.jsonl'))
+        with open(os.path.join(self.dir, 'trail.jsonl'), encoding='utf-8') as f:
+            text = f.read()
+        self.assertNotIn(OLD, text)
+        self.assertNotIn(NEW, text)
+        self.assertNotIn(OLD[:8], text)
 
     def test_a_wrong_card_against_a_listed_slot_with_no_mark_is_still_refused(self):
         # the same wiped-looking answer (the card opens nothing) but no mark: refused, nothing written

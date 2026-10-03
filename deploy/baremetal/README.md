@@ -95,6 +95,9 @@ Commissioning has two halves:
   anywhere, killed included, is finished by the same command with the same keys; `unknown` is left
   to the custodian (`recovery-reconcile.py`, RECOVERY-RECONCILIATION.md). The key is always the
   ceremony's (#175): there is no host-generated mode.
+  Every --enrol, --check and --replace is on the audit trail /var/log/regalia/recovery-key.jsonl (#278):
+  the request before a key is asked for (no trail, no run), then its outcome (ALLOW, DENY, INCOMPLETE) with
+  the header's state. Never a key.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
@@ -777,7 +780,8 @@ removing only what it can prove it made.
   root fingerprint, the EK and AK, the WireGuard keys, the NV indices read back, the `espcreds` record (the
   PCR 12 the peers must expect), and the peers and paths. It is signed by the node's AK in a TPM quote whose
   qualifying data is the record's digest under its own label, so no session quote can stand in for it.
-  An `enrol` event carrying its SHA-256 goes to `enrol-audit.jsonl` first. To check it with no TPM, run
+  An `enrol` event carrying its SHA-256 goes to the enrol trail (`trails.where("enrol")`, #278), INCOMPLETE before and
+  ALLOW once the file is in place. To check it with no TPM, run
   `enrol verify-record --record F --manifest CHAIN --root-key K`.
 
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):
@@ -816,7 +820,9 @@ it (`service_mesh.authority`).
 - **The one-year limit:** a node accepts a sequence jump of at most `heartbeat.MAX_ALLOWANCE` (about a
   year of 600 s steps), however long it was away. A node offline for longer, or caught mid catch-up for
   longer across a revocation-key rotation, refuses the next heartbeat and needs the counter's recovery
-  command (#244).
+  command: `python3 -Es -m deploy.baremetal.recount` (#244). The same command redefines the authority's
+  own sequence counter, or a node's heartbeat counter, when either is unusable: at a floor no lower than
+  the old counter and every given heartbeat that verifies against the current manifest, typed and audited.
 - **A revocation** changes one node's state to QUARANTINED or REVOKED_STOLEN, nothing else. Membership's
   rule for revocation-signed changes is checked by the Store before it is kept. Anything permissive is
   the root's. If the process stops between the manifest and its heartbeat, the next start signs the

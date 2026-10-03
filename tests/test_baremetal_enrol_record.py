@@ -52,6 +52,15 @@ class Record(rt.Case):
         anchor.define()
         self.node = FakeNode(base, self.root, anchor)
         self.quoted = []
+        import unittest.mock
+        from deploy.baremetal import trails
+        real_where = trails.where
+        # the registry's path, redirected for the test (a test cannot write under /var); test_the_trail_is_the_registrys
+        # shows enrol asks the registry and nothing else
+        patcher = unittest.mock.patch.object(trails, "where", lambda name, cfg=None: self.dir + "/enrol-audit.jsonl"
+                                             if name == "enrol" else real_where(name, cfg))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def tpm(self, argv, **kw):
         """tpm2_quote, by node a's AK (OpenSSL) under its EK: the quote and signature the TPM would write."""
@@ -130,6 +139,15 @@ class Record(rt.Case):
             with open(version, "w") as f:
                 f.write("x; rm -rf /\n")
             self.assertEqual(enrol._tool(), "unknown")
+
+    def test_the_trail_is_the_registrys(self):
+        """#278 (48): one registry, one path: enrol writes its trail where trails.where("enrol") says."""
+        import unittest.mock
+        from deploy.baremetal import node as node_module, trails
+        opened = []
+        with unittest.mock.patch.object(node_module, "Trail", lambda path: (opened.append(path), lambda event: None)[1]):
+            self.write()
+        self.assertEqual(set(opened), {trails.where("enrol")})
 
     def test_a_session_quote_cannot_pass_as_a_record_quote(self):
         record = self.write()

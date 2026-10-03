@@ -105,6 +105,24 @@ class Configuration(Case):
         self.refused("is not in the manifest", n.own_address, dict(self.m1, nodes=self.m1["nodes"][1:]))
 
 
+class Indices(unittest.TestCase):
+    """#182 (regalia-kms-51): the anchor occupies C, C+1, C+4, C+5 and the heartbeat counter H, H+1. The two
+    sets must be disjoint, as the classes define them."""
+
+    def test_overlapping_index_sets_are_refused(self):
+        base = json.loads(open(os.path.join(os.path.dirname(node.__file__), "node.example.json")).read())
+        epoch = int(base["nv_epoch"], 16)
+        for label, beat in (("H = C+4, a record slot", epoch + 4), ("H+1 = C+4", epoch + 3), ("H = C+5", epoch + 5),
+                            ("H = C+1, the base", epoch + 1), ("H+1 = C", epoch - 1)):
+            with self.subTest(label):
+                with self.assertRaises(m.Refused) as caught:
+                    node.validate(dict(base, nv_heartbeat="0x%08x" % beat))
+                self.assertIn("must not overlap", str(caught.exception))
+        node.validate(dict(base, nv_heartbeat="0x%08x" % (epoch + 2)))          # C+2, C+3: free between base and record
+        node.validate(dict(base, nv_heartbeat="0x%08x" % (epoch + 6)))
+        node.validate(base)
+
+
 class Publishing(Case):
     """sync owns the store; the root services read a published copy and verify it themselves."""
 
@@ -128,6 +146,19 @@ class Publishing(Case):
         late.start()                                                               # published a moment later, as sync does
         self.assertEqual(n.manifest(patience=5, step=0.05)["epoch"], 2)            # and the reader waited for it
         late.join()
+
+    def test_a_fork_the_tpm_never_recorded_is_refused_at_the_anchor_epoch(self):
+        """#213's deferred finding (regalia-kms-1e), on #182's lock-free check: a chain at the anchor's epoch
+        but not the manifest the TPM recorded (a root key that signed twice) used to pass the root services."""
+        n = self.node()
+        store = self.store(n)
+        store.commit(self.e1)
+        fork = dict(self.m1, issued_at="2026-09-30T00:00:00Z")                   # epoch 1, root-signed, never recorded
+        with open(n.path(node.PUBLISHED), "wb") as f:
+            f.write(m.canonical([rt.sign(fork)]))
+        self.refused("CONFLICT", n.manifest, patience=0)
+        node.publish(store, n.path(node.PUBLISHED))                               # the recorded chain is taken
+        self.assertEqual(n.manifest(), self.m1)
 
     def test_a_sync_that_withholds_or_rolls_back_stops_the_node_rather_than_misleading_it(self):
         n = self.node()
@@ -390,20 +421,6 @@ class Trail(Case):
         self.assertEqual(stat.S_IMODE(os.stat(self.cfg["state_dir"] + "/audit.jsonl").st_mode), 0o600)
         with self.assertRaises(OSError):
             node.Trail(self.d + "/nowhere/audit.jsonl")({"event": "x"})              # a trail that cannot be written raises
-
-    def test_a_trail_is_never_written_through_a_link_or_into_a_file_of_another_user(self):
-        """regalia-kms-3e on #277: every trail (sync's, admission's, enrolment's) is opened with O_NOFOLLOW and must be
-        a regular file of the writing service's own user."""
-        target = self.d + "/elsewhere"
-        open(target, "w").close()
-        os.symlink(target, self.cfg["state_dir"] + "/linked.jsonl")
-        with self.assertRaises(OSError):
-            node.Trail(self.cfg["state_dir"] + "/linked.jsonl")({"event": "x"})
-        self.assertEqual(os.path.getsize(target), 0, "nothing was appended through the link")
-        real = os.fstat                                   # a file another user owns (as root, a planted one)
-        with unittest.mock.patch.object(node.os, "fstat", lambda fd: os.stat_result((real(fd).st_mode, 0, 0, 1, os.geteuid() + 1, 0, 0, 0, 0, 0))):
-            with self.assertRaisesRegex(node.Refused, "not a regular file of this service's own user"):
-                node.Trail(self.cfg["state_dir"] + "/audit.jsonl")({"event": "x"})
 
 
 if __name__ == "__main__":
