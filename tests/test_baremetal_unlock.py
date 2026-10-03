@@ -894,11 +894,24 @@ class Units(unittest.TestCase):
         self.assertEqual(lines, [["root", "PARTLABEL=regalia-root", unlock.KEY_SOCKET, "luks,x-initrd.attach"]])
         with open(os.path.join(here, "wg-boot")) as f:
             script = f.read()
-        # every program the script runs is in the image: a check that runs a missing tool fails OPEN (seen: grep)
-        code = "\n".join(l.split("#")[0] for l in script.splitlines())
-        shipped = re.search(r"inst_multiple ([^\n]+)", install).group(1).split()
-        for tool in ("grep", "awk", "cut", "tr", "head", "tail", "find", "xargs", "base64"):
-            self.assertNotRegex(code, r"(^|[\s|;(])%s\s" % tool, tool)
+        # every program the script runs is in the image: a check that runs a missing tool fails OPEN (seen: grep).
+        # Every word in a command position (line start, after | ; & && || ( $( ` and after if/then/do/else/!) is a
+        # shell builtin or keyword, a function of the script, or a program the module installs.
+        code = "\n".join(re.sub(r"(^|\s)#.*$", r"\1", l) for l in script.splitlines())
+        code = re.sub(r"\[![^\]]*\]", "", code)                       # glob classes in case patterns
+        code = re.sub(r"(?m)(^\s*|\bin\s+)[^\s()]+\)", r"\1", code)        # case labels
+        code = re.sub(r'"\([^"$]*\)"', '""', code)                     # a literal "(...)" in a string
+        shipped = set(re.search(r"inst_multiple ([^\n]+)", install).group(1).split())
+        functions = set(re.findall(r"(?m)^\s*([a-z_]+)\(\)\s*\{", code))
+        builtins = {"set", "case", "esac", "in", "if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "read",
+                    "echo", "printf", "exit", "return", "trap", "local", "shift", "true", "false", "test", "[", "]", "[[", "break",
+                    "continue", "export", "unset", "eval", "exec", ":", "{", "}", "!", "wait", "cd", "umask"}
+        words = set()
+        for match in re.finditer(r"(?:^|[|;&(`]|\$\(|\b(?:if|then|do|else|elif|while|until)\b|!)\s*(?=([A-Za-z_][\w.+-]*|\[))", code, re.M):   # (a lookahead: "if awk" yields both)
+            words.add(match.group(1))
+        words -= {w for w in words if re.fullmatch(r"[A-Za-z_]\w*", w) and re.search(r"\b%s=" % re.escape(w), code)}   # assignments
+        unknown = sorted(words - builtins - functions - shipped)
+        self.assertEqual(unknown, [], "the script runs programs the image does not hold")
         for tool in ("ip", "wg", "nft", "sed", "cat", "sleep"):
             self.assertIn(tool, shipped)
         for credential in ("regalia.wg-boot-key", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"):

@@ -279,7 +279,9 @@ C="$T/creds"; mkdir "$C"; cp "$T/lisbon.boot.conf" "$C/regalia.wg-boot-conf"; cp
 printf 'BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_PRELOAD=%s/evil.so\nBOOT_EXTRA=$(touch %s/sourced)\n' \
   "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$C/regalia.boot-env"
 R="$T/run-wg-boot"; mkdir "$R"
-initrd(){ x lisbon env CREDENTIALS_DIRECTORY="$C" RUNTIME_DIRECTORY="$R" sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
+# the script runs with only the programs the dracut module puts in the image on its PATH, as in the initrd
+mkdir "$T/initrd-bin"; for t in ip wg nft sed cat sleep; do ln -s "$(command -v "$t")" "$T/initrd-bin/$t"; done
+initrd(){ x lisbon env PATH="$T/initrd-bin" CREDENTIALS_DIRECTORY="$C" RUNTIME_DIRECTORY="$R" /bin/sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
 initrd up && P "the initrd's script brings the boot mesh up" || F "deploy/baremetal/initrd/wg-boot up failed"
 [ "$(x lisbon wg show wg-boot private-key)" = "$(cat "$T/lisbon.boot.key")" ] && [ "$(x lisbon wg show wg-boot peers | wc -l)" = 2 ] \
   && P "wg-boot has the node's key and its two peers" || F "wg-boot is not configured as rendered"
@@ -384,7 +386,7 @@ timed asked lisbon "${TUN[porto]}" 3; rc=$?
 [ "$rc" != 0 ] && [ "$took" -le 10 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
 initrd up >/dev/null 2>&1
 # as ExecStopPost runs it: the credentials are gone, the runtime directory is still there
-x lisbon env RUNTIME_DIRECTORY="$R" sh "$HERE/deploy/baremetal/initrd/wg-boot" down
+x lisbon env PATH="$T/initrd-bin" RUNTIME_DIRECTORY="$R" /bin/sh "$HERE/deploy/baremetal/initrd/wg-boot" down
 x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
   && F "the boot interface, its ruleset or its address is still there" || P "without its credentials, as at switch-root, the script takes the interface, the ruleset and the address down"
 

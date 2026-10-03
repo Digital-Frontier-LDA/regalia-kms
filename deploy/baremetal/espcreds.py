@@ -17,12 +17,18 @@ line, which systemd in the initrd would act on) gives another PCR 12, and the pe
 What the stub skips, it does not measure either, and this module skips the same: a name that is not ASCII,
 is longer than 255 characters, starts with a dot, or does not end in ".cred" (any case).
 
-NOT covered: the per-image credentials (<image>.extra.d/*.cred, measured into PCR 12 as a second archive),
-configuration extensions, and a kernel command line passed by a boot loader (also PCR 12). A KMS host has
-none of them; if one appears, PCR 12 differs from pcr12() and the peers refuse, which is the intent.
+NOT covered here, and each would change PCR 12, so the peers refuse (the intent): the per-image credentials
+(<image>.extra.d/*.cred, measured as an archive of their own BEFORE the global one), configuration extensions,
+PE addons (loader/addons, <image>.extra.d/*.addon.efi), a kernel command line from a boot loader or from the
+SMBIOS string io.systemd.stub.kernel-cmdline-extra, and a UKI profile other than the first. A KMS host has
+none of them.
+
+NOT MEASURED AT ALL, by anything the peers attest: credentials systemd in the initrd imports from other
+sources, SMBIOS type 11 strings and QEMU's fw_cfg (systemd 257 src/core/import-creds.c). SMBIOS reaches
+PCR 1 at most, through the firmware. What systemd does with credentials by name must therefore be
+restricted in the image itself (#66, B2).
 """
 import hashlib
-import re
 
 PREFIX = ".extra/global_credentials"
 DIRECTORY = "loader/credentials"
@@ -84,5 +90,7 @@ def record(files):
     """PCR 12 and what it was computed from, in the stub's order: what a measurement set is made from."""
     names = sorted(n for n in files if measured(n))
     return {"pcr12": pcr12(files),
-            "credentials": [{"file": n, "name": re.sub(r"(?i)\.cred$", "", n), "sha256": hashlib.sha256(files[n]).hexdigest(),
-                             "size": len(files[n])} for n in names]}
+            # the stub takes the suffix in any case, systemd imports only ".cred" exactly: a file it measures but
+            # never makes a credential of has no name
+            "credentials": [{"file": n, "name": n[:-len(SUFFIX)] if n.endswith(SUFFIX) else None,
+                             "sha256": hashlib.sha256(files[n]).hexdigest(), "size": len(files[n])} for n in names]}

@@ -148,9 +148,13 @@ class OnQemu(tub.OnSwtpm):
 
     # -- the guest --
     def partition(self, number):
-        """A partition of the guest's disk as a block device on this machine, while the guest is off."""
+        """A partition of the guest's disk as a block device on this machine, while the guest is off. The caller
+        detaches it; a cleanup does too, only if it is still this image's (a freed loop name may be another's)."""
         loop = run(["losetup", "--find", "--show", "--partscan", self.image], capture_output=True, text=True, check=True).stdout.strip()
-        self.addCleanup(lambda: run(["losetup", "-d", loop], capture_output=True))
+        def detach():
+            if os.path.realpath(run(["losetup", "-n", "-O", "BACK-FILE", loop], capture_output=True, text=True).stdout.strip() or "/") == os.path.realpath(self.image):
+                run(["losetup", "-d", loop], capture_output=True)
+        self.addCleanup(detach)
         for _ in range(50):
             if os.path.exists("%sp%d" % (loop, number)):
                 break
@@ -163,8 +167,9 @@ class OnQemu(tub.OnSwtpm):
         loop, part = self.partition(1)
         mnt = self.d + "/esp"
         os.makedirs(mnt, exist_ok=True)
-        self.assertEqual(run(["mount", "-t", "vfat", part, mnt], capture_output=True).returncode, 0)
+        mounted = run(["mount", "-t", "vfat", part, mnt], capture_output=True).returncode == 0
         try:
+            self.assertTrue(mounted, "the ESP did not mount")
             where = mnt + "/loader/credentials"
             for name in os.listdir(where):
                 os.unlink(os.path.join(where, name))
@@ -173,8 +178,9 @@ class OnQemu(tub.OnSwtpm):
                 with open(os.path.join(where, name), "wb") as f:
                     f.write(content)
         finally:
-            self.assertEqual(run(["umount", mnt], capture_output=True).returncode, 0)
+            unmounted = not mounted or run(["umount", mnt], capture_output=True).returncode == 0
             run(["losetup", "-d", loop], capture_output=True)
+        self.assertTrue(unmounted, "the ESP did not unmount")
         return files
 
     def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None):
@@ -337,8 +343,10 @@ class OnQemu(tub.OnSwtpm):
         self.assertEqual([v.lower() for v in booted.groups()], [pcrs["7"], record["pcr11"]["system"], expected["pcr12"]])
         print("PCR 12 with the host's six credentials: %s, as espcreds computes it" % expected["pcr12"], file=sys.stderr)
 
-        # boots 3-5, A PLANTED CREDENTIAL: each adds one file to the ESP that systemd in the initrd would act on.
-        # PCR 12 is not the expected one, every peer refuses the quote, nothing is given, the console asks.
+        # boots 3-5, A PLANTED CREDENTIAL: each adds one file to the ESP under a name systemd in the initrd acts on
+        # (these are plain, so systemd ignores them as undecryptable; what matters here is that ANY extra file
+        # changes PCR 12). PCR 7 and 11 are unchanged, PCR 12 is what espcreds computes for the seven files, every
+        # peer refuses the quote, nothing is given, the console asks.
         planted = {"systemd.unit-dropin.regalia-unlock.service": b"[Service]\nEnvironment=PLANTED=1\n",
                    "systemd.extra-unit.regalia-planted.service": b"[Service]\nExecStart=/bin/true\n",
                    "tmpfiles.extra": b"f /run/regalia-planted - - - - planted\n"}
@@ -346,8 +354,11 @@ class OnQemu(tub.OnSwtpm):
             with self.subTest(planted=name):
                 since = len(self.events)
                 said = self.boot("%d-planted" % n, dict(credentials, **{name: content}), recovery=True)
-                self.assertNotEqual(espcreds.pcr12(self.on_esp), expected["pcr12"])
                 self.assertIn("the disk stays locked", said)
+                shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+                self.assertIsNotNone(shown)
+                self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], record["pcr11"]["system"], espcreds.pcr12(self.on_esp)])
+                self.assertNotEqual(shown.group(3).lower(), expected["pcr12"])
                 self.assertRegex(said, PROMPT.pattern.decode())
                 outcomes = {(e["event"], e["outcome"]) for e in self.events[since:]}
                 self.assertNotIn(("unlock", "ALLOW"), outcomes)

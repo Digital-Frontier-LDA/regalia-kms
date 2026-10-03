@@ -20,10 +20,10 @@
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key from the socket, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
-#   boot 3  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
-#           console asks for the recovery key, and the key opens the volume.
-#   boots 4-6  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line): PCR 12
+#   boots 3-5  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line): PCR 12
 #           is not the one the peers expect, and they refuse the quote.
+#   boot 6  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
+#           console asks for the recovery key, and the key opens the volume.
 #
 # The guest is built here from Debian's own packages (mmdebstrap). REGALIA_BOOT_ROOTFS names a directory
 # to use instead: the one variable to change when the appliance image of #61 exists.
@@ -152,7 +152,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### three boots"
+echo "### six boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
