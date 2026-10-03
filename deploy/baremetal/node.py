@@ -6,7 +6,7 @@
 Four processes, each the smallest one that can do its part. Only the first three are root, and none of
 them parses what a peer sends except `sync`, which holds no capability and is not root:
 
-    authtime   root, no capability      asks chrony whether time is authenticated; writes
+    authtime   root, CAP_DAC_OVERRIDE   asks chrony whether time is authenticated; writes
                                         /run/regalia/authtime.json (authtime.py)
     wg-apply   root, CAP_NET_ADMIN      makes wg-svc and wg-unlock what the CURRENT manifest says, and
                                         reads the result back (wgsvc.py, bootnet.py); a oneshot, run at
@@ -44,6 +44,7 @@ writes the trust anchors this configuration points at (#190); the revocation aut
 import argparse
 import binascii
 import contextlib
+import errno
 import json
 import os
 import re
@@ -450,10 +451,10 @@ class Sync:
         self.publish()
         mesh, svc = self.node.site["boot_mesh"], self.node.site["service_mesh"]
         listeners = []
-        service = socket.create_server((self.node.own_address(self.manifest()), svc["sync_port"]), family=socket.AF_INET6)
+        service = bind_when_up((self.node.own_address(self.manifest()), svc["sync_port"]), stop, family=socket.AF_INET6)
         service.settimeout(1)
         listeners.append(service)
-        unlocking = socket.create_server((mesh["address"], mesh["unlock_port"]))
+        unlocking = bind_when_up((mesh["address"], mesh["unlock_port"]), stop)
         listeners.append(unlocking)
         threads = [threading.Thread(target=sync.serve, args=(self.server(), service, stop), daemon=True),
                    threading.Thread(target=unlock.serve, args=(self.unlock_peer(), unlocking), kwargs={"caller": self.caller}, daemon=True)]
@@ -471,6 +472,19 @@ class Sync:
         finally:
             for listener in listeners:
                 listener.close()
+
+
+def bind_when_up(where, stop, family=socket.AF_INET, create=socket.create_server, sleep=time.sleep):
+    """A listener on a tunnel address, once the tunnel has it. On a host's first start the tunnels do not
+    exist yet: regalia-wg-apply makes them from the chain this process has just published. Waiting here,
+    rather than exiting, keeps the service from restarting in a loop until they appear."""
+    while True:
+        try:
+            return create(where, family=family)
+        except OSError as failure:
+            if failure.errno != errno.EADDRNOTAVAIL or stop():
+                raise
+        sleep(1)
 
 
 def authtime_service(cfg):

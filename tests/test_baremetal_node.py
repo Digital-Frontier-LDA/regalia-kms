@@ -2,6 +2,7 @@
 
 The TPM, wg and ip are fakes here (hbt.FakeTpm and a recorder). The units that run these under a real
 systemd, and the end-to-end run, are the next step."""
+import errno
 import json
 import os
 import shutil
@@ -317,6 +318,32 @@ class Applying(Case):
         self.assertIn("could not be taken down or deleted", " ".join(caught.exception.__notes__))
         host, n = self.ready(fail=["wg", "syncconf", "wg-unlock"], stuck=True)
         self.refused("could not be taken down or deleted", node.wg_apply, n)
+
+
+class Binding(unittest.TestCase):
+    def test_a_listener_waits_for_its_tunnel_address_instead_of_exiting(self):
+        """Found by running the units under systemd: sync published the chain, could not bind the tunnel
+        address wg-apply had not made yet, and restarted in a loop."""
+        calls, naps = [], []
+
+        def create(where, family):
+            calls.append(where)
+            if len(calls) < 3:
+                raise OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address")
+            return "listener"
+        self.assertEqual(node.bind_when_up(("fd72::1", 7444), lambda: False, create=create, sleep=naps.append), "listener")
+        self.assertEqual((len(calls), naps), (3, [1, 1]))
+
+    def test_any_other_failure_or_a_stop_is_not_waited_out(self):
+        def busy(where, family):
+            raise OSError(errno.EADDRINUSE, "in use")
+        with self.assertRaises(OSError):
+            node.bind_when_up(("fd72::1", 7444), lambda: False, create=busy, sleep=lambda s: None)
+
+        def missing(where, family):
+            raise OSError(errno.EADDRNOTAVAIL, "not yet")
+        with self.assertRaises(OSError):
+            node.bind_when_up(("fd72::1", 7444), lambda: True, create=missing, sleep=lambda s: None)
 
 
 class Time(Case):
