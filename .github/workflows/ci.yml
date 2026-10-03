@@ -436,7 +436,8 @@ jobs:
   # regalia-kms#77: the disk recovery key, on a real dm-crypt volume (a loop device). With every other
   # keyslot destroyed, the recovery key alone opens and mounts it; a wrong key, one wrong letter, no
   # dashes, other grouping and capitals do not; a used key is replaced and then opens nothing. The
-  # script fails if the six file-backed tests of recovery-key.sh do not all run.
+  # script fails if the file-backed tests of recovery-key.sh do not all run. Every header sync under a
+  # fault is lab/recovery/matrix.py (recovery-matrix.yml, #175).
   luks-recovery-key:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -448,6 +449,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends cryptsetup-bin
+          command -v systemd-cryptenroll || sudo apt-get install -y -qq --no-install-recommends systemd-cryptsetup
+          command -v systemd-cryptenroll
       - name: The recovery key alone opens the volume (loop device, LUKS2)
         run: sudo bash e2e/luks-recovery-key.sh
 
