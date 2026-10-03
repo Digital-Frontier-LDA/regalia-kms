@@ -207,9 +207,15 @@ def target(document, node_id):
 
 
 def _key(entry):
-    """A set's measurements, whole: the per-phase values are as much the image as the others."""
+    """A set's measurements, whole: the per-phase values are as much the image as the others, and so are the keys
+    it is signed with. The same PCRs under other signing keys (an image re-signed after an initrd-key rotation;
+    the initrd key is not measured) is ANOTHER set, never "unchanged": under the old label it is a changed image,
+    and under a new one it can neither sit beside the old set (attest refuses two sets of the same measurements)
+    nor replace it in an emergency (the dropped measurements would still be accepted). A key rotation therefore
+    comes with a rebuilt image, a new PCR 11 (#267, 51's read)."""
     return (entry["tpm_firmware_version"], tuple(sorted(entry["pcrs"].items())),
-            tuple((phase, tuple(sorted(pcrs.items()))) for phase, pcrs in sorted(entry.get("phases", {}).items())))
+            tuple((phase, tuple(sorted(pcrs.items()))) for phase, pcrs in sorted(entry.get("phases", {}).items())),
+            tuple(sorted(entry.get("signing", {}).items())))
 
 
 def _states(entry):
