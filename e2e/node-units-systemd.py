@@ -725,19 +725,21 @@ def part2(work, binaries, user, ctx, servers, status):
               nodes=[dict(n, state="REVOKED_STOLEN") if n["node_id"] == "a" else n for n in m2["nodes"]])
     store.commit(signed(m3, hbt.REVOKE, "revocation"))
     freshness.accept(hbt.beat(m3, 3, issued=int(time.time())), m3)
-    # from here b refuses: the lease a holds NOW (it may have been renewed since section 8) is its last
-    end = json.loads(pathlib.Path("/run/regalia/admission.json").read_text())["serve_until_boottime_ms"]
+    mark = len(events)                   # from here b refuses; a lease it granted just before may still be landing
     seen = []
 
     def lapsed():
         seen.append(json.loads(pathlib.Path("/run/regalia/admission.json").read_text()))
-        return admission.boottime_ms() > end + 2000 and daemon.ready() == 503
+        last = max(d["serve_until_boottime_ms"] for d in seen)
+        return admission.boottime_ms() > last + 2000 and daemon.ready() == 503
     stopped = until(lapsed, lease.MAX_LIFETIME + 60, 3)
     refused = [e for e in events if e.get("subject") == "a" and e.get("outcome") == "DENY"]
     ok(any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in refused),
        "a asked b to renew; b refused it by name, under epoch 3", refused[-2:] or events[-4:])
-    ok(all(d["serve_until_boottime_ms"] <= end for d in seen), "the admission was never extended after the revocation reached b",
-       [d["serve_until_boottime_ms"] for d in seen][-5:])
+    granted = [e for e in events[mark:] if e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"]
+    ends = [d["serve_until_boottime_ms"] for d in seen if d["serve_until_boottime_ms"]]
+    ok(not granted and ends == sorted(ends) and len(set(ends[-len(ends) // 2:])) <= 1,
+       "b granted no lease after the revocation, and a's admission stopped moving at the end of the last one", (granted, sorted(set(ends))))
     code, answer = daemon.sign(b"after the lease")
     ok(stopped is True and code == 503, "at the end of the lease the daemon refuses (503) and reports not ready, with nobody touching it",
        (code, answer, daemon.log()[-600:]))
