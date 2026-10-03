@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from deploy.baremetal import attest, espcreds, measurements, uki
+from deploy.baremetal import attest, debverify, espcreds, measurements, uki
 from deploy.baremetal import membership as m
 
 # `systemd-measure calculate` (257.13-1~deb13u1) over sections whose content is their own name
@@ -255,12 +255,20 @@ class Case(unittest.TestCase):
                   "packages_sha256": "cd" * 32, "packages": ["dracut=106-6"], "initrd_sha256": initrd_sha256,
                   "initrd_size": 1, "initrd_entries": 1,
                   # #246: what the builder verified against the archive, exactly the inventory's packages (none in the fixture's)
-                  "verified_packages": {"schema": uki.VERIFIED_SCHEMA, "packages": {}, "releases": {"https://snapshot.example trixie": "ef" * 32},
-                                        "keyring_sha256": "12" * 32, "entries": 0}}
+                  "verified_packages": self.verified()}
         record.update(change)
         for key in [k for k, v in change.items() if v is None]:
             del record[key]
         return self.write(name, json.dumps(record).encode())
+
+    def verified(self, inventory=None, **change):
+        """A build record's verified_packages (debverify, #246) for `inventory` (default: the one reviewed), as the
+        builder writes it: the pinned keyring, that inventory's sha256, its package and dracut-over line counts."""
+        owned, over, digest = uki._inventory_counts(inventory)
+        verified = {"schema": uki.VERIFIED_SCHEMA, "packages": {}, "releases": {"https://snapshot.example trixie": "ef" * 32},
+                    "keyring_sha256": debverify.KEYRING_SHA256, "inventory_sha256": digest, "entries": sum(owned.values()), "dracut_over": over}
+        verified.update(change)
+        return verified
 
     def build(self, **kw):
         kw.setdefault("unlock_client", self.write("regalia-unlock.compiled", CLIENT))
@@ -933,12 +941,15 @@ class InitrdBuildRecord(Case):
             "the initrd's build record": self.initrd_build("h.json", packages=None),          # a field missing
             # #246: the verified set must be exactly the inventory's packages
             "verified other packages than the inventory names (not verified: none; not in the inventory: zlib1g=1:1.3-1)":
-                self.initrd_build("v1.json", verified_packages={"schema": uki.VERIFIED_SCHEMA, "releases": {}, "keyring_sha256": "12" * 32, "entries": 1,
-                                                               "packages": {"zlib1g": {"version": "1:1.3-1", "deb_sha256": "34" * 32}}}),
+                self.initrd_build("v1.json", verified_packages=self.verified(packages={"zlib1g": {"version": "1:1.3-1", "deb_sha256": "34" * 32}})),
             "verified_packages is not a regalia.initrd-packages/v1":
-                self.initrd_build("v2.json", verified_packages={"schema": uki.VERIFIED_SCHEMA, "releases": {}, "keyring_sha256": "12" * 32, "entries": 1,
-                                                               "packages": {"zlib1g": "1:1.3-1"}}),
+                self.initrd_build("v2.json", verified_packages=self.verified(packages={"zlib1g": "1:1.3-1"})),
             "missing=['verified_packages']": self.initrd_build("v3.json", verified_packages=None),
+            "verified with another keyring than the pinned Debian archive keyring":
+                self.initrd_build("v4.json", verified_packages=self.verified(keyring_sha256="12" * 32)),
+            "verified another inventory than the one reviewed": self.initrd_build("v5.json", verified_packages=self.verified(inventory_sha256="56" * 32)),
+            "verified 1 package and 0 dracut-over lines": self.initrd_build("v6.json", verified_packages=self.verified(entries=1)),
+            "the initrd's build record's verified_packages is not a": self.initrd_build("v7.json", verified_packages=self.verified(dracut_over=True)),
             "not valid JSON": self.write("i.json", b"{"),
         }
         for reason, path in cases.items():
@@ -1047,13 +1058,21 @@ class InitrdReview(Case):
         with open(os.path.join(root, "var/lib/dpkg/info/udev.list"), "a") as f:
             f.write("/lib/udev/rules.d/61-other.rules\n")
         os.symlink("graphical.target", os.path.join(root, "lib/udev/rules.d/61-other.rules"))
+        with open(os.path.join(root, "var/lib/dpkg/status"), "a") as f:
+            f.write("\nPackage: base-files\nStatus: install ok installed\nVersion: 13.8\n")
+        with open(os.path.join(root, "var/lib/dpkg/info/base-files.list"), "w") as f:
+            f.write("/var/run\n")
+        os.makedirs(os.path.join(root, "var"), exist_ok=True)
+        os.symlink("/run", os.path.join(root, "var/run"))
         data = unlock_initrd({"usr/lib/udev/rules.d/60-block.rules": (0o100644, b"r"), "etc/initrd-release": (0o100644, b"x"),
-                              "usr/lib/udev/rules.d/61-other.rules": (0o120777, b"60-block.rules")})
+                              "usr/lib/udev/rules.d/61-other.rules": (0o120777, b"60-block.rules"), "var/run": (0o120777, b"../run")})
         lines = uki.initrd_inventory_lines(data, root=root)
         by_path = {l.split(" ")[5]: l.split(" ")[:2] for l in lines}
         self.assertEqual(by_path["usr/lib/udev/rules.d/60-block.rules"], ["package", "udev=257.13-1"])
-        # a package's path where dracut put something else (#246): dracut's, read by the reviewer, not "verified"
-        self.assertEqual(by_path["usr/lib/udev/rules.d/61-other.rules"], ["generated", "dracut-over:udev=257.13-1"])
+        # #246: a package's path that differs from what was installed stays the package's, for the archive check to
+        # refuse, unless it is on the pinned list of the paths dracut writes over
+        self.assertEqual(by_path["usr/lib/udev/rules.d/61-other.rules"], ["package", "udev=257.13-1"])
+        self.assertEqual(by_path["var/run"], ["generated", "dracut-over:base-files=13.8"])
         self.assertEqual(by_path["etc/initrd-release"], ["generated", "dracut"])
         self.assertEqual(by_path["usr/lib/systemd/system/regalia-unlock.service"], ["ours", "regalia-kms"])
         self.assertEqual(by_path["etc/crypttab"], ["ours", "regalia-kms"])
@@ -1268,13 +1287,36 @@ class InitrdReview(Case):
         inventory = self.write("inv-pkg.txt", ("\n".join(uki.initrd_inventory_lines(uki.read(self.inputs["initrd"])))
                                                + "\npackage zlib1g=1:1.3-1 f 0644 0:0 usr/lib/libz.so.1 " + "56" * 32 + "\n").encode())
         self.assertEqual(uki.inventory_package_origins(inventory), {"zlib1g=1:1.3-1"})
-        missing = {"initrd_build": self.initrd_build("m.json")}
+        missing = {"initrd_build": self.initrd_build("m.json", verified_packages=self.verified(inventory, entries=1))}
         with self.assertRaisesRegex(m.Refused, "not verified: zlib1g=1:1.3-1; not in the inventory: none"):
             uki.check_initrd_build(dict(self.inputs, **missing), uki.sha256(CLIENT), inventory)
-        named = {"schema": uki.VERIFIED_SCHEMA, "releases": {}, "keyring_sha256": "12" * 32, "entries": 1,
-                 "packages": {"zlib1g": {"version": "1:1.3-1", "deb_sha256": "34" * 32}}}
+        named = self.verified(inventory, packages={"zlib1g": {"version": "1:1.3-1", "deb_sha256": "34" * 32}})
         self.assertIsNotNone(uki.check_initrd_build(dict(self.inputs, initrd_build=self.initrd_build("n.json", verified_packages=named)),
                                                     uki.sha256(CLIENT), inventory))
+        # the record of a build that verified this inventory under another class for one line: another sha256
+        reclassed = self.write("inv-reclassed.txt", uki.read(inventory).replace(b"package zlib1g=1:1.3-1", b"generated dracut"))
+        with self.assertRaisesRegex(m.Refused, "verified another inventory than the one reviewed"):
+            uki.check_initrd_build(dict(self.inputs, initrd_build=self.initrd_build("r.json", verified_packages=named)),
+                                   uki.sha256(CLIENT), reclassed)
+
+    def test_only_the_pinned_paths_are_dracut_s_over_a_package(self):
+        """#246: a "dracut-over" line is accepted only for a path on uki.DRACUT_OVER, with its owner, and a link only
+        to the pinned target; anything else is refused when the inventory is read, so it cannot hide a package file."""
+        base = "\n".join(uki.initrd_inventory_lines(uki.read(self.inputs["initrd"]))) + "\n"
+        good = self.write("inv-over.txt", (base + "generated dracut-over:base-files=13.8 l 0777 0:0 var/run ../run\n"
+                                           "generated dracut-over:dracut-core=106-6 f 0644 0:0 usr/lib/systemd/system/dracut-mount.service "
+                                           + "78" * 32 + "\n").encode())
+        self.assertIn("var/run", uki.load_inventory(good))
+        self.assertEqual(uki._inventory_counts(good)[1], 2)
+        for line, reason in (("generated dracut-over:udev=257.13-1 f 0644 0:0 usr/lib/udev/rules.d/60-block.rules " + "78" * 32,
+                              "usr/lib/udev/rules.d/60-block.rules is not on the pinned list"),
+                             ("generated dracut-over:systemd=257 l 0777 0:0 var/run ../run", "var/run is not on the pinned list"),
+                             ("generated dracut-over:base-files=13.8 l 0777 0:0 var/run /tmp/evil", "var/run is not dracut's link to ../run")):
+            with self.subTest(reason):
+                self.refused(reason, uki.load_inventory, self.write("inv-bad-over.txt", (base + line + "\n").encode()))
+        # every source a dracut-over file is held to is a file of dracut-core
+        for path, (owner, source) in uki.DRACUT_OVER.items():
+            self.assertTrue(source[0] == "link" or (source[0] == "dracut-core" and source[1].startswith("usr/lib/dracut/modules.d/")), path)
 
     def test_sign_refuses_an_image_whose_initrd_did_not_pass(self):
         bad = self.write("initrd-bad", unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, b"rd.luks.uuid=1\n")}))

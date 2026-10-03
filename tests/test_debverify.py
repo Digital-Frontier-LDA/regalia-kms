@@ -1,6 +1,7 @@
 """deploy/baremetal/debverify.py (#246): every "package" entry of the initrd inventory, checked against its .deb along
 the archive's signed chain (InRelease by signature, Packages by its hash, the .deb by its hash, the file by its bytes).
 A throwaway archive here: its own signing key (gpg), Release, Packages and .deb, served from memory."""
+import contextlib
 import hashlib
 import io
 import lzma
@@ -51,6 +52,13 @@ def deb(files, compress="xz"):
     return out
 
 
+class Paths(unittest.TestCase):
+    def test_a_deb_s_paths_lose_only_a_leading_dot_slash(self):
+        files = dv.deb_files(deb({".hidden/x": b"a", "usr/lib/y": b"b"}))
+        self.assertIn(".hidden/x", files)
+        self.assertNotIn("hidden/x", files)
+
+
 class Archive(unittest.TestCase):
     def setUp(self):
         if not (shutil.which("gpg") and shutil.which("gpgv")):
@@ -63,8 +71,13 @@ class Archive(unittest.TestCase):
         self.keyring = os.path.join(self.d, "keyring.gpg")
         with open(self.keyring, "wb") as f:
             f.write(self.gpg("--export").stdout)
+        self.signers = {self.fingerprint(): "test archive"}
         self.served = {}
         self.packages = []
+
+    def fingerprint(self, home=None):
+        colons = subprocess.run(["gpg", "--homedir", home or self.home, "--with-colons", "--fingerprint"], capture_output=True, check=True).stdout
+        return next(l.split(":")[9] for l in colons.decode().splitlines() if l.startswith("fpr:"))
 
     def gpg(self, *args, data=None):
         return subprocess.run(["gpg", "--homedir", self.home, "--batch", "--pinentry-mode", "loopback", *args],
@@ -89,9 +102,9 @@ class Archive(unittest.TestCase):
             raise OSError("404 %s" % url)
         return io.BytesIO(self.served[url])
 
-    def run_verify(self, inventory):
+    def run_verify(self, inventory, signers=None):
         cache = os.path.join(self.d, "cache-%d" % len(os.listdir(self.d)))
-        index = dv.source_index(BASE, "trixie", self.keyring, cache, self.opener)
+        index = dv.source_index(BASE, "trixie", self.keyring, cache, self.opener, signers=signers or self.signers)
         return dv.verify(dv.inventory_packages(inventory), index, cache, self.opener)
 
     def line(self, origin, kind, path, value):
@@ -154,6 +167,63 @@ class Archive(unittest.TestCase):
         self.served["%s/dists/trixie/InRelease" % BASE] = forged
         with self.assertRaisesRegex(dv.Refused, "signature does not verify"):
             self.run_verify([])
+
+    def test_only_a_good_signature_by_a_pinned_key_is_trusted(self):
+        """gpgv's exit status says a key of the keyring signed; the status lines say which, and whether it has expired."""
+        self.publish("zlib1g", "1:1.3-1", {"usr/lib/libz.so.1.3": b"genuine"})
+        self.release()
+        self.assertEqual(self.run_verify([])[0], [])
+        # a key in the keyring that is not pinned: refused, though gpgv exits 0
+        with self.assertRaisesRegex(dv.Refused, "no good signature by a pinned key"):
+            self.run_verify([], signers={"A" * 40: "another"})
+        # the pinned key, expired: refused (a key made and used in 2020, expired a day later)
+        old = os.path.join(self.d, "old")
+        os.mkdir(old, 0o700)
+        past = ["gpg", "--homedir", old, "--batch", "--pinentry-mode", "loopback", "--faked-system-time", "20200101T000000"]
+        subprocess.run(past + ["--passphrase", "", "--quick-gen-key", "old archive <old@example>", "ed25519", "sign", "1d"], capture_output=True, check=True)
+        text = b"Origin: Debian\nSHA256:\n"
+        self.served["%s/dists/trixie/InRelease" % BASE] = subprocess.run(past + ["--clearsign"], input=text, capture_output=True, check=True).stdout
+        with open(self.keyring, "wb") as f:
+            f.write(subprocess.run(["gpg", "--homedir", old, "--export"], capture_output=True, check=True).stdout)
+        with self.assertRaisesRegex(dv.Refused, "signature by the pinned key [0-9A-F]{40} is EXPKEYSIG"):
+            self.run_verify([], signers={self.fingerprint(old): "old"})
+
+    def test_dracut_s_overwrites_are_held_to_the_pinned_list_and_dracut_core(self):
+        unit = b"[Unit]\nDescription=dracut mount hook\n"
+        self.publish("dracut-core", "106-6", {"usr/lib/dracut/modules.d/98dracut-systemd/dracut-mount.service": unit,
+                                              "usr/lib/systemd/system/dracut-mount.service": b"the host's copy"})
+        self.release()
+        cache = os.path.join(self.d, "cache-over")
+        index = dv.source_index(BASE, "trixie", self.keyring, cache, self.opener, signers=self.signers)
+        pinned = {"usr/lib/systemd/system/dracut-mount.service": ("dracut-core", ("dracut-core", "usr/lib/dracut/modules.d/98dracut-systemd/dracut-mount.service")),
+                  "var/run": ("base-files", ("link", "../run"))}
+
+        def check(*over):
+            owned, entries = dv.inventory_entries(list(over))
+            return dv.verify_dracut_over(entries, dv.inventory_versions(owned, entries), pinned, index, cache, self.opener)
+        unit_line = "generated dracut-over:dracut-core=106-6 f 0644 0:0 usr/lib/systemd/system/dracut-mount.service "
+        self.assertEqual(check(unit_line + sha(unit), "generated dracut-over:base-files=13.8 l 0777 0:0 var/run ../run"), [])
+        for over, reason in ((unit_line + sha(b"planted"), "not dracut-core's usr/lib/dracut/modules.d/98dracut-systemd/dracut-mount.service"),
+                             ("generated dracut-over:base-files=13.8 l 0777 0:0 var/run /tmp", "dracut's link points at /tmp"),
+                             ("generated dracut-over:udev=1 f 0644 0:0 usr/lib/udev/x.rules " + sha(b"x"), "is not on the pinned list"),
+                             ("generated dracut-over:systemd=1 l 0777 0:0 var/run ../run", "is not on the pinned list")):
+            with self.subTest(reason):
+                self.assertTrue(any(reason in f for f in check(over)), check(over))
+        with self.assertRaisesRegex(dv.Refused, "names dracut-core at two versions"):
+            check(unit_line + sha(unit), "package dracut-core=106-7 f 0644 0:0 usr/bin/dracut " + sha(b"d"))
+
+    def test_the_keyring_must_be_the_pinned_one(self):
+        inventory = os.path.join(self.d, "inventory.txt")
+        with open(inventory, "w") as f:
+            f.write("# nothing\n")
+        out = os.path.join(self.d, "out.json")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = dv.main(["--inventory", inventory, "--keyring", self.keyring, "--source", BASE, "trixie",
+                            "--cache", os.path.join(self.d, "c"), "--out", out])
+        self.assertEqual(code, 1)
+        self.assertIn("is not the pinned Debian archive keyring", err.getvalue())
+        self.assertFalse(os.path.exists(out))
 
     def test_a_package_that_cannot_be_fetched_is_refused(self):
         self.publish("zlib1g", "1:1.3-1", {"usr/lib/libz.so.1.3": b"genuine"})

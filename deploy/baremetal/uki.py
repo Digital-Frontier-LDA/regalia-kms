@@ -86,7 +86,7 @@ import subprocess
 import sys
 import tempfile
 
-from deploy.baremetal import attest, espcreds, membership
+from deploy.baremetal import attest, debverify, espcreds, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -682,6 +682,12 @@ def load_inventory(path=INVENTORY):
                     and re.fullmatch(r"[fldcbps?] [0-7]{4} \d+:\d+", " ".join(words[2:5])) is not None,
                     "%s:%d is not CLASS ORIGIN TYPE MODE UID:GID PATH VALUE" % (path, number))
             require(words[5] not in pinned, "%s:%d names %s twice" % (path, number, words[5]))
+            if words[0] == "generated" and words[1].startswith("dracut-over:"):
+                rule = DRACUT_OVER.get(words[5])
+                require(rule is not None and rule[0] == words[1][len("dracut-over:"):].partition("=")[0],
+                        "%s:%d: %s is not on the pinned list of the paths dracut writes over (uki.DRACUT_OVER)" % (path, number, words[5]))
+                require(rule[1][0] != "link" or (words[2], words[6]) == ("l", _escape(rule[1][1])),
+                        "%s:%d: %s is not dracut's link to %s" % (path, number, words[5], rule[1][1]))
             pinned[words[5]] = " ".join(words[2:5] + words[6:])
     return pinned
 
@@ -718,6 +724,33 @@ def ours():
     pinned.update({link: ("link", target) for link, target in UNLOCK_ENABLED.items()})
     pinned[RELAY_DROPIN[0]] = ("file", sha256(RELAY_DROPIN[1]))
     return pinned
+
+
+# #246: the paths of a package that dracut writes over, each with what dracut puts there and the line of dracut-core
+# 106-6 that does it. Only these are classed "generated dracut-over:OWNER" in the inventory; a package file that
+# differs from what the build machine installed anywhere else stays "package", and the archive check refuses it
+# (deploy/baremetal/debverify.py). Each is still checked: a link by its target here, a file against dracut-core's
+# .deb at the source path here. {path in the image: (owning package, ("link", target) | (package, path in its .deb))}
+_DRACUT_SYSTEMD = "usr/lib/dracut/modules.d/98dracut-systemd/"
+DRACUT_OVER = {
+    # usr/bin/dracut: ln -sfn ../run "$initdir/var/run"; ln -sfn ../run/lock "$initdir/var/lock"
+    "var/run": ("base-files", ("link", "../run")),
+    "var/lock": ("base-files", ("link", "../run/lock")),
+    # 98dracut-systemd/module-setup.sh: ln -sf initrd-release "$initdir"/usr/lib/os-release (and etc/os-release)
+    "usr/lib/os-release": ("base-files", ("link", "initrd-release")),
+    "etc/os-release": ("base-files", ("link", "initrd-release")),
+    # 01systemd-udevd/module-setup.sh: ln_r "$(find_binary true)" "/usr/bin/loginctl"
+    "usr/bin/loginctl": ("systemd", ("link", "true")),
+    # 98dracut-systemd/module-setup.sh: ln_r "${systemdsystemunitdir}/initrd.target" "${systemdsystemunitdir}/default.target"
+    UNIT_DIR + "/default.target": ("systemd", ("link", "initrd.target")),
+    # 98dracut-systemd/module-setup.sh: inst_simple "$moddir/emergency.service" .../emergency.service (and .../rescue.service)
+    UNIT_DIR + "/emergency.service": ("systemd", ("dracut-core", _DRACUT_SYSTEMD + "emergency.service")),
+    UNIT_DIR + "/rescue.service": ("systemd", ("dracut-core", _DRACUT_SYSTEMD + "emergency.service")),
+}
+# 98dracut-systemd/module-setup.sh installs its own dracut-*.service units over dracut-core's systemd copies
+DRACUT_OVER.update({UNIT_DIR + "/" + unit: ("dracut-core", ("dracut-core", _DRACUT_SYSTEMD + unit)) for unit in (
+    "dracut-cmdline.service", "dracut-initqueue.service", "dracut-mount.service", "dracut-pre-mount.service",
+    "dracut-pre-pivot.service", "dracut-pre-trigger.service", "dracut-pre-udev.service")})
 
 
 def _ours_path(path, files):
@@ -767,9 +800,10 @@ def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
         else:
             owner = owners.get(raw) or (owners.get(raw[4:]) if raw.startswith("usr/") else None)
             cls, origin = ("package", owner) if owner else ("generated", "dracut")
-            if owner and not _as_installed(root, raw, files[raw]):
-                # a package's path holding what dracut put there instead (its own unit, a link to initrd-release, a
-                # shell where a tool was): dracut's, for the reader, and never "verified" against the package (#246)
+            if owner and raw in DRACUT_OVER and DRACUT_OVER[raw][0] == owner.partition("=")[0] \
+                    and not _as_installed(root, raw, files[raw]):
+                # a pinned path dracut writes over (its own unit, a link to initrd-release): dracut's, checked against
+                # DRACUT_OVER's source (#246). Anywhere else a difference stays "package", and debverify refuses it.
                 cls, origin = "generated", "dracut-over:" + owner
         kind, mode, owner_ids, value = state.split(" ")
         rows.append(({"ours": 0, "generated": 1, "unclassified": 1, "package": 2}[cls], path,
@@ -933,13 +967,16 @@ VERIFIED_SCHEMA = "regalia.initrd-packages/v1"
 
 def inventory_package_origins(path=None):
     """{"name=version"} of the inventory's "package" entries: what the build record's verified_packages must name."""
-    origins = set()
-    with open(path or INVENTORY) as f:
-        for line in f:
-            words = line.rstrip("\n").split(" ")
-            if not line.startswith("#") and len(words) == 7 and words[0] == "package":
-                origins.add(words[1])
-    return origins
+    return set(_inventory_counts(path)[0])
+
+
+def _inventory_counts(path=None):
+    """({"name=version": package lines}, dracut-over lines, the file's sha256) of the inventory."""
+    with open(path or INVENTORY, "rb") as f:
+        raw = f.read()
+    load_inventory(path or INVENTORY)                # its shape, and only pinned dracut-over lines
+    owned, over = debverify.inventory_entries(raw.decode("utf-8").splitlines())
+    return {origin: len(lines) for origin, lines in owned.items()}, len(over), sha256(raw)
 
 
 def check_initrd_build(inputs, client_sha256, inventory=None):
@@ -965,17 +1002,28 @@ def check_initrd_build(inputs, client_sha256, inventory=None):
     # #246: every package the inventory names was checked by the builder against its .deb along Debian's signed chain
     # (deploy/baremetal/debverify.py): exactly those packages, at those versions, no more and no fewer
     verified = built["verified_packages"]
-    membership.exact(verified, ("schema", "packages", "releases", "keyring_sha256", "entries"), "the initrd's build record's verified_packages")
+    membership.exact(verified, ("schema", "packages", "releases", "keyring_sha256", "inventory_sha256", "entries", "dracut_over"),
+                     "the initrd's build record's verified_packages")
     require(verified["schema"] == VERIFIED_SCHEMA and isinstance(verified["packages"], dict) and isinstance(verified["releases"], dict)
-            and attest.is_hex(verified["keyring_sha256"], 64) and isinstance(verified["entries"], int)
+            and attest.is_hex(verified["keyring_sha256"], 64) and attest.is_hex(verified["inventory_sha256"], 64)
+            and type(verified["entries"]) is int and type(verified["dracut_over"]) is int
             and all(isinstance(v, dict) and set(v) == {"version", "deb_sha256"} and isinstance(v["version"], str)
                     and attest.is_hex(v["deb_sha256"], 64) for v in verified["packages"].values())
             and all(attest.is_hex(v, 64) for v in verified["releases"].values()),
             "the initrd's build record's verified_packages is not a %s" % VERIFIED_SCHEMA)
+    require(verified["keyring_sha256"] == debverify.KEYRING_SHA256,
+            "the initrd's build record's packages were verified with another keyring than the pinned Debian archive keyring")
+    owned, over, inventory_sha256 = _inventory_counts(inventory)
+    # what the builder verified is this inventory, the reviewed one, byte for byte: its classes and origins included
+    require(verified["inventory_sha256"] == inventory_sha256,
+            "the initrd's build record verified another inventory than the one reviewed (%s, not %s)" % (verified["inventory_sha256"], inventory_sha256))
     named = {"%s=%s" % (name, v["version"]) for name, v in verified["packages"].items()}
-    want = inventory_package_origins(inventory)
+    want = set(owned)
     require(named == want, "the initrd's build record verified other packages than the inventory names (not verified: %s; not in the "
             "inventory: %s)" % (", ".join(sorted(want - named)) or "none", ", ".join(sorted(named - want)) or "none"))
+    require((verified["entries"], verified["dracut_over"]) == (sum(owned.values()), over),
+            "the initrd's build record verified %d package and %d dracut-over lines, the inventory has %d and %d"
+            % (verified["entries"], verified["dracut_over"], sum(owned.values()), over))
     return built
 
 
