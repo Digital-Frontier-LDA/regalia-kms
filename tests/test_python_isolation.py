@@ -56,7 +56,7 @@ PATHED = r'["\']?[\w$/{}.:-]*/(?:python(?:[23](?:\.\d+)?)?|pypy3?)(?![\w.-])["\'
 VARIABLE = r'(?<![\w$])"?\$\{?(?:\w*_)?(?:py|PY|pybin|PYBIN|python3?|PYTHON3?|interp|INTERP)(?:_\w+)?(?::-[^}]*)?\}?"?(?![\w.])'
 INTERP = re.compile("(?P<word>%s)|(?P<pathed>%s)|(?P<variable>%s)" % (WORD, PATHED, VARIABLE))
 # A command starts here; before its first word may stand VAR=value words, timeout N, sudo, nohup, exec, env.
-START = r'(?:^|[;&({!|]|\$\(|\bthen\b|\bdo\b|\bif\b|\belse\b)\s*(?:!\s*)?'
+START = r'(?:^|[;&({!|]|\$\(|\bthen\b|\bdo\b|\bif\b|\belse\b|-exec(?:dir)?\s|\bxargs(?:\s+-\S+)*\s)\s*(?:!\s*)?'
 ASSIGN = r'\w+=(?:[\w./:-]*|"(?:[^"$]|\$(?!\())*")\s+'            # VAR=value, VAR="$OTHER"; not VAR="$(…)"
 PREFIX = r'(?:' + ASSIGN + r'|timeout\s+\S+\s+|sudo\s+|nohup\s+|exec\s+|env\s+(?:-\S+\s+\S+\s+)*)*'
 COMMAND = re.compile(START + PREFIX + r'$')
@@ -194,6 +194,20 @@ class PythonRunsIsolated(unittest.TestCase):
                     self.fail("%s:%d: %s. Add -I (or -Es for a script by path, -Ps beside PYTHONPATH=\"$HERE\")" % (name, number, what))
         self.assertGreater(seen, 40, "almost no python3 invocation was seen: the pattern no longer matches how they are written")
 
+    def test_the_workflow_steps_follow_it_too(self):
+        """CI's own steps run Python too: the test runners, the drills and the bench harness. They are
+        judged line by line with the same rule (YAML keys and package names do not match it)."""
+        workflows = tracked(".github/workflows/*.yml")
+        self.assertGreater(len(workflows), 0)
+        seen = 0
+        for name in workflows:
+            text = (ROOT / name).read_text(encoding="utf-8", errors="replace")
+            seen += len(INTERP.findall(text))
+            for number, what in findings(text):
+                with self.subTest(workflow=name, line=number):
+                    self.fail("%s:%d: %s" % (name, number, what))
+        self.assertGreater(seen, 8, "almost no Python was seen in the workflows")
+
     def test_the_commands_an_operator_is_told_to_type_follow_it_too(self):
         """The production surface is not the e2e scripts: it is `sudo python3 deploy/baremetal/host_probe.py …`
         as the runbooks and the tools' own usage text give it, typed by root on a KMS host."""
@@ -265,6 +279,12 @@ class PythonRunsIsolated(unittest.TestCase):
             "producer | \"$HERE/x.py\"",
             "\"$HERE/x.py\";",
             "\"$PY\" \"$ROOT/e2e/cosmos_kms_tx.py\" address",
+            "find . -name '*.json' -exec \"$HERE/check.py\" {} +",
+            "find . -execdir ./check.py {} \\;",
+            "ls *.json | xargs \"$HERE/check.py\"",
+            "ls *.json | xargs -n1 -P4 \"$HERE/check.py\"",
+            "find . -exec python3 check.py {} +",
+            "printf '%s\\n' a b | xargs python3 -c 'import sys; print(sys.argv)'",
             "\"$PY\" -c 'print(1)'",
             "$PY -m venv /opt/x",
             "read -r A _ < <(\"$PY\" \"$ROOT/e2e/cosmos_kms_tx.py\" address)",
@@ -295,6 +315,9 @@ class PythonRunsIsolated(unittest.TestCase):
             "python3 -IB - <<'PY'",
             "printf '%s' \"$program\" | python3 -I > out.txt",
             "make || python3 -Es \"$HERE/x.py\"",
+            "find . -name '*.json' -exec python3 -Es \"$HERE/check.py\" {} +",
+            "ls *.json | xargs python3 -I -c 'import sys; print(sys.argv)'",
+            "find . -name '*.py' -exec grep -l secrets {} +",
             "\"$PY\" -Es \"$ROOT/e2e/cosmos_kms_tx.py\" address",
             "\"$PY\" -I -c 'import cosmpy' 2>/dev/null || { echo \"$PY lacks cosmpy\" >&2; exit 2; }",
             "PY=\"${REGALIA_COSMOS_PYTHON:-python3}\"",

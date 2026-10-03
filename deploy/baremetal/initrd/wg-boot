@@ -67,7 +67,10 @@ case "${1:-}" in
     # The ruleset is a credential from the ESP, which whoever holds the machine can write: it may hold one
     # table, ours, and read no other file (an `include` of a credential would be printed, key and all, in
     # nft's error). nft's messages are not passed on, for the same reason as wg's.
-    if grep -qiE '(^|[^a-z_])include([^a-z_]|$)' "$NFT"; then fail "regalia.boot-nft includes another file"; fi
+    # (with the shell alone: a tool missing from the image must not let the check pass)
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in *[Ii][Nn][Cc][Ll][Uu][Dd][Ee]*) fail "regalia.boot-nft includes another file" ;; esac
+    done < "$NFT"
     nft -f "$NFT" 2>/dev/null || fail "nft refused regalia.boot-nft"
     [ "$(nft list tables 2>/dev/null)" = "table inet regalia_boot" ] || fail "regalia.boot-nft made other tables than inet regalia_boot"
     ip link set "$BOOT_NIC" up

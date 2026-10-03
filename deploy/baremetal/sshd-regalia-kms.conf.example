@@ -1,6 +1,13 @@
 # Install as /etc/ssh/sshd_config.d/00-regalia-kms.conf on a bare-metal KMS host (#143; SSH.md).
 # sshd takes the FIRST value it reads for a keyword and Debian's sshd_config includes this directory
-# before anything else, so these win. Check the result on the host with: sshd -T
+# before anything else, so these win over later GLOBAL lines. Three things can still defeat them, and
+# none may be present: a drop-in that sorts before this one; a main sshd_config that has lost its
+# Include line (this file is then silently ignored); and a Match block, anywhere, that sets one of
+# these keywords (a Match block overrides the global value whatever the order).
+# Check the result on the host for the account and address a login would have, because plain
+# `sshd -T` prints the global values and does not evaluate Match:
+#     sshd -T -C user=<account>,addr=<an admin address>,host=<the admin machine's name>,laddr=<this host's address>,lport=22
+# (addr and host are the CLIENT's; laddr and lport are this host's, for Match LocalAddress and LocalPort)
 # tests/test_baremetal_ssh_trust.py runs a real sshd on this file (with the paths moved to a
 # temporary directory and, for want of a FIDO token, the two "sk-" algorithm lines widened).
 
@@ -19,13 +26,19 @@ AuthenticationMethods publickey
 # No authorized_keys: a key is accepted only inside a certificate the CA signed.
 AuthorizedKeysFile none
 AuthorizedKeysCommand none
+# One public key a line. TWO CA keys, on two tokens (SSH.md): a FIDO key cannot be copied, so a single
+# CA token lost would end every login within one certificate lifetime.
 TrustedUserCAKeys /etc/ssh/regalia-user-ca.pub
 # Which certificate principals may log in as which account: one file per account, one principal a line.
 # An account with no file accepts nobody.
 AuthorizedPrincipalsFile /etc/ssh/regalia-principals/%u
-# Only certificates are offered at all, and only for keys held in a FIDO token (touch, and the PIN
-# where the key was made with verify-required). A plain key is refused before it is looked at.
+# Only certificates are offered at all, and only for keys held in a FIDO token. A plain key is refused
+# before it is looked at.
 PubkeyAcceptedAlgorithms sk-ssh-ed25519-cert-v01@openssh.com
+# Touch AND the token's PIN for every login, required HERE. How the key was made (-O verify-required)
+# and what the certificate says (no-touch-required) do not decide it: without this line a certificate
+# carrying no-touch-required needs no touch, and a key made without verify-required needs no PIN.
+PubkeyAuthOptions touch-required verify-required
 # The CA key is a FIDO token key too: a certificate signed by a key in a file is not accepted.
 CASignatureAlgorithms sk-ssh-ed25519@openssh.com
 # Certificates revoked before they expire (ssh-keygen -k). The file MUST exist, empty if nothing is

@@ -148,13 +148,15 @@ no "other keys than the record's are refused" "is not the one the record names" 
 hdr "4  a software TPM measures the image; its own signatures open a secret in the right phase only"
 export TPM2TOOLS_TCTI="$D"
 # The sections as systemd-stub measures them, from the SIGNED image: "name-digest content-digest" per section.
-PYTHONPATH="$HERE" python3 -BPs - "$W/a/test-image.efi" > "$W/extends" <<'EOF'
+python3 -IB - "$HERE" "$W/a/test-image.efi" > "$W/extends" <<'EOF'
+import sys; sys.path.append(sys.argv.pop(1))
 import hashlib, sys
 from deploy.baremetal import uki
 for name, content in uki.measured(uki.read(sys.argv[1])).items():
     print(hashlib.sha256(b"." + name.encode() + b"\0").hexdigest(), hashlib.sha256(content).hexdigest())
 EOF
-PYTHONPATH="$HERE" python3 -BPs - "$W/a/test-image.efi" > "$W/pcrsig.json" <<'EOF'
+python3 -IB - "$HERE" "$W/a/test-image.efi" > "$W/pcrsig.json" <<'EOF'
+import sys; sys.path.append(sys.argv.pop(1))
 import sys
 from deploy.baremetal import uki
 sys.stdout.write(dict(uki.sections(uki.read(sys.argv[1])))[".pcrsig"].rstrip(b"\0").decode())
@@ -196,8 +198,10 @@ opens system && F "another image opened the system-phase secret" || P "another i
 
 hdr "5  the measurement set of this image for a host"
 printf '{"0": "%s", "7": "%s"}' "$(printf '00%.0s' $(seq 32))" "$(printf '77%.0s' $(seq 32))" > "$W/pcrs.json"
-uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" > "$W/set.json" 2>"$W/set.err"
-PYTHONPATH="$HERE" python3 -BPs - "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
+mkdir -p "$W/esp/loader/credentials"; printf 'test-node\n' > "$W/esp/loader/credentials/regalia.node-id.cred"
+uki set --record "$SIGNED" --label test-image --tpm-firmware-version 2019102300163636 --pcrs "$W/pcrs.json" --esp "$W/esp" > "$W/set.json" 2>"$W/set.err"
+python3 -IB - "$HERE" "$W/set.json" "$i11" "$s11" <<'EOF' && P "the set gives PCR 11 per phase from the record, and a measurement document accepts it" || F "the set: $(cat "$W/set.err" "$W/set.json")"
+import sys; sys.path.append(sys.argv.pop(1))
 import json, sys
 from deploy.baremetal import measurements
 entry = json.load(open(sys.argv[1]))
