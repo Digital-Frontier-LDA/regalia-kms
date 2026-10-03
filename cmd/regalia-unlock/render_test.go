@@ -403,3 +403,17 @@ func TestAChainTooFarAboveTheAnchorIsRefused(t *testing.T) {
 		t.Errorf("%v, %d files", err, len(f.writes))
 	}
 }
+
+// A render killed in an earlier start (the timeout, the OOM killer) leaves temporaries in the preserved
+// directory: the next start removes them and renders, rather than failing once per leftover (d9's read).
+func TestTemporariesOfAKilledStartDoNotBlockTheNext(t *testing.T) {
+	f := newFixture(t)
+	f.writes["/run/regalia-boot/.regalia.boot-nft.render-new"] = []byte("half")
+	f.writes["/run/regalia-boot/.regalia.unlock-config.render-new"] = []byte("half")
+	if _, err := render("/run/regalia-boot", f.env()); err != nil {
+		t.Fatalf("leftovers block the render: %v", err)
+	}
+	if len(f.writes) != 4 {
+		t.Errorf("after the render: %v", f.writes)
+	}
+}

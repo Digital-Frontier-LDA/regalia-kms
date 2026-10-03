@@ -225,10 +225,16 @@ func render(dir string, env renderEnv) (string, error) {
 
 // publish puts the four files into dir all together or not at all: each is written under a temporary name
 // first, and only when all four are written are they renamed onto their names. A failure removes what it
-// wrote, so dir never holds a mixed set (d9's read of #299).
+// wrote, so dir never holds a mixed set (d9's read of #299). A render killed in an earlier start leaves its
+// temporaries (the directory is preserved), so they are removed first. With a complete set already in dir,
+// a rename failing after the first would leave an incomplete set, never a mixed one: renames within one
+// tmpfs directory do not fail in practice, and the units that read dir Require= this one.
 func publish(env renderEnv, dir string, files map[string][]byte) error {
 	names := []string{"regalia.unlock-config", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"}
 	temporary := func(name string) string { return filepath.Join(dir, "."+name+".render-new") }
+	for _, name := range names {
+		env.remove(temporary(name)) // a killed earlier start's leftover; none is the usual case
+	}
 	var written, placed []string
 	undo := func() {
 		for _, path := range append(written, placed...) {
