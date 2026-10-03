@@ -845,42 +845,64 @@ def _journal_facts(journal, step, facts):
 def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):
     """Design step 4 of #190: regalia.unlock-local (the local contribution, made here) and regalia.wg-boot-key (the
     WG-BOOT private key init made) sealed to this TPM and the initrd key (approved_image), on the ESP in
-    loader/credentials. Returns {file: {"sha256", "size"}} of the two sealed files: the part of PCR 12 a peer
-    cannot render from the manifest and the site (espcreds.record). The WG-BOOT private key file is removed once
-    its sealed copy is published; the local contribution stays until the peers' paths are enrolled."""
+    loader/credentials. Returns {file: {"sha256", "size"}} of the two sealed files as read back off the ESP: the
+    part of PCR 12 a peer cannot render from the manifest and the site (espcreds.record).
+
+    THE CLEAR COPIES. The WG-BOOT private key file is removed once its sealed copy is published (or, after a
+    crash between the two, on the next run). The local contribution (local.bin) stays until the peers' LUKS
+    paths are enrolled (step "paths", which removes it): they need it, and its sealed copy opens only in the
+    initrd. If local.bin is gone before then, the sealed copy could never be paired with a path, so it is made
+    again and resealed: this enrolment's unlock-local.cred (by its journalled digest) is replaced, and the
+    returned record changes with it (no stranding)."""
     directory_esp = os.path.join(esp, "loader", "credentials")
+    local_path = os.path.join(directory, LOCAL_FILE)
+    unlock_file = SEALED[0][0] + espcreds.SUFFIX
+    if journal.state("local") == "done" and not os.path.lexists(local_path) and journal.state("paths") != "done":
+        target = os.path.join(directory_esp, unlock_file)
+        facts = {k: v for k, v in journal.get("seal").items() if k not in ("state", "at")}
+        recorded = (facts.get("files") or {}).get(unlock_file, {}).get("sha256") or facts.get(unlock_file)
+        if os.path.lexists(target):
+            with open(target, "rb") as f:
+                require(recorded is not None and hashlib.sha256(f.read(1 << 20)).hexdigest() == recorded,
+                        "%s is not the one this enrolment sealed, and local.bin is gone: remove it by hand" % target)
+            os.unlink(target)
+        journal.doc["steps"].pop("local")
+        kept = {k: v for k, v in facts.items() if k != "files" and not k.endswith(unlock_file)}
+        kept.update({f: v["sha256"] for f, v in (facts.get("files") or {}).items() if f != unlock_file})
+        _journal_facts(journal, "seal", kept)    # sealed again below, from a new contribution
     if journal.state("seal") == "done":
         files = journal.get("seal")["files"]
         for filename, fact in files.items():
             path = os.path.join(directory_esp, filename)
             with open(path, "rb") as f:
                 require(hashlib.sha256(f.read(1 << 20)).hexdigest() == fact["sha256"], "%s changed since this enrolment sealed it" % path)
-        boot_key = journal.get("wg_boot").get("path")
-        if boot_key and os.path.lexists(boot_key):
-            os.unlink(boot_key)          # sealed and published: the clear copy goes (a crash came between the two)
-        return files
-    _ensure_trusted_dir(directory_esp)
-    plain = {"local": local_contribution(journal, directory)}
-    boot_key = journal.get("wg_boot")["path"]
-    with open(boot_key, "rb") as f:
-        plain["wg_boot"] = f.read(4096)
-    require(WG_KEY.fullmatch(plain["wg_boot"].decode("ascii", "replace").strip()), "%s does not hold a WireGuard key" % boot_key)
-    if journal.state("seal") is None:
-        _journal_facts(journal, "seal", {})
-    for name, source in SEALED:
-        filename = name + espcreds.SUFFIX
-        if os.path.lexists(os.path.join(directory_esp, filename)):
-            _publish_esp(journal, "seal", directory_esp, filename, None)        # ours (journalled) is kept; anything else refused
-        else:
-            _publish_esp(journal, "seal", directory_esp, filename, _seal(name, plain[source], initrd_pub, run))
-    files = {}
-    for name, _ in SEALED:
-        filename = name + espcreds.SUFFIX
-        with open(os.path.join(directory_esp, filename), "rb") as f:
-            data = f.read(1 << 20)
-        files[filename] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
-    journal.done("seal", files=files)
-    os.unlink(boot_key)
+    else:
+        _ensure_trusted_dir(directory_esp)
+        if journal.state("seal") is None:
+            _journal_facts(journal, "seal", {})
+        boot_key = journal.get("wg_boot")["path"]
+        for name, source in SEALED:
+            filename = name + espcreds.SUFFIX
+            if os.path.lexists(os.path.join(directory_esp, filename)):
+                _publish_esp(journal, "seal", directory_esp, filename, None)    # ours (journalled) is kept; anything else refused
+                continue
+            if source == "local":
+                plain = local_contribution(journal, directory)
+            else:
+                with open(boot_key, "rb") as f:
+                    plain = f.read(4096)
+                require(WG_KEY.fullmatch(plain.decode("ascii", "replace").strip()), "%s does not hold a WireGuard key" % boot_key)
+            _publish_esp(journal, "seal", directory_esp, filename, _seal(name, plain, initrd_pub, run))
+        files = {}
+        for name, _ in SEALED:
+            filename = name + espcreds.SUFFIX
+            with open(os.path.join(directory_esp, filename), "rb") as f:
+                data = f.read(1 << 20)
+            files[filename] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+        journal.done("seal", files=files)
+    boot_key = journal.get("wg_boot").get("path")
+    if boot_key and os.path.lexists(boot_key):
+        os.unlink(boot_key)              # sealed and published: the clear copy goes
     return files
 
 
@@ -913,6 +935,8 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
         files = seal_credentials(journal, directory, boot["esp"], initrd_pub, run)
         print("SEALED to this TPM and the initrd key, on the ESP: %s" % ", ".join(
             "%s (sha256 %s, %d bytes)" % (f, v["sha256"][:16], v["size"]) for f, v in sorted(files.items())), file=out)
+        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled (not built "
+              "yet, #190); the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
     return epoch, digest
 
 

@@ -144,6 +144,37 @@ class Seal(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "this enrolment did not make it"):
             self.seal()
 
+    def test_a_lost_local_contribution_is_made_again_and_resealed(self):
+        """local.bin gone before the peers' paths use it: its sealed copy could never be paired with a path, so
+        the enrolment makes a new one and reseals it, replacing only its own unlock-local.cred (no stranding)."""
+        first = self.seal()
+        boot_before = self.on_esp("regalia.wg-boot-key")
+        os.unlink(os.path.join(self.dir, enrol.LOCAL_FILE))
+        run = FakeCreds()
+        files = self.seal(run)
+        self.assertEqual([c["argv"][2] for c in run.calls], ["--name=regalia.unlock-local"])
+        with open(os.path.join(self.dir, enrol.LOCAL_FILE), "rb") as f:
+            self.assertEqual(run.calls[0]["input"], f.read())
+        self.assertNotEqual(files["regalia.unlock-local.cred"], first["regalia.unlock-local.cred"])
+        self.assertEqual(files["regalia.wg-boot-key.cred"], first["regalia.wg-boot-key.cred"])
+        self.assertEqual(self.on_esp("regalia.wg-boot-key"), boot_before)
+        self.assertEqual(self.journal.get("seal")["files"], files)
+
+    def test_a_lost_local_contribution_with_a_foreign_sealed_file_is_refused(self):
+        self.seal()
+        os.unlink(os.path.join(self.dir, enrol.LOCAL_FILE))
+        with open(self.creds + "/regalia.unlock-local.cred", "wb") as f:
+            f.write(b"replaced by someone\n")
+        with self.assertRaisesRegex(enrol.Refused, "not the one this enrolment sealed"):
+            self.seal()
+        self.assertEqual(self.on_esp("regalia.unlock-local"), b"replaced by someone\n")
+
+    def test_a_clear_wg_boot_key_left_by_a_crash_is_removed_on_resume(self):
+        self.seal()
+        enrol._write_private(self.boot_key, (self.wg_private + "\n").encode())    # as if the unlink never ran
+        self.seal()
+        self.assertFalse(os.path.exists(self.boot_key))
+
     def test_a_changed_sealed_file_is_found_on_resume(self):
         self.seal()
         with open(self.creds + "/regalia.wg-boot-key.cred", "ab") as f:
