@@ -203,8 +203,9 @@ def unlock_initrd(change=None, drop=()):
              "usr/lib/regalia/wg-boot": (0o100755, mine("wg-boot")), "etc/marker": (0o100644, b"an initrd")}
     for unit in uki.UNLOCK_UNITS:
         files["usr/lib/systemd/system/" + unit] = (0o100644, mine(unit))
-    for link in uki.UNLOCK_ENABLED:
-        files[link] = (0o120777, ("/usr/lib/systemd/system/" + os.path.basename(link)).encode())
+    for link, target in uki.UNLOCK_ENABLED.items():
+        files[link] = (0o120777, target.encode())
+    files[uki.RELAY_DROPIN[0]] = (0o100644, uki.RELAY_DROPIN[1])
     files.update(change or {})
     return newc([(n, mode, data) for n, (mode, data) in sorted(files.items()) if n not in drop])
 
@@ -872,27 +873,39 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
 class InitrdReview(Case):
-    """#198: the initrd that is measured is read here, and opens the root disk only through the unlock client."""
+    """#198: the initrd that is measured is read here: everything systemd and udev would read is ours or on
+    the allowlist, and the root disk is opened only through the unlock client."""
 
-    def review(self, data):
-        return uki.review_initrd_data(data, run=subprocess.run)
+    def review(self, data, allow=()):
+        listed = self.write("allowlist.txt", "".join(line + "\n" for line in allow).encode())
+        return uki.review_initrd_data(data, run=subprocess.run, allowlist=listed)
 
-    def refused_by(self, data, *reasons):
-        review = self.review(data)
+    def refused_by(self, data, *reasons, allow=()):
+        review = self.review(data, allow)
         self.assertFalse(review["passed"], review)
         for reason in reasons:
             self.assertTrue(any(reason in f for f in review["findings"]), (reason, review["findings"]))
         return review
 
-    def test_the_module_s_initrd_passes_and_the_record_says_so(self):
-        review = self.review(unlock_initrd())
+    def passes(self, data, allow=()):
+        review = self.review(data, allow)
         self.assertTrue(review["passed"], review["findings"])
+        return review
+
+    def test_the_module_s_initrd_passes_and_the_record_says_so(self):
+        review = self.passes(unlock_initrd())
         self.assertEqual(review["crypttab"], "root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach")
         self.assertEqual(sorted(review["units"]), sorted(uki.UNLOCK_UNITS))
         record = self.build()
-        self.assertEqual(record["initrd_review"], review)
+        self.assertEqual(record["initrd_review"], uki.review_initrd_data(unlock_initrd()))
         uki.load_record(m.canonical(record), signed=False)
+        # the module's drop-ins are the bytes module-setup.sh writes
+        with open(os.path.join(INITRD, "dracut", "90regalia-unlock", "module-setup.sh")) as f:
+            setup = f.read()
+        for content in (uki.RELAY_DROPIN[1], uki.RESET_DROPIN[1]):
+            self.assertIn("printf '%s'" % content.decode().replace("\n", "\\n"), setup)
 
     def test_a_planted_rd_luks_word_is_refused(self):
         for word in ("rd.luks.uuid=0b1c", "rd.luks=0", "luks.options=tpm2-device=auto", "rd.luks.key=/key", "rd.break", "systemd.debug_shell"):
@@ -900,9 +913,11 @@ class InitrdReview(Case):
                 self.refused_by(unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, ("%s\n" % word).encode())}),
                                 "etc/cmdline.d/90-crypt.conf holds %r" % word)
         self.refused_by(unlock_initrd({"etc/cmdline": (0o100644, b"rd.luks.name=abc=root\n")}), "etc/cmdline holds")
-        # a word that turns a shell OFF is allowed, a commented line is not read, and another file name is not dracut's
-        self.assertTrue(self.review(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"# rd.luks.uuid=x\nrd.shell=0\n"),
-                                                   "etc/cmdline.d/notes.txt": (0o100644, b"rd.luks=1")}))["passed"])
+        # through a link to the directory, too
+        self.refused_by(unlock_initrd({"etc/cmdline.d": (0o120777, b"../usr/share/frag"), "usr/share/frag/x.conf": (0o100644, b"rd.luks.uuid=1\n")},
+                                      drop=("etc/cmdline.d/10-quiet.conf",)), "etc/cmdline.d/x.conf holds 'rd.luks.uuid=1'")
+        self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"# rd.luks.uuid=x\nrd.shell=0\n"),
+                                   "etc/cmdline.d/notes.txt": (0o100644, b"rd.luks=1")}))
 
     def test_the_crypttab_holds_the_one_generic_line_and_nothing_else(self):
         line = b"root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach\n"
@@ -914,46 +929,105 @@ class InitrdReview(Case):
                 ("a link out of the image", {"etc/crypttab": (0o120777, b"/sysroot/etc/crypttab")}, ())):
             with self.subTest(name):
                 self.refused_by(unlock_initrd(change, drop), "etc/crypttab must hold exactly the unlock client's line")
-        self.assertTrue(self.review(unlock_initrd({"etc/crypttab": (0o100644, b"# comment\n\n" + line)}))["passed"])
+        self.passes(unlock_initrd({"etc/crypttab": (0o100644, b"# comment\n\n" + line)}))
 
-    def test_the_unlock_units_are_this_repository_s_as_systemd_takes_them(self):
+    def test_our_units_are_this_repository_s_and_nothing_overrides_them(self):
         unit = "usr/lib/systemd/system/regalia-unlock.service"
-        self.refused_by(unlock_initrd(drop=(unit,)), "regalia-unlock.service is not in the image")
-        self.refused_by(unlock_initrd({unit: (0o100644, b"[Service]\nExecStart=/bin/sh\n")}), "regalia-unlock.service is not this repository's")
-        # an /etc copy wins over /usr/lib: a mask there is what systemd loads, and is refused
-        self.refused_by(unlock_initrd({"etc/systemd/system/regalia-unlock.service": (0o120777, b"/dev/null")}),
-                        "regalia-unlock.service is not this repository's (masked or a link")
+        self.refused_by(unlock_initrd(drop=(unit,)), unit + " is not in the image")
+        self.refused_by(unlock_initrd({unit: (0o100644, b"[Service]\nExecStart=/bin/sh\n")}), unit + " is not this repository's (other bytes)")
         with open(os.path.join(INITRD, "regalia-unlock.service"), "rb") as f:
             same = f.read()
-        self.assertTrue(self.review(unlock_initrd({"etc/systemd/system/regalia-unlock.service": (0o100644, same)}))["passed"])
+        hostile = (0o100644, b"[Service]\nExecStart=\nExecStart=/usr/bin/sh -c 'cat /etc/marker'\n")
+        # d9's reproductions: a copy, a mask or an override in EVERY directory systemd reads, including the
+        # ones that outrank /etc (system.control) and the ones listed after it
+        for where in ("etc/systemd/system.control/regalia-unlock.service", "etc/systemd/system.attached/regalia-unlock.service",
+                      "usr/local/lib/systemd/system/regalia-unlock.service", "etc/systemd/system/regalia-unlock.service",
+                      "run/systemd/system/regalia-unlock.service"):
+            with self.subTest(where):
+                self.refused_by(unlock_initrd({where: hostile}), where + " is not on the initrd's allowlist")
+                self.refused_by(unlock_initrd({where: (0o100644, same)}), where + " is not on the initrd's allowlist")
+        self.refused_by(unlock_initrd({"etc/systemd/system/regalia-unlock.service": (0o120777, b"/dev/null")}),
+                        "etc/systemd/system/regalia-unlock.service is not on the initrd's allowlist (a link to /dev/null)")
         self.refused_by(unlock_initrd(drop=("usr/bin/regalia-unlock",)), "usr/bin/regalia-unlock, the unlock client, is not in the image")
         self.refused_by(unlock_initrd({"usr/lib/regalia/wg-boot": (0o100755, b"#!/bin/sh\nexit 0\n")}), "usr/lib/regalia/wg-boot is not this repository's")
-        self.refused_by(unlock_initrd(drop=(uki.UNLOCK_ENABLED[0],)), "regalia-unlock-core.socket is not enabled")
+        link = "etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket"
+        self.refused_by(unlock_initrd(drop=(link,)), link + " is not in the image")
+        self.refused_by(unlock_initrd({link: (0o120777, b"/usr/lib/systemd/system/evil.socket"), "usr/lib/systemd/system/evil.socket": (0o100644, b"")}),
+                        link + " is not this repository's (a link to /usr/lib/systemd/system/evil.socket)")
 
-    def test_nothing_from_outside_the_image_is_sourced_executed_or_read(self):
+    def test_every_drop_in_of_the_unlock_path_is_pinned_by_its_bytes(self):
+        hostile = (0o100644, b"[Service]\nExecStart=\nExecStart=/usr/bin/sh -c 'echo key'\n")
+        for where in ("usr/lib/systemd/system/regalia-unlock.service.d/z.conf", "etc/systemd/system/regalia-unlock.service.d/z.conf",
+                      "etc/systemd/system/regalia-.service.d/z.conf", "etc/systemd/system/regalia-unlock-.service.d/z.conf",
+                      "etc/systemd/system/systemd-cryptsetup@root.service.d/z.conf", "etc/systemd/system/systemd-cryptsetup@.service.d/z.conf",
+                      "usr/lib/systemd/system/service.d/z.conf", "etc/systemd/system/socket.d/z.conf", "etc/systemd/system/cryptsetup.target.d/z.conf",
+                      "etc/systemd/system/initrd-switch-root.target.d/z.conf", "etc/systemd/system.control/regalia-unlock.service.d/z.conf"):
+            with self.subTest(where):
+                self.refused_by(unlock_initrd({where: hostile}), where + " is not on the initrd's allowlist")
+                # listed by path alone it is still refused: a drop-in of the unlock path needs its sha256
+                self.refused_by(unlock_initrd({where: hostile}), "the allowlist names it without its sha256", allow=[where])
+        # a drop-in for an unrelated unit, listed by path, passes; listed with other bytes, it does not
+        other = "usr/lib/systemd/system/systemd-journald.service.d/x.conf"
+        self.passes(unlock_initrd({other: (0o100644, b"[Service]\n")}), allow=[other])
+        self.refused_by(unlock_initrd({other: (0o100644, b"[Service]\n")}), other + " is on the allowlist with other bytes",
+                        allow=[other + " sha256:" + "0" * 64])
+        # the module's credential reset passes on a unit the image holds, and not with other bytes
+        journald = "usr/lib/systemd/system/systemd-journald.service"
+        reset = journald + ".d/" + uki.RESET_DROPIN[0]
+        self.passes(unlock_initrd({journald: (0o100644, b"[Service]\n"), reset: (0o100644, uki.RESET_DROPIN[1])}), allow=[journald])
+        self.refused_by(unlock_initrd({journald: (0o100644, b"[Service]\n"), reset: (0o100644, b"[Service]\nExecStart=/bin/sh\n")}),
+                        reset + " is not the module's credential reset", allow=[journald])
+
+    def test_nothing_unlisted_runs_generators_rules_and_manager_configuration_included(self):
+        for where in ("usr/lib/systemd/system-generators/zz", "etc/systemd/system-generators/zz", "usr/lib/systemd/system-environment-generators/zz",
+                      "usr/lib/udev/rules.d/99-x.rules", "etc/udev/rules.d/99-x.rules", "etc/systemd/system.conf",
+                      "usr/lib/systemd/system.conf.d/x.conf", "usr/lib/systemd/system/evil.service",
+                      "etc/systemd/system/multi-user.target.wants/evil.service"):
+            with self.subTest(where):
+                self.refused_by(unlock_initrd({where: (0o100755, b"#!/bin/sh\n")}), where + " is not on the initrd's allowlist")
+        gen = "usr/lib/systemd/system-generators/systemd-fstab-generator"
+        review = self.passes(unlock_initrd({gen: (0o100755, b"\x7fELF gen")}), allow=[gen])
+        self.assertEqual(review["generators"], {gen: hashlib.sha256(b"\x7fELF gen").hexdigest()})
+
+    def test_links_are_followed_inside_the_image_and_a_redirected_directory_is_refused(self):
+        hostile = (0o100644, b"[Service]\nExecStart=/usr/bin/sh\n")
+        # d9: etc/systemd/system made a link to a directory with a hostile unit in it
+        self.refused_by(unlock_initrd({"etc/systemd/system": (0o120777, b"../../usr/lib/evil"), "usr/lib/evil/regalia-unlock.service": hostile},
+                                      drop=tuple(uki.UNLOCK_ENABLED)), "etc/systemd/system is not on the initrd's allowlist (a link to",
+                        "etc/systemd/system/regalia-unlock.service is not on the initrd's allowlist")
+        # a link that loops, and one to a file the image does not hold
+        self.refused_by(unlock_initrd({"usr/lib/udev/rules.d/a.rules": (0o120777, b"b.rules"), "usr/lib/udev/rules.d/b.rules": (0o120777, b"a.rules")}),
+                        "usr/lib/udev/rules.d/a.rules: a link loop")
+        self.refused_by(unlock_initrd({"usr/lib/udev/rules.d/c.rules": (0o120777, b"/sysroot/etc/udev/c.rules")}),
+                        "usr/lib/udev/rules.d/c.rules: a link to /sysroot/etc/udev/c.rules, which is not in the image")
+        # ".." in a name stays in the image (the kernel unpacks it under /)
+        self.refused_by(unlock_initrd({"../../etc/systemd/system/x.service": hostile}), "etc/systemd/system/x.service is not on the initrd's allowlist")
+
+    def test_a_listed_drop_in_still_names_nothing_outside_the_image(self):
         dropin = "etc/systemd/system/regalia-wg-boot.service.d/50-extra.conf"
-        pre = {dropin: (0o100644, b"[Service]\nExecStartPre=/usr/lib/regalia/pre\n")}
-        # a script that sources /etc (not in the image: on a booted host that is the root disk's)
-        self.refused_by(unlock_initrd(dict(pre, **{"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\n. /etc/regalia/boot.env\nexit 0\n")})),
-                                 "usr/lib/regalia/pre:2 sources /etc/regalia/boot.env, which is not a file of the image")
-        self.refused_by(unlock_initrd(dict(pre, **{"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\nsource \"$CONF\"\n")})),
-                        "sources \"$CONF\", which is not a file of the image")
-        self.refused_by(unlock_initrd(dict(pre, **{"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\ncat /sysroot/etc/regalia/key > /run/k\n")})),
-                        "usr/lib/regalia/pre:2 names /sysroot/etc/regalia/key, which is not in the image")
-        # ... the same script sourcing a file the image holds, and using /run and /dev, passes
-        self.assertTrue(self.review(unlock_initrd(dict(pre, **{"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\n. /etc/marker\necho x > /run/x 2>/dev/null\n")})))["passed"])
-        # a drop-in that reads a file from outside, executes one, or loads a credential from anywhere but the stub's directory
+
+        def listed(text, extra=None):
+            body = b"[Service]\n" + text + b"\n"
+            files = {dropin: (0o100644, body)}
+            files.update(extra or {})
+            return unlock_initrd(files), [dropin + " sha256:" + hashlib.sha256(body).hexdigest()]
+        data, allow = listed(b"ExecStartPre=/usr/lib/regalia/pre", {"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\n. /etc/regalia/boot.env\nexit 0\n")})
+        self.refused_by(data, "usr/lib/regalia/pre:2 sources /etc/regalia/boot.env, which is not a file of the image", allow=allow)
+        data, allow = listed(b"ExecStartPre=/usr/lib/regalia/pre", {"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\nsource \"$CONF\"\n")})
+        self.refused_by(data, "sources \"$CONF\", which is not a file of the image", allow=allow)
+        data, allow = listed(b"ExecStartPre=/usr/lib/regalia/pre", {"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\ncat /sysroot/etc/regalia/key > /run/k\n")})
+        self.refused_by(data, "usr/lib/regalia/pre:2 names /sysroot/etc/regalia/key, which is not in the image", allow=allow)
+        data, allow = listed(b"ExecStartPre=/usr/lib/regalia/pre", {"usr/lib/regalia/pre": (0o100755, b"#!/bin/sh\n. /etc/marker\necho x > /run/x 2>/dev/null\n")})
+        self.passes(data, allow=allow)
         for line, reason in ((b"EnvironmentFile=-/sysroot/etc/default/regalia", "EnvironmentFile names /sysroot/etc/default/regalia"),
                              (b"ExecStartPre=/sysroot/usr/bin/tool", "ExecStartPre names /sysroot/usr/bin/tool"),
                              (b"LoadCredential=k:/boot/efi/k.cred", "LoadCredential names /boot/efi/k.cred"),
                              (b"LoadCredential=k:/.extra/global_credentials/../k.cred", "LoadCredential names /.extra/global_credentials/../k.cred")):
             with self.subTest(line):
-                self.refused_by(unlock_initrd({dropin: (0o100644, b"[Service]\n" + line + b"\n")}), reason)
-        self.assertTrue(self.review(unlock_initrd({dropin: (0o100644, b"[Service]\nLoadCredential=k:/.extra/global_credentials/regalia.k.cred\n")}))["passed"])
-        # drop-ins for every service, and systemd-cryptsetup's, count too
-        for where in ("usr/lib/systemd/system/service.d/10-env.conf", "etc/systemd/system/systemd-cryptsetup@.service.d/key.conf"):
-            with self.subTest(where):
-                self.refused_by(unlock_initrd({where: (0o100644, b"[Service]\nEnvironmentFile=/var/lib/x\n")}), where + ": EnvironmentFile names /var/lib/x")
+                data, allow = listed(line)
+                self.refused_by(data, reason, allow=allow)
+        data, allow = listed(b"LoadCredential=k:/.extra/global_credentials/regalia.k.cred")
+        self.passes(data, allow=allow)
 
     def test_compressed_and_concatenated_initrds_are_read_as_the_kernel_reads_them(self):
         import gzip
@@ -961,28 +1035,46 @@ class InitrdReview(Case):
         main = unlock_initrd()
         early = newc([("kernel/x86/microcode/GenuineIntel.bin", 0o100644, b"ucode")])
         for name, data in (("gzip", gzip.compress(main)), ("xz", lzma.compress(main, format=lzma.FORMAT_XZ, check=lzma.CHECK_CRC32)),
-                           ("early, padding, then gzip", early + b"\0" * 512 + gzip.compress(main))):
+                           ("early, padding, then gzip", early + b"\0" * 512 + gzip.compress(main)),
+                           ("gzip, then padding", gzip.compress(main) + b"\0" * 4096)):
             with self.subTest(name):
-                self.assertTrue(self.review(data)["passed"])
-        # a later archive replaces an earlier one's file, as the kernel unpacks them
+                self.passes(data)
+        # the kernel goes on after a compressed stream: an archive appended after it is read, and replaces
         late = newc([("etc/crypttab", 0o100644, b"root /dev/sda3 none luks\n")])
-        self.refused_by(main + late, "etc/crypttab must hold exactly")
+        for name, data in (("cpio after cpio", main + late), ("cpio after gzip", gzip.compress(main) + late),
+                           ("gzip after gzip", gzip.compress(main) + gzip.compress(late)),
+                           ("padding then cpio after xz", lzma.compress(main, format=lzma.FORMAT_XZ) + b"\0" * 8 + late)):
+            with self.subTest(name):
+                self.refused_by(data, "etc/crypttab must hold exactly")
         if shutil.which("zstd"):
             zst = subprocess.run(["zstd", "-q", "-c"], input=main, capture_output=True, check=True).stdout
-            self.assertTrue(self.review(zst)["passed"])
-        for data, reason in ((b"not an initrd at all", "the initrd cannot be read: the initrd is neither a cpio archive"),
-                             (main[:300], "the initrd cannot be read: the initrd's cpio archive is cut short"),
-                             (gzip.compress(gzip.compress(main)), "nests one compressed stream in another")):
+            self.passes(zst)
+        for data, reason in ((b"not an initrd at all", "neither a cpio archive, padding, nor a compression"),
+                             (main[:300], "a cpio archive in the initrd is cut short"),
+                             (gzip.compress(main)[:-40], "ends before its end marker"),
+                             (gzip.compress(main) + b"trailing", "at byte"),
+                             (b"\x1f\x8b\x08\x00garbage", "cannot be read"),
+                             (gzip.compress(gzip.compress(main)), "holds another compressed stream")):
             with self.subTest(reason):
-                self.refused_by(data, reason)
+                self.refused_by(data, "the initrd cannot be read", reason)
+
+    def test_the_inventory_gives_the_lines_the_allowlist_needs(self):
+        gen, dropin, unit = "usr/lib/systemd/system-generators/g", "usr/lib/systemd/system/service.d/10.conf", "usr/lib/systemd/system/a.service"
+        data = unlock_initrd({gen: (0o100755, b"g"), dropin: (0o100644, b"[Service]\n"), unit: (0o100644, b"[Unit]\n"),
+                              "etc/systemd/system/multi-user.target.wants/a.service": (0o120777, b"/usr/lib/systemd/system/a.service")})
+        lines = uki.initrd_inventory_lines(data)
+        self.assertEqual(lines, sorted(lines))
+        self.assertIn(gen, lines)
+        self.assertIn(unit, lines)
+        self.assertIn(dropin + " sha256:" + hashlib.sha256(b"[Service]\n").hexdigest(), lines)
+        self.assertIn("etc/systemd/system/multi-user.target.wants/a.service -> /usr/lib/systemd/system/a.service", lines)
+        self.passes(data, allow=lines)
 
     def test_sign_refuses_an_image_whose_initrd_did_not_pass(self):
         bad = self.write("initrd-bad", unlock_initrd({"etc/cmdline.d/90-crypt.conf": (0o100644, b"rd.luks.uuid=1\n")}))
         record = self.build(inputs={"initrd": bad})
         self.assertFalse(record["initrd_review"]["passed"])
         self.refused("the record's initrd review did not pass, so nothing is signed", self.sign, record=record, inputs=dict(self.inputs, initrd=bad))
-        # a record edited to say it passed: the shape check refuses it if it keeps its findings, and the signing
-        # machine's own review refuses it if they are removed
         forged = json.loads(json.dumps(record))
         forged["initrd_review"]["passed"] = True
         self.refused("says passed only with no finding", self.sign, record=forged, inputs=dict(self.inputs, initrd=bad))

@@ -9,6 +9,8 @@ record of what it will measure, and signed in a separate step by keys that are o
     python3 -Es -m deploy.baremetal.uki verify  --image IMAGE --record RECORD --initrd-pub P --system-pub P --secure-boot-cert C
     python3 -Es -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
                                             --esp ROOT [--credentials-record OUT]
+    python3 -Es -m deploy.baremetal.uki initrd-review --initrd INITRD          (the review build records, #198)
+    python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD       (the allowlist lines it would need)
 
     INPUTS: --linux VMLINUZ --initrd INITRD [--microcode FILE] --cmdline FILE --os-release FILE
             --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub
@@ -275,32 +277,64 @@ def cmdline_text(raw):
 
 # ---- the initrd's review (#198): what the measured initrd does to open the root disk ----
 #
-# The image's initrd carries its own crypttab, command-line fragments and units, and once a host has
-# booted nothing on it shows what they were (#135). So they are read HERE, from the exact bytes that are
+# The image's initrd carries its own crypttab, command-line fragments, units and generators, and once a host
+# has booted nothing on it shows what they were (#135). So they are read HERE, from the exact bytes that are
 # measured, and the result goes into the record; `sign` refuses an image whose initrd did not pass.
-# The rules (KERNEL-UPDATE.md step 2.2a), each a refusal with its reason:
-#   crypttab   etc/crypttab holds exactly the one generic line of the dracut module (the unlock client's
-#              socket, the partition by its label), and nothing else
-#   cmdline.d  no fragment (etc/cmdline.d/*.conf, etc/cmdline) holds a word of the command line's refusal
-#              list: rd.luks* in any form, a debug shell, another target
-#   the units  the unlock client's units and the boot mesh script are THIS repository's, byte for byte, as
-#              systemd will take them (an /etc copy, a mask, wins over /usr/lib and is what is compared);
-#              the client binary is there; the relay and the core socket are enabled
-#   the image  the unlock path (those units, every drop-in that applies to them or to systemd-cryptsetup,
-#              and every script they run) names no path outside the image: what it sources, executes or
-#              reads is in the initrd, a runtime or kernel directory (/run, /proc, /sys, /dev, /tmp), or a
-#              credential the stub unpacked from the ESP by its fixed name (/.extra/global_credentials/
-#              NAME.cred, measured into PCR 12). Nothing from the root disk, nothing from the build machine.
-# What it does NOT judge: the rest of dracut's own initrd (its hooks and systemd's units), which no rule
-# here names. A review catches what it names (#198, "not covered").
-INITRD_REVIEW = "regalia.initrd-review/v1"
+#
+# AN ALLOWLIST, NOT A LIST OF WHAT IS BAD. Everything systemd and udev read in the initrd to decide what
+# runs (units, drop-ins, .wants/.requires links, generators, environment generators, udev rules, the
+# manager's own configuration), in every directory they read it from, must be on the list:
+#   OURS        the unlock client's units, its enable links and the module's two drop-ins, pinned to this
+#               repository's bytes (or link target)
+#   the list    deploy/baremetal/initrd/initrd-allowlist.txt: the distribution's files, taken from the
+#               reviewed dracut build (`uki initrd-inventory`); a path alone, a path and its sha256, or a
+#               link and its target. A file that is not on it is refused, whatever it says.
+# A drop-in that applies to a unit of the unlock path (our units, systemd-cryptsetup@, cryptsetup.target,
+# sockets.target, the initrd targets: per unit, every dash prefix, the template, the type-wide service.d,
+# socket.d, target.d) must be pinned by content: ours, or on the list WITH its sha256. So an ExecStart=
+# override anywhere systemd would read it is refused by its bytes, not looked for by its words.
+# Links are followed inside the archive only (a name is taken under "/", so ".." cannot leave it); a loop,
+# or a link whose target is not in the image (other than a mask, /dev/null), is a finding.
+# And beside the list (KERNEL-UPDATE.md step 2.2a):
+#   crypttab    etc/crypttab holds exactly the one generic line of the dracut module
+#   cmdline.d   no fragment (etc/cmdline.d/*.conf, etc/cmdline) holds a word of the command line's refusal list
+#   the client  /usr/bin/regalia-unlock is there; the boot mesh script is this repository's
+#   paths       the unlock units and every script they run name no path outside the image: what they
+#               source, execute or read is in the initrd, a runtime or kernel directory, or a credential
+#               the stub unpacked from the ESP by its fixed name (/.extra/global_credentials/NAME.cred)
+# What it does NOT judge: the content of the distribution's files the list names by path alone (dracut's
+# hooks, systemd's own units), which come from the build machine's packages. A review catches what it names.
+INITRD_REVIEW = "regalia.initrd-review/v2"
 INITRD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initrd")
+ALLOWLIST = os.path.join(INITRD_DIR, "initrd-allowlist.txt")
+UNIT_DIR = "usr/lib/systemd/system"
 UNLOCK_UNITS = ("regalia-unlock-relay.service", "regalia-unlock-core.socket", "regalia-unlock.service", "regalia-wg-boot.service")
 UNLOCK_SCRIPTS = {"usr/lib/regalia/wg-boot": "wg-boot"}
 UNLOCK_BINARIES = ("usr/bin/regalia-unlock",)
-UNLOCK_ENABLED = ("etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket",
-                  "etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service")
-UNIT_DIRS = ("etc/systemd/system", "run/systemd/system", "usr/lib/systemd/system")      # systemd's precedence
+UNLOCK_ENABLED = {"etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket": "/usr/lib/systemd/system/regalia-unlock-core.socket",
+                  "etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service": "/usr/lib/systemd/system/regalia-unlock-relay.service"}
+# the module's drop-ins (module-setup.sh writes exactly these bytes): the relay ordering for
+# systemd-cryptsetup, and the credential reset on every unit that takes credentials by name
+RELAY_DROPIN = (UNIT_DIR + "/systemd-cryptsetup@.service.d/50-regalia-relay.conf",
+                b"[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n")
+RESET_DROPIN = ("99-regalia-no-credentials.conf", b"[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n")
+# Where systemd 257 and udev read what they run, in the initrd (systemd.unit(5) "System Unit Search Path",
+# systemd.generator(7), systemd.environment-generator(7), udev(7), systemd-system.conf(5)). /lib is
+# /usr/lib on a merged-/usr image, and is read through its link.
+SEARCH_DIRS = (
+    "etc/systemd/system.control", "run/systemd/system.control", "run/systemd/transient", "run/systemd/generator.early",
+    "etc/systemd/system", "etc/systemd/system.attached", "run/systemd/system", "run/systemd/system.attached",
+    "run/systemd/generator", "usr/local/lib/systemd/system", "usr/lib/systemd/system", "run/systemd/generator.late",
+    "etc/systemd/system-generators", "run/systemd/system-generators", "usr/local/lib/systemd/system-generators",
+    "usr/lib/systemd/system-generators",
+    "etc/systemd/system-environment-generators", "run/systemd/system-environment-generators",
+    "usr/local/lib/systemd/system-environment-generators", "usr/lib/systemd/system-environment-generators",
+    "etc/udev/rules.d", "run/udev/rules.d", "usr/local/lib/udev/rules.d", "usr/lib/udev/rules.d",
+    "etc/systemd/system.conf.d", "run/systemd/system.conf.d", "usr/local/lib/systemd/system.conf.d", "usr/lib/systemd/system.conf.d")
+SEARCH_FILES = ("etc/systemd/system.conf",)
+GENERATOR_DIRS = tuple(d for d in SEARCH_DIRS if d.endswith("generators"))
+# the units whose drop-ins must be pinned by content
+CRITICAL = re.compile(r"(regalia-.*|systemd-cryptsetup@.*\.service|cryptsetup(-pre)?\.target|sockets\.target|initrd.*\.target)")
 RUNTIME_PREFIXES = ("/run", "/proc", "/sys", "/dev", "/tmp")
 STUB_CREDENTIAL = r"/\.extra/global_credentials/[A-Za-z0-9._-]+\.cred"
 # a path in a unit's value or a script's line: after a start, a separator or a unit's exec prefix (-@:+!)
@@ -309,22 +343,34 @@ MAX_INITRD_FILES, MAX_UNPACKED = 200000, 2 * 1024 * 1024 * 1024
 TOOLS.update({"zstd": "zstd", "lz4": "lz4"})
 
 
-def _cpio(data, files):
-    """Reads ONE newc archive at the start of `data` into `files` ({path: (mode, bytes)}, a link's bytes its
-    target); returns how many bytes it used. Hard links carry their data on the last name (newc)."""
-    pos, links = 0, {}
+def stat_regular(mode):
+    return mode & 0o170000 == 0o100000
+
+
+def stat_link(mode):
+    return mode & 0o170000 == 0o120000
+
+
+def stat_dir(mode):
+    return mode & 0o170000 == 0o040000
+
+
+def _cpio(data, pos, files):
+    """Reads ONE newc archive at `pos` into `files` ({path: (mode, bytes)}, a link's bytes its target); returns
+    where it ends. Hard links carry their data on the last name (newc). A name is taken under "/", normalised."""
+    links = {}
     while True:
         head = data[pos:pos + 110]
-        require(len(head) == 110 and head[:6] in (b"070701", b"070702"), "the initrd's cpio archive is cut short or not newc")
+        require(len(head) == 110 and head[:6] in (b"070701", b"070702"), "a cpio archive in the initrd is cut short or not newc")
         try:
             ino, mode, _, _, nlink, _, size, major, minor, _, _, namesize, _ = (int(head[i:i + 8], 16) for i in range(6, 110, 8))
         except ValueError:
-            raise Refused("the initrd's cpio archive has a header that is not hexadecimal")
+            raise Refused("a cpio header in the initrd is not hexadecimal")
         name_end = pos + 110 + namesize
-        name = data[pos + 110:name_end - 1].decode("utf-8", "replace")
         start = (name_end + 3) & ~3
         body = data[start:start + size]
-        require(len(body) == size and namesize >= 1, "the initrd's cpio archive is cut short")
+        require(namesize >= 1 and len(body) == size and name_end <= len(data), "a cpio archive in the initrd is cut short")
+        name = data[pos + 110:name_end - 1].decode("utf-8", "replace")
         pos = (start + size + 3) & ~3
         if name == "TRAILER!!!":
             return pos
@@ -342,68 +388,96 @@ def _cpio(data, files):
         require(len(files) <= MAX_INITRD_FILES, "the initrd holds more than %d files" % MAX_INITRD_FILES)
 
 
-def stat_regular(mode):
-    return mode & 0o170000 == 0o100000
-
-
-def stat_link(mode):
-    return mode & 0o170000 == 0o120000
-
-
-def _decompress(data, run, tools):
-    import gzip
+def _stream(data, run, tools):
+    """One compressed stream at the start of `data`: (what it decompresses to, what follows it). gzip and xz
+    in Python, bounded while they run; zstd and lz4 through the tool, which takes the rest whole."""
     import lzma
-    if data[:2] == b"\x1f\x8b":
-        out = gzip.decompress(data)
-    elif data[:6] == b"\xfd7zXZ\x00":
-        out = lzma.decompress(data)
-    elif data[:4] in (b"\x28\xb5\x2f\xfd", b"\x02\x21\x4c\x18"):
-        tool = "zstd" if data[:4] == b"\x28\xb5\x2f\xfd" else "lz4"
-        out = _run(run, [tools[tool], "-dc"], "decompressing the initrd (%s)" % tool, input=data, env=_clean_env())
-    else:
-        raise Refused("the initrd is neither a cpio archive nor compressed in a way this tool reads (gzip, xz, zstd, lz4)")
-    require(len(out) <= MAX_UNPACKED, "the initrd unpacks to more than %d bytes" % MAX_UNPACKED)
-    return out
+    import zlib
+    try:
+        if data[:2] == b"\x1f\x8b" or data[:6] == b"\xfd7zXZ\x00":
+            d = zlib.decompressobj(wbits=31) if data[:2] == b"\x1f\x8b" else lzma.LZMADecompressor(format=lzma.FORMAT_XZ)
+            out, chunk = bytearray(), data
+            while True:
+                out += d.decompress(chunk, MAX_UNPACKED + 1 - len(out)) if not isinstance(d, lzma.LZMADecompressor) else \
+                    d.decompress(chunk, max_length=MAX_UNPACKED + 1 - len(out))
+                require(len(out) <= MAX_UNPACKED, "the initrd unpacks to more than %d bytes" % MAX_UNPACKED)
+                done = d.eof
+                if done:
+                    return bytes(out), d.unused_data
+                chunk = d.unconsumed_tail if hasattr(d, "unconsumed_tail") else b""
+                if not chunk and not (isinstance(d, lzma.LZMADecompressor) and not d.needs_input):
+                    raise Refused("a compressed stream in the initrd ends before its end marker")
+        if data[:4] in (b"\x28\xb5\x2f\xfd", b"\x02\x21\x4c\x18"):
+            tool = "zstd" if data[:4] == b"\x28\xb5\x2f\xfd" else "lz4"
+            out = _run(run, [tools[tool], "-dc"], "decompressing the initrd (%s)" % tool, input=data, env=_clean_env())
+            require(len(out) <= MAX_UNPACKED, "the initrd unpacks to more than %d bytes" % MAX_UNPACKED)
+            return out, b""
+    except (zlib.error, lzma.LZMAError, EOFError, ValueError) as error:
+        raise Refused("a compressed stream in the initrd cannot be read: %s" % error)
+    raise Refused("the initrd holds data at byte %d that is neither a cpio archive, padding, nor a compression this tool "
+                  "reads (gzip, xz, zstd, lz4)" % 0)
 
 
 def initrd_files(data, run=subprocess.run, tools=TOOLS, depth=0):
-    """Every file of an initrd as the kernel unpacks it: one or more cpio archives one after the other (an
-    uncompressed early one, microcode, then the main one, usually compressed), NUL padding between them, a
-    later archive's file replacing an earlier one's. Read in memory only, nothing is written: a name is
-    taken under the image's root ("/" + name, normalised, so ".." cannot leave it), and a link is followed
-    only inside the image (_resolve)."""
+    """Every file of an initrd as the kernel unpacks it (init/initramfs.c): cpio archives and compressed
+    streams one after another, NUL padding between them, to the end; a later file replaces an earlier one.
+    A compressed stream holds cpio archives (and padding) only. Read in memory, nothing is written."""
     files, pos = {}, 0
     while pos < len(data):
         if data[pos] == 0:
             pos += 1
             continue
         if data[pos:pos + 6] in (b"070701", b"070702"):
-            pos += _cpio(data[pos:], files)
+            pos = _cpio(data, pos, files)
             continue
-        # the rest is one compressed stream holding the main archive(s); nothing follows it
-        require(depth == 0, "the initrd nests one compressed stream in another")
-        files.update(initrd_files(_decompress(data[pos:], run, tools), run, tools, depth + 1))
-        break
+        require(depth == 0, "a compressed stream in the initrd holds another compressed stream")
+        try:
+            inner, rest = _stream(data[pos:], run, tools)
+        except Refused as refused:
+            raise Refused(str(refused).replace("at byte 0", "at byte %d" % pos))
+        files.update(initrd_files(inner, run, tools, depth + 1))
+        data, pos = rest, 0
     return files
 
 
 def _resolve(files, path, depth=0):
     """`path` (relative to the image's root) with every link in it followed inside the image; None when it is
-    not in the image."""
-    require(depth < 40, "a link loop in the initrd")
+    not in the image. A loop is a refusal."""
+    require(depth < 40, "a link loop in the initrd at %s" % path)
     parts, done = [p for p in path.strip("/").split("/") if p not in ("", ".")], ""
     for i, part in enumerate(parts):
-        here = os.path.normpath(os.path.join(done, part)) if part != ".." else os.path.dirname(done)
+        here = os.path.dirname(done) if part == ".." else (done + "/" + part).lstrip("/")
         entry = files.get(here)
         if entry is not None and stat_link(entry[0]):
             target = entry[1].decode("utf-8", "replace")
             base = "" if target.startswith("/") else os.path.dirname(here)
-            rest = "/".join([os.path.join(base, target).lstrip("/")] + parts[i + 1:])
+            rest = "/".join([(base + "/" + target).lstrip("/")] + parts[i + 1:])
             return _resolve(files, os.path.normpath("/" + rest).lstrip("/"), depth + 1)
-        if entry is None and not any(k.startswith(here + "/") for k in files):
+        if entry is None and here not in _directories(files):
             return None
         done = here
     return done
+
+
+def _directories(files):
+    """The directories the image holds, listed or implied by a file under them (cached on the dict)."""
+    cached = getattr(files, "_dirs", None)
+    if cached is None or len(files) != getattr(files, "_dirs_for", -1):
+        cached = set()
+        for path, (mode, _) in files.items():
+            if stat_dir(mode):
+                cached.add(path)
+            parent = os.path.dirname(path)
+            while parent and parent not in cached:
+                cached.add(parent)
+                parent = os.path.dirname(parent)
+        if isinstance(files, _Files):
+            files._dirs, files._dirs_for = cached, len(files)
+    return cached
+
+
+class _Files(dict):
+    """The image's files, with the directory index _directories caches."""
 
 
 def _regular(files, path):
@@ -412,12 +486,100 @@ def _regular(files, path):
     return entry[1] if entry is not None and stat_regular(entry[0]) else None
 
 
-def _effective_unit(files, name):
-    """The unit file systemd will load for `name`: the first directory in its precedence that has it."""
-    for directory in UNIT_DIRS:
-        if os.path.join(directory, name) in files:
-            return os.path.join(directory, name)
-    return None
+def inventory(files):
+    """What systemd and udev would read, as {logical path: ("file", sha256) | ("link", target) | ("dir", None)},
+    walking every search directory through the links that lead to it."""
+    children = {}
+    for path in set(files) | _directories(files):
+        children.setdefault(os.path.dirname(path), set()).add(os.path.basename(path))
+    found, findings, walked = {}, [], set()
+
+    def walk(logical, real, depth):
+        if real in walked or depth > 8:
+            return
+        walked.add(real)
+        for name in sorted(children.get(real, ())):
+            here, entry = logical + "/" + name, files.get(real + "/" + name, (0o040000, b""))   # implied: a directory
+            if stat_dir(entry[0]):
+                walk(here, real + "/" + name, depth + 1)
+            elif stat_link(entry[0]):
+                target = entry[1].decode("utf-8", "replace")
+                found[here] = ("link", target)
+                try:
+                    resolved = _resolve(files, real + "/" + name)
+                except Refused:
+                    findings.append("%s: a link loop" % here)
+                    continue
+                if resolved is None and target != "/dev/null":
+                    findings.append("%s: a link to %s, which is not in the image" % (here, target))
+                elif resolved is not None and stat_dir(files.get(resolved, (0o040000, b""))[0]) and resolved not in walked:
+                    walk(here, resolved, depth + 1)
+            elif stat_regular(entry[0]):
+                found[here] = ("file", sha256(entry[1]))
+            else:
+                findings.append("%s: neither a file, a link nor a directory" % here)
+    for logical in SEARCH_DIRS:
+        try:
+            real = _resolve(files, logical)
+        except Refused:
+            findings.append("%s: a link loop" % logical)
+            continue
+        if real is not None:
+            if real != logical:
+                found[logical] = ("link", os.path.relpath("/" + real, "/" + os.path.dirname(logical)))
+            walk(logical, real, 0)
+    for logical in SEARCH_FILES:
+        if logical in files:
+            entry = files[logical]
+            found[logical] = ("file", sha256(entry[1])) if stat_regular(entry[0]) else ("link", entry[1].decode("utf-8", "replace"))
+    return found, findings
+
+
+def load_allowlist(path=ALLOWLIST):
+    """{path: None | ("file", sha256) | ("link", target)} from the list's lines: PATH, PATH sha256:HEX, PATH -> TARGET."""
+    listed = {}
+    with open(path) as f:
+        for number, line in enumerate(f, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            words = line.split()
+            if len(words) == 1:
+                listed[words[0]] = None
+            elif len(words) == 2 and words[1].startswith("sha256:") and attest.is_hex(words[1][7:], 64):
+                listed[words[0]] = ("file", words[1][7:])
+            elif len(words) == 3 and words[1] == "->":
+                listed[words[0]] = ("link", words[2])
+            else:
+                raise Refused("%s:%d is not PATH, PATH sha256:HEX or PATH -> TARGET" % (path, number))
+    return listed
+
+
+def ours():
+    """Our pinned files: {logical path: ("file", sha256) | ("link", target)}."""
+    pinned = {}
+    for name in UNLOCK_UNITS:
+        with open(os.path.join(INITRD_DIR, name), "rb") as f:
+            pinned[UNIT_DIR + "/" + name] = ("file", sha256(f.read()))
+    pinned.update({link: ("link", target) for link, target in UNLOCK_ENABLED.items()})
+    pinned[RELAY_DROPIN[0]] = ("file", sha256(RELAY_DROPIN[1]))
+    return pinned
+
+
+def _critical_dropin(path):
+    """Whether `path` is a drop-in that applies to a unit of the unlock path."""
+    parent = os.path.basename(os.path.dirname(path))
+    if not parent.endswith(".d") or not any(path.startswith(d + "/") for d in SEARCH_DIRS if "/udev/" not in d):
+        return False
+    unit = parent[:-2]
+    if unit in ("service", "socket", "target"):             # type-wide
+        return True
+    if unit.endswith(("-.service", "-.socket", "-.target")):  # a dash prefix: does it start a critical unit's name?
+        prefix, kind = unit.rsplit(".", 1)
+        return any(re.fullmatch(CRITICAL, u) for u in UNLOCK_UNITS + ("systemd-cryptsetup@root.service", "cryptsetup.target",
+                   "sockets.target", "initrd.target", "initrd-root-fs.target", "initrd-switch-root.target")
+                   if u.startswith(prefix) and u.endswith("." + kind))
+    return re.fullmatch(CRITICAL, unit) is not None
 
 
 def _allowed(files, path, credential=False):
@@ -425,7 +587,10 @@ def _allowed(files, path, credential=False):
         return True
     if credential and re.fullmatch(STUB_CREDENTIAL, path):
         return True
-    return _resolve(files, path) is not None
+    try:
+        return _resolve(files, path) is not None
+    except Refused:
+        return False
 
 
 def _scan_unit(files, where, text, findings, scripts):
@@ -466,77 +631,119 @@ def _scan_script(files, path, findings, seen):
 
 
 def review_initrd(path, run=subprocess.run, tools=TOOLS):
-    """The review of the initrd at `path` (see above): {"schema", "passed", "findings", "crypttab", "units"}."""
+    """The review of the initrd at `path` (see above)."""
     return review_initrd_data(read(path), run, tools)
 
 
-def review_initrd_data(data, run=subprocess.run, tools=TOOLS):
+def review_initrd_data(data, run=subprocess.run, tools=TOOLS, allowlist=ALLOWLIST):
     """The same review, of an initrd's bytes (an image's .initrd section)."""
-    findings = []
+    empty = {"schema": INITRD_REVIEW, "passed": False, "findings": [], "crypttab": None, "units": {}, "generators": {}, "inventory_sha256": None}
     try:
-        files = initrd_files(data, run, tools)
+        files = _Files(initrd_files(data, run, tools))
     except Refused as refused:
-        return {"schema": INITRD_REVIEW, "passed": False, "findings": ["the initrd cannot be read: %s" % refused], "crypttab": None, "units": {}}
+        return dict(empty, findings=["the initrd cannot be read: %s" % refused])
+    findings = []
+
     def lines(text):
         return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
     with open(os.path.join(INITRD_DIR, "dracut", "90regalia-unlock", "crypttab")) as f:
         want = lines(f.read())
-    crypttab = _regular(files, "etc/crypttab")
+    try:
+        crypttab = _regular(files, "etc/crypttab")
+    except Refused as refused:
+        crypttab, findings = None, findings + ["etc/crypttab: %s" % refused]
     got = lines(crypttab.decode("utf-8", "replace")) if crypttab is not None else None
     if got != want:
         findings.append("etc/crypttab must hold exactly the unlock client's line (%s); it holds %s"
                         % (want[0] if want else "?", "nothing" if got is None else (" | ".join(got) or "no line")))
-    fragments = sorted(p for p in files if (p.startswith("etc/cmdline.d/") and p.endswith(".conf")) or p == "etc/cmdline")
-    for fragment in fragments:
+    # the command-line fragments, through any link to their directory
+    fragments = []
+    try:
+        real = _resolve(files, "etc/cmdline.d")
+    except Refused:
+        real, findings = None, findings + ["etc/cmdline.d: a link loop"]
+    if real is not None:
+        fragments = ["etc/cmdline.d/" + os.path.basename(p) for p in sorted(files) if os.path.dirname(p) == real and p.endswith(".conf")]
+    for fragment in fragments + (["etc/cmdline"] if "etc/cmdline" in files else []):
         body = _regular(files, fragment) or b""
         for word in " ".join(lines(body.decode("utf-8", "replace"))).split():
             if re.fullmatch(CMDLINE_HARDENING, word):
                 continue
             if any(re.fullmatch(p, word) for p in CMDLINE_REFUSED):
                 findings.append("%s holds %r: the initrd's command line must not say how the disk is opened" % (fragment, word))
-    units, scripts = {}, set()
-    for name in UNLOCK_UNITS:
-        where = _effective_unit(files, name)
-        with open(os.path.join(INITRD_DIR, name), "rb") as f:
-            ours = f.read()
-        body = _regular(files, where) if where else None
-        if body != ours:
-            findings.append("%s is %s" % (name, "not in the image" if where is None else
-                            "not this repository's (%s, as systemd takes it: %s)" % ("masked or a link" if body is None else "other bytes", where)))
-        else:
-            units[name] = sha256(body)
-            _scan_unit(files, where, body.decode("utf-8", "replace"), findings, scripts)
+    # everything systemd and udev read: ours, pinned, or on the list
+    found, walk_findings = inventory(files)
+    findings += walk_findings
+    pinned, listed = ours(), load_allowlist(allowlist)
+    for path, (kind, value) in sorted(found.items()):
+        if path in pinned:
+            if pinned[path] != (kind, value):
+                findings.append("%s is not this repository's (%s)" % (path, "a link to %s" % value if kind == "link" else "other bytes"))
+            continue
+        if os.path.basename(path) == RESET_DROPIN[0] and kind == "file":
+            unit = os.path.basename(os.path.dirname(path))[:-2]
+            if value != sha256(RESET_DROPIN[1]):
+                findings.append("%s is not the module's credential reset" % path)
+            elif not any(d + "/" + unit in found for d in SEARCH_DIRS):
+                findings.append("%s resets a unit the image does not hold" % path)
+            continue
+        if path not in listed:
+            findings.append("%s is not on the initrd's allowlist (%s)" % (path, "a link to %s" % value if kind == "link" else "a file"))
+        elif listed[path] is not None and listed[path] != (kind, value):
+            findings.append("%s is on the allowlist with other %s" % (path, "bytes" if kind == "file" else "target"))
+        elif _critical_dropin(path) and listed[path] is None:
+            findings.append("%s applies to the unlock path, and the allowlist names it without its sha256" % path)
+    for path in pinned:
+        if path not in found:
+            findings.append("%s is not in the image" % path)
+    # the client, the script, and the paths the unlock units name
     for path, name in UNLOCK_SCRIPTS.items():
         with open(os.path.join(INITRD_DIR, name), "rb") as f:
-            ours = f.read()
-        if _regular(files, path) != ours:
-            findings.append("%s is not this repository's %s" % (path, name))
+            if _regular(files, path) != f.read():
+                findings.append("%s is not this repository's %s" % (path, name))
     for path in UNLOCK_BINARIES:
         if _regular(files, path) is None:
             findings.append("%s, the unlock client, is not in the image" % path)
-    for link in UNLOCK_ENABLED:
-        if link not in files:
-            findings.append("%s is not enabled (no %s)" % (os.path.basename(link), link))
-    # every drop-in that applies to the unlock path: per unit, the type-wide service.d/socket.d, and
-    # systemd-cryptsetup's (the template and the root volume's instance)
-    targets = UNLOCK_UNITS + ("systemd-cryptsetup@.service", "systemd-cryptsetup@root.service", "service", "socket")
-    for directory in UNIT_DIRS:
-        for target in targets:
-            prefix = "%s/%s.d/" % (directory, target)
-            for dropin in sorted(p for p in files if p.startswith(prefix) and p.endswith(".conf")):
-                body = _regular(files, dropin)
-                if body is not None:
-                    _scan_unit(files, dropin, body.decode("utf-8", "replace"), findings, scripts)
-    seen = set()
+    units, scripts, seen = {}, set(), set()
+    for name in UNLOCK_UNITS:
+        body = _regular(files, UNIT_DIR + "/" + name)
+        if body is not None and sha256(body) == pinned[UNIT_DIR + "/" + name][1]:
+            units[name] = sha256(body)
+            _scan_unit(files, UNIT_DIR + "/" + name, body.decode("utf-8", "replace"), findings, scripts)
+    # the drop-ins that apply to the unlock path (pinned by content, ours or listed) are read the same way
+    for path, (kind, _) in sorted(found.items()):
+        if kind == "file" and _critical_dropin(path):
+            _scan_unit(files, path, (_regular(files, path) or b"").decode("utf-8", "replace"), findings, scripts)
     for script in sorted(scripts):
         _scan_script(files, script, findings, seen)
+    generators = {p: v for p, (k, v) in found.items() if k == "file" and any(p.startswith(d + "/") for d in GENERATOR_DIRS)}
+    lines_ = "".join("%s %s %s\n" % (p, k, v) for p, (k, v) in sorted(found.items()))
     return {"schema": INITRD_REVIEW, "passed": not findings, "findings": sorted(set(findings))[:64],
-            "crypttab": got[0] if got and len(got) == 1 else None, "units": units}
+            "crypttab": got[0] if got and len(got) == 1 else None, "units": units, "generators": generators,
+            "inventory_sha256": sha256(lines_.encode())}
+
+
+def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS):
+    """The allowlist lines an initrd would need (`uki initrd-inventory`): every file systemd and udev read
+    that is not ours, a drop-in of the unlock path with its sha256, a link with its target."""
+    files = _Files(initrd_files(data, run, tools))
+    found, _ = inventory(files)
+    pinned, out = ours(), []
+    for path, (kind, value) in sorted(found.items()):
+        if path in pinned or os.path.basename(path) == RESET_DROPIN[0]:
+            continue
+        if kind == "link":
+            out.append("%s -> %s" % (path, value))
+        elif _critical_dropin(path):
+            out.append("%s sha256:%s" % (path, value))
+        else:
+            out.append(path)
+    return out
 
 
 def check_review(review):
     """A record's initrd review, checked for shape: the fields, and passed only with no finding."""
-    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units"), "record.initrd_review")
+    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units", "generators", "inventory_sha256"), "record.initrd_review")
     require(review["schema"] == INITRD_REVIEW, "record.initrd_review is not a %s" % INITRD_REVIEW)
     require(isinstance(review["passed"], bool) and isinstance(review["findings"], list)
             and all(isinstance(f, str) for f in review["findings"]) and review["passed"] == (not review["findings"]),
@@ -544,7 +751,9 @@ def check_review(review):
     require(review["crypttab"] is None or isinstance(review["crypttab"], str), "record.initrd_review.crypttab is not text")
     require(isinstance(review["units"], dict) and set(review["units"]) <= set(UNLOCK_UNITS)
             and all(attest.is_hex(v, 64) for v in review["units"].values()), "record.initrd_review.units is not a map of the unlock units")
-
+    require(isinstance(review["generators"], dict) and all(isinstance(k, str) and attest.is_hex(v, 64) for k, v in review["generators"].items()),
+            "record.initrd_review.generators is not a map of paths to sha256")
+    require(review["inventory_sha256"] is None or attest.is_hex(review["inventory_sha256"], 64), "record.initrd_review.inventory_sha256 is not a sha256")
 
 INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey")
 
@@ -1007,8 +1216,19 @@ def main(argv=None):
     c.add_argument("--pcrs", required=True, help='a JSON file: {"0": "<64 hex>", "7": ...}, the host\'s own values, without PCR 11 or 12')
     c.add_argument("--esp", metavar="ROOT", required=True, help="the node's ESP as it will be: PCR 12 is computed from ROOT/loader/credentials")
     c.add_argument("--credentials-record", metavar="OUT", help="write what PCR 12 was computed from (espcreds.record)")
+    c = sub.add_parser("initrd-review", help="review an initrd as build does, and print the findings")
+    c.add_argument("--initrd", required=True)
+    c = sub.add_parser("initrd-inventory", help="print the allowlist lines an initrd would need (to review, never to paste unread)")
+    c.add_argument("--initrd", required=True)
     args = parser.parse_args(argv)
     try:
+        if args.command == "initrd-review":
+            review = review_initrd(args.initrd)
+            print(json.dumps(review, indent=2, sort_keys=True))
+            return 0 if review["passed"] else 1
+        if args.command == "initrd-inventory":
+            print("\n".join(initrd_inventory_lines(read(args.initrd))))
+            return 0
         if args.command == "build":
             record = build(_inputs(args), args.uname, args.name, args.out)
             print("built %s: unsigned image %s" % (record["name"], record["unsigned_sha256"]))

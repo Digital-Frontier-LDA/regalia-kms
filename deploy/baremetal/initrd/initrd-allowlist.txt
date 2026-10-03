@@ -1,0 +1,12 @@
+# What systemd and udev may read in a KMS host's initrd, besides this repository's own files (#198).
+# deploy/baremetal/uki.py reviews every initrd it measures against this list: a unit, drop-in, link,
+# generator, udev rule or manager configuration file in any directory systemd or udev reads that is
+# neither ours (pinned in uki.py) nor named here is refused, and the image cannot be signed.
+#
+#   PATH                   a distribution file, any content
+#   PATH sha256:HEX        pinned by content (required for a drop-in of the unlock path)
+#   PATH -> TARGET         a link and its target
+#
+# Taken from the reviewed dracut build (Debian 13, e2e/unlock-boot-qemu.sh) with
+# `python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD`, and read before it is added:
+# a new line is a new thing the initrd runs.
