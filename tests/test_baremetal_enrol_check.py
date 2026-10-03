@@ -69,13 +69,13 @@ class Check(unittest.TestCase):
         self.refused("not 64 hex digits", self.envelope(self.manifest()), typed="1234")
 
     def test_only_the_root_signed_epoch_one_is_accepted(self):
-        self.refused("manifest is refused", self.envelope(self.manifest(), key=hbt.OTHER))
-        self.refused("manifest is refused", self.envelope(self.manifest(), key=hbt.REVOKE, signer="revocation"))
+        self.refused("manifest chain is refused", self.envelope(self.manifest(), key=hbt.OTHER))
+        self.refused("manifest chain is refused", self.envelope(self.manifest(), key=hbt.REVOKE, signer="revocation"))
         later = dict(self.manifest(), epoch=2, prev_digest="00" * 32)
         self.refused("first manifest must be the root-signed epoch 1", self.envelope(later))
         tampered = self.envelope(self.manifest())
         tampered["manifest"]["nodes"][1]["state"] = "QUARANTINED"
-        self.refused("manifest is refused", tampered)
+        self.refused("manifest chain is refused", tampered)
 
     def test_each_identity_must_be_this_hosts(self):
         for field, value in (("ek_name", "000b" + "33" * 32), ("ak_name", "000b" + "44" * 32),
@@ -96,6 +96,45 @@ class Check(unittest.TestCase):
         before = sorted(os.listdir(self.d))
         self.check(self.envelope(self.manifest()))
         self.assertEqual(sorted(os.listdir(self.d)), before)
+
+
+    def test_a_host_first_named_at_a_later_epoch_enrols_on_the_whole_chain(self):
+        """A fourth node, or a replacement (#76): not in epoch 1, named first at epoch 3 by the root."""
+        first = self.manifest()
+        first["nodes"] = first["nodes"][1:]                         # epoch 1: b and c only
+        second = dict(copy.deepcopy(first), epoch=2, prev_digest=m.digest(first))
+        third = dict(copy.deepcopy(second), epoch=3, prev_digest=m.digest(second))
+        third["nodes"] = [self.manifest()["nodes"][0]] + third["nodes"]
+        chain = [self.envelope(first), self.envelope(second), self.envelope(third)]
+        self.assertEqual(self.check(chain)["epoch"], 3)
+        self.refused("does not name this host", chain[:2])          # a chain that stops before it
+        # a revocation-signed epoch cannot add a node (only the root can): the chain is refused
+        revoked = dict(copy.deepcopy(third), epoch=3)
+        self.refused("manifest chain is refused", [chain[0], chain[1], self.envelope(revoked, key=hbt.REVOKE, signer="revocation")])
+        # and a chain whose last epoch dropped this host, by a revocation, does not enrol it
+        fourth = dict(copy.deepcopy(third), epoch=4, prev_digest=m.digest(third))
+        fourth["nodes"][0]["state"] = "QUARANTINED"
+        self.refused("not enrolled", chain + [self.envelope(fourth, key=hbt.REVOKE, signer="revocation")])
+
+    def test_a_malformed_bundle_is_a_refusal(self):
+        with open(self.d + "/bundle.json", "w") as f:
+            json.dump({"schema": enrol.SCHEMA_BUNDLE, "node_id": "a"}, f)
+        self.refused("not a complete identity bundle", self.envelope(self.manifest()))
+
+    def test_the_fingerprint_is_read_from_a_terminal_only(self):
+        """`enrol check < file` would make a file a trust anchor again."""
+        for name, content in (("manifest.json", self.envelope(self.manifest())), ("doc.json", self.document)):
+            with open(os.path.join(self.d, name), "w") as f:
+                json.dump(content, f)
+        import io
+        import sys as _sys
+        import unittest.mock
+        with unittest.mock.patch.object(_sys, "stdin", io.StringIO(enrol.fingerprint(self.root) + "\n")), \
+                unittest.mock.patch.object(_sys, "stderr", io.StringIO()) as err:
+            code = enrol.main(["check", "--manifest", self.d + "/manifest.json", "--root-key", self.root,
+                               "--measurements", self.d + "/doc.json", "--enrol-dir", self.d])
+        self.assertEqual(code, 1)
+        self.assertIn("standard input is not a terminal", err.getvalue())
 
 
 if __name__ == "__main__":

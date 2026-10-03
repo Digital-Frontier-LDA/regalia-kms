@@ -404,11 +404,14 @@ def fingerprint(root_key):
     return hashlib.sha256(bytes.fromhex(root_key)).hexdigest()
 
 
-def check_manifest(directory, envelope, root_key, typed, document):
-    """Phase 2's first step, and the only one before anything is written: the manifest is the root-signed
-    epoch 1, its root key is the one whose fingerprint the operator typed by hand (a file alone never sets a
-    trust anchor, ADR-0002 D21.2), it names THIS host exactly as its identity bundle says, and it commits to
-    the measurements document given. Returns the manifest; writes nothing."""
+def check_manifest(directory, chain, root_key, typed, document):
+    """Phase 2's first step, and the only one before anything is written: `chain` (one envelope, or the list
+    of envelopes from epoch 1 to N) verifies from the root-signed epoch 1 onwards under the root key whose
+    fingerprint the operator typed by hand (a file alone never sets a trust anchor, ADR-0002 D21.2); its LAST
+    manifest names THIS host exactly as its identity bundle says, and commits to the measurements document
+    given. The first three hosts enrol on epoch 1; a host added later (a fourth node, or a replacement under
+    #76) is named first at some epoch N and enrols on the whole chain to N. Returns the last manifest; writes
+    nothing."""
     require(isinstance(root_key, str) and re.fullmatch(r"[0-9a-f]{64}", root_key), "the root key is 64 lower-case hex")
     typed = re.sub(r"[\s:]", "", (typed or "").lower())
     require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
@@ -416,11 +419,15 @@ def check_manifest(directory, envelope, root_key, typed, document):
             "key the ceremony made. Nothing was written")
     with open(os.path.join(directory, "bundle.json")) as f:
         bundle = json.load(f)
-    require(bundle.get("schema") == SCHEMA_BUNDLE, "bundle.json is not an identity bundle")
+    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE
+            and all(isinstance(bundle.get(k), str) for k in ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub")),
+            "bundle.json is not a complete identity bundle")
+    envelopes = chain if isinstance(chain, list) else [chain]
+    require(envelopes, "the chain is empty")
     try:
-        manifest = membership.accept(None, envelope, root_key)
+        manifest = membership.accept_chain(None, envelopes, root_key)
     except membership.Refused as refusal:
-        raise Refused("the manifest is refused: %s" % refusal)
+        raise Refused("the manifest chain is refused: %s" % refusal)
     nodes = membership.validate(manifest)
     node_id = bundle["node_id"]
     require(node_id in nodes, "the manifest does not name this host (%s)" % node_id)
@@ -447,7 +454,8 @@ def main(argv=None):
     p.add_argument("--enrol-dir", default=ENROL_DIR)
     p.add_argument("--wg-service-key", default=WG_SERVICE_KEY)
     c = sub.add_parser("check", help="check the root-signed manifest against this host, writing nothing")
-    c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, from the ceremony")
+    c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, or a JSON list of the "
+                   "envelopes from epoch 1 to the one that first names this host")
     c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
     c.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
     c.add_argument("--enrol-dir", default=ENROL_DIR)
@@ -458,9 +466,11 @@ def main(argv=None):
                 envelope = membership.load(f.read())
             with open(args.measurements) as f:
                 document = json.load(f)
+            # TYPED, from a terminal: piped from a file, the fingerprint would be a file again (D21.2)
+            require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
             typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
             manifest = check_manifest(args.enrol_dir, envelope, args.root_key, typed, document)
-        except (Refused, membership.Refused, OSError, ValueError, EOFError) as error:
+        except (Refused, membership.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
         print("OK: the manifest (epoch %d, %s) is root-signed by the key whose fingerprint was typed, names this host "
