@@ -348,7 +348,7 @@ def _check_ancestor(name, st, child_uid):
     (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's owner
     can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
     (#233, Go); kept identical by hand until one shared helper exists."""
-    me = os.geteuid()                    # root, in production: main() refuses anything else
+    me = os.geteuid()                    # root, in production: main() refuses anything else, and _hand_over requires it
     open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
     require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
             and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_uid in (0, me))),
@@ -661,6 +661,9 @@ def _hand_over(state, chown=True):
     already (an enrolment resumed) only at 0755, the mode this step gives it. `chown` False (tests, which
     cannot change an owner): the user that owns it is taken to be regalia-sync."""
     if chown:
+        # _check_ancestor trusts directories of this user as well as root's: right for root, which main()
+        # requires, and for tests; a handover to regalia-sync is never done by anyone else
+        require(os.geteuid() == 0, "the state directory is handed to %s by root only" % SYNC_USER)
         import pwd
         user = pwd.getpwnam(SYNC_USER)
         uid, gid = user.pw_uid, user.pw_gid
