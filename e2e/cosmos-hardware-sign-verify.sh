@@ -17,18 +17,28 @@ TOKEN_LABEL="${REGALIA_COSMOS_PKCS11_TOKEN_LABEL:-}"
 SLOT="${REGALIA_COSMOS_PKCS11_SLOT:-}"
 PIN="${REGALIA_COSMOS_PKCS11_PIN:-}"
 OBJECT_ID="${REGALIA_COSMOS_PKCS11_OBJECT_ID:-}"
+SERIAL="${REGALIA_COSMOS_PKCS11_SERIAL:-}"
+# A REAL CARD IS NAMED BY ITS SERIAL (regalia-kms#174). A label is shared by every
+# SmartCard-HSM left at its default, and a slot index moves when another reader comes or goes, so with
+# OpenSC's module the token is found by serial, OpenSC is shown only that card, and the PIN is
+# presented only while that serial is the one card visible. SoftHSM (CI) keeps the label or slot
+# selector.
+# Anything that is not SoftHSM is taken to reach real cards: OpenSC's module, and also p11-kit-proxy,
+# pkcs11-spy or a vendor module in front of it.
+OPENSC=1; case "$(basename "$MODULE")" in *softhsm*) OPENSC=0;; esac
 
 [ -n "$MODULE" ] || { echo "REGALIA_COSMOS_PKCS11_MODULE is required" >&2; exit 2; }
 [ -f "$MODULE" ] || { echo "PKCS#11 module does not exist: $MODULE" >&2; exit 2; }
-[ -n "$TOKEN_LABEL" ] || [ -n "$SLOT" ] || { echo "REGALIA_COSMOS_PKCS11_TOKEN_LABEL or REGALIA_COSMOS_PKCS11_SLOT is required" >&2; exit 2; }
+[ -n "$TOKEN_LABEL" ] || [ -n "$SLOT" ] || [ -n "$SERIAL" ] || { echo "REGALIA_COSMOS_PKCS11_SERIAL (a real card), or REGALIA_COSMOS_PKCS11_TOKEN_LABEL or REGALIA_COSMOS_PKCS11_SLOT (SoftHSM), is required" >&2; exit 2; }
 [ -z "$SLOT" ] || [[ "$SLOT" =~ ^[0-9]+$ ]] || { echo "PKCS#11 slot must be a decimal number: $SLOT" >&2; exit 2; }
 [ -n "$OBJECT_ID" ] || { echo "REGALIA_COSMOS_PKCS11_OBJECT_ID is required" >&2; exit 2; }
 case "$OBJECT_ID" in *[!0-9A-Fa-f]*) echo "REGALIA_COSMOS_PKCS11_OBJECT_ID must be hexadecimal" >&2; exit 2;; esac
 [ -n "$PIN" ] || { echo "REGALIA_COSMOS_PKCS11_PIN is required" >&2; exit 2; }
 [ "${#PIN}" -ge 6 ] || { echo "refusing a PIN shorter than six characters" >&2; exit 2; }
+[ "$OPENSC" = 0 ] || [ -n "$SERIAL" ] || { echo "REGALIA_COSMOS_PKCS11_SERIAL is required with a module that reaches real cards: a real card is chosen by serial (only SoftHSM keeps the label or slot)" >&2; exit 2; }
 command -v pkcs11-tool >/dev/null || { echo "pkcs11-tool is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }
-python3 -c 'import cryptography' 2>/dev/null || {
+python3 -I -c 'import cryptography' 2>/dev/null || {
   echo "python cryptography package is required for signature verification" >&2
   exit 2
 }
@@ -38,7 +48,7 @@ cleanup() { unset PIN; rm -rf -- "$STATE"; }
 trap cleanup EXIT HUP INT TERM
 chmod 700 "$STATE"
 
-python3 - "$ROOT/internal/policy/testdata/signdoc-akashnet2-msgsend.hex" "$STATE/digest.bin" <<'PY'
+python3 -I - "$ROOT/internal/policy/testdata/signdoc-akashnet2-msgsend.hex" "$STATE/digest.bin" <<'PY'
 import hashlib
 import pathlib
 import sys
@@ -48,15 +58,23 @@ pathlib.Path(sys.argv[2]).write_bytes(hashlib.sha256(raw).digest())
 PY
 
 SELECTOR=()
-if [ -n "$SLOT" ]; then SELECTOR=(--slot "$SLOT"); else SELECTOR=(--token-label "$TOKEN_LABEL"); fi
+if [ "$OPENSC" = 1 ]; then
+  # shellcheck source=lib/bench_cards.sh
+  . "$ROOT/e2e/lib/bench_cards.sh"
+  bench_isolate "$STATE/opensc.conf" "$MODULE" "$SERIAL" || { echo "cannot isolate $SERIAL in OpenSC" >&2; exit 2; }
+  CARD_SLOT="$(bench_slot "$SERIAL")"; [ -n "$CARD_SLOT" ] || { echo "no single slot holds $SERIAL" >&2; exit 2; }
+  SELECTOR=(--slot "$CARD_SLOT")
+elif [ -n "$SLOT" ]; then SELECTOR=(--slot "$SLOT"); else SELECTOR=(--token-label "$TOKEN_LABEL"); fi
+[ "$OPENSC" = 0 ] || bench_gate "$SERIAL" "$CARD_SLOT" || { echo "$SERIAL is not the one card visible: no PIN presented" >&2; exit 2; }
 PKCS11_PIN="$PIN" pkcs11-tool --module "$MODULE" "${SELECTOR[@]}" \
   --login --pin env:PKCS11_PIN --read-object --type pubkey --id "$OBJECT_ID" \
   --output-file "$STATE/public.der" >/dev/null
+[ "$OPENSC" = 0 ] || bench_gate "$SERIAL" "$CARD_SLOT" || { echo "$SERIAL is not the one card visible: no PIN presented" >&2; exit 2; }
 PKCS11_PIN="$PIN" pkcs11-tool --module "$MODULE" "${SELECTOR[@]}" \
   --login --pin env:PKCS11_PIN --sign --mechanism ECDSA --id "$OBJECT_ID" \
   --input-file "$STATE/digest.bin" --output-file "$STATE/signature.raw" >/dev/null
 
-python3 - "$STATE/public.der" "$STATE/digest.bin" "$STATE/signature.raw" <<'PY'
+python3 -I - "$STATE/public.der" "$STATE/digest.bin" "$STATE/signature.raw" <<'PY'
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature, Prehashed

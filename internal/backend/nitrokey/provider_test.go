@@ -60,6 +60,21 @@ type fakeSession struct {
 	order      []string
 	retriesErr error
 	loginErr   error
+	// pulled is a token removed while its session was open: it no longer answers for its identity.
+	// A test sets it from a hook (or beforehand, with pullOnSign) to model the removal mid-operation.
+	pulled      bool
+	pullOnSign  bool
+	panicOnSign bool
+	// endOnSign ends the REQUEST's context during the signature and fails it, as a caller that hangs
+	// up, or a deadline that passes, does.
+	endOnSign context.CancelFunc
+	// endBefore ends the request's context just before the named call (Identity,
+	// EstablishSecureChannel, PublicKey, PINRetries, Login, AssertKEKGeneratedOnToken,
+	// AssertKEKNonExportable), which then refuses it as every driver call refuses an ended context.
+	endBefore string
+	end       context.CancelFunc
+	// endDuringLogin ends the request's context while the PIN is with the token: the PIN WAS presented.
+	endDuringLogin bool
 	// mechanismErr is what OffersMechanism answers; nil means the token offers it.
 	mechanismErr   error
 	mechanismAsked []string
@@ -92,27 +107,55 @@ type fakeSession struct {
 	signErr error
 }
 
-func (session *fakeSession) Identity(context.Context) (string, string, error) {
+// ended is the start of every driver call: a context that has ended is refused. A test can make the
+// request end just before a chosen call.
+func (session *fakeSession) ended(ctx context.Context, call string) error {
+	if session.endBefore == call && session.end != nil {
+		session.end()
+	}
+	return ctx.Err()
+}
+
+func (session *fakeSession) Identity(ctx context.Context) (string, string, error) {
 	session.order = append(session.order, "Identity")
+	// as the PKCS#11 driver: every call refuses a context that has ended
+	if err := session.ended(ctx, "Identity"); err != nil {
+		return "", "", err
+	}
+	if session.pulled {
+		return "", "", errors.New("token not present")
+	}
 	return session.serial, session.devaut, nil
 }
-func (session *fakeSession) EstablishSecureChannel(context.Context) error {
+func (session *fakeSession) EstablishSecureChannel(ctx context.Context) error {
 	session.order = append(session.order, "EstablishSecureChannel")
+	if err := session.ended(ctx, "EstablishSecureChannel"); err != nil {
+		return err
+	}
 	if session.secureErr {
 		return errors.New("secure messaging unavailable")
 	}
 	session.secure = true
 	return nil
 }
-func (session *fakeSession) Login(_ context.Context, pin []byte) error {
+func (session *fakeSession) Login(ctx context.Context, pin []byte) error {
 	session.order = append(session.order, "Login")
+	if session.ended(ctx, "Login") != nil {
+		return ErrPINNotPresented // as the driver: refused before the PIN reached the token
+	}
 	session.loginCalls++
 	session.logged = true
 	session.pin = pin
+	if session.endDuringLogin && session.end != nil {
+		session.end()
+	}
 	return session.loginErr
 }
-func (session *fakeSession) PINRetries(context.Context) (int, error) {
+func (session *fakeSession) PINRetries(ctx context.Context) (int, error) {
 	session.order = append(session.order, "PINRetries")
+	if err := session.ended(ctx, "PINRetries"); err != nil {
+		return 0, err
+	}
 	if session.retriesErr != nil {
 		// Return whatever retries the test configured alongside the error, so a test can
 		// isolate the err clause (provider.go:184) from the retries<=1 clause by setting
@@ -134,6 +177,20 @@ func (session *fakeSession) Sign(context.Context, string, string, []byte) ([]byt
 	// Return non-empty signature bytes alongside session.signErr so a test can isolate the err
 	// clause (provider.go:270) from the len(output)==0 clause by setting signErr — otherwise
 	// both clauses fire on the same fixture and the err operand is undetectable.
+	if session.panicOnSign {
+		panic("the PKCS#11 module crashed")
+	}
+	if session.pullOnSign {
+		session.pulled = true
+		if session.endOnSign != nil {
+			session.endOnSign()
+		}
+		return nil, errors.New("PKCS#11 signing unavailable")
+	}
+	if session.endOnSign != nil {
+		session.endOnSign()
+		return nil, context.Canceled
+	}
 	if session.signErr != nil {
 		return []byte("signature"), session.signErr
 	}
@@ -165,7 +222,10 @@ func (session *fakeSession) OffersMechanism(_ context.Context, operation, algori
 	return session.mechanismErr
 }
 
-func (session *fakeSession) PublicKey(context.Context, string) ([]byte, error) {
+func (session *fakeSession) PublicKey(ctx context.Context, _ string) ([]byte, error) {
+	if err := session.ended(ctx, "PublicKey"); err != nil {
+		return nil, err
+	}
 	// Return session.publicKey alongside session.publicKeyErr so a test can isolate the err clause
 	// (provider.go:150) from the len(output)==0 clause by setting publicKey to non-empty bytes
 	// alongside publicKeyErr — otherwise both clauses fire on the same fixture and the err
@@ -187,11 +247,17 @@ func (session *fakeSession) PublicKey(context.Context, string) ([]byte, error) {
 
 // A fake token is a correctly provisioned one unless a test says otherwise; the refusing cases
 // live in kek_provenance_test.go, which sets these.
-func (session *fakeSession) AssertKEKGeneratedOnToken(context.Context, string) error {
+func (session *fakeSession) AssertKEKGeneratedOnToken(ctx context.Context, _ string) error {
+	if err := session.ended(ctx, "AssertKEKGeneratedOnToken"); err != nil {
+		return err
+	}
 	return session.notTokenGenerated
 }
 
-func (session *fakeSession) AssertKEKNonExportable(context.Context, string) error {
+func (session *fakeSession) AssertKEKNonExportable(ctx context.Context, _ string) error {
+	if err := session.ended(ctx, "AssertKEKNonExportable"); err != nil {
+		return err
+	}
 	return session.exportable
 }
 

@@ -1,0 +1,54 @@
+# The node's side of the three-site transport (deploy/baremetal/sync.py, unlock.py): it answers peers on
+# the service tunnel and booting nodes on the unlock tunnel, pulls manifests and heartbeats from the
+# peers and the revocation authority, keeps the membership store, and runs the heartbeat watch.
+# It is the one process that parses what other machines send, so it is not root and holds NO
+# capability. The TPM through the tss group (the store's anchor, the heartbeat counter, the lease
+# signatures). It publishes the verified chain, 0644, for the root services to verify for themselves.
+[Unit]
+Description=Regalia KMS: membership, heartbeats and leases between the three sites
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=regalia-wg-apply.service regalia-authtime.service
+Wants=regalia-wg-apply.service regalia-authtime.service
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip, tpm2_*, chronyc and openssl are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json sync
+Restart=always
+RestartSec=5s
+User=regalia-sync
+Group=regalia-sync
+SupplementaryGroups=tss
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+StateDirectory=regalia-sync
+# 0755: the directory is traversable so the root services can read the published chain; every file in
+# it but chain.json and heartbeat.prom is 0600.
+StateDirectoryMode=0755
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

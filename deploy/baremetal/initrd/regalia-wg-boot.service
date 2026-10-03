@@ -1,0 +1,50 @@
+# The boot mesh, before root exists (regalia-kms#66): the initrd's default-deny ruleset, then WireGuard
+# with the node's WG-BOOT key.
+#
+# systemd unseals the key with the TPM (LoadCredentialEncrypted=); on another machine, or on a boot the
+# TPM's policy refuses, that fails and the interface never comes up. The key is added to the rendered
+# configuration in memory and never written anywhere (deploy/baremetal/bootnet.py says why it must be
+# there at all). Everything is taken down again before the root filesystem takes over: a booted host
+# has no wg-boot and uses no WG-BOOT key.
+#
+# WG-BOOT is a transport identity, never an authorization: its key is not sealed to anything that
+# retires a boot image, so a retired but signed image brings this up too. The peer refuses it at
+# attestation.
+
+[Unit]
+Description=Boot mesh: WireGuard to the peers, before root
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+DefaultDependencies=no
+# the credential is unsealed with the TPM: not before its device is there, and not before PCR 11 holds the
+# initrd phase (systemd-pcrphase-initrd extends "enter-initrd"): a credential sealed to the image's
+# initrd-phase signature opens only from then on, and an unseal that ran first would fail by a race
+Wants=tpm2.target
+After=tpm2.target systemd-pcrphase-initrd.service
+Before=regalia-unlock.service cryptsetup-pre.target
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# No EnvironmentFile=: boot.env is read by the script as data. A file that may come from
+# storage others can write must not be able to set this process's environment (LD_PRELOAD, PATH).
+# Four files from the ESP, by fixed paths, as for regalia-unlock.service: the key sealed to this TPM, and
+# three that are not secret (bootnet.boot_wg_conf, bootnet.boot_ruleset, and boot.env). A missing one
+# keeps the unit from starting, and nothing is left behind.
+LoadCredentialEncrypted=regalia.wg-boot-key:/.extra/global_credentials/regalia.wg-boot-key.cred
+LoadCredential=regalia.wg-boot-conf:/.extra/global_credentials/regalia.wg-boot-conf.cred
+LoadCredential=regalia.boot-nft:/.extra/global_credentials/regalia.boot-nft.cred
+LoadCredential=regalia.boot-env:/.extra/global_credentials/regalia.boot-env.cred
+# where `up` notes the interface for `down`, which may run without the credentials; removed after it
+RuntimeDirectory=regalia-wg-boot
+RuntimeDirectoryMode=0700
+ExecStart=/usr/lib/regalia/wg-boot up
+# ExecStopPost, not ExecStop: it also runs when the start failed or timed out. Nothing of the boot mesh,
+# least of all its default-deny ruleset, may be left for the real root to inherit.
+ExecStopPost=/usr/lib/regalia/wg-boot down
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077

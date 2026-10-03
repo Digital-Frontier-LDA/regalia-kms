@@ -27,7 +27,8 @@
   "fencing_state_path": "/var/lib/regalia-kms/epochs.jsonl",
   "fencing_public_key_path": "/etc/regalia-kms/fencing/lease-signing.pub",
   "runtime_admission": "required",
-  "runtime_admission_path": "/run/regalia/admission.json",
+  "runtime_admission_path": "/run/regalia/admission/admission.json",
+  "runtime_admission_owner": "regalia-admission",
   "node_id": "site-a",
   "boot_session_path": "/run/regalia/boot-session",
   "metrics_reader_principals": [

@@ -1,0 +1,73 @@
+# regalia-kms#80, step 3b: the node's four units under the runner's real systemd. It changes the machine
+# (a kernel module, the system chrony and clock, a user, units), so it runs only here, and only when
+# what it tests changes. Not a required check: the paths filter means it does not report on other PRs.
+name: node units
+
+on:
+  pull_request:
+    paths:
+      - deploy/baremetal/**
+      - e2e/node-units-systemd.py
+      - .github/workflows/node-units.yml
+      - internal/admission/**
+      - internal/config/**
+      - cmd/regalia-kms/**
+      - cmd/regalia-audit-collector/**
+  push:
+    branches: [main]
+    paths:
+      - deploy/baremetal/**
+      - e2e/node-units-systemd.py
+      - .github/workflows/node-units.yml
+      - internal/admission/**
+      - internal/config/**
+      - cmd/regalia-kms/**
+      - cmd/regalia-audit-collector/**
+
+permissions:
+  contents: read
+
+jobs:
+  node-units-systemd:
+    runs-on: ubuntu-24.04     # pinned: the chrony and systemd behaviour observed is 24.04's
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the software TPM, chrony and WireGuard tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools chrony wireguard-tools iproute2 \
+            openssl python3-cryptography softhsm2 opensc libpcsclite-dev tpm2-abrmd libtss2-tcti-tabrmd0
+          # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel has no vTPM proxy
+          # (CONFIG_TCG_VTPM_PROXY is not set), so the test makes the device with swtpm's CUSE mode.
+          sudo apt-get install -y -qq --no-install-recommends tpm-udev
+      - name: swtpm with its CUSE interface (Ubuntu builds it without; rebuilt from Ubuntu's own source package)
+        run: |
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update -qq
+          sudo apt-get build-dep -y -qq swtpm
+          sudo apt-get install -y -qq --no-install-recommends libfuse-dev libfuse3-dev pkg-config
+          cd "$RUNNER_TEMP" && apt-get source -qq swtpm && cd swtpm-*/
+          [ -x configure ] || autoreconf -fi
+          ./configure -q --prefix=/usr/local --with-cuse --with-openssl
+          make -s -j"$(nproc)"
+          sudo make -s install
+          sudo ldconfig
+          /usr/local/bin/swtpm --version
+          /usr/local/bin/swtpm cuse --help | head -1
+          ls /usr/lib/x86_64-linux-gnu/libtss2-tcti-tabrmd*
+      - name: Build the KMS daemon and the audit collector (part 2 runs them)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          for name in regalia-kms regalia-audit-collector; do go build -o "$RUNNER_TEMP/bin/$name" "./cmd/$name"; done
+      - name: The four units, as shipped, under systemd; a peer's lease, the daemon, a revocation
+        run: |
+          set -o pipefail
+          REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
+          grep -q '^node-units-systemd: 49 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
+            echo "::error::the units test did not pass all 49 checks" >&2; exit 1; }

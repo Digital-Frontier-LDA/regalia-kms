@@ -3,8 +3,10 @@ one file the Go daemon reads. Refused means serve_until 0 in the same step; a fa
 the lease still gives; the file runs out by itself if the service stops."""
 import json
 import os
+import subprocess
 import unittest
 import unittest.mock
+from unittest import mock
 
 from deploy.baremetal import admission, lease
 from deploy.baremetal import heartbeat as hb
@@ -116,7 +118,20 @@ class Admission(Case):
         self.manifest_now = None
         self.service.manifest = lambda: (_ for _ in ()).throw(m.Refused("bad\x00\n\x1b[31m" + "x" * 500))
         reason = self.service.step()["reason"]
-        self.assertEqual(reason, "bad???[31m" + "x" * 230)
+        self.assertEqual(reason, "bad???[31m" + "x" * 500)
+
+    def test_the_longest_document_fits_what_the_daemon_reads(self):
+        """internal/admission refuses a file above maxFileBytes (4096) as oversized, which would hide the reason:
+        the reason is cut at ADMISSION_REASON_LIMIT, and the document with every field at its largest fits."""
+        self.manifest_now = None
+        self.service.manifest = lambda: (_ for _ in ()).throw(m.Refused("y" * 10000))
+        self.assertEqual(len(self.service.step()["reason"]), admission.ADMISSION_REASON_LIMIT)
+        widest = {"schema": admission.SCHEMA, "node_id": "n" * 32, "session_id": "f" * 64, "boot_id": "b" * 36,
+                  "epoch": 2 ** 63 - 1, "manifest_digest": "d" * 64, "lease_issued_at": "9999-12-31T23:59:59Z",
+                  "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1,
+                  "reason": "\\" * admission.ADMISSION_REASON_LIMIT}            # every character escaped: the worst case
+        self.assertEqual(set(widest), set(self.service.step()))                     # the same fields the service writes
+        self.assertLessEqual(len(json.dumps(widest).encode()) + 1, 4096)
 
     def test_if_the_service_stops_the_file_runs_out_by_itself(self):
         document = self.service.step()
@@ -192,6 +207,163 @@ class Admission(Case):
         self.assertEqual(held["lease"]["node_id"], "a")
         held["lease"]["node_id"] = "z"
         self.assertEqual(self.holder.held()["lease"]["node_id"], "a")
+
+
+class DaemonStart(Case):
+    """The daemon serves only under a lease asked for after its own process started (#72). The service
+    sees that start and asks at once, not at the next scheduled renewal."""
+
+    def setUp(self):
+        super().setUp()
+        self.started = None
+        self.service = admission.Service(self.holder, lambda: self.manifest_now, self.renew, self.path,
+                                         boottime=lambda: self.ticks, boot=lambda: BOOT, daemon_started=lambda: self.started)
+
+    def test_a_daemon_that_started_after_the_lease_was_asked_for_gets_a_new_one_at_once(self):
+        first = self.service.step()
+        self.later(5)                                   # far from a third of the lease
+        self.assertEqual(self.service.step()["requested_boottime_ms"], first["requested_boottime_ms"])   # no daemon known: the schedule
+        self.started = first["requested_boottime_ms"] - 1
+        self.assertEqual(self.service.step()["requested_boottime_ms"], first["requested_boottime_ms"])   # it started before: the lease serves it
+        self.started = self.ticks - 2000                # the daemon restarted two seconds ago
+        renewed = self.service.step()
+        self.assertEqual(renewed["requested_boottime_ms"], self.ticks)
+        self.assertGreater(renewed["requested_boottime_ms"], self.started)
+        self.assertGreater(renewed["serve_until_boottime_ms"], first["serve_until_boottime_ms"])
+        self.later(5)
+        self.assertEqual(self.service.step()["requested_boottime_ms"], renewed["requested_boottime_ms"])  # once, not at every step
+
+    def test_a_renewal_in_the_same_second_as_the_held_lease_still_takes_effect(self):
+        """Both leases then expire together. The one just asked for must win the tie, or the daemon would go
+        on waiting with the service believing it had answered."""
+        first = self.service.step()
+        self.ticks += 700                               # the boot clock moved; authenticated time, in seconds, did not
+        self.started = self.ticks - 100
+        renewed = self.service.step()
+        self.assertEqual(renewed["requested_boottime_ms"], self.ticks)
+        self.assertEqual(renewed["serve_until_boottime_ms"] - first["serve_until_boottime_ms"], 700)   # the same expiry, read 700 ms later
+        self.ticks += 5000
+        self.assertEqual(self.service.step()["requested_boottime_ms"], renewed["requested_boottime_ms"])
+
+    def test_a_renewal_for_the_daemon_is_held_even_if_it_has_less_life_than_the_lease_held(self):
+        """Found by an independent read. The issuer dates a lease by ITS clock and cuts it at ITS heartbeat's
+        expiry, so the lease asked for after the daemon started can end before the one held. Keeping the
+        longer one left the daemon refusing every token, and the service asking again every round."""
+        first = self.service.step()
+
+        def shorter(request):
+            body = dict(self.issue("c", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + lease.MAX_LIFETIME - 5))
+            return lt.sign(body, self.keys["c"])
+        self.service.renew = shorter
+        self.later(1)
+        self.started = self.ticks - 500
+        renewed = self.service.step()
+        self.assertEqual(renewed["requested_boottime_ms"], self.ticks)                        # the new lease is the one held
+        self.assertEqual(renewed["serve_until_boottime_ms"] - first["serve_until_boottime_ms"], -5000 + 1000)   # 5 s shorter, read 1 s later
+        self.assertEqual(self.holder.held()["lease"]["issuer"], "c")
+        self.later(5)
+        self.assertEqual(self.service.step()["requested_boottime_ms"], renewed["requested_boottime_ms"])   # and it is not asked for again
+        # on the schedule, with no daemon waiting, the longer lease is still the one kept
+        self.later(lease.MAX_LIFETIME // 3 + 5)
+
+        def much_shorter(request):
+            body = dict(self.issue("b", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + 20))
+            return lt.sign(body, self.keys["b"])
+        self.service.renew = much_shorter
+        kept = self.service.step()
+        self.assertEqual((kept["requested_boottime_ms"], self.holder.held()["lease"]["issuer"]), (renewed["requested_boottime_ms"], "c"))
+
+    def test_a_preferred_lease_inside_the_margin_costs_one_round_and_heals_at_the_next(self):
+        first = self.service.step()
+
+        def nearly_over(request):
+            body = dict(self.issue("c", manifest=self.manifest_now, request=request)["lease"], expires_at=hbt.stamp(self.now + admission.MARGIN))
+            return lt.sign(body, self.keys["c"])
+        good, self.service.renew = self.service.renew, nearly_over
+        self.later(1)
+        self.started = self.ticks - 500
+        inside = self.service.step()
+        self.assertEqual(inside["serve_until_boottime_ms"], 0)
+        self.assertIn("inside the 10 s margin", inside["reason"])
+        self.service.renew = good
+        self.later(5)
+        healed = self.service.step()                                    # the schedule asks again: the held lease is nearly over
+        self.assertGreater(healed["serve_until_boottime_ms"], first["serve_until_boottime_ms"])
+        self.assertGreater(healed["requested_boottime_ms"], self.started)
+
+    def test_a_lease_asked_for_at_the_very_tick_the_daemon_started_is_not_after_it(self):
+        first = self.service.step()
+        self.started = first["requested_boottime_ms"]
+        self.later(1)
+        self.assertEqual(self.service.step()["requested_boottime_ms"], self.ticks)
+
+    def test_while_the_peer_is_down_it_keeps_asking_and_keeps_what_it_holds(self):
+        first = self.service.step()
+        self.later(5)
+        self.started, self.peer_up = self.ticks - 1000, False
+        kept = self.service.step()
+        self.assertEqual((kept["requested_boottime_ms"], kept["serve_until_boottime_ms"]),
+                         (first["requested_boottime_ms"], first["serve_until_boottime_ms"]))
+        self.later(5)
+        self.peer_up = True
+        self.assertEqual(self.service.step()["requested_boottime_ms"], self.ticks)
+
+    def test_a_lost_request_record_counts_as_asked_before(self):
+        self.service.step()
+        os.unlink(self.path + ".requests")
+        self.later(5)
+        self.started = 1                                # long ago, yet nothing shows the lease was asked for since
+        self.assertEqual(self.service.step()["requested_boottime_ms"], self.ticks)
+
+    def test_the_start_of_a_systemd_unit_is_read_from_the_kernel(self):
+        proc = os.path.join(self.d, "proc")
+        os.makedirs(os.path.join(proc, "4242"))
+        tail = " S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 123456 20 21\n"
+        calls = []
+
+        def systemctl(pid=b"4242\n", code=0):
+            def run(argv, **kw):
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, code, pid, b"")
+            return run
+        for name in ("(regalia-kms)", "(a b)", "(evil) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 20)"):
+            with open(os.path.join(proc, "4242", "stat"), "w") as f:
+                f.write("4242 " + name + tail)
+            self.assertEqual(admission.unit_started(run=systemctl(), proc=proc)(), 1234570)
+        self.assertEqual(calls[0], ["systemctl", "show", "--property=MainPID", "--value", "regalia-kms.service"])
+        self.assertEqual(admission.process_started_ms(4242, proc), 1234570)
+        # nothing to read is "unknown", never an error that stops the lease service and never a time
+        for label, run in (("the unit has no main process", systemctl(b"0\n")), ("systemctl failed", systemctl(code=1)),
+                           ("not a PID", systemctl(b"4242; rm\n")), ("the process is gone", systemctl(b"4243\n"))):
+            with self.subTest(label):
+                self.assertIsNone(admission.unit_started(run=run, proc=proc)())
+
+        def missing(argv, **kw):
+            raise FileNotFoundError("systemctl")
+
+        def slow(argv, **kw):
+            raise subprocess.TimeoutExpired(argv, 10)
+        self.assertIsNone(admission.unit_started(run=missing, proc=proc)())
+        self.assertIsNone(admission.unit_started(run=slow, proc=proc)())
+        for label, stat in (("no command name", "4242 regalia-kms S 1 2"), ("too short", "4242 (x) S 1 2 3"),
+                            ("not a number", "4242 (x)" + tail.replace("123456", "soon")), ("zero", "4242 (x)" + tail.replace("123456", "0")),
+                            ("negative", "4242 (x)" + tail.replace("123456", "-5")), ("empty", "")):
+            with self.subTest(label):
+                with open(os.path.join(proc, "4242", "stat"), "w") as f:
+                    f.write(stat)
+                self.refused("the process start time cannot be read", admission.process_started_ms, 4242, proc)
+                self.assertIsNone(admission.unit_started(run=systemctl(), proc=proc)())
+
+    def test_this_process_s_start_is_on_the_boot_clock_and_matches_what_the_daemon_would_read(self):
+        started = admission.process_started_ms(os.getpid())
+        self.assertTrue(0 < started <= admission.boottime_ms())
+        self.assertEqual(started % 10, 0)
+        self.assertEqual(admission.process_started_ms(os.getpid()), started)
+
+    def test_another_clock_tick_is_refused_rather_than_disagreed_with(self):
+        with mock.patch.object(os, "sysconf", lambda name: 250):
+            self.refused("the kernel clock tick is not 100 Hz", admission.process_started_ms, os.getpid())
+            self.assertIsNone(admission.unit_started(run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, b"%d\n" % os.getpid(), b""))())
 
 
 if __name__ == "__main__":

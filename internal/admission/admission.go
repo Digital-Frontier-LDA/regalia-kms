@@ -31,9 +31,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +50,7 @@ const (
 	MaxAheadMilliseconds = 300_000
 	maxFileBytes         = 4096
 	bootIDPath           = "/proc/sys/kernel/random/boot_id"
+	processStatPath      = "/proc/self/stat"
 )
 
 // ErrNotAdmitted is what an operation gets while the node holds no runtime lease.
@@ -90,8 +93,13 @@ type Options struct {
 	Path        string
 	NodeID      string
 	SessionPath string
-	// OwnerUID is who must own the two files and their directories. Zero is root, the default.
+	// OwnerUID is the lease service's user (regalia-kms#191): the admission file and its directory
+	// must be that user's or root's. Zero is root.
 	OwnerUID uint32
+	// SessionOwnerUID is who writes the boot session: root (the unlock client, or
+	// regalia-boot-session.service), the default. Only tests set it. The lease service's user is
+	// never trusted for this file: it would then choose the session its own admission is checked against.
+	SessionOwnerUID uint32
 	// Boottime returns CLOCK_BOOTTIME in milliseconds.
 	Boottime func() (int64, error)
 	// BootID returns the kernel's boot ID.
@@ -119,6 +127,11 @@ func Open(options Options) (*Gate, error) {
 	if !filepath.IsAbs(options.Path) || !filepath.IsAbs(options.SessionPath) {
 		return nil, errors.New("admission paths must be absolute")
 	}
+	// readTrusted checks the cleaned directory and opens the path as given: the two must be the same
+	// path, or a ".." after a link would open a file outside the directories that were checked.
+	if filepath.Clean(options.Path) != options.Path || filepath.Clean(options.SessionPath) != options.SessionPath {
+		return nil, errors.New("admission paths must be clean, with no \"..\", \".\" or repeated \"/\"")
+	}
 	if !nodeIDPattern.MatchString(options.NodeID) {
 		return nil, errors.New("admission needs this node's ID as the membership manifest spells it")
 	}
@@ -145,6 +158,46 @@ func Boottime() (int64, error) {
 		return 0, err
 	}
 	return ts.Sec*1000 + ts.Nsec/1_000_000, nil
+}
+
+// ProcessStart is when this process started, in CLOCK_BOOTTIME milliseconds, as the kernel records it
+// in /proc/self/stat. The lease service reads the same number for the daemon's PID
+// (deploy/baremetal/admission.py, daemon_started), so "a lease asked for after the daemon started"
+// means the same moment on both sides, and the service can ask for one at once instead of at its
+// next renewal. The kernel counts it in clock ticks, rounded down; this returns the tick AFTER, so it
+// is never before the true start (and up to 10 ms after it): a lease asked for inside the tick the
+// process started in, before the process existed, does not count as asked for since.
+func ProcessStart() (int64, error) {
+	contents, err := os.ReadFile(processStatPath)
+	if err != nil {
+		return 0, err
+	}
+	return parseProcessStart(string(contents))
+}
+
+// userHZ is the unit of the times in /proc/<pid>/stat. It is 100 on every Linux architecture Go
+// supports (the kernel's USER_HZ, not its internal tick rate); deploy/baremetal/admission.py asks
+// sysconf and refuses any other value.
+const userHZ = 100
+
+// parseProcessStart takes field 22 (starttime) of a /proc/<pid>/stat line. The command name, field
+// 2, is in parentheses and may itself contain spaces and parentheses, so the fields are counted
+// from the LAST ")".
+func parseProcessStart(stat string) (int64, error) {
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return 0, errors.New("the process stat line has no command name")
+	}
+	fields := strings.Fields(stat[end+1:])
+	const startTime = 22 - 3 // fields[0] is field 3, the state
+	if len(fields) <= startTime {
+		return 0, errors.New("the process stat line is too short")
+	}
+	ticks, err := strconv.ParseInt(fields[startTime], 10, 64)
+	if err != nil || ticks <= 0 || ticks > math.MaxInt64/1000 {
+		return 0, errors.New("the process start time is not a positive number of ticks")
+	}
+	return (ticks + 1) * 1000 / userHZ, nil
 }
 
 // KernelBootID reads /proc/sys/kernel/random/boot_id.
@@ -201,7 +254,7 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if document.BootID != gate.bootID {
 		return refuse("the admission file is from another boot")
 	}
-	session, err := readTrusted(gate.options.SessionPath, gate.options.OwnerUID)
+	session, err := readTrusted(gate.options.SessionPath, gate.options.SessionOwnerUID)
 	if err != nil {
 		return refuse("the boot session: " + err.Error())
 	}
@@ -239,17 +292,24 @@ func (gate *Gate) read() (Document, error) {
 	return Parse(contents)
 }
 
-// readTrusted reads a small file that only its owner could have written: opened without following
-// a link, regular, owned by ownerUID, not writable by group or others, in a directory with the same
-// owner and the same restriction. The checks run on the opened descriptor, so the file that is
-// checked is the file that is read.
+// readTrusted reads a small file that only its writer (ownerUID) or root could have written: opened
+// without following a link, regular, owned by one of the two, not writable by group or others, in a
+// directory with the same owner and the same restriction. Above that directory nobody else may be able
+// to swap it: every ancestor is a real directory owned by one of the two, and one that group or others
+// can write must be sticky (as /tmp is) with the next component down owned by one of the two, so
+// nobody else can rename it away. The file's own checks run on the opened descriptor, so the file that
+// is checked is the file that is read.
 func readTrusted(path string, ownerUID uint32) ([]byte, error) {
+	trusted := func(uid uint32) bool { return uid == ownerUID || uid == 0 }
 	var directory unix.Stat_t
 	if err := unix.Lstat(filepath.Dir(path), &directory); err != nil {
 		return nil, errors.New("its directory cannot be examined")
 	}
-	if directory.Mode&unix.S_IFMT != unix.S_IFDIR || directory.Uid != ownerUID || directory.Mode&0o022 != 0 {
-		return nil, errors.New("its directory is not one only its owner can write")
+	if directory.Mode&unix.S_IFMT != unix.S_IFDIR || !trusted(directory.Uid) || directory.Mode&0o022 != 0 {
+		return nil, errors.New("its directory is not one only its owner or root can write")
+	}
+	if err := ancestorsTrusted(filepath.Dir(path), directory.Uid, trusted); err != nil {
+		return nil, err
 	}
 	descriptor, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
@@ -264,8 +324,8 @@ func readTrusted(path string, ownerUID uint32) ([]byte, error) {
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, errors.New("it is not a regular file")
 	}
-	if stat.Uid != ownerUID || stat.Mode&0o022 != 0 {
-		return nil, errors.New("it is not a file only its owner can write")
+	if !trusted(stat.Uid) || stat.Mode&0o022 != 0 {
+		return nil, errors.New("it is not a file only its owner or root can write")
 	}
 	contents, err := io.ReadAll(io.LimitReader(file, maxFileBytes+1))
 	if err != nil {
@@ -275,6 +335,26 @@ func readTrusted(path string, ownerUID uint32) ([]byte, error) {
 		return nil, errors.New("it is oversized")
 	}
 	return contents, nil
+}
+
+// ancestorsTrusted walks from directory's parent up to "/". childUID is the owner of the component
+// below the one examined.
+func ancestorsTrusted(directory string, childUID uint32, trusted func(uint32) bool) error {
+	for current := directory; current != "/"; {
+		parent := filepath.Dir(current)
+		var stat unix.Stat_t
+		if err := unix.Lstat(parent, &stat); err != nil {
+			return fmt.Errorf("%s, above it, cannot be examined", parent)
+		}
+		if stat.Mode&unix.S_IFMT != unix.S_IFDIR || !trusted(stat.Uid) {
+			return fmt.Errorf("%s, above it, is not a directory of its owner or root", parent)
+		}
+		if stat.Mode&0o022 != 0 && (stat.Mode&unix.S_ISVTX == 0 || !trusted(childUID)) {
+			return fmt.Errorf("%s, above it, lets someone else replace what is below it", parent)
+		}
+		current, childUID = parent, stat.Uid
+	}
+	return nil
 }
 
 // Parse validates the bytes of an admission file: one JSON object with exactly the schema's

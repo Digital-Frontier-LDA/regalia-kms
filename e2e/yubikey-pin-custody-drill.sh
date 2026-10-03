@@ -41,7 +41,7 @@ for t in ykman systemd-creds systemd-run age age-keygen go python3 openssl; do c
 sudo -n true 2>/dev/null || die "needs sudo (systemd-creds and the service run as root); run 'sudo -v' first"
 
 # ---- the gate: two registered staging YubiKeys, proven by the key in 9A ----------------------------
-registered(){ python3 - "$HSM_STAGING_REGISTRY_FILE" "$1" <<'PY'
+registered(){ python3 -I - "$HSM_STAGING_REGISTRY_FILE" "$1" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 m = [x for x in d["devices"] if x.get("kind") == "yubikey-piv" and x.get("token_serial") == sys.argv[2] and x.get("role") == "staging"]
@@ -58,6 +58,16 @@ tries(){ ykman --device "$1" piv info 2>/dev/null | sed -n 's/^PIN tries remaini
 counters(){ say "  counters: $PRIMARY=$(tries "$PRIMARY" || echo absent) $REPLACEMENT=$(tries "$REPLACEMENT" || echo absent)"; }
 for s in "$PRIMARY" "$REPLACEMENT"; do [ "$(tries "$s")" = 3 ] || die "$s does not start at 3 PIN tries: a drill that starts low cannot measure what it spends"; done
 say "cards $PRIMARY (primary) and $REPLACEMENT (replacement), registered and pinned; state $STATE"
+# OPENSC IS USED ONLY TO SEE THE NITROKEY, and it is shown ONLY the Nitrokey (e2e/lib/bench_cards.sh,
+# regalia-kms#174): with its defaults it would enumerate the YubiKeys under test too, open them, and
+# leave their PIV applet selected while the drill counts their PIN tries. Every PIN in this drill goes
+# to a YubiKey named by serial (ykman --device, and the provider, which checks the serial first).
+if [ -n "$NITROKEY" ]; then
+  # shellcheck source=lib/bench_cards.sh
+  . "$ROOT/e2e/lib/bench_cards.sh"
+  NK_MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
+  bench_isolate "$STATE/opensc.conf" "$NK_MODULE" "$NITROKEY" || die "cannot isolate the Nitrokey $NITROKEY in OpenSC"
+fi
 
 # ---- helpers ------------------------------------------------------------------------------------
 # USB device of a YubiKey, by serial: de-authorise each candidate until that serial vanishes.
@@ -69,7 +79,7 @@ usb_of_yubikey(){ local d; for d in /sys/bus/usb/devices/*; do
   done; return 1; }
 authorize(){ echo "$2" | sudo tee "$1/authorized" >/dev/null; sleep 3; }
 # Change a card's PIN; both PINs on stdin to a pty-driven ykman, never argv.
-change_pin(){ OLD="$2" NEW="$3" python3 - "$1" <<'PY'
+change_pin(){ OLD="$2" NEW="$3" python3 -I - "$1" <<'PY'
 import os, pty, re, select, sys, termios, time
 pid, fd = pty.fork()
 if pid == 0:
@@ -98,7 +108,11 @@ seal(){ # seal <name> <out> ; the PIN arrives on stdin
   sudo systemd-creds encrypt --with-key=host --name="$1" - "$2" 2>>"$LOG" >/dev/null; }
 say "building the drill test binary"
 go -C "$ROOT" test -c -tags piv -o "$STATE/drill.test" ./internal/integration 2>&1 | tee -a "$LOG" || die "build"
+# The YubiKey a phase hands a PIN to is named by serial; it must be on the bus as that serial now.
+yk_gate(){ ykman list --serials 2>/dev/null | grep -qx "$1" || { say "$1 is not attached: no PIN presented"; return 97; }; }
 phase(){ # phase <name> <serial> <credential blob> ; returns the test's status
+  # "absent" runs with the card out on purpose and must present nothing: the one phase not gated.
+  [ "$1" = absent ] || yk_gate "$2" || die "$2 is not attached: no PIN presented"
   local out; out="$(sudo systemd-run --quiet --pipe --wait --collect -p LimitMEMLOCK=1M \
       -p "LoadCredentialEncrypted=yubi-drill.pin:$3" \
       --setenv=REGALIA_PINDRILL_PHASE="$1" --setenv=REGALIA_PINDRILL_SERIAL="$2" \
@@ -142,7 +156,7 @@ say "R1 — seal the primary's PIN (v1) and serve through it"
 printf '%s' "$YK_PIN_PRIMARY" | seal yubi-drill.pin "$STATE/v1.cred"
 phase serve "$PRIMARY" "$STATE/v1.cred" || die "v1 did not serve"; counters
 say "R2 — rotate: new PIN on the card, sealed as v2 BEFORE anything restarts"
-NEWPIN="$(python3 -c 'import secrets; print("".join(secrets.choice("0123456789") for _ in range(8)))')"
+NEWPIN="$(python3 -I -c 'import secrets; print("".join(secrets.choice("0123456789") for _ in range(8)))')"
 printf '%s' "$NEWPIN" | age -r "$BG" -o "$STATE/rotated.age"   # so a failed run can still restore it
 change_pin "$PRIMARY" "$YK_PIN_PRIMARY" "$NEWPIN" >/dev/null 2>&1 || die "PIN change on $PRIMARY"
 # Only now is the card's PIN the rotated one. Set earlier, a failed change would make the restore
@@ -174,10 +188,10 @@ if [ -n "$NITROKEY" ]; then
   NK=""; for d in /sys/bus/usb/devices/*; do grep -q "^${NITROKEY}" "$d/serial" 2>/dev/null && NK="$d"; done
   [ -n "$NK" ] || die "cannot find Nitrokey $NITROKEY on USB"
   authorize "$NK" 0
-  pkcs11-tool --list-slots 2>/dev/null | grep -q "$NITROKEY" && die "the Nitrokey is still visible"
+  pkcs11-tool --module "$NK_MODULE" --list-slots 2>/dev/null | grep -q "$NITROKEY" && die "the Nitrokey is still visible"
   phase serve "$PRIMARY" "$STATE/v3.cred" || die "YubiKey custody failed while the HSM was out"
   authorize "$NK" 1; sleep 2
-  pkcs11-tool --list-slots 2>/dev/null | grep -q "$NITROKEY" && say "  Nitrokey back" || say "  WARNING: Nitrokey not visible again yet"
+  pkcs11-tool --module "$NK_MODULE" --list-slots 2>/dev/null | grep -q "$NITROKEY" && say "  Nitrokey back" || say "  WARNING: Nitrokey not visible again yet"
 else
   say "O1 — skipped: no Nitrokey serial given"
 fi

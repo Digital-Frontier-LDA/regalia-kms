@@ -36,8 +36,8 @@ M0="$(printf 'firmware stand-in' | sha256sum | cut -d' ' -f1)"; M7="$(printf 'se
 boot(){ mkdir -p "$W/$1"; swtpm socket --tpm2 --tpmstate "dir=$W/$1" --server "type=unixio,path=$W/$1.sock" \
   --ctrl "type=unixio,path=$W/$1.sock.ctrl" --flags not-need-init,startup-clear --daemon --pid "file=$W/$1.pid"; sleep 0.5
   TPM2TOOLS_TCTI="$(tcti "$1")" tpm2_pcrextend "0:sha256=$M0" "7:sha256=$M7"; }
-node(){ local t="$1"; shift; TPM2TOOLS_TCTI="$(tcti "$t")" python3 "$ATTEST" "$@" 2>&1; }
-ver(){ local c="$1"; shift; python3 "$ATTEST" "$c" --policy "$W/policy.json" --state "$W/state.json" "$@" 2>&1; }
+node(){ local t="$1"; shift; TPM2TOOLS_TCTI="$(tcti "$t")" python3 -Es "$ATTEST" "$@" 2>&1; }
+ver(){ local c="$1"; shift; python3 -Es "$ATTEST" "$c" --policy "$W/policy.json" --state "$W/state.json" "$@" 2>&1; }
 rnd(){ openssl rand -hex 32; }
 ephemeral(){ openssl genpkey -algorithm X25519 2>/dev/null | openssl pkey -pubout -outform DER -out "$1"; }
 # refused NAME REASON CMD...: the command must exit nonzero AND give that reason
@@ -57,7 +57,7 @@ mkdir "$W/a" "$W/b"
 node A node-init --out "$W/a" >/dev/null || F "node-init on A failed"
 node B node-init --out "$W/b" >/dev/null || F "node-init on B failed"
 # INTAKE: the verifier's reference values for site-a, read from TPM A while it is trusted
-TPM2TOOLS_TCTI="$(tcti A)" python3 - "$HERE" "$W" <<'PY' || { echo "tpm-attest-swtpm: intake failed"; exit 1; }
+TPM2TOOLS_TCTI="$(tcti A)" python3 -I - "$HERE" "$W" <<'PY' || { echo "tpm-attest-swtpm: intake failed"; exit 1; }
 import json, re, subprocess, sys
 sys.path.insert(0, sys.argv[1])
 from deploy.baremetal import attest
@@ -130,7 +130,7 @@ N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S1" "$W/k1.der" "$N
 refused "a quote over a different PCR selection is refused" 'covers PCRs' verify "$EPOCH" "$S1" "$W/k1.der" "$N"
 N="$(ver nonce --node-id site-a)"; quote B site-a "$EPOCH" "$S1" "$W/k1.der" "$N"
 refused "a quote signed by another TPM's AK is refused" 'signature does not verify' verify "$EPOCH" "$S1" "$W/k1.der" "$N"
-flip(){ python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[int(sys.argv[3])]^=1; open(sys.argv[2],"wb").write(b)' "$@"; }
+flip(){ python3 -I -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[int(sys.argv[3])]^=1; open(sys.argv[2],"wb").write(b)' "$@"; }
 N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S1" "$W/k1.der" "$N"; flip "$W/q.sig" "$W/bad.sig" 10
 refused "an altered signature is refused" 'signature does not verify' verify "$EPOCH" "$S1" "$W/k1.der" "$N" "$W/q.msg" "$W/bad.sig"
 N="$(ver nonce --node-id site-a)"; quote A site-a "$EPOCH" "$S1" "$W/k1.der" "$N"; flip "$W/q.msg" "$W/bad.msg" -1

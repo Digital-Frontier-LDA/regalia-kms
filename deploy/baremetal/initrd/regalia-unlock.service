@@ -1,0 +1,79 @@
+# The pre-root unlock client (cmd/regalia-unlock), started by a connection on regalia-unlock-core.socket,
+# which only the relay on the key socket (regalia-unlock-relay.service) connects to.
+#
+# systemd does two things for it, and the program does neither itself:
+#   - it unseals the local half of the disk credential with the TPM (LoadCredentialEncrypted=). On
+#     another machine, or on a boot the TPM's policy refuses, that fails and the program never starts;
+#   - it passes the listening socket (socket activation).
+# The program runs no other program and writes no secret anywhere. It stays for as long as the initrd
+# lasts and answers each connection with the key or with nothing, always under the ONE boot session it
+# made when it started: a peer accepts one session per boot. systemd stops it before the root filesystem
+# takes over; it zeroes the local half and the key and ends. Started again in
+# the same boot (after a crash), it finds the first one's session on record and asks no peer.
+
+[Unit]
+Description=Give the root volume's key: TPM plus one peer
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+DefaultDependencies=no
+Requires=regalia-unlock-core.socket
+# the local half is unsealed with the TPM: not before its device is there
+Wants=tpm2.target
+# and, in a measured boot, not before the initrd's phase is in PCR 11: the quote must show that phase
+After=tpm2.target systemd-pcrphase-initrd.service
+# the boot mesh, when the initrd has it (#66); without that unit this line does nothing
+Wants=regalia-wg-boot.service
+After=regalia-wg-boot.service
+# it holds the local half and the boot session's private key: it does not outlive the initrd
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+
+[Service]
+Type=exec
+# Everything that differs per host comes from the ESP, none from the image: the image is the same for
+# every host (one PCR 11 to sign). systemd-stub packs the ESP's loader/credentials/<name>.cred files into
+# the initrd at /.extra/global_credentials/ and measures them into PCR 12, which the peers attest. The
+# image's command line carries systemd.import_credentials=no, so systemd imports NO credential from any
+# source (ESP, SMBIOS, fw_cfg, command line) and nothing in the initrd acts on one by name; this unit
+# reads exactly its two files, by these fixed paths, as data:
+#   regalia.unlock-local   the local half, sealed to this TPM (decrypted here, never accepted in plain)
+#   regalia.unlock-config  the boot configuration (unlock.boot_config): not secret
+# With a path, a missing file is fatal: the unit does not start, and systemd-cryptsetup asks at the
+# console (the boot test times it).
+ExecStart=/usr/bin/regalia-unlock -config %d/regalia.unlock-config -budget 200s
+LoadCredentialEncrypted=regalia.unlock-local:/.extra/global_credentials/regalia.unlock-local.cred
+LoadCredential=regalia.unlock-config:/.extra/global_credentials/regalia.unlock-config.cred
+# What it leaves for the running system: the boot session's ID and public key, and who opened the disk,
+# in /run/regalia. The directory is root's, 0755, and stays when this unit ends and across switch-root:
+# the lease service and the KMS daemon read and write there after boot.
+RuntimeDirectory=regalia
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# it holds secrets for the whole initrd phase: no core file, whatever the image's defaults
+LimitCORE=0
+# The program is root with nothing root can do: no capability, no new privilege, no write anywhere but
+# that directory, no device but the TPM and the disks it reads the LUKS2 header of, no socket family but
+# the three it uses.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=block-* r
+UMask=0077

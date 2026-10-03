@@ -1,0 +1,55 @@
+# This boot's session, when the unlock client presented none (#191). The unlock client leaves
+# /run/regalia/boot-session and boot-session.pub in the initrd; on a boot where the disk was opened with
+# the recovery key it never ran, and the lease service needs a session to ask for a lease with. The lease
+# service is not root (regalia-admission) and cannot write /run/regalia, and the KMS daemon accepts the
+# session only from root: so this oneshot makes the pair, as root, the way the client would (the key
+# first, the marker last), and only if there is no marker yet. A pair the client left is kept as it is.
+# It holds no capability, no network and no device; it sees its configuration and /run/regalia only.
+# Never in the initrd: there the client owns the pair (deploy/baremetal/node.py, boot_session).
+[Unit]
+Description=Regalia KMS: this boot's session, when the unlock client presented none
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+# /run/regalia is made by tmpfiles (regalia.tmpfiles.conf) when the initrd did not leave it
+After=systemd-tmpfiles-setup.service
+Before=regalia-admission.service
+# never in the initrd, even in an image that copied every regalia-* unit: there the unlock client owns the pair
+ConditionPathExists=!/etc/initrd-release
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/usr/lib/regalia-kms
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json boot-session
+User=root
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/regalia
+TemporaryFileSystem=/etc:ro /var:ro /run:ro
+BindPaths=/run/regalia
+BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime
+ProtectProc=invisible
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

@@ -7,7 +7,7 @@ and nearest-rank p90 over `BENCH_N` samples.
 ```sh
 pip install --require-hashes -r tools/bench/requirements.txt
 HSM_PIN=… PKCS11_MODULE=/usr/lib/$(uname -m)-linux-gnu/opensc-pkcs11.so BENCH_N=25 \
-  python3 tools/bench/hsm-bench.py
+  python3 -Es tools/bench/hsm-bench.py
 ```
 
 **One session, logged in once — on the normal path.** Spawning `pkcs11-tool` per operation costs

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -31,7 +33,11 @@ const (
 //	  loop Token error, value Decode    refused by a later check with the same answer ("not one flat
 //	                                    JSON object"); the cases below cover each such input.
 //
-// world is one node's /run: a directory only its owner can write, the admission file and the boot
+// THE ANCESTOR WALK SEES THE TEST'S OWN TEMPORARY DIRECTORY. With TMPDIR (or GOTMPDIR) under a group- or
+// world-writable directory without the sticky bit (a umask 002 home, ~/.cache at 0775), the tests that
+// expect an admission are refused: that is the rule working, not a fault. /tmp, or any 0755/0700 chain, passes.
+//
+// world is one node's /run: a directory only its owner or root can write, the admission file and the boot
 // session file in it, and a CLOCK_BOOTTIME the test moves.
 type world struct {
 	t         *testing.T
@@ -59,7 +65,7 @@ func newWorld(t *testing.T) *world {
 	w.write("boot-session", []byte(testSession+"\n"), 0o644)
 	w.put(good(w.now))
 	gate, err := Open(Options{
-		Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid()),
+		Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid()), SessionOwnerUID: uint32(os.Getuid()),
 		Boottime:     func() (int64, error) { return w.now, nil },
 		BootID:       func() (string, error) { return testBoot, nil },
 		OnTransition: func(status Status) { w.events = append(w.events, status) },
@@ -164,10 +170,10 @@ func TestEveryDefectOfTheFileIsNotAdmitted(t *testing.T) {
 				w.t.Fatal(err)
 			}
 		}},
-		{"group-writable", "it is not a file only its owner can write", func(w *world) { w.write("admission.json", []byte(whole(w)), 0o664) }},
-		{"world-writable", "it is not a file only its owner can write", func(w *world) { w.write("admission.json", []byte(whole(w)), 0o646) }},
-		{"its directory group-writable", "its directory is not one only its owner can write", func(w *world) { _ = os.Chmod(w.directory, 0o775) }},
-		{"its directory world-writable", "its directory is not one only its owner can write", func(w *world) { _ = os.Chmod(w.directory, 0o757) }},
+		{"group-writable", "it is not a file only its owner or root can write", func(w *world) { w.write("admission.json", []byte(whole(w)), 0o664) }},
+		{"world-writable", "it is not a file only its owner or root can write", func(w *world) { w.write("admission.json", []byte(whole(w)), 0o646) }},
+		{"its directory group-writable", "its directory is not one only its owner or root can write", func(w *world) { _ = os.Chmod(w.directory, 0o775) }},
+		{"its directory world-writable", "its directory is not one only its owner or root can write", func(w *world) { _ = os.Chmod(w.directory, 0o757) }},
 		{"oversized", "it is oversized", raw("{" + strings.Repeat(" ", maxFileBytes) + "}")},
 		{"empty", "not one flat JSON object", raw("")},
 		{"not JSON", "not one flat JSON object", raw("admitted")},
@@ -258,7 +264,7 @@ func TestTheBootSessionFileIsHeldToTheSameRules(t *testing.T) {
 		arrange    func(*world)
 	}{
 		{"missing", "the boot session: it cannot be opened", func(w *world) { _ = os.Remove(w.path("boot-session")) }},
-		{"group-writable", "the boot session: it is not a file only its owner can write", func(w *world) {
+		{"group-writable", "the boot session: it is not a file only its owner or root can write", func(w *world) {
 			w.write("boot-session", []byte(testSession), 0o664)
 		}},
 		{"a symlink", "the boot session: it cannot be opened", func(w *world) {
@@ -281,7 +287,7 @@ func TestTheBootSessionFileIsHeldToTheSameRules(t *testing.T) {
 
 func TestAFileInADirectoryThatIsNotThereIsNotAdmitted(t *testing.T) {
 	w := newWorld(t)
-	gate, err := Open(Options{Path: w.path("absent/admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid()),
+	gate, err := Open(Options{Path: w.path("absent/admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid()), SessionOwnerUID: uint32(os.Getuid()),
 		Boottime: func() (int64, error) { return w.now, nil }, BootID: func() (string, error) { return testBoot, nil }})
 	if err != nil {
 		t.Fatal(err)
@@ -293,20 +299,117 @@ func TestAFileInADirectoryThatIsNotThereIsNotAdmitted(t *testing.T) {
 
 func TestAFileOwnedBySomeoneElseIsNotAdmitted(t *testing.T) {
 	w := newWorld(t)
-	other, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"),
+	other, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), SessionOwnerUID: uint32(os.Getuid()),
 		OwnerUID: uint32(os.Getuid()) + 1, Boottime: func() (int64, error) { return w.now, nil }, BootID: func() (string, error) { return testBoot, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	status := other.Check(context.Background())
-	if status.Admitted || !strings.Contains(status.Reason, "its directory is not one only its owner can write") {
+	if status.Admitted || !strings.Contains(status.Reason, "its directory is not one only its owner or root can write") {
 		t.Fatalf("status = %+v", status)
+	}
+}
+
+// THE LEASE SERVICE IS NOT ROOT (regalia-kms#191). Its user may write the admission file, never the
+// boot session: the session is what the admission is checked against, so it stays root's (or, here,
+// whoever SessionOwnerUID names), whatever OwnerUID says.
+func TestTheBootSessionIsHeldToItsOwnOwnerNotTheLeaseServices(t *testing.T) {
+	w := newWorld(t)
+	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"),
+		OwnerUID: uint32(os.Getuid()), SessionOwnerUID: uint32(os.Getuid()) + 1,
+		Boottime: func() (int64, error) { return w.now, nil }, BootID: func() (string, error) { return testBoot, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := gate.Check(context.Background())
+	if status.Admitted || !strings.Contains(status.Reason, "the boot session: its directory is not one only its owner or root can write") {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+// A file of root's is trusted whatever OwnerUID names: root can write it anyway. /etc/hostname is
+// root's, 0644, in root's /etc, on every host this suite runs on.
+func TestAFileOfRootsIsTrustedForAnyWriter(t *testing.T) {
+	var stat unix.Stat_t
+	if err := unix.Stat("/etc/hostname", &stat); err != nil || stat.Uid != 0 || stat.Mode&0o022 != 0 {
+		t.Skip("no root-owned /etc/hostname here")
+	}
+	if _, err := readTrusted("/etc/hostname", uint32(os.Getuid())+1); err != nil {
+		t.Fatalf("a root file was refused: %v", err)
+	}
+}
+
+// ABOVE THE DIRECTORY, NOBODY ELSE MAY BE ABLE TO SWAP IT. A directory that is the writer's own but sits
+// in one anyone can write, without the sticky bit, can be renamed away and replaced by anyone.
+func TestADirectoryUnderOneOthersCanWriteIsNotTrusted(t *testing.T) {
+	base := t.TempDir()
+	if err := os.Chmod(base, 0o755); err != nil { // CI's umask 002 makes it group-writable
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, want string
+		mode       os.FileMode
+		ok         bool
+	}{
+		{"world-writable, not sticky", "lets someone else replace what is below it", 0o777, false},
+		{"group-writable, not sticky", "lets someone else replace what is below it", 0o775, false},
+		{"world-writable and sticky, the child the writer's own", "", 0o777 | os.ModeSticky, true},
+		{"only its owner can write", "", 0o755, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			above := filepath.Join(base, strings.NewReplacer(" ", "-", ",", "", "'", "").Replace(test.name))
+			directory := filepath.Join(above, "admission")
+			if err := os.MkdirAll(directory, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(directory, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(above, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "admission.json"), []byte("{}"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := readTrusted(filepath.Join(directory, "admission.json"), uint32(os.Getuid()))
+			if test.ok && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if !test.ok && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("got %v, want a refusal containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+// A link on the way up is refused: the path would name a directory other than the one examined.
+func TestALinkAboveTheDirectoryIsNotTrusted(t *testing.T) {
+	base := t.TempDir()
+	if err := os.Chmod(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(real, "admission"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(real, "admission"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "admission", "admission.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(base, "link")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readTrusted(filepath.Join(base, "link", "admission", "admission.json"), uint32(os.Getuid()))
+	if err == nil || !strings.Contains(err.Error(), "is not a directory of its owner or root") {
+		t.Fatalf("got %v", err)
 	}
 }
 
 func TestAnUnreadableClockACancelledRequestAndANilGateAreNotAdmitted(t *testing.T) {
 	w := newWorld(t)
-	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid()),
+	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid()), SessionOwnerUID: uint32(os.Getuid()),
 		Boottime: func() (int64, error) { return 0, errors.New("no clock") }, BootID: func() (string, error) { return testBoot, nil }})
 	if err != nil {
 		t.Fatal(err)
@@ -337,6 +440,8 @@ func TestOpenRefusesAnIncompleteOrUnusableConfiguration(t *testing.T) {
 		{"no admission path", "needs the admission file path", Options{NodeID: "a", SessionPath: "/run/regalia/boot-session", BootID: boot}},
 		{"no session path", "needs the admission file path", Options{Path: "/run/regalia/admission.json", NodeID: "a", BootID: boot}},
 		{"a relative path", "must be absolute", Options{Path: "admission.json", NodeID: "a", SessionPath: "/run/regalia/boot-session", BootID: boot}},
+		{"a path with .. in it", "must be clean", Options{Path: "/run/regalia/admission/l/../admission.json", NodeID: "a", SessionPath: "/run/regalia/boot-session", BootID: boot}},
+		{"a session path with a repeated slash", "must be clean", Options{Path: "/run/regalia/admission/admission.json", NodeID: "a", SessionPath: "/run/regalia//boot-session", BootID: boot}},
 		{"a relative session path", "must be absolute", Options{Path: "/run/regalia/admission.json", NodeID: "a", SessionPath: "boot-session", BootID: boot}},
 		{"no node ID", "needs this node's ID", Options{Path: "/run/regalia/admission.json", SessionPath: "/run/regalia/boot-session", BootID: boot}},
 		{"a node ID the manifest could not hold", "needs this node's ID", Options{Path: "/run/regalia/admission.json", NodeID: "Site A", SessionPath: "/run/regalia/boot-session", BootID: boot}},
@@ -365,7 +470,7 @@ func TestTheRealClockAndBootID(t *testing.T) {
 	}
 	// with the defaults, a gate opens, and a file from the fixture's boot is from another boot
 	w := newWorld(t)
-	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid())})
+	gate, err := Open(Options{Path: w.path("admission.json"), NodeID: "a", SessionPath: w.path("boot-session"), OwnerUID: uint32(os.Getuid()), SessionOwnerUID: uint32(os.Getuid())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,6 +585,50 @@ func TestTheRunnerChecksAdmissionBeforeDuringAndAfterAnOperation(t *testing.T) {
 		"no executor": NewRunner(&scriptedHolder{answers: []bool{true}}, nil)} {
 		if err := runner.Run(context.Background(), func(context.Context) error { return nil }); !errors.Is(err, ErrNotAdmitted) {
 			t.Fatalf("%s: Run = %v, want ErrNotAdmitted", name, err)
+		}
+	}
+}
+
+// The daemon's start, as the kernel dates it: the number the lease service reads for the same PID.
+func TestProcessStartIsThisProcessOnTheBootClock(t *testing.T) {
+	started, err := ProcessStart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now, err := Boottime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started <= 0 || started > now {
+		t.Fatalf("the process started at %d and the boot clock reads %d", started, now)
+	}
+	if again, _ := ProcessStart(); again != started {
+		t.Fatalf("the start time moved: %d then %d", started, again)
+	}
+	if started%10 != 0 {
+		t.Fatalf("%d is not a whole number of 10 ms ticks", started)
+	}
+}
+
+func TestParseProcessStartCountsFromTheLastParenthesis(t *testing.T) {
+	tail := " S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 123456 20 21\n"
+	for _, name := range []string{"(regalia-kms)", "(a b)", "(evil) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 20)", "(()"} {
+		got, err := parseProcessStart("4242 " + name + tail)
+		if err != nil || got != 1234570 { // tick 123456 at 100 Hz, and one tick more: never before the true start
+			t.Fatalf("%q: %d, %v", name, got, err)
+		}
+	}
+	for label, stat := range map[string]string{
+		"no command name": "4242 regalia-kms S 1 2",
+		"too short":       "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+		"not a number":    "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 soon 20",
+		"zero":            "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 0 20",
+		"negative":        "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 -5 20",
+		"overflowing":     "4242 (x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 9223372036854775807 20",
+		"empty":           "",
+	} {
+		if got, err := parseProcessStart(stat); err == nil {
+			t.Fatalf("%s: accepted as %d", label, got)
 		}
 	}
 }

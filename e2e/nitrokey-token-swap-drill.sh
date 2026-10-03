@@ -2,7 +2,7 @@
 # nitrokey-token-swap-drill.sh — regalia#48 rows F3 (USB detach and return) and F5 (a different genuine
 # card in place of the commissioned one) on REAL cards, with one long-lived provider across the whole
 # sequence (TestPhysicalTokenSwapIsRefusedBeforeAnyPIN). What this script adds is the measurement the
-# test cannot make about itself: EVERY attached card's PIN retry counter, read before and after from
+# test cannot make about itself: both drill cards' PIN retry counters (the only cards OpenSC is shown), read before and after from
 # outside the process (an empty VERIFY answers 63Cx without spending a try). Every counter must end
 # where it started.
 #
@@ -23,15 +23,20 @@ MODULE="${HSM_PKCS11_MODULE:-/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so}"
 export HSM_PKCS11_MODULE="$MODULE"
 STATE="$(mktemp -d "${TMPDIR:-/tmp}/regalia-swap.XXXXXX")"; chmod 700 "$STATE"
 LOG="$STATE/transcript.log"
-# Three or more readers: OpenSC's default 16 virtual slots hide the fifth (see the cross-card drill).
-printf 'app default {\n}\napp opensc-pkcs11 {\n\tpkcs11 {\n\t\tmax_virtual_slots = 32;\n\t}\n}\n' > "$STATE/opensc.conf"
-export OPENSC_CONF="${OPENSC_CONF:-$STATE/opensc.conf}"
 say(){ printf '%s %s\n' "$(date -u +%T)" "$*" | tee -a "$LOG"; }
 die(){ say "FAIL: $*"; say "state kept for inspection: $STATE"; exit 1; }
 sudo -n true 2>/dev/null || die "needs sudo for the USB toggle; run 'sudo -v' first"
 # shellcheck source=/dev/null
 . "$CEREMONY/tools/hsm-reader-select.sh"
 
+# OpenSC sees ONLY these two cards (e2e/lib/bench_cards.sh, regalia-kms#174): no other card is probed,
+# and none can take a slot when the commissioned card's reader leaves and comes back. Isolation is by
+# reader name, not index, so it holds across the re-enumeration the detach causes.
+# shellcheck source=lib/bench_cards.sh
+. "$ROOT/e2e/lib/bench_cards.sh"
+bench_isolate "$STATE/opensc.conf" "$MODULE" "$CARD" "$OTHER" || die "cannot isolate $CARD and $OTHER in OpenSC"
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
 for s in "$CARD" "$OTHER"; do hsm_assert_staging_card "$s" || die "$s is not a registered staging card: refusing"; done
 USB=""
 for d in /sys/bus/usb/devices/*; do
@@ -53,6 +58,11 @@ BEFORE="$(counters)"
 say "commissioned $CARD at USB $USB, other $OTHER, object $OBJECT; OPENSC_CONF=$OPENSC_CONF"
 say "PIN tries before: $BEFORE"
 
+# The provider presents the PINs (it checks each card's identity first); both cards must be exactly what
+# OpenSC sees when it starts.
+bench_gate "$CARD" && bench_gate "$OTHER" || die "the visible cards are not exactly $CARD and $OTHER: no PIN"
+# After this one gate the test logs in several times, also after the USB detach; those logins rely on
+# the provider's own identity check (serial and public-key pin) before every PIN.
 REGALIA_SWAPDRILL_MODULE="$MODULE" REGALIA_SWAPDRILL_SERIAL="$CARD" REGALIA_SWAPDRILL_PIN="$COMMISSIONED_PIN" \
 REGALIA_SWAPDRILL_USB="$USB" REGALIA_SWAPDRILL_OTHER_SERIAL="$OTHER" REGALIA_SWAPDRILL_OTHER_PIN="$OTHER_PIN" \
 REGALIA_SWAPDRILL_OBJECT_ID="$OBJECT" \

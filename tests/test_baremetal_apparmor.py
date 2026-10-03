@@ -118,6 +118,14 @@ class Profile(unittest.TestCase):
         for name in ("hsm-site-a.pin", "yubi-site-a.pin"):   # regalia-kms-credentials.conf.example
             self.assertTrue(allowed("/run/credentials/regalia-kms.service/" + name, "r"))
 
+    def test_the_lease_service_user_can_be_resolved_and_nothing_more_of_the_user_database(self):
+        # runtime_admission_owner is resolved by name at start (#191): without /etc/passwd an enforced
+        # profile would stop every start with "not a user on this host"
+        self.assertTrue(allowed("/etc/passwd", "r"))
+        for path, perms in (("/etc/passwd", "w"), ("/etc/shadow", "r"), ("/etc/gshadow", "r")):
+            with self.subTest(path=path, perms=perms):
+                self.assertFalse(allowed(path, perms))
+
     def test_what_a_kms_daemon_has_no_business_touching_is_refused(self):
         for path, perms in (
                 ("/dev/tpm0", "r"), ("/dev/tpmrm0", "rw"), ("/etc/credstore.encrypted/regalia-kms-hsm-site-a.pin", "r"),
@@ -129,7 +137,9 @@ class Profile(unittest.TestCase):
                 ("/run/credentials/regalia-sops-kms.service/workload-key.pem", "r"),
                 ("/run/credentials/regalia-kms.service/hsm-site-a.pin", "w"),
                 ("/run/regalia-kms/site-lease.json", "w"), ("/run/pcscd/pcscd.pid", "r"),
-                ("/run/regalia/admission.json", "w"), ("/run/regalia/boot-session", "w"), ("/run/regalia/admission.json.requests", "r"),
+                ("/run/regalia/admission/admission.json", "w"), ("/run/regalia/boot-session", "w"),
+                ("/run/regalia/admission/admission.json.requests", "r"), ("/run/regalia/admission/.admission-x", "w"),
+                ("/run/regalia/admission.json", "r"), ("/run/regalia/authtime.json", "r"),
                 ("/bin/sh", "x"), ("/usr/bin/pkcs11-tool", "x"), ("/tmp/x", "w"), ("/proc/1/environ", "r")):
             with self.subTest(path=path, perms=perms):
                 self.assertFalse(allowed(path, perms))

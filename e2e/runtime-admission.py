@@ -4,7 +4,7 @@ runtime lease (regalia-kms#74). The token is SoftHSM; the lease is real: node a 
 software TPMs, b's TPM signs the lease, and deploy/baremetal/admission.py turns it into the admission file
 the daemon reads. No hardware.
 
-    python3 e2e/runtime-admission.py
+    python3 -Es e2e/runtime-admission.py
 
   1  no admission file yet: the daemon is up, NOT ready, and a sign request is a 503
   2  the lease service's first round: the node is admitted, the daemon is ready, and it returns a
@@ -15,9 +15,11 @@ the daemon reads. No hardware.
   5  a file from another boot, with times that look valid, is refused
   6  the node is revoked: the next round writes serve_until 0 and the daemon refuses at once
 
-Needs sudo, for one thing only: the admission file and its directory must be root's (the daemon refuses
-anything else), so they are placed with `sudo install`. The daemon itself runs as the invoking user, in a
-temporary directory, and nothing is installed on the machine.
+Needs sudo, for one thing only: the boot session and the run directory must be root's, with nothing above
+them anyone else could swap (the daemon refuses anything else), so they are placed with `sudo install`,
+in a directory directly under /tmp. The lease service is played by the invoking user, as on a host it is
+its own user (#191): the daemon is told so (runtime_admission_owner) and is given that user's directory
+inside root's. The daemon itself runs as the invoking user too, and nothing is installed on the machine.
 """
 import base64
 import datetime
@@ -25,6 +27,7 @@ import hashlib
 import http.client
 import json
 import os
+import pwd
 import shutil
 import signal
 import ssl
@@ -84,7 +87,9 @@ def main():
         die("libsofthsm2.so not found")
 
     w = Path(tempfile.mkdtemp(dir="/tmp"))               # 0700, this user's: only the root-owned run/ inside it is the gate's concern
-    etc, state, runtime = w / "etc", w / "state", w / "run"
+    # root's run directory, directly under /tmp (root's, sticky): under this user's w/ it would not be
+    # trusted, since this user could swap it
+    etc, state, runtime = w / "etc", w / "state", Path("/tmp") / ("regalia-run-" + w.name)
     for d in (etc, state, state / "tokens", w / "collector"):
         d.mkdir(mode=0o700)
     processes = []
@@ -178,7 +183,8 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
         "pin_paths": {DEVICE: str(etc / "card.pin")},
         "audit_journal_path": str(state / "audit.jsonl"), "audit_sink_url": "https://127.0.0.1:%d" % sink,
         # what this test is about: the node is "a", as the membership manifest spells it
-        "runtime_admission": "required", "runtime_admission_path": str(runtime / "admission.json"),
+        "runtime_admission": "required", "runtime_admission_path": str(runtime / "admission" / "admission.json"),
+        "runtime_admission_owner": pwd.getpwuid(os.getuid()).pw_name,
         "node_id": "a", "boot_session_path": str(runtime / "boot-session")}
     for name, document in documents.items():
         (etc / name).write_text(json.dumps(document, indent=1) + "\n")
@@ -191,6 +197,8 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
         run(["sudo", "install", "-m", "0644", "-o", "root", "-g", "root", source, runtime / ("." + name + ".new")])
         run(["sudo", "mv", "-f", runtime / ("." + name + ".new"), runtime / name])
     run(["sudo", "install", "-d", "-m", "0755", "-o", "root", "-g", "root", runtime])
+    # the lease service's own directory inside root's, as regalia.tmpfiles.conf makes it on a host
+    run(["sudo", "install", "-d", "-m", "0755", "-o", str(os.getuid()), "-g", str(os.getgid()), runtime / "admission"])
     (w / "boot-session").write_text(lt.SESSION + "\n")
     as_root(w / "boot-session", "boot-session")
 
@@ -284,13 +292,14 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
             raise ConnectionError("peer b is unreachable")
         manifest = world["manifest"]
         return lease.issue(manifest, "b", request, fixture.attester, fixture.evidence(lt.SESSION, manifest), fixture.freshness, fixture.signer)
-    service = admission.Service(holder, lambda: world["manifest"], renew, str(w / "admission.staged"))
+    # As on a host: the service knows when the daemon's process started, from the kernel, by its PID.
+    def daemon_started():
+        return admission.process_started_ms(daemon.pid)
+    service = admission.Service(holder, lambda: world["manifest"], renew, str(runtime / "admission" / "admission.json"), daemon_started=daemon_started)
 
     def round_():
-        """One round of the lease service, and its file placed as root."""
-        document = service.step()
-        as_root(w / "admission.staged", "admission.json")
-        return document
+        """One round of the lease service, which writes its file itself, as its own user."""
+        return service.step()
 
     # ---- 2 ------------------------------------------------------------------------------------------------
     header("2  the lease service's first round: admitted, ready, serving")
@@ -332,13 +341,40 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     status, answer = sign(b"renewed")
     ok(status == 200, "and serves", "%s %s" % (status, answer))
 
+    # ---- 4b: the daemon restarts (#72: every token is "just arrived" for a new process) ------------------------
+    header("4b the daemon restarts: it waits for a lease asked for since, and the lease service asks at once")
+    before = round_()                                    # a fresh lease, nowhere near its scheduled renewal
+    daemon.terminate()
+    daemon.wait(timeout=30)
+    daemon = subprocess.Popen([str(w / "regalia-kms"), "-config", str(etc / "config.json")], env=softhsm,
+                                 stdout=open(w / "daemon.log", "a"), stderr=subprocess.STDOUT)
+    processes.append(daemon)                             # every helper above now means the new process
+    started = None
+    for _ in range(150):                                 # until it listens: "not ready" is an answer, no answer is not
+        if ready() is not None:
+            started = admission.process_started_ms(daemon.pid)
+            break
+        time.sleep(0.2)
+    ok(started is not None and started > before["requested_boottime_ms"], "the new daemon started after the held lease was asked for", (started, before))
+    status, answer = sign(b"new process, old lease")
+    ok(status == 503 and ready() == 503, "the admission file is still valid, yet the new daemon serves nothing on that lease (503, not ready)", "%s %s" % (status, answer))
+    service.daemon_started = None                        # a lease service that does not look at the daemon: its schedule says "not yet"
+    unchanged = round_()
+    ok(unchanged["requested_boottime_ms"] == before["requested_boottime_ms"] and ready() == 503,
+       "left to the schedule, the lease is not renewed and the daemon keeps waiting", unchanged)
+    service.daemon_started = daemon_started
+    document = round_()
+    ok(document["requested_boottime_ms"] > started, "the lease service sees the daemon's start and asks at once", (document, started))
+    ok(wait_for(200, 20) == 200, "the daemon is ready again, without waiting for the scheduled renewal")
+    status, answer = sign(b"new process, new lease")
+    ok(status == 200, "and signs", "%s %s" % (status, answer))
+
     # ---- 5 ------------------------------------------------------------------------------------------------
     header("5  a file from another boot is refused, whatever its times say")
     ok(ready() == 200, "(admitted before the file is swapped)")
     forged = dict(document, boot_id="0f3a9c1e-1111-4222-8333-444455556666", serve_until_boottime_ms=admission.boottime_ms() + 200_000,
                   requested_boottime_ms=1, lease_issued_at=stamp, reason="")
-    (w / "forged.json").write_text(json.dumps(forged))
-    as_root(w / "forged.json", "admission.json")
+    admission.write(str(runtime / "admission" / "admission.json"), forged)
     status, answer = sign(b"another boot")
     ok(status == 503 and ready() == 503, "refused (503), not ready", "%s %s" % (status, answer))
     ok("from another boot" in log(), "the daemon's log: the admission file is from another boot")

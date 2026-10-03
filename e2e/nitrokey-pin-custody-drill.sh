@@ -53,13 +53,35 @@ pin_of(){ case "$1" in "$PRIMARY") printf '%s' "$NK_PIN_PRIMARY";; "$REPLACEMENT
 CARDS="$PRIMARY${REPLACEMENT:+ $REPLACEMENT}"
 
 # ---- the gate: registered staging cards, pinned by C.DevAut ---------------------------------------
+# OpenSC sees ONLY the drill's cards, as this user and as root in the drill's services (passed with
+# --setenv), and every command that presents a PIN runs only while that card's serial is where it is
+# expected (e2e/lib/bench_cards.sh, regalia-kms#174). Before readers and slots are resolved: isolation
+# renumbers them.
+# shellcheck source=lib/bench_cards.sh
+. "$ROOT/e2e/lib/bench_cards.sh"
+# shellcheck disable=SC2086  # CARDS is one or two serials, split on purpose
+bench_isolate "$STATE/opensc.conf" "$MODULE" $CARDS || die "cannot isolate $CARDS in OpenSC"
+gate(){ bench_gate "$1" ${2:+"$2"} || die "$1 is not where it is expected: no PIN presented"; }
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
 for s in $CARDS; do hsm_assert_staging_card "$s" || die "$s is not a registered staging Nitrokey: refusing"; done
 # Readers and slots resolve in the MAIN shell: a failed inline lookup would pass "" (= reader 0).
 declare -A READER SLOT
-for s in $CARDS; do
-  READER[$s]="$(hsm_reader_for "$s" 2>/dev/null || true)"; [ -n "${READER[$s]}" ] || die "cannot resolve $s to a PC/SC reader"
-  SLOT[$s]="$(hsm_slot_id_for "$s" 2>/dev/null || true)"; [ -n "${SLOT[$s]}" ] || die "PKCS#11 cannot see $s"
-done
+# Resolved again after the deliberate outage: a reader that leaves and returns can be renumbered.
+# resolve dies on a card it cannot find; resolve_quiet, for restore(), leaves the old value and goes on
+# (a stale slot then fails the gate, and the restore says so, instead of exiting before the host key).
+resolve_quiet(){ local s r sl
+  for s in $CARDS; do
+    r="$(hsm_reader_for "$s" 2>/dev/null || true)"; [ -z "$r" ] || READER[$s]="$r"
+    sl="$(hsm_slot_id_for "$s" 2>/dev/null || true)"; [ -z "$sl" ] || SLOT[$s]="$sl"
+  done; }
+resolve(){ local s
+  resolve_quiet
+  for s in $CARDS; do
+    [ -n "${READER[$s]:-}" ] || die "cannot resolve $s to a PC/SC reader"
+    [ -n "${SLOT[$s]:-}" ] || die "PKCS#11 cannot see $s"
+  done; }
+resolve
 # The user-PIN counter, read with an empty VERIFY: no attempt is spent.
 # The count is the low nibble of 63Cx, in HEX (a 10-try card answers 63CA); printed in decimal.
 tries(){ local sw x; sw="$(opensc-tool --reader "${READER[$1]}" -s "00 A4 04 00 0B E8 2B 06 01 04 01 81 C3 1F 02 01 00" -s "00 20 00 81" 2>&1 \
@@ -74,20 +96,26 @@ done
 say "cards: $CARDS; state $STATE"
 
 # ---- helpers ------------------------------------------------------------------------------------
-p11(){ local card="$1"; shift; PKCS11_PIN="$(pin_of "$card")" pkcs11-tool --module "$MODULE" --slot "${SLOT[$card]}" "$@"; }
+# p11 and change_pin RETURN on a failed gate (they also run from restore(), which must go on to put
+# the host key and USB back); their callers stop the drill on that failure.
+p11(){ local card="$1"; shift; bench_gate "$card" "${SLOT[$card]}" || return 97; PKCS11_PIN="$(pin_of "$card")" pkcs11-tool --module "$MODULE" --slot "${SLOT[$card]}" "$@"; }
 change_pin(){ # change_pin <card> <old> <new>
+  bench_gate "$1" "${SLOT[$1]}" || return 97
   PKCS11_PIN="$2" NEW_PIN="$3" pkcs11-tool --module "$MODULE" --slot "${SLOT[$1]}" --login --pin env:PKCS11_PIN \
     --change-pin --new-pin env:NEW_PIN >>"$LOG" 2>&1; }
 seal(){ sudo systemd-creds encrypt --with-key=host --name="$1" - "$2" 2>>"$LOG" >/dev/null; }
 say "building the drill test binary"
 go -C "$ROOT" test -c -o "$STATE/drill.test" ./internal/integration >>"$LOG" 2>&1 || die "build"
 declare -A PINNED
-commission(){ local out; out="$(REGALIA_NKDRILL_PHASE=commission REGALIA_NKDRILL_MODULE="$MODULE" REGALIA_NKDRILL_SERIAL="$1" \
+commission(){ local out; gate "$1"; out="$(REGALIA_NKDRILL_PHASE=commission REGALIA_NKDRILL_MODULE="$MODULE" REGALIA_NKDRILL_SERIAL="$1" \
     REGALIA_NKDRILL_OBJECT_ID="$OBJECT_ID" "$STATE/drill.test" -test.count=1 -test.v -test.run '^TestNitrokeyPINCustodyDrill$' 2>&1)"
   PINNED[$1]="$(sed -n 's/.*PUBKEY_SHA256=\(sha256:[0-9a-f]*\).*/\1/p' <<< "$out" | head -1)"
   [ -n "${PINNED[$1]}" ] || { printf '%s\n' "$out" >> "$LOG"; die "could not commission the drill key on $1"; }; }
 phase(){ # phase <name> <serial> <credential blob> ; returns the test's status
+  # "absent" is run with the card out on purpose, and must present nothing: it is the one phase not gated.
+  [ "$1" = absent ] || gate "$2"
   local out rc; out="$(sudo systemd-run --quiet --pipe --wait --collect -p LimitMEMLOCK=1M \
+      --setenv=OPENSC_CONF="$OPENSC_CONF" \
       -p "LoadCredentialEncrypted=nk-drill.pin:$3" \
       --setenv=REGALIA_NKDRILL_PHASE="$1" --setenv=REGALIA_NKDRILL_MODULE="$MODULE" --setenv=REGALIA_NKDRILL_SERIAL="$2" \
       --setenv=REGALIA_NKDRILL_OBJECT_ID="$OBJECT_ID" --setenv=REGALIA_NKDRILL_CREDENTIAL=nk-drill.pin \
@@ -113,7 +141,7 @@ ROTATED=""; KEYS_MADE=""; DISABLED_USB=""
 restore(){ # always: the card PIN, the drill keys, the host key, USB authorisation
   set +e
   # Only the device THIS drill turned off: others may be off on purpose (Qubes, usbguard).
-  [ -z "$DISABLED_USB" ] || authorize "$DISABLED_USB" 1
+  [ -z "$DISABLED_USB" ] || { authorize "$DISABLED_USB" 1; sleep 2; resolve_quiet; }
   local keep=0 s
   if [ -n "$ROTATED" ]; then
     if change_pin "$PRIMARY" "$ROTATED" "$NK_PIN_PRIMARY"; then say "restore: $PRIMARY PIN put back"
@@ -155,7 +183,7 @@ phase serve "$PRIMARY" "$STATE/v1.cred" || die "v1 did not serve"; counters
 say "R2 — rotate: new PIN on the card, sealed as v2 BEFORE anything restarts"
 # The same LENGTH as the card's PIN: a card provisioned at the production posture (10 digits, 10
 # tries) refuses a shorter new PIN with CKR_DATA_INVALID (measured on DENK0404144, 2026-09-29).
-NEWPIN="$(python3 -c 'import secrets,sys; print("".join(secrets.choice("0123456789") for _ in range(int(sys.argv[1]))))' "${#NK_PIN_PRIMARY}")"
+NEWPIN="$(python3 -I -c 'import secrets,sys; print("".join(secrets.choice("0123456789") for _ in range(int(sys.argv[1]))))' "${#NK_PIN_PRIMARY}")"
 printf '%s' "$NEWPIN" | age -r "$BG" -o "$STATE/rotated.age"   # so a failed run can still restore it
 change_pin "$PRIMARY" "$NK_PIN_PRIMARY" "$NEWPIN" || die "PIN change on $PRIMARY"
 ROTATED="$NEWPIN"   # only now does the card hold it: set earlier, a failed change would make restore spend a retry
@@ -186,6 +214,7 @@ DISABLED_USB="$NK"; authorize "$NK" 0
 pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | grep -q "$PRIMARY" && die "$PRIMARY still visible"
 phase absent "$PRIMARY" "$STATE/v3.cred" || die "absent phase"
 authorize "$NK" 1; DISABLED_USB=""; sleep 2
+resolve
 [ "$(tries "$PRIMARY")" = "$F" ] || die "the outage spent a retry"
 phase serve "$PRIMARY" "$STATE/v3.cred" || die "did not serve after the card came back"; counters
 

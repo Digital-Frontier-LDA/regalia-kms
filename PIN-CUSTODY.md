@@ -153,7 +153,10 @@ disk is unlocked by the local TPM alone, bound to PCR 7 (`root_disk_tpm_unlocked
 image with the same Secure Boot state unlocks it, reaches the host key, and opens the PIN. The seal
 is only as revocable as the disk unlock. The disk must need something a retired image cannot get: a
 peer's contribution, given only to an image the membership manifest currently accepts (#66, #67), or
-an NV-backed local policy. Until then a retired image is retired in name only.
+an NV-backed local policy. Until then a retired image is retired in name only. Tracked as #135, and
+measured on every host: `host_probe.py` (`root_disk_unlock_revocable`) fails while a keyslot of the
+root volume is released by a TPM token bound to PCR values or to a signed policy, and it cannot be
+skipped.
 
 ### Migrating a credential sealed before this change
 
@@ -413,7 +416,7 @@ results are not physical evidence.
 | PCR set chosen and recorded | evidence (`host.credential_tpm2_pcrs` and the signed policy's two fields) |
 | blob actually sealed to the recorded PCR set, signed policy and key; to the host key AND the TPM, never either alone; the host key root's, 0400, on dm-crypt | host (`host_probe.py`, `pin_credentials_sealed_as_recorded`, read from each blob's header) |
 | the PIN does not open without the host key (another disk, or none), on the sealed image or an updated one | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`, section 8); **no real host yet** |
-| a retired image cannot unlock the root disk, so cannot reach the host key | **none** (not built; blocking for production, #75) |
+| a retired image cannot unlock the root disk, so cannot reach the host key | host (`host_probe.py`, `root_disk_unlock_revocable`: **fails on every host enrolled with `--tpm2-pcrs=7`**, by design, #135). The mechanism is not built; an NV-backed policy retires an image on a software TPM (`e2e/pcrlock-luks-swtpm.sh`) |
 | signed PCR 11 policy: opens across a signed kernel update, refused otherwise | CI, software TPM (`e2e/pcr-signed-policy-swtpm.sh`); **no real host yet** |
 | whole-disk rollback refused at next start | unit — **only with an audit sink configured** |
 | rollback counters in the TPM (fencing epoch, audit checkpoints; ADR-0002 D21) | **none** (not built) |

@@ -2,10 +2,16 @@
 """The admission file: what tells the KMS daemon that this node holds a runtime lease (#74, Phase 14).
 
 The lease rules (lease.py) are Python; the daemon is Go. Writing those rules a second time in Go would
-give two copies that drift. So a small root service on the host keeps the lease, as a kubelet keeps a
+give two copies that drift. So a small service on the host keeps the lease, as a kubelet keeps a
 node lease, and writes ONE narrow fact for the daemon to read:
 
-    /run/regalia/admission.json   (root, 0644, in a directory only root can write; replaced atomically)
+    /run/regalia/admission/admission.json   (0644, replaced atomically)
+
+The service runs as its own user, regalia-admission, not root (#191): it talks to peers and parses their
+answers. /run/regalia/admission is that user's (0755, regalia.tmpfiles.conf) inside root's /run/regalia,
+so it can replace this file and nothing else there. The daemon accepts the file and its directory only
+from that user (runtime_admission_owner) or root, with no group or other write, and nothing above it that
+anyone else could swap; and it accepts the boot session beside it only from root.
 
     {"schema": "regalia.admission/v1",
      "node_id": ..., "session_id": "<64 hex: this boot's attested session>",
@@ -34,8 +40,17 @@ requested_boottime_ms is when the node made the request that the held lease answ
 after it was asked for, so "asked for after the HSM returned" shows a peer vouched after the HSM
 returned, with no comparison between two machines' clocks (#72, PoC 12.4).
 
-COOPERATIVE, as lease.Holder is: root on the node can write this file. What bounds a compromised node is
-outside it: peers refuse its unlocks, verifiers refuse its lease, the fencing authority decides who signs.
+WHEN THE DAEMON STARTS, THE SERVICE ASKS AT ONCE. The daemon serves a token only under a lease asked for
+after the daemon's own process started (#72: a token pulled, the daemon restarted and the token put back
+must not resume on the old lease). Left to the schedule, that is a wait of up to a third of a lease. So
+each step() compares the held lease's request time with the daemon's start, which the kernel dates in
+/proc/<pid>/stat on the boot clock and the daemon reads for itself (internal/admission.ProcessStart): a
+lease asked for at or before it is renewed now. `daemon_started` is injected; unit_started() is the one
+for a systemd unit. Not knowing the start (the unit is down) changes nothing.
+
+COOPERATIVE, as lease.Holder is: root on the node, and the lease service's own user, can write this
+file. What bounds a compromised node is outside it: peers refuse its unlocks, verifiers refuse its
+lease, the fencing authority decides who signs.
 
 The call to a peer is injected (`renew`): the transport is #80. Run as a program, this only SHOWS the
 admission file the daemon reads.
@@ -44,6 +59,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -57,6 +73,10 @@ FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_diges
           "requested_boottime_ms", "serve_until_boottime_ms", "reason")
 MARGIN = 10                # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
+# The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
+# refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
+# that; the full text of a refusal goes to the audit trail (convergence.audited), not to this file.
+ADMISSION_REASON_LIMIT = 1024
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
 
@@ -72,12 +92,41 @@ def boot_id(path=BOOT_ID_PATH):
     return value
 
 
-def _printable(text):
-    return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:240]
+def process_started_ms(pid, proc="/proc"):
+    """When process `pid` started, in CLOCK_BOOTTIME milliseconds: field 22 of /proc/<pid>/stat, which the
+    kernel counts in clock ticks, rounded down; this returns the tick AFTER, as the daemon does for itself,
+    so it is never before the true start. The command name (field 2) is in parentheses and may contain spaces and
+    parentheses, so the fields are counted from the LAST ")". Go's reader assumes 100 ticks a second
+    (internal/admission.parseProcessStart); another rate here is refused rather than disagreed with."""
+    require(os.sysconf("SC_CLK_TCK") == 100, "the kernel clock tick is not 100 Hz: the daemon would read another start time")
+    with open(os.path.join(proc, str(int(pid)), "stat")) as f:
+        stat = f.read(4096)
+    fields = stat[stat.rfind(")") + 1:].split() if ")" in stat else []
+    require(len(fields) > 19 and re.fullmatch(r"[1-9][0-9]{0,15}", fields[19]) is not None, "the process start time cannot be read")
+    return (int(fields[19]) + 1) * 10
+
+
+def unit_started(unit="regalia-kms.service", run=subprocess.run, proc="/proc"):
+    """A `daemon_started` for Service: when the main process of a systemd unit started, or None when the
+    unit has no main process or it cannot be read (then nothing is renewed early)."""
+    def started():
+        try:
+            done = run(["systemctl", "show", "--property=MainPID", "--value", unit], capture_output=True, timeout=10)
+            pid = done.stdout.decode(errors="replace").strip() if done.returncode == 0 else ""
+            if re.fullmatch(r"[1-9][0-9]{0,9}", pid) is None:
+                return None
+            return process_started_ms(pid, proc)
+        except (OSError, subprocess.SubprocessError, Refused):
+            return None
+    return started
+
+
+def _printable(text, limit=membership.NAME_LIMIT):
+    return membership.printable(text, limit)
 
 
 def write(path, document):
-    """Replace the admission file: complete or not at all, readable by the daemon, writable by root only."""
+    """Replace the admission file: complete or not at all, readable by the daemon, writable by its writer only."""
     require(tuple(document) == FIELDS, "an admission document has exactly its fields, in order")
     directory = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".admission-")
@@ -98,8 +147,9 @@ class Service:
     """One node's holder loop. `holder` is its lease.Holder; `manifest()` returns its current manifest (its
     membership.Store.load); `renew(request)` asks a peer and returns the lease envelope, or raises."""
 
-    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id):
+    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id, daemon_started=None):
         self.holder, self.manifest, self.renew, self.path, self.boottime = holder, manifest, renew, path, boottime
+        self.daemon_started = daemon_started      # () -> the daemon's start on the boot clock (ms), or None
         self.boot = boot()
         self.requests_path = path + ".requests"   # nonce -> when it was asked for; survives a restart of this service
 
@@ -129,7 +179,16 @@ class Service:
                 "manifest_digest": membership.digest(manifest) if manifest else "00" * 32,
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
-                "serve_until_boottime_ms": serve_until, "reason": _printable(reason)}
+                "serve_until_boottime_ms": serve_until, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
+
+    def _daemon_waits(self):
+        """Whether the daemon started after the held lease was asked for: it will not serve on that lease,
+        so a new one is asked for now. False when there is no daemon to wait, or no lease (then due() asks)."""
+        started = self.daemon_started() if self.daemon_started is not None else None
+        held = self.holder.held()
+        if started is None or held is None:
+            return False
+        return self._requests().get(held["lease"]["nonce"], 0) <= started
 
     def step(self):
         """One round: renew if due, check, write. Returns the document written."""
@@ -137,11 +196,17 @@ class Service:
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
-            if self.holder.due(manifest):
+            waits = self._daemon_waits()
+            if waits or self.holder.due(manifest):
                 request = self.holder.request()
                 self._remember(request["nonce"], self.boottime())
                 try:
-                    self.holder.install(self.renew(request), manifest)
+                    # asked for the daemon's sake: this lease is the one to hold, even if a peer whose clock
+                    # runs behind, or whose heartbeat ends sooner, gave it less life than the one held.
+                    # If it has no more than MARGIN left (the peer's heartbeat is about to end), this round
+                    # writes "not admitted" where the tokens alone were waiting: no key was being served
+                    # either way, and the next round's scheduled renewal takes the longer lease.
+                    self.holder.install(self.renew(request), manifest, prefer=waits)
                 except Exception as failure:      # a peer is down, or refused: what the node still holds decides
                     reason = "renewal failed: %s" % failure
             before = self.boottime()              # read BEFORE the check: the bound can only come out earlier
@@ -177,7 +242,7 @@ def read(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Show the admission file the KMS daemon reads.")
-    parser.add_argument("path", nargs="?", default="/run/regalia/admission.json")
+    parser.add_argument("path", nargs="?", default="/run/regalia/admission/admission.json")
     args = parser.parse_args(argv)
     try:
         document = read(args.path)

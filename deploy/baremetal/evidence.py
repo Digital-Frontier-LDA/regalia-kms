@@ -22,8 +22,10 @@ evidence.
         "runtime_credentials_excluded_from_backup": true,
         "system_rom_version": "P89 v3.40 (2024-03-22)",  # intake records (README, section 1)
         "ilo_firmware_version": "2.82",
-        "tpm_ek_certificate_present": true
-      }
+        "tpm_ek_certificate_present": true,
+        "node_id": "a",                                  # the node's ID in the membership manifest
+        "unlock_peers": ["b", "c"]                       # the peers holding an unlock path for its root
+      }                                                  #   disk (unlock.py); [] for a host not enrolled
     }
 
 Every field is required and no other is allowed; every control boolean must be true (evidence records
@@ -46,7 +48,10 @@ SCHEMA = "regalia-kms/baremetal-evidence/v1"
 ATTESTED = ("ilo_isolated_or_disabled", "ac_power_recovery", "redundant_power_supplies", "chassis_intrusion_armed",
             "used_hardware_intake", "runtime_credentials_excluded_from_backup")
 RECORDS = ("pin_import_key_sha256", "hsm_usb_path", "credential_tpm2_pcrs", "credential_tpm2_signed_pcrs",
-           "credential_tpm2_pcr_key_pkfp", "system_rom_version", "ilo_firmware_version", "tpm_ek_certificate_present")
+           "credential_tpm2_pcr_key_pkfp", "system_rom_version", "ilo_firmware_version", "tpm_ek_certificate_present",
+           "node_id", "unlock_peers")
+NODE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")   # membership.py's form of a node ID
+MAX_PEERS = 16
 MAX_AGE = datetime.timedelta(hours=24)
 MAX_BYTES = 128 * 1024
 
@@ -131,7 +136,20 @@ def validate(doc, measured_names, now=None):
     for k in ("system_rom_version", "ilo_firmware_version"):
         require(isinstance(host[k], str) and re.fullmatch(r"[A-Za-z0-9 ._()/-]{1,64}", host[k]), "host.%s must be a version string" % k)
     require(isinstance(host["tpm_ek_certificate_present"], bool), "host.tpm_ek_certificate_present must be true or false")
+    unlock_record(host["node_id"], host["unlock_peers"])
     return host
+
+
+def unlock_record(node_id, peers, label="host."):
+    """The record the probe judges a peer-enrolled root disk against (#67): this host's node ID and the
+    peers that hold an unlock path for it. Returns (node_id, tuple of peers). host_probe.py holds its
+    --node-id and --unlock-peer arguments to this same function."""
+    require(isinstance(node_id, str) and NODE_ID.fullmatch(node_id) is not None,
+            "%snode_id must be a node ID (lowercase letters, digits and dashes, at most 32)" % label)
+    require(isinstance(peers, list) and len(peers) <= MAX_PEERS and all(isinstance(p, str) and NODE_ID.fullmatch(p) for p in peers),
+            "%sunlock_peers must be a list of at most %d node IDs" % (label, MAX_PEERS))
+    require(len(set(peers)) == len(peers) and node_id not in peers, "%sunlock_peers names each peer once, and never the node itself" % label)
+    return node_id, tuple(peers)
 
 
 class Snapshot:
