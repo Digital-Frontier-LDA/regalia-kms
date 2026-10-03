@@ -24,6 +24,7 @@ class Case(unittest.TestCase):
         self.fresh = hb.Freshness(self.counter, lambda: (T0 + 60, True), lambda: 5000, self.d + "/freshness.json")
         self.fresh.accept(hbt.beat(self.m1, 40, issued=T0), self.m1)
         self.events = []
+        self.floor = self.d + "/recount-floor.json"
 
     def state(self):
         with open(self.d + "/freshness.json") as f:
@@ -43,14 +44,14 @@ class Recount(Case):
     def test_an_unusable_counter_is_redefined_at_the_held_heartbeat_and_the_next_is_accepted(self):
         self.break_counter()
         self.refused("", self.fresh.check, self.m1)                               # stranded
-        value = recount.recount(self.counter, self.m1, [self.state()], lambda planned: recount.phrase(self.counter.index, planned), self.events.append)
+        value = recount.recount(self.counter, self.m1, [self.state()], lambda planned: recount.phrase(self.counter.index, planned), self.events.append, self.floor)
         self.assertEqual((value, self.counter.value()), (40, 40))
         self.refused("REPLAY", self.fresh.accept, hbt.beat(self.m1, 40, issued=T0 + 30), self.m1)
         self.fresh.accept(hbt.beat(self.m1, 41, issued=T0 + 30), self.m1)
         self.assertEqual([(e["event"], e.get("outcome")) for e in self.events], [("recount-requested", None), ("recount", "ALLOW")])
 
     def test_a_usable_counter_is_never_reset(self):
-        self.refused("the counter is usable", recount.recount, self.counter, self.m1, [self.state()], lambda p: "", self.events.append)
+        self.refused("the counter is usable", recount.recount, self.counter, self.m1, [self.state()], lambda p: "", self.events.append, self.floor)
         self.assertEqual(self.events[-1]["outcome"], "DENY")
         self.assertEqual(self.counter.value(), 40)
 
@@ -66,7 +67,7 @@ class Recount(Case):
         self.break_counter()
         stranger = Ed25519PrivateKey.generate()
         self.refused("no heartbeat given verifies", recount.recount, self.counter, self.m1,
-                     [hbt.beat(self.m1, 99, key=stranger)], lambda p: "", self.events.append)
+                     [hbt.beat(self.m1, 99, key=stranger)], lambda p: "", self.events.append, self.floor)
         self.assertEqual(self.events[-1]["outcome"], "DENY")
 
     def test_the_old_counter_still_read_is_a_floor_too(self):
@@ -80,14 +81,14 @@ class Recount(Case):
     def test_a_tpm_that_does_not_answer_is_not_recounted(self):
         self.tpm.broken = True
         with self.assertRaises(m.Refused) as caught:
-            recount.recount(self.counter, self.m1, [self.state()], lambda p: "", self.events.append)
+            recount.recount(self.counter, self.m1, [self.state()], lambda p: "", self.events.append, self.floor)
         self.assertNotIsInstance(caught.exception, m.Unusable)
         self.assertEqual(self.events[-1]["outcome"], "DENY")
 
     def test_a_wrong_phrase_changes_nothing(self):
         self.break_counter()
         with self.assertRaises(m.Refused):
-            recount.recount(self.counter, self.m1, [self.state()], lambda p: "yes", self.events.append)
+            recount.recount(self.counter, self.m1, [self.state()], lambda p: "yes", self.events.append, self.floor)
         self.assertEqual(self.events[-1]["outcome"], "DENY")
         self.assertNotIn(self.counter.index, self.tpm.nv)                        # untouched
 
@@ -103,25 +104,104 @@ class Recount(Case):
             return real(argv, input=input, **kw)
         self.counter.run = flaky
         with self.assertRaises(recount.Incomplete):
-            recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append)
+            recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append, self.floor)
         self.assertEqual(self.events[-1]["outcome"], "INCOMPLETE")
         self.counter.run = real
-        self.assertEqual(recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append), 40)
+        self.assertEqual(recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append, self.floor), 40)
 
 
-class CommandLine(Case):
-    def test_end_to_end(self):
+class AcrossACut(Case):
+    def test_a_cut_after_any_tpm_call_never_lowers_the_floor(self):
+        """#261 (regalia-kms-3e, decided by regalia-kms-24): the old counter reads 1000 with wrong attributes,
+        the held heartbeat is 990. Cut after each TPM call in turn: every rerun defines at 1000 or more."""
+        for cut in range(1, 12):
+            with self.subTest(cut=cut):
+                tpm = hbt.FakeTpm()
+                counter = hb.Counter("0x1500018", lock_path=self.d + "/c.lock", run=tpm)
+                counter.define()
+                counter.advance(1000)
+                tpm.nv[counter.base_index][0] &= ~tpm.LOCKED                     # wrong attributes: unusable, still reads
+                floor = self.d + "/floor-%d.json" % cut
+                calls = {"n": 0}
+
+                def cutting(argv, input=None, **kw):
+                    if argv[0] in ("tpm2_nvundefine", "tpm2_nvdefine", "tpm2_nvincrement", "tpm2_nvwrite", "tpm2_nvwritelock"):
+                        calls["n"] += 1
+                        if calls["n"] == cut:
+                            raise OSError("power cut at TPM call %d" % cut)
+                    return tpm(argv, input=input, **kw)
+                counter.run = cutting
+                held = [hbt.beat(self.m1, 990, issued=T0)]
+                try:
+                    recount.recount(counter, self.m1, held, lambda p: recount.phrase(counter.index, p), self.events.append, floor)
+                except recount.Incomplete:
+                    pass
+                counter.run = tpm
+                value = recount.recount(counter, self.m1, held, lambda p: recount.phrase(counter.index, p), self.events.append, floor) \
+                    if counter_unusable(counter) else counter.value()
+                self.assertGreaterEqual(value, 1000)
+                os.unlink(floor)
+
+    def test_an_unreadable_carried_floor_is_a_refusal(self):
         self.break_counter()
-        with open(self.d + "/membership.json", "wb") as f:
-            f.write(m.canonical([hbt.sign(self.m1) if hasattr(hbt, "sign") else {"manifest": self.m1, "signature": {
-                "signer": "root", "key": hbt.pub(hbt.ROOT), "sig": hbt.ROOT.sign(m.DOMAIN + m.canonical(self.m1)).hex()}}]))
-        argv = ["--membership", self.d + "/membership.json", "--root-key", hbt.pub(hbt.ROOT), "--tpm-index", "0x1500018",
-                "--heartbeat", self.d + "/freshness.json", "--audit-log", self.d + "/audit.jsonl"]
-        code = recount.main(argv, ask=lambda prompt: "recount 0x1500018 at 40", counter_for=lambda index, tcti: self.counter)
-        self.assertEqual((code, self.counter.value()), (0, 40))
+        with open(self.floor, "w") as f:
+            f.write("{")
+        self.refused("not valid JSON", recount.recount, self.counter, self.m1, [self.state()], lambda p: "", self.events.append, self.floor)
+
+
+def counter_unusable(counter):
+    try:
+        counter.value()
+    except m.Unusable:
+        return True
+    return False
+
+
+class TheHostsTpmAndChain(Case):
+    def anchored(self):
+        anchor = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm)
+        anchor.define()
+        store = m.Store(self.d + "/membership.json", hbt.pub(hbt.ROOT), anchor)
+        store.commit(signed(self.m1))
+        return anchor
+
+    def test_the_chain_must_be_the_one_this_tpm_anchored(self):
+        anchor = self.anchored()
+        self.assertEqual(recount.current([signed(self.m1)], hbt.pub(hbt.ROOT), anchor), self.m1)
+        fork = dict(self.m1, issued_at="2026-09-30T00:00:00Z")
+        self.refused("CONFLICT", recount.current, [signed(fork)], hbt.pub(hbt.ROOT), anchor)
+
+    def test_a_tpm_without_the_host_s_anchor_is_refused(self):
+        other = m.HighWater("0x1500016", lock_path=self.d + "/other.lock", run=hbt.FakeTpm())   # another TPM: no anchor at all
+        with self.assertRaises(m.Refused):
+            recount.current([signed(self.m1)], hbt.pub(hbt.ROOT), other)
+
+
+def signed(man):
+    return {"manifest": man, "signature": {"signer": "root", "key": hbt.pub(hbt.ROOT), "sig": hbt.ROOT.sign(m.DOMAIN + m.canonical(man)).hex()}}
+
+
+class CommandLine(TheHostsTpmAndChain):
+    def test_end_to_end_from_the_node_s_configuration(self):
+        tpm = hbt.FakeTpm()                                   # the indices as node.json spells them
+        anchor = m.HighWater("0x01500016", lock_path=self.d + "/hw.lock", run=tpm)
+        anchor.define()
+        m.Store(self.d + "/membership.json", hbt.pub(hbt.ROOT), anchor).commit(signed(self.m1))
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/c.lock", run=tpm)
+        counter.define()
+        hb.Freshness(counter, lambda: (T0 + 60, True), lambda: 5000, self.d + "/freshness.json").accept(hbt.beat(self.m1, 41, issued=T0), self.m1)
+        tpm.nv.pop("0x01500018")                              # the counter's index gone: unusable
+        with open(os.path.join(os.path.dirname(recount.__file__), "node.example.json")) as f:
+            cfg = json.load(f)
+        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti=None, state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018")
+        with open(self.d + "/node.json", "w") as f:
+            json.dump(cfg, f)
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl"]
+        self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=tpm), 0)
+        self.assertEqual(counter.value(), 41)
         with open(self.d + "/audit.jsonl") as f:
             self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
-        self.assertEqual(recount.main(argv, ask=lambda prompt: "", counter_for=lambda index, tcti: self.counter), 1)   # usable now: refused
+        self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=tpm), 1)             # usable now: refused
 
 
 if __name__ == "__main__":
