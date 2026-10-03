@@ -352,15 +352,28 @@ def _current(args):
     return manifest, True
 
 
-def _summary(manifest, anchored, tcti=None):
-    summary = {"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "policy_version": manifest["policy_version"],
-               "issued_at": manifest["issued_at"], "nodes": {n["node_id"]: n["state"] for n in manifest["nodes"]},
-               "checked_against_tpm": anchored}
+def _tpm(anchored, tcti):
+    """What every result says of the TPM it was checked against: whether, which, and whether a simulator."""
+    fields = {"checked_against_tpm": anchored}
     if anchored:
-        summary["tpm"] = tcti
+        fields["tpm"] = tcti
         if tcti.split(":")[0] in SIMULATORS:
-            summary["tpm_is_a_simulator"] = True
-    return summary
+            fields["tpm_is_a_simulator"] = True
+    return fields
+
+
+def _tpm_text(anchored, tcti):
+    """The lines a checked result adds (the TPM through %(tpm)s: a TCTI may hold a '%')."""
+    if not anchored:
+        return ""
+    return "\nchecked against the TPM epoch counter of %(tpm)s" + (
+        "\nWARNING: that is a TPM SIMULATOR, not this host's TPM: on a KMS host this answer proves nothing"
+        if tcti.split(":")[0] in SIMULATORS else "")
+
+
+def _summary(manifest, anchored, tcti=None):
+    return dict({"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "policy_version": manifest["policy_version"],
+                 "issued_at": manifest["issued_at"], "nodes": {n["node_id"]: n["state"] for n in manifest["nodes"]}}, **_tpm(anchored, tcti))
 
 
 def _cmd_version(args):
@@ -378,9 +391,7 @@ def _cmd_transition(args):
 def _cmd_epoch(args):
     manifest, anchored = _current(args)
     return _summary(manifest, anchored, args.tcti), "epoch %(epoch)d, measurements %(policy_version)s, manifest %(manifest_digest)s" + (
-        "\nchecked against the TPM epoch counter of %(tpm)s" + (
-            "\nWARNING: that is a TPM SIMULATOR, not this host's TPM: on a KMS host this answer proves nothing"
-            if args.tcti.split(":")[0] in SIMULATORS else "") if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
+        _tpm_text(anchored, args.tcti) if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
 
 
 def _cmd_propose(args):
@@ -405,10 +416,10 @@ def _cmd_may_reboot(args):
     authenticated = args.now is not None
     verdict = may_reboot(manifest, _document(args.measurements), args.node_id, args.running, args.session_id,
                          _json(args.attest_state, "--attest-state"), leases, args.now if authenticated else int(time.time()))
-    verdict.update(node_id=args.node_id, epoch=manifest["epoch"], checked_against_tpm=anchored, time_authenticated=authenticated)
+    verdict.update(node_id=args.node_id, epoch=manifest["epoch"], time_authenticated=authenticated, **_tpm(anchored, args.tcti))
     return verdict, "YES: %(node_id)s may reboot into %(target)s (vouched for by %(authorizers)s; the shortest lease has %(seconds)d s left)" + (
         "" if authenticated else "\nTIME IS THE SYSTEM CLOCK, not authenticated (no --now): do not act on a lease that is about to expire") + (
-        "" if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)") + (
+        _tpm_text(anchored, args.tcti) if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)") + (
         "\nWait until this host is back and serving before starting the next one (KERNEL-UPDATE.md, step 3.5)")
 
 
@@ -421,9 +432,9 @@ def _cmd_retire_ready(args):
         require(node_id not in states, "--state names %s twice" % node_id)
         states[node_id] = _json(path, "--state %s" % node_id)
     seen = retire_ready(manifest, _document(args.measurements), states)
-    return {"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"], "checked_against_tpm": anchored}, \
+    return dict({"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"]}, **_tpm(anchored, args.tcti)), \
         "YES: every node was last seen on its target by every peer that has seen it (epoch %(epoch)d). The state files are " \
-        "unsigned: this guards against retiring too early, it is not proof"
+        "unsigned: this guards against retiring too early, it is not proof" + _tpm_text(anchored, args.tcti)
 
 
 def _cmd_check_replacement(args):
@@ -431,8 +442,9 @@ def _cmd_check_replacement(args):
     candidate = _json(args.candidate, "--candidate")
     candidate = candidate.get("manifest", candidate) if set(candidate) == {"manifest", "signature"} else candidate
     measurements.check_replacement(current, candidate, _document(args.old), _document(args.new), args.old_id, args.new_id)
-    return {"replacement": "%s by %s" % (args.old_id, args.new_id), "epoch": candidate["epoch"], "policy_version": candidate["policy_version"],
-            "checked_against_tpm": anchored}, "the candidate replaces %(replacement)s and changes nothing else (epoch %(epoch)d, measurements %(policy_version)s)"
+    return dict({"replacement": "%s by %s" % (args.old_id, args.new_id), "epoch": candidate["epoch"], "policy_version": candidate["policy_version"]},
+                **_tpm(anchored, args.tcti)), \
+        "the candidate replaces %(replacement)s and changes nothing else (epoch %(epoch)d, measurements %(policy_version)s)" + _tpm_text(anchored, args.tcti)
 
 
 def main(argv=None):

@@ -401,6 +401,36 @@ class Decisions(Case):
         self.assertEqual(rc, 1)
         self.assertIn("a replacement does not change the measurements of c", err)
 
+    def test_every_decision_checked_against_the_tpm_names_it(self):
+        """may-reboot (the one an operator acts on), retire-ready and check-replacement decide on what the TPM
+        said too: each names the TPM it read, and says when that is a simulator. A '%' in the TCTI is text."""
+        done = dict(a={"b": "image-2", "c": "image-2"}, b={"a": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        decisions = {"may-reboot": (self.reboot("a", self.state()), 2, "YES: a may reboot into image-2"),
+                     "retire-ready": (self.retire(**done), 2, "YES: every node was last seen on its target")}
+        for tcti, simulator in (("device:/dev/tpmrm0", False), ("swtpm:path=/run/100%a.sock", True)):
+            for command, (argv, epoch, said) in decisions.items():
+                with self.subTest(command=command, tcti=tcti), mock.patch.dict(os.environ), \
+                        mock.patch.multiple(m.HighWater, value=mock.Mock(return_value=epoch), verify=mock.Mock(return_value=epoch),
+                                            pinned=mock.Mock(return_value=True)):
+                    os.environ.pop("TPM2TOOLS_TCTI", None)
+                    checked = [*argv, "--tpm-index", "0x1500016", "--tcti", tcti]
+                    rc, out, err = self.run_cli(*checked)
+                    self.assertEqual((rc, err), (0, ""))
+                    self.assertIn(said, out)
+                    self.assertIn("checked against the TPM epoch counter of " + tcti, out)
+                    self.assertNotIn("NOT checked", out)
+                    self.assertEqual("WARNING: that is a TPM SIMULATOR" in out, simulator)
+                    rc, result = self.as_json(*checked)
+                    self.assertEqual((rc, result["checked_against_tpm"], result["tpm"], result.get("tpm_is_a_simulator", False)),
+                                     (0, True, tcti, simulator))
+                    os.environ["TPM2TOOLS_TCTI"] = "swtpm:path=/tmp/other.sock"
+                    rc, out, err = self.run_cli(*checked)
+                    self.assertEqual((rc, out), (1, ""))
+                    self.assertIn("TPM2TOOLS_TCTI is set in the environment", err)
+        rc, result = self.as_json(*self.retire(**done))
+        self.assertEqual((rc, result["checked_against_tpm"]), (0, False))
+        self.assertNotIn("tpm", result)
+
 
 if __name__ == "__main__":
     unittest.main()
