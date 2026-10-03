@@ -26,7 +26,8 @@ build   runs `ukify build` with no key, reads the image back, and requires every
         the input it was given, byte for byte. ukify is deterministic (measured on 257: the same inputs
         give the same file), so the record's `unsigned_sha256` is what a second builder must also get.
         The image may hold only the sections this tool knows how to measure; any other is refused.
-sign    takes TWO records of the same image built on two machines, which must be identical: one builder
+sign    refuses a record whose initrd review did not pass (#198). It
+        takes TWO records of the same image built on two machines, which must be identical: one builder
         alone decides nothing. It copies every input into its private work directory ONCE and builds only
         from those copies, so no input can change between the builds it makes. It then builds the image
         again from the same inputs, which must hash to the record's values; signs the
@@ -58,8 +59,12 @@ key, and that is the size every TPM 2.0 has. The public half of the SYSTEM key i
 (.pcrpkey) and so is itself measured: it is an input of `build`. The initrd-phase key's public half is
 given where the initrd's secret is sealed (unlock.seal_local).
 
-WHAT THIS DOES NOT DO. It does not fetch or pin the inputs, build the initrd, review what the initrd
-does (KERNEL-UPDATE.md step 2.2a), or install anything. The command-line check is a short refusal list
+THE INITRD'S REVIEW (#198, KERNEL-UPDATE.md step 2.2a). `build` unpacks the initrd it measures and
+records whether it opens the root disk only through the unlock client (the rules are above
+review_initrd); `sign` refuses a record whose review did not pass, and runs the review again on its own
+copy; `verify` runs it again on the image's .initrd section.
+
+WHAT THIS DOES NOT DO. It does not fetch or pin the inputs, build the initrd, or install anything. The command-line check is a short refusal list
 (disk-unlock words, debug shells), not a review. Whether a real machine measures what the record says is
 shown on a software TPM by e2e/uki-build.sh (the same sections replayed) and has not been shown by a
 boot. Nothing here has run with a hardware token.
@@ -268,6 +273,279 @@ def cmdline_text(raw):
     return text
 
 
+# ---- the initrd's review (#198): what the measured initrd does to open the root disk ----
+#
+# The image's initrd carries its own crypttab, command-line fragments and units, and once a host has
+# booted nothing on it shows what they were (#135). So they are read HERE, from the exact bytes that are
+# measured, and the result goes into the record; `sign` refuses an image whose initrd did not pass.
+# The rules (KERNEL-UPDATE.md step 2.2a), each a refusal with its reason:
+#   crypttab   etc/crypttab holds exactly the one generic line of the dracut module (the unlock client's
+#              socket, the partition by its label), and nothing else
+#   cmdline.d  no fragment (etc/cmdline.d/*.conf, etc/cmdline) holds a word of the command line's refusal
+#              list: rd.luks* in any form, a debug shell, another target
+#   the units  the unlock client's units and the boot mesh script are THIS repository's, byte for byte, as
+#              systemd will take them (an /etc copy, a mask, wins over /usr/lib and is what is compared);
+#              the client binary is there; the relay and the core socket are enabled
+#   the image  the unlock path (those units, every drop-in that applies to them or to systemd-cryptsetup,
+#              and every script they run) names no path outside the image: what it sources, executes or
+#              reads is in the initrd, a runtime or kernel directory (/run, /proc, /sys, /dev, /tmp), or a
+#              credential the stub unpacked from the ESP by its fixed name (/.extra/global_credentials/
+#              NAME.cred, measured into PCR 12). Nothing from the root disk, nothing from the build machine.
+# What it does NOT judge: the rest of dracut's own initrd (its hooks and systemd's units), which no rule
+# here names. A review catches what it names (#198, "not covered").
+INITRD_REVIEW = "regalia.initrd-review/v1"
+INITRD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initrd")
+UNLOCK_UNITS = ("regalia-unlock-relay.service", "regalia-unlock-core.socket", "regalia-unlock.service", "regalia-wg-boot.service")
+UNLOCK_SCRIPTS = {"usr/lib/regalia/wg-boot": "wg-boot"}
+UNLOCK_BINARIES = ("usr/bin/regalia-unlock",)
+UNLOCK_ENABLED = ("etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket",
+                  "etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service")
+UNIT_DIRS = ("etc/systemd/system", "run/systemd/system", "usr/lib/systemd/system")      # systemd's precedence
+RUNTIME_PREFIXES = ("/run", "/proc", "/sys", "/dev", "/tmp")
+STUB_CREDENTIAL = r"/\.extra/global_credentials/[A-Za-z0-9._-]+\.cred"
+# a path in a unit's value or a script's line: after a start, a separator or a unit's exec prefix (-@:+!)
+PATH_TOKEN = re.compile(r"""(?:^|(?<=[\s=:"'(<>|;@+!-]))(/[A-Za-z.][A-Za-z0-9._@+-]*(?:/[A-Za-z0-9._@+-]+)*/?)""")
+MAX_INITRD_FILES, MAX_UNPACKED = 200000, 2 * 1024 * 1024 * 1024
+TOOLS.update({"zstd": "zstd", "lz4": "lz4"})
+
+
+def _cpio(data, files):
+    """Reads ONE newc archive at the start of `data` into `files` ({path: (mode, bytes)}, a link's bytes its
+    target); returns how many bytes it used. Hard links carry their data on the last name (newc)."""
+    pos, links = 0, {}
+    while True:
+        head = data[pos:pos + 110]
+        require(len(head) == 110 and head[:6] in (b"070701", b"070702"), "the initrd's cpio archive is cut short or not newc")
+        try:
+            ino, mode, _, _, nlink, _, size, major, minor, _, _, namesize, _ = (int(head[i:i + 8], 16) for i in range(6, 110, 8))
+        except ValueError:
+            raise Refused("the initrd's cpio archive has a header that is not hexadecimal")
+        name_end = pos + 110 + namesize
+        name = data[pos + 110:name_end - 1].decode("utf-8", "replace")
+        start = (name_end + 3) & ~3
+        body = data[start:start + size]
+        require(len(body) == size and namesize >= 1, "the initrd's cpio archive is cut short")
+        pos = (start + size + 3) & ~3
+        if name == "TRAILER!!!":
+            return pos
+        path = os.path.normpath("/" + name).lstrip("/")
+        if not path or path == ".":
+            continue
+        if stat_regular(mode) and nlink > 1:
+            group = links.setdefault((ino, major, minor), [])
+            group.append(path)
+            if size:
+                for other in group:
+                    files[other] = (mode, body)
+                continue
+        files[path] = (mode, body)
+        require(len(files) <= MAX_INITRD_FILES, "the initrd holds more than %d files" % MAX_INITRD_FILES)
+
+
+def stat_regular(mode):
+    return mode & 0o170000 == 0o100000
+
+
+def stat_link(mode):
+    return mode & 0o170000 == 0o120000
+
+
+def _decompress(data, run, tools):
+    import gzip
+    import lzma
+    if data[:2] == b"\x1f\x8b":
+        out = gzip.decompress(data)
+    elif data[:6] == b"\xfd7zXZ\x00":
+        out = lzma.decompress(data)
+    elif data[:4] in (b"\x28\xb5\x2f\xfd", b"\x02\x21\x4c\x18"):
+        tool = "zstd" if data[:4] == b"\x28\xb5\x2f\xfd" else "lz4"
+        out = _run(run, [tools[tool], "-dc"], "decompressing the initrd (%s)" % tool, input=data, env=_clean_env())
+    else:
+        raise Refused("the initrd is neither a cpio archive nor compressed in a way this tool reads (gzip, xz, zstd, lz4)")
+    require(len(out) <= MAX_UNPACKED, "the initrd unpacks to more than %d bytes" % MAX_UNPACKED)
+    return out
+
+
+def initrd_files(data, run=subprocess.run, tools=TOOLS, depth=0):
+    """Every file of an initrd as the kernel unpacks it: one or more cpio archives one after the other (an
+    uncompressed early one, microcode, then the main one, usually compressed), NUL padding between them, a
+    later archive's file replacing an earlier one's. Read in memory only, nothing is written: a name is
+    taken under the image's root ("/" + name, normalised, so ".." cannot leave it), and a link is followed
+    only inside the image (_resolve)."""
+    files, pos = {}, 0
+    while pos < len(data):
+        if data[pos] == 0:
+            pos += 1
+            continue
+        if data[pos:pos + 6] in (b"070701", b"070702"):
+            pos += _cpio(data[pos:], files)
+            continue
+        # the rest is one compressed stream holding the main archive(s); nothing follows it
+        require(depth == 0, "the initrd nests one compressed stream in another")
+        files.update(initrd_files(_decompress(data[pos:], run, tools), run, tools, depth + 1))
+        break
+    return files
+
+
+def _resolve(files, path, depth=0):
+    """`path` (relative to the image's root) with every link in it followed inside the image; None when it is
+    not in the image."""
+    require(depth < 40, "a link loop in the initrd")
+    parts, done = [p for p in path.strip("/").split("/") if p not in ("", ".")], ""
+    for i, part in enumerate(parts):
+        here = os.path.normpath(os.path.join(done, part)) if part != ".." else os.path.dirname(done)
+        entry = files.get(here)
+        if entry is not None and stat_link(entry[0]):
+            target = entry[1].decode("utf-8", "replace")
+            base = "" if target.startswith("/") else os.path.dirname(here)
+            rest = "/".join([os.path.join(base, target).lstrip("/")] + parts[i + 1:])
+            return _resolve(files, os.path.normpath("/" + rest).lstrip("/"), depth + 1)
+        if entry is None and not any(k.startswith(here + "/") for k in files):
+            return None
+        done = here
+    return done
+
+
+def _regular(files, path):
+    where = _resolve(files, path)
+    entry = files.get(where) if where else None
+    return entry[1] if entry is not None and stat_regular(entry[0]) else None
+
+
+def _effective_unit(files, name):
+    """The unit file systemd will load for `name`: the first directory in its precedence that has it."""
+    for directory in UNIT_DIRS:
+        if os.path.join(directory, name) in files:
+            return os.path.join(directory, name)
+    return None
+
+
+def _allowed(files, path, credential=False):
+    if any(path == p or path.startswith(p + "/") for p in RUNTIME_PREFIXES):
+        return True
+    if credential and re.fullmatch(STUB_CREDENTIAL, path):
+        return True
+    return _resolve(files, path) is not None
+
+
+def _scan_unit(files, where, text, findings, scripts):
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", ";", "[")) or "=" not in line:
+            continue
+        key, value = (s.strip() for s in line.split("=", 1))
+        credential = key in ("LoadCredential", "LoadCredentialEncrypted")
+        for path in PATH_TOKEN.findall(value):
+            if not _allowed(files, path.rstrip("/") or "/", credential):
+                findings.append("%s: %s names %s, which is not in the image" % (where, key, path))
+        if key.startswith("Exec") and key != "ExecSearchPath" and value:
+            program = value.split()[0].lstrip("@-:+!|")
+            if program.startswith("/"):
+                scripts.add(program)
+
+
+def _scan_script(files, path, findings, seen):
+    if path in seen:
+        return
+    seen.add(path)
+    body = _regular(files, path)
+    if body is None or not body.startswith(b"#!"):
+        return
+    text = body.decode("utf-8", "replace")
+    interpreter = text.splitlines()[0][2:].strip().split()
+    if interpreter and not _allowed(files, interpreter[0]):
+        findings.append("%s: its interpreter %s is not in the image" % (path, interpreter[0]))
+    for number, raw in enumerate(text.splitlines()[1:], 2):
+        line = re.sub(r"(^|\s)#.*$", "", raw)
+        for sourced in re.findall(r"(?:^|[;&|]\s*|\s)(?:\.|source)\s+(\S+)", line):
+            if not sourced.startswith("/") or not _allowed(files, sourced):
+                findings.append("%s:%d sources %s, which is not a file of the image" % (path, number, sourced))
+        for token in PATH_TOKEN.findall(line):
+            if not _allowed(files, token.rstrip("/") or "/"):
+                findings.append("%s:%d names %s, which is not in the image" % (path, number, token))
+
+
+def review_initrd(path, run=subprocess.run, tools=TOOLS):
+    """The review of the initrd at `path` (see above): {"schema", "passed", "findings", "crypttab", "units"}."""
+    return review_initrd_data(read(path), run, tools)
+
+
+def review_initrd_data(data, run=subprocess.run, tools=TOOLS):
+    """The same review, of an initrd's bytes (an image's .initrd section)."""
+    findings = []
+    try:
+        files = initrd_files(data, run, tools)
+    except Refused as refused:
+        return {"schema": INITRD_REVIEW, "passed": False, "findings": ["the initrd cannot be read: %s" % refused], "crypttab": None, "units": {}}
+    def lines(text):
+        return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    with open(os.path.join(INITRD_DIR, "dracut", "90regalia-unlock", "crypttab")) as f:
+        want = lines(f.read())
+    crypttab = _regular(files, "etc/crypttab")
+    got = lines(crypttab.decode("utf-8", "replace")) if crypttab is not None else None
+    if got != want:
+        findings.append("etc/crypttab must hold exactly the unlock client's line (%s); it holds %s"
+                        % (want[0] if want else "?", "nothing" if got is None else (" | ".join(got) or "no line")))
+    fragments = sorted(p for p in files if (p.startswith("etc/cmdline.d/") and p.endswith(".conf")) or p == "etc/cmdline")
+    for fragment in fragments:
+        body = _regular(files, fragment) or b""
+        for word in " ".join(lines(body.decode("utf-8", "replace"))).split():
+            if re.fullmatch(CMDLINE_HARDENING, word):
+                continue
+            if any(re.fullmatch(p, word) for p in CMDLINE_REFUSED):
+                findings.append("%s holds %r: the initrd's command line must not say how the disk is opened" % (fragment, word))
+    units, scripts = {}, set()
+    for name in UNLOCK_UNITS:
+        where = _effective_unit(files, name)
+        with open(os.path.join(INITRD_DIR, name), "rb") as f:
+            ours = f.read()
+        body = _regular(files, where) if where else None
+        if body != ours:
+            findings.append("%s is %s" % (name, "not in the image" if where is None else
+                            "not this repository's (%s, as systemd takes it: %s)" % ("masked or a link" if body is None else "other bytes", where)))
+        else:
+            units[name] = sha256(body)
+            _scan_unit(files, where, body.decode("utf-8", "replace"), findings, scripts)
+    for path, name in UNLOCK_SCRIPTS.items():
+        with open(os.path.join(INITRD_DIR, name), "rb") as f:
+            ours = f.read()
+        if _regular(files, path) != ours:
+            findings.append("%s is not this repository's %s" % (path, name))
+    for path in UNLOCK_BINARIES:
+        if _regular(files, path) is None:
+            findings.append("%s, the unlock client, is not in the image" % path)
+    for link in UNLOCK_ENABLED:
+        if link not in files:
+            findings.append("%s is not enabled (no %s)" % (os.path.basename(link), link))
+    # every drop-in that applies to the unlock path: per unit, the type-wide service.d/socket.d, and
+    # systemd-cryptsetup's (the template and the root volume's instance)
+    targets = UNLOCK_UNITS + ("systemd-cryptsetup@.service", "systemd-cryptsetup@root.service", "service", "socket")
+    for directory in UNIT_DIRS:
+        for target in targets:
+            prefix = "%s/%s.d/" % (directory, target)
+            for dropin in sorted(p for p in files if p.startswith(prefix) and p.endswith(".conf")):
+                body = _regular(files, dropin)
+                if body is not None:
+                    _scan_unit(files, dropin, body.decode("utf-8", "replace"), findings, scripts)
+    seen = set()
+    for script in sorted(scripts):
+        _scan_script(files, script, findings, seen)
+    return {"schema": INITRD_REVIEW, "passed": not findings, "findings": sorted(set(findings))[:64],
+            "crypttab": got[0] if got and len(got) == 1 else None, "units": units}
+
+
+def check_review(review):
+    """A record's initrd review, checked for shape: the fields, and passed only with no finding."""
+    membership.exact(review, ("schema", "passed", "findings", "crypttab", "units"), "record.initrd_review")
+    require(review["schema"] == INITRD_REVIEW, "record.initrd_review is not a %s" % INITRD_REVIEW)
+    require(isinstance(review["passed"], bool) and isinstance(review["findings"], list)
+            and all(isinstance(f, str) for f in review["findings"]) and review["passed"] == (not review["findings"]),
+            "record.initrd_review says passed only with no finding")
+    require(review["crypttab"] is None or isinstance(review["crypttab"], str), "record.initrd_review.crypttab is not text")
+    require(isinstance(review["units"], dict) and set(review["units"]) <= set(UNLOCK_UNITS)
+            and all(attest.is_hex(v, 64) for v in review["units"].values()), "record.initrd_review.units is not a map of the unlock units")
+
+
 INPUTS = ("linux", "initrd", "microcode", "cmdline", "os_release", "stub", "pcrpkey")
 
 
@@ -368,11 +646,13 @@ def build(inputs, uname, name, out_dir, run=subprocess.run, tools=TOOLS):
         require(".pcrsig" not in dict(sections(data)), "an unsigned image must have no .pcrsig section")
         _check_sections(parts, inputs, uname)
         values, _ = _predict(parts, run, tools, work)
+        review = review_initrd(inputs["initrd"], run, tools)          # the staged copy: the bytes just measured
         record = {
             "schema": SCHEMA, "name": name, "uname": uname,
             "inputs": {k: {"sha256": sha256(read(inputs[k])), "size": os.path.getsize(inputs[k])} for k in INPUTS if inputs.get(k)},
             "sections": {"." + n: sha256(c) for n, c in parts.items()},
             "unsigned_sha256": sha256(data), "stub_sections": stub_sections(data), "cmdline": parts["cmdline"].decode("ascii"), "phase_paths": dict(PHASE_PATHS), "pcr11": values, "pcrpkey_pkfp": fingerprint,
+            "initrd_review": review,
             "tools": {"ukify": _tool_version(run, [tools["ukify"], "--version"]),
                       "systemd_measure": _tool_version(run, [tools["measure"], "--version"])}}
         _place(image, os.path.join(out_dir, name + ".unsigned.efi"))
@@ -393,7 +673,8 @@ def _place(source, destination):
     os.unlink(source)
 
 
-RECORD_KEYS = ("schema", "name", "uname", "inputs", "sections", "unsigned_sha256", "stub_sections", "cmdline", "phase_paths", "pcr11", "pcrpkey_pkfp", "tools")
+RECORD_KEYS = ("schema", "name", "uname", "inputs", "sections", "unsigned_sha256", "stub_sections", "cmdline", "phase_paths", "pcr11", "pcrpkey_pkfp",
+               "initrd_review", "tools")
 
 
 def load_record(raw, signed=None):
@@ -413,6 +694,7 @@ def load_record(raw, signed=None):
     cmdline_text(record["cmdline"].encode("ascii", "replace"))      # the same rules, read back
     require(sha256(record["cmdline"].encode("ascii")) == record["sections"].get(".cmdline"), "record.cmdline is not the image's .cmdline section")
     membership.exact(record["pcr11"], attest.PHASES, "record.pcr11")
+    check_review(record["initrd_review"])
     for field in [record["unsigned_sha256"], record["pcrpkey_pkfp"]] + list(record["pcr11"].values()):
         require(attest.is_hex(field, 64), "the record holds a value that is not a SHA-256 in lowercase hex")
     require(isinstance(record["sections"], dict) and set(record["sections"]) <= {"." + n for n in OURS}
@@ -510,6 +792,9 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
     require(second_record is not None, "a second builder's record is required: one builder alone does not decide what is signed")
     load_record(membership.canonical(second_record), signed=False)
     require(membership.canonical(second_record) == membership.canonical(record), "the two builders' records differ: nothing is signed")
+    # #198: no image is signed whose initrd was not reviewed and found to open the disk only as it must
+    require(record["initrd_review"]["passed"], "the record's initrd review did not pass, so nothing is signed: %s"
+            % "; ".join(record["initrd_review"]["findings"]))
     for role in ("initrd", "system", "secure_boot"):
         _key_argument(keys[role][0], source, "the %s key" % role.replace("_", " "))
     public = {role: public_key(read(keys[role][1], 65536), "the %s certificate" % role.replace("_", " "), run, tools) for role in keys}
@@ -532,6 +817,9 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         inputs = _stage(inputs, work)
         for key, entry in record["inputs"].items():               # the copies, not the originals, are what is built
             require(sha256(read(inputs[key])) == entry["sha256"], "the input --%s changed while it was copied" % key.replace("_", "-"))
+        # the review again, here, on the copy that is about to be built and signed: not taken on the record's word
+        require(review_initrd(inputs["initrd"], run, tools) == record["initrd_review"],
+                "this machine's review of the initrd is not the record's: nothing is signed")
         # the third build: this machine must get the bytes the record names before it signs anything
         data = _ukify(inputs, uname, os.path.join(work, "unsigned.efi"), run, tools)
         require(sha256(data) == record["unsigned_sha256"], "this machine built another image than the record's (%s, not %s): "
@@ -600,6 +888,10 @@ def verify(image, record, public_keys, secure_boot_cert, run=subprocess.run, too
     certificate = _run(run, [tools["openssl"], "x509", "-outform", "der"], "reading the Secure Boot certificate", input=read(secure_boot_cert, 65536))
     require(sha256(certificate) == record["signed"]["secure_boot_cert_sha256"], "the Secure Boot certificate given is not the one the record names")
     _run(run, [tools["sbverify"], "--cert", secure_boot_cert, image], "checking the Secure Boot signature")
+    # and the initrd it carries reviewed again, here, on the operator's machine (#198): the signatures say
+    # the reviewed record was signed, this says the bytes still pass the same rules
+    require(record["initrd_review"]["passed"] and review_initrd_data(parts["initrd"], run, tools) == record["initrd_review"],
+            "the image's initrd does not pass the review its record states")
     return dict(record["pcr11"])
 
 
