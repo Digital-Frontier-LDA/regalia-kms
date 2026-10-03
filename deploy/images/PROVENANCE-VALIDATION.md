@@ -206,3 +206,14 @@ The image/rootfs/executable remain runner claims because those bytes are not
 published. The 280 remaining matches include required kernel/runtime components;
 package removal is not a proof of advisory reachability or patch applicability.
 The snapshot expiry and production commissioning gates remain in effect.
+
+## Vulnerability remediation — 2026-10-03
+
+[Final code CI 37111898894](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37111898894)
+passes all 36 functional jobs. The rebuilt image contains 247 packages, all bound
+to signed Debian indexes, with normal boot and daemon confinement verified.
+Freshly verified October 3 indexes offer no newer installed package versions.
+The exact scan remains blocked at 38 Critical + 242 High; no exceptions or release
+signatures are issued. Public evidence bindings and the diagnostic remediation
+report are recorded in
+[VULNERABILITY-REMEDIATION.md](VULNERABILITY-REMEDIATION.md).

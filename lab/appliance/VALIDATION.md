@@ -350,3 +350,15 @@ The image/rootfs/executable remain runner claims because those bytes are not
 published. The 280 remaining matches include required kernel/runtime components;
 package removal is not a proof of advisory reachability or patch applicability.
 The snapshot expiry and production commissioning gates remain in effect.
+
+## Vulnerability remediation — 2026-10-03
+
+[Final code CI 37111898894](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37111898894)
+passes all 36 functional jobs. The image has 247 authenticated packages, down
+from 259; actual daemon confinement, persistent mount/umount privilege removal,
+ordinary-UID bind-mount denial and normal UEFI boot/shutdown pass. Four libfdisk1
+matches disappear; vulnerability-database changes leave the total unchanged at
+38 Critical + 242 High. The scan alone blocks release. Exact source/rootfs/report
+hashes, database deltas, signed-index update checks and remaining source-level
+actions are recorded in
+[VULNERABILITY-REMEDIATION.md](../../deploy/images/VULNERABILITY-REMEDIATION.md).
