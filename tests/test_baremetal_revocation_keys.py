@@ -11,7 +11,14 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from deploy.baremetal import heartbeat as hb, membership as m
 import tests.test_baremetal_heartbeat as hbt
 
-VECTORS = pathlib.Path(__file__).resolve().parent / "vectors" / "revocation-p256.json"
+VECTORS = pathlib.Path(__file__).resolve().parent / "vectors" / "typed-keys-p256.json"
+
+
+def v3(man, life=hb.MAX_LIFETIME):
+    """A regalia.membership/v3 manifest from a v1 one: v2's fields (each node's SSH host key, the heartbeat
+    lifetime), where typed keys are allowed."""
+    nodes = [dict(n, ssh_host_pub=("%02x" % (0xd0 + i)) * 32) for i, n in enumerate(man["nodes"])]
+    return dict(man, schema=m.SCHEMA_V3, heartbeat_max_lifetime_s=life, nodes=nodes)
 
 
 def p256():
@@ -38,7 +45,7 @@ def p256_beat(man, sequence, key, entry, issued=hbt.T0, high=False):
 class Case(unittest.TestCase):
     def setUp(self):
         self.key, self.entry = p256()
-        self.man = hbt.manifest(keys=[hbt.pub(hbt.REVOKE), self.entry])
+        self.man = v3(hbt.manifest(keys=[hbt.pub(hbt.REVOKE), self.entry]))
 
     def refused(self, reason, fn, *args):
         with self.assertRaises(m.Refused) as caught:
@@ -64,7 +71,15 @@ class Entries(Case):
                                      ("twice", None, "must be distinct")):
             with self.subTest(label):
                 keys = [self.entry, dict(self.entry)] if entry is None else [entry]
-                self.refused(reason, m.validate, hbt.manifest(keys=keys))
+                self.refused(reason, m.validate, v3(hbt.manifest(keys=keys)))
+
+    def test_a_typed_key_needs_schema_v3(self):
+        """The Go accept() in the initrd knows only Ed25519 until it is ported: a typed key under v1 or v2
+        must make the manifest invalid everywhere, never be misread."""
+        self.refused("needs schema regalia.membership/v3", m.validate, hbt.manifest(keys=[self.entry]))
+        v2 = dict(v3(hbt.manifest(keys=[self.entry])), schema=m.SCHEMA_V2)
+        self.refused("needs schema regalia.membership/v3", m.validate, v2)
+        m.validate(dict(v2, revocation_keys=[hbt.pub(hbt.REVOKE)]))        # v2 with bare keys: as before
 
 
 class Heartbeats(Case):
@@ -115,10 +130,41 @@ class Manifests(Case):
                                                      "sig": hbt.ROOT.sign(m.DOMAIN + m.canonical(candidate)).hex()}}
         self.assertEqual(m.verify_envelope(root, hbt.pub(hbt.ROOT), self.man)[1], "root")
 
-    def test_the_root_is_ed25519_always(self):
+    def test_a_bare_hex_root_pin_is_ed25519_and_names_only_itself(self):
         envelope = {"manifest": self.man, "signature": {"signer": "root", "key": self.entry["key"],
                                                         "sig": sign_p256(self.key, m.DOMAIN + m.canonical(self.man))}}
         self.refused("not the pinned root", m.verify_envelope, envelope, self.entry["key"][:64])
+
+
+class Root(Case):
+    """#156: the root on an offline Nitrokey too. The pinned root is one entry or a list; the algorithm comes
+    from the pinned entry; a typed root signs only v3."""
+
+    def root_envelope(self, man, key, entry):
+        return {"manifest": man, "signature": {"signer": "root", "key": entry["key"], "sig": sign_p256(key, m.DOMAIN + m.canonical(man))}}
+
+    def test_a_p256_root_signs_the_first_v3_manifest(self):
+        key, entry = p256()
+        first = m.accept(None, self.root_envelope(self.man, key, entry), entry)
+        self.assertEqual((first["epoch"], first["schema"]), (1, m.SCHEMA_V3))
+        self.assertEqual(m.accept(None, self.root_envelope(self.man, key, entry), [hbt.pub(hbt.ROOT), entry])["epoch"], 1)   # a root set
+
+    def test_a_typed_root_cannot_sign_a_v2_manifest(self):
+        key, entry = p256()
+        v2 = dict(self.man, schema=m.SCHEMA_V2, revocation_keys=[hbt.pub(hbt.REVOKE)])
+        self.refused("needs schema regalia.membership/v3", m.accept, None, self.root_envelope(v2, key, entry), entry)
+
+    def test_the_root_s_algorithm_comes_from_the_pinned_entry(self):
+        key, entry = p256()
+        ed = {"manifest": self.man, "signature": {"signer": "root", "key": entry["key"],
+                                                  "sig": hbt.ROOT.sign(m.DOMAIN + m.canonical(self.man)).hex()}}
+        self.refused("does not verify", m.accept, None, ed, entry)                           # an Ed25519 signature under a P-256 root
+        self.refused("not the pinned root", m.accept, None, self.root_envelope(self.man, key, entry), hbt.pub(hbt.ROOT))
+
+    def test_a_malformed_root_pin_is_refused(self):
+        for bad in ([], {"alg": "ecdsa-p256", "key": "00" * 65}, [hbt.pub(hbt.ROOT), hbt.pub(hbt.ROOT)], "AB" * 32):
+            with self.subTest(bad=bad), self.assertRaises(m.Refused):
+                m.root_entries(bad)
 
 
 class Vectors(unittest.TestCase):
@@ -134,6 +180,13 @@ class Vectors(unittest.TestCase):
                 else:
                     with self.assertRaises(m.Refused):
                         m.verify_revocation(case["alg"], case["key"], message, case["sig"], "vector")
+        for case in doc["manifests"]:
+            with self.subTest(case["name"]):
+                if case["valid"]:
+                    self.assertEqual(m.accept(None, case["envelope"], case["root"])["epoch"], 1)
+                else:
+                    with self.assertRaises(m.Refused):
+                        m.accept(None, case["envelope"], case["root"])
 
 
 if __name__ == "__main__":

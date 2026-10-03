@@ -8,7 +8,7 @@ node claims (THREE-SITE-THREAT-MODEL.md S2, ADR-0002 D23).
     envelope = {"manifest": {...}, "signature": {"signer": "root" | "revocation", "key": "<hex Ed25519 public key>",
                                                  "sig": "<hex Ed25519 signature>"}}
 
-    manifest = {"schema": "regalia.membership/v1" | "regalia.membership/v2", "epoch": <int >= 1>,
+    manifest = {"schema": "regalia.membership/v1" | "regalia.membership/v2" | "regalia.membership/v3", "epoch": <int >= 1>,
                 "prev_digest": "<64 hex, or "" at epoch 1>",
                 "policy_version": "<text>", "issued_at": "YYYY-MM-DDTHH:MM:SSZ",
                 "heartbeat_max_lifetime_s": <int> (v2 only),
@@ -84,7 +84,12 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 SCHEMA = "regalia.membership/v1"
 SCHEMA_V2 = "regalia.membership/v2"
-SCHEMAS = (SCHEMA, SCHEMA_V2)          # in order: a chain never goes back
+# v3 is v2 with TYPED keys allowed (an {"alg": ...} entry, ECDSA P-256 for keys held on a Nitrokey, whose
+# PKCS#11 has no EdDSA). Gated behind its own version so that a verifier that knows only Ed25519 (the
+# initrd's Go accept() until it is ported) refuses the whole manifest rather than misreading a key: the
+# switch is one root-signed step, after every verifier that will see it has learnt v3.
+SCHEMA_V3 = "regalia.membership/v3"
+SCHEMAS = (SCHEMA, SCHEMA_V2, SCHEMA_V3)          # in order: a chain never goes back
 HEARTBEAT_MIN_S, HEARTBEAT_HARD_MAX_S = 3600, 7 * 24 * 3600      # what a v2 manifest may set as heartbeat_max_lifetime_s
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
@@ -219,6 +224,16 @@ def revocation_entry(entry, label="a revocation key"):
     return entry["alg"], entry["key"]
 
 
+def root_entries(root, label="the root key"):
+    """The pinned root: one entry or a non-empty list of them, each a bare 64-hex Ed25519 key or a typed
+    {"alg", "key"} entry (#156: the root on an offline Nitrokey). Returns [(alg, key hex), ...]."""
+    entries = root if isinstance(root, list) else [root]
+    require(entries and len(entries) <= 8, "the root is one key or a list of one to eight")
+    out = [revocation_entry(entry, label) for entry in entries]
+    require(len({k for _, k in out}) == len(out), "the root keys must be distinct")
+    return out
+
+
 def revocation_alg(manifest, key):
     """The algorithm the manifest's revocation_keys give for `key` (its hex), or None if it names none."""
     for entry in manifest["revocation_keys"]:
@@ -254,7 +269,7 @@ def validate(manifest):
     """Schema and uniqueness. Returns the manifest's nodes by ID."""
     require(isinstance(manifest, dict), "manifest must be an object")
     require(manifest.get("schema") in SCHEMAS, "schema must be %s" % " or ".join(SCHEMAS))
-    second = manifest["schema"] == SCHEMA_V2
+    second = manifest["schema"] in (SCHEMA_V2, SCHEMA_V3)        # v3 has v2's fields
     exact(manifest, V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
     node_keys = V2_NODE_KEYS if second else NODE_KEYS
     if second:
@@ -281,6 +296,8 @@ def validate(manifest):
     require(isinstance(keys, list), "revocation_keys must be a list")
     named = [revocation_entry(k, "revocation_keys[%d]" % i)[1] for i, k in enumerate(keys)]
     require(len(set(named)) == len(named), "revocation_keys must be distinct")
+    require(manifest["schema"] == SCHEMA_V3 or all(isinstance(k, str) for k in keys),
+            "a typed revocation key ({\"alg\": ...}) needs schema %s" % SCHEMA_V3)
     nodes = manifest["nodes"]
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
@@ -324,13 +341,15 @@ def verify_envelope(envelope, root_key, current=None):
             "signature.key must be 64 or 130 lowercase hex")
     hex_field(sig["sig"], 128, "signature.sig")
     if sig["signer"] == "root":
-        require(sig["key"] == root_key, "the signature names a root key that is not the pinned root")
-        alg = "ed25519"                                  # the root is Ed25519, always
+        algs = [alg for alg, key in root_entries(root_key) if key == sig["key"]]
+        require(algs, "the signature names a root key that is not the pinned root")
+        alg = algs[0]                                    # from the pinned entry, never from the signature
     else:
         alg = revocation_alg(current, sig["key"]) if current is not None else None
         require(alg is not None, "the signing revocation key is not named by the current manifest")
     manifest = envelope["manifest"]
     validate(manifest)
+    require(alg == "ed25519" or manifest["schema"] == SCHEMA_V3, "a manifest signed by a typed (%s) key needs schema %s" % (alg, SCHEMA_V3))
     try:
         verify_revocation(alg, sig["key"], DOMAIN + canonical(manifest), sig["sig"], "manifest")
     except Refused:

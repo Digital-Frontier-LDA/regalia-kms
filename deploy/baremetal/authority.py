@@ -94,7 +94,7 @@ def validate(doc):
     """The configuration. Refused names the first thing wrong."""
     membership.exact(doc, KEYS, "authority configuration")
     require(doc["schema"] == SCHEMA, "schema must be %s" % SCHEMA)
-    membership.hex_field(doc["root_key"], 64, "root_key")
+    membership.root_entries(doc["root_key"], "root_key")
     require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
             "tcti must be null (the kernel's resource manager) or a TCTI string")
     for k in ("nv_epoch", "nv_sequence"):
