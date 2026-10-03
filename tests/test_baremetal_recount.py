@@ -237,11 +237,15 @@ class CommandLine(TheHostsTpmAndChain):
             self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
         self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=run), 1)             # usable now: refused
 
-    def test_refused_while_regalia_sync_runs(self):
-        counter, run = self.node_setup(sync="active")
-        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl"]
-        self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=run), 1)
-        self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))                           # nothing asked, nothing done
+    def test_refused_unless_regalia_sync_is_stopped(self):
+        for state in ("active", "activating", "deactivating", "reloading", ""):
+            with self.subTest(state=state or "(no answer)"):
+                self.d = tempfile.mkdtemp()                       # a host of its own for each state
+                self.addCleanup(shutil.rmtree, self.d, True)
+                counter, run = self.node_setup(sync=state)
+                argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl"]
+                self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=run), 1)
+                self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))                   # nothing asked, nothing done
 
     def test_an_explicit_heartbeat_that_does_not_exist_is_refused(self):
         counter, run = self.node_setup()

@@ -227,8 +227,11 @@ def main(argv=None, ask=None, run=None):
             index, defaults = cfg["nv_heartbeat"], [os.path.join(cfg["state_dir"], "freshness.json")]
             counter = node.heartbeat_counter(cfg, run)            # the service's own construction and lock
             active = run(["systemctl", "is-active", "regalia-sync.service"], capture_output=True, timeout=10)
-            require(active.stdout.decode(errors="replace").strip() != "active",
-                    "regalia-sync is running and advances this counter: stop it first (systemctl stop regalia-sync)")
+            state = active.stdout.decode(errors="replace").strip()
+            # only a stopped service passes: "activating", "deactivating", "reloading" or a systemctl that failed
+            # (no answer) count as running
+            require(state in ("inactive", "failed"), "regalia-sync is not stopped (%s): it advances this counter; stop it first "
+                    "(systemctl stop regalia-sync)" % (state or "no answer from systemctl"))
         else:
             cfg = authority.validate(raw)
             index, defaults = cfg["nv_sequence"], [os.path.join(cfg["state_dir"], n) for n in (authority.HEARTBEAT, authority.PENDING)]
