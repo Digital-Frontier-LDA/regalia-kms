@@ -65,7 +65,8 @@ class FakeTpm:
     lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes.
     A counter's value is an integer; an ordinary index holds bytes, at most the size it was defined with."""
     COUNTER, WRITTEN, LOCKED = 0x10, 0x20000000, 0x800
-    BITS = {"ownerwrite": 0x2, "authwrite": 0x4, "policywrite": 0x8, "ppwrite": 0x1, "writedefine": 0x2000, "ownerread": 0x20000, "authread": 0x40000}
+    BITS = {"ownerwrite": 0x2, "authwrite": 0x4, "policywrite": 0x8, "ppwrite": 0x1, "writedefine": 0x2000, "ownerread": 0x20000, "authread": 0x40000,
+            "no_da": 0x2000000, "orderly": 0x4000000, "clear_stclear": 0x8000000}
 
     def __init__(self, highest=0):
         self.nv, self.highest, self.broken = {}, highest, False

@@ -524,10 +524,12 @@ class HighWater:
           2. each other slot that is missing or has the wrong attributes is deleted, defined, and written at once;
           3. the counter and its base are deleted and defined again at `epoch`;
           4. any slot not yet holding the new record is written.
-        Interrupted anywhere, the node holds what it held, or the new record beside a counter not in step with
-        it (unusable, a floor at `epoch`), or the finished anchor. One case is weaker, stated: when NEITHER slot
-        has this software's attributes, step 2 deletes the first before anything new is in the TPM, so a cut
-        between that delete and the write leaves only the counter (if it reads) as the floor."""
+        In step 2 a MISSING slot is defined and written first (nothing to lose), so the new record is in the TPM
+        before any defined slot is deleted; among wrong slots, the one holding nothing, else the lower record,
+        goes first. Interrupted anywhere, the node holds what it held, or the new record beside a counter not in
+        step with it (unusable, a floor at `epoch`), or the finished anchor. One case is weaker, stated: when
+        BOTH slots are defined with wrong attributes, the first deleted (the lower) is gone before anything new
+        is in the TPM; a cut there loses that lower record, while the higher one, and the counter, remain."""
         hex_field(manifest_digest, 64, "a manifest digest")
         with _exclusive(self.lock_path):
             data = self.slot_bytes(epoch, manifest_digest)
@@ -539,9 +541,10 @@ class HighWater:
                 first = min(good, key=lambda index: (held[index] is not None, held[index] or (0, "")))
                 self._put(first, data, epoch, manifest_digest)
                 written.add(first)
-            for index in self.record_indices:
-                if index in written or index in good:
-                    continue
+            # a MISSING slot first (nothing to lose), then wrong ones holding nothing, then the lower record first
+            rest = [index for index in self.record_indices if index not in written and index not in good]
+            rest.sort(key=lambda index: (int(index, 16) in defined, self._held(index) if int(index, 16) in defined else None or (-1, "")))
+            for index in rest:
                 if int(index, 16) in defined:
                     require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
                 r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread")
@@ -556,6 +559,15 @@ class HighWater:
                 if index not in written:
                     self._put(index, data, epoch, manifest_digest)
             return base
+
+    def _held(self, index):
+        """The valid record a defined slot holds whatever its attributes, (-1, "") for none: what remains() reads."""
+        a, size = self._public(index)
+        if a & self.NT_MASK != self.NT_ORDINARY or size != self.RECORD_BYTES or not a & self.WRITTEN:
+            return (-1, "")
+        data = self._read_any(index, self.RECORD_BYTES, a)
+        held_epoch, held = int.from_bytes(data[:8], "big"), data[8:40].hex()
+        return (held_epoch, held) if data == self.slot_bytes(held_epoch, held) else (-1, "")
 
     def _put(self, index, data, epoch, manifest_digest):
         r = self._tpm("nvwrite", index, "-C", "o", "-i", "-", input=data)
@@ -724,13 +736,9 @@ class HighWater:
             for index in self.record_indices:
                 if int(index, 16) not in defined:
                     continue
-                a, size = self._public(index)
-                if a & self.NT_MASK != self.NT_ORDINARY or size != self.RECORD_BYTES or not a & self.WRITTEN:
-                    continue
-                data = self._read_any(index, self.RECORD_BYTES, a)
-                held_epoch, held = int.from_bytes(data[:8], "big"), data[8:40].hex()
-                if data == self.slot_bytes(held_epoch, held):
-                    records.append((held_epoch, held))
+                held = self._held(index)
+                if held[0] >= 0:
+                    records.append(held)
             return epoch, records
 
     def record(self):

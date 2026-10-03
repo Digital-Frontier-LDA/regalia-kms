@@ -670,6 +670,12 @@ class RecordWrites(unittest.TestCase):
         with unittest.mock.patch.object(reader, "_base", base_then_redefined):
             with self.assertRaisesRegex(m.Refused, "changed during the read: read again"):
                 reader.verify(lambda epoch: "%02x" % epoch * 32 if epoch in (3, 4, 9) else good(epoch), lock=False)
+        # the base comes back the same and only the counter moved (two redefinitions in quick succession): still refused
+        epochs = iter([9, 10])
+        real_epoch = reader._epoch
+        with unittest.mock.patch.object(reader, "_epoch", lambda base: next(epochs)):
+            with self.assertRaisesRegex(m.Refused, "changed during the read: read again"):
+                reader.verify(lambda epoch: "%02x" % epoch * 32, lock=False)
 
     def test_redefine_refuses_a_digest_that_is_not_one_before_deleting_anything(self):
         hw = self.defined()
@@ -816,6 +822,9 @@ class RecordWrites(unittest.TestCase):
                                   ("0x150001a", "ownerwrite|authread"),                       # no ownerread: the owner could not read it
                                   ("0x150001b", "ownerread|authread|authwrite"),
                                   ("0x150001b", "ownerread|authread"),
+                                  ("0x150001a", "ownerread|ownerwrite|authread|no_da"),       # bits outside the mask (51: untested)
+                                  ("0x150001b", "ownerread|ownerwrite|authread|orderly"),
+                                  ("0x150001b", "ownerread|ownerwrite|authread|clear_stclear"),
                                   ("0x1500017", "ownerread|ownerwrite|authread|authwrite|writedefine")):   # the base too
             with self.subTest(index=index, attributes=attributes):
                 self.tpm = FakeTpm()
@@ -880,6 +889,36 @@ class RecordWrites(unittest.TestCase):
         order = [(tool, index) for tool, index in self.calls if tool in ("nvundefine", "nvwrite")]
         self.assertEqual(order[:2], [("nvwrite", "0x150001a"), ("nvundefine", "0x150001b")])
         self.assertEqual((hw.value(), hw.slots()), (10, [(10, "10" * 32)] * 2))
+
+    def test_a_missing_slot_is_filled_before_a_wrong_one_holding_a_record_is_deleted(self):
+        """51's fifth read: the upgrade from main (one 40-byte, authwrite record index; the second slot absent)
+        deleted the wrong slot first, so a cut there lost the highest record. A missing slot is now written first."""
+        hw = self.defined()
+        hw.anchor(7, lambda epoch: "%02x" % epoch * 32)
+        self.tpm(["tpm2_nvundefine", "0x150001a", "-C", "o"])
+        self.tpm(["tpm2_nvdefine", "0x150001a", "-C", "o", "-s", "48", "-a", "ownerread|ownerwrite|authread|authwrite"])
+        self.tpm(["tpm2_nvwrite", "0x150001a", "-C", "o", "-i", "-"], input=m.HighWater.slot_bytes(8, "08" * 32))
+        self.tpm(["tpm2_nvundefine", "0x150001b", "-C", "o"])                # missing
+        self.assertEqual(hw.remains(), (7, [(8, "08" * 32)]))
+        del self.calls[:]
+        self.fault = lambda argv: 1 if argv[:2] == ["tpm2_nvundefine", "0x150001a"] else None    # a cut at the first delete
+        with self.assertRaisesRegex(m.Refused, "cannot delete NV index 0x150001a"):
+            hw.redefine(9, "09" * 32)
+        self.assertEqual([(tool, index) for tool, index in self.calls if tool in ("nvdefine", "nvwrite", "nvundefine")][:3],
+                         [("nvdefine", "0x150001b"), ("nvwrite", "0x150001b"), ("nvundefine", "0x150001a")])
+        self.assertEqual(sorted(hw.remains()[1]), [(8, "08" * 32), (9, "09" * 32)])     # nothing was lost, and the new record is in
+        self.fault = lambda argv: None
+        hw.redefine(9, "09" * 32)
+        self.assertEqual((hw.value(), hw.slots(), hw.unusable()), (9, [(9, "09" * 32)] * 2, None))
+        # both slots wrong: the one holding nothing goes first, then the lower record
+        for index, record in (("0x150001a", m.HighWater.slot_bytes(12, "12" * 32)), ("0x150001b", b"\x5a" * 48)):
+            self.tpm(["tpm2_nvundefine", index, "-C", "o"])
+            self.tpm(["tpm2_nvdefine", index, "-C", "o", "-s", "48", "-a", "ownerread|ownerwrite|authread|authwrite"])
+            self.tpm(["tpm2_nvwrite", index, "-C", "o", "-i", "-"], input=record)
+        del self.calls[:]
+        hw.redefine(13, "13" * 32)
+        self.assertEqual([index for tool, index in self.calls if tool == "nvundefine"][:2], ["0x150001b", "0x150001a"])
+        self.assertEqual((hw.value(), hw.slots()), (13, [(13, "13" * 32)] * 2))
 
     def test_two_valid_slots_that_disagree_at_one_epoch_are_refused(self):
         hw = self.defined()
