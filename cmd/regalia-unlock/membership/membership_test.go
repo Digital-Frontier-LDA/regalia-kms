@@ -4,12 +4,37 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
 // envelopeOf assembles an envelope the vector stores in parts: its signature's public key beside it, as
 // "signature_public" (a public key written as "key" reads as a credential to the secret scanner).
+// reasonDetail is what Python's messages add and Go's leave out, for the same reason: the offending value's
+// repr, the missing/unknown field lists, a parenthesised hint at the end, and the quote style.
+var reasonDetail = []struct {
+	pattern *regexp.Regexp
+	with    string
+}{
+	{regexp.MustCompile(`"([^"]*)"`), "'$1'"},
+	{regexp.MustCompile(`: missing=.*$`), ""},
+	{regexp.MustCompile(` \([^()]*\)$`), ""},
+	{regexp.MustCompile(`state .+ is not a known state`), "state is not a known state"},
+}
+
+// sameReason holds a Go refusal to the Python's: the same message, but for that detail (48's read of #293).
+func sameReason(python any, err error) bool {
+	want, _ := python.(string)
+	norm := func(s string) string {
+		for _, d := range reasonDetail {
+			s = d.pattern.ReplaceAllString(s, d.with)
+		}
+		return s
+	}
+	return norm(want) == norm(err.Error())
+}
+
 // restoreTyped undoes the vector's composition: every "public" field is "key" again, as the Python signed
 // it (make-membership-v1.py, compose).
 func restoreTyped(value any) any {
@@ -77,6 +102,8 @@ func TestEveryRecordedDecisionIsTheSame(t *testing.T) {
 			t.Errorf("call %d: Python refused (%s), Go accepted", i, call["refused"])
 		} else if _, ok := err.(*Refused); !ok {
 			t.Errorf("call %d: Go failed without a refusal: %v", i, err)
+		} else if !sameReason(call["refused"], err) {
+			t.Errorf("call %d: refused for another reason:\nPython: %s\nGo:     %v", i, call["refused"], err)
 		}
 	}
 	t.Logf("%d accepted and %d refused, as the Python decided", accepted, refused)
@@ -109,6 +136,8 @@ func TestEveryRecordedEnvelopeIsVerifiedAlike(t *testing.T) {
 			}
 		} else if _, ok := err.(*Refused); !ok {
 			t.Errorf("verification %d: Python refused (%s); Go: %v", i, record["refused"], err)
+		} else if !sameReason(record["refused"], err) {
+			t.Errorf("verification %d: refused for another reason:\nPython: %s\nGo:     %v", i, record["refused"], err)
 		}
 	}
 	if len(records) < 100 || typedSeen < 5 {
@@ -133,6 +162,8 @@ func TestEveryCraftedCaseAndDocumentIsDecidedAlike(t *testing.T) {
 		_, err := Accept(current, envelope, c["root_public"])
 		if _, accepted := c["accepted"]; accepted != (err == nil) {
 			t.Errorf("%s: Python %v, Go %v", c["name"], c["accepted"] != nil, err)
+		} else if !accepted && !sameReason(c["refused"], err) {
+			t.Errorf("%s: refused for another reason:\nPython: %s\nGo:     %v", c["name"], c["refused"], err)
 		}
 		// and validate() alone, which the transition rules use on both manifests
 		_, invalid := Validate(envelope.(map[string]any)["manifest"])
