@@ -721,13 +721,42 @@ Five systemd units in `deploy/baremetal/units/`, all run from one configuration,
 - Each unit's sandbox is pinned by `tests/test_baremetal_units.py`, including systemd's own
   `systemd-analyze verify` and an offline exposure score of at most 3.0.
 
-**NOT BUILT: provisioning a node (#190).** Nothing writes a node's trust anchors yet. Until the enrolment
-command exists they are placed by hand, as the end-to-end test does: the membership store's first
-manifest (`/var/lib/regalia-sync/membership.json`, through `membership.Store.commit`, which also defines
-and advances the TPM anchor), the heartbeat counter's NV index, the measurements document the manifest
-commits to, each peer's AK in the attestation state (`attest.Verifier`), the WG-SERVICE private key
-(`/etc/regalia/wg-service.key`, 0600), the site configuration with `boot_mesh` and `service_mesh`, and
-`chrony.conf` as `authtime.conf()` renders it (the whole file).
+**Provisioning a node (#190), PARTLY BUILT: `python3 -Es -m deploy.baremetal.enrol`.** Two phases, as root at
+the console; every step is journalled in `/var/lib/regalia-enrol` (root, 0700), and a rerun resumes,
+removing only what it can prove it made.
+- `init --node-id X` makes the EK and AK in the TPM, the WG-SERVICE key (`/etc/regalia/wg-service.key`,
+  0600) and the WG-BOOT key, and writes the identity bundle (public values) for the manifest ceremony.
+- `check` verifies a root-signed manifest chain against this host and writes nothing.
+- `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
+  configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
+  --secure-boot-cert --esp`). It checks all of them before writing: the image goes through `uki.verify`, and
+  its PCR 11 must be accepted for this node. Then it writes, in order:
+  - `node.json`, the site configuration and the measurements under `/etc/regalia`;
+  - the TPM anchor, the store and the heartbeat counter, as `regalia-sync`;
+  - `regalia.unlock-local` and `regalia.wg-boot-key`, sealed to this TPM (PCR 7, and PCR 11 through the
+    initrd key) into the ESP's `loader/credentials`. Their SHA-256 and size are journalled for PCR 12.
+  No directory on the way is followed through a link or is writable by others, and no file is replaced.
+  The initrd key is taken only from the root's chain: the approved set must name the image's signing
+  keys (`"signing"`, #267), so a re-signed copy of an approved image is refused.
+- **What stays on disk in the clear, and for how long.**
+  - The WG-BOOT private key stays only until its sealed copy is on the ESP.
+  - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until the peers'
+    LUKS paths are enrolled. That step is not built yet, so today it stays indefinitely: **the paths step
+    must land before any production enrolment.**
+  - Both live on the root volume, which at enrolment is open with the recovery key: encrypted at rest,
+    readable by root while the host runs. Host backups must exclude `/var/lib/regalia-enrol`.
+  - Removal is a plain unlink. Overwriting first buys nothing on ext4 over an SSD with TRIM.
+- **The ESP is written by root only** (it is root's and mounted by root). On FAT there is no link(2), so a
+  sealed file is published by checking the target is absent and renaming onto it; that check assumes no
+  other writer.
+
+**Still NOT BUILT** (placed by hand, as the end-to-end test does):
+- each peer's AK in the attestation state (`attest.Verifier`);
+- the LUKS paths with the peers' contributions (`unlock.enrol_path`);
+- the four rendered ESP credentials;
+- `chrony.conf` as `authtime.conf()` renders it;
+- the enrolment record signed by the AK's quote;
+- `commit --replace` (#76).
 
 ### The revocation authority (#199)
 
