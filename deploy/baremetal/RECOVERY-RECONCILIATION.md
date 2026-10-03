@@ -39,6 +39,21 @@ copy causes refusal; that copy is preserved for a further explicit custody choic
 every mutation and left unchanged. An unselected passphrase remains visible as
 `needs-review` and causes exit 1 even when the selected repair finished.
 
+**A kill inside a retirement (#175, d9's read).** luksKillSlot wipes a slot's key material (with
+random bytes) before it updates the metadata. A kill between the two leaves the retired slot listed
+while its card opens nothing, and the header alone cannot tell that slot from a live one. So, before
+each retirement, and only after proving the retired card, the tool records `regalia_retiring:
+[[slot, salt]]` on the kept slot's token. This is one in-place token replace, measured atomic on
+cryptsetup 2.7.5. A retry may then finish a listed slot whose card opens nothing only when that mark
+names it by number and salt, and cryptsetup itself answers "no key" (exit 2) for the card. Without
+the mark, a card that opens nothing is still refused. Once the slot is gone, the mark is cleared, so
+a finished header's token is the plain one. systemd-cryptenroll lists a marked token as `recovery`,
+a boot prompt opens through it, and `--wipe-slot=recovery` removes it (tested).
+
+**One tool at a time.** This tool and `recovery-key.sh` take the same lock,
+`/run/lock/regalia-recovery-<device>.lock` (`recovery_state.lock_path`). They also read the header with
+the same classifier (`recovery_state.py`); the JSON this tool prints carries it as `header_state`.
+
 There is no undo. A failure reports the observed header; repeating the same
 explicit selections/cards handles slots that were already retired. A pending
 read or write can fail again, and no success is reported without its checks.

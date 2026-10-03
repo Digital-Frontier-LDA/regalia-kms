@@ -4,34 +4,63 @@ on:
     paths:
       - 'lab/recovery/**'
       - 'deploy/baremetal/recovery-key.sh'
+      - 'deploy/baremetal/recovery_state.py'
+      - 'deploy/baremetal/recovery-reconcile.py'
       - 'tests/test_recovery_matrix_observer.py'
       - '.github/workflows/recovery-matrix.yml'
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  # #175: each mode's level-1 scenarios in five shards (position modulo 5; one eighth of replace took
+  # 32 minutes on 2 CPUs with level 2), each shard running
+  # level 2 from the unfinished headers its own faults left. recovery-reconcile.py is the repair.
   matrix:
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [enrol, replace]
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Install cryptsetup for disposable regular-file headers
+      - name: Install cryptsetup and strace for disposable regular-file headers
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cryptsetup-bin strace
       - name: Verify recovery-header observer guards
-        run: python3 -m unittest discover -s tests -p test_recovery_matrix_observer.py -v
-      - name: Observe every successful and single-failure cleanup boundary
+        run: python3 -Es -m unittest discover -s tests -p test_recovery_matrix_observer.py -v
+      - name: Fault every call and every header sync, then the run that resumes each unfinished header
         run: |
           mkdir -p "$RUNNER_TEMP/recovery-evidence"
-          python3 lab/recovery/matrix.py --script deploy/baremetal/recovery-key.sh \
-            --output "$RUNNER_TEMP/recovery-evidence/matrix.json"
+          python3 -Es lab/recovery/matrix.py --script deploy/baremetal/recovery-key.sh \
+            --reconciler deploy/baremetal/recovery-reconcile.py \
+            --mode "${{ matrix.mode }}" --shard "${{ matrix.shard }}/5" \
+            --output "$RUNNER_TEMP/recovery-evidence/matrix-${{ matrix.mode }}-${{ matrix.shard }}.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: recovery-interruption-evidence
+          name: recovery-interruption-evidence-${{ matrix.mode }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/recovery-evidence
           if-no-files-found: error
           retention-days: 14
+  # Every shard passed, and together they ran every level-1 scenario of both modes exactly once.
+  merge:
+    needs: matrix
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: recovery-interruption-evidence-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      - name: Every shard passed and the level-1 total is complete
+        run: python3 -Es lab/recovery/merge.py --shards 5 "$RUNNER_TEMP"/shards/matrix-*.json

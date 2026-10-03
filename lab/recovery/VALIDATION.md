@@ -69,3 +69,12 @@ is fixed in the script and covered by a unit test.
 Script SHA-256: `676c5ada5d44b8fffb0724eccfd2bf8c71fa441059a2d79732b2dfc9d342cb1b`. Report SHA-256:
 `628e99169a93d7f9843f2e60360598d8d5a064cbaaa28c3a2bb0cce99031781b`. The run took 61 minutes on two
 CPUs.
+
+**Superseded by d9's read of #236 (same day).** The 337/337 run above predates:
+- the expected-key check (a retry must leave the right key, not only a clean shape);
+- the TPM stand-in;
+- level 2 (faults in the run that resumes each unfinished header);
+- proof that every sync fault fired;
+- `recovery-reconcile.py` as the repair.
+
+Under all of them, one replace shard (1/8) on cryptsetup 2.7.5 passed 110/110: 24 level-1 cases and 86 level-2 cases, 0 findings, every fault proven fired. Its first run caught a harness defect, now fixed: observing an image let cryptsetup repair a stale secondary header before the run (see README, "Observing never touches a run's image"). The full result is CI's merged report of 2 modes × 5 shards on cryptsetup 2.7.0, recorded on #236.

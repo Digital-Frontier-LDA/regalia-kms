@@ -17,6 +17,11 @@ import subprocess
 import stat
 import sys
 
+# recovery_state.py beside this file, by its resolved path: the reader recovery-key.sh uses. Run with
+# python3 -I, the script's own directory is not on sys.path, so it is added explicitly, last.
+sys.path.append(str(Path(__file__).resolve().parent))
+import recovery_state  # noqa: E402
+
 CRYPTSETUP = '/usr/sbin/cryptsetup'
 LOCKDIR = Path('/run/lock')
 ENV = {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C'}
@@ -46,6 +51,16 @@ def command(device, arguments, key=None):
             os.close(reader)
             if writer is not None: os.close(writer)
     return result
+
+
+def cryptsetup_new_enough():
+    """2.4 or newer: token import --token-replace, which the retiring mark relies on, is not in
+    older ones. Refused by name, not by a failed flag."""
+    result = subprocess.run([CRYPTSETUP, '--version'], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=45, env=ENV)
+    found = re.match(r'cryptsetup (\d+)\.(\d+)', result.stdout or '')
+    if not found: raise Refused('cannot read the cryptsetup version')
+    if tuple(int(x) for x in found.groups()) < (2, 4):
+        raise Refused('cryptsetup %s.%s is too old: 2.4 or newer is required (token import --token-replace)' % found.groups())
 
 
 def header(device):
@@ -78,6 +93,8 @@ def header(device):
 
 
 def describe(data):
+    """The custodian's view; 'header_state' is recovery_state.classify, the reader recovery-key.sh uses."""
+    shared = recovery_state.classify(data)
     owners = {slot: [] for slot in data['keyslots']}
     recovery = set(); orphans = []
     for token, value in data['tokens'].items():
@@ -89,7 +106,7 @@ def describe(data):
     unlabelled = [s for s, types in owners.items() if not types]
     ambiguous = [s for s, types in owners.items() if len(types) > 1]
     clean = len(recovery) == 1 and not (orphans or ignored or unlabelled or ambiguous)
-    return {'state': 'clean' if clean else 'needs-review',
+    return {'state': 'clean' if clean else 'needs-review', 'header_state': shared['state'],
             'recovery_slots': sorted(recovery, key=int), 'unlabelled_slots': sorted(unlabelled, key=int),
             'ignored_recovery_slots': sorted(ignored, key=int),
             'orphan_recovery_tokens': sorted(orphans, key=int),
@@ -125,9 +142,19 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     if not proves(device, kept_key, keep): raise Refused('kept card does not open the selected slot')
     # Prove every requested retirement before the first write. Absent slots are
     # already retired; a retry can continue without inventing an undo operation.
+    # luksKillSlot wipes a slot's key material (with random bytes) BEFORE it updates
+    # the metadata, so a kill between the two leaves the slot listed while its card
+    # opens nothing. That is accepted only when this tool recorded, on the kept
+    # slot's token and after proving the card, that it was retiring exactly that slot
+    # (number and salt), and cryptsetup itself answers "no key" (exit 2) for the card.
+    retiring = retiring_marks(before, keep)
     for slot, value in zip(retire, retired_keys):
         if slot in before['keyslots'] and not proves(device, value, slot):
-            raise Refused('retired card does not open its selected slot')
+            salt = before['keyslots'][slot].get('kdf', {}).get('salt')
+            if (slot, salt) not in retiring:
+                raise Refused('retired card does not open its selected slot')
+            if command(device, ['open', '--test-passphrase'], value).returncode != 2:
+                raise Refused('cannot prove the retired card opens nothing; inspect and repeat the selections')
     retained = {s: v for s, v in before['keyslots'].items() if s not in retire and s != keep}
     kept_salt = before['keyslots'][keep]['kdf']['salt']
     def checked_write(args, key=None, input_data=None):
@@ -165,9 +192,28 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
         # Slot number reuse is not authority to retire a different slot.
         if current['keyslots'][slot] != before['keyslots'][slot]:
             raise Refused('retired slot identity changed; inspect again')
+        mark = (slot, current['keyslots'][slot]['kdf']['salt'])
+        if mark not in retiring_marks(current, keep):
+            token_id, token = kept_token(current, keep)
+            marks = [list(m) for m in sorted(retiring_marks(current, keep) | {mark})]
+            data = json.dumps(dict(token, regalia_retiring=marks)).encode()
+            current = checked_write(['token', 'import', '--token-id', token_id, '--token-replace', '--json-file', '-'], input_data=data)
         current = checked_write(['luksKillSlot', '--batch-mode', slot], kept_key)
     for token in describe(header(device))['orphan_recovery_tokens']:
         checked_write(['token', 'remove', '--token-id', token])
+    # Every retirement is done: clear the mark (one in-place token replace, measured atomic on
+    # cryptsetup 2.7.5), so that a finished header holds the kept slot's token as it was before.
+    current = header(device)
+    # Only marks whose slot is gone are cleared; a mark for a slot still listed stays, so a later
+    # retry can still finish it.
+    marks = retiring_marks(current, keep)
+    pending = sorted(m for m in marks if m[0] in current['keyslots'])
+    if marks and len(pending) < len(marks):
+        token_id, token = kept_token(current, keep)
+        token = {k: v for k, v in token.items() if k != 'regalia_retiring'}
+        if pending: token['regalia_retiring'] = [list(m) for m in pending]
+        data = json.dumps(token).encode()
+        checked_write(['token', 'import', '--token-id', token_id, '--token-replace', '--json-file', '-'], input_data=data)
     final = header(device)
     if any(s in final['keyslots'] for s in retire) or not proves(device, kept_key, keep) or not proves(device, kept_key):
         raise Refused('selected reconciliation did not finish')
@@ -181,15 +227,30 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     return describe(final)
 
 
+def kept_token(data, keep):
+    found = [(i, t) for i, t in data['tokens'].items() if t['type'] == 'systemd-recovery' and t['keyslots'] == [keep]]
+    if len(found) != 1: raise Refused('kept slot has no single recovery token')
+    return found[0]
+
+
+def retiring_marks(data, keep):
+    """(slot, salt) pairs this tool recorded on the kept slot's token before retiring them."""
+    try:
+        _, token = kept_token(data, keep)
+    except Refused:
+        return set()
+    marks = token.get('regalia_retiring')
+    if not isinstance(marks, list): return set()
+    return {(m[0], m[1]) for m in marks if isinstance(m, list) and len(m) == 2 and all(isinstance(x, str) for x in m)}
+
+
 @contextmanager
 def instance_lock(device):
-    identity = device.stat()
-    key = f'block-{identity.st_rdev}' if stat.S_ISBLK(identity.st_mode) else f'file-{identity.st_dev}-{identity.st_ino}'
-    name = f'regalia-recovery-{key}.lock'
-    descriptor = os.open(LOCKDIR / name, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    # The same lock file recovery-key.sh takes (recovery_state.lock_path): the two never interleave.
+    path = recovery_state.lock_path(device, str(LOCKDIR))
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
-        actual = os.fstat(descriptor)
-        if not stat.S_ISREG(actual.st_mode) or actual.st_uid != os.geteuid() or actual.st_nlink != 1 or actual.st_mode & 0o077:
+        if recovery_state.lock_unsafe(os.fstat(descriptor)):
             raise Refused('unsafe reconciliation lock')
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
@@ -207,6 +268,7 @@ def main():
     try:
         # Separate lock file: locking the device inode itself deadlocks real
         # cryptsetup. Other header tools do not share this utility lock.
+        cryptsetup_new_enough()
         with instance_lock(args.device):
             if args.keep_slot is None:
                 if args.retire_slot: raise Refused('--retire-slot requires --keep-slot')

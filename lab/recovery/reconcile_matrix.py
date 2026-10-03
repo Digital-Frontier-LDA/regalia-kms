@@ -36,7 +36,12 @@ def run(script, output):
     try:
         with tempfile.TemporaryDirectory(prefix='regalia-reconcile-') as temp:
             directory = Path(temp); (directory/'bin').mkdir()
+            source_dir = script.parent
             script = directory / 'reconcile-under-test.py'; script.write_bytes(frozen_source)
+            # the classifier it imports from beside itself (recovery_state.py), frozen with it
+            shared = (source_dir / 'recovery_state.py').read_bytes()
+            (directory / 'recovery_state.py').write_bytes(shared)
+            report['recovery_state_sha256'] = hashlib.sha256(shared).hexdigest()
             shim=directory/'bin/cryptsetup'; shim.write_text(observer.SHIM);shim.chmod(0o700)
             calls=directory/'calls.jsonl'
             alphabet='cbdefghijklnrtuv'
@@ -54,10 +59,12 @@ def run(script, output):
             untouched=observer.header(executable,base)['keyslots']
             image=directory/'trial.img'
             last_public = ''
-            def invoke(point=0,fault='',keep='2',retire='1',supplied=None):
+            fired_flag=calls.with_suffix('.fired')
+            def invoke(point=0,fault='',keep='2',retire='1',supplied=None,sync=0,counts=None):
                 nonlocal last_public
-                calls.unlink(missing_ok=True)
-                env=dict(os.environ,MATRIX_CALLS=str(calls),MATRIX_CRYPTSETUP=executable,MATRIX_POINT=str(point),MATRIX_FAULT=fault)
+                calls.unlink(missing_ok=True); fired_flag.unlink(missing_ok=True)
+                env=dict(os.environ,MATRIX_CALLS=str(calls),MATRIX_CRYPTSETUP=executable,MATRIX_POINT=str(point),MATRIX_FAULT=fault,
+                         MATRIX_STRACE=observer.STRACE or '',MATRIX_SYNC=str(sync),MATRIX_SYNCS=str(counts or ''),MATRIX_FIRED=observer.FIRED.get(fault,''))
                 proc=subprocess.Popen(['python3','-I','-c',WORKER,str(script),str(shim),str(image),'--keep-slot',keep,'--retire-slot',retire],
                                       env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
                 try: out,err=proc.communicate(('\n'.join(supplied or [keys['new'],keys['old']])+'\n').encode(),timeout=60)
@@ -71,7 +78,10 @@ def run(script, output):
                     print(public[:1500],flush=True)
                 return proc.returncode,recorded
             shutil.copyfile(base,image)
-            _,baseline=invoke()
+            counts=directory/'syncs.txt'
+            _,baseline=invoke(counts=counts)
+            syncs={int(i):int(n) for i,n in (line.split() for line in counts.read_text().splitlines())}
+            report['syncs']={' '.join(baseline[i-1][:2]):n for i,n in sorted(syncs.items()) if n}
             def final_valid():
                 actual=observer.header(executable,image)
                 state=observer.observe(executable,image,keys)
@@ -96,6 +106,26 @@ def run(script, output):
                     invoke()
                     if not final_valid():raise ValueError('explicit same-selection retry did not reconcile')
                     report['cases'].append({'point':point,'call':baseline[point-1][0],'fault':fault,'injection_reached':True,'exit_code':code,'retry_reconciled':True,'unknown_slots_preserved':True})
+            # Every fsync of every header-writing call (#175, d9): luksKillSlot wipes the key material
+            # before the metadata, so a kill there leaves the retired slot listed and its card opening
+            # nothing; the same selection must still finish.
+            for point,count in sorted(syncs.items()):
+                for n in range(1,count+1):
+                    for fault in observer.SYNC_FAULTS:
+                        shutil.copyfile(base,image);code,actual=invoke(point,fault,sync=n)
+                        if not fired_flag.exists():raise ValueError('sync fault %s at call %d sync %d did not fire'%(fault,point,n))
+                        meta=observer.header(executable,image)
+                        if meta['keyslots'].get('0')!=untouched['0'] or meta['keyslots'].get('3')!=untouched['3']:
+                            raise ValueError('unselected slot changed')
+                        if not observer.opens(executable,image,keys['installer']) or not observer.opens(executable,image,keys['unknown']):
+                            raise ValueError('unselected unlock path lost')
+                        if not (observer.opens(executable,image,keys['new']) or observer.opens(executable,image,keys['old'])):
+                            raise ValueError('both cards lost')
+                        invoke()
+                        if not final_valid():raise ValueError('same-selection retry did not reconcile after %s at call %d sync %d'%(fault,point,n))
+                        if any('regalia_retiring' in t for t in observer.header(executable,image)['tokens'].values()):
+                            raise ValueError('the retiring mark was left after a finished reconciliation')
+                        report['cases'].append({'point':point,'call':baseline[point-1][0],'fault':fault,'sync':n,'injection_reached':True,'exit_code':code,'retry_reconciled':True,'unknown_slots_preserved':True})
             # Wrong cards and a slot owned by another non-recovery token must refuse
             # before any mutation, even though the operator names explicit slots.
             for supplied in [[keys['old'],keys['old']],[keys['new'],keys['unknown']]]:
@@ -119,7 +149,7 @@ def run(script, output):
             if code == 0 or 'a retired card still opens' not in last_public or observer.header(executable,image)['keyslots'].get('3')!=preserved or not observer.opens(executable,image,keys['old']):
                 raise ValueError('an unselected copy was erased or its surviving card was not refused')
             report.update(status='passed',cases_executed=len(report['cases']),fault_points_reached=len(report['cases']),
-                          negative_controls=4,unknown_keys_retained=True,scope='Command boundaries and explicit same-card retries, not internal sector writes')
+                          negative_controls=4,unknown_keys_retained=True,scope='Command boundaries and every fsync of every header-writing call (KILL, TERM, EIO), each followed by the same explicit selection; not physical power loss')
     finally:
         report['elapsed_seconds']=round(time.monotonic()-started,3)
         output.parent.mkdir(parents=True,exist_ok=True);output.write_text(json.dumps(report,indent=2)+'\n')

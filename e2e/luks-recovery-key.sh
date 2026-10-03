@@ -23,7 +23,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "luks-recovery-key: run as root (it makes a loop device and a dm-crypt mapping)"; exit 2; }
-for t in cryptsetup losetup mkfs.ext4 mount umount python3; do
+for t in cryptsetup losetup mkfs.ext4 mount umount python3 flock; do
   command -v "$t" >/dev/null || { echo "luks-recovery-key: $t is required (cryptsetup-bin, util-linux, e2fsprogs, python3)"; exit 2; }
 done
 S=deploy/baremetal/recovery-key.sh
@@ -104,8 +104,8 @@ why="$(judge)" && P "5: the probe still measures one recovery keyslot: $why" || 
 
 # the file-backed half, where a skip is a failure
 out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -BEs -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
-[ "$rc" = 0 ] && grep -q '^Ran 34 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
-  && P "the 34 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
+[ "$rc" = 0 ] && grep -q '^Ran 33 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
+  && P "the 33 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a step that fails, a replace that stops half way, a signal during the writes; every header sync is lab/recovery/matrix.py)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
 
 echo "luks-recovery-key: $pass passed, $failed failed"
 [ "$failed" = 0 ]

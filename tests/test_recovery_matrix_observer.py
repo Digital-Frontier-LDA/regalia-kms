@@ -1,24 +1,55 @@
+import json
+import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 import importlib.util
 spec = importlib.util.spec_from_file_location('recovery_matrix_fixture',Path(__file__).resolve().parents[1]/'lab/recovery/matrix.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-clean_recovery = module.clean_recovery
 
 
 class RecoveryHeaderObserver(unittest.TestCase):
-    def test_only_one_live_recovery_slot_with_no_orphan_or_extra_key_is_clean(self):
-        good={'keyslots':['0','1'],'tokens':{'0':{'type':'systemd-recovery','keyslots':['1']}}}
-        self.assertTrue(clean_recovery(good))
-        for bad in (
-            dict(good,priorities={'0':1,'1':0}),
-            {'keyslots':['0','1'],'tokens':{}},
-            {'keyslots':['0','1','2'],'tokens':good['tokens']},
-            {'keyslots':['0','1'],'tokens':dict(good['tokens'],orphan={'type':'systemd-recovery','keyslots':[]})},
-            {'keyslots':['0','1','2'],'tokens':dict(good['tokens'],second={'type':'systemd-recovery','keyslots':['2']})},
+    def test_a_finished_run_is_judged_by_which_key_owns_the_recovery_slot(self):
+        """d9's read of #236: "clean" by shape alone passed a retry that left the USED key as the
+        recovery key. A finished run needs the expected key in the one recovery keyslot."""
+        finished = module.finished
+        tpm = ['tpm-slot', ['tpm-token']]
+        good = {'state': 'clean', 'keyslots': ['1', '2'], 'priorities': {'1': 1, '2': 1}, 'tpm': tpm,
+                'tokens': {'0': {'type': 'systemd-tpm2', 'keyslots': ['1']}, '1': {'type': 'systemd-recovery', 'keyslots': ['2']}},
+                'opens_boot': {'tpm': True, 'new': True, 'old': False}, 'opens_slots': {'new': ['2'], 'old': []}}
+        self.assertIsNone(finished('replace', good, tpm, spent_refused=True))
+        for why, bad, spent in (
+            ('the used key owns the recovery slot', dict(good, opens_slots={'new': [], 'old': ['2']}), True),
+            ('the used key still opens somewhere', good, False),
+            ('the TPM keyslot changed', dict(good, tpm=['other', ['tpm-token']]), True),
+            ('the TPM stand-in does not open', dict(good, opens_boot={'tpm': False, 'new': True, 'old': False}), True),
+            ('ignored priority', dict(good, priorities={'1': 1, '2': 0}), True),
+            ('not clean', dict(good, state='orphan-keyslot'), True),
         ):
-            with self.subTest(state=bad): self.assertFalse(clean_recovery(bad))
+            with self.subTest(why=why): self.assertIsNotNone(finished('replace', bad, tpm, spent_refused=spent))
+        enrolled = dict(good, state='orphan-keyslot', keyslots=['0', '1', '2'], priorities={'0': 1, '1': 1, '2': 1},
+                        opens_slots={'old': ['2'], 'new': []})
+        self.assertIsNone(finished('enrol', enrolled, tpm, spent_refused=True))
+        # a marked recovery slot that no card key opens is not a finished enrol
+        self.assertIsNotNone(finished('enrol', dict(enrolled, opens_slots={'old': [], 'new': []}), tpm, spent_refused=True))
+
+    @unittest.skipUnless(module.STRACE and shutil.which('cryptsetup', path=os.environ.get('PATH', '') + ':/usr/sbin'), 'cryptsetup or strace is missing')
+    def test_a_script_that_ends_clean_with_the_wrong_key_fails_the_matrix(self):
+        """The mutation 24 asked for: --replace that leaves the used key as the recovery key and
+        prints STATE: clean. The matrix must refuse it before any scenario runs."""
+        real = Path(__file__).resolve().parents[1] / 'deploy/baremetal/recovery-key.sh'
+        with tempfile.TemporaryDirectory() as temp:
+            mutated = Path(temp) / 'recovery-key.sh'
+            text = real.read_text()
+            # replace: do nothing, report the header (still the used key's), succeed
+            text = text.replace('replace)\n  case "$STATE" in', 'replace)\n  end 0 "REPLACED (mutated: nothing done)"\n  case "$STATE" in', 1)
+            self.assertIn('mutated: nothing done', text)
+            mutated.write_text(text)
+            shutil.copy(real.parent / 'recovery_state.py', Path(temp) / 'recovery_state.py')
+            with self.assertRaisesRegex(ValueError, "the recovery keyslot is not the new key's"):
+                module.run(mutated, Path(temp) / 'report.json', mode='replace', shard=(1, 50))
 
     def test_the_state_is_read_from_the_header_independently_of_the_script(self):
         header_state = module.header_state
@@ -44,3 +75,43 @@ class RecoveryHeaderObserver(unittest.TestCase):
             with self.subTest(case=name): self.assertEqual(header_state(meta), 'unknown')
         self.assertEqual(module.reported_state('x\nSTATE: clean — one\nSTATE: orphan-token — t\n'), 'orphan-token')
         self.assertIsNone(module.reported_state('killed before it printed anything'))
+
+
+merge_spec = importlib.util.spec_from_file_location('recovery_matrix_merge', Path(__file__).resolve().parents[1] / 'lab/recovery/merge.py')
+merge = importlib.util.module_from_spec(merge_spec)
+merge_spec.loader.exec_module(merge)
+
+
+class ShardMerge(unittest.TestCase):
+    def reports(self, temp, changes=None):
+        changes = changes or {}
+        paths = []
+        for mode in ('enrol', 'replace'):
+            for shard in (1, 2, 3):
+                report = {'shard': '%d/3' % shard, 'status': 'passed', 'cryptsetup': 'cryptsetup 2.7.0', 'script_sha256': 'abc',
+                          'first_level_total': {mode: 30}, 'first_level_executed': {mode: 10},
+                          'second_level_executed': {mode: 4}, 'second_level_baselines': {mode: 1},
+                          'syncs': {mode: {'luksAddKey --batch-mode': [3]}}, 'finding_cases': 0}
+                report.update(changes.get((mode, shard), {}))
+                path = Path(temp) / ('%s-%d.json' % (mode, shard))
+                path.write_text(json.dumps(report))
+                paths.append(path)
+        return paths
+
+    def test_six_complete_shards_merge(self):
+        with tempfile.TemporaryDirectory() as temp:
+            summary = merge.merge(self.reports(temp), 3)
+        self.assertEqual(summary['status'], 'passed', summary['problems'])
+        self.assertEqual(summary['modes']['replace']['level1_executed'], 30)
+
+    def test_a_missing_short_failed_or_disagreeing_shard_fails_the_merge(self):
+        for name, changes, drop in (
+            ('a shard missing', {}, 'replace-3.json'),
+            ('a shard ran short', {('enrol', 2): {'first_level_executed': {'enrol': 9}}}, None),
+            ('a shard with findings', {('replace', 1): {'status': 'completed-with-findings'}}, None),
+            ('shards on different cryptsetup', {('enrol', 1): {'cryptsetup': 'cryptsetup 2.7.5'}}, None),
+            ('a header-writing call with no sync counted', {('enrol', 1): {'syncs': {'enrol': {'token import': [0]}}}}, None),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                paths = [p for p in self.reports(temp, changes) if p.name != drop]
+                self.assertEqual(merge.merge(paths, 3)['status'], 'failed')

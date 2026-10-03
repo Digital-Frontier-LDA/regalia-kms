@@ -2,9 +2,16 @@
 
 This is a laboratory observer, not a production repair tool. Findings do not grant
 release admission. Keys are random fixtures and never included in the report.
+
+Level 1 starts from a clean header: every cryptsetup call of the run, every header-writing call
+after a single command failure, and every fsync inside each header-writing call, under each fault.
+Level 2 (#175) starts from every distinct header a level-1 fault left behind and faults the
+header writes of the run that resumes it (the operator's next run after a crash), then checks
+that a third, ordinary run finishes it.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -22,6 +29,9 @@ FAULTS = ('fail_before', 'fail_after', 'term_after', 'kill_before', 'kill_after'
 # Inside one call: the N-th fsync of that cryptsetup process is answered by strace with a KILL (the
 # whole run dies with it), a TERM (sent to the whole run once the call returns) or EIO (a failing write).
 SYNC_FAULTS = ('sync_kill', 'sync_term', 'sync_eio')
+# What strace writes when each injection really happened (measured, strace 6.x): a sync fault counts
+# only when its trace shows this after at least N fsyncs.
+FIRED = {'sync_kill': '+++ killed by SIGKILL +++', 'sync_term': '--- SIGTERM {si_signo=SIGTERM, si_code=SI_KERNEL}', 'sync_eio': '(INJECTED)'}
 SHIM = '''#!/usr/bin/python3
 import json,os,pathlib,signal,subprocess,sys
 log=pathlib.Path(os.environ['MATRIX_CALLS'])
@@ -37,13 +47,19 @@ command=[os.environ['MATRIX_CRYPTSETUP'],*sys.argv[1:]]
 strace=os.environ.get('MATRIX_STRACE','')
 counts=os.environ.get('MATRIX_SYNCS','')
 trace=log.with_suffix('.trace')
+fired=log.with_suffix('.fired')
 if hit and fault.startswith('sync_'):
  inject={'sync_kill':'signal=KILL','sync_term':'signal=TERM','sync_eio':'error=EIO'}[fault]
- command=[strace,'-f','-qq','-o','/dev/null','-e','trace=fsync','-e','inject=fsync:%s:when=%s'%(inject,os.environ['MATRIX_SYNC']),*command]
+ trace.unlink(missing_ok=True)
+ command=[strace,'-f','-qq','-o',str(trace),'-e','trace=fsync','-e','inject=fsync:%s:when=%s'%(inject,os.environ['MATRIX_SYNC']),*command]
 elif counts:
  trace.unlink(missing_ok=True)
  command=[strace,'-f','-qq','-o',str(trace),'-e','trace=fsync',*command]
 result=subprocess.run(command,close_fds=False)
+if hit and fault.startswith('sync_'):
+ lines=trace.read_text().splitlines() if trace.exists() else []
+ synced=sum('fsync(' in line for line in lines)
+ if synced>=int(os.environ['MATRIX_SYNC']) and any(os.environ['MATRIX_FIRED'] in line for line in lines): fired.write_text('fired')
 if counts and not (hit and fault.startswith('sync_')):
  synced=sum('fsync(' in line for line in trace.read_text().splitlines()) if trace.exists() else 0
  with open(counts,'a') as stream: stream.write('%d %d\\n'%(index,synced))
@@ -54,6 +70,11 @@ if hit and fault in ('term_after','kill_after'):
  os.killpg(os.getpgrp(),signal.SIGTERM if fault=='term_after' else signal.SIGKILL)
 sys.exit(result.returncode)
 '''
+# A stand-in for the TPM keyslot's token: the header only, no TPM. Every fault and every retry must
+# leave its keyslot and this token byte-identical.
+TPM_TOKEN = {'type': 'systemd-tpm2', 'keyslots': ['1'], 'tpm2-blob': 'AA==', 'tpm2-pcrs': [7],
+             'tpm2-pcr-bank': 'sha256', 'tpm2-primary-alg': 'ecc', 'tpm2-policy-hash': '00'}
+TPM_SLOT = '1'
 
 
 def cs(executable, args, value=None, check=True):
@@ -76,12 +97,29 @@ def opens(executable, image, value, slot=None):
     return cs(executable, args, value, check=False).returncode == 0
 
 
+def opens_nothing(executable, image, value):
+    """cryptsetup's own "no key available with this passphrase" (exit 2), never a failed read."""
+    return cs(executable, ['open', '--test-passphrase', str(image)], value, check=False).returncode == 2
+
+
 def observe(executable, image, values):
+    """Read a header and try every key, on a COPY: cryptsetup repairs a header whose secondary copy
+    is stale on any load (a read-only isLuks included), so observing the image a run will use would
+    change what that run sees (#175: level-2 sync faults that never fired)."""
+    with tempfile.TemporaryDirectory(prefix='regalia-luks-observe-') as temp:
+        copy = Path(temp)/'observed.img'
+        shutil.copyfile(image, copy)
+        return _observe(executable, copy, values)
+
+
+def _observe(executable, image, values):
     meta = header(executable, image)
     slots = sorted(meta['keyslots'], key=int)
     tokens = {i: {'type': t['type'], 'keyslots': t['keyslots']}
               for i, t in meta['tokens'].items()}
     return {'keyslots': slots, 'tokens': tokens, 'state': header_state(meta),
+            'marks': {i: sorted(k for k in t if k.startswith('regalia_')) for i, t in meta['tokens'].items()},
+            'tpm': [meta['keyslots'].get(TPM_SLOT), [t for t in meta['tokens'].values() if t.get('type') == 'systemd-tpm2']],
             'priorities': {slot:meta['keyslots'][slot].get('priority',1) for slot in slots},
             'opens_boot': {name:opens(executable,image,value) for name,value in values.items()},
             'opens_slots': {name: [s for s in slots if opens(executable, image, value, s)]
@@ -89,7 +127,8 @@ def observe(executable, image, values):
 
 
 def header_state(meta):
-    """The header's state as #175 names it, read here independently of the script under test."""
+    """The header's state as #175 names it, written here separately from recovery_state.py (which
+    the script and recovery-reconcile.py share) so that a bug in one is not agreed with by the other."""
     slots = meta.get('keyslots') or {}
     named, owner, empty, unknown = set(), {}, [], False
     for token_id, token in (meta.get('tokens') or {}).items():
@@ -124,27 +163,56 @@ def header_state(meta):
     return 'clean'
 
 
+def _header_bytes_digest(stream):
+    """Whether the two LUKS2 binary headers disagree (a write was cut between them): the primary at 0,
+    the secondary right after the primary's metadata area. Returns 'stale' or 'same'."""
+    primary = stream.read(4096)
+    size = int.from_bytes(primary[8:16], 'big')        # hdr_size: binary header plus JSON area
+    stream.seek(0); first = stream.read(size)
+    stream.seek(size); second = stream.read(size)
+    seqid = lambda block: int.from_bytes(block[16:24], 'big')
+    return 'same' if seqid(first) == seqid(second) else 'stale'
+
+
 def reported_state(text):
     """The last state the script printed, or None when it printed none (it was killed)."""
     found = [line.split(' ', 2)[1] for line in text.splitlines() if line.startswith('STATE: ')]
     return found[-1] if found else None
 
 
-def clean_recovery(state):
+# The key that must own the one recovery keyslot when a run of this mode has finished, and the one
+# that must open nothing. Enrol leaves the installer's passphrase (commissioning wipes it later), so
+# its finished state is orphan-keyslot with exactly the installer's keyslot unnamed.
+OWNER = {'enrol': ('old', None), 'replace': ('new', 'old')}
+FINISHED = {'enrol': ('orphan-keyslot', ['0']), 'replace': ('clean', [])}
+
+
+def finished(mode, state, tpm, spent_refused):
+    """Why `state` is not a finished run of `mode`, or None. Shape AND which key: the recovery
+    keyslot must be the expected key's, the spent key must open nothing, the TPM stand-in untouched."""
+    expected, unnamed = FINISHED[mode]
+    owner, spent = OWNER[mode]
     recovery = [s for t in state['tokens'].values() if t['type'] == 'systemd-recovery' for s in t['keyslots']]
-    orphans = any(not t['keyslots'] for t in state['tokens'].values())
-    fixture = set(state['keyslots']) - {'0'}
-    return (len(recovery) == 1 and set(recovery) == fixture and not orphans
-            and state.get('priorities',{}).get(recovery[0],1) != 0)
+    named = {s for t in state['tokens'].values() for s in t['keyslots']}
+    if state['state'] != expected: return 'state %s, not %s' % (state['state'], expected)
+    if sorted(set(state['keyslots']) - named) != unnamed: return 'unnamed keyslots %s' % sorted(set(state['keyslots']) - named)
+    if len(recovery) != 1: return '%d recovery keyslots' % len(recovery)
+    if state['opens_slots'][owner] != recovery: return 'the recovery keyslot is not the %s key\'s' % owner
+    if state['priorities'].get(recovery[0], 1) == 0: return 'the recovery keyslot has priority ignore'
+    if spent and not spent_refused: return 'the %s key still opens, or cannot be shown to open nothing' % spent
+    if state['tpm'] != tpm: return 'the TPM keyslot or its token changed'
+    if not state['opens_boot']['tpm']: return 'the TPM stand-in no longer opens'
+    return None
 
 
 def invoke(script, image, inputs, executable, directory, point=0, fault='', prefail=0, sync=0, counts=None):
     log = directory / 'calls.jsonl'
     log.unlink(missing_ok=True)
+    log.with_suffix('.fired').unlink(missing_ok=True)
     environment = dict(os.environ, PATH=str(directory / 'bin') + ':' + os.environ['PATH'],
                        MATRIX_CALLS=str(log), MATRIX_CRYPTSETUP=executable, MATRIX_STRACE=STRACE or '',
                        MATRIX_POINT=str(point), MATRIX_FAULT=fault, MATRIX_PREFAIL=str(prefail),
-                       MATRIX_SYNC=str(sync), MATRIX_SYNCS=str(counts or ''))
+                       MATRIX_SYNC=str(sync), MATRIX_SYNCS=str(counts or ''), MATRIX_FIRED=FIRED.get(fault, ''))
     reader, writer = os.pipe()
     if fault == 'closed_stderr': os.close(reader)
     process = subprocess.Popen(['bash', str(script), '--' + inputs[0], str(image)],
@@ -153,42 +221,51 @@ def invoke(script, image, inputs, executable, directory, point=0, fault='', pref
     os.close(writer)
     if fault != 'closed_stderr': os.close(reader)
     try:
-        output, error = process.communicate(('\n'.join(inputs[1:])+'\n').encode(), timeout=45)
+        output, error = process.communicate(('\n'.join(inputs[1:])+'\n').encode(), timeout=60)
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         output, error = process.communicate()
         raise ValueError('recovery script timed out')
     calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
-    return process.returncode, (output+(error or b'')).decode(errors='replace'), calls
+    fired = log.with_suffix('.fired').exists()
+    return process.returncode, (output+(error or b'')).decode(errors='replace'), calls, fired
 
 
-def reconcile_fixture(executable, image, values, state):
-    """Explicit laboratory repair: keep the old key if present, otherwise the new.
-
-    The operator has all disposable fixture keys and authenticates every slot. No
-    analogous automatic deletion is authorized for production custody material.
-    """
-    keep = (state['opens_slots']['old'] or state['opens_slots']['new'])
+def reconcile_fixture(executable, image, values, state, mode, reconciler=None):
+    """Repair a header the ordinary retry did not finish, as a custodian would: keep the newest key
+    that opens a recovery slot, retire every other slot except the installer's and the TPM's, each
+    proven by a card. With `reconciler`, it is deploy/baremetal/recovery-reconcile.py itself."""
+    name = 'new' if state['opens_slots']['new'] else 'old'
+    keep = state['opens_slots'][name]
     if not keep: return False
-    # Duplicate slots can hold the same known fixture key after a blind retry.
-    # The laboratory oracle proves every candidate before choosing one.
-    selected = keep[0]
-    cs(executable,['config','--priority','normal','--key-slot',selected,str(image)])
+    keep = keep[0]
+    spare = {TPM_SLOT, keep} | ({'0'} if mode == 'enrol' else set())
+    retire, cards = [], []
     for slot in state['keyslots']:
-        if slot not in ('0', selected):
+        if slot in spare: continue
+        holders = [n for n in ('old', 'new') if slot in state['opens_slots'][n]]
+        if not holders: raise ValueError('the custodian cannot prove slot %s with any card' % slot)
+        retire.append(slot); cards.append(values[holders[0]])
+    if reconciler is None:
+        cs(executable,['config','--priority','normal','--key-slot',keep,str(image)])
+        for slot in retire:
             cs(executable, ['luksKillSlot', '--batch-mode', str(image), slot])
-    current = header(executable, image)
-    for token, data in current['tokens'].items():
-        if not data['keyslots'] or data['keyslots'] != [selected]:
-            cs(executable, ['token', 'remove', '--token-id', token, str(image)])
-    current = header(executable, image)
-    if not any(t['type'] == 'systemd-recovery' and t['keyslots'] == [selected] for t in current['tokens'].values()):
-        token = json.dumps({'type':'systemd-recovery', 'keyslots':[selected]})
-        subprocess.run([executable,'token','import','--json-file','-',str(image)],
-                       input=token, text=True, capture_output=True, check=True, timeout=30)
+        current = header(executable, image)
+        for token, data in current['tokens'].items():
+            if data['type'] == 'systemd-recovery' and data['keyslots'] != [keep]:
+                cs(executable, ['token', 'remove', '--token-id', token, str(image)])
+        current = header(executable, image)
+        if not any(t['type'] == 'systemd-recovery' and t['keyslots'] == [keep] for t in current['tokens'].values()):
+            subprocess.run([executable,'token','import','--json-file','-',str(image)],
+                           input=json.dumps({'type':'systemd-recovery', 'keyslots':[keep]}), text=True, capture_output=True, check=True, timeout=30)
+    else:
+        spec = importlib.util.spec_from_file_location('recovery_reconcile_under_test', reconciler)
+        repair = importlib.util.module_from_spec(spec); spec.loader.exec_module(repair)
+        repair.CRYPTSETUP = executable
+        repair.reconcile(image, keep, retire, values[name], cards)
     final = observe(executable, image, values)
-    return clean_recovery(final) and final['opens_boot']['installer'] and (
-        final['opens_boot']['old'] or final['opens_boot']['new'])
+    return bool(final['opens_boot'][name] and final['opens_boot']['tpm'] and len(
+        [s for t in final['tokens'].values() if t['type'] == 'systemd-recovery' for s in t['keyslots']]) == 1)
 
 
 # Calls that write the LUKS2 header; the rest only read it.
@@ -217,30 +294,47 @@ def workspace():
         with _guard: _free.append(directory)
 
 
-def trial(script, executable, mode, baseline, inputs, values, scenario):
+class Context:
+    def __init__(self, script, executable, mode, inputs, values, tpm, reconciler, keep_dir):
+        self.script, self.executable, self.mode, self.inputs = script, executable, mode, inputs
+        self.values, self.tpm, self.reconciler, self.keep_dir = values, tpm, reconciler, keep_dir
+        self.kept = {}
+
+
+def spent_refused(ctx, image):
+    spent = OWNER[ctx.mode][1]
+    return spent is None or opens_nothing(ctx.executable, image, ctx.values[spent])
+
+
+def trial(ctx, baseline, scenario, level):
     with workspace() as directory:
-        return _trial(script, executable, mode, baseline, inputs, values, scenario, directory)
+        return _trial(ctx, baseline, scenario, level, directory)
 
 
-def _trial(script, executable, mode, baseline, inputs, values, scenario, directory):
+def _trial(ctx, baseline, scenario, level, directory):
     index, fault, primary, operation, sync = scenario
+    executable, values, mode = ctx.executable, ctx.values, ctx.mode
     image = directory/'trial.img'
     shutil.copyfile(baseline,image)
-    before=observe(executable,image,values)
-    code, text, actual=invoke(script,image,inputs,executable,directory,index,fault,primary,sync)
+    before=observe(executable,image,values)   # on a copy: the image the run gets is the baseline's bytes
+    code, text, actual, fired=invoke(ctx.script,image,ctx.inputs,executable,directory,index,fault,primary,sync)
+    # The header exactly as the fault left it, before anything reads it (a read can repair it).
+    left = directory/'left.img'
+    shutil.copyfile(image, left)
     # No fixture secret may reach diagnostics, argv or evidence.
     public=text+json.dumps(actual)
     if any(secret in public for secret in values.values()):
         raise ValueError('fixture secret leaked to diagnostics or arguments')
     after=observe(executable,image,values)
-    available=after['opens_boot']['installer'] and (mode=='enrol' or (
-        after['opens_boot']['old'] or after['opens_boot']['new']))
-    reached = not index or index <= len(actual)
+    available=after['opens_boot']['tpm'] and after['tpm']==ctx.tpm and (
+        after['opens_boot']['installer'] if mode=='enrol' else (after['opens_boot']['old'] or after['opens_boot']['new']))
+    # A sync fault is reached only when strace's trace shows it fired; a call fault when the call ran.
+    reached = fired if fault.startswith('sync_') else (not index or index <= len(actual))
     if not available:
         raise ValueError('a valid pre-existing unlock path was destroyed: %s' % json.dumps(
-            {'mode':mode,'point':index,'sync':sync,'primary_failure':primary,'fault':fault,'state':after}))
+            {'mode':mode,'level':level,'point':index,'sync':sync,'primary_failure':primary,'fault':fault,'state':after}))
     issues=[]; observations=[]
-    if not reached: issues.append('cleanup_path_point_not_reached')
+    if not reached: issues.append('fault_not_injected' if fault.startswith('sync_') else 'cleanup_path_point_not_reached')
     if ('Nothing was changed' in text or 'as it was before this run' in text) and before != after:
         issues.append('unchanged_claim_contradicts_header')
     # The state the script printed last is the header's, read independently here. "unreadable" is
@@ -248,88 +342,162 @@ def _trial(script, executable, mode, baseline, inputs, values, scenario, directo
     said=reported_state(text)
     if said not in (None, 'unreadable') and said != after['state']: issues.append('reported_state_contradicts_header')
     # Not a finding: any script that writes the header more than once leaves a changed header that
-    # is not clean when it is killed between two writes. The gate is that the ordinary retry
-    # reconciles it (below).
-    if after != before and not clean_recovery(after): observations.append('header_needs_reconciliation')
-    # A normal retry is observed independently of the fault injection.
-    invoke(script,image,inputs,executable,directory)
+    # is not finished when it is killed between two writes. The gate is that the next ordinary run
+    # finishes it (below), and level 2 faults that run too.
+    left_unfinished = after != before and finished(mode, after, ctx.tpm, spent_refused(ctx, image)) is not None
+    if left_unfinished:
+        observations.append('header_needs_reconciliation')
+        if level == 1:
+            # Distinct by what was observed AND by the bytes of both header copies: a stale secondary
+            # header is a state of its own (the next load repairs it), even when it reads the same.
+            with open(left, 'rb') as stream:
+                raw = _header_bytes_digest(stream)
+            key = json.dumps({'observed': {k: after[k] for k in ('state', 'keyslots', 'tokens', 'marks', 'priorities', 'opens_boot', 'opens_slots')},
+                              'stale_secondary': raw}, sort_keys=True)
+            with _guard:
+                if key not in ctx.kept:
+                    kept = ctx.keep_dir / ('%s-%d.img' % (mode, len(ctx.kept)))
+                    shutil.copyfile(left, kept)
+                    ctx.kept[key] = kept
+    # The ordinary retry, with no fault: it must finish the run, with the right key.
+    invoke(ctx.script,image,ctx.inputs,executable,directory)
     retried=observe(executable,image,values)
-    native_clean=clean_recovery(retried)
-    if not native_clean: issues.append('ordinary_retry_does_not_reconcile')
-    repaired=reconcile_fixture(executable,image,values,retried) if (
-        retried['opens_slots']['old'] or retried['opens_slots']['new']) else mode=='enrol'
-    if not repaired: raise ValueError('explicit fixture reconciliation failed')
-    return {'mode':mode,'point':index,'fault':fault,'sync':sync,'exit_code':code,
-            'reported_state':said,'observations':observations,
+    why=finished(mode, retried, ctx.tpm, spent_refused(ctx, image))
+    if why: issues.append('ordinary_retry_does_not_reconcile')
+    repaired=True
+    if why:
+        repaired=reconcile_fixture(executable,image,values,retried,mode,ctx.reconciler)
+        if not repaired: raise ValueError('explicit reconciliation failed after: %s' % why)
+    left.unlink(missing_ok=True)
+    return {'mode':mode,'level':level,'point':index,'fault':fault,'sync':sync,'exit_code':code,
+            'calls_made':[c[:2] for c in actual] if not reached else None,
+            'reported_state':said,'observations':observations,'retry_unfinished_because':why,
             'call':operation, 'primary_failure':primary, 'injection_reached':reached, 'actual_call_count':len(actual), 'state':after,
-            'unlock_available':available,'ordinary_retry_clean':native_clean,
+            'unlock_available':available,'ordinary_retry_clean':why is None,
             'fixture_reconciliation_clean':repaired,'findings':issues}
 
 
 STRACE = shutil.which('strace')
 
 
-def run(script, output):
+def enumerate_run(ctx, baseline, work, writes_only, discover_cleanup):
+    """The scenarios for one starting header: its calls (all, or only those that write the header)
+    under each call fault, and each fsync of each header-writing call under each sync fault."""
+    image = work/'trial.img'; shutil.copyfile(baseline, image)
+    counts = work/'syncs.txt'; counts.unlink(missing_ok=True)
+    code, _, calls, _ = invoke(ctx.script, image, ctx.inputs, ctx.executable, work, counts=counts)
+    syncs = {int(i): int(n) for i, n in (line.split() for line in counts.read_text().splitlines())} if counts.exists() else {}
+    table = {}
+    for i, n in sorted(syncs.items()):
+        if n: table.setdefault(' '.join(calls[i-1][:2]), []).append(n)
+    scenarios = [(i, f, 0, calls[i-1][0], 0) for i in range(1, len(calls)+1)
+                 if not writes_only or calls[i-1][0] in WRITES for f in FAULTS]
+    if not writes_only: scenarios.append((0, 'closed_stderr', 0, 'stderr', 0))
+    scenarios.extend((i, f, 0, calls[i-1][0], n) for i, count in sorted(syncs.items())
+                     for n in range(1, count+1) for f in SYNC_FAULTS)
+    if discover_cleanup:
+        # Cleanup paths reached after each possible command refusal; every later command in them
+        # that WRITES the header is interrupted too.
+        for primary in range(1, len(calls)+1):
+            shutil.copyfile(baseline, image)
+            _, _, cleanup, _ = invoke(ctx.script, image, ctx.inputs, ctx.executable, work, primary, 'fail_before')
+            for i in range(primary+1, len(cleanup)+1):
+                if cleanup[i-1][0] in WRITES:
+                    scenarios.extend((i, f, primary, cleanup[i-1][0], 0) for f in FAULTS)
+    image.unlink(missing_ok=True)
+    return code, calls, table, scenarios
+
+
+def build_fixture(executable, directory, script, values):
+    """base: the installer's passphrase (keyslot 0) and a TPM stand-in (keyslot 1, a systemd-tpm2
+    token). enrolled: base, the old recovery key enrolled by the script, the installer's wiped."""
+    base=directory/'base.img';base.touch();os.truncate(base,32<<20)
+    fast=['--pbkdf','pbkdf2','--pbkdf-force-iterations','1000']
+    cs(executable,['luksFormat','--type','luks2','--batch-mode',*fast,str(base)],values['installer'])
+    with tempfile.TemporaryFile() as added:
+        added.write(values['tpm'].encode()); added.seek(0)
+        with tempfile.TemporaryFile() as current:
+            current.write(values['installer'].encode()); current.seek(0)
+            subprocess.run([executable,'luksAddKey','--batch-mode',*fast,'--new-key-slot',TPM_SLOT,'--key-file',f'/proc/self/fd/{current.fileno()}',
+                            str(base),f'/proc/self/fd/{added.fileno()}'],pass_fds=(current.fileno(),added.fileno()),
+                           stdin=subprocess.DEVNULL,capture_output=True,check=True,timeout=30)
+    subprocess.run([executable,'token','import','--json-file','-',str(base)],input=json.dumps(TPM_TOKEN),
+                   text=True,capture_output=True,check=True,timeout=30)
+    enrolled=directory/'enrolled.img';shutil.copyfile(base,enrolled)
+    work=directory/'baseline'; (work/'bin').mkdir(parents=True); shim=work/'bin/cryptsetup'; shim.write_text(SHIM); shim.chmod(0o700)
+    code, text, _, _=invoke(script,enrolled,['enrol',values['installer'],values['old']],executable,work)
+    if code: raise ValueError('baseline enrol failed: %s' % text[-500:])
+    cs(executable,['luksKillSlot','--batch-mode',str(enrolled),'0'])
+    return base, enrolled, work
+
+
+def shard_of(items, shard):
+    index, count = shard
+    return [item for n, item in enumerate(items) if n % count == index - 1]
+
+
+def run(script, output, mode='all', shard=(1, 1), reconciler=None):
     executable = shutil.which('cryptsetup', path=os.environ['PATH']+':/usr/sbin')
     if not executable or not Path('/proc/self/fd').is_dir():
         raise ValueError('Linux with real cryptsetup is required; no skipping')
     if not STRACE:
         raise ValueError('strace is required for the faults inside a call; no skipping')
     script = script.resolve()
+    reconciler = reconciler.resolve() if reconciler else None
     output.parent.mkdir(parents=True, exist_ok=True)
-    report = {'schema':'regalia.recovery-crash-matrix/v1', 'status':'failed', 'production_approved':False,
+    report = {'schema':'regalia.recovery-crash-matrix/v2', 'status':'failed', 'production_approved':False,
               'script_sha256':hashlib.sha256(script.read_bytes()).hexdigest(),
-              'cryptsetup':cs(executable, ['--version']).stdout.strip(), 'cases':[],
-              'scope':'Every cryptsetup call on successful and single-failure cleanup paths, and every fsync inside each call that writes the header (KILL, TERM, EIO); not physical power loss'}
+              'reconciler_sha256':hashlib.sha256(reconciler.read_bytes()).hexdigest() if reconciler else None,
+              'cryptsetup':cs(executable, ['--version']).stdout.strip(),
+              'strace':subprocess.run([STRACE,'-V'],capture_output=True,text=True).stdout.splitlines()[0],
+              'shard':'%d/%d' % shard, 'cases':[], 'first_level_total':{}, 'second_level_baselines':{},
+              'scope':'Level 1: every cryptsetup call from a clean header, header-writing calls after each single failure, '
+                      'every fsync of every header-writing call (KILL, TERM, EIO). Level 2: the header writes and fsyncs '
+                      'of the run resuming every distinct header level 1 left. Not physical power loss.'}
     started = time.monotonic()
     try:
         with tempfile.TemporaryDirectory(prefix='regalia-luks-matrix-') as temp:
             directory = Path(temp)
-            (directory/'bin').mkdir()
-            shim=directory/'bin/cryptsetup';shim.write_text(SHIM);shim.chmod(0o700)
             alphabet='cbdefghijklnrtuv'
             recovery=lambda: '-'.join(''.join(secrets.choice(alphabet) for _ in range(8)) for _ in range(8))
-            values={'installer':secrets.token_hex(32), 'old':recovery(), 'new':recovery()}
-            base=directory/'base.img';base.touch();base.write_bytes(b'');os.truncate(base,32<<20)
-            cs(executable,['luksFormat','--type','luks2','--batch-mode','--pbkdf','pbkdf2',
-                           '--pbkdf-force-iterations','1000',str(base)],values['installer'])
-            enrolled=directory/'enrolled.img';shutil.copyfile(base,enrolled)
-            code, text, _=invoke(script,enrolled,['enrol',values['installer'],values['old']],executable,directory)
-            if code: raise ValueError('baseline enrol failed')
-            for mode in ('enrol','replace'):
-                baseline=base if mode=='enrol' else enrolled
-                inputs=[mode, values['installer'] if mode=='enrol' else values['old'],
-                        values['old'] if mode=='enrol' else values['new']]
-                image=directory/'trial.img';shutil.copyfile(baseline,image)
-                counts=directory/'syncs.txt'; counts.unlink(missing_ok=True)
-                code, text, calls=invoke(script,image,inputs,executable,directory,counts=counts)
-                if code or not clean_recovery(observe(executable,image,values)):
-                    raise ValueError('successful baseline does not have a clean recovery header')
-                syncs={int(i):int(n) for i,n in (line.split() for line in counts.read_text().splitlines())}
-                report.setdefault('syncs',{})[mode]={' '.join(calls[i-1][:2]):n for i,n in sorted(syncs.items()) if n}
-                scenarios=[(index,fault,0,calls[index-1][0],0) for index in range(1,len(calls)+1) for fault in FAULTS]+[(0,'closed_stderr',0,'stderr',0)]
-                # Every header sync of every call that writes one, each with KILL, TERM and EIO.
-                scenarios.extend((index,fault,0,calls[index-1][0],n) for index,count in sorted(syncs.items())
-                                 for n in range(1,count+1) for fault in SYNC_FAULTS)
-                # Discover cleanup paths reached after each possible command refusal. Then interrupt
-                # every later command in those paths that WRITES the header: a read there can change
-                # what is printed, not what the header holds, and the reported state is checked anyway.
-                def discover(primary):
-                    with workspace() as work:
-                        image=work/'trial.img'; shutil.copyfile(baseline,image)
-                        return primary, invoke(script,image,inputs,executable,work,primary,'fail_before')[2]
+            values={'installer':secrets.token_hex(32), 'tpm':secrets.token_hex(32), 'old':recovery(), 'new':recovery()}
+            base, enrolled, work = build_fixture(executable, directory, script, values)
+            tpm = observe(executable, base, values)['tpm']
+            for name in (('enrol','replace') if mode == 'all' else (mode,)):
+                baseline=base if name=='enrol' else enrolled
+                inputs=[name, values['installer'] if name=='enrol' else values['old'],
+                        values['old'] if name=='enrol' else values['new']]
+                keep_dir = directory/('level2-'+name); keep_dir.mkdir()
+                ctx = Context(script, executable, name, inputs, values, tpm, reconciler, keep_dir)
+                code, calls, table, scenarios = enumerate_run(ctx, baseline, work, writes_only=False, discover_cleanup=True)
+                image=work/'trial.img'; shutil.copyfile(baseline,image)
+                invoke(script,image,inputs,executable,work)
+                why = finished(name, observe(executable,image,values), tpm, spent_refused(ctx, image))
+                image.unlink()
+                if code or why:
+                    raise ValueError('the successful %s run does not finish with the right key: %s' % (name, why or 'exit %s' % code))
+                report.setdefault('syncs',{})[name]=table
+                report['first_level_total'][name]=len(scenarios)
+                mine = shard_of(scenarios, shard)
                 with ThreadPoolExecutor(WORKERS) as pool:
-                    for primary, cleanup_calls in pool.map(discover, range(1,len(calls)+1)):
-                        for index in range(primary+1,len(cleanup_calls)+1):
-                            if cleanup_calls[index-1][0] in WRITES:
-                                scenarios.extend((index,fault,primary,cleanup_calls[index-1][0],0) for fault in FAULTS)
-                with ThreadPoolExecutor(WORKERS) as pool:
-                    for case in pool.map(lambda scenario: trial(script,executable,mode,baseline,inputs,values,scenario), scenarios):
+                    for case in pool.map(lambda s: trial(ctx, baseline, s, 1), mine):
                         report['cases'].append(case)
-                        print(f"{mode} point={case['point']} sync={case.get('sync',0)} prefail={case['primary_failure']} {case['fault']}: observed, unlock preserved{' FINDINGS '+','.join(case['findings']) if case['findings'] else ''}",flush=True)
+                        print(f"{name} L1 point={case['point']} sync={case['sync']} prefail={case['primary_failure']} {case['fault']}: observed, unlock preserved{' FINDINGS '+','.join(case['findings']) if case['findings'] else ''}",flush=True)
+                # Level 2: every distinct unfinished header this shard's faults left, resumed under faults.
+                second = []
+                for key, kept in sorted(ctx.kept.items(), key=lambda kv: kv[1].name):
+                    _, _, _, resumed = enumerate_run(ctx, kept, work, writes_only=True, discover_cleanup=False)
+                    second.extend((kept, s) for s in resumed)
+                report['second_level_baselines'][name]=len(ctx.kept)
+                with ThreadPoolExecutor(WORKERS) as pool:
+                    for case in pool.map(lambda ks: trial(ctx, ks[0], ks[1], 2), second):
+                        report['cases'].append(case)
+                        print(f"{name} L2 point={case['point']} sync={case['sync']} {case['fault']}: observed, unlock preserved{' FINDINGS '+','.join(case['findings']) if case['findings'] else ''}",flush=True)
         findings=sum(bool(c['findings']) for c in report['cases'])
         report.update(status='completed-with-findings' if findings else 'passed', finding_cases=findings,
                       cases_executed=len(report['cases']),
+                      first_level_executed={n:sum(c['level']==1 and c['mode']==n for c in report['cases']) for n in report['first_level_total']},
+                      second_level_executed={n:sum(c['level']==2 and c['mode']==n for c in report['cases']) for n in report['first_level_total']},
                       observations={name:sum(name in c.get('observations',[]) for c in report['cases']) for name in ('header_needs_reconciliation',)},
                       findings={name:sum(name in c['findings'] for c in report['cases']) for name in sorted({f for c in report['cases'] for f in c['findings']})},
                       fault_points_reached=sum(c['injection_reached'] for c in report['cases']), release_admissible=not findings)
@@ -345,8 +513,13 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--script',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
+    parser.add_argument('--mode',choices=('all','enrol','replace'),default='all')
+    parser.add_argument('--shard',default='1/1',help='i/n: run the level-1 scenarios whose position modulo n is i-1')
+    parser.add_argument('--reconciler',type=Path,help='repair unfinished headers with this recovery-reconcile.py')
     args=parser.parse_args()
-    result=run(**vars(args))
+    index, count = (int(x) for x in args.shard.split('/'))
+    if not 1 <= index <= count: parser.error('--shard i/n needs 1 <= i <= n')
+    result=run(args.script, args.output, args.mode, (index, count), args.reconciler)
     print(json.dumps({k:v for k,v in result.items() if k!='cases'},indent=2))
     if result['status'] != 'passed': raise SystemExit(1)
 

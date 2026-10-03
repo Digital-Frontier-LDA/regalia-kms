@@ -6,9 +6,6 @@
 #   sudo deploy/baremetal/recovery-key.sh --enrol   DEVICE   add the recovery key as a keyslot of its own
 #   sudo deploy/baremetal/recovery-key.sh --check   DEVICE   prove a typed key opens THAT keyslot; unlocks nothing
 #   sudo deploy/baremetal/recovery-key.sh --replace DEVICE   after any use: a new key in, the used one out
-#   ... --enrol --host-generated / --replace --host-generated  the key is generated HERE by systemd (#175);
-#                                                            refused unless /etc/regalia-kms/recovery-key.conf
-#                                                            says source=host (the owner's decision)
 #
 # WHAT IT IS. One key per host, generated at the ceremony (step 0), written by hand on the KMS host
 # recovery card and carried in every escrow. It opens that host's disk BY ITSELF: no TPM, no peer, no
@@ -53,6 +50,15 @@
 # keyslot is protected on the assumption of 256 random bits). It is ESCROWED ONLY AFTER --replace and
 # --check have succeeded here: an escrow written first would hold a key that opens nothing.
 #
+# ONE RUN AT A TIME. This script and recovery-reconcile.py take the same lock for the device
+# (/run/lock/regalia-recovery-<device>.lock) and read the header with the same classifier
+# (recovery_state.py, beside this script, run by its path with python3 -Es).
+#
+# WHERE THE KEY COMES FROM (#175, decided 2026-10-03): the ceremony, only. It is generated on the
+# offline ceremony machine and written to the card and the escrow there, as nShield writes a card set
+# and Vault encrypts unseal shares to their custodians at generation. A key generated here would have
+# to travel back to the ceremony to be escrowed, and would open the disk before its escrow existed.
+#
 # NO UNDO. Once the first header write starts, INT, TERM, HUP and PIPE are ignored: the run finishes.
 # A kill, a power cut or a failing write leaves one of the states above, at every point with the used
 # key or the new key opening the disk (lab/recovery/matrix.py proves it at every header sync), and the
@@ -68,38 +74,27 @@ set -uo pipefail
 export LC_ALL=C
 fail(){ printf 'recovery-key: FAIL: %s\n' "$*" >&2; exit 1; }
 say(){ printf 'recovery-key: %s\n' "$*" >&2; }
-MODE=""; DEV=""; HOST=""
+MODE=""; DEV=""
 while [ $# -gt 0 ]; do case "$1" in
   --status|--enrol|--check|--replace) [ -z "$MODE" ] || fail "one of --status, --enrol, --check, --replace"; MODE="${1#--}"; shift;;
-  --host-generated) HOST=1; shift;;
   -h|--help) sed -n '2,/^set -uo pipefail$/{/^set -uo pipefail$/!p}' "$0"; exit 0;;
   -*) fail "unknown argument '$1' (see --help)";;
   *) [ -z "$DEV" ] || fail "one device"; DEV="$1"; shift;; esac; done
 [ -n "$MODE" ] || fail "one of --status, --enrol, --check, --replace is required (see --help)"
 [ -n "$DEV" ] || fail "name the LUKS2 device (the partition under the root volume; see lsblk)"
-for t in cryptsetup python3; do command -v "$t" >/dev/null || fail "$t is required"; done
+for t in cryptsetup python3 flock; do command -v "$t" >/dev/null || fail "$t is required"; done
 [ -r "$DEV" ] || fail "cannot read $DEV (run as root)"
 cryptsetup isLuks --type luks2 "$DEV" 2>/dev/null || fail "$DEV is not a LUKS2 volume"
 
-# WHERE THE KEY IS GENERATED (#175): "ceremony" (step 0 and pin-escrow.sh --new-recovery-key; typed
-# here) or "host" (systemd-cryptenroll generates it here and shows it once). The owner's decision; the
-# default, and the only answer before it, is "ceremony". A config change, not a code change.
-CONF="${REGALIA_RECOVERY_KEY_CONF:-/etc/regalia-kms/recovery-key.conf}"
-SOURCE=ceremony
-if [ -e "$CONF" ]; then
-  line="$(grep -vE '^[[:space:]]*(#|$)' "$CONF")" || true
-  case "$line" in source=ceremony) SOURCE=ceremony;; source=host) SOURCE=host;;
-    *) fail "$CONF must hold exactly one line, source=ceremony or source=host";; esac
-fi
-case "$MODE" in enrol|replace)
-  if [ -n "$HOST" ] && [ "$SOURCE" != host ]; then
-    fail "--host-generated is refused: this host's recovery keys come from the ceremony (source=$SOURCE). Host-generated keys wait for the owner's decision (regalia-kms#175); once made, it is source=host in $CONF"
-  fi
-  if [ -z "$HOST" ] && [ "$SOURCE" = host ]; then
-    fail "this host's recovery keys are generated here (source=host in $CONF): use --$MODE --host-generated"
-  fi;;
-esac
-[ -z "$HOST" ] || command -v systemd-cryptenroll >/dev/null || fail "systemd-cryptenroll is required for --host-generated"
+# Python runs by path with -Es (no environment, no user site): recovery_state.py beside this script,
+# which resolves through symlinks. No module in the working directory is ever what reads the header.
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)" || fail "cannot find this script's directory"
+STATE_PY="$HERE/recovery_state.py"
+[ -f "$STATE_PY" ] || fail "$STATE_PY is missing"
+# ONE RUN AT A TIME per device, this script and recovery-reconcile.py alike: the same lock file.
+LOCK="$(python3 -Es "$STATE_PY" lock "$DEV")" || fail "cannot take the recovery lock for $DEV"
+exec 9<"$LOCK" || fail "cannot open $LOCK"
+flock -n 9 || fail "another recovery-key.sh or recovery-reconcile.py is working on $DEV; wait for it"
 
 KEY_FORMAT='^([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}$'
 # What systemd-cryptenroll uses for its own recovery and TPM keyslots: the key has 256 bits of
@@ -107,81 +102,10 @@ KEY_FORMAT='^([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}$'
 KDF=(--pbkdf pbkdf2 --pbkdf-force-iterations 1000 --hash sha512)
 
 dump(){ cryptsetup luksDump --dump-json-metadata "$DEV" 2>/dev/null; }
-# THE ONE READER OF THE HEADER'S STATE. It prints one line:
-#   <state>|<recovery keyslots>|<keyslots no token names>|<empty recovery tokens>|<used new>|<all keyslots>|<why>
-# "<used new>" is filled for added-unproven only. Two recovery keyslots are a --replace that stopped
-# if, and only if, each is named by exactly one recovery token naming only it, and exactly one of the
-# two tokens says it REPLACES the other keyslot, names THAT KEYSLOT'S SALT, and carries the other's
-# generation plus one. The salt is the keyslot's identity: keyslot NUMBERS are reused, and the mark
-# outlives a completed replace, so a recovery key somebody adds later in the recycled number is not
-# taken for the used half of a replace.
-CLASSIFY='
-import json, sys
-try:
-    meta = json.load(sys.stdin)
-except ValueError:
-    sys.exit(1)
-order = lambda s: (len(s), s)
-keyslots = meta.get("keyslots") or {}
-present = set(keyslots)
-tokens = sorted(((i, t) for i, t in (meta.get("tokens") or {}).items() if isinstance(t, dict)), key=lambda it: order(it[0]))
-named, owner, empty, why = set(), {}, [], []
-for i, t in tokens:
-    listed = [str(s) for s in t.get("keyslots") or []]
-    live = [s for s in listed if s in present]
-    named.update(live)
-    if t.get("type") != "systemd-recovery":
-        continue
-    if not live:
-        empty.append(i)
-        continue
-    if len(listed) != 1:
-        why.append("one recovery token names more than one keyslot (token %s)" % i)
-        continue
-    if listed[0] in owner:
-        why.append("keyslot %s is named by more than one recovery token" % listed[0])
-        continue
-    owner[listed[0]] = t
-recovery = sorted(owner, key=order)
-unnamed = sorted((s for s in present if s not in named), key=order)
-for s in recovery:
-    if (keyslots[s] or {}).get("priority") == 0:
-        why.append("recovery keyslot %s has priority ignore: a boot prompt would not try it (cryptsetup config --priority normal --key-slot %s DEVICE)" % (s, s))
-def generation(t):
-    g = t.get("regalia_generation", 0)
-    return g if isinstance(g, int) and not isinstance(g, bool) and 0 <= g <= 2**31 - 1 else None
-def salt(s):
-    v = ((keyslots.get(s) or {}).get("kdf") or {}).get("salt")
-    return v if isinstance(v, str) and v else None
-pair = ""
-if len(recovery) == 2 and not why:
-    a, b = recovery
-    newer = [(new, old) for new, old in ((a, b), (b, a))
-             if str(owner[new].get("regalia_replaces")) == old and salt(old) is not None
-             and owner[new].get("regalia_replaces_salt") == salt(old) and generation(owner[new]) is not None
-             and generation(owner[old]) is not None and generation(owner[new]) == generation(owner[old]) + 1]
-    if len(newer) == 1:
-        pair = "%s %s" % (newer[0][1], newer[0][0])
-    else:
-        why.append("two recovery keyslots (%s), and the header does not say that one replaces the other" % " ".join(recovery))
-elif len(recovery) > 2:
-    why.append("%d recovery keyslots" % len(recovery))
-if why:
-    state = "unknown"
-elif empty:
-    state = "orphan-token"
-elif not recovery:
-    state = "no-recovery"
-elif pair:
-    state = "added-unproven"
-elif unnamed:
-    state = "orphan-keyslot"
-else:
-    state = "clean"
-print("|".join([state, " ".join(recovery), " ".join(unnamed), " ".join(empty), pair, " ".join(sorted(present, key=order)), "; ".join(why)]))
-'
 # read_state: set STATE RECOVERY UNNAMED EMPTY PAIR ALL WHY from the header; fails when it cannot be read.
-read_state(){ local line; line="$(dump | python3 -I -c "$CLASSIFY")" && [ -n "$line" ] || return 1
+# THE ONE READER OF THE HEADER'S STATE is recovery_state.py, which recovery-reconcile.py imports too.
+# It prints <state>|<recovery>|<unnamed>|<empty tokens>|<used new>|<all keyslots>|<why>.
+read_state(){ local line; line="$(dump | python3 -Es "$STATE_PY" classify)" && [ -n "$line" ] || return 1
   IFS='|' read -r STATE RECOVERY UNNAMED EMPTY PAIR ALL WHY <<< "$line"; }
 
 A=""; B=""; C=""; trap 'A=""; B=""; C=""' EXIT
@@ -249,13 +173,11 @@ for t in (meta.get("tokens") or {}).values():
         sys.exit(0 if isinstance(salt, str) and salt and salt not in salts else 1)
 sys.exit(1)
 ' "$1"; }
-# mark <slot> <generation> [<the keyslot it replaces>]: the systemd-recovery token for a keyslot. With
-# REPLACE_TOKEN set, it replaces that token (systemd-cryptenroll's own) instead of adding one.
-REPLACE_TOKEN=""
+# mark <slot> <generation> [<the keyslot it replaces>]: the systemd-recovery token for a keyslot.
 mark(){ local extra="" salt
   if [ -n "${3:-}" ]; then salt="$(salt_of "$3")" || return 1; extra=",\"regalia_replaces\":\"$3\",\"regalia_replaces_salt\":\"$salt\""; fi
   printf '{"type":"systemd-recovery","keyslots":["%s"],"regalia_generation":%d%s}' "$1" "$2" "$extra" \
-    | cryptsetup token import ${REPLACE_TOKEN:+--token-id "$REPLACE_TOKEN" --token-replace} --json-file - "$DEV" >/dev/null 2>&1; }
+    | cryptsetup token import --json-file - "$DEV" >/dev/null 2>&1; }
 
 # report: the header as it is now, read again. On standard output: every keyslot by kind (and, when
 # keys were typed, which of them opens it), then the state and its one way forward.
@@ -285,7 +207,7 @@ for s in sorted(meta.get("keyslots") or {}, key=lambda s: (len(s), s)):
     orphan-keyslot) echo "STATE: orphan-keyslot — keyslot $UNNAMED is a passphrase no token names: the installer's (once the TPM is proven: systemd-cryptenroll --wipe-slot=password $DEV), or a key left by an --enrol or --replace that stopped (run it again with the same keys: it picks the keyslot up)";;
     added-unproven) echo "STATE: added-unproven — keyslot ${PAIR#* } replaces keyslot ${PAIR% *}, which is not destroyed yet: run --replace again with the used key and the new key, in that order";;
     orphan-token) echo "STATE: orphan-token — recovery token $EMPTY names no keyslot and opens nothing: --enrol or --replace removes it first, or cryptsetup token remove --token-id ${EMPTY%% *} $DEV";;
-    unknown) echo "STATE: unknown — $WHY. This script changes nothing here: the custodian decides which keyslot to keep (deploy/baremetal/recovery-reconcile.py --keep-slot N --retire-slot M $DEV)";;
+    unknown) echo "STATE: unknown — $WHY. This script changes nothing here: the custodian decides which keyslot to keep (sudo python3 -I $HERE/recovery-reconcile.py $DEV --keep-slot N --retire-slot M)";;
   esac; }
 # The header before this run's first write: "nothing was changed" is said only when it is still so.
 H0=""
@@ -330,21 +252,6 @@ retire(){
 spent(){
   opens "$A" && end 1 "the used key STILL opens $DEV through another keyslot; look at cryptsetup luksDump $DEV"
   opens_nothing "$A" || end 1 "cannot show that the used key opens nothing (the header or the device could not be read); run --status"; }
-# shown: under --host-generated, systemd-cryptenroll enrols a key it generates and prints it on the
-# console, and this run then asks for it back FROM THE CARD. Sets ADDED (the keyslot it made) and B.
-shown(){
-  local before="$ALL" s
-  systemd-cryptenroll "$DEV" --recovery-key --unlock-key-file=<(printf '%s' "$A") </dev/null \
-    || { read_state; end 1 "systemd-cryptenroll could not enrol a recovery key"; }
-  read_state || end 1 "the LUKS2 header of $DEV could not be read after systemd-cryptenroll"
-  for s in $RECOVERY; do case " $before " in *" $s "*) ;; *) ADDED="$s";; esac; done
-  [ -n "$ADDED" ] || end 1 "systemd-cryptenroll reported success, but no new recovery keyslot is in the header"
-  REPLACE_TOKEN="$(token_of "$ADDED")" || end 1 "the token systemd-cryptenroll wrote for keyslot $ADDED cannot be found"
-  say "WRITE THE KEY SHOWN ABOVE ON THE KMS HOST RECOVERY CARD NOW, dashes included. Then type it back from the card."
-  B="$(ask "The recovery key, read from the card (hidden): ")"
-  well_formed "$B" "that value"
-  proven "$B" "$ADDED" || end 1 "the key typed from the card does NOT open the new keyslot $ADDED: the card is wrong. The key on the screen is enrolled; correct the card from it and run --check. The used key is still enrolled"; }
-
 read_state || fail "cannot read the LUKS2 header of $DEV"
 case "$MODE" in
 status)
@@ -373,15 +280,6 @@ enrol)
   [ -n "$A" ] || fail "no passphrase given; nothing was changed"
   opens "$A" || fail "that passphrase does not open $DEV; nothing was changed"
   NAME_A="the passphrase typed"
-  if [ -n "$HOST" ]; then
-    [ -z "$RECOVERY" ] || end 1 "$DEV already has a recovery keyslot ($RECOVERY). To change the key use --replace --host-generated"
-    for s in $UNNAMED; do opens "$A" "$s" || end 1 "keyslot $s is a passphrase no token names, and not the one typed. If an earlier --host-generated run stopped, its key was never confirmed from a card: remove that keyslot (cryptsetup luksKillSlot $DEV $s) and enrol again"; done
-    writes; sweep
-    shown
-    NAME_B="the key typed from the card"
-    mark "$ADDED" 1 || end 1 "the key is enrolled (keyslot $ADDED) and proven from the card, but its token could not be marked; run --check"
-    end 0 "ENROLLED: a recovery key generated here is keyslot $ADDED of $DEV, proven from the card. Escrow it next."
-  fi
   B="$(ask "The recovery key, from the KMS host recovery card (hidden): ")"
   if [ -t 0 ]; then C="$(ask "The recovery key again: ")"; [ "$B" = "$C" ] || fail "the two entries differ; nothing was changed"; fi
   well_formed "$B" "that value"
@@ -423,22 +321,6 @@ replace)
   A="$(ask "The recovery key that was USED (hidden): ")"
   well_formed "$A" "the used key"
   NAME_A="the used key"
-  if [ -n "$HOST" ]; then
-    [ "$STATE" != added-unproven ] || end 1 "a --replace stopped half way: finish it with the same keys, or decide with recovery-reconcile.py"
-    opens "$A" "$RECOVERY" || end 1 "that key does not open the recovery keyslot ($RECOVERY); nothing was changed"
-    generation="$(generation_of "$RECOVERY")" || end 1 "the used keyslot's token carries a generation this script did not write; nothing was changed"
-    [ "$generation" -lt 2147483647 ] || end 1 "the used keyslot's token is at the last generation this script writes; nothing was changed"
-    OLD="$RECOVERY"
-    writes; sweep
-    shown
-    NAME_B="the new key typed from the card"
-    mark "$ADDED" "$((generation + 1))" "$OLD" || end 1 "the new key (keyslot $ADDED) is proven from the card, but its token could not be marked: two recovery keyslots no mark relates. Decide with recovery-reconcile.py"
-    systemd-cryptenroll "$DEV" --wipe-slot="$OLD" </dev/null >/dev/null 2>&1
-    read_state || end 1 "the header could not be read after the used keyslot $OLD was to be wiped"
-    ! has_slot "$OLD" || end 1 "the USED keyslot $OLD could not be wiped: run --replace again with the used key and the new card"
-    sweep; spent
-    end 0 "REPLACED: the new recovery key, generated here, is keyslot $ADDED of $DEV; the used key opens nothing. Escrow it next."
-  fi
   B="$(ask "The NEW recovery key, from the new card (hidden): ")"
   if [ -t 0 ]; then C="$(ask "The new recovery key again: ")"; [ "$B" = "$C" ] || fail "the two entries differ; nothing was changed"; fi
   well_formed "$B" "the new key"

@@ -878,83 +878,15 @@ class RecoveryKey(unittest.TestCase):
             self.assertIn(self.state(done), ("no-recovery", "orphan-keyslot", "clean"), done.stdout)
             self.assertTrue(done.stdout.rstrip().splitlines()[-1].startswith("STATE: "), done.stdout)
 
-    def conf(self, text):
-        path = os.path.join(self.dir, "recovery-key.conf")
-        with open(path, "w", encoding="ascii") as f:
-            f.write(text)
-        return path
-
-    def test_host_generated_keys_are_refused_until_the_owner_has_decided(self):
-        """#175: where the key is generated is the owner's decision. Until /etc/regalia-kms/recovery-key.conf
-        says source=host, --host-generated refuses; once it does, the typed path refuses instead."""
-        before = self.header()
-        for conf in (None, "source=ceremony\n", "# the default\nsource=ceremony\n"):
-            env = dict(self.env(), REGALIA_RECOVERY_KEY_CONF=self.conf(conf) if conf else os.path.join(self.dir, "absent.conf"))
-            done = subprocess.run(["bash", SCRIPT, "--enrol", "--host-generated", self.img], input=INSTALLER + "\n",
-                                  capture_output=True, text=True, env=env, timeout=60)
-            self.assertEqual(done.returncode, 1)
-            self.assertIn("--host-generated is refused", done.stderr)
-            self.assertIn("regalia-kms#175", done.stderr)
-        env = dict(self.env(), REGALIA_RECOVERY_KEY_CONF=self.conf("source=host\n"))
-        done = subprocess.run(["bash", SCRIPT, "--enrol", self.img], input=INSTALLER + "\n" + KEY + "\n",
-                              capture_output=True, text=True, env=env, timeout=60)
+    def test_there_is_one_source_of_recovery_keys_the_ceremony(self):
+        """#175, decided 2026-10-03: no host-generated mode, no switch to one."""
+        done = subprocess.run(["bash", SCRIPT, "--enrol", "--host-generated", self.img], input=INSTALLER + "\n", capture_output=True, text=True, env=self.env(), timeout=60)
         self.assertEqual(done.returncode, 1)
-        self.assertIn("use --enrol --host-generated", done.stderr)
-        for bad in ("source=both\n", "source=host\nsource=ceremony\n", "host\n"):
-            env = dict(self.env(), REGALIA_RECOVERY_KEY_CONF=self.conf(bad))
-            done = subprocess.run(["bash", SCRIPT, "--status", self.img], capture_output=True, text=True, env=env, timeout=60)
-            self.assertEqual(done.returncode, 1)
-            self.assertIn("must hold exactly one line", done.stderr)
-        self.assertEqual(self.header(), before)
-
-    def host_generated(self, mode, first, card=None):
-        """Run --<mode> --host-generated; type `first`, wait for the key systemd shows, then type it back
-        (or `card`, a wrong copy) as if read from the card."""
-        env = dict(self.env(), REGALIA_RECOVERY_KEY_CONF=self.conf("source=host\n"))
-        with subprocess.Popen(["bash", SCRIPT, "--" + mode, "--host-generated", self.img], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, text=True, env=env) as proc:
-            proc.stdin.write(first + "\n")
-            proc.stdin.flush()
-            shown, lines = None, []
-            for line in proc.stdout:
-                lines.append(line)
-                match = re.fullmatch(r"\s*(([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8})\s*", line)
-                if match:
-                    shown = match.group(1)
-                    break
-            self.assertIsNotNone(shown, "no key was shown: %s" % "".join(lines))
-            proc.stdin.write((card or shown) + "\n")
-            proc.stdin.close()
-            rest = proc.stdout.read()
-            stderr = proc.stderr.read()
-            proc.wait(timeout=120)
-        return proc.returncode, shown, "".join(lines) + rest, stderr
-
-    @unittest.skipUnless(shutil.which("systemd-cryptenroll", path=PATH) or os.environ.get("REGALIA_EXPECT_CRYPTENROLL") == "1",
-                         "systemd-cryptenroll is not installed")
-    def test_host_generated_keys_are_shown_once_proven_from_the_card_and_replace_by_index(self):
-        code, first, out, err = self.host_generated("enrol", INSTALLER)
-        self.assertEqual(code, 0, err)
-        self.assertIn("WRITE THE KEY SHOWN ABOVE ON THE KMS HOST RECOVERY CARD", err)
-        self.assertTrue(self.opens(first))
-        slot = next(t["keyslots"][0] for t in self.header()["tokens"].values())
-        self.assertEqual(self.generations(), {slot: 1})
-        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
-        # a card copied wrong: the used key is NOT destroyed, and the run says the card is wrong
-        code, wrong, out, err = self.host_generated("replace", first, card=THIRD_KEY)
-        self.assertEqual(code, 1)
-        self.assertIn("the card is wrong", err)
-        self.assertTrue(self.opens(first) and self.opens(wrong))
-        self.assertEqual(self.state(subprocess.CompletedProcess([], 1, out, err)), "unknown")
-        self.cs("luksKillSlot", "--batch-mode", self.img, next(s for s, t in self.generations().items() if t is None or s != slot))
-        self.cs("token", "remove", "--token-id", next(i for i, t in self.header()["tokens"].items() if not t["keyslots"]), self.img)
-        code, second, out, err = self.host_generated("replace", first)
-        self.assertEqual(code, 0, err)
-        self.assertIn("REPLACED", err)
-        self.assertTrue(self.opens(second) and not self.opens(first))
-        self.assertEqual(list(self.generations().values()), [2])
-        self.assertEqual(self.run_script("status").returncode, 0)
-
+        self.assertIn("unknown argument '--host-generated'", done.stderr)
+        with open(SCRIPT, encoding="utf-8") as f:
+            text = f.read()
+        for gone in ("systemd-cryptenroll \"$DEV\" --recovery-key", "recovery-key.conf", "source=host"):
+            self.assertNotIn(gone, text)
 
 if __name__ == "__main__":
     unittest.main()
