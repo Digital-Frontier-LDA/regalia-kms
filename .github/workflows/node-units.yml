@@ -35,6 +35,19 @@ jobs:
           # tpm-udev: the tss group and its rule for /dev/tpmrm*. The runner's Azure kernel has no vTPM proxy
           # (CONFIG_TCG_VTPM_PROXY is not set), so the test makes the device with swtpm's CUSE mode.
           sudo apt-get install -y -qq --no-install-recommends tpm-udev
+      - name: swtpm with its CUSE interface (Ubuntu builds it without; rebuilt from Ubuntu's own source package)
+        run: |
+          sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get update -qq
+          sudo apt-get build-dep -y -qq swtpm
+          sudo apt-get install -y -qq --no-install-recommends libfuse-dev libfuse3-dev pkg-config
+          cd "$RUNNER_TEMP" && apt-get source -qq swtpm && cd swtpm-*/
+          [ -x configure ] || autoreconf -fi
+          ./configure -q --prefix=/usr/local --with-cuse --with-openssl
+          make -s -j"$(nproc)"
+          sudo make -s install
+          sudo ldconfig
+          /usr/local/bin/swtpm cuse --help | head -1
       - name: The four units, as shipped, under systemd (part 1)
         run: |
           set -o pipefail
