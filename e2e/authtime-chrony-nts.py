@@ -18,6 +18,9 @@ exactly as the root service will on a host:
      whatever chrony does with it; and so is a third NTS server that nobody declared
   5  the only source is plain NTP -> not authenticated
   6  the root service stops: a minute later (here, two seconds) the published answer is no longer believed
+  7  the client configured as authtime.conf() renders it from the site (#303): authenticated
+  8  both sources agree on a jump after boot: chronyd exits (maxchange 1 3 0), and time is not authenticated
+  9  three declared, one jumps: it is outvoted, chronyd keeps running, time stays authenticated
 """
 import os
 import random
@@ -92,7 +95,7 @@ def scenario(work, daemons, stop):
         path = os.path.join(work, name + ".conf")
         with open(path, "w") as f:
             f.write(text + "cmdport 0\nbindcmdaddress %s/%s.sock\npidfile %s/%s.pid\n" % (work, name, work, name))
-        daemons[name] = subprocess.Popen([chronyd, "-x", "-U", "-u", user, "-n", "-f", path], cwd=work,
+        daemons[name] = subprocess.Popen([chronyd, "-x", "-U", "-u", user, "-d", "-f", path], cwd=work,      # -d: in front, logging to its log
                                          stdout=open(os.path.join(work, name + ".log"), "w"), stderr=subprocess.STDOUT)
 
     for name, (address, port, ke) in servers.items():
@@ -216,6 +219,73 @@ def scenario(work, daemons, stop):
     ok(stale()[1] is True, "a fresh status is believed")
     time.sleep(3)
     ok(stale()[1] is False, "nobody re-checked for longer than the bound: the same status is no longer believed")
+
+    header("7  the client configured as the site renders it (#303)")
+    # authtime.conf()'s bytes, with only what a private lab must change: the servers' ports (and a fast poll),
+    # and paths this unprivileged chronyd can write. Every other directive is the rendered one.
+    rendered = authtime.conf(declared)
+    lab = rendered.replace("ntsdumpdir /var/lib/chrony\n", "ntsdumpdir %s\n" % work).replace(
+        "driftfile /var/lib/chrony/chrony.drift\n", "driftfile %s/client.drift\n" % work).replace("cmdport 0\n", "")
+    for name in ("one", "two"):
+        lab = lab.replace("server %s nts iburst\n" % servers[name][0], nts(name))
+    ok(all(line in lab.splitlines() for line in ("authselectmode require", "minsources 2", "makestep 1 3", "maxchange 1 3 0", "leapsectz right/UTC")),
+       "the lab client keeps every rendered directive but the servers' ports and the state paths")
+
+    def rendered_client(text):
+        stop("client")
+        start("client", text + trust)
+    rendered_client(lab)
+    said = until(lambda v: v == "", 90)
+    ok(said == "", "chrony configured as rendered: two agreeing NTS sources, authenticated", said)
+
+    header("8  both sources agree on a jump after boot: chronyd exits (maxchange), nothing is served")
+    time.sleep(8)                                    # past the first three clock updates (minpoll 0): steps are over
+    for name in ("one", "two"):
+        subprocess.run([CHRONYC, "-h", sock, "offset", servers[name][0], "2"], capture_output=True, check=False)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and daemons["client"].poll() is None:
+        time.sleep(1)
+    log = open(os.path.join(work, "client.log")).read()
+    exceeded = [line for line in log.splitlines() if "exceeds the allowed maximum" in line]
+    ok(daemons["client"].poll() is not None and exceeded, "chronyd exits on an offset over a second agreed by two sources, by "
+       "maxchange (%s)" % (exceeded[-1].strip()[:90] if exceeded else "no maxchange line"), log[-600:])
+    said = verdict()
+    ok(said != "", "and time is not authenticated: chrony cannot be asked (%s)" % said[:60], said)
+
+    header("9  three declared, one source jumps: outvoted, the clock stays authenticated")
+    stop("three")
+    start("three", "local stratum 8\nport %d\nntsport %d\nbindaddress %s\nntsserverkey %s/three.key\nntsservercert %s/three.crt\nallow 127.0.0.0/8\nntsdumpdir %s\n"
+          % (plain[1], base + 6, plain[0], work, work, work))
+    three = authtime.conf(declared + [plain[0]])
+    lab3 = three.replace("ntsdumpdir /var/lib/chrony\n", "ntsdumpdir %s\n" % work).replace(
+        "driftfile /var/lib/chrony/chrony.drift\n", "driftfile %s/client.drift\n" % work).replace("cmdport 0\n", "")
+    for name in ("one", "two"):
+        lab3 = lab3.replace("server %s nts iburst\n" % servers[name][0], nts(name))
+    lab3 = lab3.replace("server %s nts iburst\n" % plain[0], "server %s port %d nts ntsport %d iburst minpoll 0 maxpoll 1\n" % (plain[0], plain[1], base + 6))
+    rendered_client(lab3 + "ntstrustedcerts %s/three.crt\n" % work)
+    declared3 = declared + [plain[0]]
+
+    def verdict3():
+        try:
+            authtime.judge(ask(), time.time(), declared3)
+            return ""
+        except m.Refused as refused:
+            return str(refused)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline and verdict3() != "":
+        time.sleep(1)
+    ok(verdict3() == "", "three declared NTS sources agree: authenticated", verdict3())
+    time.sleep(8)
+    subprocess.run([CHRONYC, "-h", sock, "offset", servers["one"][0], "2"], capture_output=True, check=False)
+    deadline, states = time.monotonic() + 60, {}
+    while time.monotonic() < deadline:
+        states = {s["name"]: s["state"] for s in ask()["sources"]}
+        if states.get(servers["one"][0]) not in authtime.ACCEPTABLE:
+            break
+        time.sleep(1)
+    ok(states.get(servers["one"][0]) not in authtime.ACCEPTABLE, "the source that jumped is outvoted (state %r)" % states.get(servers["one"][0]), states)
+    ok(daemons["client"].poll() is None and verdict3() == "", "chronyd keeps running and time stays authenticated on the two that agree",
+       verdict3())
 
     print("\nauthtime-chrony-nts: %d passed, %d failed" % (passed, failed))
     return 1 if failed else 0

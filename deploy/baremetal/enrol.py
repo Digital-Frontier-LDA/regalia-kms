@@ -508,16 +508,22 @@ def check_manifest(directory, chain, root_key, typed, document):
 NODE_JSON = "/etc/regalia/node.json"
 
 
-def node_config(node_id, root_key, example):
+def node_config(node_id, root_key, example, site):
     """The node configuration enrolment writes: the shipped example (deploy/baremetal/node.example.json) with
-    this host's node ID and the root key whose fingerprint was typed. Checked by node.validate."""
+    this host's node ID, the root key whose fingerprint was typed, and the NTS servers of the validated site
+    config's time.nts (#303: chrony.conf and the firewall are rendered from the same list, so the names chrony
+    uses and the names authtime judges cannot differ). Checked by node.validate."""
     from deploy.baremetal import node as node_module           # imported here: node imports most of the package
-    doc = dict(example, node_id=node_id, root_key=root_key)
+    doc = dict(example, node_id=node_id, root_key=root_key, time_servers=[server["name"] for server in site["time"]["nts"]])
     node_module.validate(doc)
     return doc
 
 
 CONFIG_DIR = "/etc/regalia/"
+# chronyd -f, by units/chrony.service.d/regalia.conf (#303). In /etc/chrony, not CONFIG_DIR: the distribution's AppArmor
+# profile for chronyd reads /etc/chrony/** and nothing else of /etc. A file of its own: Debian's chrony.conf, a package
+# conffile, is never touched.
+CHRONY_CONF = "/etc/chrony/regalia.conf"
 
 
 def _same(target, digest):
@@ -531,8 +537,8 @@ def _install(journal, step, path, data, prefix=""):
     which fails if the target exists (a rename would replace it silently). A file already there, or one that
     appears meanwhile, is accepted only if it is byte-for-byte what this step writes (a resumed run); anything
     else is refused and left. Enrolment never overwrites a node's configuration (re-enrolment is #76)."""
-    require(path.startswith(CONFIG_DIR) and os.path.normpath(path) == path and "\0" not in path,
-            "%s is not under %s: enrolment writes configuration only there" % (path, CONFIG_DIR))
+    require((path.startswith(CONFIG_DIR) or path == CHRONY_CONF) and os.path.normpath(path) == path and "\0" not in path,
+            "%s is not under %s: enrolment writes configuration only there (and %s)" % (path, CONFIG_DIR, CHRONY_CONF))
     target = prefix + path
     digest = hashlib.sha256(data).hexdigest()
     facts = {k: v for k, v in journal.get(step).items() if k not in ("state", "at")}
@@ -578,16 +584,20 @@ def _install(journal, step, path, data, prefix=""):
 
 
 def install_config(journal, node_id, root_key, example, site, document, prefix=""):
-    """Phase 2's configuration: node.json, the site configuration and the measurements document the manifest
-    commits to, each where node.json says, each refused if something else is already there."""
-    from deploy.baremetal import sitecfg
-    sitecfg.validate(site)
-    config = node_config(node_id, root_key, example)
+    """Phase 2's configuration: node.json, the site configuration, the measurements document the manifest
+    commits to, each where node.json says, and chrony.conf (#303), rendered from the site's time.nts by
+    authtime.conf, at CHRONY_CONF, where the shipped chrony drop-in points chronyd (Debian's own
+    /etc/chrony/chrony.conf, a package conffile, is never touched). Each refused if something else is already
+    there."""
+    from deploy.baremetal import authtime, sitecfg
+    validated = sitecfg.validate(site)
+    config = node_config(node_id, root_key, example, validated)
     for key in ("site", "measurements"):
         require(config[key].startswith(CONFIG_DIR), "node.json puts %s at %s, outside %s" % (key, config[key], CONFIG_DIR))
     pretty = lambda doc: (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()        # noqa: E731
     _install(journal, "config", config["site"], pretty(site), prefix)
     _install(journal, "config", config["measurements"], pretty(document), prefix)
+    _install(journal, "config", CHRONY_CONF, authtime.conf(config["time_servers"]).encode(), prefix)
     _install(journal, "config", NODE_JSON, pretty(config), prefix)
     return config
 

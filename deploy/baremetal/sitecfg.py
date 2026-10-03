@@ -13,8 +13,13 @@ network_probe.py checks the result from each zone, so the two can never describe
       "admin_cidrs": ["203.0.113.0/28"],            # may reach ssh_port, and ping
       "outbound": [                                  # the ONLY destinations the host may reach
         {"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
-        {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}
+        {"name": "dns", "cidr": "203.0.113.194/32", "proto": "udp", "port": 53}
       ],
+      "time": {"nts": [                              # authenticated time (#303): NTS servers only, at least two, from
+        {"name": "nts.netnod.se", "cidrs": ["194.58.200.0/24"]},   # independent operators (three ride out one);
+        {"name": "ptbtime1.ptb.de", "cidrs": ["192.53.103.0/24"]}, # each by the name its certificate carries, and the
+        {"name": "time.cloudflare.com", "cidrs": ["162.159.200.0/24"]}   # addresses (/24 or narrower) it may answer from:
+      ]},                                            #   NTS-KE (TCP 4460) and NTP (UDP 123) go there and nowhere else
       "boot_mesh": null,                             # a single-site host; or, in a three-site cluster (#66):
       "service_mesh": null                           # and, with a boot_mesh, the tunnel regalia-sync uses (#80)
     }
@@ -59,7 +64,12 @@ import re
 
 SCHEMA = "regalia.baremetal-site/v1"
 KEYS = ("schema", "site", "host_ipv4", "kms_port", "ssh_port", "client_cidrs", "monitoring_cidrs", "admin_cidrs",
-        "outbound", "boot_mesh", "service_mesh")
+        "outbound", "time", "boot_mesh", "service_mesh")
+TIME_KEYS = ("nts",)
+NTS_KEYS = ("name", "cidrs")
+NTS_MINIMUM, NTS_MAXIMUM = 2, 8        # authtime.MINIMUM agreeing sources; a bound on what is rendered
+NTS_PORTS = (("tcp", 4460), ("udp", 123))   # NTS-KE, then NTP: rendered from `time` only, never an `outbound` entry
+NTS_SERVER = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+"      # a host name, or an IPv4 address
 OUTBOUND_KEYS = ("name", "cidr", "proto", "port")
 MESH_KEYS = ("node_id", "interface", "listen_port", "address", "unlock_port", "nic_mac", "prefix", "gateway", "peers")
 MAC = r"[0-9a-f]{2}(:[0-9a-f]{2}){5}"
@@ -124,7 +134,7 @@ def validate(doc):
         for c in cfg["client_cidrs"] + cfg["monitoring_cidrs"]:
             require(not ipaddress.ip_network(a).overlaps(ipaddress.ip_network(c)),
                     "admin network %s overlaps the KMS-caller network %s: zones must be disjoint" % (a, c))
-    require(isinstance(doc["outbound"], list) and doc["outbound"], "outbound must list the audit and NTP sinks at least")
+    require(isinstance(doc["outbound"], list) and doc["outbound"], "outbound must list the audit sink at least")
     names = set()
     for i, o in enumerate(doc["outbound"]):
         require(isinstance(o, dict) and set(o) == set(OUTBOUND_KEYS), "outbound[%d] needs exactly %s" % (i, list(OUTBOUND_KEYS)))
@@ -132,12 +142,40 @@ def validate(doc):
                 "outbound[%d].name must be a unique short name" % i)
         names.add(o["name"])
         require(o["proto"] in ("tcp", "udp"), "outbound[%d].proto must be tcp or udp" % i)
+        require((o["proto"], o["port"]) not in NTS_PORTS, "outbound[%d] opens %s/%s: time traffic is rendered from `time` "
+                "(NTS only, to its servers), never opened here: no plain-NTP fallback" % (i, o["proto"], o["port"]))
         cfg["outbound"].append({"name": o["name"], "cidr": _networks([o["cidr"]], "outbound[%d].cidr" % i)[0],
                                 "proto": o["proto"], "port": _port(o["port"], "outbound[%d].port" % i)})
-    require({"audit", "ntp"} <= names, "outbound must include the 'audit' and 'ntp' sinks")
+    require("audit" in names, "outbound must include the 'audit' sink")
+    cfg["time"] = _time(doc["time"])
     cfg["boot_mesh"] = _boot_mesh(doc["boot_mesh"], cfg)
     cfg["service_mesh"] = _service_mesh(doc["service_mesh"], cfg)
     return cfg
+
+
+def _time(time_):
+    """The NTS servers (#303): NTS_MINIMUM to NTS_MAXIMUM, distinct names, each with one to four IPv4 networks no
+    wider than /24, from which it may answer. chrony.conf (authtime.conf), node.json's time_servers (enrol) and
+    the firewall's time rules are all rendered from this, so the names chrony uses and the names authtime
+    judges cannot differ. That the servers belong to independent operators is the site's claim."""
+    require(isinstance(time_, dict) and set(time_) == set(TIME_KEYS), "time must hold exactly %s" % list(TIME_KEYS))
+    servers = time_["nts"]
+    require(isinstance(servers, list) and NTS_MINIMUM <= len(servers) <= NTS_MAXIMUM,
+            "time.nts must list %d to %d NTS servers (three, from three operators, ride out one)" % (NTS_MINIMUM, NTS_MAXIMUM))
+    out = []
+    for i, server in enumerate(servers):
+        label = "time.nts[%d]" % i
+        require(isinstance(server, dict) and set(server) == set(NTS_KEYS), "%s needs exactly %s" % (label, list(NTS_KEYS)))
+        require(isinstance(server["name"], str) and len(server["name"]) <= 253 and re.fullmatch(NTS_SERVER, server["name"]),
+                "%s.name must be a host name (the one its certificate carries)" % label)
+        require(isinstance(server["cidrs"], list) and 1 <= len(server["cidrs"]) <= 4, "%s.cidrs must list one to four networks" % label)
+        cidrs = _networks(server["cidrs"], label + ".cidrs")
+        require(all(ipaddress.ip_network(c).prefixlen >= 24 for c in cidrs), "%s.cidrs: no wider than /24: the host reaches "
+                "those servers only" % label)
+        out.append({"name": server["name"], "cidrs": cidrs})
+    names = [s["name"] for s in out]
+    require(len(set(names)) == len(names), "time.nts lists a server twice")
+    return {"nts": out}
 
 
 def _address(value, label):

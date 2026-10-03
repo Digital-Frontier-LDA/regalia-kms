@@ -30,7 +30,23 @@ class SiteConfig(unittest.TestCase):
             "IPv6": (lambda d: d.__setitem__("client_cidrs", ["2001:db8::/64"]), "not IPv4"),
             "same ports": (lambda d: d.__setitem__("ssh_port", 8443), "must differ"),
             "bool port": (lambda d: d.__setitem__("kms_port", True), "port number"),
-            "no ntp sink": (lambda d: d.__setitem__("outbound", d["outbound"][:1]), "'audit' and 'ntp'"),
+            "no audit sink": (lambda d: d.__setitem__("outbound", d["outbound"][1:]), "'audit' sink"),
+            # #303: time is NTS only, rendered from `time`; never a side door in `outbound`
+            "plain NTP outbound": (lambda d: d["outbound"].append({"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}),
+                                   "no plain-NTP fallback"),
+            "NTS-KE outbound": (lambda d: d["outbound"].append({"name": "ke", "cidr": "203.0.113.193/32", "proto": "tcp", "port": 4460}),
+                                "rendered from `time`"),
+            "no time": (lambda d: d.pop("time"), "fields mismatch"),
+            "one NTS server": (lambda d: d["time"].__setitem__("nts", d["time"]["nts"][:1]), "2 to 8 NTS servers"),
+            "nine NTS servers": (lambda d: d["time"].__setitem__("nts", [{"name": "nts%d.example.net" % i, "cidrs": ["192.0.2.%d/32" % i]}
+                                                                          for i in range(9)]), "2 to 8 NTS servers"),
+            "a server twice": (lambda d: d["time"]["nts"][1].__setitem__("name", d["time"]["nts"][0]["name"]), "twice"),
+            "a server name with a newline": (lambda d: d["time"]["nts"][0].__setitem__("name", "a.se\nserver evil.example"), "host name"),
+            "an upper-case name": (lambda d: d["time"]["nts"][0].__setitem__("name", "Time.Cloudflare.com"), "host name"),
+            "a /16 for a server": (lambda d: d["time"]["nts"][0].__setitem__("cidrs", ["194.58.0.0/16"]), "no wider than /24"),
+            "no address for a server": (lambda d: d["time"]["nts"][0].__setitem__("cidrs", []), "one to four"),
+            "an extra key in time": (lambda d: d["time"].__setitem__("pool", []), "exactly"),
+            "an extra key in a server": (lambda d: d["time"]["nts"][0].__setitem__("key", "x"), "exactly"),
             "bad proto": (lambda d: d["outbound"][0].__setitem__("proto", "icmp"), "tcp or udp"),
             "loopback host": (lambda d: d.__setitem__("host_ipv4", "127.0.0.1"), "host address"),
             "duplicate net": (lambda d: d.__setitem__("client_cidrs", ["198.51.100.0/24", "198.51.100.0/24"]), "twice"),
@@ -110,8 +126,13 @@ class Render(unittest.TestCase):
 
     def test_outbound_only_to_declared_sinks(self):
         self.assertIn('ip daddr 203.0.113.192/32 tcp dport 6514 accept comment "audit"', self.text)
-        self.assertIn('ip daddr 203.0.113.193/32 udp dport 123 accept comment "ntp"', self.text)
-        self.assertEqual(self.text.count(" dport "), 4)    # kms, ssh, audit, ntp: nothing else opens
+        self.assertIn('ip daddr 203.0.113.194/32 udp dport 53 accept comment "dns"', self.text)
+        # #303: each NTS server on NTS-KE and NTP, to its own networks and nowhere else
+        for name, net in (("nts.netnod.se", "194.58.200.0/24"), ("ptbtime1.ptb.de", "192.53.103.0/24"), ("time.cloudflare.com", "162.159.200.0/24")):
+            self.assertIn('ip daddr { %s } tcp dport 4460 accept comment "time: %s, NTS-KE"' % (net, name), self.text)
+            self.assertIn('ip daddr { %s } udp dport 123 accept comment "time: %s, NTP"' % (net, name), self.text)
+        self.assertEqual(self.text.count(" dport "), 10)   # kms, ssh, audit, dns, and 2 per NTS server: nothing else opens
+        self.assertEqual(self.text.count("dport 123 "), 3)  # NTP only to the three NTS servers
         self.assertNotIn("ip6", self.text)                 # a single-site host carries no IPv6 at all
         self.assertEqual(self.text.count("meta nfproto ipv6 drop"), 2)
 

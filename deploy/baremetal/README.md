@@ -203,10 +203,24 @@ Commissioning has two halves:
   as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
   (declare servers of independent operators, so that no single operator can move the clock; with
   exactly two, one operator's outage stops the nodes, so declare **three**), with no source that was not
-  declared or is not NTS, an update within the last hour, and no correction pending. `authtime.conf()`
-  renders the **whole** `chrony.conf`: no `pool`, no `sourcedir` (the distribution's default takes
-  servers from DHCP that way), no `refclock`; and chronyd must be the only thing on the host that sets
-  the clock (no systemd-timesyncd beside it). A host whose RTC is far off never authenticates, because
+  declared or is not NTS, an update within the last hour, and no correction pending. The servers are the
+  site config's `time.nts` (#303): each by the name its certificate carries and the networks (/24 or
+  narrower) it answers from, at least two, three recommended. From that one list `enrol commit` writes
+  node.json's `time_servers` (what authtime judges) and `/etc/chrony/regalia.conf` (`authtime.conf()`,
+  the **whole** configuration: every server with NTS, `authselectmode require`, `minsources 2`, no
+  `pool`, no `sourcedir` (the distribution's default takes servers from DHCP that way), no `refclock`;
+  the clock stepped only during the first three updates, and after them chronyd **exits** on an offset
+  over a second, `maxchange 1 3 0`, which only two sources agreeing on a jump can cause: it stays down,
+  time stops being authenticated and the node stops serving until an operator looks), and the firewall
+  opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
+  either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`
+  (installed in `/etc/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
+  (Debian's own `chrony.conf`, a package conffile, is never touched; `/etc/chrony` is where the
+  distribution's AppArmor profile lets chronyd read) and conflicts with systemd-timesyncd: chronyd must be
+  the only thing on the host that sets the clock. NTS cookies stay in chrony's own state directory
+  (`/var/lib/chrony`, 0750, `_chrony`'s). DNS for the servers' names is an `outbound` entry of the
+  site's; an NTS-KE server that hands out an NTP address outside its declared networks is dropped by the
+  firewall and refused by authtime, so declare every network an operator uses. A host whose RTC is far off never authenticates, because
   NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
   service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
   services believe it for 60 s.
@@ -768,7 +782,6 @@ removing only what it can prove it made.
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):
 - each peer's AK in the attestation state (`attest.Verifier`);
 - the LUKS paths with the peers' contributions (`unlock.enrol_path`);
-- `chrony.conf` as `authtime.conf()` renders it;
 - the enrolment record signed by the AK's quote;
 - `commit --replace` (#76).
 

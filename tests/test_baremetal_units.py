@@ -22,6 +22,20 @@ def unit(name):
     return parser
 
 
+class ChronyDropIn(unittest.TestCase):
+    """#303: chronyd from enrolment's configuration, the package's own file untouched."""
+
+    def test_chronyd_runs_from_the_rendered_configuration_alone(self):
+        from deploy.baremetal import enrol
+        lines = (UNITS / "chrony.service.d" / "regalia.conf").read_text().splitlines()
+        execs = [line for line in lines if line.startswith("ExecStart=")]
+        # an empty ExecStart= first: a drop-in otherwise ADDS a second command instead of replacing the package's
+        self.assertEqual(execs, ["ExecStart=", "ExecStart=!/usr/sbin/chronyd -f %s $DAEMON_OPTS" % enrol.CHRONY_CONF])
+        self.assertTrue(enrol.CHRONY_CONF.startswith("/etc/chrony/") and enrol.CHRONY_CONF != "/etc/chrony/chrony.conf")
+        self.assertIn("Conflicts=systemd-timesyncd.service", lines)
+        self.assertFalse([line for line in lines if line.startswith("Restart")])     # an exit on maxchange stays down
+
+
 class Units(unittest.TestCase):
     def service(self, name):
         return unit(name + ".service")["Service"]

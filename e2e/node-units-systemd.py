@@ -77,6 +77,7 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import admission, attest, authtime, heartbeat, lease, measurements, membership, node, os_probe, sync, wgsvc   # noqa: E402
+from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, node, os_probe, sync, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
 
 PREFIX = "/usr/lib/regalia-kms"
@@ -305,16 +306,31 @@ def nts_server(work, n):
 
 def chrony(work):
     """Two NTS servers on the loopback (each with its own certificate), and the system chrony configured as
-    authtime.conf() renders it, pointed at them."""
+    authtime.conf() renders it, pointed at them, through the shipped drop-in (#303): /etc/chrony/regalia.conf,
+    under the distribution's AppArmor profile, the package's own chrony.conf untouched."""
     servers = [nts_server(work, n) for n in (1, 2)]
+    package_conf = hashlib.sha256(pathlib.Path("/etc/chrony/chrony.conf").read_bytes()).hexdigest()
     text = authtime.conf(["127.0.0.2", "127.0.0.3"])
     for n, address in enumerate(("127.0.0.2", "127.0.0.3"), 1):
         text = text.replace("server %s nts iburst\n" % address, "server %s port %d nts ntsport %d iburst minpoll 0 maxpoll 1\n" % (address, 21120 + n, 21460 + n))
     for n in (1, 2):                       # where the distribution's AppArmor profile lets chronyd read
         shutil.copy(work / ("s%d.crt" % n), "/etc/chrony/e2e-s%d.crt" % n)
     text += "".join("ntstrustedcerts /etc/chrony/e2e-s%d.crt\n" % n for n in (1, 2))
-    pathlib.Path("/etc/chrony/chrony.conf").write_text(text)
+    pathlib.Path(enrol.CHRONY_CONF).write_text(text)
+    os.makedirs("/etc/systemd/system/chrony.service.d", exist_ok=True)
+    shutil.copy(ROOT / "deploy" / "baremetal" / "units" / "chrony.service.d" / "regalia.conf", "/etc/systemd/system/chrony.service.d/regalia.conf")
+    sh("systemctl", "daemon-reload")
     sh("systemctl", "restart", "chrony")
+    started = show("chrony.service", "ExecStart", "Conflicts", "ActiveState")
+    ok("-f %s" % enrol.CHRONY_CONF in started["ExecStart"] and started["ActiveState"] == "active",
+       "chronyd runs from %s through the shipped drop-in, under the distribution's AppArmor profile" % enrol.CHRONY_CONF, started)
+    ok("systemd-timesyncd.service" in started["Conflicts"], "systemd-timesyncd conflicts with it: one thing sets the clock", started["Conflicts"])
+    ok(hashlib.sha256(pathlib.Path("/etc/chrony/chrony.conf").read_bytes()).hexdigest() == package_conf,
+       "the package's /etc/chrony/chrony.conf is untouched")
+    state = os.stat("/var/lib/chrony")
+    ok(stat.S_IMODE(state.st_mode) & 0o007 == 0 and pwd.getpwuid(state.st_uid).pw_name == "_chrony",
+       "the NTS cookies' directory (ntsdumpdir /var/lib/chrony) is chrony's user's, and others cannot read it (%s %s)"
+       % (oct(stat.S_IMODE(state.st_mode)), pwd.getpwuid(state.st_uid).pw_name))
     return servers
 
 
@@ -363,8 +379,8 @@ def provision(work):
     envelope = signed(manifest)
     site = {"schema": "regalia.baremetal-site/v1", "site": "e2e", "host_ipv4": "192.0.2.10", "kms_port": 8443, "ssh_port": 22,
             "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["203.0.113.128/32"], "admin_cidrs": ["203.0.113.0/28"],
-            "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
-                         {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}],
+            "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514}],
+            "time": {"nts": [{"name": "127.0.0.2", "cidrs": ["127.0.0.2/32"]}, {"name": "127.0.0.3", "cidrs": ["127.0.0.3/32"]}]},
             "boot_mesh": {"node_id": "a", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443, "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                           "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
                                     {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]},
