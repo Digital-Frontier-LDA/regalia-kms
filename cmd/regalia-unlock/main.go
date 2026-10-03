@@ -149,10 +149,10 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 		return errors.New("cannot open the TPM " + o.tpm)
 	}
 	device.Close()
-	quote := func(qualifying []byte) ([]byte, []byte, error) {
+	quote := func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 		device, err := openTPM(o.tpm)
 		if err != nil {
-			return nil, nil, errors.New("cannot open the TPM " + o.tpm)
+			return nil, nil, nil, errors.New("cannot open the TPM " + o.tpm)
 		}
 		defer device.Close()
 		return tpmQuote(device, qualifying, config.PCRs)
@@ -318,7 +318,7 @@ func gone(connection *net.UnixConn) bool {
 //
 // A record that cannot be written is said and is NOT a reason to leave the disk locked: the node then
 // boots, its leases may be refused until the next boot, and that can be repaired without the recovery key.
-func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, error) {
+func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, map[string]string, error) {
 	// Tried again before each quote until it is written: a full /run may have room a moment later.
 	if !u.presented && u.o.sessionDir != "" {
 		if err := publishSession(u.o.sessionDir, u.boot); err != nil {
@@ -513,7 +513,11 @@ func deriveKey(config *bootConfig, o options, paths map[string][]pathToken, loca
 					return nil, "", "", fmt.Errorf("the disk stays locked: no peer helped within %s", o.budget)
 				}
 				asked = true
+				spoke := boot.spokeVersion1
 				contribution, err := boot.ask(peer, token.PathEpoch, dial(peer.Endpoint, until), quote)
+				if boot.spokeVersion1 && !spoke {
+					fmt.Fprintf(diagnostics, "regalia-unlock: %s speaks only version 1 of the exchange: asked without PCR values (upgrade the peers)\n", peer.NodeID)
+				}
 				if err != nil {
 					fmt.Fprintf(diagnostics, "regalia-unlock: round %d, %s (path epoch %d): %s\n", round, peer.NodeID, token.PathEpoch, err)
 					continue
