@@ -894,6 +894,13 @@ class Units(unittest.TestCase):
         self.assertEqual(lines, [["root", "PARTLABEL=regalia-root", unlock.KEY_SOCKET, "luks,x-initrd.attach"]])
         with open(os.path.join(here, "wg-boot")) as f:
             script = f.read()
+        # every program the script runs is in the image: a check that runs a missing tool fails OPEN (seen: grep)
+        code = "\n".join(l.split("#")[0] for l in script.splitlines())
+        shipped = re.search(r"inst_multiple ([^\n]+)", install).group(1).split()
+        for tool in ("grep", "awk", "cut", "tr", "head", "tail", "find", "xargs", "base64"):
+            self.assertNotRegex(code, r"(^|[\s|;(])%s\s" % tool, tool)
+        for tool in ("ip", "wg", "nft", "sed", "cat", "sleep"):
+            self.assertIn(tool, shipped)
         for credential in ("regalia.wg-boot-key", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"):
             self.assertRegex(script, r'(?m)^[^#\n]*/%s"' % re.escape(credential))
 

@@ -286,8 +286,9 @@ class OnQemu(tub.OnSwtpm):
         # the peers take the guest's PCR 7, the image's PCR 11 per phase and the PCR 12 of the host's credentials
         # as reference, and each gives a path its half
         def reference(pcr12):
-            return {"tpm_firmware_version": self.reference["tpm_firmware_version"], "pcrs": {"7": pcrs["7"], "12": pcr12},
-                    "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}
+            # one accepted set, as measurements.bind() gives it: PCR 7 and 12 in every phase, PCR 11 per phase
+            return {"accepted": [{"label": "e2e", "tpm_firmware_version": self.reference["tpm_firmware_version"],
+                                  "pcrs": {"7": pcrs["7"], "12": pcr12}, "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}]}
         loop, self.disk = self.partition(2)
         for peer in ("b", "c"):
             enrolment = unlock.Enrolment("a")
