@@ -18,7 +18,15 @@ from .verify import read_regular, require, VerificationError, run
 POLICY = Path(__file__).with_name('package-snapshot-policy.json')
 ARCHIVES = {
     'debian': ('trixie', 'archive-key-13.asc', '04B54C3CDCA79751B16BC6B5225629DF75B188BD'),
-    'debian-security': ('trixie-security', 'archive-key-13-security.asc', '5E04A1E3223A19A20706E20F9904613D4CCE68C6')}
+    'debian-security': ('trixie-security', 'archive-key-13-security.asc', '5E04A1E3223A19A20706E20F9904613D4CCE68C6'),
+    'debian-backports': ('trixie-backports', 'archive-key-13.asc', '04B54C3CDCA79751B16BC6B5225629DF75B188BD')}
+
+
+def archive_url(archive, timestamp):
+    # Backports is a suite in the Debian archive, not a separate snapshot archive.
+    require(archive in ARCHIVES, 'unapproved snapshot archive')
+    upstream = 'debian' if archive == 'debian-backports' else archive
+    return f'https://snapshot.debian.org/archive/{upstream}/{timestamp}/'
 
 
 def policy(data, now=None):
@@ -30,8 +38,10 @@ def policy(data, now=None):
     require(isinstance(data['timestamp'], str) and re.fullmatch(r'\d{8}T\d{6}Z', data['timestamp']), 'invalid snapshot timestamp')
     date = datetime.strptime(data['timestamp'], '%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)
     require(timedelta(0) <= now-date <= timedelta(days=data['max_snapshot_age_days']), 'snapshot timestamp is future or stale; review a new policy')
-    require(set(data['archives']) == set(ARCHIVES), 'both Debian and security snapshots are required')
-    for archive, (suite, key, fingerprint) in ARCHIVES.items():
+    require({'debian', 'debian-security'} <= set(data['archives']) <= set(ARCHIVES),
+            'Debian and security snapshots are required; only trixie backports is optional')
+    for archive in data['archives']:
+        suite, key, fingerprint = ARCHIVES[archive]
         require(data['archives'][archive] == {'suite':suite,'key_file':key,'primary_fingerprint':fingerprint}, 'unapproved archive authority')
     return data
 
@@ -82,11 +92,13 @@ def verify_release(inrelease, key, fingerprint, suite, now=None):
         require(len(valid)==1, 'required pinned archive signature absent')
         release=(home/'Release').read_text(encoding='ascii')
     metadata=fields(release)
-    require(metadata.get('Origin')=='Debian' and metadata.get('Codename')==suite, 'unexpected Release identity')
+    origin = 'Debian Backports' if suite == 'trixie-backports' else 'Debian'
+    require(metadata.get('Origin')==origin and metadata.get('Codename')==suite, 'unexpected Release identity')
     date=parsedate_to_datetime(metadata['Date'])
     require(date.tzinfo is not None and date <= now+timedelta(minutes=5), 'future Release date')
     expiry=metadata.get('Valid-Until')
-    if suite.endswith('-security'): require(expiry is not None, 'security Release expiry missing')
+    if suite.endswith(('-security', '-backports')):
+        require(expiry is not None, 'security/backports Release expiry missing')
     if expiry:
         expires=parsedate_to_datetime(expiry)
         require(expires.tzinfo is not None and now < expires and date < expires, 'Release expired or invalid')
@@ -132,7 +144,7 @@ def validate(directory, policy_path=POLICY):
         require(len(data)<=128*1024*1024, 'package index expansion exceeds bounds')
         items=packages(data)
         verified.update(index_sha256=sums[name][0],packages=len(items),
-                        url=f'https://snapshot.debian.org/archive/{archive}/{config["timestamp"]}/')
+                        url=archive_url(archive, config['timestamp']))
         report['archives'][archive]=verified
         inventory.extend(dict(item,archive=archive) for item in items)
     return report,inventory
@@ -148,7 +160,7 @@ def fetch(destination, policy_path=POLICY):
         (staging/'policy.json').write_bytes(policy_data)
         for archive, entry in config['archives'].items():
             root=staging/archive;root.mkdir()
-            base=f'https://snapshot.debian.org/archive/{archive}/{config["timestamp"]}/dists/{entry["suite"]}/'
+            base=archive_url(archive, config['timestamp'])+f'dists/{entry["suite"]}/'
             download('https://ftp-master.debian.org/keys/'+entry['key_file'],root/entry['key_file'],1024*1024)
             download(base+'InRelease',root/'InRelease',4*1024*1024)
             _,sums=verify_release(root/'InRelease',root/entry['key_file'],entry['primary_fingerprint'],entry['suite'])
@@ -179,11 +191,16 @@ def render_preseed(text, config):
             and text.count('d-i mirror/http/directory string /debian')==1, 'unexpected mirror template')
     text=text.replace('d-i mirror/http/hostname string deb.debian.org','d-i mirror/http/hostname string snapshot.debian.org')
     text=text.replace('d-i mirror/http/directory string /debian',f'd-i mirror/http/directory string /archive/debian/{config["timestamp"]}')
-    return text + '\n# Fixed snapshot security repository; keep normal APT signature/expiry checks.\n' + \
+    result = text + '\n# Fixed snapshot security repository; keep normal APT signature/expiry checks.\n' + \
         'd-i apt-setup/services-select multiselect\n' + \
         f'd-i apt-setup/local0/repository string http://snapshot.debian.org/archive/debian-security/{config["timestamp"]}/ trixie-security main\n' + \
         'd-i apt-setup/local0/comment string authenticated dated Debian security snapshot\n' + \
         'd-i apt-setup/local0/source boolean false\n'
+    if 'debian-backports' in config['archives']:
+        result += f'd-i apt-setup/local1/repository string http://snapshot.debian.org/archive/debian/{config["timestamp"]}/ trixie-backports main\n' + \
+            'd-i apt-setup/local1/comment string authenticated dated Debian backports snapshot\n' + \
+            'd-i apt-setup/local1/source boolean false\n'
+    return result
 
 
 def main():

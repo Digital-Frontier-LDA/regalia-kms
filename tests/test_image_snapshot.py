@@ -15,13 +15,13 @@ from deploy.images.verify import VerificationError
 class PackageSnapshotPolicy(unittest.TestCase):
     def setUp(self):
         self.config=json.loads(snapshot.POLICY.read_text())
-        self.now=datetime(2026,10,2,12,tzinfo=timezone.utc)
+        self.now=datetime.strptime(self.config['timestamp'],'%Y%m%dT%H%M%SZ').replace(tzinfo=timezone.utc)+timedelta(hours=12)
 
     def test_both_pinned_authorities_and_recent_timestamp_required(self):
         snapshot.policy(self.config,self.now)
         for kind in ('future','stale','signer','missing','injection','age'):
             config=copy.deepcopy(self.config)
-            if kind=='future': config['timestamp']='20261003T000000Z'
+            if kind=='future': config['timestamp']=(self.now+timedelta(days=1)).strftime('%Y%m%dT%H%M%SZ')
             if kind=='stale': config['timestamp']='20260901T000000Z'
             if kind=='signer': config['archives']['debian']['primary_fingerprint']='0'*40
             if kind=='missing': del config['archives']['debian-security']
@@ -37,6 +37,26 @@ class PackageSnapshotPolicy(unittest.TestCase):
             self.assertEqual(snapshot.check_installed(path,inventory)['packages'],1)
             path.write_text('openssl\t9.9.9\n')
             with self.assertRaises(VerificationError): snapshot.check_installed(path,inventory)
+
+    def test_backports_is_optional_and_cannot_replace_security_or_its_authority(self):
+        config=copy.deepcopy(self.config)
+        config['archives'].pop('debian-backports',None)
+        snapshot.policy(config,self.now)
+        suite,key,pin=snapshot.ARCHIVES['debian-backports']
+        config['archives']['debian-backports']={'suite':suite,'key_file':key,'primary_fingerprint':pin}
+        snapshot.policy(config,self.now)
+        self.assertEqual(snapshot.archive_url('debian-backports',config['timestamp']),
+                         'https://snapshot.debian.org/archive/debian/'+config['timestamp']+'/')
+        template=(snapshot.POLICY.parents[2]/'lab/appliance/preseed.cfg').read_text()
+        rendered=snapshot.render_preseed(template,config)
+        self.assertIn('trixie-security main',rendered)
+        self.assertIn('trixie-backports main',rendered)
+        for mutation in ('missing-security','signer','suite'):
+            bad=copy.deepcopy(config)
+            if mutation=='missing-security':del bad['archives']['debian-security']
+            if mutation=='signer':bad['archives']['debian-backports']['primary_fingerprint']='0'*40
+            if mutation=='suite':bad['archives']['debian-backports']['suite']='sid'
+            with self.subTest(mutation=mutation),self.assertRaises(VerificationError):snapshot.policy(bad,self.now)
 
     def test_duplicate_fields_and_unsafe_package_urls_refused(self):
         with self.assertRaises(VerificationError): snapshot.fields('Date: x\nDate: y\n')
@@ -62,10 +82,10 @@ class SnapshotSignatures(unittest.TestCase):
         subprocess.run(['gpgconf','--homedir',str(cls.home),'--kill','all'],check=True)
         cls.temp.cleanup()
 
-    def sign(self, expiry=None, date=None, signer=0):
+    def sign(self, expiry=None, date=None, signer=0, origin='Debian', suite='trixie-security'):
         now=datetime.now(timezone.utc)
         self.release=self.home/'Release.txt';self.signed=self.home/'InRelease'
-        text='Origin: Debian\nCodename: trixie-security\nDate: '+format_datetime(date or now-timedelta(hours=1))+'\n'
+        text=f'Origin: {origin}\nCodename: {suite}\nDate: '+format_datetime(date or now-timedelta(hours=1))+'\n'
         if expiry != 'missing': text+='Valid-Until: '+format_datetime(expiry or now+timedelta(days=1))+'\n'
         text+='SHA256:\n '+hashlib.sha256(b'fixture').hexdigest()+' 7 main/binary-amd64/Packages.xz\n'
         self.release.write_text(text)
@@ -89,6 +109,18 @@ class SnapshotSignatures(unittest.TestCase):
         self.sign();self.signed.write_bytes(self.signed.read_bytes().replace(b'Origin: Debian',b'Origin: Evil!!'))
         with self.assertRaises(VerificationError): self.verify()
 
+    def test_backports_requires_its_signed_origin_and_expiry(self):
+        for change in ({}, {'origin':'Debian'}, {'expiry':'missing'},
+                       {'expiry':datetime.now(timezone.utc)-timedelta(days=1)}):
+            args={'origin':'Debian Backports','suite':'trixie-backports',**change}
+            self.sign(**args)
+            if not change:
+                report,_=snapshot.verify_release(self.signed,self.key,self.pins[0],'trixie-backports')
+                self.assertEqual(report['suite'],'trixie-backports')
+            else:
+                with self.assertRaises(VerificationError):
+                    snapshot.verify_release(self.signed,self.key,self.pins[0],'trixie-backports')
+
 class FrozenPackageIndexes(unittest.TestCase):
     def test_index_tampering_is_refused_and_parsing_uses_verified_bytes(self):
         import lzma
@@ -103,7 +135,7 @@ class FrozenPackageIndexes(unittest.TestCase):
                 folder=root/archive;folder.mkdir();(folder/'Packages.xz').write_bytes(compressed)
             with patch.object(snapshot,'verify_release',return_value=({'status':'verified'},{'main/binary-amd64/Packages.xz':expected})):
                 _, inventory=snapshot.validate(root)
-                self.assertEqual(len(inventory),2)
+                self.assertEqual(len(inventory),len(self.config_archives()))
                 first=root/'debian/Packages.xz';first.write_bytes(compressed+b'corrupted')
                 with self.assertRaises(VerificationError): snapshot.validate(root)
                 first.write_bytes(compressed)
@@ -114,4 +146,7 @@ class FrozenPackageIndexes(unittest.TestCase):
                     return data
                 with patch.object(snapshot,'read_regular',side_effect=replaced_after_read):
                     _, inventory=snapshot.validate(root)
-                    self.assertEqual([x['Package'] for x in inventory],['fixture','fixture'])
+                    self.assertEqual([x['Package'] for x in inventory],['fixture']*len(self.config_archives()))
+
+    def config_archives(self):
+        return json.loads(snapshot.POLICY.read_text())['archives']

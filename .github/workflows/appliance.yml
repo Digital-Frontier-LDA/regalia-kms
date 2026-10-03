@@ -77,6 +77,7 @@ jobs:
           name: appliance-evidence
           path: |
             lab/appliance/.artifacts/**/build-report.json
+            lab/appliance/.artifacts/**/kernel-update.json
             lab/appliance/.artifacts/**/install.log
             lab/appliance/.artifacts/**/install.stderr
             lab/appliance/.artifacts/**/acceptance.log

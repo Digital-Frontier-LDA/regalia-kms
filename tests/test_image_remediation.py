@@ -37,6 +37,24 @@ class RemediationTests(unittest.TestCase):
         for packages in ([package(), package()], [{**package(), 'metadata': {'architecture': 'arm64'}}]):
             with self.assertRaises(VerificationError): remediation.package_plan(packages, [])
 
+    def test_split_kernel_uses_the_exact_binary_owner_not_the_image_meta_package(self):
+        version='7.1.13+deb13-amd64'
+        path='/boot/vmlinuz-'+version
+        kernel={'id':'kernel','name':'linux-kernel','version':version,'type':'linux-kernel',
+                'locations':[{'path':path}]}
+        binary={**package('linux-binary-'+version,'7.1.13-1~bpo13+1'),
+                'metadata':{'architecture':'amd64','source':'linux-signed-amd64',
+                            'sourceVersion':'7.1.13+1~bpo13+1','files':[{'path':path}]}}
+        meta={**package('linux-image-'+version,'7.1.13-1~bpo13+1'),
+              'metadata':{'architecture':'amd64','source':'linux-signed-amd64','files':[]}}
+        packages=[kernel,binary,meta]
+        self.assertEqual(triage.source_identity(kernel,packages),
+                         ('linux','7.1.13-1~bpo13+1','kernel-package-ownership-candidate'))
+        self.assertEqual(remediation.finding_packages({'packages':['linux-kernel']},packages),[binary['name']])
+        meta['metadata']['files']=[{'path':path}]
+        self.assertEqual(triage.source_identity(kernel,packages)[2],'unmapped')
+        self.assertEqual(remediation.finding_packages({'packages':['linux-kernel']},packages),[])
+
     def fixture(self, root):
         evidence, review = root / 'scan', root / 'review'
         evidence.mkdir(); review.mkdir()

@@ -23,6 +23,18 @@ for directory in /go /.cache/go-build /root/go /tmp/regalia-build; do
 done
 kernel_count=$(dpkg-query -W -f='${db:Status-Status}\n' 'linux-image-[0-9]*' | grep -c '^installed$')
 check test "$kernel_count" = 1
+check test "$(uname -r)" = 7.1.13+deb13-amd64
+check test -r /var/log/regalia-kernel-update.json
+# Exercise the installed kernel's WireGuard driver with no node credentials,
+# network peers or allowed egress, then remove the disposable interface.
+check ip link add regalia-wg-test type wireguard
+check wg show regalia-wg-test
+check ip link delete regalia-wg-test
+# TPM libraries must load; physical attestation still requires the hardware lab.
+check tpm2_getcap --help
+check modprobe tpm_tis
+check test -x /usr/sbin/sulogin
+echo REGALIA_KERNEL_NETWORK_CRYPTO_PASS
 /usr/local/sbin/regalia-kms -version
 check systemctl start regalia-kms.service
 check test "$(systemctl show regalia-kms.service -p ActiveState --value)" = inactive
@@ -158,6 +170,7 @@ check mount -t 9p -o trans=virtio,version=9p2000.L regalia_export /mnt/regalia-e
 cp /var/log/regalia-packages.tsv /mnt/regalia-export/packages.tsv
 cp /var/log/regalia-go-version.txt /mnt/regalia-export/go-version.txt
 cp /var/log/regalia-binary-build.txt /mnt/regalia-export/binary-build.txt
+cp /var/log/regalia-kernel-update.json /mnt/regalia-export/kernel-update.json
 cp /usr/local/sbin/regalia-kms /mnt/regalia-export/regalia-kms
 # Remove the automatic verification boot flag after the successful prototype
 # test; normal boots retain the same commissioning and network restrictions.

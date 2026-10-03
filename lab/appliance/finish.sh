@@ -23,6 +23,9 @@ tar -xf /tmp/regalia-source.tar -C /tmp/regalia-source
 cd /tmp/regalia-source
 revision=$(cat BUILD_COMMIT)
 case "$revision" in *[!0-9a-f]*|'') exit 1 ;; esac
+# Only the reviewed six-package kernel closure may come from dated backports.
+# Stable libraries remain on their authenticated Debian/security versions.
+python3 -I lab/appliance/kernel.py --apply >/var/log/regalia-kernel-update.json
 # Debian authenticates the compiler package. Go's automatic newer toolchain and
 # module downloads use its checksum database; never disable those checks.
 export GOSUMDB=sum.golang.org GOPROXY=https://proxy.golang.org GOTOOLCHAIN=auto
@@ -121,8 +124,11 @@ python3 -I /tmp/regalia-source/lab/appliance/minimize.py --apply >/var/log/regal
 apt-get autoremove --purge -y
 # A fresh baseline carries one current kernel. CURRENT/NEXT overlap belongs to
 # the controlled update procedure, rather than an unreviewed installer fallback.
-keep_kernel=$(dpkg-query -W -f='${Depends}\n' linux-image-amd64 | awk '{print $1}')
+keep_kernel=$(dpkg-query -W -f='${Depends}\n' linux-image-amd64 | tr ',' '\n' | awk '$1 ~ /^linux-image-[0-9]/ {print $1}')
 case "$keep_kernel" in linux-image-[0-9]*-amd64) ;; *) exit 1 ;; esac
+# The pinned upgrade helper validated the full package/version closure; this
+# also catches changed meta-package ordering or an unexpected second image.
+test "$keep_kernel" = linux-image-7.1.13+deb13-amd64
 for package in $(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'linux-image-[0-9]*' | awk '$2 == "installed" {print $1}'); do
   if [ "$package" != "$keep_kernel" ]; then apt-get purge -y "$package"; fi
 done

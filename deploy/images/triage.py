@@ -43,7 +43,8 @@ def source_identity(package: dict, packages: list[dict]) -> tuple[str, str, str]
         paths = {location["path"] for location in package.get("locations", [])}
         owners = [candidate for candidate in packages
                   if candidate.get("type") == "deb"
-                  and candidate.get("name") == "linux-image-" + package["version"]
+                  and candidate.get("name") in {"linux-image-" + package["version"],
+                                                "linux-binary-" + package["version"]}
                   and paths.intersection(file["path"] for file in candidate.get("metadata", {}).get("files", []))]
         if len(owners) == 1:
             owner = owners[0]

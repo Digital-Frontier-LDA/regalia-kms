@@ -59,7 +59,11 @@ def finding_packages(row, packages):
                 # never claims the kernel's upstream version lacks backports.
                 source, _, mapping = triage.source_identity(package, packages)
                 if source == 'linux' and mapping == 'kernel-package-ownership-candidate':
-                    names.append('linux-image-' + package['version'])
+                    paths = {item['path'] for item in package.get('locations', [])}
+                    names.extend(p['name'] for p in packages if p['type'] == 'deb'
+                                 and p['name'] in {'linux-image-' + package['version'],
+                                                   'linux-binary-' + package['version']}
+                                 and paths.intersection(f['path'] for f in p.get('metadata', {}).get('files', [])))
     return sorted(set(names))
 
 
