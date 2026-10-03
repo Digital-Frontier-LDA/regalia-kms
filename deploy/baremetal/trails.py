@@ -45,11 +45,14 @@ import grp
 import hashlib
 import json
 import os
+import re
 import stat
 import sys
 import time
 
 MAX_LINE = 64 * 1024                       # the collector's own bound on an event
+ROTATE_BYTES = 16 * 1024 * 1024            # a trail file this long is archived and a new one begun
+ARCHIVE = re.compile(r"\.([0-9]{20})")     # <trail>.<last seq>: an archived file of the trail
 TOOL_DIR = "/var/log/regalia"
 TOOL_DIR_OWNER = 0                         # root: the operator tools run as root
 TOOL_GROUP = "regalia-audit"               # the group that reads the operator tools' trails
@@ -157,13 +160,8 @@ def append(path, event, now=time.time):
         raise Refused("an event may not carry %s: the trail sets them" % " or ".join(OWN))
     if os.path.dirname(os.path.abspath(path)) == TOOL_DIR:
         _tool_dir(TOOL_DIR)
-    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, MODE)
+    fd = _open_locked(path)
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
-            raise Refused("%s is not a regular file of this user's: not written" % path)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        _readable_by_its_shipper(fd, info, path)
         last, ended = _last_line(fd)
         if last and not ended:                     # torn by a crash: terminated, kept, chained over
             _write_whole(fd, b"\n")
@@ -173,6 +171,9 @@ def append(path, event, now=time.time):
         line = canonical(dict(event, at=event.get("at", int(now())), seq=seq, prev=hashlib.sha256(last).hexdigest() if last else "")) + b"\n"
         if len(line) > MAX_LINE:
             raise Refused("the event is %d bytes, more than a trail line may be" % len(line))
+        if os.fstat(fd).st_size >= ROTATE_BYTES:
+            _rotate(path, fd, seq - 1, line)
+            return seq
         _write_whole(fd, line)
         os.fsync(fd)
         return seq
@@ -189,6 +190,72 @@ def _readable_by_its_shipper(fd, info, path):
         gid = _tool_group()
         if gid is not None and info.st_gid != gid:
             os.fchown(fd, -1, gid)
+
+
+def _open_locked(path):
+    """The trail, open and locked. A writer that waited on the lock while another rotated the file holds
+    the archive's inode: it sees `path` is no longer that file, and opens the new one."""
+    while True:
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, MODE)
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                raise Refused("%s is not a regular file of this user's: not written" % path)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            now = os.stat(path, follow_symlinks=False)
+            if (now.st_dev, now.st_ino) == (info.st_dev, info.st_ino):
+                _readable_by_its_shipper(fd, info, path)
+                return fd
+        except BaseException:
+            os.close(fd)
+            raise
+        os.close(fd)
+
+
+def _rotate(path, fd, last_seq, line):
+    """Start a new file whose first line is `line`, chained onto the last line of the full one, which stays
+    as the archive <path>.<last seq, 20 digits>. Under the caller's lock. In this order, so a cut anywhere
+    leaves one chain:
+      1  link the full file to its archive name (a cut here: two names for one file; segments() skips an
+         archive that is the current file, and the next append finds the link made and goes on);
+      2  write the new line to <path>.next and fsync it (a cut here: a stale .next, read by nobody,
+         replaced by the next rotation; the event was not recorded, and append had not returned);
+      3  rename it over <path>, and fsync the directory."""
+    directory = os.path.dirname(os.path.abspath(path))
+    archive = "%s.%020d" % (path, last_seq)
+    try:
+        os.link(path, archive, follow_symlinks=False)
+    except FileExistsError:
+        held, full = os.lstat(archive), os.fstat(fd)
+        if (held.st_dev, held.st_ino) != (full.st_dev, full.st_ino):
+            raise Refused("%s exists and is not this trail's full file: not rotated" % archive)
+    _sync_directory(directory)
+    following = path + ".next"
+    try:
+        stale = os.lstat(following)
+    except FileNotFoundError:
+        stale = None
+    if stale is not None:
+        if not stat.S_ISREG(stale.st_mode) or stale.st_uid != os.geteuid():
+            raise Refused("%s is not a file this writer left: not rotated" % following)
+        os.unlink(following)
+    new = os.open(following, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, MODE)
+    try:
+        _readable_by_its_shipper(new, os.fstat(new), path)
+        _write_whole(new, line)
+        os.fsync(new)
+    finally:
+        os.close(new)
+    os.rename(following, path)
+    _sync_directory(directory)
+
+
+def _sync_directory(directory):
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _write_whole(fd, line):
@@ -227,16 +294,23 @@ def verify(path, expected_head=None):
     passes through it. "head" is the last line's hash; a final torn line is that line, and counted torn."""
     with open(path, "rb") as f:
         data = f.read()
+    return _verify_data(data, None, expected_head)
+
+
+def _verify_data(data, marker, expected_head):
+    """verify's check over `data`, which continues after the pruned line `marker` names (None: from the start)."""
     lines = data.split(b"\n")
     if lines and lines[-1] == b"":
         lines.pop()
     else:
         lines[-1:] = [lines[-1]] if lines else []
     report = {"lines": 0, "chained": 0, "legacy": 0, "torn": 0, "head": ""}
-    previous, expected, chained = b"", 1, False
-    reached = expected_head is None
+    previous, expected, chained = "", 1, False             # previous: the SHA-256 of the line before, hex
+    if marker:
+        previous, expected, chained = marker["line_sha256"], marker["seq"] + 1, marker["seq"] > 0
+    reached = expected_head is None or previous == expected_head
     for number, body in enumerate(lines, 1):
-        if previous and hashlib.sha256(previous).hexdigest() == expected_head:
+        if previous and previous == expected_head:
             reached = True
         raw = body + b"\n"
         report["lines"] += 1
@@ -244,25 +318,25 @@ def verify(path, expected_head=None):
             value = json.loads(body)
         except ValueError:
             report["torn"] += 1                    # kept, and chained over by the next line
-            previous = raw
+            previous = hashlib.sha256(raw).hexdigest()
             continue
         if not isinstance(value, dict) or "seq" not in value:
             if chained:
                 raise Refused("line %d has no seq after the chain began" % number)
             report["legacy"] += 1
-            previous = raw
+            previous = hashlib.sha256(raw).hexdigest()
             continue
         chained = True
         if canonical(value) != body:
             raise Refused("line %d is not in canonical form: edited" % number)
         if value["seq"] != expected:
             raise Refused("line %d carries seq %r where %d was expected: a line deleted or reordered" % (number, value["seq"], expected))
-        if value["prev"] != (hashlib.sha256(previous).hexdigest() if previous else ""):
+        if value["prev"] != previous:
             raise Refused("line %d's prev is not the SHA-256 of the line before it: a line edited, deleted or reordered" % number)
         expected += 1
         report["chained"] += 1
-        previous = raw
-    report["head"] = hashlib.sha256(previous).hexdigest() if previous else ""
+        previous = hashlib.sha256(raw).hexdigest()
+    report["head"] = previous
     if not reached and report["head"] != expected_head:
         raise Refused("the chain does not reach %s, a line known to have been written: the file was cut short or replaced" % expected_head)
     return report
@@ -299,6 +373,145 @@ def unanswered(path, **match):
     return found if found is not None and found.get("seq") not in answered else None
 
 
+def segments(path):
+    """A trail's files, oldest first: (marker, [archives], path). marker is the pruned point (prune), or
+    None. An archive that is the current file is skipped (a rotation cut after its link), and so is
+    one the marker covers (a prune cut before it removed it)."""
+    directory, base = os.path.split(os.path.abspath(path))
+    marker = _marker(path + ".pruned")
+    try:
+        current = os.lstat(path)
+    except FileNotFoundError:
+        current = None
+    archives = []
+    for name in os.listdir(directory):
+        match = ARCHIVE.fullmatch(name[len(base):]) if name.startswith(base) else None
+        if not match:
+            continue
+        full = os.path.join(directory, name)
+        info = os.lstat(full)
+        if not stat.S_ISREG(info.st_mode):
+            raise Refused("%s is not a regular file" % full)
+        if current is not None and (info.st_dev, info.st_ino) == (current.st_dev, current.st_ino):
+            continue
+        last = int(match.group(1))
+        if marker is not None and last <= marker["seq"]:
+            continue
+        archives.append((last, full))
+    return marker, [full for _, full in sorted(archives)], path
+
+
+def _marker(path):
+    try:
+        with open(path, "rb") as f:
+            marker = json.loads(f.read(4096))
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        raise Refused("%s is not a prune marker" % path)
+    fields = {"seq": int, "sequence": int, "event_hash": str, "line_sha256": str, "timestamp": int}
+    if not isinstance(marker, dict) or set(marker) != set(fields) or \
+            not all(type(marker[k]) is t and (t is not int or marker[k] >= 0) for k, t in fields.items()) or \
+            not re.fullmatch(r"[0-9a-f]{64}", marker["line_sha256"]) or not re.fullmatch(r"sha256:[0-9a-f]{64}", marker["event_hash"]):
+        raise Refused("%s is not a prune marker" % path)
+    return marker
+
+
+def _read_whole(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refused("%s is not a regular file" % path)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+
+def verify_trail(path, expected_head=None):
+    """verify over the whole trail: its archives in order, then the current file, as one chain, from the
+    prune marker when there is one. An archive that does not end with a newline is refused: rotation only
+    archives a whole file."""
+    marker, archives, current = segments(path)
+    parts = []
+    for archive in archives:
+        data = _read_whole(archive)
+        if data and not data.endswith(b"\n"):
+            raise Refused("%s does not end with a whole line: not an archive rotation made" % archive)
+        parts.append(data)
+    try:
+        parts.append(_read_whole(current))
+    except FileNotFoundError:
+        pass
+    return _verify_data(b"".join(parts), marker, expected_head)
+
+
+def prune(path, head_path):
+    """Remove the archives the collector has committed, oldest first, and only those. head_path is the
+    shipper's record of its last pass (cmd/regalia-audit-ship -head): the collector's committed line, and
+    for each archive wholly behind it, that archive's last line and the event it shipped as. An archive is
+    removed only if it is named there, behind the committed line, and its last line on disk is the one
+    named. The marker is written (and synced) first, so a cut leaves files the marker covers, which
+    segments() skips. Returns how many were removed."""
+    with open(head_path, "rb") as f:
+        head = json.loads(f.read(1 << 20))
+    committed = head.get("committed")
+    named = {entry.get("name"): entry for entry in head.get("archives", []) if isinstance(entry, dict)}
+    marker, archives, _ = segments(path)
+    left = _left_behind(path, marker)                     # covered by the marker, left by a prune that was cut
+    covered = []
+    for archive in archives:
+        entry = named.get(os.path.basename(archive))
+        if not entry or not isinstance(committed, int) or not isinstance(entry.get("sequence"), int) or entry["sequence"] > committed:
+            break
+        data = _read_whole(archive)
+        last = data[data.rstrip(b"\n").rfind(b"\n") + 1:]
+        if not data.endswith(b"\n") or hashlib.sha256(last).hexdigest() != entry.get("line_sha256") or \
+                int(ARCHIVE.fullmatch(archive[len(path):]).group(1)) != entry.get("seq"):
+            raise Refused("%s is not the archive the shipper recorded: not pruned" % archive)
+        covered.append((archive, entry))
+    for archive in left:
+        os.unlink(archive)
+    if not covered:
+        if left:
+            _sync_directory(os.path.dirname(os.path.abspath(path)))
+        return len(left)
+    last = covered[-1][1]
+    new = {k: last[k] for k in ("seq", "sequence", "event_hash", "line_sha256", "timestamp")}
+    staged = path + ".pruned.next"
+    fd = os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    try:
+        _write_whole(fd, canonical(new))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _marker(staged)                                       # refuse to install a marker this module would not read
+    os.rename(staged, path + ".pruned")
+    _sync_directory(os.path.dirname(os.path.abspath(path)))
+    for archive, _ in covered:
+        os.unlink(archive)
+    _sync_directory(os.path.dirname(os.path.abspath(path)))
+    return len(left) + len(covered)
+
+
+def _left_behind(path, marker):
+    """Archives the marker already covers: a prune removed them from the trail, and was cut before it
+    unlinked them. segments() skips them; prune finishes removing them."""
+    if marker is None:
+        return []
+    directory, base = os.path.split(os.path.abspath(path))
+    found = []
+    for name in os.listdir(directory):
+        match = ARCHIVE.fullmatch(name[len(base):]) if name.startswith(base) else None
+        if match and int(match.group(1)) <= marker["seq"]:
+            found.append(os.path.join(directory, name))
+    return sorted(found)
+
+
 def main(argv):
     if len(argv) == 2 and argv[0] == "append":
         name = argv[1]
@@ -312,7 +525,7 @@ def main(argv):
             return 1
     if len(argv) in (2, 3) and argv[0] == "verify":
         try:
-            print(json.dumps(verify(*argv[1:]), sort_keys=True))
+            print(json.dumps(verify_trail(*argv[1:]), sort_keys=True))
             return 0
         except (Refused, OSError) as failure:
             print("BROKEN: %s" % failure, file=sys.stderr)

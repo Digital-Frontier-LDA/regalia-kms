@@ -791,6 +791,13 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
   the operator tools' trails use `regalia-audit`. Trails are 0640, and `/var/log/regalia` is
   root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory is 0750 for this.
   The client key in `/etc/regalia/audit-ship/` is 0640 root:regalia-audit-ship.
+- **Rotation and pruning.** A trail past 16 MiB is archived as `<trail>.<last seq>` (20 digits) and a new
+  file begun. Its first line continues the chain (seq and prev), so the archives and the current file
+  verify as one chain (`trails.py verify <trail>`), and a writer killed at any step of a rotation leaves
+  it so. The shipper reads them in order. `regalia-audit-prune@<trail>.timer` removes, daily, only the
+  archives the shipper's last pass recorded as wholly committed at the collector, and only if each one's
+  last line is the one recorded. It writes `<trail>.pruned` first; the shipper goes on from that marker
+  and still checks the collector's head, and a marker ahead of the collector raises the tamper alarm.
 - **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
   records one "alarm flood" alarm of its own and answers 429.
 

@@ -99,19 +99,52 @@ type trailDetail struct {
 // TrailEvents checks the trail's chain as trails.verify does and returns one event a complete line,
 // chained from genesis. A break is ErrTrailTampered.
 func TrailEvents(name string, data []byte) ([]Event, error) {
+	return TrailEventsFrom(name, TrailStart{}, data)
+}
+
+// TrailStart is where data begins in a trail whose older files were pruned (trails.py's prune marker,
+// <trail>.pruned): the last pruned line's seq and its number in the stream (Sequence), the event it
+// shipped as, its line's SHA-256, and that event's time. The zero value is the start of the trail.
+// Every event after it depends on exactly these, so a rebuild from a marker is the rebuild from the
+// first line, byte for byte.
+type TrailStart struct {
+	Seq        uint64 `json:"seq"`
+	Sequence   uint64 `json:"sequence"`
+	EventHash  string `json:"event_hash"`
+	LineSHA256 string `json:"line_sha256"`
+	Timestamp  int64  `json:"timestamp"`
+}
+
+func (start TrailStart) valid() bool {
+	if start == (TrailStart{}) {
+		return true
+	}
+	_, err := hex.DecodeString(start.LineSHA256)
+	return start.Sequence > 0 && start.Seq <= start.Sequence && auditHashPattern.MatchString(start.EventHash) &&
+		len(start.LineSHA256) == 64 && err == nil && strings.ToLower(start.LineSHA256) == start.LineSHA256 && start.Timestamp >= 0
+}
+
+// TrailEventsFrom is TrailEvents for data that continues after start.
+func TrailEventsFrom(name string, start TrailStart, data []byte) ([]Event, error) {
 	if !trailNamePattern.MatchString(name) {
 		return nil, fmt.Errorf("%q is not a trail name", name)
 	}
+	if !start.valid() {
+		return nil, fmt.Errorf("%w: the prune marker is not one trails.py writes", ErrTrailTampered)
+	}
 	complete := data[:bytes.LastIndexByte(data, '\n')+1]
 	var events []Event
-	var previousLine []byte
-	previousHash, previousTime := genesisHash, time.Unix(0, 0).UTC()
+	previousLineHash, previousHash, previousTime := "", genesisHash, time.Unix(0, 0).UTC()
 	expected, chained := uint64(1), false
+	if start.Sequence > 0 {
+		previousLineHash, previousHash, previousTime = start.LineSHA256, start.EventHash, time.Unix(start.Timestamp, 0).UTC()
+		expected, chained = start.Seq+1, start.Seq > 0
+	}
 	for len(complete) > 0 {
 		end := bytes.IndexByte(complete, '\n') + 1
 		raw, body := complete[:end], complete[:end-1]
 		complete = complete[end:]
-		number := uint64(len(events) + 1)
+		number := start.Sequence + uint64(len(events)+1)
 		var fields map[string]json.RawMessage
 		kind := "torn"
 		if json.Valid(body) {
@@ -123,12 +156,7 @@ func TrailEvents(name string, data []byte) ([]Event, error) {
 						return nil, fmt.Errorf("%w: line %d carries seq %s where %d was expected", ErrTrailTampered, number, seq, expected)
 					}
 					var prev string
-					want := ""
-					if previousLine != nil {
-						sum := sha256.Sum256(previousLine)
-						want = hex.EncodeToString(sum[:])
-					}
-					if json.Unmarshal(fields["prev"], &prev) != nil || prev != want {
+					if json.Unmarshal(fields["prev"], &prev) != nil || prev != previousLineHash {
 						return nil, fmt.Errorf("%w: line %d's prev is not the SHA-256 of the line before it", ErrTrailTampered, number)
 					}
 					expected++
@@ -143,7 +171,8 @@ func TrailEvents(name string, data []byte) ([]Event, error) {
 		event.PreviousHash = previousHash
 		event.Hash = eventHash(event)
 		events = append(events, event)
-		previousLine, previousHash, previousTime = raw, event.Hash, event.Timestamp
+		sum := sha256.Sum256(raw)
+		previousLineHash, previousHash, previousTime = hex.EncodeToString(sum[:]), event.Hash, event.Timestamp
 	}
 	return events, nil
 }
@@ -226,8 +255,15 @@ func trailValueSafe(value string) bool {
 // holds. ErrTrailTampered (with an alarm raised at the collector) means stop; any other error is
 // the collector being unreachable or refusing, and the next pass tries again.
 func ShipTrail(ctx context.Context, sink TrailSink, site, name string, data []byte) (uint64, uint64, error) {
-	events, buildErr := TrailEvents(name, data)
-	total := uint64(len(events))
+	return ShipTrailFrom(ctx, sink, site, name, TrailStart{}, data)
+}
+
+// ShipTrailFrom is ShipTrail for a trail whose older files were pruned: data continues after start.
+// The collector must hold at least the pruned lines (a prune is allowed only behind its head), and
+// the line it holds at its head must be the one rebuilt here, or start itself.
+func ShipTrailFrom(ctx context.Context, sink TrailSink, site, name string, start TrailStart, data []byte) (uint64, uint64, error) {
+	events, buildErr := TrailEventsFrom(name, start, data)
+	total := start.Sequence + uint64(len(events))
 	head, hash, err := sink.CommittedHead(ctx, site)
 	if err != nil {
 		return 0, total, err
@@ -239,11 +275,15 @@ func ShipTrail(ctx context.Context, sink TrailSink, site, name string, data []by
 		return head, total, buildErr
 	case head > total:
 		return head, total, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("the trail %s holds %d complete lines and the collector committed %d: the file was cut short or replaced", name, total, head))
-	case head > 0 && events[head-1].Hash != hash:
+	case head < start.Sequence:
+		return head, total, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("the trail %s was pruned through line %d and the collector committed only %d: lines were removed before they shipped", name, start.Sequence, head))
+	case head == start.Sequence && head > 0 && start.EventHash != hash:
+		return head, total, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("the trail %s's prune marker names line %d as an event the collector did not commit there", name, head))
+	case head > start.Sequence && events[head-start.Sequence-1].Hash != hash:
 		return head, total, raiseTrailAlarm(ctx, sink, head, hash, fmt.Sprintf("line %d of the trail %s is not the line the collector committed: the file was rewritten", head, name))
 	}
 	for i := head; i < total; i++ {
-		if err := sink.Send(ctx, events[i]); err != nil {
+		if err := sink.Send(ctx, events[i-start.Sequence]); err != nil {
 			return i, total, err
 		}
 	}

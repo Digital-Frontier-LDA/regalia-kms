@@ -289,3 +289,156 @@ class Unanswered(unittest.TestCase):
             trails.append(path, {"outcome": "INCOMPLETE", "device": "/dev/a", "request": killed})
             self.assertIsNone(trails.unanswered(path, device="/dev/a"))
             trails.verify(path)
+
+
+def _killed_at(path, step, start):
+    """Child: append until a rotation, and die (os._exit, no cleanup) at `step` inside it."""
+    real = {"link": trails.os.link, "rename": trails.os.rename, "sync": trails._sync_directory}
+    calls = {"sync": 0}
+
+    def die():
+        os._exit(9)
+    if step == "before-link":
+        trails.os.link = lambda *a, **k: die()
+    elif step == "after-link":
+        trails._sync_directory = lambda d: die()
+    elif step == "before-rename":
+        trails.os.rename = lambda *a, **k: die()
+    elif step == "after-rename":
+        def sync(directory):
+            calls["sync"] += 1
+            real["sync"](directory)
+            if calls["sync"] == 2:
+                die()
+        trails._sync_directory = sync
+    for i in range(1000):
+        trails.append(path, {"event": "e", "i": start + i})
+    os._exit(0)                                                             # never rotated: the test fails
+
+
+def _rotating_writer(path, n, start):
+    for i in range(n):
+        trails.append(path, {"event": "concurrent", "i": start + i})
+
+
+class Rotation(Case):
+    def setUp(self):
+        super().setUp()
+        patcher = unittest.mock.patch.object(trails, "ROTATE_BYTES", 400)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def archives(self):
+        return sorted(name for name in os.listdir(self.d) if trails.ARCHIVE.fullmatch(name[len("audit.jsonl"):] or "x"))
+
+    def test_a_full_file_is_archived_and_the_chain_goes_on_in_the_new_one(self):
+        for i in range(12):
+            self.assertEqual(trails.append(self.path, {"event": "e", "i": i}), i + 1)
+        archives = self.archives()
+        self.assertGreaterEqual(len(archives), 2)
+        report = trails.verify_trail(self.path)
+        self.assertEqual((report["chained"], report["lines"]), (12, 12))
+        for name in archives:
+            full = os.path.join(self.d, name)
+            last = json.loads(open(full, "rb").read().splitlines()[-1])
+            self.assertEqual(last["seq"], int(name.rsplit(".", 1)[1]))           # named by its last seq
+            self.assertEqual(os.stat(full).st_mode & 0o777, 0o640)
+        first = json.loads(open(self.path, "rb").readline())
+        self.assertEqual(first["seq"], int(archives[-1].rsplit(".", 1)[1]) + 1)
+        self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o640)
+        with self.assertRaises(trails.Refused):                                     # the current file alone does not start the chain
+            trails.verify(self.path)
+
+    def test_a_process_killed_anywhere_in_a_rotation_leaves_one_chain(self):
+        """#278 (regalia-kms-24): killed at each step of a rotation (no cleanup, as a power cut would leave
+        it): the archive and the current file verify as one chain, and the next append finishes the
+        rotation without losing or repeating a line."""
+        for step in ("before-link", "after-link", "before-rename", "after-rename"):
+            with self.subTest(step):
+                for name in os.listdir(self.d):
+                    os.unlink(os.path.join(self.d, name))
+                child = multiprocessing.Process(target=_killed_at, args=(self.path, step, 0))
+                child.start()
+                child.join(60)
+                self.assertEqual(child.exitcode, 9, "the child did not reach a rotation")
+                before = trails.verify_trail(self.path)["chained"]
+                seq = trails.append(self.path, {"event": "after the cut"})
+                report = trails.verify_trail(self.path)
+                self.assertEqual((seq, report["chained"]), (before + 1, before + 1))
+                for i in range(6):
+                    trails.append(self.path, {"event": "on", "i": i})
+                self.assertEqual(trails.verify_trail(self.path)["chained"], before + 7)
+                self.assertFalse(os.path.exists(self.path + ".next") and step != "before-rename")
+
+    def test_writers_waiting_on_a_rotated_file_reopen_the_new_one(self):
+        processes = [multiprocessing.Process(target=_rotating_writer, args=(self.path, 25, 100 * k)) for k in range(4)]
+        for p in processes:
+            p.start()
+        for p in processes:
+            p.join(120)
+        report = trails.verify_trail(self.path)
+        self.assertEqual(report["chained"], 100)
+        self.assertGreater(len(self.archives()), 3)
+
+    def head(self, committed, upto=None):
+        """What the shipper records after a pass: the committed line, and each archive wholly behind it."""
+        entries, sequence = [], 0
+        for name in self.archives():
+            data = open(os.path.join(self.d, name), "rb").read()
+            sequence += data.count(b"\n")
+            last = data.splitlines(keepends=True)[-1]
+            entries.append({"name": name, "seq": int(name.rsplit(".", 1)[1]), "sequence": sequence,
+                            "event_hash": "sha256:" + hashlib.sha256(b"event %d" % sequence).hexdigest(),
+                            "line_sha256": hashlib.sha256(last).hexdigest(), "timestamp": 1790000000 + sequence})
+        entries = [e for e in entries if e["sequence"] <= committed][:upto]
+        path = os.path.join(self.d, "head.json")
+        with open(path, "w") as f:
+            json.dump({"trail": "sync", "committed": committed, "archives": entries}, f)
+        return path, entries
+
+    def test_prune_removes_only_what_the_collector_committed_and_the_chain_still_verifies(self):
+        for i in range(20):
+            trails.append(self.path, {"event": "e", "i": i})
+        archives = self.archives()
+        self.assertGreaterEqual(len(archives), 3)
+        second = sum(open(os.path.join(self.d, n), "rb").read().count(b"\n") for n in archives[:2])
+        head, entries = self.head(second)                                           # committed: the first two archives
+        self.assertEqual(trails.prune(self.path, head), 2)
+        self.assertEqual(self.archives(), archives[2:])
+        marker = json.load(open(self.path + ".pruned"))
+        self.assertEqual((marker["seq"], marker["sequence"]), (entries[-1]["seq"], second))
+        self.assertEqual(trails.verify_trail(self.path)["chained"], 20 - entries[-1]["seq"])
+        self.assertEqual(trails.prune(self.path, head), 0)                         # nothing more is committed
+        os.unlink(head)
+
+    def test_prune_refuses_an_archive_that_is_not_the_one_recorded(self):
+        for i in range(12):
+            trails.append(self.path, {"event": "e", "i": i})
+        head, entries = self.head(10 ** 6)
+        record = json.load(open(head))
+        record["archives"][0]["line_sha256"] = "0" * 64
+        with open(head, "w") as f:
+            json.dump(record, f)
+        before = self.archives()
+        self.refused("not the archive the shipper recorded", trails.prune, self.path, head)
+        self.assertEqual(self.archives(), before)
+        self.assertFalse(os.path.exists(self.path + ".pruned"))
+        os.unlink(head)
+
+    def test_a_prune_cut_after_its_marker_leaves_a_trail_that_still_verifies(self):
+        for i in range(16):
+            trails.append(self.path, {"event": "e", "i": i})
+        archives = self.archives()
+        first = open(os.path.join(self.d, archives[0]), "rb").read().count(b"\n")
+        head, entries = self.head(first)
+        with unittest.mock.patch.object(trails.os, "unlink", side_effect=OSError("cut")):
+            with self.assertRaises(OSError):
+                trails.prune(self.path, head)
+        self.assertEqual(self.archives(), archives)                                # the marker is in, the archive too
+        marker, remaining, _ = trails.segments(self.path)
+        self.assertEqual((marker["seq"], [os.path.basename(r) for r in remaining]), (entries[0]["seq"], archives[1:]))
+        self.assertEqual(trails.verify_trail(self.path)["chained"], 16 - entries[0]["seq"])
+        self.assertEqual(trails.prune(self.path, head), 1)                         # the one the cut left is removed now
+        self.assertEqual(self.archives(), archives[1:])
+        self.assertEqual(trails.verify_trail(self.path)["chained"], 16 - entries[0]["seq"])
+        os.unlink(head)
