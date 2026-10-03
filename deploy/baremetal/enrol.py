@@ -325,7 +325,7 @@ def wg_key(journal, step, path, run):
     private, public = _wg_pair(run)
     journal.doc["steps"][step] = {"state": "started", "at": int(time.time()), "public": public}
     _atomic_json(journal.path, journal.doc)                     # one write: recorded BEFORE the private file exists
-    os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+    _ensure_trusted_dir(os.path.dirname(path))
     _write_private(path, (private + "\n").encode())
     journal.done(step, public=public, path=path)
     return public
@@ -340,35 +340,88 @@ def firmware_version(run):
     return "%08x%08x" % tuple(words) if None not in words else None
 
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _check_ancestor(name, st, child_uid):
+    """One directory on the way down: owned by root (or this user) and closed to group and others, OR sticky
+    (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's owner
+    can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
+    (#233, Go); kept identical by hand until one shared helper exists."""
+    me = os.geteuid()                    # root, in production: main() refuses anything else, and _hand_over requires it
+    open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
+            and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_uid in (0, me))),
+            "%s is not a root-owned directory closed to group and others (nor a sticky one): what enrolment puts "
+            "under it could be replaced" % name)
+
+
+def _open_trusted(path, create=None):
+    """A descriptor on the directory `path`, reached from / one component at a time, each opened without
+    following a link (O_NOFOLLOW at EVERY level, not only the last) and each checked by _check_ancestor before
+    anything is made in it or below it. With `create`, a missing component is made with that mode, inside the
+    descriptor of the one above (never os.makedirs, which follows links). The last directory is checked as an
+    ancestor of what will be put in it, by this user."""
+    path = os.path.abspath(path)
+    fd, name, st = os.open("/", _DIR_FLAGS), "/", None
+    try:
+        st = os.fstat(fd)
+        for part in [p for p in path.split("/") if p]:
+            below = os.path.join(name, part)
+            try:
+                child = os.open(part, _DIR_FLAGS, dir_fd=fd)
+            except FileNotFoundError:
+                require(create is not None, "%s does not exist" % below)
+                _check_ancestor(name, st, os.geteuid())        # before anything is made in it
+                os.mkdir(part, create, dir_fd=fd)
+                child = os.open(part, _DIR_FLAGS, dir_fd=fd)
+                os.fchmod(child, create)                        # the mode asked for, whatever the umask
+            except OSError as error:                            # ELOOP: a link; ENOTDIR: not a directory
+                raise Refused("%s is not a real directory (%s): enrolment does not follow it" % (below, error.strerror))
+            child_st = os.fstat(child)
+            _check_ancestor(name, st, child_st.st_uid)
+            os.close(fd)
+            fd, name, st = child, below, child_st
+        _check_ancestor(name, st, os.geteuid())
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _ensure_trusted_dir(path, mode=0o755):
+    """`path` and every directory above it trusted (see _open_trusted), missing ones made with `mode`. Only root
+    can then change what lies there, so the path-based writes after it cannot be redirected."""
+    os.close(_open_trusted(path, create=mode))
+
+
 def _safe_directory(directory):
     """The enrolment directory holds the journal and, between the phases, the WG-BOOT private key: it must be a
-    real directory (not a link), owned by root, 0700, and every directory above it root's and not writable by
-    group or others (otherwise someone could swap it). Created if absent; never trusted if it is not so."""
+    real directory (not a link), owned by root, 0700, and every directory above it trusted (_check_ancestor:
+    otherwise someone could swap it). Created if absent; never trusted if it is not so."""
     directory = os.path.abspath(directory)
-    me = os.geteuid()                    # root, in production: main() refuses anything else
-    # Every directory above it is owned by root (or this user) and closed to group and others, OR is sticky
-    # (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's
-    # owner can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
-    # (#233, Go); kept identical by hand until one shared helper exists.
-    below, walk = directory, os.path.dirname(directory)
-    while True:
-        st = os.lstat(walk)
-        open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-        child_owner = os.lstat(below).st_uid if os.path.lexists(below) else me
-        require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
-                and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_owner in (0, me))),
-                "%s is not a root-owned directory closed to group and others (nor a sticky one): the enrolment "
-                "directory under it could be replaced" % walk)
-        if walk == "/":
-            break
-        below, walk = walk, os.path.dirname(walk)
-    if not os.path.lexists(directory):
-        os.mkdir(directory, 0o700)
-    st = os.lstat(directory)
-    require(stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode) and st.st_uid == me,
-            "%s is not a real directory owned by this user (root)" % directory)
-    os.chmod(directory, 0o700)
-    require(stat.S_IMODE(os.lstat(directory).st_mode) == 0o700, "%s could not be made 0700" % directory)
+    parent = _open_trusted(os.path.dirname(directory))
+    try:
+        base = os.path.basename(directory)
+        try:
+            os.mkdir(base, 0o700, dir_fd=parent)
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(base, _DIR_FLAGS, dir_fd=parent)
+        except OSError as error:
+            raise Refused("%s is not a real directory (%s)" % (directory, error.strerror))
+        try:
+            st = os.fstat(fd)
+            _check_ancestor(os.path.dirname(directory), os.fstat(parent), st.st_uid)
+            require(stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid(),
+                    "%s is not a real directory owned by this user (root)" % directory)
+            os.fchmod(fd, 0o700)
+            require(stat.S_IMODE(os.fstat(fd).st_mode) == 0o700, "%s could not be made 0700" % directory)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(parent)
 
 
 def init(node_id, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
@@ -417,11 +470,7 @@ def check_manifest(directory, chain, root_key, typed, document):
     require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
     require(typed == fingerprint(root_key), "the root key's fingerprint is not the one typed: this is not the root "
             "key the ceremony made. Nothing was written")
-    with open(os.path.join(directory, "bundle.json")) as f:
-        bundle = json.load(f)
-    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE
-            and all(isinstance(bundle.get(k), str) for k in ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub")),
-            "bundle.json is not a complete identity bundle")
+    bundle = _bundle(directory)
     envelopes = chain if isinstance(chain, list) else [chain]
     require(envelopes, "the chain is empty")
     try:
@@ -491,7 +540,7 @@ def _install(journal, step, path, data, prefix=""):
         existing()
     else:
         directory = os.path.dirname(target)
-        os.makedirs(directory, mode=0o755, exist_ok=True)
+        _ensure_trusted_dir(directory)
         facts["tmp:" + path] = os.path.basename(tmp)
         journal.done(step, **facts)       # the temporary name, recorded before the file exists
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
@@ -533,6 +582,155 @@ def install_config(journal, node_id, root_key, example, site, document, prefix="
     return config
 
 
+SYNC_USER = "regalia-sync"
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def anchor_and_store(config_path, chain, run=subprocess.run):
+    """Phase 2's trust anchors, run AS regalia-sync (the user that owns them from then on, #214): the
+    membership epoch anchor (membership.HighWater: the counter, its base and the two record slots, #68),
+    the store committed with the whole chain, so the anchor stands at its last epoch N, and the heartbeat
+    counter. Returns (epoch, digest of the last manifest).
+
+    RESUMED, it never takes over indices it cannot prove are this chain's: a store that exists must load
+    (Store checks it against the anchor) and be a PREFIX of `chain`, and the rest is committed; indices
+    without a store are accepted only as `define` leaves them (epoch 0, the zero record), the state of an
+    enrolment stopped before its first commit. Anything else is refused and left."""
+    from deploy.baremetal import heartbeat, node as node_module
+    with open(config_path, "rb") as f:
+        cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
+    n = node_module.Node(cfg, run)
+    hw, store = n.anchor(), n.store()
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"))
+    envelopes = chain if isinstance(chain, list) else [chain]
+
+    def defined(owner, indices):
+        return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
+    anchor_indices = hw._indices()
+    # Every refusal before the first write: the heartbeat counter is checked BEFORE the anchor is defined or the
+    # store committed, so a counter someone else advanced leaves the TPM and the store as they were.
+    counter_present = defined(counter, (counter.index, counter.base_index))
+    require(not counter_present or (len(counter_present) == 2 and counter.value() == 0),
+            "the TPM already holds the heartbeat counter's indices (%s) at a value other than a fresh one: enrolment "
+            "does not take them over" % ", ".join(counter_present))
+    already = 0
+    if os.path.exists(store.path):
+        store.load()                                   # refuses a store the TPM anchor does not vouch for
+        held = [membership.digest(m) for m in store.manifests]
+        current, mine = None, []
+        for envelope in envelopes:
+            current = membership.accept(current, envelope, cfg["root_key"])
+            mine.append(membership.digest(current))
+        require(held == mine[:len(held)], "%s holds a chain that is not the beginning of this one: an enrolment of "
+                "another manifest, or a node already in service. Enrolment does not touch it (re-enrolment is #76)" % store.path)
+        already = len(held)
+    else:
+        present = defined(hw, anchor_indices)
+        if present:
+            require(len(present) == len(anchor_indices) and hw.value() == 0 and hw.record() == (0, membership.HighWater.ZERO),
+                    "the TPM already holds the anchor's indices (%s) and no store goes with them: they are not an enrolment "
+                    "stopped before its first commit. Enrolment does not take them over (re-enrolment is replacement, #76)"
+                    % ", ".join(present))
+        else:
+            hw.define()
+    for envelope in envelopes[already:]:            # what the store holds already is this chain's beginning (checked)
+        store.commit(envelope)
+    manifest = store.load()
+    if not counter_present:
+        counter.define()
+    return manifest["epoch"], membership.digest(manifest)
+
+
+def run_as_sync(config_path, chain, run=subprocess.run):
+    """anchor_and_store, in a process of regalia-sync with the tss group (the TPM), started from the package
+    root so `-m` finds it. The chain goes on its standard input: the enrolment directory is root's (0700),
+    and regalia-sync could not read a file there. The journal stays with the caller."""
+    # env -i: nothing of root's environment reaches the step (the TCTI comes from node.json, not from here)
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", "-"],
+               cwd=PACKAGE_ROOT, capture_output=True, text=True, input=membership.canonical(chain).decode())
+    require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
+    m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
+    require(m is not None, "the anchor step did not report its result")
+    return int(m.group(1)), m.group(2)
+
+
+def _hand_over(state, chown=True):
+    """The state directory, made regalia-sync's: every directory above it trusted and made one level at a time
+    (_open_trusted), then the directory itself opened without following a link and judged by descriptor, so what
+    is checked is what is changed. Taken over only when it is root's and empty; one that is regalia-sync's
+    already (an enrolment resumed) only at 0755, the mode this step gives it. `chown` False (tests, which
+    cannot change an owner): the user that owns it is taken to be regalia-sync."""
+    if chown:
+        # _check_ancestor trusts directories of this user as well as root's: right for root, which main()
+        # requires, and for tests; a handover to regalia-sync is never done by anyone else
+        require(os.geteuid() == 0, "the state directory is handed to %s by root only" % SYNC_USER)
+        import pwd
+        user = pwd.getpwnam(SYNC_USER)
+        uid, gid = user.pw_uid, user.pw_gid
+    else:
+        uid, gid = os.geteuid(), os.getegid()
+    parent = _open_trusted(os.path.dirname(os.path.abspath(state)), create=0o755)
+    try:
+        base, created = os.path.basename(state), False
+        try:
+            os.mkdir(base, 0o700, dir_fd=parent)
+            created = True
+        except FileExistsError:
+            pass
+        try:
+            fd = os.open(base, _DIR_FLAGS, dir_fd=parent)
+        except OSError as error:
+            raise Refused("%s is not a real directory (%s): enrolment does not follow it" % (state, error.strerror))
+    finally:
+        os.close(parent)
+    try:
+        st = os.fstat(fd)
+        if created:                                      # ours, just made (root's on a host): handed over below
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o755)
+        elif (st.st_uid, st.st_gid) == (uid, gid):
+            require(stat.S_IMODE(st.st_mode) == 0o755, "%s is %s's but mode %o, not 0755: enrolment did not leave it so, "
+                    "and does not take it over" % (state, SYNC_USER, stat.S_IMODE(st.st_mode)))
+        else:
+            require(st.st_uid == 0 and not os.listdir(fd), "%s is neither %s's nor an empty directory of root's: "
+                    "enrolment does not take it over" % (state, SYNC_USER))
+            os.fchown(fd, uid, gid)
+            os.fchmod(fd, 0o755)
+    finally:
+        os.close(fd)
+
+
+def _bundle(directory):
+    with open(os.path.join(directory, "bundle.json"), "rb") as f:
+        bundle = membership.load(f.read(membership.MAX_BYTES + 1))
+    require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE
+            and all(isinstance(bundle.get(k), str) for k in ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub")),
+            "bundle.json is not a complete identity bundle")
+    return bundle
+
+
+def commit(directory, chain, root_key, typed, document, site, example, run=subprocess.run, prefix="", as_sync=None, out=sys.stdout):
+    """Phase 2, as far as the trust anchors (#190): this host's TPM identity re-checked by Name, the manifest
+    chain checked again (never trusted from an earlier `check`), the configuration installed, the state
+    directory made regalia-sync's, and the anchor, the store and the heartbeat counter set up AS regalia-sync.
+    The ESP credentials and the enrolment record follow in later steps."""
+    journal = Journal(directory, _bundle(directory)["node_id"])
+    require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
+    identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
+    manifest = check_manifest(directory, chain, root_key, typed, document)
+    config = install_config(journal, journal.doc["node_id"], root_key, example, site, document, prefix)
+    _hand_over(prefix + config["state_dir"], as_sync is None)
+    journal.started("anchor")
+    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain if isinstance(chain, list) else [chain])
+    require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
+            "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
+    journal.done("anchor", epoch=epoch, digest=digest)
+    print("ENROLLED (trust anchors): node %s, membership epoch %d (%s) anchored in the TPM and committed as %s"
+          % (journal.doc["node_id"], epoch, digest[:16], SYNC_USER), file=out)
+    return epoch, digest
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -546,7 +744,45 @@ def main(argv=None):
     c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
     c.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
     c.add_argument("--enrol-dir", default=ENROL_DIR)
+    k = sub.add_parser("commit", help="enrol this host's trust anchors from the checked manifest chain")
+    k.add_argument("--manifest", required=True, help="the root-signed envelope, or the JSON list of envelopes from epoch 1")
+    k.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
+    k.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
+    k.add_argument("--site", required=True, help="this host's site configuration (with boot_mesh and service_mesh)")
+    k.add_argument("--example", default=os.path.join(PACKAGE_ROOT, "deploy", "baremetal", "node.example.json"),
+                   help="the node configuration this enrolment starts from (default: the shipped example)")
+    k.add_argument("--enrol-dir", default=ENROL_DIR)
+    a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
+    a.add_argument("--config", required=True)
+    a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
+    if args.command == "_anchor":                    # run by commit, as regalia-sync
+        try:
+            chain = membership.load(sys.stdin.buffer.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
+            epoch, digest = anchor_and_store(args.config, chain)
+        except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        print("ANCHORED epoch %d digest %s" % (epoch, digest))
+        return 0
+    if args.command == "commit":
+        if os.geteuid() != 0:
+            print("REFUSED: enrolment runs as root, at the host's console", file=sys.stderr)
+            return 2
+        try:
+            with open(args.manifest, "rb") as f:
+                chain = membership.load(f.read())
+            loaded = {}
+            for name in ("measurements", "site", "example"):
+                with open(getattr(args, name)) as f:
+                    loaded[name] = json.load(f)
+            require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
+            typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
+            commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"])
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "check":
         try:
             with open(args.manifest) as f:
