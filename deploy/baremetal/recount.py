@@ -50,7 +50,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import heartbeat, membership
+from deploy.baremetal import heartbeat, membership, trails
 
 Refused, require = membership.Refused, membership.require
 
@@ -203,17 +203,15 @@ def main(argv=None, ask=None, run=None):
     ap.add_argument("--config", required=True, help="this host's node.json, or the authority's authority.json")
     ap.add_argument("--heartbeat", action="append", default=[], metavar="FILE",
                     help="another heartbeat to take the floor from (e.g. a node's freshness state, on the authority); repeatable")
-    ap.add_argument("--audit-log", required=True, help="the file the audit events are appended to")
+    ap.add_argument("--audit-log", default=trails.where("recount"),
+                    help="the audit trail (default %(default)s, its place in trails.py's registry)")
     args = ap.parse_args(argv)
 
-    def record(event):
-        line = json.dumps(dict(event, time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())), sort_keys=True)
-        fd = os.open(args.audit_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    def record(event):                 # hash-chained, whole or not at all, never through a link (trails.py, #278)
         try:
-            os.write(fd, (line + "\n").encode())
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+            trails.append(args.audit_log, dict(event, time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
+        except trails.Refused as refused:  # an unwritable trail, as an OSError from the file would be
+            raise OSError(str(refused)) from refused
 
     try:
         require("TPM2TOOLS_TCTI" not in os.environ, "TPM2TOOLS_TCTI is set in the environment: the TPM is the configuration's; unset it")
