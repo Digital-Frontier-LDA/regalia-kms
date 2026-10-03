@@ -35,10 +35,11 @@ deb [signed-by=/inputs/archive-key-13.asc] https://snapshot.debian.org/archive/d
 deb [signed-by=/inputs/archive-key-13-security.asc] https://snapshot.debian.org/archive/debian-security/20261003T000000Z/ trixie-security main
 ```
 
-Resolve a cached Debian 13 development base using `docker image inspect` and
-record its exact ID, then tag that ID under a unique local experimental name.
-Pass that name as `DEVELOPMENT_BASE`; never use an unresolved rolling base tag.
-The cached base remains unsigned development infrastructure. New compiler
+The Dockerfile pins the same Debian 13 multi-platform digest as the existing
+bootstrap laboratory and registers that exact input in the development policy.
+Record the resolved native-platform image ID. No base override or rolling tag
+is accepted by the inventory guard. Publisher signatures remain unverified for
+this development base. New compiler
 dependencies use signed, dated APT indexes; the Dockerfile retains normal
 signature and expiry checks. It does not mount credentials, host devices or the
 Docker socket into a container.
@@ -73,6 +74,19 @@ retains source authentication, recipe hashes, image IDs, compiler inventory
 binding, all behavioral outcomes and limits. The repository Docker recipe also
 produces that same executable hash and passes the 121 bootstrap checks using
 its actual 255-package build inventory. The compiler image is not minimized.
+That receipt describes the first recipe's cached-base experiment. CI correctly
+refused its selectable FROM input; the current recipe uses the literal digest
+above. A current recipe result requires its own fresh evidence and must not be
+inferred from the earlier cached-base result.
+
+The [pinned recipe receipt](evidence/tpm-source-pinned-20261003.json) records
+that fresh result: both compilation paths produce the same executable hash as
+the earlier experiment, and all 121 bootstrap assertions, 14 EK/NV cases and
+four cold restarts pass again against the current recipe and actual compiler
+inventory. All 96 image guards and five Python invocation guards pass with the
+new input registered. Source names in the advisory table are formatted as code
+identifiers so the command guard does not misread a Python package name as a
+piped invocation; no command guard is weakened.
 
 ## Residual Risk
 

@@ -1,7 +1,6 @@
-# Laboratory compiler only, never an appliance or release image. The caller must
-# resolve a locally cached development base by exact image ID before tagging it.
-ARG DEVELOPMENT_BASE
-FROM ${DEVELOPMENT_BASE}
+# Laboratory compiler only, never an appliance or release image. Match the
+# explicitly reviewed development input; publisher signatures remain unverified.
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 COPY archive-key-13.asc archive-key-13-security.asc sources.list /inputs/
 RUN rm -f /etc/apt/sources.list.d/* \

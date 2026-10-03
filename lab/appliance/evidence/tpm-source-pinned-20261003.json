@@ -1,5 +1,5 @@
 {
-  "actual_recipe_package_inventory_sha256": "58a72e777124aa4b0a4d83c002a235f6204a38423edbd9829af51c9bd6fa55ca",
+  "actual_recipe_package_inventory_sha256": "eb966cbf73c97cd31e5241368a108ece0af5e943f38c0b2e15fa122a1b0b48b9",
   "authenticated_source": {
     "authentication": "pinned GPG InRelease -> SHA256 Sources -> SHA256 source files",
     "directory": "pool/main/t/tpm2-tools",
@@ -527,7 +527,7 @@
     "docker_daemon_platform": "linux/arm64",
     "evidence_class": "emulated",
     "harness_sha256": "ce8f2ea65ccbde45653abc09cfb0d5133c051b88fd349e1bb8b3076bd53f4c18",
-    "image_id": "sha256:3535aacc3f553b79f096838601fa9c9e5b7f84ce8057d598f4a3c0946eeb255e",
+    "image_id": "sha256:a1b44808774d75ba5eeabaa8366a80f7eb088227cbf66c8c7702fae1de71aef4",
     "limitations_observed": {
       "membership_state_rollback_is_possible": true
     },
@@ -544,10 +544,7 @@
       "binutils\t2.44-3",
       "binutils-aarch64-linux-gnu\t2.44-3",
       "binutils-common\t2.44-3",
-      "binutils-gold\t2.44-2",
-      "binutils-gold-aarch64-linux-gnu\t2.44-2",
       "bsdutils\t1:2.41.5-0+deb13u1",
-      "ca-certificates\t20250419",
       "comerr-dev\t2.1-1.47.2-3+b12",
       "coreutils\t9.7-3",
       "cpp\t4:14.2.0-1",
@@ -569,10 +566,6 @@
       "gcc-14-aarch64-linux-gnu\t14.2.0-19",
       "gcc-14-base\t14.2.0-19",
       "gcc-aarch64-linux-gnu\t4:14.2.0-1",
-      "golang-1.24-go\t1.24.4-1",
-      "golang-1.24-src\t1.24.4-1",
-      "golang-go\t2:1.24~2",
-      "golang-src\t2:1.24~2",
       "grep\t3.11-4+b1",
       "gzip\t1.13-1+deb13u1",
       "hostname\t3.25",
@@ -605,7 +598,6 @@
       "libcryptsetup12\t2:2.7.5-2",
       "libctf-nobfd0\t2.44-3",
       "libctf0\t2.44-3",
-      "libcurl3t64-gnutls\t8.14.1-2+deb13u5",
       "libcurl4-openssl-dev\t8.14.1-2+deb13u5",
       "libcurl4t64\t8.14.1-2+deb13u5",
       "libdb5.3t64\t5.3.28+dfsg2-9",
@@ -666,8 +658,6 @@
       "libnghttp2-dev\t1.64.0-1.1+deb13u1",
       "libnghttp3-9\t1.8.0-1",
       "libnghttp3-dev\t1.8.0-1",
-      "libngtcp2-16\t1.11.0-1+deb13u1",
-      "libngtcp2-crypto-gnutls8\t1.11.0-1+deb13u1",
       "libp11-kit-dev\t0.25.5-3",
       "libp11-kit0\t0.25.5-3",
       "libpam-modules\t1.7.0-5",
@@ -675,8 +665,6 @@
       "libpam-runtime\t1.7.0-5",
       "libpam0g\t1.7.0-5",
       "libpcre2-8-0\t10.46-1~deb13u2",
-      "libpcsclite-dev\t2.3.3-1",
-      "libpcsclite1\t2.3.3-1",
       "libperl5.40\t5.40.1-6+deb13u1",
       "libpkgconf3\t1.8.1-4",
       "libpopt0\t1.19+dfsg-2",
@@ -780,7 +768,6 @@
       "sysvinit-utils\t3.14-4",
       "tar\t1.35+dfsg-3.1",
       "tpm-udev\t0.6+nmu1",
-      "tpm2-tools\t5.7-1+b1",
       "tzdata\t2026c-0+deb13u1",
       "udev\t257.13-1~deb13u1",
       "util-linux\t2.41.5-0+deb13u1",
@@ -789,7 +776,7 @@
       "zlib1g-dev\t1:1.3.dfsg+really1.3.1-1+b1"
     ],
     "schema_version": 1,
-    "source_commit": "024fc39c587206dac8a41b7c2d5e37dd145cd3fb",
+    "source_commit": "6f8266458f9248bfffb4f3abfc8611a08489ea3b",
     "sources_sha256": {
       "lab.py": "ce8f2ea65ccbde45653abc09cfb0d5133c051b88fd349e1bb8b3076bd53f4c18",
       "membership_cases.py": "9a1d50d9506af7a009819285d91d3225b59e948690a80dfc3d8dfb728ef3fdd5",
@@ -798,19 +785,23 @@
     },
     "status": "passed",
     "swtpm_seccomp": "kill",
-    "timestamp": "2026-10-03T14:49:35.918552+00:00"
+    "timestamp": "2026-10-03T15:06:05.185626+00:00"
   },
   "development_base": {
-    "image_id": "sha256:d1eaa43878780eaa7ca5f7ad2f34e57917be9caf82e270933e656dabd8d457a1",
     "platform": "linux/arm64",
-    "publisher_signature_verified": false
+    "publisher_signature_verified": false,
+    "reference": "debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a"
   },
   "distinct_compile_paths_comparison": {
     "image_ids": [
-      "sha256:4f39f34ee12e50c88dae473dd6c118c834f1cf1e5879a0b786595125df3ff31e",
-      "sha256:a98afec9df4265913b6bdc2feb125a8628555e3f474201b4d9cbe701fe9f3560"
+      "sha256:a1b44808774d75ba5eeabaa8366a80f7eb088227cbf66c8c7702fae1de71aef4",
+      "sha256:3b34de687ef8bbd308334f5aef813d624401c9ac023aae6d3ecebe7835e313c8"
     ],
     "independent_builders": false,
+    "paths": [
+      "/build/first",
+      "/build/second"
+    ],
     "status": "matched"
   },
   "ek_nv_fixture": {
@@ -881,26 +872,22 @@
   "evidence_class": "emulated",
   "final_rootfs_scanned": false,
   "limits": [
-    "Cached unsigned development base shared by compilation experiments.",
-    "Exact final appliance filesystem still contains curl/FAPI and remains blocked.",
-    "Physical firmware/TPM/HSM and manufacturer certificate profile/trust are unqualified.",
-    "Software manifest state rollback remains possible.",
-    "Recipe hashes describe commit 6f82664; its selectable development FROM was later refused by inventory CI and replaced with a literal reviewed digest."
+    "The development OCI base is digest-pinned but publisher signatures remain unverified.",
+    "Both compilations share a development Docker engine/toolchain, not independent builders.",
+    "The final appliance still contains curl/FAPI and remains blocked.",
+    "Hardware manufacturer certificate profiles/trust, NV permissions and firmware remain unqualified.",
+    "Software manifest state rollback remains possible."
   ],
   "production_approved": false,
+  "recipe_git_parent": "6f8266458f9248bfffb4f3abfc8611a08489ea3b",
   "recipe_inputs_sha256": {
+    "deploy/images/development-inputs.json": "faf1dd84f84c38ff9093944be2462749ee2a5f5ad9750865607b784e7fb97b71",
     "deploy/images/source.py": "3d7a5f1fd5e392c4bf408fc5af376b9a2a895f0bd330da3bfedece2fd443a09e",
-    "lab/appliance/Dockerfile.tpm-source": "dbe387f71cdf39199052df5665fda04b9048db0ae13d744d19068a1e173038dc",
+    "lab/appliance/Dockerfile.tpm-source": "d8a1841d5b55fb9d2db0036cf19ba46b3b6f53a99a2d312a042c7d5ee63fc5da",
     "lab/appliance/tpm_profile.py": "3b97dca3b8e22a60ce7f9cf72c6c1563b2e05956c603b996e76952186c9b91a1",
     "lab/bootstrap/ek_nv_cases.py": "8965d1e3d646716e6475197bf0814edbf75395bfe6abae7c77b799be3c5ed3b5"
   },
-  "recipe_source_commit": "6f8266458f9248bfffb4f3abfc8611a08489ea3b",
   "release_admissible": false,
-  "repository_recipe": {
-    "binary_digest_record": "a9ed047e60c6165dea6a1ed398e940bbb9848d7461268580292bfbaec9e04151  /opt/regalia-esys/usr/bin/tpm2",
-    "expected_equal": true,
-    "image_id": "sha256:3535aacc3f553b79f096838601fa9c9e5b7f84ce8057d598f4a3c0946eeb255e"
-  },
   "restart_soak": {
     "ak_attributes": 328818,
     "cycles_completed": 4,
@@ -932,6 +919,5 @@
     "source_sha256": "ce8f2ea65ccbde45653abc09cfb0d5133c051b88fd349e1bb8b3076bd53f4c18",
     "status": "passed"
   },
-  "restart_test_image_id": "sha256:4f39f34ee12e50c88dae473dd6c118c834f1cf1e5879a0b786595125df3ff31e",
   "schema": "regalia.tpm-source-experiment/v1"
 }
