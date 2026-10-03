@@ -584,6 +584,8 @@ class Records(Case):
         open(os.path.join(d, "REGALIA.NODE-ID.CRED"), "wb").close()
         self.refused("holds names FAT would take for one (regalia.node-id.cred)", uki.credential_files, esp)
         os.remove(os.path.join(d, "REGALIA.NODE-ID.CRED"))
+        os.symlink(esp, os.path.join(self.d, "esp-link"))
+        self.refused("esp-link is a link: give the ESP itself", uki.credential_files, os.path.join(self.d, "esp-link"))
         # a link anywhere in the tree, not only on the way to the credentials
         os.symlink(os.path.join(self.d), os.path.join(esp, "EFI", "Linux", "elsewhere"))
         self.refused("is a link", uki.credential_files, esp)

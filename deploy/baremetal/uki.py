@@ -469,6 +469,7 @@ def credential_files(esp):
     # The whole tree is walked once: no link anywhere (a link would measure files the installed ESP does
     # not hold), no per-image credentials or addons (*.efi.extra.d, wherever an image may sit), no global
     # addons (loader/addons), and no two names in one directory that FAT would take for one.
+    require(not os.path.islink(esp), "%s is a link: give the ESP itself" % esp)
     credentials, extra, addons = None, [], []
     for top, dirs, files_here in os.walk(esp):
         for name in dirs + files_here:
