@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import unittest
 
-from deploy.baremetal import attest, measurements, uki
+from deploy.baremetal import attest, espcreds, measurements, uki
 from deploy.baremetal import membership as m
 
 # `systemd-measure calculate` (257.13-1~deb13u1) over sections whose content is their own name
@@ -530,6 +530,47 @@ class Records(Case):
         self.refused("must not give PCR 11: it comes from the image's record, per phase", uki.measurement_set, record, "x", "0" * 16, dict(pcrs, **{"11": "00" * 32}))
         self.refused("tpm_firmware_version must be 16 hex", uki.measurement_set, record, "x", "nope", pcrs)
         self.refused("short plain name", uki.measurement_set, record, "an image", "0" * 16, pcrs)
+
+    def test_pcr_12_comes_from_the_nodes_credential_files_and_never_by_hand(self):
+        record = self.build()
+        pcrs = {"7": "77" * 32}
+        files = {"regalia.node-id.cred": b"node-a\n", "regalia.boot-mesh.cred": b"mesh", "regalia.unlock-local.cred": b"sealed"}
+        entry = uki.measurement_set(record, "image-7", "0" * 16, pcrs, files)
+        self.assertEqual(entry["pcrs"], {"7": "77" * 32, "12": espcreds.pcr12(files)})
+        self.assertNotIn("12", entry["phases"]["initrd"])                         # one value for both phases, beside PCR 7
+        self.assertEqual(attest.selection(entry), [7, 11, 12])
+        # another file, a changed one, or one missing: another PCR 12
+        for label, other in (("one more (a unit drop-in)", dict(files, **{"x.conf.cred": b"[Service]"})),
+                             ("one changed", dict(files, **{"regalia.boot-mesh.cred": b"mesh2"})),
+                             ("one missing", {k: v for k, v in files.items() if k != "regalia.unlock-local.cred"})):
+            with self.subTest(label):
+                self.assertNotEqual(uki.measurement_set(record, "image-7", "0" * 16, pcrs, other)["pcrs"]["12"], entry["pcrs"]["12"])
+        self.refused("must not give PCR 12: it is computed from the node's credential files", uki.measurement_set, record, "x", "0" * 16,
+                     dict(pcrs, **{"12": "12" * 32}))
+        self.refused("holds no credential the stub measures", uki.measurement_set, record, "x", "0" * 16, pcrs, {".hidden.cred": b"x", "notes.txt": b"y"})
+        # the directory as the stub reads it: files only, no link, bounded
+        d = os.path.join(self.d, "esp-creds"); os.mkdir(d)
+        for name, data in files.items():
+            with open(os.path.join(d, name), "wb") as f:
+                f.write(data)
+        self.assertEqual(uki.credential_files(d), files)
+        os.symlink(os.path.join(d, "regalia.node-id.cred"), os.path.join(d, "link.cred"))
+        self.refused("is not a regular file", uki.credential_files, d)
+        os.remove(os.path.join(d, "link.cred"))
+        # through the command, with the record of what it was computed from
+        with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
+            json.dump(pcrs, f)
+        rec = os.path.join(self.out, "image-7.record.json")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
+                                       os.path.join(self.d, "host-pcrs.json"), "--credentials", d, "--credentials-record", os.path.join(self.d, "creds.json")]), 0)
+        self.assertEqual(json.loads(out.getvalue())["pcrs"]["12"], espcreds.pcr12(files))
+        with open(os.path.join(self.d, "creds.json")) as f:
+            self.assertEqual(json.load(f), espcreds.record(files))
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(uki.main(["set", "--record", rec, "--label", "image-7", "--tpm-firmware-version", "0" * 16, "--pcrs",
+                                       os.path.join(self.d, "host-pcrs.json"), "--credentials-record", os.path.join(self.d, "c2.json")]), 1)
+        self.assertIn("--credentials-record needs --credentials", err.getvalue())
 
     def test_a_record_is_checked_when_it_is_read(self):
         record = self.build()

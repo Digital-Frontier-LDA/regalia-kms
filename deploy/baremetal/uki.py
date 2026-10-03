@@ -8,6 +8,7 @@ record of what it will measure, and signed in a separate step by keys that are o
                                             --secure-boot-key K --secure-boot-cert C [--key-source file|engine:pkcs11]
     python3 -Es -m deploy.baremetal.uki verify  --image IMAGE --record RECORD [--secure-boot-cert C]
     python3 -Es -m deploy.baremetal.uki set     --record RECORD --label LABEL --tpm-firmware-version HEX --pcrs FILE
+                                            [--credentials DIR [--credentials-record OUT]]
 
     INPUTS: --linux VMLINUZ --initrd INITRD [--microcode FILE] --cmdline FILE --os-release FILE
             --uname VERSION --stub LINUX-STUB --pcrpkey SYSTEM-KEY.pub
@@ -61,7 +62,7 @@ import subprocess
 import sys
 import tempfile
 
-from deploy.baremetal import attest, membership
+from deploy.baremetal import attest, espcreds, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -451,11 +452,38 @@ def verify(image, record, public_keys, secure_boot_cert=None, run=subprocess.run
     return dict(record["pcr11"])
 
 
-def measurement_set(record, label, firmware, pcrs):
+MAX_CREDENTIALS = 32
+MAX_CREDENTIAL_BYTES = 1024 * 1024
+
+
+def credential_files(directory):
+    """{file name: bytes} of a node's ESP credential directory (<ESP>/loader/credentials), as the stub reads
+    it: regular files only, no link (the stub would read the target; a reviewer reading the directory would
+    not), bounded in number and size."""
+    names = sorted(os.listdir(directory))
+    require(len(names) <= MAX_CREDENTIALS, "%s holds %d files; a KMS host has a handful of credentials" % (directory, len(names)))
+    files = {}
+    for name in names:
+        path = os.path.join(directory, name)
+        require(not os.path.islink(path) and os.path.isfile(path), "%s is not a regular file: a credential directory holds files only" % path)
+        files[name] = read(path, MAX_CREDENTIAL_BYTES)
+    return files
+
+
+def measurement_set(record, label, firmware, pcrs, credentials=None):
     """The measurement set of this image on one host (KERNEL-UPDATE.md step 1.4): that host's TPM firmware
-    version and its own PCR values, with PCR 11 per phase from the record."""
+    version and its own PCR values, with PCR 11 per phase from the record, and with `credentials` (the
+    node's ESP credential files, {file name: bytes}) PCR 12 as systemd-stub will measure them
+    (espcreds.pcr12). PCR 12 has one value for both phases: nothing extends it after the initrd (measured
+    in the unlock boot test, #215). It is never given by hand: a set that should hold it is made from the
+    files."""
     load_record(membership.canonical(record))
     require(isinstance(pcrs, dict) and "11" not in pcrs, "the host's PCR values must not give PCR 11: it comes from the image's record, per phase")
+    require("12" not in pcrs, "the host's PCR values must not give PCR 12: it is computed from the node's credential files (--credentials)")
+    if credentials is not None:
+        require(any(espcreds.measured(n) for n in credentials), "the credential directory holds no credential the stub measures: PCR 12 would "
+                "be all zero, which is a host with no per-host configuration")
+        pcrs = dict(pcrs, **{"12": espcreds.pcr12(credentials)})
     entry = {"label": label, "tpm_firmware_version": firmware, "pcrs": pcrs,
              "phases": {phase: {"11": record["pcr11"][phase]} for phase in attest.PHASES}}
     try:
@@ -502,7 +530,9 @@ def main(argv=None):
     c.add_argument("--record", required=True)
     c.add_argument("--label", required=True)
     c.add_argument("--tpm-firmware-version", required=True)
-    c.add_argument("--pcrs", required=True, help='a JSON file: {"0": "<64 hex>", "7": ...}, the host\'s own values, without PCR 11')
+    c.add_argument("--pcrs", required=True, help='a JSON file: {"0": "<64 hex>", "7": ...}, the host\'s own values, without PCR 11 or 12')
+    c.add_argument("--credentials", metavar="DIR", help="the node's ESP credential directory (loader/credentials): PCR 12 is computed from it")
+    c.add_argument("--credentials-record", metavar="OUT", help="with --credentials: write what PCR 12 was computed from (espcreds.record)")
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
@@ -519,7 +549,14 @@ def main(argv=None):
             print("VERIFIED %s: the image is the record's, and both PCR signatures verify" % record["name"])
         else:
             record = load_record(read(args.record, 64 * 1024))
-            print(json.dumps(measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536))), indent=2, sort_keys=True))
+            require(args.credentials or not args.credentials_record, "--credentials-record needs --credentials")
+            files = credential_files(args.credentials) if args.credentials else None
+            entry = measurement_set(record, args.label, args.tpm_firmware_version, membership.load(read(args.pcrs, 65536)), files)
+            if args.credentials_record:
+                fd = os.open(args.credentials_record, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+                with os.fdopen(fd, "w") as f:
+                    f.write(json.dumps(espcreds.record(files), indent=2, sort_keys=True) + "\n")
+            print(json.dumps(entry, indent=2, sort_keys=True))
             return 0
         for phase in attest.PHASES:
             print("  PCR 11, %-6s (%s): %s" % (phase, PHASE_PATHS[phase], record["pcr11"][phase]))
