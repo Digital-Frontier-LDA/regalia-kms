@@ -300,6 +300,7 @@ def _json(path, label):
 
 DEFAULT_TCTI = "device:/dev/tpmrm0"
 TCTI_PATTERN = r"(?:device|swtpm|mssim|tabrmd)(?::[!-~]{1,200})?"
+SIMULATORS = ("swtpm", "mssim")      # accepted (the tests, a lab), and said so in the output
 
 
 def _current(args):
@@ -357,6 +358,8 @@ def _summary(manifest, anchored, tcti=None):
                "checked_against_tpm": anchored}
     if anchored:
         summary["tpm"] = tcti
+        if tcti.split(":")[0] in SIMULATORS:
+            summary["tpm_is_a_simulator"] = True
     return summary
 
 
@@ -375,7 +378,9 @@ def _cmd_transition(args):
 def _cmd_epoch(args):
     manifest, anchored = _current(args)
     return _summary(manifest, anchored, args.tcti), "epoch %(epoch)d, measurements %(policy_version)s, manifest %(manifest_digest)s" + (
-        "\nchecked against the TPM epoch counter of %(tpm)s" if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
+        "\nchecked against the TPM epoch counter of %(tpm)s" + (
+            "\nWARNING: that is a TPM SIMULATOR, not this host's TPM: on a KMS host this answer proves nothing"
+            if args.tcti.split(":")[0] in SIMULATORS else "") if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
 
 
 def _cmd_propose(args):

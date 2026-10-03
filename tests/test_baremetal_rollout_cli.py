@@ -228,7 +228,11 @@ class Epoch(Case):
                     rc, out, err = self.run_cli(*argv, *extra)
                     self.assertEqual((rc, err), (0, ""))
                     self.assertIn("checked against the TPM epoch counter of " + tcti, out)
-                    self.assertEqual(self.as_json(*argv, *extra)[1]["tpm"], tcti)
+                    report = self.as_json(*argv, *extra)[1]
+                    self.assertEqual(report["tpm"], tcti)
+                    simulator = tcti.startswith("swtpm:")
+                    self.assertEqual("WARNING: that is a TPM SIMULATOR, not this host's TPM" in out, simulator)
+                    self.assertEqual(report.get("tpm_is_a_simulator", False), simulator)
                     built.assert_called_with("0x1500016", tcti=tcti)
             built.reset_mock()
             with mock.patch.dict(os.environ, TPM2TOOLS_TCTI="swtpm:path=/tmp/other.sock"):
