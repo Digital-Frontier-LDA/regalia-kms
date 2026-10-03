@@ -558,7 +558,7 @@ class Records(Case):
                 f.write(data)
         self.assertEqual(uki.credential_files(esp), files)
         os.symlink(os.path.join(d, "regalia.node-id.cred"), os.path.join(d, "link.cred"))
-        self.refused("is not a regular file", uki.credential_files, esp)
+        self.refused("link.cred is a link", uki.credential_files, esp)
         os.remove(os.path.join(d, "link.cred"))
         os.mkdir(os.path.join(d, "sub"))
         self.refused("is not a regular file", uki.credential_files, esp)            # stricter than the stub, on purpose
@@ -567,17 +567,44 @@ class Records(Case):
         os.makedirs(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
         self.refused("the ESP holds per-image credentials or addons (EFI/Linux/regalia.efi.extra.d)", uki.credential_files, esp)
         os.rmdir(os.path.join(esp, "EFI", "Linux", "regalia.efi.extra.d"))
-        self.refused("is not a directory", uki.credential_files, os.path.join(self.d, "no-esp"))
+        self.refused("has no loader/credentials directory", uki.credential_files, os.path.join(self.d, "no-esp"))
         # global addons are measured into PCR 12 too: refused; an empty addons directory is fine
         os.makedirs(os.path.join(esp, "loader", "addons"))
         self.assertEqual(uki.credential_files(esp), files)
         open(os.path.join(esp, "loader", "addons", "x.addon.efi"), "wb").close()
         self.refused("the ESP holds global addons", uki.credential_files, esp)
         os.remove(os.path.join(esp, "loader", "addons", "x.addon.efi"))
+        # FAT is case-insensitive, and so is the reader: the same checks in other cases, and twins refused
+        for path, reason in ((os.path.join(esp, "EFI", "Linux", "A.EFI.EXTRA.D"), "per-image credentials or addons"),
+                             (os.path.join(esp, "regalia.efi.extra.d"), "per-image credentials or addons")):
+            with self.subTest(path=path):
+                os.makedirs(path)
+                self.refused(reason, uki.credential_files, esp)
+                os.rmdir(path)
+        open(os.path.join(d, "REGALIA.NODE-ID.CRED"), "wb").close()
+        self.refused("holds names FAT would take for one (regalia.node-id.cred)", uki.credential_files, esp)
+        os.remove(os.path.join(d, "REGALIA.NODE-ID.CRED"))
+        # a link anywhere in the tree, not only on the way to the credentials
+        os.symlink(os.path.join(self.d), os.path.join(esp, "EFI", "Linux", "elsewhere"))
+        self.refused("is a link", uki.credential_files, esp)
+        os.remove(os.path.join(esp, "EFI", "Linux", "elsewhere"))
+        # the bounds: at most 32 files, each at most 1 MiB
+        many = os.path.join(self.d, "many"); os.makedirs(os.path.join(many, "loader", "credentials"))
+        for i in range(33):
+            open(os.path.join(many, "loader", "credentials", "c%02d.cred" % i), "wb").close()
+        self.refused("holds 33 files", uki.credential_files, many)
+        big = os.path.join(self.d, "big"); os.makedirs(os.path.join(big, "loader", "credentials"))
+        with open(os.path.join(big, "loader", "credentials", "big.cred"), "wb") as f:
+            f.write(bytes(uki.MAX_CREDENTIAL_BYTES + 1))
+        self.refused("is larger than", uki.credential_files, big)
+        # the stub's order is the byte order of the names (strcmp16), not a case-folded one: pinned here
+        # without a boot, with a pair that sorts differently under case folding
+        self.assertEqual([c["file"] for c in espcreds.record({"a.cred": b"1", "B.cred": b"2"})["credentials"]], ["B.cred", "a.cred"])
         # a link on the way (loader/ pointing elsewhere) is refused
         elsewhere = os.path.join(self.d, "elsewhere"); os.rename(os.path.join(esp, "loader"), elsewhere)
         os.symlink(elsewhere, os.path.join(esp, "loader"))
         self.refused("is a link: the ESP is read as it will be installed", uki.credential_files, esp)
+        self.assertFalse(os.path.islink(os.path.join(self.d, "elsewhere")))
         os.remove(os.path.join(esp, "loader")); os.rename(elsewhere, os.path.join(esp, "loader"))
         # through the command, with the record of what it was computed from
         with open(os.path.join(self.d, "host-pcrs.json"), "w") as f:
