@@ -365,6 +365,7 @@ class Peer:
         `caller` is the node the transport identified (the boot mesh knows which key a tunnel address
         belongs to): a request that names another node is refused before anything else is looked at.
         It narrows who may ask in a node's name; it authorizes nothing (the attestation does)."""
+        message = None                                  # (what to answer in, if it cannot even be read)
         try:
             try:
                 message = membership.load(raw, MAX_BYTES)
