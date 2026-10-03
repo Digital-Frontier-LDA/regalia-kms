@@ -391,6 +391,20 @@ class Trail(Case):
         with self.assertRaises(OSError):
             node.Trail(self.d + "/nowhere/audit.jsonl")({"event": "x"})              # a trail that cannot be written raises
 
+    def test_a_trail_is_never_written_through_a_link_or_into_a_file_of_another_user(self):
+        """regalia-kms-3e on #277: every trail (sync's, admission's, enrolment's) is opened with O_NOFOLLOW and must be
+        a regular file of the writing service's own user."""
+        target = self.d + "/elsewhere"
+        open(target, "w").close()
+        os.symlink(target, self.cfg["state_dir"] + "/linked.jsonl")
+        with self.assertRaises(OSError):
+            node.Trail(self.cfg["state_dir"] + "/linked.jsonl")({"event": "x"})
+        self.assertEqual(os.path.getsize(target), 0, "nothing was appended through the link")
+        real = os.fstat                                   # a file another user owns (as root, a planted one)
+        with unittest.mock.patch.object(node.os, "fstat", lambda fd: os.stat_result((real(fd).st_mode, 0, 0, 1, os.geteuid() + 1, 0, 0, 0, 0, 0))):
+            with self.assertRaisesRegex(node.Refused, "not a regular file of this service's own user"):
+                node.Trail(self.cfg["state_dir"] + "/audit.jsonl")({"event": "x"})
+
 
 if __name__ == "__main__":
     unittest.main()

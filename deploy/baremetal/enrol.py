@@ -792,14 +792,19 @@ RECORD_KEYS = ("schema", "node_id", "epoch", "manifest_digest", "root_fingerprin
                "wg_service_pub", "wg_boot_pub", "nv", "espcreds", "peers", "paths", "tool", "at")
 
 
+VERSION_FILE = os.path.join(PACKAGE_ROOT, "deploy", "baremetal", "VERSION")
+
+
 def _tool():
-    """This tool's version, for the record: the git commit when run from a checkout, else "unknown"."""
+    """This tool's version, for the record: the one line the package build writes to deploy/baremetal/VERSION, or
+    "unknown". Never by running git: enrolment runs as root, and git in a tree another user can write would run
+    that tree's configured helpers as root (regalia-kms-3e on #277)."""
     try:
-        done = subprocess.run(["git", "-C", PACKAGE_ROOT, "describe", "--always", "--dirty", "--abbrev=12"], capture_output=True,
-                              text=True, timeout=10, stdin=subprocess.DEVNULL)
-        return done.stdout.strip() if done.returncode == 0 and done.stdout.strip() else "unknown"
-    except (OSError, subprocess.SubprocessError):
+        with open(VERSION_FILE, "rb") as f:
+            text = f.read(129).decode("ascii", "replace").strip()
+    except OSError:
         return "unknown"
+    return text if re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", text) else "unknown"
 
 
 def write_record(journal, directory, node, manifest, peers, run=subprocess.run, now=time.time, tool=_tool):
@@ -831,6 +836,11 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
               "peers": [{"peer": p, "ak_name": nodes[p]["ak_name"]} for p in peers], "paths": paths,
               "tool": tool(), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now()))}
     payload = membership.canonical(record)
+    trail = node_module.Trail(os.path.join(directory, "enrol-audit.jsonl"))
+    # requested, then the outcome (reanchor's order): a crash before the file is in place leaves INCOMPLETE, and the
+    # rerun's ALLOW names the one record that exists (regalia-kms-3e on #277)
+    trail({"event": "enrol", "node": record["node_id"], "epoch": record["epoch"], "manifest_digest": record["manifest_digest"],
+           "outcome": "INCOMPLETE", "reason": "writing the enrolment record"})
     env = dict(os.environ, TPM2TOOLS_TCTI=node.tcti) if node.tcti else None
     with tempfile.TemporaryDirectory(prefix="enrol-record-") as d:
         qpath, spath = os.path.join(d, "quote"), os.path.join(d, "signature")
@@ -843,11 +853,12 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
     attest.verify_document(payload, bytes.fromhex(record["ak_public"]), record["ek_name"], quote, signature)
     document = {"record": record, "quote": quote.hex(), "signature": signature.hex()}
     digest = hashlib.sha256(membership.canonical(document)).hexdigest()
-    node_module.Trail(os.path.join(directory, "enrol-audit.jsonl"))(
-        {"event": "enrol", "node": record["node_id"], "epoch": record["epoch"], "manifest_digest": record["manifest_digest"],
-         "record_sha256": digest, "outcome": "ALLOW", "reason": ""})
-    _atomic_json(os.path.join(directory, RECORD_FILE), document)
+    _atomic_json(os.path.join(directory, RECORD_FILE), document)        # written, fsynced, renamed, directory fsynced
     os.chmod(os.path.join(directory, RECORD_FILE), 0o644)
+    with open(os.path.join(directory, RECORD_FILE), "rb") as f:
+        require(hashlib.sha256(membership.canonical(json.loads(f.read()))).hexdigest() == digest, "the record read back is not the one written")
+    trail({"event": "enrol", "node": record["node_id"], "epoch": record["epoch"], "manifest_digest": record["manifest_digest"],
+           "record_sha256": digest, "outcome": "ALLOW", "reason": ""})
     journal.done("record", sha256=digest)
     return record
 
@@ -1320,8 +1331,12 @@ def main(argv=None):
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
         record = document["record"]
-        print("VERIFIED: node %s enrolled on epoch %d, record signed by its AK %s (TPM reset count %d); PCR 12 expected %s"
-              % (record["node_id"], record["epoch"], facts["ak_name"][:20], facts["reset_count"], record["espcreds"].get("pcr12")))
+        # only what was checked: the quote's PCR VALUES are not in it (only their digest), so the record's expected PCR 12
+        # is the record's claim, not something this verification shows
+        print("VERIFIED: node %s enrolled on epoch %d (manifest %s); the record is signed by its AK %s, the manifest's, under its "
+              "EK, in a quote over PCRs %s (TPM reset count %d)"
+              % (record["node_id"], record["epoch"], record["manifest_digest"][:16], facts["ak_name"][:20],
+                 ",".join(str(p) for p in facts["pcrs"]), facts["reset_count"]))
         return 0
     if args.command == "_aks":                       # run by paths, as regalia-sync
         try:

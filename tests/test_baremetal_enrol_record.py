@@ -85,8 +85,11 @@ class Record(rt.Case):
         self.assertEqual(facts["ak_name"], self.keys["a"].ak_name)
         self.assertEqual(enrol.Journal(self.dir, "a").state("record"), "done")
         with open(self.dir + "/enrol-audit.jsonl") as f:
-            event = json.loads(f.read().splitlines()[-1])
-        self.assertEqual((event["event"], event["node"], event["outcome"]), ("enrol", "a", "ALLOW"))
+            events = [json.loads(line) for line in f.read().splitlines()]
+        self.assertEqual([(e["event"], e["node"], e["outcome"]) for e in events], [("enrol", "a", "INCOMPLETE"), ("enrol", "a", "ALLOW")])
+        import hashlib
+        self.assertEqual(events[1]["record_sha256"], hashlib.sha256(m.canonical(document)).hexdigest())
+        self.assertNotIn("record_sha256", events[0])
 
     def test_a_changed_record_or_another_root_or_manifest_is_refused(self):
         self.write()
@@ -100,6 +103,33 @@ class Record(rt.Case):
         other = dict(self.m1, nodes=[self.entry("a", ak_name=self.keys["x"].ak_name), self.entry("b"), self.entry("c")])
         with self.assertRaisesRegex((enrol.Refused, m.Refused), "record's (ak_name|manifest)|no manifest at epoch 1 with the record's digest"):
             enrol.verify_record(document, [rt.sign(other)], self.root)
+
+    def test_a_crash_before_the_file_leaves_incomplete_and_no_allow(self):
+        """regalia-kms-3e on #277: the ALLOW comes only after the record is durably in place."""
+        import unittest.mock
+        with unittest.mock.patch.object(enrol, "_atomic_json", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                self.write()
+        with open(self.dir + "/enrol-audit.jsonl") as f:
+            self.assertEqual([json.loads(line)["outcome"] for line in f.read().splitlines()], ["INCOMPLETE"])
+        self.assertFalse(os.path.exists(self.dir + "/" + enrol.RECORD_FILE))
+        self.write()
+        with open(self.dir + "/enrol-audit.jsonl") as f:
+            outcomes = [json.loads(line)["outcome"] for line in f.read().splitlines()]
+        self.assertEqual(outcomes, ["INCOMPLETE", "INCOMPLETE", "ALLOW"], "one ALLOW, naming the one record that exists")
+
+    def test_the_tool_version_comes_from_the_package_file_never_from_git(self):
+        import unittest.mock
+        version = os.path.join(self.node.d, "VERSION")
+        with unittest.mock.patch.object(enrol, "VERSION_FILE", version), unittest.mock.patch.object(enrol.subprocess, "run",
+                                                                                                     side_effect=AssertionError("no git")):
+            self.assertEqual(enrol._tool(), "unknown")
+            with open(version, "w") as f:
+                f.write("0.9.1+g1a2b3c\n")
+            self.assertEqual(enrol._tool(), "0.9.1+g1a2b3c")
+            with open(version, "w") as f:
+                f.write("x; rm -rf /\n")
+            self.assertEqual(enrol._tool(), "unknown")
 
     def test_a_session_quote_cannot_pass_as_a_record_quote(self):
         record = self.write()

@@ -216,8 +216,13 @@ class Trail:
     def __call__(self, event):
         line = json.dumps(dict(event, at=int(time.time())), sort_keys=True).encode() + b"\n"
         with self.lock:
-            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o600)
+            # never through a link, and only into a regular file of this process's own user: a trail that
+            # could be redirected would put the audit events (and the appends) wherever the link points
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
             try:
+                st = os.fstat(fd)
+                require(stat.S_ISREG(st.st_mode) and st.st_uid == os.geteuid(),
+                        "%s is not a regular file of this service's own user: no audit event is written there" % self.path)
                 os.write(fd, line)
                 os.fsync(fd)
             finally:
