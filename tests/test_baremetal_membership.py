@@ -80,6 +80,20 @@ class Manifests(unittest.TestCase):
                 with self.assertRaises(m.Refused):
                     m.accept(self.m1, env, ROOT_PUB)
 
+    def test_issued_at_is_ascii_digits_at_full_width(self):
+        """Signed correctly, so only the timestamp refuses them; the pre-root Go reader refuses the same (#66).
+        strptime alone accepts each of these."""
+        for label, at in (("Arabic-Indic digits", "٢٠٢٦-١٠-٠٢T٠٩:٠٠:٠٠Z"), ("a fullwidth year", "２０２６-10-02T09:00:00Z"),
+                          ("a Devanagari year", "२०२६-10-02T09:00:00Z"), ("an unpadded month", "2026-1-02T09:00:00Z"),
+                          ("unpadded fields", "2026-10-2T9:0:0Z"), ("a one-digit second", "2026-10-02T09:00:0Z"),
+                          ("a day padded with a space", "2026-10- 2T09:00:00Z"), ("lowercase t and z", "2026-10-02t09:00:00z"),
+                          ("a trailing newline", "2026-10-02T09:00:00Z\n"), ("no such date", "2026-02-30T09:00:00Z")):
+            with self.subTest(label):
+                man = manifest(2, m.digest(self.m1), three())
+                man["issued_at"] = at
+                with self.assertRaisesRegex(m.Refused, "issued_at must be UTC"):
+                    m.accept(self.m1, sign(man, ROOT), ROOT_PUB)
+
     def test_ambiguous_encodings_are_refused_at_parse(self):
         for raw in ('{"a": 1, "a": 2}', '{"epoch": 1.0}', '{"epoch": NaN}'):
             with self.subTest(raw=raw), self.assertRaises(m.Refused):

@@ -92,6 +92,7 @@ CAPABILITIES = {
     "DRAINING": frozenset({"serve"}),
     "QUARANTINED": frozenset(), "RETIRED": frozenset(), "REVOKED_STOLEN": frozenset(),
 }
+UTC_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")   # [0-9], never \d: ASCII only
 MANIFEST_KEYS = ("schema", "epoch", "prev_digest", "policy_version", "issued_at", "revocation_keys", "nodes")
 NODE_KEYS = ("node_id", "state", "ek_name", "ak_name", "wg_boot_pub", "wg_service_pub", "hsm_serials")
 IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
@@ -196,6 +197,10 @@ def validate(manifest):
     require(isinstance(manifest["policy_version"], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,32}", manifest["policy_version"]),
             "policy_version must be a short name")
     try:
+        # the form first, in ASCII digits at full width: strptime alone takes "2026-1-3T1:2:3Z" and a year in
+        # any script's digits, which the pre-root Go reader refuses (#66)
+        if not (isinstance(manifest["issued_at"], str) and UTC_TIME.fullmatch(manifest["issued_at"])):
+            raise ValueError
         datetime.datetime.strptime(manifest["issued_at"], "%Y-%m-%dT%H:%M:%SZ")
     except (TypeError, ValueError):
         raise Refused("issued_at must be UTC, YYYY-MM-DDTHH:MM:SSZ")

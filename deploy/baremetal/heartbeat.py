@@ -85,7 +85,7 @@ MAX_BYTES = 16 * 1024
 
 def parse_time(text, label):
     """A UTC timestamp as unix seconds; Refused unless it is exactly YYYY-MM-DDTHH:MM:SSZ and a real date."""
-    require(isinstance(text, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", text) is not None,
+    require(isinstance(text, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", text) is not None,
             "%s must be UTC, YYYY-MM-DDTHH:MM:SSZ" % label)
     try:
         return calendar.timegm(time.strptime(text, "%Y-%m-%dT%H:%M:%SZ"))
