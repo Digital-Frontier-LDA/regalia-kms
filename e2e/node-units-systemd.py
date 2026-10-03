@@ -692,13 +692,17 @@ def part2(work, binaries, user, ctx, servers, status):
     # notes each request's operation and b's answer, to tell a's renewals from its pulls
     requests, answer = [], server.handle
 
+    started = []
+
     def handle(raw, address):
-        out = answer(raw, address)
         try:
             op = json.loads(raw).get("op")
         except (ValueError, AttributeError):
             op = None
-        requests.append((op, address[0] if isinstance(address, tuple) else address, out))
+        who = address[0] if isinstance(address, tuple) else address
+        started.append((time.monotonic(), op, who))          # a request that never answers shows here only
+        out = answer(raw, address)
+        requests.append((op, who, out))
         return out
     server.handle = handle
     listener = inside(lambda: socket.create_server((address["b"], cfg_port(ctx)), family=socket.AF_INET6))
@@ -760,6 +764,12 @@ def part2(work, binaries, user, ctx, servers, status):
     def from_a(ops):
         return [r for r in requests[marked:] if r[0] in ops and r[1] == address["a"]]
     renewals = until(lambda: from_a(("lease-nonce", "lease")), lease.MAX_LIFETIME, 2)
+    if not renewals:                     # diagnostics: what b was doing instead
+        import faulthandler
+        print("  b: %d requests started, %d answered; last started: %s" % (len(started), len(requests), started[-4:]))
+        print("  b's trail since the revocation: %s" % [(e.get("event"), e.get("subject"), e.get("outcome"), e.get("reason", "")[:80]) for e in events[mark:]][-8:])
+        print("  a's lease service: %s" % journal("regalia-admission.service", 15)[-1500:])
+        faulthandler.dump_traceback(all_threads=True)
     denied = [e for e in events[mark:] if e.get("subject") == "a" and e.get("outcome") == "DENY"]
     # b refuses a when it identifies the caller (sync.py, peer_of), before any lease policy runs: the
     # transport's refusal. The lease policy's own refusal of a revoked subject is #199's revoke e2e.
