@@ -16,11 +16,12 @@ class FirstHeartbeat(st.Case):
         super().setUp()
         self.counter = hb.Counter("0x1500018", lock_path=os.path.join(self.d, "late.lock"), run=hbt.FakeTpm())
         self.late = hb.Freshness(self.counter, self.clock, lambda: self.ticks, os.path.join(self.d, "late-freshness.json"))
-        self.trail = []
+        self.trail, self.notes = [], []
 
     def take(self, sources=("b", "c", "authority"), bootstrap=False, manifest=None):
         transports = {s if s != "authority" else "authority": self.wire(s, "a") for s in sources}
-        return enrol.take_first_heartbeat("a", manifest or self.m1, self.stores["b"], self.late, transports, self.trail.append, bootstrap)
+        return enrol.take_first_heartbeat("a", manifest or self.m1, self.stores["b"], self.late, transports, self.trail.append, bootstrap,
+                                          note=self.notes.append)
 
     def test_the_highest_heartbeat_starts_the_counter_with_no_increment_loop(self):
         self.beat(self.m1)
@@ -48,7 +49,20 @@ class FirstHeartbeat(st.Case):
         self.assertEqual(self.counter.value(), 0)
         self.assertEqual([(e["outcome"], e["sequence"]) for e in self.trail], [("INCOMPLETE", 0), ("ALLOW", 0)])
         self.assertIn("bootstrap", self.trail[-1]["reason"])
-        self.assertEqual(self.take(sources=(), bootstrap=True), (None, None), "defined: nothing more to do")
+        self.assertEqual(self.take(sources=(), bootstrap=True), (None, None), "the bootstrap's own counter, still before any heartbeat")
+        with self.assertRaisesRegex((enrol.Refused, m.Refused), "no source gave one to check it against"):
+            self.take(sources=())                                   # without --bootstrap: not "nothing to do"
+        self.assertIn("bootstrap: no source gave a heartbeat", self.notes[0])
+
+    def test_an_existing_counter_far_behind_the_network_is_refused(self):
+        """d9's edge on #279: a counter from an earlier life of the TPM, no heartbeat held."""
+        self.counter.define()
+        self.beat(self.m1)
+        self.assertEqual(self.take(), (None, None), "within the jump bound: accept() takes the next heartbeat")
+        import unittest.mock
+        with unittest.mock.patch.object(hb.Counter, "MAX_JUMP", 0):
+            with self.assertRaisesRegex((enrol.Refused, m.Refused), "more than the jump bound 0.*recount.py sets its floor"):
+                self.take()
 
     def test_bootstrap_takes_a_heartbeat_when_there_is_one(self):
         self.beat(self.m1)

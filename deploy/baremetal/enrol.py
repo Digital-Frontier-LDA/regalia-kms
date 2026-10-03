@@ -716,10 +716,10 @@ def first_heartbeat(config_path, run=subprocess.run, bootstrap=False):
     manifest = store.load()             # the store the anchor step committed, checked against the TPM anchor (the
     #                                     published chain does not exist yet: the sync service writes it)
     return take_first_heartbeat(n.node_id, manifest, store, n.freshness(), n.sources(manifest),
-                                node_module.Trail(n.path("sync-audit.jsonl")), bootstrap)
+                                node_module.Trail(n.path("sync-audit.jsonl")), bootstrap, note=lambda text: print("NOTE " + " ".join(text.split())))
 
 
-def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bootstrap=False):
+def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bootstrap=False, note=lambda text: None):
     """first_heartbeat's decision, given the node's parts. WHENEVER the node enrols with no heartbeat counter yet (a
     founding node whose hardware came late, a re-imaged one, a replacement: the network's heartbeats may be far past
     the jump bound), its counter is defined at the highest heartbeat a source holds that verifies under its
@@ -729,9 +729,9 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
     from deploy.baremetal import convergence, heartbeat, sync
     counter = freshness.counter
     present = [i for i in (counter.index, counter.base_index) if counter._tpm("nvreadpublic", i).returncode == 0]
-    if freshness.held() is not None or len(present) == 2:
+    if freshness.held() is not None:
         return None, None
-    require(not present, "the heartbeat counter is half defined (%s): that is recount.py's case, not enrolment's" % ", ".join(present))
+    require(len(present) != 1, "the heartbeat counter is half defined (%s): that is recount.py's case, not enrolment's" % ", ".join(present))
     client = sync.Client(node_id, store, None, sources, lambda event: None)
     found, failures = [], []
     for name in sorted(sources):
@@ -744,6 +744,22 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
             found.append((heartbeat.verify(envelope, manifest)["sequence"], name, envelope))
         except (Refused, membership.Refused, KeyError, TypeError) as refusal:
             failures.append("%s: %s" % (name, refusal))
+    if len(present) == 2:
+        # a counter from an earlier life of this TPM (the same board re-enrolled, an earlier commit cut after the define),
+        # with no heartbeat held: fine only if it is within the jump bound of the network (regalia-kms-d9 on #279)
+        # Safe to keep only when a verified heartbeat is within the jump bound of it: accept() then takes that heartbeat
+        # as it would any other, and the node becomes fresh. Otherwise refused, never "nothing to do".
+        value = counter.value()
+        if found:
+            highest = max(f[0] for f in found)
+            require(highest - value <= counter.MAX_JUMP, "the TPM holds a heartbeat counter at %d with no heartbeat held, %d "
+                    "behind the network's %d (more than the jump bound %d): the node would never be fresh. recount.py sets its "
+                    "floor" % (value, highest - value, highest, counter.MAX_JUMP))
+            return None, None
+        require(bootstrap and value == 0 and manifest["epoch"] == 1,
+                "the TPM holds a heartbeat counter at %d with no heartbeat held, and no source gave one to check it against (%s): "
+                "run commit again once one answers, or recount.py sets its floor" % (value, "; ".join(failures) or "none reachable"))
+        return None, None                     # the bootstrap's own counter, before any heartbeat exists
     event = {"event": "heartbeat-first", "node": node_id, "epoch": manifest["epoch"]}
     if not found:
         require(bootstrap, "no peer and no authority gave a heartbeat that verifies under epoch %d (%s): the node cannot start "
@@ -751,8 +767,10 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
                 "heartbeat was ever issued, with --bootstrap)" % (manifest["epoch"], "; ".join(failures) or "none reachable"))
         require(manifest["epoch"] == 1, "--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch %d: "
                 "a heartbeat has been issued since, run commit again once a source answers" % manifest["epoch"])
+        # an unreachable source and one that holds none look alike from here: the operator is shown which is which
+        note("bootstrap: no source gave a heartbeat. %s" % ("; ".join(failures) or "no source is configured"))
         trail(dict(event, sequence=0, outcome="INCOMPLETE", reason="bootstrap (--bootstrap): no source holds a heartbeat (%s)"
-                   % "; ".join(failures)))
+                   % ("; ".join(failures) or "no source configured")))
         counter.define()
         trail(dict(event, sequence=0, outcome="ALLOW", reason="bootstrap: the counter starts at 0"))
         return 0, None
@@ -776,6 +794,8 @@ def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False
     require(done.returncode == 0, "the first-heartbeat step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
     m = re.search(r"^FIRST-HEARTBEAT (\S+) (\S+)$", done.stdout, re.M)
     require(m is not None, "the first-heartbeat step did not report its result")
+    for line in re.findall(r"^NOTE (.*)$", done.stdout, re.M):
+        print("  " + line)                                     # to the operator at the console
     if m.group(1) == "held":
         return None, None
     return int(m.group(1)), (None if m.group(2) == "-" else float(m.group(2)))
