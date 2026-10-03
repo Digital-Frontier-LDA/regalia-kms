@@ -198,6 +198,26 @@ class ToolDirectory(Case):
             os.chmod(tool_dir, 0o2770)
             self.refused("no group or other can write", trails.append, trail, {"event": "e"})
 
+    def test_a_service_trail_takes_its_own_reader_group(self):
+        """#286: a writer that belongs to its trail's reader group gives the file that group, also a rotated
+        one; a writer that does not still writes (the operation is recorded), and the shipper's refusal to read
+        says what is wrong; a group this machine does not have changes nothing."""
+        import grp
+        others = [g for g in os.getgroups() if g != os.stat(self.d).st_gid]
+        if not others:
+            self.skipTest("the test user belongs to one group only")
+        reader = grp.getgrgid(others[0]).gr_name
+        trails.append(self.path, {"event": "e"}, group=reader)
+        self.assertEqual((os.stat(self.path).st_gid, os.stat(self.path).st_mode & 0o777), (others[0], 0o640))
+        with unittest.mock.patch.object(trails, "ROTATE_BYTES", 1):
+            trails.append(self.path, {"event": "rotated"}, group=reader)
+        self.assertEqual(os.stat(self.path).st_gid, others[0])                       # the new file after a rotation
+        other = os.path.join(self.d, "other.jsonl")
+        with unittest.mock.patch.object(trails.os, "fchown", side_effect=PermissionError("not a member")):
+            self.assertEqual(trails.append(other, {"event": "e"}, group=reader), 1)     # written all the same
+        trails.append(other, {"event": "e"}, group="no-such-group-for-this-test")
+        self.assertEqual(trails.verify(other)["chained"], 2)
+
     def test_a_trail_of_another_mode_is_brought_to_0640(self):
         with open(self.path, "w"):
             pass

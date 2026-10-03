@@ -387,7 +387,7 @@ class Authority:
         self.cfg, self.run = cfg, run or subprocess.run
         self.signer = signer or signer_for(cfg)
         self.clock = clock or authtime.clock(os.path.join(cfg["run_dir"], "authtime.json"))
-        self.trail = trail or node.Trail(self.path("audit.jsonl"))
+        self.trail = trail or node.Trail(self.path("audit.jsonl"), "authority")
         if getattr(self.signer, "on_latch", "none") is None:   # a PIN latch is recorded once, when it is set
             self.signer.on_latch = lambda latch: self.trail({"event": "pin-latch", "outcome": "DENY", "reason": latch["reason"],
                                                              "serial": latch["serial"], "signer": self.signer.kind})
