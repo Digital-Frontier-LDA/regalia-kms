@@ -4,10 +4,12 @@
 #
 #   sudo REGALIA_UNLOCK_BIN=/path/to/regalia-unlock e2e/unlock-boot-qemu.sh
 #
-# A Debian 13 guest in QEMU (KVM when the machine has it), with a software TPM as its TPM and its whole
-# disk a LUKS2 volume. Its initrd is built by the guest's own dracut with the module
-# deploy/baremetal/initrd/dracut/90regalia-unlock. The peers run on this machine, in network
-# namespaces, as in e2e/wg-boot-netns.sh; nothing is loaded outside a namespace.
+# A Debian 13 guest in QEMU (KVM when the machine has it), with a software TPM as its TPM and its disk
+# one GPT partition labelled regalia-root, a LUKS2 volume. Its initrd is built by the guest's own dracut
+# with the module deploy/baremetal/initrd/dracut/90regalia-unlock, and is the same for every host: what
+# differs per host reaches the initrd as system credentials (here through QEMU's SMBIOS; on a host,
+# from the ESP through systemd-stub). The peers run on this machine, in network namespaces, as in
+# e2e/wg-boot-netns.sh; nothing is loaded outside a namespace.
 #
 #   boot 1  ENROLMENT. Nothing is enrolled: the console asks for the recovery key and the test types it
 #           (PoC 6.5: the manual path works with no peer and no credential). The running guest seals
@@ -29,7 +31,7 @@ cd "$(dirname "$0")/.."
 export LC_ALL=C PATH="$PATH:/usr/sbin:/sbin"
 [ "$(id -u)" = 0 ] || { echo "unlock-boot-qemu: run as root"; exit 2; }
 BIN="${REGALIA_UNLOCK_BIN:?set REGALIA_UNLOCK_BIN to a built cmd/regalia-unlock (static: CGO_ENABLED=0)}"
-for t in qemu-system-x86_64 swtpm tpm2_createek cryptsetup mkfs.ext4 wg nft ip cpio python3; do
+for t in qemu-system-x86_64 swtpm tpm2_createek cryptsetup mkfs.ext4 sfdisk wg nft ip python3; do
   command -v "$t" >/dev/null || { echo "unlock-boot-qemu: $t is required"; exit 2; }
 done
 W="$(mktemp -d /var/tmp/regalia-boot.XXXXXX)"; chmod 700 "$W"
@@ -72,6 +74,7 @@ install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boo
 install -m 0644 deploy/baremetal/initrd/regalia-unlock.socket deploy/baremetal/initrd/regalia-unlock.service \
   deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
+install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
 # And what only the test adds, in the real root: the enrolment step and the report.
 install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report "$ROOT/usr/lib/regalia/"
 install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service "$ROOT/etc/systemd/system/"
@@ -86,26 +89,34 @@ chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-
   || { tail -40 "$W/dracut.log"; echo "unlock-boot-qemu: dracut failed"; exit 2; }
 grep -i "regalia" "$W/dracut.log" | head -5 || true
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
-for f in 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.socket$' 'regalia-unlock\.service$' 'regalia-wg-boot\.service$' \
+for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.socket$' 'regalia-unlock\.service$' 'regalia-wg-boot\.service$' \
          'systemd-pcrphase-initrd\.service$' 'initrd\.target\.wants/systemd-pcrphase-initrd\.service' 'systemd-pcrextend$' \
          'bin/wg$' 'bin/nft$' 'bin/ip$' 'wireguard\.ko' 'nf_tables\.ko' 'nft_ct\.ko' 'virtio_net\.ko'; do
   grep -q "$f" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: the initrd lacks $f"; grep -c . "$W/lsinitrd.txt"; exit 2; }
 done
+# nothing per host: no /etc/regalia, and the one crypttab line of the module
+if grep -q 'etc/regalia' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds files under /etc/regalia"; exit 2; fi
+chroot "$ROOT" lsinitrd -f etc/crypttab /boot/initrd.e2e | grep -v '^#' > "$W/crypttab.txt"
+cmp -s "$W/crypttab.txt" <(grep -v '^#' deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab) \
+  || { cat "$W/crypttab.txt"; echo "unlock-boot-qemu: the initrd's crypttab is not the module's"; exit 2; }
 cp "$ROOT/boot/vmlinuz-$KVER" "$W/vmlinuz"; cp "$ROOT/boot/initrd.e2e" "$W/initrd"
 for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
-echo "### the disk: all of it one LUKS2 volume, opened only by the recovery key so far"
+echo "### the disk: one GPT partition labelled regalia-root, a LUKS2 volume opened only by the recovery key so far"
 truncate -s 4G "$W/disk.img"
-LOOP="$(losetup --find --show "$W/disk.img")"
-printf '%s' "$RECOVERY" | cryptsetup luksFormat --type luks2 --batch-mode --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --key-file - "$LOOP"
-printf '{"type":"systemd-recovery","keyslots":["0"]}' | cryptsetup token import --json-file - "$LOOP"
-printf '%s' "$RECOVERY" | cryptsetup open --key-file - "$LOOP" regalia-boot-build
+printf 'label: gpt\nname=regalia-root\n' | sfdisk -q "$W/disk.img"
+LOOP="$(losetup --find --show --partscan "$W/disk.img")"
+PART="${LOOP}p1"
+for _ in $(seq 1 50); do [ -b "$PART" ] && break; sleep 0.1; done
+[ -b "$PART" ] || { echo "unlock-boot-qemu: no partition device $PART"; exit 2; }
+printf '%s' "$RECOVERY" | cryptsetup luksFormat --type luks2 --batch-mode --pbkdf pbkdf2 --pbkdf-force-iterations 1000 --key-file - "$PART"
+printf '{"type":"systemd-recovery","keyslots":["0"]}' | cryptsetup token import --json-file - "$PART"
+printf '%s' "$RECOVERY" | cryptsetup open --key-file - "$PART" regalia-boot-build
 mkfs.ext4 -q -L root /dev/mapper/regalia-boot-build
 mkdir "$W/mnt"; mount /dev/mapper/regalia-boot-build "$W/mnt"; MOUNTED+=("$W/mnt")
 cp -a "$ROOT/." "$W/mnt/"
 umount "$W/mnt"; MOUNTED=()
 cryptsetup close regalia-boot-build
-cryptsetup luksUUID "$LOOP" > "$W/uuid"
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 

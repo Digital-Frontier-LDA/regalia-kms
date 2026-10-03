@@ -126,7 +126,7 @@ RESPONSE_KEYS = ("schema", "peer_id", "node_id", "epoch", "manifest_digest", "se
 ENROLMENT_KEYS = ("schema", "target", "peer", "path_epoch", "ciphertext")
 TOKEN_TYPE = "regalia-peer-unlock"
 TOKEN_KEYS = ("type", "keyslots", "version", "target", "peer", "path_epoch", "local")
-LOCAL_NAME = "regalia-unlock-local"
+LOCAL_NAME = "regalia.unlock-local"
 # Where systemd-cryptsetup reads the root volume's key: the key-file field of its crypttab entry, and the
 # ListenStream of deploy/baremetal/initrd/regalia-unlock.socket.
 KEY_SOCKET = "/run/regalia-unlock/key.sock"

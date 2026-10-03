@@ -27,9 +27,18 @@ Before=initrd-switch-root.target shutdown.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# No EnvironmentFile=: /etc/regalia/boot.env is read by the script as data. A file that may come from
+# No EnvironmentFile=: boot.env is read by the script as data. A file that may come from
 # storage others can write must not be able to set this process's environment (LD_PRELOAD, PATH).
-LoadCredentialEncrypted=regalia-wg-boot-key:/etc/regalia/wg-boot.cred
+# system credentials, as for regalia-unlock.service: the key sealed to this TPM, and three that are not
+# secret (bootnet.boot_wg_conf, bootnet.boot_ruleset, and boot.env). A missing one makes the script fail
+# and leave nothing behind.
+LoadCredentialEncrypted=regalia.wg-boot-key
+LoadCredential=regalia.wg-boot-conf
+LoadCredential=regalia.boot-nft
+LoadCredential=regalia.boot-env
+# where `up` notes the interface for `down`, which may run without the credentials; removed after it
+RuntimeDirectory=regalia-wg-boot
+RuntimeDirectoryMode=0700
 ExecStart=/usr/lib/regalia/wg-boot up
 # ExecStopPost, not ExecStop: it also runs when the start failed or timed out. Nothing of the boot mesh,
 # least of all its default-deny ruleset, may be left for the real root to inherit.
