@@ -27,6 +27,11 @@ check() {
         derror "regalia-unlock: libtss2-tcti-device is not installed: systemd could not unseal the boot credentials"
         return 1
     fi
+    # The module is two files: without its crypttab line the image would build and open nothing.
+    if [ ! -s "${moddir:?}/crypttab" ]; then
+        derror "regalia-unlock: $moddir/crypttab is missing: install the whole module directory"
+        return 1
+    fi
     # The client and its unit come from the host separately. The client stays for the whole initrd phase
     # and records the boot session: under a unit that gives it nowhere to write, or does not stop it before
     # the root filesystem takes over, the host would boot with its leases refused or the client left behind.

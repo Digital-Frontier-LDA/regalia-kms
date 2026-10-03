@@ -74,6 +74,7 @@ install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boo
 install -m 0644 deploy/baremetal/initrd/regalia-unlock.socket deploy/baremetal/initrd/regalia-unlock.service \
   deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
+install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
 # And what only the test adds, in the real root: the enrolment step and the report.
 install -m 0755 e2e/lib/boot-guest/e2e-enrol e2e/lib/boot-guest/e2e-report "$ROOT/usr/lib/regalia/"
 install -m 0644 e2e/lib/boot-guest/regalia-e2e-enrol.service e2e/lib/boot-guest/regalia-e2e-report.service "$ROOT/etc/systemd/system/"
