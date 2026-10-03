@@ -515,11 +515,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
-      - name: Build the pre-root client (static, no cgo, reproducible flags)
-        run: CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
-      - name: Build the initrd twice from nothing (the second in a hostile environment); both must be identical
+      - name: Build the initrd twice from nothing (the second in a hostile environment, host apt configuration included); both must be identical
         run: |
-          sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 2
+          sudo REGALIA_GO="$(command -v go)" REGALIA_HOSTILE_APT=1 bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 2
           sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/repro"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -544,10 +542,8 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Build the pre-root client (static, no cgo, reproducible flags)
-        run: CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: Build the initrd once, on Debian 13
-        run: REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 1
+        run: REGALIA_GO="$(command -v go)" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro" 1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: initrd-debian
@@ -566,7 +562,7 @@ jobs:
         run: |
           cd "$RUNNER_TEMP/builds"
           for b in initrd-first initrd-second initrd-debian; do
-            echo "$b: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_entries"], "entries, client", r["client_sha256"])' "$b/initrd-build.json")"
+            echo "$b: $(python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["initrd_sha256"], r["initrd_entries"], "entries, commit", r["commit"][:12], r["go"], "client", r["client_sha256"])' "$b/initrd-build.json")"
           done
           bad=0
           for b in initrd-second initrd-debian; do
