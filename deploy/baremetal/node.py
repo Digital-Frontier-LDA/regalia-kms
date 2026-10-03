@@ -62,7 +62,7 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, attest, authtime, bootnet, convergence, heartbeat, heartbeat_watch, lease,
+from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, heartbeat, heartbeat_watch, lease,
                               measurements, membership, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
@@ -207,21 +207,15 @@ def boot_session(run_dir, rand=os.urandom, make=False):
 # ---- the trail ----
 
 class Trail:
-    """Audit events, one JSON object a line, appended and fsynced. Raises if it cannot write: callers that
-    must not act unrecorded (sync.Server) refuse to answer then."""
+    """Audit events, one JSON object a line, hash-chained, appended and fsynced (trails.append, #278).
+    Raises if it cannot write: callers that must not act unrecorded (sync.Server) refuse to answer then."""
 
     def __init__(self, path):
         self.path, self.lock = path, threading.Lock()
 
     def __call__(self, event):
-        line = json.dumps(dict(event, at=int(time.time())), sort_keys=True).encode() + b"\n"
         with self.lock:
-            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o600)
-            try:
-                os.write(fd, line)
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            trails.append(self.path, dict(event, at=int(time.time())))
 
 
 # ---- the node ----
