@@ -244,8 +244,9 @@ def _der_exact(raw, index):
 
 def ek_certificate(journal, directory, run):
     """The TPM's EK certificate for the RSA EK this enrolment uses (TCG index 0x01c00002), checked to
-    certify THAT key. Only a missing index means "no certificate"; one that is there and cannot be read,
-    or certifies another key, is a refusal. An ECC EK certificate (0x01c0000a) certifies the ECC EK, which
+    certify THAT key. Only a missing index means "no certificate"; one that is there and cannot be read
+    (an index whose read is refused, for example locked by its authorisation, included), or certifies
+    another key, is a refusal. An ECC EK certificate (0x01c0000a) certifies the ECC EK, which
     this enrolment does not use: its presence is recorded, nothing is decided on it. Not a trust decision
     either way: the ceremony verifies the issuer against the manufacturer's CA."""
     if journal.state("ek_certificate") == "done":
@@ -322,9 +323,8 @@ def wg_key(journal, step, path, run):
                 "only as a new node, through replacement (#76); a stray file is removed by hand: rm %s" % (path, path))
         os.unlink(path)
     private, public = _wg_pair(run)
-    journal.started(step)
-    journal.doc["steps"][step]["public"] = public               # recorded BEFORE the private file exists
-    _atomic_json(journal.path, journal.doc)
+    journal.doc["steps"][step] = {"state": "started", "at": int(time.time()), "public": public}
+    _atomic_json(journal.path, journal.doc)                     # one write: recorded BEFORE the private file exists
     os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
     _write_private(path, (private + "\n").encode())
     journal.done(step, public=public, path=path)
@@ -346,15 +346,22 @@ def _safe_directory(directory):
     group or others (otherwise someone could swap it). Created if absent; never trusted if it is not so."""
     directory = os.path.abspath(directory)
     me = os.geteuid()                    # root, in production: main() refuses anything else
-    walk = os.path.dirname(directory)
+    # Every directory above it is owned by root (or this user) and closed to group and others, OR is sticky
+    # (/tmp, 1777) with the entry below it owned by root or this user: in a sticky directory only an entry's
+    # owner can rename or remove it, so nobody else can swap what lies beneath. The SAME rule as admission.ancestorsTrusted
+    # (#233, Go); kept identical by hand until one shared helper exists.
+    below, walk = directory, os.path.dirname(directory)
     while True:
         st = os.lstat(walk)
-        require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me) and not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH),
-                "%s is not a root-owned directory closed to group and others: the enrolment directory under it "
-                "could be replaced" % walk)
+        open_to_others = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        child_owner = os.lstat(below).st_uid if os.path.lexists(below) else me
+        require(stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me)
+                and (not open_to_others or (st.st_mode & stat.S_ISVTX and child_owner in (0, me))),
+                "%s is not a root-owned directory closed to group and others (nor a sticky one): the enrolment "
+                "directory under it could be replaced" % walk)
         if walk == "/":
             break
-        walk = os.path.dirname(walk)
+        below, walk = walk, os.path.dirname(walk)
     if not os.path.lexists(directory):
         os.mkdir(directory, 0o700)
     st = os.lstat(directory)

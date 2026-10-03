@@ -285,12 +285,43 @@ class InitOnSwtpm(unittest.TestCase):
         with self.assertRaisesRegex(enrol.Refused, "not a real directory"):
             self.init()
         os.unlink(self.dir)
+        # a sticky world-writable parent (/tmp, 1777) with our own entry below it is safe
+        os.chmod(self.d, 0o1777)
+        try:
+            self.init()
+        finally:
+            os.chmod(self.d, 0o700)
+        shutil.rmtree(self.dir)
+        for handle in (attest.AK_HANDLE,):
+            subprocess.run(["tpm2_evictcontrol", "-C", "o", "-c", handle], capture_output=True)
+        os.unlink(self.wg)
         os.chmod(self.d, 0o775)
         try:
             with self.assertRaisesRegex(enrol.Refused, "closed to group and others"):
                 self.init()
         finally:
             os.chmod(self.d, 0o700)
+
+
+    def test_under_a_sticky_parent_only_our_own_entry_is_trusted(self):
+        """The rule #233's gate uses (admission.ancestorsTrusted): a world-writable sticky ancestor is
+        trusted only if the entry below it, on our path, is owned by root or by us. A foreign owner could
+        rename or remove that entry, and so swap the enrolment directory."""
+        os.mkdir(self.dir, 0o700)
+        os.chmod(self.d, 0o1777)
+        self.addCleanup(os.chmod, self.d, 0o700)
+        real = os.lstat
+
+        def foreign_child(path, *a, **k):
+            st = real(path, *a, **k)
+            if os.path.abspath(path) == os.path.abspath(self.dir):
+                return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, 65534, st.st_gid,
+                                       st.st_size, int(st.st_atime), int(st.st_mtime), int(st.st_ctime)))
+            return st
+        with unittest.mock.patch.object(enrol.os, "lstat", foreign_child):
+            with self.assertRaisesRegex(enrol.Refused, "nor a sticky one|not a real directory owned"):
+                enrol._safe_directory(self.dir)
+        enrol._safe_directory(self.dir)          # our own entry under the sticky parent: trusted
 
 
 if __name__ == "__main__":
