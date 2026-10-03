@@ -516,10 +516,17 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   | `regalia.boot-nft` | `bootnet.boot_ruleset` | no |
   | `regalia.boot-env` | `BOOT_NIC`, `BOOT_ADDRESS`, `BOOT_GATEWAY`, `BOOT_TUNNEL` (read as data) | no |
 
-  The units name each without a path: systemd looks for it among the credentials it was given at
-  boot, decrypts the two sealed ones (a plain one under those names is refused), and treats a missing
-  one as absent: the client then gives nothing and the console asks for the recovery key. The machine
-  that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+  **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
+  carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
+  not SMBIOS type 11 or QEMU's fw_cfg (which nothing the peers attest measures), not the command line.
+  The stub still unpacks the ESP's files into the initrd at `/.extra/global_credentials/`, and the two
+  units read exactly their six by fixed paths there: the two sealed ones decrypted by systemd (a plain
+  one is refused), the four others as data. A missing file keeps its unit from starting, and the
+  console asks for the recovery key (within seconds in the boot test). Second layer, for an image built
+  without that switch: the dracut module leaves out systemd-debug-generator (which makes units and
+  drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles and sysctl services.
+  `fstab.extra` (read by fstab-generator, which mounts the root) is covered by the first layer only.
+  The machine that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
 
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
@@ -531,14 +538,12 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   12 in the initrd phase**, against the value the node's credentials give: `espcreds.pcr12(files)`,
   the stub's own computation (one extend with the SHA-256 of a cpio archive of the files, sorted by
   name), shown equal to a real boot's. The boot test's peers do; a planted credential is refused.
-  **Not every credential channel is measured.** systemd in the initrd also imports credentials from
-  SMBIOS type 11 strings and from QEMU's fw_cfg, and nothing puts those in PCR 12 (SMBIOS reaches PCR
-  1 at most, through the firmware, which no peer attests). Whoever can set SMBIOS strings on a host
-  (firmware, iLO) could pass credentials the peers never see; what systemd acts on by name must
-  therefore also be restricted in the image (B2 on #66).
+  **Not every credential channel is measured**: SMBIOS type 11 strings and QEMU's fw_cfg reach PCR 1
+  at most, through the firmware, which no peer attests. That is why systemd imports none (above); the
+  boot test passes a unit drop-in through SMBIOS and it is not acted on.
   OPEN for production: the measurement set's PCR 12 per node, computed by a tool from the node's
   credentials (#66, d9), and the split decided on #66 (membership-derived data signed and verified in
-  the initrd, B3; refusal of unexpected credential names, B2).
+  the initrd, B3).
   The image must be built with `dracut --no-hostonly --no-hostonly-cmdline` (the module refuses
   hostonly mode, which copies the build machine's identity and crypt settings into the image). The
   ruleset credential may hold only `table inet regalia_boot` and include no file; `down` flushes every

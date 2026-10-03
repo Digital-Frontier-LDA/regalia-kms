@@ -863,17 +863,20 @@ class Units(unittest.TestCase):
         self.assertIn("systemd-pcrphase", re.search(r"^\s*echo (.*)$", depends, re.M).group(1).split())
 
     def test_the_image_is_the_same_for_every_host(self):
-        """Nothing per host is in the initrd (#66): every per-host file is a system credential, named without
-        a path (searched among the credentials systemd was given at boot), and the one crypttab line names the
-        root partition by its GPT label."""
+        """Nothing per host is in the initrd (#66): every per-host file comes from the ESP, read by a fixed path
+        under the stub's archive (/.extra/global_credentials), never from systemd's credential store, and the
+        one crypttab line names the root partition by its GPT label."""
         here = os.path.join(REPO, "deploy/baremetal/initrd")
         secret = {"regalia-unlock.service": ["regalia.unlock-local"], "regalia-wg-boot.service": ["regalia.wg-boot-key"]}
         plain = {"regalia-unlock.service": ["regalia.unlock-config"],
                  "regalia-wg-boot.service": ["regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"]}
         for name in secret:
             service = self.unit(name)["Service"]
-            self.assertEqual([v for k, v in service if k == "LoadCredentialEncrypted"], secret[name], name)
-            self.assertEqual([v for k, v in service if k == "LoadCredential"], plain[name], name)
+            # each by its fixed path under the stub's archive: no credential is taken from systemd's store
+            at = lambda names: ["%s:/.extra/global_credentials/%s.cred" % (n, n) for n in names]
+            self.assertEqual([v for k, v in service if k == "LoadCredentialEncrypted"], at(secret[name]), name)
+            self.assertEqual([v for k, v in service if k == "LoadCredential"], at(plain[name]), name)
+            self.assertFalse([k for k, _ in service if k == "ImportCredential"], name)
         for name in sorted(os.listdir(here)) + ["dracut/90regalia-unlock/module-setup.sh"]:
             if os.path.isfile(os.path.join(here, name)):
                 with open(os.path.join(here, name)) as f:
@@ -889,6 +892,12 @@ class Units(unittest.TestCase):
                                      '"${systemdsystemunitdir:?}/$unit"', '"${moddir:?}/crypttab" /etc/crypttab'])
         check = module[module.index("check() {"):module.index("depends() {")]
         self.assertIn('if [ -n "${hostonly-}" ]; then', check)
+        # the second layer: no generator of units from credentials, and no credential imported by tmpfiles or sysctl
+        self.assertIn('rm -f -- "${initdir:?}${systemdutildir:?}/system-generators/systemd-debug-generator"', install)
+        for service in ("systemd-tmpfiles-setup.service", "systemd-tmpfiles-setup-dev-early.service", "systemd-tmpfiles-setup-dev.service",
+                        "systemd-sysctl.service"):
+            self.assertIn(service, install)
+        self.assertIn("printf '[Service]\\nImportCredential=\\n'", install)
         with open(os.path.join(here, "dracut/90regalia-unlock/crypttab")) as f:
             lines = [l.split() for l in f if l.strip() and not l.startswith("#")]
         self.assertEqual(lines, [["root", "PARTLABEL=regalia-root", unlock.KEY_SOCKET, "luks,x-initrd.attach"]])
@@ -936,8 +945,8 @@ class Units(unittest.TestCase):
             self.assertIn("'%s'" % line, check)
             self.assertIn(line.split("=", 1)[1], (values | unit)[line.split("=", 1)[0]])
         self.assertEqual([k for k, _ in service if k.startswith("Exec")], ["ExecStart"])      # one program, no shell around it
-        self.assertEqual(values["LoadCredentialEncrypted"], unlock.LOCAL_NAME)          # a system credential, decrypted: never in plain
-        self.assertEqual([v for k, v in service if k == "LoadCredential"], ["regalia.unlock-config"])   # the one plain one: not secret
+        self.assertEqual(values["LoadCredentialEncrypted"], "%s:/.extra/global_credentials/%s.cred" % ((unlock.LOCAL_NAME,) * 2))   # decrypted: never in plain
+        self.assertEqual([v for k, v in service if k == "LoadCredential"], ["regalia.unlock-config:/.extra/global_credentials/regalia.unlock-config.cred"])
         self.assertEqual((values["CapabilityBoundingSet"], values["NoNewPrivileges"], values["ProtectSystem"]), ("", "yes", "strict"))
         self.assertEqual(values["RestrictAddressFamilies"], "AF_UNIX AF_INET AF_INET6")
         self.assertEqual((values["DevicePolicy"], sorted(v for k, v in service if k == "DeviceAllow")), ("closed", ["/dev/tpmrm0 rw", "block-* r"]))

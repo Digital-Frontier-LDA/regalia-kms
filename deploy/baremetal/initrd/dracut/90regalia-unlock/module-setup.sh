@@ -81,5 +81,16 @@ install() {
     # (in place of any other: dracut's crypt modules copy the build machine's in hostonly mode)
     rm -f -- "${initdir:?}/etc/crypttab"
     inst_simple "${moddir:?}/crypttab" /etc/crypttab
+    # Nothing in the initrd acts on a credential by name. The image's command line already stops systemd
+    # importing any (systemd.import_credentials=no); this is the second layer, for an image built without
+    # it: no unit or drop-in from a credential (the generator that makes them is left out), and the tmpfiles
+    # and sysctl services import none.
+    rm -f -- "${initdir:?}${systemdutildir:?}/system-generators/systemd-debug-generator"
+    local service
+    for service in systemd-tmpfiles-setup.service systemd-tmpfiles-setup-dev-early.service systemd-tmpfiles-setup-dev.service \
+        systemd-sysctl.service; do
+        mkdir -p "${initdir:?}${systemdsystemunitdir:?}/$service.d"
+        printf '[Service]\nImportCredential=\n' > "${initdir:?}${systemdsystemunitdir:?}/$service.d/50-regalia-no-credentials.conf"
+    done
     "${SYSTEMCTL:?}" -q --root "${initdir:?}" enable regalia-unlock.socket
 }

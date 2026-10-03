@@ -23,7 +23,7 @@ import threading
 import time
 import unittest
 
-from deploy.baremetal import attest, bootnet, espcreds, firewall, sitecfg, unlock
+from deploy.baremetal import attest, bootnet, espcreds, firewall, sitecfg, uki, unlock
 import tests.test_baremetal_unlock as tub
 
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
@@ -183,7 +183,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertTrue(unmounted, "the ESP did not unmount")
         return files
 
-    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None):
+    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None):
         """One boot of the guest under OVMF, to power-off, with `credentials` on its ESP. Returns what its
         console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase."""
         self.on_esp = self.esp(credentials or {})
@@ -210,9 +210,15 @@ class OnQemu(tub.OnSwtpm):
                 "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
         if enrol_disk:
             argv += ["-drive", "file=%s,format=raw,if=virtio" % enrol_disk]
+        for name, content in sorted((smbios or {}).items()):        # SMBIOS type 11: a channel the firmware owns
+            path = "%s/smbios-%s-%s" % (self.d, label, name)
+            with open(path, "w") as f:
+                f.write("io.systemd.credential.binary:%s=%s" % (name, base64.b64encode(content).decode()))
+            argv += ["-smbios", "type=11,path=" + path]
         qemu = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.processes.append(qemu)
-        said, answered, deadline = b"", 0, time.monotonic() + timeout
+        said, answered, started = b"", 0, time.monotonic()
+        deadline, self.prompted_after = started + timeout, None
         with open("%s/console-%s.log" % (BOOT, label), "wb") as log:
             while True:
                 ready, _, _ = select.select([qemu.stdout], [], [], 1)
@@ -224,6 +230,8 @@ class OnQemu(tub.OnSwtpm):
                     log.write(chunk)
                     log.flush()
                     prompts = len(PROMPT.findall(said))
+                    if prompts and self.prompted_after is None:
+                        self.prompted_after = time.monotonic() - started
                     if recovery and prompts > answered:
                         answered = prompts
                         time.sleep(1)
@@ -271,6 +279,10 @@ class OnQemu(tub.OnSwtpm):
         image, mnt = self.enrolment_disk(local, self.keys["a", "boot"][0])
         said = self.boot("1-enrolment", enrol_disk=image, recovery=True)
         self.assertRegex(said, PROMPT.pattern.decode())
+        # with no file on the ESP the two units do not start (a path that is not there is fatal), and the console
+        # asks promptly: nothing waits on the socket for a client that never came
+        print("boot 1: the console asked %.0f s after the guest started" % self.prompted_after, file=sys.stderr)
+        self.assertLess(self.prompted_after, 120)
         self.assertIn("REGALIA-E2E-ENROLLED", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         self.assertEqual(run(["mount", "-o", "loop,ro", image, mnt], capture_output=True).returncode, 0)
@@ -286,6 +298,10 @@ class OnQemu(tub.OnSwtpm):
         # MEASURED BOOT: the stub and systemd measured what the build record says, and an empty ESP left PCR 12 alone
         with open(BOOT + "/e2e.record.json") as f:
             record = json.load(f)
+        # the image's own command line (signed, in PCR 11) stops systemd importing any credential, from any source
+        with open(BOOT + "/e2e.efi", "rb") as f:
+            cmdline = dict(uki.sections(f.read()))[".cmdline"].decode()
+        self.assertIn("systemd.import_credentials=no", cmdline.split())
         self.assertEqual(pcrs["11"], record["pcr11"]["system"])
         self.assertEqual(pcrs["12"], espcreds.ZERO)
 
@@ -342,6 +358,17 @@ class OnQemu(tub.OnSwtpm):
         self.assertIsNotNone(booted)
         self.assertEqual([v.lower() for v in booted.groups()], [pcrs["7"], record["pcr11"]["system"], expected["pcr12"]])
         print("PCR 12 with the host's six credentials: %s, as espcreds computes it" % expected["pcr12"], file=sys.stderr)
+
+        # boot 2b, A CREDENTIAL FROM SMBIOS (which the firmware owns, and nothing the peers attest measures): a drop-in
+        # for the unlock client that would print a marker. systemd imports no credential, so it is not acted on, and
+        # the unlock goes on as in boot 2 (PCR 12 does not see SMBIOS: this boot is NOT refused by the peers).
+        dropin = b"[Service]\nExecStartPre=/bin/sh -c 'echo REGALIA-E2E-PLANTED-RAN > /dev/console'\n"
+        said = self.boot("2b-smbios", credentials, smbios={"systemd.unit-dropin.regalia-unlock.service": dropin})
+        self.assertNotIn("REGALIA-E2E-PLANTED-RAN", said)
+        self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
+        self.assertNotRegex(said, PROMPT.pattern.decode())
+        if "skipping importing of credentials" in said:
+            print("boot 2b: systemd said it imports no credential", file=sys.stderr)
 
         # boots 3-5, A PLANTED CREDENTIAL: each adds one file to the ESP under a name systemd in the initrd acts on
         # (these are plain, so systemd ignores them as undecryptable; what matters here is that ANY extra file

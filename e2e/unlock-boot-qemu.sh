@@ -20,6 +20,8 @@
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key from the socket, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
+#   boot 2b A CREDENTIAL FROM SMBIOS (a unit drop-in, as the firmware could pass one): not acted on, since
+#           the image's command line stops systemd importing credentials; the unlock goes on.
 #   boots 3-5  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line): PCR 12
 #           is not the one the peers expect, and they refuse the quote.
 #   boot 6  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
@@ -102,6 +104,11 @@ for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'r
 done
 # nothing per host: no /etc/regalia, and the one crypttab line of the module
 if grep -q 'etc/regalia' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds files under /etc/regalia"; exit 2; fi
+# nothing in it acts on a credential by name: no generator of units from credentials, the imports reset
+if grep -q 'systemd-debug-generator' "$W/lsinitrd.txt"; then echo "unlock-boot-qemu: the initrd holds systemd-debug-generator"; exit 2; fi
+for s in systemd-tmpfiles-setup systemd-sysctl; do
+  grep -q "$s.service.d/50-regalia-no-credentials.conf" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: no credential reset for $s"; exit 2; }
+done
 chroot "$ROOT" lsinitrd -f etc/crypttab /boot/initrd.e2e | grep -v '^#' > "$W/crypttab.txt"
 cmp -s "$W/crypttab.txt" <(grep -v '^#' deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab) \
   || { cat "$W/crypttab.txt"; echo "unlock-boot-qemu: the initrd's crypttab is not the module's"; exit 2; }
@@ -115,7 +122,7 @@ for k in initrd system secure-boot; do
 done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
 cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
-printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4}" > "$ROOT/tmp/uki/cmdline"
+printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4 systemd.import_credentials=no}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
@@ -152,7 +159,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### six boots"
+echo "### seven boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
@@ -163,4 +170,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 6 boots passed (enrolment with the recovery key, unattended through a peer, no peer and the recovery key, three planted credentials refused)"
+echo "unlock-boot-qemu: 7 boots passed (enrolment with the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, three planted ESP credentials refused, no peer and the recovery key)"
