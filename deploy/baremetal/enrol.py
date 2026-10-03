@@ -467,14 +467,52 @@ def fingerprint(root_key):
     return hashlib.sha256(bytes.fromhex(root_key)).hexdigest()
 
 
-def check_manifest(directory, chain, root_key, typed, document):
+def _check_replacement_step(envelopes, root_key, node_id, replace):
+    """The step of the chain that first names `node_id`: a replacement only with `replace`, and `replace` only for one."""
+    from deploy.baremetal import replacement
+    previous = None
+    for envelope in envelopes:
+        current = membership.accept(previous, envelope, root_key)
+        if node_id in membership.validate(current):
+            break
+        previous = current
+    else:
+        return                                             # not named at all: check_manifest says so next
+    before = membership.validate(previous) if previous is not None else {}
+    after = membership.validate(current)
+    retired = sorted(n for n, entry in after.items() if n in before and before[n]["state"] not in replacement.TERMINAL
+                     and entry["state"] in replacement.TERMINAL)
+    if replace is None:
+        require(not retired, "the manifest that first names %s (epoch %d) retires %s: it is a replacement, enrolled only with "
+                "`commit --replace %s`" % (node_id, current["epoch"], ", ".join(retired), retired[0] if retired else ""))
+        return
+    require(previous is not None, "%s is named from epoch 1: it replaces nobody" % node_id)
+    require(replace in retired, "the manifest that first names %s (epoch %d) does not replace %s%s: not the replacement typed"
+            % (node_id, current["epoch"], replace, " (it retires %s)" % ", ".join(retired) if retired else ""))
+    try:
+        # policy_version changes with a replacement whose measurements name the new node: the documents are the
+        # root's to compare (measurements.check_replacement); here the identities are asserted
+        replacement._check_replacement(previous, current, replace, node_id, policy_version_may_change=True)
+    except membership.Refused as refusal:
+        raise Refused("the replacement of %s by %s is refused: %s" % (replace, node_id, refusal))
+
+
+def check_manifest(directory, chain, root_key, typed, document, replace=None):
     """Phase 2's first step, and the only one before anything is written: `chain` (one envelope, or the list
     of envelopes from epoch 1 to N) verifies from the root-signed epoch 1 onwards under the root key whose
     fingerprint the operator typed by hand (a file alone never sets a trust anchor, ADR-0002 D21.2); its LAST
     manifest names THIS host exactly as its identity bundle says, and commits to the measurements document
     given. The first three hosts enrol on epoch 1; a host added later (a fourth node, or a replacement under
     #76) is named first at some epoch N and enrols on the whole chain to N. Returns the last manifest; writes
-    nothing."""
+    nothing.
+
+    A REPLACEMENT (#76): when the manifest that first names this host also moves a node to RETIRED or
+    REVOKED_STOLEN, it is a replacement, and it is enrolled only as one: with `replace` = the old node's ID, typed
+    by the operator, and replacement.check_replacement's rules on that step (the old node terminal and kept, no
+    identity of any node ever listed reused, nothing else changed). A replacement is never enrolled by accident as
+    a plain addition, nor an addition as a replacement of a node the operator did not name. The measurement
+    document of that step is the root's ceremony to compare (measurements.check_replacement); enrolment asserts the
+    identities."""
     require(isinstance(root_key, str) and re.fullmatch(r"[0-9a-f]{64}", root_key), "the root key is 64 lower-case hex")
     typed = re.sub(r"[\s:]", "", (typed or "").lower())
     require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
@@ -489,6 +527,7 @@ def check_manifest(directory, chain, root_key, typed, document):
         raise Refused("the manifest chain is refused: %s" % refusal)
     nodes = membership.validate(manifest)
     node_id = bundle["node_id"]
+    _check_replacement_step(envelopes, root_key, node_id, replace)
     require(node_id in nodes, "the manifest does not name this host (%s)" % node_id)
     node = nodes[node_id]
     require(membership.CAPABILITIES[node["state"]] & {"request", "serve"},
@@ -1003,7 +1042,7 @@ def render_credentials(journal, esp, site, chain, root_key, anchor, device=None)
 
 
 def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
-           out=sys.stdout):
+           out=sys.stdout, replace=None):
     """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
     from an earlier `check`), the boot image checked (approved_image), the configuration installed, the state
     directory made regalia-sync's, the anchor, the store and the heartbeat counter set up AS regalia-sync, and the
@@ -1013,7 +1052,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     journal = Journal(directory, _bundle(directory)["node_id"])
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
-    manifest = check_manifest(directory, chain, root_key, typed, document)
+    manifest = check_manifest(directory, chain, root_key, typed, document, replace)
     initrd_pub = None
     if boot is not None:                                            # checked before anything is written
         initrd_pub = approved_image(boot["image"], boot["record"], boot["initrd_pub"], boot["system_pub"],
@@ -1054,6 +1093,7 @@ def main(argv=None):
     c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
     c.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
     c.add_argument("--enrol-dir", default=ENROL_DIR)
+    c.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
     k = sub.add_parser("commit", help="enrol this host's trust anchors from the checked manifest chain")
     k.add_argument("--manifest", required=True, help="the root-signed envelope, or the JSON list of envelopes from epoch 1")
     k.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
@@ -1068,6 +1108,7 @@ def main(argv=None):
     k.add_argument("--secure-boot-cert", required=True, help="the Secure Boot certificate the record names")
     k.add_argument("--esp", required=True, help="the ESP's mount point: the sealed credentials go to ESP/loader/credentials")
     k.add_argument("--enrol-dir", default=ENROL_DIR)
+    k.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
@@ -1096,7 +1137,8 @@ def main(argv=None):
             typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
             boot = {"image": args.image, "record": args.image_record, "initrd_pub": args.initrd_pub, "system_pub": args.system_pub,
                     "secure_boot_cert": args.secure_boot_cert, "esp": args.esp}
-            commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot)
+            commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot,
+                   replace=args.replace)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
@@ -1110,7 +1152,7 @@ def main(argv=None):
             # TYPED, from a terminal: piped from a file, the fingerprint would be a file again (D21.2)
             require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
             typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
-            manifest = check_manifest(args.enrol_dir, envelope, args.root_key, typed, document)
+            manifest = check_manifest(args.enrol_dir, envelope, args.root_key, typed, document, args.replace)
         except (Refused, membership.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
