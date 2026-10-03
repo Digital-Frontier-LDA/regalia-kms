@@ -122,19 +122,21 @@ class Heartbeats(Case):
         self.refused("time is not authenticated", self.a.beat)
         self.assertEqual((self.a.counter.value(), self.a.held()), (0, None))
 
-    def test_a_failure_before_signing_retries_the_same_number(self):
-        """#230 (decided by regalia-kms-24): nothing was signed under the reserved number, so it is retried."""
+    def test_a_failure_in_the_signer_spends_its_number_never_signs_it_twice(self):
+        """#230 fourth read (regalia-kms-51, the reviewer, and 24's rule): sign() may fail after the token
+        signed, so the number is spent the moment it is handed over. One number, at most one signature."""
         with unittest.mock.patch.object(self.a.signer, "sign", side_effect=OSError("token busy")):
-            for _ in range(5):
+            for _ in range(3):
                 with self.assertRaises(OSError):
                     self.a.beat()
-        self.assertEqual((self.a.counter.value(), self.a.held()), (1, None))
-        self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 1)
-        # a new process does not know the reservation: that number is lost, never reused
-        with unittest.mock.patch.object(self.a.signer, "sign", side_effect=OSError("power lost")):
-            with self.assertRaises(OSError):
-                self.a.beat()
-        self.assertEqual(self.authority().beat()["heartbeat"]["sequence"], 3)
+        self.assertEqual((self.a.counter.value(), self.a.held()), (3, None))
+        self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 4)
+
+    def test_a_failure_before_the_signer_reserves_nothing(self):
+        self.authenticated = False
+        for _ in range(3):
+            self.refused("not authenticated", self.a.beat)
+        self.assertEqual(self.a.counter.value(), 0)
 
     def test_a_failure_after_signing_republishes_the_same_bytes(self):
         with unittest.mock.patch.object(authority.Authority, "_publish", side_effect=OSError("disk full")):
@@ -205,9 +207,32 @@ class Heartbeats(Case):
         with failing:
             self.a.run_loop(lambda: clock["t"] > 86400, sleep=lambda s: clock.__setitem__("t", clock["t"] + s), clock=lambda: clock["t"])
         attempts = sum(1 for e in self.events if e.get("outcome") == "FAILED")
-        self.assertEqual(self.a.counter.value(), 1)
-        self.assertLessEqual(attempts, 86400 // 900 + 6)   # backed off to the interval
+        self.assertEqual(self.a.counter.value(), attempts)                 # one number per handed-over signature
+        self.assertLessEqual(attempts, 86400 // 900 + 6)   # backed off to the interval: the nodes' own rate
         self.assertEqual([authority.retry_delay(n, 900) for n in range(6)], [60, 120, 240, 480, 900, 900])
+
+    def test_a_pending_file_that_cannot_be_removed_is_said(self):
+        real = os.unlink
+
+        def unlink(path, *a, **k):
+            if path.endswith("pending-heartbeat.json"):
+                raise PermissionError("read-only")
+            return real(path, *a, **k)
+        with unittest.mock.patch.object(authority.os, "unlink", unlink):
+            self.a.beat()
+        self.assertEqual(self.events[-1]["outcome"], "STUCK")
+
+    def test_wake_runs_the_next_beat_at_once(self):
+        clock, beats = {"t": 0.0}, []
+        self.a.beat = lambda reason="interval": beats.append(clock["t"])
+        self.a.catch_up = lambda: None
+
+        def sleep(seconds):
+            clock["t"] += seconds
+            if clock["t"] == 5:
+                self.a.wake.set()                          # a revocation's heartbeat failed: try again now
+        self.a.run_loop(lambda: clock["t"] >= 10, sleep=sleep, clock=lambda: clock["t"])
+        self.assertEqual(beats, [0.0, 5.0])
 
     def test_a_key_the_manifest_does_not_name_reserves_nothing(self):
         stranger = authority.FileSigner(self.d + "/revocation.pem")
@@ -312,6 +337,20 @@ class Revocation(Case):
         self.assertIn("the next beat will", answer["reason"])
         self.assertEqual(self.a.catch_up()["heartbeat"]["epoch"], 2)
 
+    def test_a_trail_that_fails_after_the_commit_still_reports_committed(self):
+        calls = {"n": 0}
+        real = self.a.trail
+
+        def trail(event):
+            if event.get("event") == "authority-revoke":
+                raise OSError("disk full")
+            return real(event)
+        self.a.trail = trail
+        with self.assertRaises(authority.Committed):
+            self.a.revoke("c", "QUARANTINED", "trail full", "local-root")
+        self.assertEqual(self.a.store.load()["epoch"], 2)
+        self.assertTrue(self.a.wake.is_set())
+
     def test_unauthenticated_time_signs_no_revocation(self):
         self.authenticated = False
         self.refused("time is not authenticated", self.a.revoke, "c", "QUARANTINED", "x-ray", "local-root")
@@ -384,6 +423,29 @@ class CommandLine(Case):
         self.assertEqual(code, 2)
         self.assertIn("another writer holds", err)
         self.refused("another writer holds", authority.one_writer, self.d)
+
+    def test_the_writer_lock_follows_no_link_and_serve_holds_it(self):
+        os.symlink(self.d + "/elsewhere", self.d + "/writer.lock")
+        with self.assertRaises(OSError):
+            authority.one_writer(self.d)
+        self.assertFalse(os.path.exists(self.d + "/elsewhere"))           # nothing created through the link
+        os.unlink(self.d + "/writer.lock")
+        seen = {}
+
+        class Serving:
+            def __init__(self, cfg):
+                pass
+
+            def serve(self, stop):
+                try:
+                    authority.one_writer(seen.setdefault("dir", self_dir))
+                    seen["second"] = "got the lock"
+                except m.Refused:
+                    seen["second"] = "refused"
+        self_dir = self.d
+        with unittest.mock.patch.object(authority, "Authority", Serving):
+            code, _, _ = self.run_main("serve")
+        self.assertEqual((code, seen["second"]), (0, "refused"))
 
     def test_init_and_accept_only_as_the_service_s_own_user(self):
         with open(self.d + "/chain.json", "w") as f:

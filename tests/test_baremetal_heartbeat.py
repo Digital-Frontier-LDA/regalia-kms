@@ -501,6 +501,41 @@ class Sequence(Case):
                 self.assertEqual(counter.value(), 2)
                 os.unlink(path)
 
+    def test_a_key_rotation_mid_catch_up_does_not_strand_the_node(self):
+        """#230 fourth read (regalia-kms-51): killed early in a 50,000-step catch-up, then the manifest names only
+        a NEW revocation key. The held heartbeat (old key) is not finished on its word, but its gap widens the
+        bound for the new, verified heartbeat."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        tpm = hbt_killing(10)
+        counter = hb.Counter("0x1500018", lock_path=self.d + "/r.lock", run=tpm)
+        counter.define()
+        clock = {"now": T0 + 60, "ticks": 5000}
+        fresh = hb.Freshness(counter, lambda: (clock["now"], True), lambda: clock["ticks"], self.d + "/rot.json")
+        fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+        away = 50000 * hb.MIN_INTERVAL_S
+        clock["now"] += away
+        clock["ticks"] += away * 1000
+        tpm.armed = True
+        with self.assertRaises(OSError):
+            fresh.accept(beat(self.m1, 50001, issued=T0 + away), self.m1)
+        tpm.armed = False
+        newer = Ed25519PrivateKey.generate()
+        m2 = manifest(epoch=2, prev=m.digest(self.m1), keys=[pub(newer)])
+        clock["now"] += 3600
+        clock["ticks"] += 3600 * 1000
+        fresh.accept(beat(m2, 50007, issued=T0 + away + 3600, key=newer), m2)
+        self.assertEqual(counter.value(), 50007)
+
+    def test_a_genuine_held_heartbeat_beyond_its_stored_allowance_is_finished_only_that_far(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        with open(self.state) as f:
+            state = json.load(f)
+        state["envelope"], state["allowance"] = beat(self.m1, 3000, issued=T0 + 60), 1000    # genuine, but over its allowance
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        self.f.accept(beat(self.m1, 1500, issued=T0 + 120), self.m1)
+        self.assertEqual(self.counter.value(), 1500)
+
     def test_the_stored_allowance_never_exceeds_the_cap(self):
         self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
         self.later(2 * 366 * 86400)

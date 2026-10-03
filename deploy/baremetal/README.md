@@ -726,14 +726,17 @@ it (`service_mesh.authority`).
 
 - **Sequence, signed once:** a number is reserved on its own TPM counter before signing (a crash loses it,
   never reuses it; a restored disk cannot move the counter back; no TPM, no authority). It is signed at
-  most once: a failure before signing retries that number, a failure after it republishes the same bytes
-  (kept in the state directory), and bytes that expire unpublished are dropped with their number. The key
+  most once: a number handed to the signer is spent even if signing fails, a failure after signing
+  republishes the same bytes (kept in the state directory), and bytes that expire unpublished are
+  dropped with their number. The key
   is checked against the manifest before reserving, and failures back off from 60 s to `interval_s`.
 - **Time:** it signs only while `authtime` says the clock is authenticated.
 - **Interval:** at least `heartbeat.MIN_INTERVAL_S` (600 s) times the number of authorities, and at most a
   quarter of the heartbeat's lifetime. A node accepts a sequence jump that grows by one per 600 s since
   the last heartbeat it accepted, so a node back from a month's repair catches up, while a sequence
   running faster than time is refused.
+- **One writer:** `serve` holds `writer.lock` in the state directory for its life, `init` and `accept`
+  for their write, each only as the service's own user.
 - **A revocation** changes one node's state to QUARANTINED or REVOKED_STOLEN, nothing else. Membership's
   rule for revocation-signed changes is checked by the Store before it is kept. Anything permissive is
   the root's. If the process stops between the manifest and its heartbeat, the next start signs the

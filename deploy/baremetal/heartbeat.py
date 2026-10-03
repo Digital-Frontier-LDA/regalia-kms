@@ -337,14 +337,19 @@ class Freshness:
         # for a held heartbeat SIGNED by a revocation key the current manifest names (any epoch: the
         # catch-up may span one): a file planted on the disk owes nothing and moves nothing.
         owed = pending(state, held, self.counter.MAX_JUMP)
+        widen = 0
         if owed:
             try:
                 signed(state["envelope"], manifest)
             except Refused:
-                owed = 0
+                # Not finished on the strength of the file (planted, or signed by a key a rotation has since
+                # retired). But the gap it records may be real: the bound for THIS heartbeat, which is
+                # verified, widens by it (capped), so a node caught mid catch-up by a key rotation is not
+                # stranded. The counter still lands only on a genuinely signed sequence.
+                owed, widen = 0, owed
         if owed:
             held = self.counter.advance(held + owed, state["allowance"] or self.counter.MAX_JUMP)
-        allowance = min(allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP), MAX_ALLOWANCE)
+        allowance = min(allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP) + widen, MAX_ALLOWANCE)
         require(heartbeat["sequence"] > held, "REPLAY: sequence %d is not above the TPM counter %d" % (heartbeat["sequence"], held))
         require(heartbeat["sequence"] - held <= allowance, "sequence jump %d exceeds the bound %d: anomaly"
                 % (heartbeat["sequence"] - held, allowance))

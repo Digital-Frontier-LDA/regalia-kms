@@ -20,9 +20,10 @@ HEARTBEATS. Every interval_s it publishes a heartbeat {epoch, sequence, issued_a
 manifest_digest} for the manifest it holds, and only while authtime says the clock is authenticated.
 SIGN ONCE: a number is reserved on its own TPM counter (a crash after that loses it, never reuses it),
 signed at most once, and the signed bytes are kept (pending-heartbeat.json) until they are published. A
-failure before signing retries the signing for the same number; a failure after it republishes the same
-bytes; signed bytes that expire unpublished, or that a newer epoch supersedes, are dropped and the number
-is lost: never two heartbeats under one number. The key is checked against the manifest before a number
+number is spent the moment it is handed to the signer (a token may sign and still report a failure), so
+a failed sign costs that number; a failure after signing republishes the same bytes; signed bytes that
+expire unpublished, or that a newer epoch supersedes, are dropped and the number is lost: never two
+signatures, and never two heartbeats, under one number. The key is checked against the manifest before a number
 is reserved, and a failed beat is retried after 60 s, doubling, at most every interval_s: failures cannot
 run the sequence ahead of the nodes' allowance. ONE authority for now: a second could not take over (#231).
 
@@ -223,9 +224,16 @@ class Authority:
         self._write(HEARTBEAT, raw, 0o644)
 
     def _unpend(self):
-        """After a publish: a pending file that cannot be removed is only republished (the same bytes)."""
-        with contextlib.suppress(OSError):
+        """Remove the pending file. One that cannot be removed is only republished (the same bytes), but say so:
+        while it stays, every beat republishes it until it nears expiry."""
+        try:
             os.unlink(self.path(PENDING))
+        except FileNotFoundError:
+            pass
+        except OSError as failure:
+            with contextlib.suppress(Exception):
+                self.trail({"event": "authority-heartbeat", "outcome": "STUCK", "reason": "the pending heartbeat cannot be removed: %s" % failure,
+                            "signer": self.signer.kind})
 
     # ---- the sequence ----
 
@@ -263,9 +271,9 @@ class Authority:
                     expires = heartbeat.parse_time(pending["heartbeat"]["expires_at"], "expires_at")
                     require(expires > seconds, "expired unpublished")
                     require(heartbeat.MIN_INTERVAL_S <= expires - seconds, "too close to its expiry to be worth publishing")
-                except (Refused, ValueError, KeyError, TypeError) as stale:
+                except (Refused, ValueError, KeyError, TypeError, OSError) as stale:
                     # unreadable, for another epoch, or out of date: dropped, and its number is lost (never re-signed)
-                    os.unlink(self.path(PENDING))
+                    self._unpend()
                     self.trail({"event": "authority-heartbeat", "outcome": "DROPPED", "reason": str(stale)[:240], "signer": self.signer.kind})
                 else:
                     self._publish(json.dumps(pending, sort_keys=True).encode())     # the same bytes, again
@@ -278,11 +286,14 @@ class Authority:
             sequence = self.next_sequence()
             body = {"schema": heartbeat.SCHEMA, "epoch": manifest["epoch"], "sequence": sequence, "issued_at": stamp(seconds),
                     "expires_at": stamp(seconds + lifetime), "manifest_digest": membership.digest(manifest)}
+            # Given to the signer: from here the number is spent, whatever sign() then does (a token may have
+            # signed before it failed). One number never carries two signatures; a failure costs one number,
+            # at the backoff's rate, which the nodes' allowance absorbs.
+            self.reserved = None
             envelope = {"heartbeat": body, "signature": {"key": self.signer.public(),
                                                          "sig": self.signer.sign(heartbeat.DOMAIN + membership.canonical(body)).hex()}}
             heartbeat.verify(envelope, manifest)
             raw = json.dumps(envelope, sort_keys=True).encode()
-            self.reserved = None                                        # signed: this number is never signed again
             self._write(PENDING, raw, 0o600)                            # from here only these bytes go out under it
             self.trail({"event": "authority-heartbeat", "outcome": "SIGNED", "epoch": manifest["epoch"], "sequence": sequence,
                         "digest": body["manifest_digest"], "expires_at": body["expires_at"], "key": self.signer.public(),
@@ -320,10 +331,10 @@ class Authority:
             envelope = {"manifest": candidate, "signature": {"signer": "revocation", "key": self.signer.public(),
                                                              "sig": self.signer.sign(membership.DOMAIN + membership.canonical(candidate)).hex()}}
             self.store.commit(envelope)                                         # membership's revocation rule, anchored in the TPM
-            self.trail({"event": "authority-revoke", "outcome": "SIGNED", "epoch": candidate["epoch"], "node": node_id, "state": state,
-                        "digest": membership.digest(candidate), "key": self.signer.public(), "signer": self.signer.kind,
-                        "requester": requester, "reason": reason})
-            try:
+            try:                                                                # from here the revocation is committed, whatever fails
+                self.trail({"event": "authority-revoke", "outcome": "SIGNED", "epoch": candidate["epoch"], "node": node_id, "state": state,
+                            "digest": membership.digest(candidate), "key": self.signer.public(), "signer": self.signer.kind,
+                            "requester": requester, "reason": reason})
                 return envelope, self.beat("revocation of %s" % node_id)       # the pending old-epoch bytes are dropped there
             except Exception as failure:      # noqa: BLE001 - committed is committed, whatever the heartbeat did
                 self.wake.set()                                         # serve retries at once, not an interval later
@@ -461,9 +472,14 @@ def one_writer(state_dir):
     """The single-writer lock: serve holds it while it runs, init and accept for their write. A second
     writer is refused at once, never queued."""
     import fcntl
-    fd = os.open(os.path.join(state_dir, "writer.lock"), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    fd = os.open(os.path.join(state_dir, "writer.lock"), os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
     try:
+        info = os.fstat(fd)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid(), "writer.lock is not this user's regular file")
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Refused:
+        os.close(fd)
+        raise
     except BlockingIOError:
         os.close(fd)
         raise Refused("another writer holds %s (is regalia-authority running? stop it first: one writer)" % os.path.join(state_dir, "writer.lock")) from None
@@ -528,11 +544,10 @@ def main(argv=None):
             print(json.dumps(answer.get("status", answer), indent=1, sort_keys=True))
             return 0
         if args.command in ("init", "accept", "serve"):
-            _writer = one_writer(cfg["state_dir"])         # held for the life of this process
-        if args.command in ("init", "accept"):
             owner = os.stat(cfg["state_dir"]).st_uid
             require(os.geteuid() == owner, "run as the authority's own user (uid %d), e.g. runuser -u regalia-authority -- ...: "
                     "files written as anyone else would lock the service out" % owner)
+            _writer = one_writer(cfg["state_dir"])         # after the uid check; held for the life of this process
         authority = Authority(cfg)
         if args.command == "serve":
             authority.serve(lambda: False)
