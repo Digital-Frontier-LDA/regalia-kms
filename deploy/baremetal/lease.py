@@ -212,8 +212,9 @@ def reattest(attester, evidence, node_id, session_id, manifest, subject, phase):
     for k, limit in (("ephemeral_public", 512), ("nonce", 32), ("quote", 1024), ("signature", 256)):
         require(isinstance(evidence[k], str) and re.fullmatch(r"([0-9a-f]{2}){1,%d}" % limit, evidence[k]) is not None,
                 "evidence.%s must be lowercase hex, at most %d bytes" % (k, limit))
-    values = evidence.get(PCR_VALUES)
-    if values is not None:
+    values = None
+    if PCR_VALUES in evidence:                     # present means given: a null is refused, not taken for absent
+        values = evidence[PCR_VALUES]
         require(isinstance(values, dict) and 0 < len(values) <= 24 and all(
                     isinstance(k, str) and re.fullmatch(r"0|[1-9]|1[0-9]|2[0-3]", k) and isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v)
                     for k, v in values.items()),

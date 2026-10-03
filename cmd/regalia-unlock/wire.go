@@ -90,7 +90,7 @@ type evidence struct {
 	Nonce           string            `json:"nonce"`
 	Quote           string            `json:"quote"`
 	Signature       string            `json:"signature"`
-	PCRValues       map[string]string `json:"pcr_values"`
+	PCRValues       map[string]string `json:"pcr_values,omitempty"`
 }
 
 type unlockRequest struct {

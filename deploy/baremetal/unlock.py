@@ -373,7 +373,8 @@ class Peer:
                 handler = {"hello": self.hello, "unlock": self.unlock}.get(message["op"])
                 require(handler is not None, "unknown operation")
             except (Refused, RecursionError):      # tens of thousands of nested brackets fit in one message
-                return {"v": VERSION, "error": "INVALID_REQUEST"}
+                asked = message.get("v") if isinstance(message, dict) else None
+                return {"v": asked if type(asked) is int and asked in EXCHANGE_VERSIONS else VERSION, "error": "INVALID_REQUEST"}
             if caller is not None and message.get("node_id") != caller:
                 self.audit({"event": "unlock-caller", "epoch": 0, "manifest_digest": "", "subject": convergence._printable(message.get("node_id")),
                             "peer": self.peer_id, "outcome": "DENY", "reason": "the request names a node that is not the one the tunnel identified (%s)"

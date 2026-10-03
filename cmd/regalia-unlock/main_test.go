@@ -62,6 +62,7 @@ type fakePeer struct {
 	requests     []map[string]any                   // every request received
 	deny         string                             // answer every request with this error
 	refuse       string                             // answer the unlock request with this error: the quote was seen, nothing is given
+	onlyV1       bool                               // a peer not yet upgraded: a version 2 request is INVALID_REQUEST
 	signWith     func(digest []byte) *peerSignature // another signer
 }
 
@@ -114,6 +115,9 @@ func (p *fakePeer) send(request []byte) ([]byte, error) {
 	}
 	p.requests = append(p.requests, message)
 	version, _ := message["v"].(float64) // a peer answers in the version it was asked in (1 or 2)
+	if p.onlyV1 && version != 1 {
+		return json.Marshal(map[string]any{"v": 1, "error": "INVALID_REQUEST"})
+	}
 	if p.deny != "" {
 		return json.Marshal(map[string]any{"v": version, "error": p.deny})
 	}
@@ -444,28 +448,33 @@ func (w *wireTPM) Send(command []byte) ([]byte, error) {
 		return tpmResponse(0x8001, 0, append(append(append([]byte(nil), w.public...), sized(name)...), sized(name)...)), nil
 	case 0x00000158: // TPM2_Quote
 		return w.quote, nil
-	case 0x0000017e: // TPM2_PCR_Read: one selection of SHA-256 in, the counter, the selection and one digest out
-		selection := command[10:]
-		pcr := -1
+	case 0x0000017e: // TPM2_PCR_Read: one selection of SHA-256 in; the counter, the selection and its digests out
+		selection := command[10:20]
+		var digests []byte
+		count := 0
 		for byteIndex, bits := range selection[7:10] {
 			for bit := 0; bit < 8; bit++ {
-				if bits&(1<<bit) != 0 {
-					pcr = byteIndex*8 + bit
+				if bits&(1<<bit) == 0 {
+					continue
 				}
+				value, ok := w.pcrs[byteIndex*8+bit]
+				if !ok {
+					return tpmResponse(0x8001, 0x1c4, nil), nil // TPM_RC_VALUE
+				}
+				if w.moving > 0 {
+					value = bytes.Repeat([]byte{0xee}, 32)
+				}
+				digests = append(digests, sized(value)...)
+				count++
 			}
-		}
-		value, ok := w.pcrs[pcr]
-		if !ok {
-			return tpmResponse(0x8001, 0x1c4, nil), nil // TPM_RC_VALUE
 		}
 		if w.moving > 0 {
 			w.moving--
-			value = bytes.Repeat([]byte{0xee}, 32)
 		}
 		body := binary.BigEndian.AppendUint32(nil, 1)
-		body = append(body, selection[:10]...)
-		body = binary.BigEndian.AppendUint32(body, 1)
-		return tpmResponse(0x8001, 0, append(body, sized(value)...)), nil
+		body = append(body, selection...)
+		body = binary.BigEndian.AppendUint32(body, uint32(count))
+		return tpmResponse(0x8001, 0, append(body, digests...)), nil
 	}
 	return tpmResponse(0x8001, 0x143, nil), nil // TPM_RC_COMMAND_CODE
 }
@@ -582,32 +591,31 @@ func TestThePCRValuesBesideTheQuoteAreTheQuotedOnes(t *testing.T) {
 	if err != nil || len(values) != 2 || values["7"] != hex.EncodeToString(seven) || values["11"] != hex.EncodeToString(eleven) {
 		t.Fatalf("values %v, %v", values, err)
 	}
-	// one PCR_Read per PCR, of exactly that PCR, after the quote
+	// one PCR_Read over the selection, after the quote: the values are read at one instant
 	reads := 0
 	for _, command := range device.commands {
 		if binary.BigEndian.Uint32(command[6:10]) == 0x17e {
 			reads++
 		}
 	}
-	if reads != 2 {
-		t.Fatalf("%d PCR_Reads for two PCRs", reads)
+	if reads != 1 {
+		t.Fatalf("%d PCR_Reads for one selection", reads)
 	}
 	// a PCR that moved once: quoted again, and the values that match are sent
 	device = &wireTPM{public: peer.akPublic, quote: device.quote, pcrs: device.pcrs, moving: 1}
 	if _, _, values, err = tpmQuote(device, qualifying, []int{7, 11}); err != nil || values["7"] != hex.EncodeToString(seven) {
 		t.Fatalf("after one move: %v, %v", values, err)
 	}
-	// one that keeps moving: an error, no values
+	// one that keeps moving: the quote still goes, without values (never values that do not match)
 	device = &wireTPM{public: peer.akPublic, quote: device.quote, pcrs: device.pcrs, moving: 100}
-	_, _, values, err = tpmQuote(device, qualifying, []int{7, 11})
-	wantError(t, err, "the PCRs kept changing between the quote and their reading")
-	if values != nil {
-		t.Fatal("values were returned with the error")
+	attest, _, values, err := tpmQuote(device, qualifying, []int{7, 11})
+	if err != nil || values != nil || len(attest) == 0 {
+		t.Fatalf("a quote whose PCRs keep moving: %v, %v", values, err)
 	}
 	// a PCR the TPM will not read
 	device = &wireTPM{public: peer.akPublic, quote: device.quote, pcrs: map[int][]byte{7: seven}}
 	_, _, _, err = tpmQuote(device, qualifying, []int{7, 11})
-	wantError(t, err, "the TPM refused to read PCR 11")
+	wantError(t, err, "the TPM refused to read the PCRs")
 	if pcrDigest(map[string]string{"11": hex.EncodeToString(eleven), "7": hex.EncodeToString(seven)}) == nil ||
 		!bytes.Equal(pcrDigest(map[string]string{"11": hex.EncodeToString(eleven), "7": hex.EncodeToString(seven)}), digest[:]) {
 		t.Fatal("the digest is not over the values in index order")
@@ -1392,6 +1400,35 @@ func TestTheCommandLine(t *testing.T) {
 }
 
 func errHelp() error { return flag.ErrHelp }
+
+// A peer not yet upgraded answers a version 2 hello INVALID_REQUEST: it is asked again in version 1, without
+// values, the unlock goes on, and the diagnostics say so once.
+func TestAPeerThatSpeaksOnlyVersion1IsAskedInVersion1(t *testing.T) {
+	porto := newFakePeer(t, "porto")
+	porto.onlyV1 = true
+	paths, _ := pathsOf(t, tokensFor(porto))
+	var log bytes.Buffer
+	key, peer, _, err := deriveKey(configFor(porto), options{rounds: 1}, paths, bytes.Repeat([]byte{0x11}, 32), testSession(t), dialer(porto),
+		noQuote, func(time.Duration) {}, &log)
+	if err != nil || peer != "porto" || len(key) == 0 {
+		t.Fatalf("%v; %s", err, log.String())
+	}
+	versions := []any{}
+	for _, request := range porto.requests {
+		versions = append(versions, request["v"])
+		if request["op"] == "unlock" {
+			if _, has := request["evidence"].(map[string]any)["pcr_values"]; has {
+				t.Fatal("a version 1 request carries pcr_values")
+			}
+		}
+	}
+	if fmt.Sprint(versions) != "[2 1 1]" {
+		t.Fatalf("the requests' versions: %v", versions)
+	}
+	if strings.Count(log.String(), "speaks only version 1 of the exchange") != 1 {
+		t.Fatalf("the diagnostics: %s", log.String())
+	}
+}
 
 // tests/vectors/pcr-values-v2.json: a real quote from a software TPM and the values read beside it. The
 // client's own check (tpmQuote sends values only when they hash to the quote's digest) holds on it, and

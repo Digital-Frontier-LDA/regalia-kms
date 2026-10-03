@@ -358,7 +358,9 @@ class Issue(Case):
                                       ("pcr_values empty", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={})),
                                       ("PCR 24", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"24": "00" * 32})),
                                       ("PCR 07", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"07": "00" * 32})),
-                                      ("a short value", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"7": "00" * 31}))):
+                                      ("a short value", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"7": "00" * 31})),
+                                      ("an uppercase value", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values={"7": "AB" * 32})),
+                                      ("a null", "evidence.pcr_values must map PCR indices 0-23", lambda e: e.update(pcr_values=None))):
             with self.subTest(label):
                 evidence = dict(good)
                 change(evidence)
