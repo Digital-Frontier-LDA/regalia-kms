@@ -53,7 +53,7 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 | Network partition | Peers cannot reach each other or the revocation authority | Fail closed: a peer whose membership is older than the freshness bound authorizes nothing (design question 1); serving continues only under a valid lease |
 | A malicious or compromised peer | It can refuse to help (availability) or try to help the wrong node | The alternate peer path (A1); it holds only its own contribution, never a whole unlock credential (S1); it cannot mint membership (offline root) |
 | Stale membership on one peer | It may still help a node revoked elsewhere | Freshness bound (question 1); revocation is restrictive-only and propagates to every reachable peer |
-| Rollback of a node's disk, or of its manifest | Old manifest, old epoch | Highest accepted epoch kept in physical TPM NV, which disk restore cannot roll back, checked at every decision. **Rolling back the TPM NV itself** (a physical attack on the TPM) defeats that node's own anchor; the independent anchor is its peers, which each keep their own highest epoch and refuse a requester whose transcript names an older one. A whole-cluster NV rollback is out of scope |
+| Rollback of a node's disk, or of its manifest | Old manifest, old epoch | Highest accepted epoch kept in physical TPM NV, which disk restore cannot roll back, checked at every decision. Beside it the TPM keeps the digest of the manifest accepted at that epoch, so a substituted chain of the same length (possible only if a key signed two manifests for one epoch) is refused as well, on disk or fetched from a single peer. **Rolling back the TPM NV itself** (a physical attack on the TPM) defeats that node's own anchor; the independent anchor is its peers, which each keep their own highest epoch and refuse a requester whose transcript names an older one. A whole-cluster NV rollback is out of scope |
 | TPM (vendor bug, fTPM, physical attack) | Sealed local secrets on that node | S1 still needs a peer contribution; measured-boot claims are only as good as #65's real PCR mapping |
 | HSM model or batch (Nitrokey batch defect seen on one unit; Pico disclosure GHSA-wq3w-g2fj-q2jq) | Availability of that device kind; for Pico, key protection is unqualified | Heterogeneous fleet only after #62–#64; until then production stays Nitrokey (decision record) |
 | YubiKey | Its PIV/OpenPGP keys if the PIN leaks | PIN retry counters; admin credentials never online (S5) |
@@ -87,7 +87,8 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 **1. Freshness of restrictive membership updates under partition.** A newer manifest proves only
 *ordering*, not that no restrictive update happened since. Freshness therefore comes from a
 **heartbeat** the revocation authority signs: it carries the current manifest epoch, a monotonic
-sequence number, an issue time and an **expiry** (proposed: 24 hours after issue). A peer authorizes a
+sequence number, an issue time and an **expiry** (at most 24 hours after issue under a v1 manifest; a
+v2 manifest states the bound, `heartbeat_max_lifetime_s`, root-signed, from one hour to seven days). A peer authorizes a
 bootstrap only while it holds an unexpired heartbeat for its manifest's epoch, and it checks:
 - the expiry against **authenticated time** (NTS-authenticated NTP, with the TPM clock as a monotonic
   floor between syncs). FENCING.md already requires authenticated time for the same reason: an
@@ -95,7 +96,9 @@ bootstrap only while it holds an unexpired heartbeat for its manifest's epoch, a
 - the sequence against the highest one it has accepted, kept in **TPM NV** outside restorable disk
   state, so a captured older heartbeat cannot be replayed after a rollback.
 Without authenticated time, or past the expiry, the peer fails closed: availability yields to
-security, and A3 covers the gap. The bound is the explicit trade; its value is set in #69.
+security, and A3 covers the gap. The bound is the explicit trade: it is both how long a partitioned
+peer goes on helping a node revoked meanwhile and how long the authority may be down before every reboot
+needs the recovery key. The owner sets it in the manifest; `heartbeat_watch.py` warns while it runs out.
 
 **2. The powered-off theft claim before revocation.** As case 1: denied away from the datacenter
 networks; inside them, bounded by detection plus the heartbeat expiry (question 1). Not "immediately

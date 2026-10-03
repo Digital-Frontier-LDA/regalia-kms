@@ -29,11 +29,12 @@ sudo -n true 2>/dev/null || die "needs sudo (seal-hsm-pin.sh runs as root); run 
 W="$(mktemp -d)"; CRED="$W/credstore"
 cleanup(){ for p in "$W"/swtpm-*.pid; do [ -f "$p" ] && kill "$(cat "$p")" 2>/dev/null; done; sudo rm -rf "$W"; }
 trap cleanup EXIT
-tpm(){ local name="$1" port="$2"; mkdir -p "$W/$name"
-  swtpm socket --tpm2 --tpmstate "dir=$W/$name" --server "type=tcp,port=$port" --ctrl "type=tcp,port=$((port+1))" \
+# UNIX SOCKETS, NOT TCP PORTS (see e2e/pin-import-swtpm.sh): no collision with another run on the machine.
+tpm(){ local name="$1"; mkdir -p "$W/$name"
+  swtpm socket --tpm2 --tpmstate "dir=$W/$name" --server "type=unixio,path=$W/$name.sock" --ctrl "type=unixio,path=$W/$name.sock.ctrl" \
     --flags not-need-init,startup-clear --daemon --pid "file=$W/swtpm-$name.pid" || die "swtpm $name did not start"; }
-tpm A 2421; tpm B 2431; sleep 1
-TA="swtpm:port=2421"; TB="swtpm:port=2431"
+tpm A; tpm B; sleep 1
+TA="swtpm:path=$W/A.sock"; TB="swtpm:path=$W/B.sock"
 seal(){ local tcti="$1"; shift; sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$CRED" "$SEAL" "$@" 2>&1; }
 tries(){ local r
   if [ "${DEV[0]}" = --yubikey ]; then ykman --device "$SERIAL" piv info 2>/dev/null | sed -n 's/^PIN tries remaining: *\([0-9]*\)\/.*/\1/p'; return; fi
@@ -64,7 +65,7 @@ out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-hos
 
 hdr "C: an altered blob is refused"
 # Flip one byte unconditionally (XOR with 0xFF), and prove the copy now differs.
-python3 -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
+python3 -I -c 'import sys; b=bytearray(open(sys.argv[1],"rb").read()); b[100]^=0xFF; open(sys.argv[2],"wb").write(b)' "$W/pin-A.blob" "$W/bad.blob"
 cmp -s "$W/pin-A.blob" "$W/bad.blob" && F "the altered blob is identical to the original"
 out="$(seal "$TA" --id drill-import "${DEV[@]}" --retries "$RETRIES" --bench-host-key --from-blob "$W/bad.blob")"; rc=$?
 [ "$rc" != 0 ] && grep -q 'could not decrypt' <<< "$out" && P "an altered blob is refused" || F "an altered blob was accepted: $out"

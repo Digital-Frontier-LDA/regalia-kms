@@ -46,7 +46,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIMD="${REGALIA_COSMOS_SIMD_BIN:-}"
 PY="${REGALIA_COSMOS_PYTHON:-python3}"
 [ -n "$SIMD" ] && [ -x "$SIMD" ] || { echo "REGALIA_COSMOS_SIMD_BIN must name an executable simd" >&2; exit 2; }
-"$PY" -c 'import cosmpy, cryptography' 2>/dev/null || { echo "$PY lacks cosmpy/cryptography (set REGALIA_COSMOS_PYTHON)" >&2; exit 2; }
+"$PY" -I -c 'import cosmpy, cryptography' 2>/dev/null || { echo "$PY lacks cosmpy/cryptography (set REGALIA_COSMOS_PYTHON)" >&2; exit 2; }
 for tool in curl jq pkcs11-tool openssl go; do
   command -v "$tool" >/dev/null || { echo "$tool is required" >&2; exit 2; }
 done
@@ -110,7 +110,7 @@ else
             | awk -F: '/serial num/{gsub(/[[:space:]]/, "", $2); print $2; exit}')"
   [ -n "$SERIAL" ] || fail "SoftHSM serial unavailable"
 fi
-read -r KMS_ADDR _ < <("$PY" "$ROOT/e2e/cosmos_kms_tx.py" address --pubkey-der "$STATE/pub.der")
+read -r KMS_ADDR _ < <("$PY" -Es "$ROOT/e2e/cosmos_kms_tx.py" address --pubkey-der "$STATE/pub.der")
 say "KMS key address: $KMS_ADDR"
 
 # ---- the chain ---------------------------------------------------------------------------------
@@ -139,10 +139,10 @@ say "chain $CHAIN_ID up; node0 = $NODE0"
   --chain-id "$CHAIN_ID" --node "$RPC" --fees 1stake --gas 200000 --broadcast-mode sync --yes --output json >"$STATE/fund.json" 2>&1 \
   || { cat "$STATE/fund.json" >&2; fail "funding transfer refused"; }
 deadline=$((SECONDS + 30))
-until [ "$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$KMS_ADDR" --denom stake)" -gt 0 ]; do
+until [ "$("$PY" -Es "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$KMS_ADDR" --denom stake)" -gt 0 ]; do
   [ "$SECONDS" -lt "$deadline" ] || fail "funding never landed"; sleep 1
 done
-say "funded: $("$PY" "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$KMS_ADDR" --denom stake) stake"
+say "funded: $("$PY" -Es "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$KMS_ADDR" --denom stake) stake"
 
 # ---- the policy the KMS enforces, fixed by the operator, never read from a SignDoc ----------------
 MAX_GAS=300000 MAX_FEE=1000 MAX_PER_TX=20000 MAX_PER_DAY=30000
@@ -171,18 +171,18 @@ kms_sign() {
   grep -q -- '--- PASS: TestCosmosKMSSignsASignDocForALiveNode' <<< "$out" || { printf '%s\n' "$out" >&2; return 1; }
 }
 # build [cosmpy build flags] — FEE and GAS may be set for one call.
-build() { "$PY" "$ROOT/e2e/cosmos_kms_tx.py" build --rest "$REST" --from "$KMS_ADDR" --denom stake --fee "${FEE:-1}" --gas "${GAS:-200000}" \
+build() { "$PY" -Es "$ROOT/e2e/cosmos_kms_tx.py" build --rest "$REST" --from "$KMS_ADDR" --denom stake --fee "${FEE:-1}" --gas "${GAS:-200000}" \
             --chain-id "$CHAIN_ID" --pubkey-der "$STATE/pub.der" "$@"; }
 # balance <address> — prints the stake balance. A balance that could not be READ is a harness
 # failure and says so; it must never be compared as if it were a number, because "the query failed"
 # would then read as "a refused transaction moved the balance".
 balance() {
   local value
-  value="$("$PY" "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$1" --denom stake)" \
+  value="$("$PY" -Es "$ROOT/e2e/cosmos_kms_tx.py" balance --rest "$REST" --address "$1" --denom stake)" \
     && [[ "$value" =~ ^[0-9]+$ ]] || { echo "HARNESS: could not read the balance of $1 from the node" >&2; return 1; }
   printf '%s\n' "$value"
 }
-broadcast() { "$PY" "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$1" --signature "$1/sig.bin"; }
+broadcast() { "$PY" -Es "$ROOT/e2e/cosmos_kms_tx.py" broadcast --rest "$REST" --dir "$1" --signature "$1/sig.bin"; }
 
 negatives=0
 kms_balance=""   # what the KMS account must hold; only a committed transaction changes it

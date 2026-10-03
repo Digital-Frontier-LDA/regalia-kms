@@ -959,7 +959,7 @@ func Capabilities() map[string]map[string]map[string]bool {
 		},
 		"yubikey-piv": {
 			"p256": {"sign": true, "certificate-sign": true}, "p384": {"sign": true, "certificate-sign": true},
-			"rsa2048": {"sign": true, "wrap": true, "unwrap": true, "certificate-sign": true},
+			"rsa2048": {"sign": true, "wrap": true, "unwrap": true, "certificate-sign": true}, "ed25519": {"sign": true},
 		},
 		"yubikey-openpgp": {
 			"ed25519": {"sign": true}, "cv25519": {"unwrap": true},

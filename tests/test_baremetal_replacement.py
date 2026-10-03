@@ -323,8 +323,9 @@ class Decisions(Case):
         evidence = self.quote(b["attester"], "a2", "a2")
         real = b["attester"].verify
 
-        def slow(*args):
-            verdict = real(*args)
+        def slow(*args, **kw):
+            self.assertEqual(kw, {"phase": "initrd"})    # a disk key is asked for from the initrd
+            verdict = real(*args, **kw)
             self.later(left + 1)                         # ... and the verification outlasts it
             return verdict
         b["attester"].verify = slow
@@ -354,7 +355,7 @@ class OnSwtpm(unittest.TestCase):
         self.m1 = self.manifest(1, "", [self.entry("a", 0), self.entry("b", 1)])
         counter = hb.Counter("0x1500018", tcti=self.tcti["b"], lock_path=self.d + "/lock")
         counter.define()
-        self.freshness = hb.Freshness(counter, self.clock, hb.TpmClock(tcti=self.tcti["b"]), self.d + "/freshness.json")
+        self.freshness = hb.Freshness(counter, self.clock, hbt.simulated_ticks(self, self.tcti["b"]), self.d + "/freshness.json")
         self.sequence = 0
         self.beat(self.m1)
         self.signer = lease.TpmSigner(tcti=self.tcti["b"])
@@ -425,7 +426,7 @@ class OnSwtpm(unittest.TestCase):
         before = self.attester(self.m1, "m1")
         self.enroll(before, "a", "a")
         self.assertGreater(replacement.may_unlock(self.m1, "b", "a", OLD_SESSION, self.evidence(before, "a", "a", OLD_SESSION, self.m1), before, self.freshness), 0)
-        old_holder = lease.Holder("a", OLD_SESSION, self.clock, hb.TpmClock(tcti=self.tcti["a"]), self.d + "/a-lease.json")
+        old_holder = lease.Holder("a", OLD_SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a"]), self.d + "/a-lease.json")
         old_lease = lease.issue(self.m1, "b", old_holder.request(), before, self.evidence(before, "a", "a", OLD_SESSION, self.m1), self.freshness, self.signer)
         old_holder.install(old_lease, self.m1)
 
@@ -439,7 +440,7 @@ class OnSwtpm(unittest.TestCase):
         # 16.3: a2 enrolls its AK under its EK, is unlocked, and holds a lease signed by b's TPM
         self.assertEqual(self.enroll(after, "a2", "a2").hex(), self.names["a2"]["ak"])
         self.assertGreater(replacement.may_unlock(m2, "b", "a2", SESSION, self.evidence(after, "a2", "a2", SESSION, m2), after, self.freshness), 0)
-        holder = lease.Holder("a2", SESSION, self.clock, hb.TpmClock(tcti=self.tcti["a2"]), self.d + "/a2-lease.json")
+        holder = lease.Holder("a2", SESSION, self.clock, hbt.simulated_ticks(self, self.tcti["a2"]), self.d + "/a2-lease.json")
         envelope = lease.issue(m2, "b", holder.request(), after, self.evidence(after, "a2", "a2", SESSION, m2), self.freshness, self.signer)
         self.assertEqual(holder.install(envelope, m2), 300)
 

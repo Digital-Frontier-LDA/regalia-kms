@@ -151,7 +151,8 @@ cat > "$W/config.json" <<JSON
  "tls_certificate_path": "$ETC/server.pem", "tls_private_key_path": "$ETC/server.key", "tls_client_ca_path": "$ETC/ca.pem",
  "pkcs11_module_path": "$MODULE", "secure_channel_evidence_path": "$ETC/secure-channel.json",
  "pin_paths": {"$DEVICE": "/run/credentials/$SVC/$DEVICE.pin"},
- "audit_journal_path": "$STATE/audit.jsonl", "audit_sink_url": "https://127.0.0.1:$SINK"}
+ "audit_journal_path": "$STATE/audit.jsonl", "audit_sink_url": "https://127.0.0.1:$SINK",
+ "runtime_admission": "disabled-for-lab"}
 JSON
 for f in config.json manifest.json policy.json rbac.json secure-channel.json server.pem server.key ca.pem; do
   sudo install -m 0640 -o root -g regalia-kms "$W/$f" "$ETC/$f" || die "cannot install $f"; done
@@ -199,7 +200,7 @@ hdr "3  it serves: a signature from the token, verified by openssl"
 printf 'regalia-kms hardened-serve e2e %s\n' "$NOW" > "$W/message"
 # sign <nonce> [curl args]: POST the SHA-256 digest of the message; the HTTP status goes to stdout, the body to $W/response.
 sign(){ local nonce="$1"; shift
-  python3 - "$W/message" "$nonce" "$OBJECT" > "$W/request.json" <<'PY'
+  python3 -I - "$W/message" "$nonce" "$OBJECT" > "$W/request.json" <<'PY'
 import base64, datetime, hashlib, json, sys
 digest = hashlib.sha256(open(sys.argv[1], "rb").read()).digest()
 expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=120)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -223,7 +224,7 @@ if [ "$status" = 200 ]; then P "POST /v1/operations/sign: 200"; else
   journal
 fi
 # The KMS returns raw r||s; openssl wants DER SEQUENCE{INTEGER r, INTEGER s}.
-python3 - "$W/response" "$W/sig.der" <<'PY' && P "the result is a 64-byte P-256 signature (r||s)" || F "the response carries no 64-byte signature: $(head -c 300 "$W/response")"
+python3 -I - "$W/response" "$W/sig.der" <<'PY' && P "the result is a 64-byte P-256 signature (r||s)" || F "the response carries no 64-byte signature: $(head -c 300 "$W/response")"
 import base64, json, sys
 raw = base64.b64decode(json.load(open(sys.argv[1]))["result_base64"], validate=True)
 assert len(raw) == 64, len(raw)
@@ -248,7 +249,8 @@ status="$(sign "e2e-nonce-$(openssl rand -hex 12)" "${mtls[@]}")"
 
 hdr "4  the hardening, measured on that process"
 # shellcheck disable=SC2024  # the report is this user's, on purpose: only the probe is root
-sudo env PYTHONPATH="$HERE" python3 - > "$W/probes" <<'PY'
+sudo python3 -IB - "$HERE" > "$W/probes" <<'PY'
+import sys; sys.path.append(sys.argv.pop(1))
 from deploy.baremetal import os_probe
 host = os_probe.Host()
 for name in ("kms_service_unprivileged", "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced"):

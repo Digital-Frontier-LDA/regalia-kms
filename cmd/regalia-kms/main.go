@@ -11,9 +11,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/certs"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/controlplane"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/executor"
@@ -27,6 +29,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"reflect"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -331,7 +335,26 @@ func run() error {
 
 	var coordinator *operations.Coordinator
 	var coordErr error
-	if settings.PKCS11ModulePath != "" || len(settings.YubiKeyDevices) > 0 {
+	// RUNTIME ADMISSION (regalia-kms#74). The node serves key operations only while it holds a
+	// runtime trust lease, which deploy/baremetal/admission.py keeps and reports in the admission
+	// file. The gate wraps the fenced runner, so an operation needs BOTH: the fencing lease says this
+	// site may sign, the runtime lease says a peer still vouches for this node. Neither stands in for
+	// the other. The gate is opened without the file having to exist: until the lease service has
+	// written it, the node is not admitted, which is an answer and not a missing configuration.
+	admittedRunner, admissionGate, admissionErr := admitRunner(settings, fencedRunner, func(status admission.Status) {
+		reportAdmission(ctx, settings.NodeID, status, coordinator)
+	})
+	if admissionErr != nil {
+		return admissionErr
+	}
+	var admissionProbe server.ReadinessProbe
+	if admissionGate != nil {
+		admissionProbe = admissionGate
+		slog.Info("KMS runtime admission required", "node", settings.NodeID, "file", settings.RuntimeAdmissionPath)
+	} else if settings.RuntimeAdmission == config.RuntimeAdmissionDisabledForLab {
+		slog.Warn("KMS runtime admission is DISABLED FOR LAB: this daemon serves with no runtime lease; never on a production host")
+	}
+	if tokenConfigured(settings) {
 		hardware, manager, observer, closer, buildErr := buildHardware(settings, keyRegistry)
 		if buildErr != nil {
 			return buildErr
@@ -345,6 +368,11 @@ func run() error {
 		// that could drift from the one an operator runs before deploying.
 		tokenProbe = manager
 		tokenObserver = observer
+		// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (regalia-kms#72 PoC 12.4). Only where runtime
+		// admission is required: without a lease service there is no lease to wait for.
+		if err := requireReauthorization(manager, admissionGate, admission.ProcessStart); err != nil {
+			return err
+		}
 
 		var auditErr error
 		// COLLECTOR RECONCILIATION before the recorder opens: the off-host copy's committed
@@ -371,19 +399,23 @@ func run() error {
 		recorder.StartVerifier(ctx, audit.DefaultVerifyInterval)
 
 		coordinator, coordErr = operations.New(rbacPolicy, keyRegistry, policyEngine, recorder,
-			fencedRunner, hardware, purposePolicyDigest, approverKeys, time.Now)
+			admittedRunner, hardware, purposePolicyDigest, approverKeys, time.Now)
 		if coordErr != nil {
 			return coordErr
+		}
+		if admissionGate != nil {
+			coordinator.RequireAdmission(admissionGate)
 		}
 		slog.Info("KMS hardware backend ready", "module", settings.PKCS11ModulePath)
 	}
 
 	healthHandler := server.NewRequired(server.Dependencies{
-		Policy:   server.RequireAll(rbacPolicy, policyEngine),
-		Registry: keyRegistry,
-		Audit:    auditProbe,
-		Token:    tokenProbe,
-		Fencing:  fencingProbe,
+		Policy:    server.RequireAll(rbacPolicy, policyEngine),
+		Registry:  keyRegistry,
+		Audit:     auditProbe,
+		Token:     tokenProbe,
+		Fencing:   fencingProbe,
+		Admission: admissionProbe,
 	})
 	// THE METRICS SURFACE. The collector counts what only the request path can see
 	// (router decisions, per-route outcomes, authentication rejections); the sources
@@ -509,6 +541,8 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 	providers := make(map[string]backend.Provider)
 	var observer *nitrokey.Provider
 	var closers []func()
+	// enumerate makes the PKCS#11 module look at the readers; nil when there is no module.
+	var enumerate func(context.Context) bool
 	if settings.PKCS11ModulePath != "" {
 		channel, channelErr := nitrokey.LoadSecureChannelEvidence(settings.SecureChannelEvidence, time.Now)
 		if channelErr != nil {
@@ -525,6 +559,7 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 		}
 		providers["nitrokey-pkcs11"] = provider
 		observer = provider
+		enumerate = driver.Ready
 		closers = append(closers, func() { _ = driver.Close() })
 		// A YUBIKEY'S OPENPGP APPLET IS A SECOND KIND OF TOKEN BEHIND THE SAME MODULE. It is served
 		// only when the evidence carries a local-usb attestation: that is the operator saying such
@@ -542,6 +577,18 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 			}
 			providers[nitrokey.OpenPGPAppletBackend] = provider
 		}
+		// With every token this host serves now openable: does each one offer what its objects
+		// declare? Asked of the token itself, without a login. No deadline: one that expired would
+		// leave the remaining tokens unchecked, and it could not interrupt a PKCS#11 call anyway.
+		unchecked, mechanismErr := requireTokensOfferBoundMechanisms(context.Background(), driver, keyRegistry)
+		if mechanismErr != nil {
+			_ = driver.Close()
+			return nil, nil, nil, nil, mechanismErr
+		}
+		if len(unchecked) > 0 {
+			slog.Warn("KMS could not ask these tokens which mechanisms they offer: an object they cannot serve will fail per operation, unnamed",
+				"tokens", strings.Join(unchecked, ", "))
+		}
 	}
 	if len(settings.YubiKeyDevices) > 0 {
 		provider, providerErr := newYubiKeyBackend(settings.YubiKeyDevices, pins)
@@ -550,6 +597,15 @@ func buildHardware(settings config.Config, keyRegistry *registry.Registry) (*cer
 				close()
 			}
 			return nil, nil, nil, nil, providerErr
+		}
+		// Both a PKCS#11 module and PIV cards: the module must leave the cards alone.
+		if cards, ok := provider.(pivReach); ok {
+			if err := requirePIVCardsOpenBesidePKCS11(context.Background(), enumerate, cards); err != nil {
+				for _, close := range closers {
+					close()
+				}
+				return nil, nil, nil, nil, err
+			}
 		}
 		providers["yubikey-piv"] = provider
 	}
@@ -737,6 +793,132 @@ func fenceRunner(settings config.Config, registryDigest string, base operations.
 		return nil, nil, err
 	}
 	return fencing.NewRunner(standby, base), standby, nil
+}
+
+// tokenConfigured reports whether the daemon gets a cryptographic backend, and with it a
+// coordinator. Without one there is nothing to route a key operation to and every one of them is
+// refused (api.Handler answers DEPENDENCY_UNAVAILABLE).
+//
+// It is a function so that one thing can be tested: config.Validate lets a configuration leave
+// runtime_admission out only when no token is configured. That exemption is safe exactly as long as
+// "no token" there and "no coordinator" here are the same condition; if a backend were ever built
+// from a setting config does not count as a token, a daemon could serve keys with no runtime lease
+// and no statement about it. TestNoTokenMeansNoKeyOperation holds the two together.
+func tokenConfigured(settings config.Config) bool {
+	return settings.PKCS11ModulePath != "" || len(settings.YubiKeyDevices) > 0
+}
+
+// admitRunner puts the runtime-admission gate in front of a runner, when the configuration requires
+// one. It returns the runner unchanged and a nil gate for "disabled-for-lab" and for a host with no
+// token (config.Validate has already refused a token with the setting left out), so readiness does
+// not gain a dependency such a host has no lease service to satisfy.
+//
+// Callable for the same reason fenceRunner is: a wiring step nothing can call is one nothing
+// notices the absence of.
+func admitRunner(settings config.Config, base operations.Runner, onTransition func(admission.Status)) (operations.Runner, *admission.Gate, error) {
+	if settings.RuntimeAdmission != config.RuntimeAdmissionRequired {
+		return base, nil, nil
+	}
+	gate, err := admission.Open(admission.Options{
+		Path: settings.RuntimeAdmissionPath, NodeID: settings.NodeID, SessionPath: settings.BootSessionPath,
+		OnTransition: onTransition,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("runtime admission: %w", err)
+	}
+	return admission.NewRunner(gate, base), gate, nil
+}
+
+// awaitingReauthorization names the backends whose provider does not yet make a returned token wait
+// for a fresh lease. It exists so that the gap is written down and shrinks: a provider that is not a
+// reauth.Provider and is not named here stops the daemon, and a test fails when a provider named here
+// has gained the hook, so the line is deleted with the change that makes it unnecessary.
+//
+// It is empty: the PKCS#11 provider (the HSM and the OpenPGP applet) and the PIV provider all wait.
+var awaitingReauthorization = map[string]string{}
+
+// requireReauthorization makes EVERY key provider wait, after a token's absence and after a start of
+// this daemon, for a runtime lease asked for since (regalia-kms#72, PoC 12.4). The rule is for every
+// key the daemon serves, so the providers are walked, not named: one that can execute a key
+// operation and has no such hook stops the daemon, unless awaitingReauthorization names it. A nil
+// gate (admission not required) or no manager (no token) changes nothing.
+//
+// The lease must have been asked for after THIS PROCESS STARTED, as the kernel dates it: the lease
+// service reads that same time for the daemon's PID and asks at once, so a restart of the daemon
+// costs one renewal and not the wait for the next scheduled one. If the start time cannot be read,
+// "now" stands in: later, so never weaker, and the cost is that wait.
+func requireReauthorization(manager *backend.Manager, gate *admission.Gate, processStart func() (int64, error)) error {
+	if manager == nil || gate == nil {
+		return nil
+	}
+	now, err := admission.Boottime()
+	if err != nil {
+		return fmt.Errorf("token reauthorization: %w", err)
+	}
+	since, err := processStart()
+	if err != nil {
+		slog.Warn("KMS process start time unavailable; token reauthorization dates from now, and waits for the lease service's next scheduled renewal", "error", err)
+		since = now
+	}
+	// The start time is the tick after the true start, so in the first 10 ms of a process it is ahead
+	// of the clock. Then "now" is the baseline: still not before the start, and a lease can be asked
+	// for after it. A start time far in the future is not a clock this daemon can reason about.
+	if since > now && since-now <= 10 {
+		since = now
+	}
+	providers := manager.Providers()
+	names := make([]string, 0, len(providers))
+	for name := range providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	// One provider may answer for two backend names (the PKCS#11 provider serves the OpenPGP applet
+	// too): it is told once, because being told again would forget what it has seen. "The same
+	// provider" is asked of a map, so a provider must be something a map can hold as a key: a pointer,
+	// as both are today. A type that is not comparable would panic there; it is refused here instead.
+	told := make(map[reauth.Provider]bool)
+	for _, name := range names {
+		if !reflect.TypeOf(providers[name]).Comparable() {
+			return fmt.Errorf("token reauthorization: the %s backend's provider cannot be told apart from another (it must be a pointer)", name)
+		}
+		provider, gated := providers[name].(reauth.Provider)
+		if !gated {
+			reason, named := awaitingReauthorization[name]
+			if !named {
+				return fmt.Errorf("token reauthorization: the %s backend serves keys and cannot make a returned token wait for a fresh lease", name)
+			}
+			slog.Warn("KMS token reauthorization does NOT cover this backend: a token pulled and put back serves on the lease already held", "backend", name, "reason", reason)
+			continue
+		}
+		if told[provider] {
+			continue
+		}
+		told[provider] = true
+		if err := provider.RequireReauthorization(gate, admission.Boottime, since); err != nil {
+			return fmt.Errorf("token reauthorization (%s): %w", name, err)
+		}
+	}
+	slog.Info("KMS token reauthorization required: a token that was absent serves again only under a runtime lease asked for after its return")
+	return nil
+}
+
+// reportAdmission logs a change in this node's admission and writes its audit event. The
+// coordinator is nil on a host with no token: there is then no audit journal, and the log line is
+// the record.
+func reportAdmission(ctx context.Context, nodeID string, status admission.Status, coordinator *operations.Coordinator) {
+	if status.Admitted {
+		slog.Info("KMS node admitted: it holds a runtime lease", "node", nodeID, "epoch", status.Epoch)
+	} else {
+		slog.Warn("KMS node NOT admitted: key operations are refused", "node", nodeID, "epoch", status.Epoch, "reason", status.Reason)
+	}
+	if coordinator == nil {
+		return
+	}
+	// Not the request's context: a transition seen while serving a cancelled request is still a
+	// transition, and its record must not be dropped with that request.
+	if err := coordinator.RecordAdmission(context.WithoutCancel(ctx), nodeID, status.Admitted, status.Epoch); err != nil {
+		slog.Error("KMS admission transition could not be audited", "node", nodeID, "admitted", status.Admitted, "error", err.Error())
+	}
 }
 
 // bindBackendToRegistry refuses a key registry that routes to a backend the daemon cannot serve.
