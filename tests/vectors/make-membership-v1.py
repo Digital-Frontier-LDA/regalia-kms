@@ -111,7 +111,10 @@ craft("epoch 1 with a prev_digest", lambda m: m.update(prev_digest="00" * 32))
 craft("policy_version too long", lambda m: m.update(policy_version="p" * 33))
 craft("policy_version with a space", lambda m: m.update(policy_version="p 1"))
 for when in ("2026-10-03 12:00:00Z", "2026-10-03T12:00:00", "2026-02-30T12:00:00Z", "2026-13-01T12:00:00Z", "2026-10-03T24:00:00Z",
-             "2026-1-3T2:0:0Z", "2026-10-03T12:00:60Z", "2026-10-03T12:00:61Z", "2026-10-03T12:00:62Z", "0000-10-03T12:00:00Z", 20261003):
+             "2026-1-3T2:0:0Z", "2026-10-03T12:00:60Z", "2026-10-03T12:00:61Z", "2026-10-03T12:00:62Z", "0000-10-03T12:00:00Z", 20261003,
+             # strptime alone takes each of these; one fixed-width ASCII form on both sides refuses them
+             "2026-10-03T12:00:0Z", "2026-10- 3T12:00:00Z", "2026-10-03t12:00:00z", "２０２６-10-03T12:00:00Z",
+             "٢٠٢٦-١٠-٠٣T١٢:٠٠:٠٠Z", "2026-10-03T12:00:00Z\n"):
     craft("issued_at %r" % (when,), lambda m, when=when: m.update(issued_at=when))
 craft("revocation_keys not a list", lambda m: m.update(revocation_keys="00" * 32))
 craft("a revocation key in uppercase", lambda m: m.update(revocation_keys=["AB" * 32]))
@@ -149,6 +152,30 @@ for name, epoch in (("an epoch that skips one, chained", 3), ("the next epoch", 
     except membership.Refused as refusal:
         outcome = {"refused": str(refusal)}
     crafted.append({"name": name, "current": first, "envelope": as_hex(envelope(following)), "root_public": root_pub, "valid": True, **outcome})
+
+# Revocation-signed successors, each signed by a revocation key the current manifest names and changing one
+# thing, so each restrictive rule is reached by itself; one that only restricts (a node quarantined) is accepted.
+revoker = Ed25519PrivateKey.from_private_bytes(bytes(range(32, 64)))
+revoker_pub = revoker.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+named = membership.load(json.dumps(dict(copy.deepcopy(base), revocation_keys=[revoker_pub])))
+for name, change in (("a revocation key quarantines a node", lambda m: m["nodes"][0].update(state="QUARANTINED")),
+                     ("a revocation key changes the policy version", lambda m: m.update(policy_version="p2")),
+                     ("a revocation key changes an HSM serial", lambda m: m["nodes"][0].update(hsm_serials=["DENK0000099"])),
+                     ("a revocation key adds an HSM serial", lambda m: m["nodes"][0]["hsm_serials"].append("DENK0000099")),
+                     ("a revocation key changes an ek_name", lambda m: m["nodes"][0].update(ek_name="000b" + "77" * 32)),
+                     ("a revocation key changes a wg_boot_pub", lambda m: m["nodes"][0].update(wg_boot_pub="77" * 32)),
+                     ("a revocation key changes a wg_service_pub", lambda m: m["nodes"][0].update(wg_service_pub="77" * 32)),
+                     ("a revocation key changes an ak_name", lambda m: m["nodes"][0].update(ak_name="000b" + "77" * 32)),
+                     ("a revocation key drops itself", lambda m: m.update(revocation_keys=[])),
+                     ("a revocation key drains a node", lambda m: m["nodes"][0].update(state="DRAINING"))):
+    following = dict(copy.deepcopy(named), epoch=2, prev_digest=membership.digest(named))
+    change(following)
+    try:
+        outcome = {"accepted": membership.digest(real(named, envelope(following, "revocation", revoker), root_pub))}
+    except membership.Refused as refusal:
+        outcome = {"refused": str(refusal)}
+    crafted.append({"name": name, "current": named, "envelope": as_hex(envelope(following, "revocation", revoker)),
+                    "root_public": root_pub, "valid": True, **outcome})
 
 # Documents as bytes: what the reader itself must refuse (or take), before any rule.
 raw = [

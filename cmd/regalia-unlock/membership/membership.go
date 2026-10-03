@@ -29,17 +29,18 @@ var (
 	schemas      = []string{SchemaV1, SchemaV2} // in order: a chain never goes back
 	capabilities = map[string][]string{"ACTIVE": {"authorize", "request", "serve"}, "MAINTENANCE": {"request"}, "DRAINING": {"serve"},
 		"QUARANTINED": {}, "RETIRED": {}, "REVOKED_STOLEN": {}}
-	terminal        = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true}
-	manifestKeys    = []string{"schema", "epoch", "prev_digest", "policy_version", "issued_at", "revocation_keys", "nodes"}
-	nodeKeys        = []string{"node_id", "state", "ek_name", "ak_name", "wg_boot_pub", "wg_service_pub", "hsm_serials"}
-	identityKeys    = []string{"ek_name", "ak_name", "wg_boot_pub", "wg_service_pub"}
-	v2ManifestKeys  = append(append([]string(nil), manifestKeys...), "heartbeat_max_lifetime_s")
-	v2NodeKeys      = append(append([]string(nil), nodeKeys...), "ssh_host_pub")
-	v2IdentityKeys  = append(append([]string(nil), identityKeys...), "ssh_host_pub")
-	nodeIDPattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	policyPattern   = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
-	serialPattern   = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
-	issuedAtPattern = regexp.MustCompile(`^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})T([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})Z$`)
+	terminal       = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true}
+	manifestKeys   = []string{"schema", "epoch", "prev_digest", "policy_version", "issued_at", "revocation_keys", "nodes"}
+	nodeKeys       = []string{"node_id", "state", "ek_name", "ak_name", "wg_boot_pub", "wg_service_pub", "hsm_serials"}
+	identityKeys   = []string{"ek_name", "ak_name", "wg_boot_pub", "wg_service_pub"}
+	v2ManifestKeys = append(append([]string(nil), manifestKeys...), "heartbeat_max_lifetime_s")
+	v2NodeKeys     = append(append([]string(nil), nodeKeys...), "ssh_host_pub")
+	v2IdentityKeys = append(append([]string(nil), identityKeys...), "ssh_host_pub")
+	nodeIDPattern  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
+	policyPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
+	serialPattern  = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
+	// membership.UTC_TIME: ASCII digits, every field at full width, uppercase T and Z (#254)
+	issuedAtPattern = regexp.MustCompile(`^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})Z$`)
 )
 
 // Refused is membership.Refused: a decision not to accept, with its reason.
@@ -267,8 +268,15 @@ func Validate(value any) (map[string]map[string]any, error) {
 }
 
 // VerifyEnvelope is membership.verify_envelope: the manifest inside, if its signature is by the pinned root
-// key or by a revocation key named in the CURRENT manifest. Returns the manifest and the signer.
+// key or by a revocation key named in the CURRENT manifest. Returns the manifest and the signer. A current
+// manifest that does not validate is refused here, before Accept reads its fields: only what Accept or
+// AcceptChain returned should be passed.
 func VerifyEnvelope(value any, rootKey string, current map[string]any) (map[string]any, string, error) {
+	if current != nil {
+		if _, err := Validate(current); err != nil {
+			return nil, "", refuse("the current manifest is not valid: %v", err)
+		}
+	}
 	envelope, err := exact(value, []string{"manifest", "signature"}, "envelope")
 	if err != nil {
 		return nil, "", err

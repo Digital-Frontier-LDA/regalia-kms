@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -92,5 +93,52 @@ func TestEveryCraftedCaseAndDocumentIsDecidedAlike(t *testing.T) {
 	}
 	if len(crafted) < 30 {
 		t.Fatalf("only %d crafted cases", len(crafted))
+	}
+}
+
+// A current manifest that does not validate is refused, never read as if it did (Python would raise a
+// TypeError on some of these; Go would panic on a failed type assertion).
+func TestAnInvalidCurrentManifestIsRefused(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "tests", "vectors", "membership-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, _ := load(raw, 64<<20, true)
+	var next map[string]any
+	for _, value := range document.(map[string]any)["crafted"].([]any) {
+		if c := value.(map[string]any); c["name"] == "the next epoch" {
+			next = c
+		}
+	}
+	if next == nil {
+		t.Fatal("no crafted case named \"the next epoch\"")
+	}
+	current := next["current"].(map[string]any)
+	if _, err := Accept(current, envelopeOf(next["envelope"]), next["root_public"].(string)); err != nil {
+		t.Fatalf("the unchanged case is refused: %v", err)
+	}
+	for name, change := range map[string]func(map[string]any){
+		"an epoch as text":        func(m map[string]any) { m["epoch"] = "1" },
+		"no revocation keys":      func(m map[string]any) { delete(m, "revocation_keys") },
+		"revocation keys as text": func(m map[string]any) { m["revocation_keys"] = "00" },
+		"nodes as null":           func(m map[string]any) { m["nodes"] = nil },
+		"a schema nobody knows":   func(m map[string]any) { m["schema"] = "regalia.membership/v0" },
+	} {
+		broken := map[string]any{}
+		for k, v := range current {
+			broken[k] = v
+		}
+		change(broken)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: panicked: %v", name, r)
+				}
+			}()
+			_, err := Accept(broken, envelopeOf(next["envelope"]), next["root_public"].(string))
+			if refused, ok := err.(*Refused); !ok || !strings.Contains(refused.Reason, "the current manifest is not valid") {
+				t.Errorf("%s: %v, not a refusal of the current manifest", name, err)
+			}
+		}()
 	}
 }
