@@ -111,6 +111,16 @@ incident for the root key's holder, not something to resolve on this host.
   cut is not known for these hosts, and a software TPM cannot show it. The two slots are the protection
   whatever the answer is. The drill (cut power to a DL360 during record writes, many times, and read
   both slots back) is still to run.
+- **Who can rewrite the anchor.** Every index of the anchor is written with the TPM's owner
+  authorization only (an index that also takes its own authorization, or a policy, is refused). With
+  the empty owner authorization a TPM has from the factory, that is anyone who can open the TPM device
+  (root, the tss group), and this software itself relies on that today. So the anchor protects against
+  a restored or substituted disk, not against code running as root on the host. That is the decided
+  trust boundary, not an oversight: owner and endorsement authorization stay empty, and access to
+  `/dev/tpmrm0` is limited to root and a `tss` group that holds only these units (decision on #190,
+  https://github.com/Digital-Frontier-LDA/regalia-kms/issues/190#issuecomment-5969483031). A non-empty
+  owner authorization would have to sit on disk for the service to advance the counter, and would
+  protect nothing against root. `host_probe.py` checking the `tss` group is part of #190.
 - Nothing fetches the chains for the operator; the transport is #80.
 - **No migration from the first layout** (#146: one 40-byte record). Nothing was commissioned with it.
   A node that had been would report `record index … is 40 bytes, not 48` and would be re-anchored,

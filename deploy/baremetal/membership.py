@@ -381,15 +381,26 @@ class HighWater:
     is the valid slot with the higher epoch. Only when NEITHER slot is valid, or an index is gone, is
     there nothing to go by: that fails closed, and the way back is `Store.reanchor()`
     (reanchor.py; MEMBERSHIP-RECOVERY.md), never a silent return to trusting the epoch alone.
-    The same limit as the counter: owner authorization on the running host can rewrite the record.
+    THE LIMIT, STATED PLAINLY. Writes to all four indices need the TPM's OWNER authorization. That is a
+    protection only if the owner hierarchy has an authorization value: with the empty one a TPM has from the
+    factory, anyone who can open the TPM device (root, the tss group) has owner authorization, and can rewrite
+    the counter, the base and the record. Today this code itself uses the owner hierarchy with no password,
+    so it needs the empty value. The anchor therefore defends against a restored or substituted DISK, and
+    against nothing that can talk to the TPM, until the owner authorization is set and given to Store (or the
+    writes are bound to a PCR policy). That is the decided trust boundary (#190): owner authorization stays
+    empty, and who may open /dev/tpmrm0 (root, a tss group holding only these units) is the gate. See
+    MEMBERSHIP-RECOVERY.md.
 
     THE FORMAT ON THE TPM, for any other reader (the initrd reads it too). For counter index C (0x1500016
     for membership):
-      * C: TPM_NT_COUNTER, 8 bytes, attributes ownerread|ownerwrite|authread|authwrite.
-      * C + 1, the base: ordinary, 8 bytes, ownerread|ownerwrite|authread|authwrite|writedefine; written
+      * C: TPM_NT_COUNTER, 8 bytes, attributes ownerread|ownerwrite|authread.
+      * C + 1, the base: ordinary, 8 bytes, ownerread|ownerwrite|authread|writedefine; written
         once and write-locked. The epoch is (counter - base), both read as unsigned 64-bit big-endian; a
         counter below its base is refused.
-      * C + 4 and C + 5, the record slots: ordinary, EXACTLY 48 bytes, ownerread|ownerwrite|authread|authwrite.
+      * C + 4 and C + 5, the record slots: ordinary, EXACTLY 48 bytes, ownerread|ownerwrite|authread.
+      * WRITES NEED OWNER AUTHORIZATION: a reader refuses any of these indices that has authwrite or
+        policywrite set, or lacks ownerwrite (a record slot that is write-locked is refused too). Reads are
+        open (authread): nothing here is secret.
         A slot holds  epoch (8 bytes, unsigned big-endian) || digest (32 bytes) || tag (8 bytes),  where
         digest is the SHA-256 of the canonical JSON of the manifest at that epoch (membership.digest; 32 zero
         bytes at epoch 0) and  tag = SHA-256(b"regalia-membership-record/v1\x00" || epoch || digest)[0:8].
@@ -412,6 +423,7 @@ class HighWater:
     RECORD_TAG = b"regalia-membership-record/v1\0"
     NT_MASK, NT_COUNTER, NT_ORDINARY = 0xF0, 0x10, 0x00
     WRITTEN, WRITELOCKED = 0x20000000, 0x800
+    OWNERWRITE, AUTHWRITE, POLICYWRITE = 0x2, 0x4, 0x8
 
     def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None):
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
@@ -469,7 +481,7 @@ class HighWater:
             require(self._tpm("nvreadpublic", index).returncode != 0, "NV index %s already exists" % index)
         base = self._define_counter(epoch)
         for index in self.record_indices:
-            r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
+            r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread")
             require(r.returncode == 0, "cannot define the record index %s" % index)
         for _ in self.record_indices:            # each write takes the slot that is not valid, else the older one
             self._write_record(epoch, manifest_digest)
@@ -478,7 +490,7 @@ class HighWater:
     def _define_counter(self, epoch):
         """The counter and its base, the counter reading `epoch` from the moment the base exists: the base is
         written as (where the counter landed) - epoch, the counter raised first on a TPM where it lands below."""
-        r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
+        r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
         require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
         landed = self._read8(self.index)
@@ -486,7 +498,7 @@ class HighWater:
             require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
             landed = self._read8(self.index)
         base = landed - epoch
-        r = self._tpm("nvdefine", self.base_index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|authwrite|writedefine")
+        r = self._tpm("nvdefine", self.base_index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|writedefine")
         require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
         r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
         require(r.returncode == 0, "cannot write the base index")
@@ -514,7 +526,7 @@ class HighWater:
                     require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
                     defined.discard(int(index, 16))
                 if int(index, 16) not in defined:
-                    r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread|authwrite")
+                    r = self._tpm("nvdefine", index, "-C", "o", "-s", str(self.RECORD_BYTES), "-a", "ownerread|ownerwrite|authread")
                     require(r.returncode == 0, "cannot define the record index %s" % index)
             self._write_record(epoch, manifest_digest)
             for index in (self.index, self.base_index):
@@ -525,16 +537,28 @@ class HighWater:
             return base
 
     def _is_slot(self, index):
+        """Whether `index` is a record slot as this software defines one, which redefine() keeps and writes into:
+        ordinary, RECORD_BYTES long, written with owner authorization only, not write-locked. Anything else
+        holds no record this anchor can use, and is replaced rather than left to make every attempt fail."""
         attributes, size = self._public(index)
-        return attributes & self.NT_MASK == self.NT_ORDINARY and size == self.RECORD_BYTES
+        return (attributes & self.NT_MASK == self.NT_ORDINARY and size == self.RECORD_BYTES and attributes & self.OWNERWRITE
+                and not attributes & (self.AUTHWRITE | self.POLICYWRITE | self.WRITELOCKED))
+
+    def _owner_written(self, index, attributes):
+        """An index of the anchor is written with owner authorization only: an index that also takes its own
+        (empty) authorization, or a policy, for a write could be rewritten by anyone who can open the TPM."""
+        require_anchor(attributes & self.OWNERWRITE and not attributes & (self.AUTHWRITE | self.POLICYWRITE),
+                       "NV index %s can be written without owner authorization (attributes 0x%x): it is not this anchor's" % (index, attributes))
 
     def _base(self):
         """Checks both indices' attributes and returns the base (one call per value/advance/check)."""
         a = self._attributes(self.index)
         require_anchor(a & self.NT_MASK == self.NT_COUNTER and a & self.WRITTEN, "NV index %s is not a written counter" % self.index)
+        self._owner_written(self.index, a)
         b = self._attributes(self.base_index)
         require_anchor(b & self.NT_MASK == self.NT_ORDINARY and b & self.WRITTEN and b & self.WRITELOCKED,
                  "base index %s is not written and write-locked" % self.base_index)
+        self._owner_written(self.base_index, b)
         return self._read8(self.base_index)
 
     def _epoch(self, base):
@@ -579,6 +603,8 @@ class HighWater:
         a, size = self._public(index)
         require_anchor(a & self.NT_MASK == self.NT_ORDINARY, "record index %s is not an ordinary index" % index)
         require_anchor(size == self.RECORD_BYTES, "record index %s is %d bytes, not %d" % (index, size, self.RECORD_BYTES))
+        self._owner_written(index, a)
+        require_anchor(not a & self.WRITELOCKED, "record index %s is write-locked: no record can be written to it" % index)
         if not a & self.WRITTEN:
             return None
         r = self._tpm("nvread", index, "-C", "o", "-s", str(self.RECORD_BYTES))
@@ -682,8 +708,11 @@ class HighWater:
         (its tag does not match yet), both of which this accepts as it accepts them after a crash. A
         refusal from a lock-free read can be a commit racing it: read again before acting on it."""
         if not lock:
-            hw = self._epoch(self._base())
+            base = self._base()
+            hw = self._epoch(base)
             self._verify(hw, digest_of, repair=False)
+            # a redefinition between the reads would pair the old base with the new counter
+            require(self._base() == base, "this host's TPM anchor was redefined during the read: read again")
             return hw
         with _exclusive(self.lock_path):
             hw = self._epoch(self._base())

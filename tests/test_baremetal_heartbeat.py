@@ -65,6 +65,7 @@ class FakeTpm:
     lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes.
     A counter's value is an integer; an ordinary index holds bytes, at most the size it was defined with."""
     COUNTER, WRITTEN, LOCKED = 0x10, 0x20000000, 0x800
+    BITS = {"ownerwrite": 0x2, "authwrite": 0x4, "policywrite": 0x8, "writedefine": 0x2000, "ownerread": 0x20000, "authread": 0x40000}
 
     def __init__(self, highest=0):
         self.nv, self.highest, self.broken = {}, highest, False
@@ -80,13 +81,15 @@ class FakeTpm:
         if tool == "nvdefine":
             if index in self.nv:
                 return no
-            self.nv[index] = [self.COUNTER if "nt=counter" in argv[argv.index("-a") + 1] else 0, None, int(argv[argv.index("-s") + 1])]
+            words = argv[argv.index("-a") + 1].split("|") if "-a" in argv else ["ownerread", "ownerwrite", "authread", "authwrite"]
+            bits = sum(self.BITS.get(word, 0) for word in words) | (self.COUNTER if "nt=counter" in words else 0)
+            self.nv[index] = [bits, None, int(argv[argv.index("-s") + 1])]
             return ok()
         if index not in self.nv:
             return no
         entry = self.nv[index]
         if tool == "nvreadpublic":
-            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: %d\n" % (index, entry[0] | 0x60006, entry[2])).encode())
+            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: %d\n" % (index, entry[0], entry[2])).encode())
         if tool == "nvread":
             size = int(argv[argv.index("-s") + 1])
             if entry[1] is None or size > entry[2]:
@@ -607,7 +610,7 @@ class OnSwtpm(unittest.TestCase):
         tpm("tpm2_nvundefine", "0x1500018", "-C", "o")
         self.refused("fail closed", self.f.check, self.m1)      # no counter: no decision
         self.refused("already exists", self.counter.define)     # the write-once base is still there
-        tpm("tpm2_nvdefine", "0x1500018", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread|authwrite")
+        tpm("tpm2_nvdefine", "0x1500018", "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread")
         tpm("tpm2_nvincrement", "0x1500018", "-C", "o")
         self.assertGreaterEqual(self.counter.value(), 7)        # a re-created counter starts above what it held
         self.refused("REPLAY", self.f.accept, beat(self.m1, 3), self.m1)
