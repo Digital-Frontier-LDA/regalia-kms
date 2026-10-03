@@ -90,6 +90,11 @@ Commissioning has two halves:
   token names, such as the installer's passphrase). The probe reads the LUKS2 header only and never
   asks for the key. After **any** use of the key, a rehearsal included: `recovery-key.sh --replace`
   with a new key printed by the ceremony disc's `pin-escrow.sh --new-recovery-key` (never invented by hand); escrow it only after `--replace` and `--check` have succeeded.
+  Every mode prints the header's state last (`STATE: clean`, `no-recovery`, `orphan-keyslot`,
+  `added-unproven`, `orphan-token` or `unknown`, each with its one way forward). A run that stops
+  anywhere, killed included, is finished by the same command with the same keys; `unknown` is left
+  to the custodian (`recovery-reconcile.py`, RECOVERY-RECONCILIATION.md). The key is always the
+  ceremony's (#175): there is no host-generated mode.
 - **IMA** policy measuring executables (`measure func=BPRM_CHECK mask=MAY_EXEC`, as in `ima_policy=tcb`).
   This is for **attestation**: TPM quotes over PCR 10 and the IMA log let another host or an
   appraiser (Keylime) check that the running regalia-kms is the expected binary. Measured:
