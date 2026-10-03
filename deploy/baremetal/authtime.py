@@ -98,8 +98,8 @@ ACCEPTABLE = ("*", "+", "-")   # selected, combined, and agreeing but not combin
 SERVER = r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+"      # a host name, or an IPv4 address
 
 
-def _printable(text):
-    return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:240]
+def _printable(text, limit=membership.NAME_LIMIT):
+    return membership.printable(text, limit)
 
 
 # ---- what chrony says ----
@@ -228,7 +228,7 @@ class Service:
         try:
             judge(self.reading(), self.wall(), self.declared, self.minimum)
         except Refused as refusal:
-            reason = _printable(refusal)
+            reason = _printable(refusal, membership.REASON_LIMIT)
         except Exception as failure:      # noqa: BLE001 - whatever went wrong, the clock was not shown to be right
             reason = "the check failed (%s)" % type(failure).__name__
         document = {"schema": SCHEMA, "boot_id": self.boot, "checked_boottime_ms": checked, "authenticated": reason == "", "reason": reason}

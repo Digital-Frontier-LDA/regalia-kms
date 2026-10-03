@@ -479,7 +479,21 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     names), for a bounded number of rounds;
   - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
     file (`/run/regalia-unlock/key.sock`). If no peer helps, it gives nothing.
-- **The units** (`deploy/baremetal/initrd/regalia-unlock.socket` and `.service`): systemd-cryptsetup's
+- **The relay** (`regalia-unlock-relay.service`): it makes the key socket crypttab names, holds no
+  credential, no TPM and no network, and needs nothing that can fail. It asks the real client on its
+  own socket (`regalia-unlock-core.socket`) and passes on exactly one whole key, or gives nothing after
+  any failure or after 330 s (the real client ends its own attempt within 200 s, so its answer comes
+  first; a client that hangs yields the prompt). With nothing, systemd-cryptsetup asks for the
+  recovery key. It makes the socket ITSELF, with no `.socket` unit, because systemd-cryptsetup asks for
+  the recovery key when the key file does not exist, and fails without asking when a connection is
+  refused or reset (systemd 257): so if the relay cannot start, or is gone, there is no socket, and the
+  console asks. It is restarted without limit; its runtime directory, the socket in it, goes when it
+  stops; systemd-cryptsetup is ordered after it, weakly. Before it, a real client that could not start
+  (a sealed credential that did not decrypt) left systemd-cryptsetup with a reset connection, and it
+  failed without asking (#66). Shown with the real systemd and systemd-cryptsetup: a client that hangs,
+  one that crashes mid-answer, an undecryptable credential, an absent one, and the relay unable to
+  start each end with no key and the prompt's path.
+- **The real client's units** (`deploy/baremetal/initrd/regalia-unlock-core.socket` and `regalia-unlock.service`): the relay's
   connection to the socket starts the client, sandboxed (no capability, no write anywhere but its own
   `/run/regalia`, no device but the TPM and the disks, read-only). Shown with a running systemd and
   the real systemd-cryptsetup: the volume is mapped with the key from the socket; with no peer,
@@ -522,10 +536,43 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   | `regalia.boot-nft` | `bootnet.boot_ruleset` | no |
   | `regalia.boot-env` | `BOOT_NIC`, `BOOT_ADDRESS`, `BOOT_GATEWAY`, `BOOT_TUNNEL` (read as data) | no |
 
-  The units name each without a path: systemd looks for it among the credentials it was given at
-  boot, decrypts the two sealed ones (a plain one under those names is refused), and treats a missing
-  one as absent: the client then gives nothing and the console asks for the recovery key. The machine
-  that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+  **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
+  carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
+  not SMBIOS type 11 or QEMU's fw_cfg (which nothing the peers attest measures), not the command line.
+  The stub still unpacks the ESP's files into the initrd at `/.extra/global_credentials/`, and the two
+  units read exactly their six by fixed paths there: the two sealed ones decrypted by systemd (a plain
+  one is refused), the four others as data. A missing file keeps its unit from starting, and the
+  console asks for the recovery key (within seconds in the boot test). Second layer, for an image built
+  without that switch: the dracut module leaves out systemd-debug-generator (which makes units and
+  drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles, sysctl, journald,
+  sysusers, udev rule-credential and systemd-cryptsetup services (the last imports `cryptsetup.*`: a
+  planted passphrase would be tried before the key socket). It is partial: fstab-generator
+  (`fstab.extra`; it mounts the root), the network generator and PID 1 itself are covered by the
+  first layer only. A PE addon on the ESP could add a command line (systemd-stub appends it, and only
+  PCR 12 changes); with Secure Boot on, the stub loads only addons signed by a key in db, and the
+  peers refuse any changed PCR 12, so it gains no contribution. `uki.py build` refuses an image
+  whose command line lacks the switch. The boot test reads systemd's own message ("systemd.import_credentials=no
+  is set") from the booted journal, and passes an extra unit through SMBIOS that is never started.
+  The machine that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+
+  **What the unlock client erases, and what it cannot (#221).** For the whole initrd phase the client
+  holds the local half (32 bytes), the boot session's RSA-3072 private key, and, once a peer has
+  answered, the volume's key. All three are byte slices, never strings. As soon as the boot's one
+  response is used, the client zeroes the local half and the private key's numbers and drops every
+  reference to the key; it keeps only the volume's key, for any later asker in this boot. When systemd
+  stops it at switch-root, it zeroes the volume's key too. The relay zeroes its copy of the key after the
+  write. **What this cannot do:** Go's `crypto/rsa` keeps its own internal copy of the private key,
+  which no program can reach (an independent read decrypted with it after the zeroing); the garbage
+  collector moves and frees memory without clearing it; and slices copied by the runtime or the
+  standard library are not tracked. That is why the image's signed command line also carries
+  `init_on_free=1 init_on_alloc=1` (required by `uki.py build`): the kernel zeroes every page when it is
+  freed and when it is handed out, so nothing the client held survives the process in memory the booted
+  system can reuse. The boot test checks the kernel's own boot message ("mem auto-init: … heap
+  alloc:on, heap free:on"), since a kernel built without the options would ignore the words. The client
+  does not mlock its memory: its unit has no capabilities, so locking is bounded by RLIMIT_MEMLOCK (8 MiB),
+  which a Go process exceeds, and granting CAP_IPC_LOCK would widen the unit for a client that holds no
+  swap-backed memory in the initrd. The volume key also lives, by design, in dm-crypt in the kernel and
+  briefly in systemd-cryptsetup.
 
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
@@ -537,14 +584,12 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   12 in the initrd phase**, against the value the node's credentials give: `espcreds.pcr12(files)`,
   the stub's own computation (one extend with the SHA-256 of a cpio archive of the files, sorted by
   name), shown equal to a real boot's. The boot test's peers do; a planted credential is refused.
-  **Not every credential channel is measured.** systemd in the initrd also imports credentials from
-  SMBIOS type 11 strings and from QEMU's fw_cfg, and nothing puts those in PCR 12 (SMBIOS reaches PCR
-  1 at most, through the firmware, which no peer attests). Whoever can set SMBIOS strings on a host
-  (firmware, iLO) could pass credentials the peers never see; what systemd acts on by name must
-  therefore also be restricted in the image (B2 on #66).
+  **Not every credential channel is measured**: SMBIOS type 11 strings and QEMU's fw_cfg reach PCR 1
+  at most, through the firmware, which no peer attests. That is why systemd imports none (above); the
+  boot test passes a unit drop-in through SMBIOS and it is not acted on.
   OPEN for production: the measurement set's PCR 12 per node, computed by a tool from the node's
   credentials (#66, d9), and the split decided on #66 (membership-derived data signed and verified in
-  the initrd, B3; refusal of unexpected credential names, B2).
+  the initrd, B3).
   The image must be built with `dracut --no-hostonly --no-hostonly-cmdline` (the module refuses
   hostonly mode, which copies the build machine's identity and crypt settings into the image). The
   ruleset credential may hold only `table inet regalia_boot` and include no file; `down` flushes every

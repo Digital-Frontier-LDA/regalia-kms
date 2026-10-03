@@ -38,6 +38,7 @@
 package main
 
 import (
+	"crypto/rsa"
 	"encoding/hex"
 	"errors"
 	"flag"
@@ -49,6 +50,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -76,11 +78,15 @@ type options struct {
 	tpm        string
 	sessionDir string
 	once       bool
+	budget     time.Duration // the longest one attempt may take, all rounds together (0: no limit)
 	rounds     int
 	wait       time.Duration
 }
 
 func run(arguments []string, out, diagnostics io.Writer) error {
+	if len(arguments) > 0 && arguments[0] == "-relay" {
+		return runRelay(arguments, out, diagnostics)
+	}
 	// The socket first, before anything that can fail. A start that cannot serve still answers whoever
 	// waits on it, with nothing: systemd-cryptsetup then asks at the console, and systemd does not start
 	// this program again for a connection left waiting. That holds for a bad flag or a bad configuration too.
@@ -102,11 +108,12 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	flags.StringVar(&o.sessionDir, "session-dir", "/run/regalia", "where the boot session's ID and public key are left for the running system")
 	flags.BoolVar(&o.once, "once", false, "answer one connection and exit (tests); without it the program serves until it is stopped")
 	flags.IntVar(&o.rounds, "rounds", 5, "how many times to go round the peers before giving up")
+	flags.DurationVar(&o.budget, "budget", 200*time.Second, "the longest one attempt may take, all rounds together: less than the relay's wait")
 	flags.DurationVar(&o.wait, "wait", 5*time.Second, "pause between rounds")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 {
+	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 || o.budget < 0 {
 		return errors.New("usage: regalia-unlock [-config FILE] [-tpm DEVICE] [-session-dir DIR] [-once] [-rounds N] [-wait DURATION]")
 	}
 	if listenerError != nil {
@@ -182,15 +189,16 @@ type unlocker struct {
 	paths       map[string][]pathToken
 	local       []byte
 	boot        *session
-	dial        func(string) transport
+	dial        func(endpoint string, until time.Time) transport
 	quote       quoter
 	sleep       func(time.Duration)
 	out         io.Writer
 	diagnostics io.Writer
 
-	presented bool   // a quote of this session was taken, to be sent to a peer
-	earlier   bool   // ANOTHER session of this boot is on record: this process asks no peer
-	key       []byte // the volume's key, from this boot's one response; given to each later connection
+	presented bool       // a quote of this session was taken, to be sent to a peer
+	earlier   bool       // ANOTHER session of this boot is on record: this process asks no peer
+	key       []byte     // the volume's key, from this boot's one response; given to each later connection
+	secrets   sync.Mutex // spent (the serving loop) and forget (the signal goroutine) zero the same memory
 	peer      string
 	slot      string
 }
@@ -263,6 +271,7 @@ func (u *unlocker) answer(connection *net.UnixConn) error {
 		// This boot's one response is used. The key is kept until the process ends, so that an asker who
 		// left meanwhile does not cost the boot its unlock: the next one gets the same key.
 		u.key, u.peer, u.slot = key, peer, slot
+		u.spent()
 	}
 	_ = connection.SetDeadline(time.Now().Add(ioTimeout))
 	if _, err := connection.Write(u.key); err != nil {
@@ -327,19 +336,43 @@ func (u *unlocker) presenting(qualifying []byte) ([]byte, []byte, error) {
 // expose and which ends with the process. Called from the signal handler, it can race an answer in
 // progress; that answer then gives a zeroed key, which the volume refuses: a failed attempt, never a
 // secret written anywhere.
+// spent drops what only served to obtain this boot's one response: the local half is zeroed, and the
+// session's private key is zeroed where this package can reach it and then let go, so nothing in the
+// process refers to it any more. That does NOT erase it: crypto/rsa keeps an internal copy this code
+// cannot reach, and the Go runtime does not clear memory it frees. What it does is shorten how long the
+// key is reachable, and leave its pages to be cleared when the process ends, by the kernel's
+// init_on_free=1 on the signed command line (#221). The key the boot was given stays: the next asker
+// in this boot gets it.
+func (u *unlocker) spent() {
+	u.secrets.Lock()
+	defer u.secrets.Unlock()
+	wipe(u.local)
+	if u.boot != nil && u.boot.key != nil {
+		zeroPrivate(u.boot.key)
+		u.boot.key = nil
+	}
+}
+
+// zeroPrivate zeroes the private numbers of an RSA key in place.
+func zeroPrivate(key *rsa.PrivateKey) {
+	numbers := append([]*big.Int{key.D, key.Precomputed.Dp, key.Precomputed.Dq, key.Precomputed.Qinv}, key.Primes...)
+	for _, number := range numbers {
+		if number != nil {
+			words := number.Bits()
+			for i := range words {
+				words[i] = 0
+			}
+		}
+	}
+}
+
 func (u *unlocker) forget() {
+	u.secrets.Lock()
+	defer u.secrets.Unlock()
 	wipe(u.local)
 	wipe(u.key)
 	if u.boot != nil && u.boot.key != nil {
-		numbers := append([]*big.Int{u.boot.key.D, u.boot.key.Precomputed.Dp, u.boot.key.Precomputed.Dq, u.boot.key.Precomputed.Qinv}, u.boot.key.Primes...)
-		for _, number := range numbers {
-			if number != nil {
-				words := number.Bits()
-				for i := range words {
-					words[i] = 0
-				}
-			}
-		}
+		zeroPrivate(u.boot.key)
 	}
 }
 
@@ -427,14 +460,26 @@ func giveNothing(listener *net.UnixListener) {
 // tcpTransport is one request per connection: the request ends when this side closes its half, and
 // the reply is everything the peer sends before it closes, bounded in size and time. The network under
 // it (WG-BOOT, #66) decides who can reach a peer; the exchange needs no secrecy from the transport.
-func tcpTransport(endpoint string) transport {
+// `until` (zero: none) bounds it too: the attempt's budget, so that its last ask cannot outlast it.
+func tcpTransport(endpoint string, until time.Time) transport {
+	limit := func() time.Time {
+		deadline := time.Now().Add(ioTimeout)
+		if !until.IsZero() && until.Before(deadline) {
+			deadline = until
+		}
+		return deadline
+	}
 	return func(request []byte) ([]byte, error) {
-		connection, err := net.DialTimeout("tcp", endpoint, ioTimeout)
+		if !until.IsZero() && !time.Now().Before(until) {
+			return nil, errors.New("the attempt's time is spent")
+		}
+		dialer := net.Dialer{Deadline: limit()}
+		connection, err := dialer.Dial("tcp", endpoint)
 		if err != nil {
 			return nil, errors.New("no connection")
 		}
 		defer connection.Close()
-		_ = connection.SetDeadline(time.Now().Add(ioTimeout))
+		_ = connection.SetDeadline(limit())
 		if _, err := connection.Write(request); err != nil {
 			return nil, errors.New("the request was not sent")
 		}
@@ -454,14 +499,21 @@ func tcpTransport(endpoint string) transport {
 // credential, the peer and the keyslot, or an error after the last round. Every reason is written to
 // diagnostics as it happens; none of them holds a secret. Whether the credential opens the keyslot is
 // systemd-cryptsetup's to find out: this boot's one response is spent either way.
-func deriveKey(config *bootConfig, o options, paths map[string][]pathToken, local []byte, boot *session, dial func(string) transport,
+func deriveKey(config *bootConfig, o options, paths map[string][]pathToken, local []byte, boot *session, dial func(string, time.Time) transport,
 	quote quoter, sleep func(time.Duration), diagnostics io.Writer) (key []byte, peerID, slot string, err error) {
-	asked := false
+	asked, started, until := false, time.Now(), time.Time{}
+	if o.budget > 0 {
+		until = started.Add(o.budget)
+	}
 	for round := 1; round <= o.rounds; round++ {
 		for _, peer := range config.Peers {
 			for _, token := range paths[peer.NodeID] {
+				// the relay in front waits a bounded time: an answer after it would come too late for anyone
+				if o.budget > 0 && time.Since(started) >= o.budget {
+					return nil, "", "", fmt.Errorf("the disk stays locked: no peer helped within %s", o.budget)
+				}
 				asked = true
-				contribution, err := boot.ask(peer, token.PathEpoch, dial(peer.Endpoint), quote)
+				contribution, err := boot.ask(peer, token.PathEpoch, dial(peer.Endpoint, until), quote)
 				if err != nil {
 					fmt.Fprintf(diagnostics, "regalia-unlock: round %d, %s (path epoch %d): %s\n", round, peer.NodeID, token.PathEpoch, err)
 					continue

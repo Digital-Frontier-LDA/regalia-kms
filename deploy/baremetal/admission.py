@@ -66,6 +66,10 @@ FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_diges
           "requested_boottime_ms", "serve_until_boottime_ms", "reason")
 MARGIN = 10                # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
+# The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
+# refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
+# that; the full text of a refusal goes to the audit trail (convergence.audited), not to this file.
+ADMISSION_REASON_LIMIT = 1024
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
 
@@ -110,8 +114,8 @@ def unit_started(unit="regalia-kms.service", run=subprocess.run, proc="/proc"):
     return started
 
 
-def _printable(text):
-    return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:240]
+def _printable(text, limit=membership.NAME_LIMIT):
+    return membership.printable(text, limit)
 
 
 def write(path, document):
@@ -168,7 +172,7 @@ class Service:
                 "manifest_digest": membership.digest(manifest) if manifest else "00" * 32,
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
-                "serve_until_boottime_ms": serve_until, "reason": _printable(reason)}
+                "serve_until_boottime_ms": serve_until, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
 
     def _daemon_waits(self):
         """Whether the daemon started after the held lease was asked for: it will not serve on that lease,

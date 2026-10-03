@@ -142,6 +142,17 @@ def load(raw, limit=MAX_BYTES):
         raise Refused("not valid JSON: %s" % error)
 
 
+NAME_LIMIT = 240          # a name in an audit event or a message: a node ID, a host, a source
+REASON_LIMIT = 4096       # the reason of a refusal: a PCR refusal names every differing value (attest.differences)
+
+
+def printable(text, limit=NAME_LIMIT):
+    """`text` as one line of printable ASCII for an audit trail or a log, cut at `limit` characters: what a
+    caller or a node supplied cannot inject a line break or a terminal escape. One helper, so the trails
+    of convergence, admission and authtime cut alike."""
+    return "".join(c if " " <= c <= "~" else "?" for c in str(text))[:limit]
+
+
 def canonical(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
