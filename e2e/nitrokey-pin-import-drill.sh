@@ -47,7 +47,9 @@ fi
 # isolated OpenSC configuration, and it is not run unless the one card visible is this serial.
 seal(){ local tcti="$1"; shift
   if [ "${DEV[0]}" = --serial ]; then bench_gate "$SERIAL" || { echo "drill: $SERIAL is not the one card visible: seal-hsm-pin.sh not run"; return 97; }; fi
-  sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$CRED" ${OPENSC_CONF:+OPENSC_CONF="$OPENSC_CONF"} "$SEAL" "$@" 2>&1; }
+  # The same module and configuration the gate looked through.
+  sudo env TPM2TOOLS_TCTI="$tcti" REGALIA_CREDSTORE="$CRED" ${OPENSC_CONF:+OPENSC_CONF="$OPENSC_CONF"} \
+    ${HSM_PKCS11_MODULE:+HSM_PKCS11_MODULE="$HSM_PKCS11_MODULE"} "$SEAL" "$@" 2>&1; }
 tries(){ local r
   if [ "${DEV[0]}" = --yubikey ]; then ykman --device "$SERIAL" piv info 2>/dev/null | sed -n 's/^PIN tries remaining: *\([0-9]*\)\/.*/\1/p'; return; fi
   r="$(opensc-tool -l 2>/dev/null | awk -v s="($SERIAL" 'index($0,s){print $1; exit}')"

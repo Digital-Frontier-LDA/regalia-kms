@@ -45,15 +45,17 @@ for t in sc-hsm-tool pkcs11-tool pkcs15-tool opensc-tool openssl go; do command 
 . "$CEREMONY/qubes/scripts/ceremony-kcv.sh"
 
 pin_of(){ case "$1:$2" in "$SRC:so") echo "$SRC_SO_PIN";; "$SRC:user") echo "$SRC_USER_PIN";; "$DST:so") echo "$DST_SO_PIN";; "$DST:user") echo "$DST_USER_PIN";; esac; }
-for s in "$SRC" "$DST"; do
-  hsm_assert_staging_card "$s" || die "$s is not a registered staging card (or its DevAut does not match): refusing to initialise it"
-done
 # OpenSC sees ONLY the two cards under test, and every command that presents a PIN (or the SO-PIN, or
 # initialises) runs only while that card's serial is where it is expected (regalia-kms#174).
 # shellcheck source=lib/bench_cards.sh
 . "$ROOT/e2e/lib/bench_cards.sh"
 bench_isolate "$STATE/opensc.conf" "$MODULE" "$SRC" "$DST" || die "cannot isolate $SRC and $DST in OpenSC"
 gate(){ bench_gate "$1" ${2:+"$2"} || die "$1 is not where it is expected: no PIN presented"; }
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
+for s in "$SRC" "$DST"; do
+  hsm_assert_staging_card "$s" || die "$s is not a registered staging card (or its DevAut does not match): refusing to initialise it"
+done
 # Resolved in the MAIN shell, into $READER. An inline `--reader "$(hsm_reader_for …)"` that fails
 # passes `--reader ""`, which OpenSC reads as reader 0, i.e. ANOTHER card (review of #37).
 reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER" ] || die "cannot resolve $1 to a PC/SC reader"; }

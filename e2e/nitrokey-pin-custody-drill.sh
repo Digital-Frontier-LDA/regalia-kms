@@ -53,7 +53,6 @@ pin_of(){ case "$1" in "$PRIMARY") printf '%s' "$NK_PIN_PRIMARY";; "$REPLACEMENT
 CARDS="$PRIMARY${REPLACEMENT:+ $REPLACEMENT}"
 
 # ---- the gate: registered staging cards, pinned by C.DevAut ---------------------------------------
-for s in $CARDS; do hsm_assert_staging_card "$s" || die "$s is not a registered staging Nitrokey: refusing"; done
 # OpenSC sees ONLY the drill's cards, as this user and as root in the drill's services (passed with
 # --setenv), and every command that presents a PIN runs only while that card's serial is where it is
 # expected (e2e/lib/bench_cards.sh, regalia-kms#174). Before readers and slots are resolved: isolation
@@ -63,12 +62,18 @@ for s in $CARDS; do hsm_assert_staging_card "$s" || die "$s is not a registered 
 # shellcheck disable=SC2086  # CARDS is one or two serials, split on purpose
 bench_isolate "$STATE/opensc.conf" "$MODULE" $CARDS || die "cannot isolate $CARDS in OpenSC"
 gate(){ bench_gate "$1" ${2:+"$2"} || die "$1 is not where it is expected: no PIN presented"; }
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
+for s in $CARDS; do hsm_assert_staging_card "$s" || die "$s is not a registered staging Nitrokey: refusing"; done
 # Readers and slots resolve in the MAIN shell: a failed inline lookup would pass "" (= reader 0).
 declare -A READER SLOT
-for s in $CARDS; do
-  READER[$s]="$(hsm_reader_for "$s" 2>/dev/null || true)"; [ -n "${READER[$s]}" ] || die "cannot resolve $s to a PC/SC reader"
-  SLOT[$s]="$(hsm_slot_id_for "$s" 2>/dev/null || true)"; [ -n "${SLOT[$s]}" ] || die "PKCS#11 cannot see $s"
-done
+# Resolved again after the deliberate outage: a reader that leaves and returns can be renumbered.
+resolve(){ local s
+  for s in $CARDS; do
+    READER[$s]="$(hsm_reader_for "$s" 2>/dev/null || true)"; [ -n "${READER[$s]}" ] || die "cannot resolve $s to a PC/SC reader"
+    SLOT[$s]="$(hsm_slot_id_for "$s" 2>/dev/null || true)"; [ -n "${SLOT[$s]}" ] || die "PKCS#11 cannot see $s"
+  done; }
+resolve
 # The user-PIN counter, read with an empty VERIFY: no attempt is spent.
 # The count is the low nibble of 63Cx, in HEX (a 10-try card answers 63CA); printed in decimal.
 tries(){ local sw x; sw="$(opensc-tool --reader "${READER[$1]}" -s "00 A4 04 00 0B E8 2B 06 01 04 01 81 C3 1F 02 01 00" -s "00 20 00 81" 2>&1 \
@@ -201,6 +206,7 @@ DISABLED_USB="$NK"; authorize "$NK" 0
 pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | grep -q "$PRIMARY" && die "$PRIMARY still visible"
 phase absent "$PRIMARY" "$STATE/v3.cred" || die "absent phase"
 authorize "$NK" 1; DISABLED_USB=""; sleep 2
+resolve
 [ "$(tries "$PRIMARY")" = "$F" ] || die "the outage spent a retry"
 phase serve "$PRIMARY" "$STATE/v3.cred" || die "did not serve after the card came back"; counters
 

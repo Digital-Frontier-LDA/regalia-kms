@@ -39,7 +39,6 @@ for t in sc-hsm-tool pkcs11-tool pkcs15-tool openssl go; do command -v "$t" >/de
 . "$CEREMONY/tools/hsm-reader-select.sh"
 
 # ---- the gate: a registered, disposable staging card, proven by its device certificate -----------
-hsm_assert_staging_card "$SERIAL" || die "$SERIAL is not a registered staging card (or its DevAut does not match): refusing to wipe it"
 # OpenSC sees ONLY this card, and every command that presents a PIN (or the SO-PIN, or initialises)
 # runs only while it is the one card visible (e2e/lib/bench_cards.sh, regalia-kms#174). Before the
 # reader is resolved: isolation renumbers the readers.
@@ -47,6 +46,9 @@ hsm_assert_staging_card "$SERIAL" || die "$SERIAL is not a registered staging ca
 . "$ROOT/e2e/lib/bench_cards.sh"
 bench_isolate "$STATE/opensc.conf" "$MODULE" "$SERIAL" || die "cannot isolate $SERIAL in OpenSC"
 gate(){ bench_gate "$SERIAL" ${1:+"$1"} || die "$SERIAL is not the one card visible: no PIN presented"; }
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
+hsm_assert_staging_card "$SERIAL" || die "$SERIAL is not a registered staging card (or its DevAut does not match): refusing to wipe it"
 reader(){ hsm_reader_for "$SERIAL" 2>/dev/null; }
 slot(){ hsm_slot_id_for "$SERIAL" 2>/dev/null; }
 READER="$(reader)"; [ -n "$READER" ] || die "cannot resolve $SERIAL to a reader"
@@ -54,7 +56,9 @@ say "card $SERIAL at reader $READER; state $STATE"
 
 p11(){ local s; s="$(slot)"; [ -n "$s" ] || die "cannot resolve $SERIAL to a PKCS#11 slot"; gate "$s"
        REGALIA_DRILL_PIN="$HSM_USER_PIN" pkcs11-tool --module "$MODULE" --slot "$s" --login --pin env:REGALIA_DRILL_PIN "$@"; }
-has_kek(){ p11 --list-objects --type privkey 2>/dev/null | grep -qiE "ID: *$KEY_ID\b"; }
+# The gate in the main shell: inside the pipeline below a failed gate would only end a subshell, and
+# "no key listed" would read as "no key".
+has_kek(){ gate; p11 --list-objects --type privkey 2>/dev/null | grep -qiE "ID: *$KEY_ID\b"; }
 phase(){ gate; REGALIA_ENVDRILL_PHASE="$1" REGALIA_ENVDRILL_MODULE="$MODULE" REGALIA_ENVDRILL_SERIAL="$SERIAL" \
          REGALIA_ENVDRILL_OBJECT_ID="$KEY_ID" REGALIA_ENVDRILL_PIN="$HSM_USER_PIN" REGALIA_ENVDRILL_STATE="$STATE" \
          go -C "$ROOT" test -count=1 -v -run '^TestEnvelopeSurvivesTokenWipeAndDKEKRestore$' ./internal/integration 2>&1 \

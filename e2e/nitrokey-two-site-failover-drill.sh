@@ -15,7 +15,7 @@
 #   - the two DKEK key check values must DIFFER (two restore domains, not one);
 #   - both cards must expose the wallet's public key;
 #   - TestCosmosSigningFailsOverBetweenTwoCards runs the promotion across them;
-#   - every card's PIN counter is read from outside before and after, and must not move.
+#   - both drill cards' PIN counters are read from outside before and after, and must not move.
 # The wallet key, its PKCS#12, both DKEK shares and every password file are deleted at the end.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,7 +42,6 @@ IMPORT="$CEREMONY/qubes/scripts/hsm-import-key-nojvm.sh"
 [ -x "$IMPORT" ] || die "no importer at $IMPORT"
 
 pin_of(){ case "$1:$2" in "$A:so") echo "$A_SO_PIN";; "$A:user") echo "$A_USER_PIN";; "$B:so") echo "$B_SO_PIN";; "$B:user") echo "$B_USER_PIN";; esac; }
-for s in "$A" "$B"; do hsm_assert_staging_card "$s" || die "$s is not a registered staging card: refusing"; done
 # OpenSC sees ONLY the two sites' cards, and every command that presents a PIN (or the SO-PIN, or
 # initialises) runs only while that card's serial is where it is expected (e2e/lib/bench_cards.sh,
 # regalia-kms#174). The ceremony importer is handed the slot and reader after the same gate.
@@ -50,6 +49,9 @@ for s in "$A" "$B"; do hsm_assert_staging_card "$s" || die "$s is not a register
 . "$ROOT/e2e/lib/bench_cards.sh"
 bench_isolate "$STATE/opensc.conf" "$MODULE" "$A" "$B" || die "cannot isolate $A and $B in OpenSC"
 gate(){ bench_gate "$1" ${2:+"$2"} || die "$1 is not where it is expected: no PIN presented"; }
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
+for s in "$A" "$B"; do hsm_assert_staging_card "$s" || die "$s is not a registered staging card: refusing"; done
 # Readers resolve in the MAIN shell into $READER: a failed inline lookup passes --reader "", which
 # OpenSC reads as reader 0, another card.
 reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER" ] || die "cannot resolve $1 to a PC/SC reader"; }

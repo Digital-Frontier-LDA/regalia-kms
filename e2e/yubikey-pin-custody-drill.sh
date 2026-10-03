@@ -108,7 +108,11 @@ seal(){ # seal <name> <out> ; the PIN arrives on stdin
   sudo systemd-creds encrypt --with-key=host --name="$1" - "$2" 2>>"$LOG" >/dev/null; }
 say "building the drill test binary"
 go -C "$ROOT" test -c -tags piv -o "$STATE/drill.test" ./internal/integration 2>&1 | tee -a "$LOG" || die "build"
+# The YubiKey a phase hands a PIN to is named by serial; it must be on the bus as that serial now.
+yk_gate(){ ykman list --serials 2>/dev/null | grep -qx "$1" || { say "$1 is not attached: no PIN presented"; return 97; }; }
 phase(){ # phase <name> <serial> <credential blob> ; returns the test's status
+  # "absent" runs with the card out on purpose and must present nothing: the one phase not gated.
+  [ "$1" = absent ] || yk_gate "$2" || die "$2 is not attached: no PIN presented"
   local out; out="$(sudo systemd-run --quiet --pipe --wait --collect -p LimitMEMLOCK=1M \
       -p "LoadCredentialEncrypted=yubi-drill.pin:$3" \
       --setenv=REGALIA_PINDRILL_PHASE="$1" --setenv=REGALIA_PINDRILL_SERIAL="$2" \

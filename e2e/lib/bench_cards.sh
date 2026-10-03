@@ -17,9 +17,15 @@
 #   bench_gate <serial> [slot]               0 only if exactly the isolated set of slots is visible, the
 #                                            serial is in exactly one of them (and in <slot>, if given):
 #                                            call it before EVERY command that presents a PIN
-#   bench_sudo <command>…                    sudo, carrying OPENSC_CONF across (sudo drops the
-#                                            environment, and a root OpenSC with the default
-#                                            configuration enumerates every reader again)
+#
+# Under sudo the configuration must be carried explicitly (sudo env OPENSC_CONF=…; systemd-run
+# --setenv / -E): sudo drops the environment, and an OpenSC with its defaults enumerates every reader.
+# A process running as ANOTHER user must be able to read the file: put <conf> in a directory that user
+# can enter (the file itself is written 0644). An unreadable configuration is the same as none.
+#
+# What isolation cannot do: two readers with the same name (two Pico HSMs: "Pol Henarejos Pico Key
+# CCID Interface") cannot be told apart by name; opensc_isolate.py refuses, and such a pair cannot be
+# isolated from each other.
 #
 # Readers that are off the bus when bench_isolate runs (a YubiKey replugged later) are not in the
 # snapshot; HSM_IGNORE_READERS (comma-separated, default "Yubico") is always ignored as well.
@@ -65,8 +71,12 @@ bench_isolate(){ # <conf> <module> <serial>…
   local serial slot slots="" here
   BENCH_MODULE="$module"
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  # Resolve the slots with OpenSC's slot limits raised and nothing ignored but the caller's list.
-  printf 'app default {\n}\napp opensc-pkcs11 {\n\tpkcs11 {\n\t\tmax_virtual_slots = 32;\n\t\tslots_per_card = 4;\n\t}\n}\n' > "$conf"
+  # Resolve the slots with OpenSC's slot limits raised and the caller's ignore list (default: every
+  # YubiKey) already applied: even this first look must not open a YubiKey.
+  local first
+  first="$(python3 -I -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()) or "\"__none__\"")' "${HSM_IGNORE_READERS:-Yubico}")"
+  printf 'app default {\n  ignored_readers = %s;\n}\napp opensc-pkcs11 {\n\tpkcs11 {\n\t\tmax_virtual_slots = 32;\n\t\tslots_per_card = 4;\n\t}\n}\n' "$first" > "$conf"
+  chmod 0644 "$conf"
   export OPENSC_CONF="$conf"
   for serial in "$@"; do
     slot="$(bench_slot "$serial")"
@@ -78,9 +88,9 @@ bench_isolate(){ # <conf> <module> <serial>…
   local ignored; ignored="$(grep -o 'ignored_readers = .*;' "$conf.ignore")"; rm -f "$conf.ignore"
   [ -n "$ignored" ] || { echo "bench_isolate: the isolation wrote no ignored_readers line" >&2; return 1; }
   printf 'app default {\n  %s\n}\napp opensc-pkcs11 {\n\tpkcs11 {\n\t\tmax_virtual_slots = 32;\n\t\tslots_per_card = 4;\n\t}\n}\n' "$ignored" > "$conf"
+  chmod 0644 "$conf"
   BENCH_CARDS=("$@")
   for serial in "$@"; do
     bench_gate "$serial" || { echo "bench_isolate: after isolation the visible slots are not exactly $*" >&2; return 1; }
   done; }
 
-bench_sudo(){ sudo env OPENSC_CONF="$OPENSC_CONF" "$@"; }

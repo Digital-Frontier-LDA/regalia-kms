@@ -95,7 +95,7 @@ cleanup(){
   sudo systemctl reset-failed "$SVC" 2>/dev/null
   [ "$made_user" = 1 ] && sudo userdel regalia-kms 2>/dev/null
   delete_key
-  rm -rf "$W"
+  rm -rf "$W" "${BENCH_DIR:-/nonexistent}"
 }
 trap cleanup EXIT
 
@@ -104,7 +104,10 @@ trap cleanup EXIT
 # here, and no other card can take the HSM's slot (e2e/lib/bench_cards.sh, regalia-kms#174).
 # shellcheck source=lib/bench_cards.sh
 . "$HERE/e2e/lib/bench_cards.sh"
-bench_isolate "$W/bench-opensc.conf" "$MODULE" "$HSM_SERIAL" || die "cannot isolate $HSM_SERIAL in OpenSC"
+# In a directory of its own that other users can enter: the transient units below run as regalia-kms
+# and as nobody, and an OpenSC configuration they cannot read is the same as none ($W is 0700).
+BENCH_DIR="$(mktemp -d)"; chmod 0755 "$BENCH_DIR"
+bench_isolate "$BENCH_DIR/opensc.conf" "$MODULE" "$HSM_SERIAL" || die "cannot isolate $HSM_SERIAL in OpenSC"
 HSM_SLOT="$(bench_slot "$HSM_SERIAL")"
 [ -n "$HSM_SLOT" ] || die "no PKCS#11 token with serial $HSM_SERIAL is attached"
 HSM_LABEL="$(hsm --list-token-slots 2>/dev/null | awk -v s="$HSM_SLOT" '/^Slot /{on=(index($0, "(" s ")")>0)} on && /token label/{v=$0; sub(/.*: */, "", v); print v; exit}')"
@@ -209,6 +212,8 @@ sudo install -m 0600 -o root -g root "$W/hsm.pin" "$ETC/$HSM_DEVICE.pin"; sudo i
 sudo install -m 0644 "$HERE/deploy/systemd/regalia-kms.service" "$UNITDIR/$SVC"
 sudo install -d -m 0755 "$UNITDIR/$SVC.d"
 sudo install -m 0644 "$HERE/deploy/baremetal/regalia-kms-hardening.conf.example" "$UNITDIR/$SVC.d/hardening.conf"
+# The PINs reach the cards only when the unit starts; every start below is gated on the HSM's serial.
+bench_gate "$HSM_SERIAL" "$HSM_SLOT" || die "the HSM is not where it was"
 printf '[Service]\nLoadCredential=%s.pin:%s\nLoadCredential=%s.pin:%s\nLimitMEMLOCK=1M\n' \
   "$HSM_DEVICE" "$ETC/$HSM_DEVICE.pin" "$YK_DEVICE" "$ETC/$YK_DEVICE.pin" > "$W/zz-e2e.conf"
 sudo install -m 0644 "$W/zz-e2e.conf" "$UNITDIR/$SVC.d/zz-e2e.conf"
@@ -263,6 +268,9 @@ sign_both(){ # label
 
 hdr "1  without a polkit rule, the service user cannot reach pcscd"
 STARTED="$(date '+%F %T')"
+# Every start hands the HSM PIN to the daemon (which then finds its card by serial through the shipped
+# configuration): only while the HSM is where this script isolated it.
+bench_gate "$HSM_SERIAL" "$HSM_SLOT" || die "the HSM is not where it was: not starting the daemon with its PIN"
 sudo systemctl start "$SVC"; code="$(wait_ready 25)"
 status="$(sign "$HSM_OBJECT" "e2e-nonce-$(openssl rand -hex 12)")"; status_yk="$(sign "$YK_OBJECT" "e2e-nonce-$(openssl rand -hex 12)")"
 refused="$(sudo journalctl -u pcscd --no-pager --since "$STARTED" 2>/dev/null | grep -c "user: $(id -u regalia-kms)) is NOT authorized")"
@@ -282,6 +290,7 @@ sed 's/^    var ONLY_THE_KMS = true;$/    var ONLY_THE_KMS = false;/' "$SHIPPED_
 cmp -s "$SHIPPED_RULE" "$W/grant.rules" && die "the shipped rule has no '    var ONLY_THE_KMS = true;' line to switch"
 sudo install -m 0644 -o root -g root "$W/grant.rules" "$RULE"; sleep 2
 STARTED="$(date '+%F %T')"
+bench_gate "$HSM_SERIAL" "$HSM_SLOT" || die "the HSM is not where it was: not starting the daemon with its PIN"
 sudo systemctl start "$SVC"; rc=$?
 [ "$rc" = 0 ] && P "systemctl start $SVC" || { F "systemctl start failed (exit $rc)"; journal; }
 code="$(wait_ready 60)"
@@ -337,6 +346,7 @@ hdr "5  without the OpenSC configuration the unit does not stay up, and says why
 sudo systemctl stop "$SVC"
 sudo mv "$ETC/opensc.conf" "$ETC/opensc.conf.aside"
 STARTED="$(date '+%F %T')"
+bench_gate "$HSM_SERIAL" "$HSM_SLOT" || die "the HSM is not where it was: not starting the daemon with its PIN"
 sudo systemctl start "$SVC" 2>/dev/null
 # The refusal comes once the module has looked at the readers and the PIV cards were tried: seconds, not at once.
 said=0
@@ -353,6 +363,7 @@ sudo mv "$ETC/opensc.conf.aside" "$ETC/opensc.conf"
 hdr "6  the polkit rule as shipped: the KMS user and root only"
 sudo install -m 0644 -o root -g root "$SHIPPED_RULE" "$RULE"; sleep 2
 STARTED="$(date '+%F %T')"
+bench_gate "$HSM_SERIAL" "$HSM_SLOT" || die "the HSM is not where it was: not starting the daemon with its PIN"
 sudo systemctl start "$SVC"; code="$(wait_ready 60)"
 [ "$code" = 200 ] && P "the daemon is ready under the shipped rule" || { F "not ready under the shipped rule (HTTP ${code:-none})"; journal; }
 sign_both "under the shipped rule"
