@@ -6,10 +6,12 @@
 set -eu
 mkdir -p /mnt/enrol
 mount /dev/vdb /mnt/enrol
-for name in unlock-local:local.bin wg-boot-key:wg-boot.key; do
+seal() {  # seal <credential name> <input> <output>
   systemd-creds encrypt --with-key=tpm2-with-public-key --tpm2-pcrs=7 --tpm2-public-key=/mnt/enrol/initrd.pub \
-    --tpm2-public-key-pcrs=11 --name="regalia.${name%%:*}" "/mnt/enrol/${name#*:}" "/mnt/enrol/${name%%:*}.cred"
-done
+    --tpm2-public-key-pcrs=11 --name="$1" "$2" "$3"
+}
+seal regalia.unlock-local /mnt/enrol/local.bin /mnt/enrol/unlock-local.cred
+seal regalia.wg-boot-key /mnt/enrol/wg-boot.key /mnt/enrol/wg-boot.cred
 for pcr in 7 11 12; do cat "/sys/class/tpm/tpm0/pcr-sha256/$pcr" > "/mnt/enrol/pcr$pcr"; done
 sync
 umount /mnt/enrol
