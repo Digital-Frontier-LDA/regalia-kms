@@ -22,26 +22,35 @@ class UtilityPackageBoundaries(unittest.TestCase):
             root = Path(temp)
             policy = root / "policy.json"
             marker = root / "must-not-execute"
-            def package(label, attack=None):
+            def package(label, attack=None, architecture="amd64", alias=False):
                 stage = root / label
                 (stage / "DEBIAN").mkdir(parents=True)
                 (stage / "usr/bin").mkdir(parents=True)
                 for directory in (stage, stage / "DEBIAN", stage / "usr", stage / "usr/bin"):
                     directory.chmod(0o755)
                 fields = dict(control)
+                fields["Architecture"] = architecture
                 if attack == "source": fields["Source"] = "different-source"
                 if attack == "version": fields["Version"] = "2.42.5-0+regalia1"
                 if attack == "flags": fields["Essential"] = "yes"
                 (stage / "DEBIAN/control").write_text("\n".join(k + ": " + v.replace("\n", "\n ") for k, v in fields.items()) + "\n")
                 elf = bytearray(20)
                 elf[:6] = b"\x7fELF\x02\x01"
-                elf[18:20] = (183 if attack == "architecture" else 62).to_bytes(2, "little")
+                machine = {"amd64": 62, "arm64": 183}[architecture]
+                elf[18:20] = (183 if attack == "architecture" else machine).to_bytes(2, "little")
                 executable = stage / "usr/bin/mount"
                 if attack == "symlink": executable.symlink_to("/bin/sh")
                 else:
                     executable.write_bytes(elf)
                     executable.chmod(0o6755 if attack == "privilege" else 0o4755)
                 if attack == "extra": (stage / "usr/bin/unreviewed").write_bytes(elf)
+                if alias:
+                    alias_path = stage / "usr/bin/i386"
+                    alias_path.symlink_to("/etc/shadow" if attack == "alias" else "mount")
+                    # Darwin creates a symlink with the caller's umask; Linux
+                    # package links have 0777. Normalize this fixture only.
+                    if alias_path.lstat().st_mode & 0o777 != 0o777:
+                        alias_path.chmod(0o777, follow_symlinks=False)
                 if attack == "script":
                     script = stage / "DEBIAN/postinst"
                     script.write_text("#!/bin/sh\ntouch " + str(marker) + "\n")
@@ -84,6 +93,22 @@ class UtilityPackageBoundaries(unittest.TestCase):
                 linked.symlink_to(good)
                 with self.assertRaises((VerificationError, OSError)): util_package.inspect(linked, "amd64")
                 self.assertFalse(marker.exists(), "inspection executed an injected maintainer script")
+                # Architecture-specific paths are exact additions, never
+                # optional files or a wildcard exception for other targets.
+                entry["architecture_payload_members"] = {"amd64": {"usr/bin/i386": {
+                    "kind": "symlink", "mode": 0o777, "link": "mount", "elf": False}}}
+                policy.write_text(json.dumps(original))
+                util_package.inspect(package("amd-alias", alias=True), "amd64")
+                util_package.inspect(package("arm-base", architecture="arm64"), "arm64")
+                for target, arch in ((good, "amd64"),
+                                     (package("arm-alias", architecture="arm64", alias=True), "arm64"),
+                                     (package("redirected-alias", attack="alias", alias=True), "amd64")):
+                    with self.subTest(target=target.name), self.assertRaises(VerificationError):
+                        util_package.inspect(target, arch)
+                entry["architecture_payload_members"]["amd64"]["usr/bin/mount"] = entry["payload_members"]["usr/bin/mount"]
+                policy.write_text(json.dumps(original))
+                with self.assertRaises(VerificationError):
+                    util_package.inspect(package("common-replacement", alias=True), "amd64")
 
 
 class UtilityProfileBoundaries(unittest.TestCase):

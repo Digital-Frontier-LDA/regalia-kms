@@ -31,7 +31,8 @@ def installed_payload(rootfs, inspected):
     expected = {}
     for package in inspected:
         name = package["control"]["Package"]
-        for path, descriptor in policy["packages"][name]["payload_members"].items():
+        for path, descriptor in util_package.payload_members(policy["packages"][name],
+                                                             package["control"]["Architecture"]).items():
             if descriptor["kind"] == "directory":
                 continue  # Shared directory permissions are not package-owned.
             actual = path.replace("{triplet}", triplet)

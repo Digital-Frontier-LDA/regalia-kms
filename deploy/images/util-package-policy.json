@@ -1239,6 +1239,34 @@
       }
     },
     "util-linux": {
+      "architecture_payload_members": {
+        "amd64": {
+          "usr/bin/i386": {
+            "elf": false,
+            "kind": "symlink",
+            "link": "setarch",
+            "mode": 511
+          },
+          "usr/bin/x86_64": {
+            "elf": false,
+            "kind": "symlink",
+            "link": "setarch",
+            "mode": 511
+          },
+          "usr/share/man/man8/i386.8.gz": {
+            "elf": false,
+            "kind": "symlink",
+            "link": "setarch.8.gz",
+            "mode": 511
+          },
+          "usr/share/man/man8/x86_64.8.gz": {
+            "elf": false,
+            "kind": "symlink",
+            "link": "setarch.8.gz",
+            "mode": 511
+          }
+        }
+      },
       "control": {
         "Conflicts": "hardlink",
         "Description": "miscellaneous system utilities\nThis package contains a number of important utilities, most of which\nare oriented towards maintenance of your system. Some of the more\nimportant utilities included in this package allow you to view kernel\nmessages, create new filesystems, view block device information,\ninterface with real time clock, etc.",

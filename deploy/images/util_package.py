@@ -20,6 +20,14 @@ TRIPLETS = {"amd64": "x86_64-linux-gnu", "arm64": "aarch64-linux-gnu"}
 PRIVILEGED_MODES = {"usr/bin/mount": 0o4755, "usr/bin/umount": 0o4755, "usr/bin/su": 0o4755}
 
 
+def payload_members(reviewed, architecture):
+    members = dict(reviewed["payload_members"])
+    additions = reviewed.get("architecture_payload_members", {}).get(architecture, {})
+    require(not set(members) & set(additions), "architecture policy replaces a common utility member")
+    members.update(additions)
+    return members
+
+
 def metadata(item, content, triplet, *, payload=False):
     result = {"kind": "directory" if item.isdir() else "symlink" if item.issym() else "file",
               "mode": item.mode, "link": item.linkname.replace(triplet, "{triplet}") if item.issym() else None}
@@ -66,15 +74,16 @@ def inspect_frozen(package, architecture):
         require(descriptor == approved, "utility control metadata or script differs: " + path)
     payload = deb_archive(package, "--fsys-tarfile", 32 * 1024 * 1024,
                           privileged_modes=PRIVILEGED_MODES)
+    expected_payload = payload_members(reviewed, architecture)
     normalized = {path.replace(triplet, "{triplet}"): value for path, value in payload.items()}
-    require(len(normalized) == len(payload) and set(normalized) == set(reviewed["payload_members"]),
+    require(len(normalized) == len(payload) and set(normalized) == set(expected_payload),
             "utility package file layout differs: " + name
-            + "; missing=" + repr(sorted(set(reviewed["payload_members"]) - set(normalized))[:32])
-            + "; extra=" + repr(sorted(set(normalized) - set(reviewed["payload_members"]))[:32]))
+            + "; missing=" + repr(sorted(set(expected_payload) - set(normalized))[:32])
+            + "; extra=" + repr(sorted(set(normalized) - set(expected_payload))[:32]))
     hashes = {}
     for path, (item, content) in normalized.items():
         descriptor = metadata(item, content, triplet, payload=True)
-        require(descriptor == reviewed["payload_members"][path], "utility file type, mode or link differs: " + path)
+        require(descriptor == expected_payload[path], "utility file type, mode or link differs: " + path)
         if descriptor["elf"]:
             require(content[:6] == b"\x7fELF\x02\x01" and len(content) >= 20
                     and int.from_bytes(content[18:20], "little") == {"amd64": 62, "arm64": 183}[architecture],

@@ -180,11 +180,20 @@ No vendor test is removed or reclassified. The complete updated helper and
 AMD64 image integration still require the workflow qualification.
 
 The first AMD64 run (`37147424785`, head `540a95e`) refuses package production
-because one output's file layout differs from the native policy. It reaches
-this check before installation. Detailed, bounded missing/extra-path diagnostics
-are now included; the exact layout requirement remains unchanged. Review that
-architecture-specific difference before approving any policy update. No AMD64
-scan or complete appliance qualification is claimed for this failed run.
+because one output's file layout differs from the native policy. Diagnostic run
+`37148915582` (`fa2b2dd`) identifies no missing paths and exactly four extra paths
+in `util-linux`: `usr/bin/i386`, `usr/bin/x86_64` and their two man-page links.
+Freshly authenticated Debian `debian/util-linux.install` selects these aliases
+only for AMD64; authenticated upstream `sys-utils/Makemodule.am` defines the
+same setarch links. The exact four symlinks are now mandatory for AMD64 and
+remain forbidden for ARM64. Common files, scripts, relationships, modes and
+hash checks are unchanged. Package inspection and installed-rootfs inspection
+use the same exact architecture layout; additions cannot replace common paths.
+The [layout review receipt](evidence/util-linux-amd64-layout-review-20261003.json)
+binds the failed-run diagnostics and reviewed source-file hashes. Adversarial
+fixtures reject missing aliases, redirected targets, aliases on ARM64 and
+common-path replacement. All nine actual native packages still pass. No AMD64
+scan or complete appliance qualification is claimed for either failed run.
 
 ## Residual Risk
 
