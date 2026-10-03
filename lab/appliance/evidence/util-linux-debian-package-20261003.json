@@ -1,0 +1,393 @@
+{
+  "appliance_installed": false,
+  "architecture": "arm64",
+  "builder_image": "sha256:586cc4d247b3907571a13ed769d1f3f0edbed1220aa923f533d3be003aebcde5",
+  "cached_parent_image": "sha256:1a6f0d7d2f35871d972f62e91796c971b4bd55971abb241643f26f8d24f3b95f",
+  "compiler_inventory_sha256": "61cd8c86f1e8024d123d992910aa2caa3014981df814663dd2933df5d79bf4c9",
+  "compiler_versions": {
+    "architecture": "arm64",
+    "archives": {
+      "debian": {
+        "date": "2026-09-12T07:55:41+00:00",
+        "index": "main/binary-arm64/Packages.xz",
+        "index_bytes": 9614192,
+        "index_sha256": "be16b37b2f740f066ea93d35d56f04f94d63693e5a3eb421b052bf86fae75bcd",
+        "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+        "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+        "suite": "trixie",
+        "valid_until": null
+      },
+      "debian-backports": {
+        "date": "2026-10-02T20:13:57+00:00",
+        "index": "main/binary-arm64/Packages.xz",
+        "index_bytes": 339772,
+        "index_sha256": "9c6f8e7fdfcd25313a903aac9f50cc9e6b043d69cf08657a535473f070abe420",
+        "inrelease_sha256": "63fa23707c5b669282011f989cabaaf24f7569567b5050a040f59a77c7afba19",
+        "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+        "suite": "trixie-backports",
+        "valid_until": "Fri, 09 Oct 2026 20:13:57 UTC"
+      },
+      "debian-security": {
+        "date": "2026-10-02T23:35:16+00:00",
+        "index": "main/binary-arm64/Packages.xz",
+        "index_bytes": 264800,
+        "index_sha256": "39b0ee2b71ff634b5101bd4b6a30c4e62fc30af800814f1439ddccd7ce23b8a3",
+        "inrelease_sha256": "9f9c5cc05760f1db55fc5e44fede3cb864f995ea98a71ad853ce334e24112430",
+        "primary_fingerprint": "5E04A1E3223A19A20706E20F9904613D4CCE68C6",
+        "suite": "trixie-security",
+        "valid_until": "Fri, 09 Oct 2026 23:35:16 UTC"
+      }
+    },
+    "compiler_inventory": {
+      "inventory_sha256": "61cd8c86f1e8024d123d992910aa2caa3014981df814663dd2933df5d79bf4c9",
+      "packages": 338,
+      "status": "verified"
+    },
+    "limitation": "Binds package names/versions to signed ARM64 archive records, not all installed filesystem bytes; cached development base lacks publisher signature qualification.",
+    "production_approved": false,
+    "schema": "regalia.native-compiler-version-review/v1",
+    "timestamp": "20261003T000000Z"
+  },
+  "independent_builders": false,
+  "known_failed_subtests": [
+    "chrt/chrt-non-root-batch-vs-nice",
+    "script/replay-live",
+    "ul/basic-printable-characters",
+    "ul/basic-filter-input",
+    "ul/basic-indicated"
+  ],
+  "limits": [
+    "One cached unsigned development builder, not independent builders or a qualified appliance image.",
+    "338 compiler versions match signed ARM64 archive records; installed compiler payload bytes are not completely rebound.",
+    "Debian test gate reports 368 cases but includes 180 SKIPPED lines and 8 KNOWN FAILED lines (5 individual subtests plus summaries).",
+    "Docker runtime automatically skips the setarch suite; a separate exact-options probe succeeds under the narrowly modified policy.",
+    "No root mount/cgroup security, PAM integration, initramfs recovery, AMD64 package admission or appliance scan of these packages is established.",
+    "All 36 existing util-linux High findings remain; no vulnerability waiver or metadata alteration."
+  ],
+  "package_admitted": false,
+  "package_hashes": {
+    "first": {
+      "bsdextrautils-dbgsym_2.42.4-0+regalia1_arm64.deb": "d5c8e719f65de948897d93576729237b323b867d9c00ed2ef41399e0787957a0",
+      "bsdextrautils_2.42.4-0+regalia1_arm64.deb": "b7d06df9941872ef9f7bfe18c9c34c7c1924cd956b7d03c6724604dad13f1be3",
+      "bsdutils-dbgsym_2.42.4-0+regalia1_arm64.deb": "3e1056637c5eefb6ecbead2353b53d4717095651f181a247848bebc73b3030ce",
+      "bsdutils_2.42.4-0+regalia1_arm64.deb": "5b96078b7d66e5bb5bbfbe9e4a33409159d0b03529526d61a8299048b60ba378",
+      "eject-dbgsym_2.42.4-0+regalia1_arm64.deb": "53e1136ec79177df4636c493279be2a3ae05a17a91f87d06852492bc17eb3106",
+      "eject_2.42.4-0+regalia1_arm64.deb": "ec8341f5fa39bed1539242c8c4c8e3a5f54257f2a861504bf18ebb0ae4bba833",
+      "fdisk-dbgsym_2.42.4-0+regalia1_arm64.deb": "42aa3e3c52513f3fbaa2a7effda45b76634131843629382babfcedd65a020e4d",
+      "fdisk_2.42.4-0+regalia1_arm64.deb": "518cdc14e60f9f140436ccdcf56d55a98b6b0f161166f7715d49938dcaa89814",
+      "lastlog2-dbgsym_2.42.4-0+regalia1_arm64.deb": "cf6761c05a2b22c9b805080a262b63102879a58785a9f325cf01da1b72997227",
+      "lastlog2_2.42.4-0+regalia1_arm64.deb": "371743a886d3ac3bd7384bb63b6fb1ffe88bd7eed826793a08763cf2bf99c4d3",
+      "libblkid-dev_2.42.4-0+regalia1_arm64.deb": "de8007c14ea185637845198b037c98a9b6f85ccfa5ef3998ddf997db3c16d0bf",
+      "libblkid1-dbgsym_2.42.4-0+regalia1_arm64.deb": "24496160f3ec11ff6ef077b2167990050df62f8c1edd26d1a866bf360f7ff0c5",
+      "libblkid1_2.42.4-0+regalia1_arm64.deb": "3141567091c7bf9569168906474e7b9aa630754f489fa0acf3bdd8bc092db426",
+      "libfdisk-dev_2.42.4-0+regalia1_arm64.deb": "cb5d02bf7115cb64bac183c168839c6ff1f74fdbcdb57877ac1bbe86db6a9df0",
+      "libfdisk1-dbgsym_2.42.4-0+regalia1_arm64.deb": "3e7c8ad5935411e765d62ebc43586f7eaaa2fefea71d187db444d107062b4c35",
+      "libfdisk1_2.42.4-0+regalia1_arm64.deb": "aac0102085202c99c36e267abbe8811e236099145f79f172fa76c55f9567776b",
+      "liblastlog2-2-dbgsym_2.42.4-0+regalia1_arm64.deb": "b31d5ac05a578bb685340a200b6e1ab03a76e9422a290d80c68b807ed51a68f6",
+      "liblastlog2-2_2.42.4-0+regalia1_arm64.deb": "3f3823761d562b8a30945c247c625983aee6a190386eb24fe19b186a5c74ec6e",
+      "liblastlog2-dev_2.42.4-0+regalia1_arm64.deb": "e3504a223aba7365f67867ee89d26e9deaa4a3b2c28497db2fa0b7492b64c0b5",
+      "libmount-dev_2.42.4-0+regalia1_arm64.deb": "a38db1d835faf8347fb58c9f88c82bbe8fccf4753151ee3cfcf9a07edd47f279",
+      "libmount1-dbgsym_2.42.4-0+regalia1_arm64.deb": "372bb9b1115531ffa1b19b38a25a3e834adb020aa90f73496f26a5140a9ef616",
+      "libmount1_2.42.4-0+regalia1_arm64.deb": "9907fd755337e67c645ce70a22492c10d48324357c233d503549cdb8b289b9e6",
+      "libpam-lastlog2-dbgsym_2.42.4-0+regalia1_arm64.deb": "dffb73e1ad06b4ab735adc90948bad221c643a57a9db2046059cf0cac77201e9",
+      "libpam-lastlog2_2.42.4-0+regalia1_arm64.deb": "ed19febf99701e79ae899d04e9737880397c497ed3b9f432a5f58a8c39439c47",
+      "libsmartcols-dev_2.42.4-0+regalia1_arm64.deb": "db919dc3c254031a23a52e0f3fc69a016d8f4b926d7cdfc416d42e93c07af8cf",
+      "libsmartcols1-dbgsym_2.42.4-0+regalia1_arm64.deb": "b25d942f48fb72903cfb17d93aa125e92836c7605cd0cb730e46d769b1e81722",
+      "libsmartcols1_2.42.4-0+regalia1_arm64.deb": "be587c7ca293d8b6b25ecd5dc79c7bdbc55322f5300bcc22623ad9a24c6afc57",
+      "libuuid1-dbgsym_2.42.4-0+regalia1_arm64.deb": "9459bb1f2eac913cf7f37b9a9c588c9ffa5fff7d2df23c5bd8728b66964d3c7e",
+      "libuuid1_2.42.4-0+regalia1_arm64.deb": "e13f0ab2fc7fd0d566be9cf2f2c913afeb1d566256ba480f1de364f1aa8593aa",
+      "login-dbgsym_4.16.0-2+really2.42.4-0+regalia1_arm64.deb": "41b3c30d0adc6ed53b238739224b7991d3c376386b146f2ca366865d9018dee8",
+      "login_4.16.0-2+really2.42.4-0+regalia1_arm64.deb": "11818a632b8145ea7ab31eb0e545613beade12a3a56ddfa63a72a02dea8e1781",
+      "mount-dbgsym_2.42.4-0+regalia1_arm64.deb": "f9c31c98beefac034a36cfe3bca205a405803512724d9be355de9863227b8b7e",
+      "mount_2.42.4-0+regalia1_arm64.deb": "28d8fafe295970e32a3ac8576f86b7652506d9c784e75e204b26fd5b80350312",
+      "rfkill-dbgsym_2.42.4-0+regalia1_arm64.deb": "b78e3396cea2012a74ba266765cd1968986a9ea56d938debc9f4f93864b21465",
+      "rfkill_2.42.4-0+regalia1_arm64.deb": "081f0b10e4b925777d54b6001168fd215c96516d32bcd69efec09b1fb846ea13",
+      "util-linux-dbgsym_2.42.4-0+regalia1_arm64.deb": "013e1f790e746db4bff7ff3ddec72ab1e28179beaee7e19168e39af0c0e21462",
+      "util-linux-extra-dbgsym_2.42.4-0+regalia1_arm64.deb": "1e89ea304081b6f33b5cf1f2cd41b7ced4160a2fb35c6d34a0524a1ec438659c",
+      "util-linux-extra_2.42.4-0+regalia1_arm64.deb": "8a9720e67414bfd50bb75ffcd0f7c35716ff0bb7047d5f706941e0a58261b004",
+      "util-linux-locales_2.42.4-0+regalia1_all.deb": "d2f9e5281145b2005df1a9564d85d2059482d7ee70a65857c52aa2f030dd677d",
+      "util-linux_2.42.4-0+regalia1_arm64.deb": "48ab7d963bf39771826030d2278629539a2f2ec2e1e3694cfbaa7b86d4cdb342",
+      "uuid-dev_2.42.4-0+regalia1_arm64.deb": "eccc82e23b8cf8b961e32dce1a5446eb82a2653905247b650522363629ffa0d6",
+      "uuid-runtime-dbgsym_2.42.4-0+regalia1_arm64.deb": "69e1cffe1cc64542fcce5905bdb9a2a9aeeb52eee24396699ebaccaa12ef458b",
+      "uuid-runtime_2.42.4-0+regalia1_arm64.deb": "a6a9ef035703400a9f4dccf688bb1aadaa82303a39192007ce5f1ec2cd74618e"
+    },
+    "second": {
+      "bsdextrautils-dbgsym_2.42.4-0+regalia1_arm64.deb": "d5c8e719f65de948897d93576729237b323b867d9c00ed2ef41399e0787957a0",
+      "bsdextrautils_2.42.4-0+regalia1_arm64.deb": "b7d06df9941872ef9f7bfe18c9c34c7c1924cd956b7d03c6724604dad13f1be3",
+      "bsdutils-dbgsym_2.42.4-0+regalia1_arm64.deb": "3e1056637c5eefb6ecbead2353b53d4717095651f181a247848bebc73b3030ce",
+      "bsdutils_2.42.4-0+regalia1_arm64.deb": "5b96078b7d66e5bb5bbfbe9e4a33409159d0b03529526d61a8299048b60ba378",
+      "eject-dbgsym_2.42.4-0+regalia1_arm64.deb": "53e1136ec79177df4636c493279be2a3ae05a17a91f87d06852492bc17eb3106",
+      "eject_2.42.4-0+regalia1_arm64.deb": "ec8341f5fa39bed1539242c8c4c8e3a5f54257f2a861504bf18ebb0ae4bba833",
+      "fdisk-dbgsym_2.42.4-0+regalia1_arm64.deb": "42aa3e3c52513f3fbaa2a7effda45b76634131843629382babfcedd65a020e4d",
+      "fdisk_2.42.4-0+regalia1_arm64.deb": "518cdc14e60f9f140436ccdcf56d55a98b6b0f161166f7715d49938dcaa89814",
+      "lastlog2-dbgsym_2.42.4-0+regalia1_arm64.deb": "cf6761c05a2b22c9b805080a262b63102879a58785a9f325cf01da1b72997227",
+      "lastlog2_2.42.4-0+regalia1_arm64.deb": "371743a886d3ac3bd7384bb63b6fb1ffe88bd7eed826793a08763cf2bf99c4d3",
+      "libblkid-dev_2.42.4-0+regalia1_arm64.deb": "de8007c14ea185637845198b037c98a9b6f85ccfa5ef3998ddf997db3c16d0bf",
+      "libblkid1-dbgsym_2.42.4-0+regalia1_arm64.deb": "24496160f3ec11ff6ef077b2167990050df62f8c1edd26d1a866bf360f7ff0c5",
+      "libblkid1_2.42.4-0+regalia1_arm64.deb": "3141567091c7bf9569168906474e7b9aa630754f489fa0acf3bdd8bc092db426",
+      "libfdisk-dev_2.42.4-0+regalia1_arm64.deb": "cb5d02bf7115cb64bac183c168839c6ff1f74fdbcdb57877ac1bbe86db6a9df0",
+      "libfdisk1-dbgsym_2.42.4-0+regalia1_arm64.deb": "3e7c8ad5935411e765d62ebc43586f7eaaa2fefea71d187db444d107062b4c35",
+      "libfdisk1_2.42.4-0+regalia1_arm64.deb": "aac0102085202c99c36e267abbe8811e236099145f79f172fa76c55f9567776b",
+      "liblastlog2-2-dbgsym_2.42.4-0+regalia1_arm64.deb": "b31d5ac05a578bb685340a200b6e1ab03a76e9422a290d80c68b807ed51a68f6",
+      "liblastlog2-2_2.42.4-0+regalia1_arm64.deb": "3f3823761d562b8a30945c247c625983aee6a190386eb24fe19b186a5c74ec6e",
+      "liblastlog2-dev_2.42.4-0+regalia1_arm64.deb": "e3504a223aba7365f67867ee89d26e9deaa4a3b2c28497db2fa0b7492b64c0b5",
+      "libmount-dev_2.42.4-0+regalia1_arm64.deb": "a38db1d835faf8347fb58c9f88c82bbe8fccf4753151ee3cfcf9a07edd47f279",
+      "libmount1-dbgsym_2.42.4-0+regalia1_arm64.deb": "372bb9b1115531ffa1b19b38a25a3e834adb020aa90f73496f26a5140a9ef616",
+      "libmount1_2.42.4-0+regalia1_arm64.deb": "9907fd755337e67c645ce70a22492c10d48324357c233d503549cdb8b289b9e6",
+      "libpam-lastlog2-dbgsym_2.42.4-0+regalia1_arm64.deb": "dffb73e1ad06b4ab735adc90948bad221c643a57a9db2046059cf0cac77201e9",
+      "libpam-lastlog2_2.42.4-0+regalia1_arm64.deb": "ed19febf99701e79ae899d04e9737880397c497ed3b9f432a5f58a8c39439c47",
+      "libsmartcols-dev_2.42.4-0+regalia1_arm64.deb": "db919dc3c254031a23a52e0f3fc69a016d8f4b926d7cdfc416d42e93c07af8cf",
+      "libsmartcols1-dbgsym_2.42.4-0+regalia1_arm64.deb": "b25d942f48fb72903cfb17d93aa125e92836c7605cd0cb730e46d769b1e81722",
+      "libsmartcols1_2.42.4-0+regalia1_arm64.deb": "be587c7ca293d8b6b25ecd5dc79c7bdbc55322f5300bcc22623ad9a24c6afc57",
+      "libuuid1-dbgsym_2.42.4-0+regalia1_arm64.deb": "9459bb1f2eac913cf7f37b9a9c588c9ffa5fff7d2df23c5bd8728b66964d3c7e",
+      "libuuid1_2.42.4-0+regalia1_arm64.deb": "e13f0ab2fc7fd0d566be9cf2f2c913afeb1d566256ba480f1de364f1aa8593aa",
+      "login-dbgsym_4.16.0-2+really2.42.4-0+regalia1_arm64.deb": "41b3c30d0adc6ed53b238739224b7991d3c376386b146f2ca366865d9018dee8",
+      "login_4.16.0-2+really2.42.4-0+regalia1_arm64.deb": "11818a632b8145ea7ab31eb0e545613beade12a3a56ddfa63a72a02dea8e1781",
+      "mount-dbgsym_2.42.4-0+regalia1_arm64.deb": "f9c31c98beefac034a36cfe3bca205a405803512724d9be355de9863227b8b7e",
+      "mount_2.42.4-0+regalia1_arm64.deb": "28d8fafe295970e32a3ac8576f86b7652506d9c784e75e204b26fd5b80350312",
+      "rfkill-dbgsym_2.42.4-0+regalia1_arm64.deb": "b78e3396cea2012a74ba266765cd1968986a9ea56d938debc9f4f93864b21465",
+      "rfkill_2.42.4-0+regalia1_arm64.deb": "081f0b10e4b925777d54b6001168fd215c96516d32bcd69efec09b1fb846ea13",
+      "util-linux-dbgsym_2.42.4-0+regalia1_arm64.deb": "013e1f790e746db4bff7ff3ddec72ab1e28179beaee7e19168e39af0c0e21462",
+      "util-linux-extra-dbgsym_2.42.4-0+regalia1_arm64.deb": "1e89ea304081b6f33b5cf1f2cd41b7ced4160a2fb35c6d34a0524a1ec438659c",
+      "util-linux-extra_2.42.4-0+regalia1_arm64.deb": "8a9720e67414bfd50bb75ffcd0f7c35716ff0bb7047d5f706941e0a58261b004",
+      "util-linux-locales_2.42.4-0+regalia1_all.deb": "d2f9e5281145b2005df1a9564d85d2059482d7ee70a65857c52aa2f030dd677d",
+      "util-linux_2.42.4-0+regalia1_arm64.deb": "48ab7d963bf39771826030d2278629539a2f2ec2e1e3694cfbaa7b86d4cdb342",
+      "uuid-dev_2.42.4-0+regalia1_arm64.deb": "eccc82e23b8cf8b961e32dce1a5446eb82a2653905247b650522363629ffa0d6",
+      "uuid-runtime-dbgsym_2.42.4-0+regalia1_arm64.deb": "69e1cffe1cc64542fcce5905bdb9a2a9aeeb52eee24396699ebaccaa12ef458b",
+      "uuid-runtime_2.42.4-0+regalia1_arm64.deb": "a6a9ef035703400a9f4dccf688bb1aadaa82303a39192007ce5f1ec2cd74618e"
+    }
+  },
+  "packages_reproduced": true,
+  "personality_probe": {
+    "added_exact_personality_values": [
+      "0x40000",
+      "0xffc0000"
+    ],
+    "probe_log_sha256": "4b0cb0e46475f646f54f91135333bd5d176d357d776e2383dc98f40054f6182d",
+    "scope": "isolated native development container only; no appliance policy change",
+    "trial_profile_sha256": "8911e34689be82933576fee6891ccc0d23b9accf4cb768ed469c0a3414794863",
+    "upstream_profile_sha256": "6416b47770785a41ac59073cdc77d9fe98517df2799dc83ef207e622de3053f6",
+    "upstream_profile_url": "https://raw.githubusercontent.com/moby/profiles/2ceae35d351c156cb5a8efc0fdc4a08cf94569d8/seccomp/default.json"
+  },
+  "production_approved": false,
+  "recipe": {
+    "Dockerfile.test-runner": {
+      "sha256": "3d7034fecf5bb347d5aeea6befb6e9969a3a451a8713e443d28aec80dccc868d",
+      "text": "FROM regalia-util-linux-debian-package-prototype:20261003\nUSER root\nRUN useradd --no-create-home --home-dir /work --uid 10001 builder && mkdir /work && chown builder:builder /work\nCOPY build-nonroot.sh /inputs/build-nonroot.sh\nUSER 10001:10001\nENTRYPOINT [\"/bin/sh\", \"/inputs/build-nonroot.sh\"]\n"
+    },
+    "build-nonroot.sh": {
+      "sha256": "912eec4ecaa50b96880e372a9f2728d8aba3e7771c7536a932940c022639aa19",
+      "text": "#!/bin/sh\nset -eu\nfor util_trial in first second; do\n    util_build_dir=/work/$util_trial\n    mkdir \"$util_build_dir\"\n    printf '%s\\n' 'fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec  /inputs/util-linux-2.42.4.tar.xz' '5b327ccd22f0f4ed28a389870aa51d04ecedb8693e52a1d122850f2b3188cbf6  /inputs/util-linux_2.41.5-0+deb13u1.debian.tar.xz' | sha256sum --check\n    tar -xJf /inputs/util-linux-2.42.4.tar.xz -C \"$util_build_dir\"\n    tar -xJf /inputs/util-linux_2.41.5-0+deb13u1.debian.tar.xz -C \"$util_build_dir/util-linux-2.42.4\"\n    sed \"s|/build/util-debian|$util_build_dir|g\" /inputs/prepare.py > \"$util_build_dir/prepare.py\"\n    python3 -I \"$util_build_dir/prepare.py\"\n    cd \"$util_build_dir/util-linux-2.42.4\"\n    echo \"starting $util_trial: uid=$(id -u) capabilities=$(grep '^CapEff:' /proc/self/status)\"\n    if env SOURCE_DATE_EPOCH=1790985600 DEB_BUILD_OPTIONS=parallel=4 dpkg-buildpackage -b -us -uc > \"$util_build_dir/build.log\" 2>&1; then\n        echo \"$util_trial Debian package build passed\"\n        tail -6 \"$util_build_dir/build.log\"\n    else\n        tail -100 \"$util_build_dir/build.log\"\n        exit 1\n    fi\n    cd /work\n    sha256sum \"$util_build_dir\"/*.deb > \"$util_build_dir/packages.sha256\"\ndone\n"
+    },
+    "prepare.py": {
+      "sha256": "64917f00b9a4984be1555680729d92e04a34e79cc1fd5bbb116b5e37ff86d942",
+      "text": "from pathlib import Path\nimport hashlib\nroot=Path('/build/util-debian/util-linux-2.42.4')\nfor name,digest in {'debian/control':'3f9ff1015a263906b45094949abb28bd8e8c0b5c2fd1176762de1553696fb305','debian/patches/upstream/loopdev-use-openat2-RESOLVE_NO_SYMLINKS-for-backing-file.patch':'9276c07a00380c76512cecdf1521489b403201ec0f15d63a831795365c46acf6','debian/patches/upstream/libmount-restrict-source-path-canonicalization-for-non-ro.patch':'543fe497aaa63410af1053e52724cb8bfae9d7e0660fd86c490b4ec43fde8133'}.items():assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest\np=root/'debian/patches/series';s=p.read_text()\nfor name in ['upstream/loopdev-use-openat2-RESOLVE_NO_SYMLINKS-for-backing-file.patch','upstream/libmount-restrict-source-path-canonicalization-for-non-ro.patch']:\n assert s.count(name+'\\n')==1;s=s.replace(name+'\\n','')\np.write_text(s)\np=root/'debian/control';s=p.read_text();original='Maintainer: Chris Hofstaedtler <zeha@debian.org>'\nassert s.count(original)==1;p.write_text(s.replace(original,'Maintainer: Regalia laboratory <noreply@example.invalid>'))\np=root/'debian/changelog';p.write_text('util-linux (2.42.4-0+regalia1) experimental; urgency=medium\\n\\n  * Laboratory build from authenticated upstream 2.42.4 with reviewed Debian packaging.\\n  * Upstreamed security patches are not applied twice; downstream Debian changes retained.\\n\\n -- Regalia laboratory <noreply@example.invalid>  Sat, 03 Oct 2026 00:00:00 +0000\\n\\n'+p.read_text())\n\np=root/'debian/patches/debian/lsfd-usrbin.patch';s=p.read_text();assert s.count('lsfd-cmd/file.c: errnos.h')==1;p.write_text(s.replace('lsfd-cmd/file.c: errnos.h','lsfd-cmd/error.c: errnos.h'))\n"
+    }
+  },
+  "required_package_controls": {
+    "bsdutils": {
+      "Architecture": "arm64",
+      "Essential": "yes",
+      "Multi-Arch": "foreign",
+      "Package": "bsdutils",
+      "Pre-Depends": "libc6 (>= 2.38), libsystemd0 (>= 254)",
+      "Protected": "no",
+      "Source": "util-linux (2.42.4-0+regalia1)",
+      "Version": "1:2.42.4-0+regalia1"
+    },
+    "libblkid1": {
+      "Architecture": "arm64",
+      "Depends": "libc6 (>= 2.38)",
+      "Essential": "no",
+      "Multi-Arch": "same",
+      "Package": "libblkid1",
+      "Protected": "no",
+      "Source": "util-linux",
+      "Version": "2.42.4-0+regalia1"
+    },
+    "liblastlog2-2": {
+      "Architecture": "arm64",
+      "Depends": "libc6 (>= 2.38), libsqlite3-0 (>= 3.5.9)",
+      "Essential": "no",
+      "Multi-Arch": "same",
+      "Package": "liblastlog2-2",
+      "Protected": "no",
+      "Source": "util-linux",
+      "Version": "2.42.4-0+regalia1"
+    },
+    "libmount1": {
+      "Architecture": "arm64",
+      "Depends": "libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.38), libselinux1 (>= 3.1~), libsystemd0 (>= 251)",
+      "Essential": "no",
+      "Multi-Arch": "same",
+      "Package": "libmount1",
+      "Protected": "no",
+      "Source": "util-linux",
+      "Version": "2.42.4-0+regalia1"
+    },
+    "libsmartcols1": {
+      "Architecture": "arm64",
+      "Depends": "libc6 (>= 2.38)",
+      "Essential": "no",
+      "Multi-Arch": "same",
+      "Package": "libsmartcols1",
+      "Protected": "no",
+      "Source": "util-linux",
+      "Version": "2.42.4-0+regalia1"
+    },
+    "libuuid1": {
+      "Architecture": "arm64",
+      "Breaks": "libuuid1t64 (<< 2.42.4-0+regalia1)",
+      "Depends": "libc6 (>= 2.38)",
+      "Essential": "no",
+      "Multi-Arch": "same",
+      "Package": "libuuid1",
+      "Protected": "no",
+      "Replaces": "libuuid1t64",
+      "Source": "util-linux",
+      "Version": "2.42.4-0+regalia1"
+    },
+    "mount": {
+      "Architecture": "arm64",
+      "Essential": "no",
+      "Multi-Arch": "foreign",
+      "Package": "mount",
+      "Pre-Depends": "libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.38), libmount1 (= 2.42.4-0+regalia1), libselinux1 (>= 3.1~), libsmartcols1 (= 2.42.4-0+regalia1)",
+      "Protected": "no",
+      "Source": "util-linux",
+      "Version": "2.42.4-0+regalia1"
+    },
+    "util-linux": {
+      "Architecture": "arm64",
+      "Essential": "yes",
+      "Multi-Arch": "foreign",
+      "Package": "util-linux",
+      "Pre-Depends": "libpam-modules, libpam-runtime, libblkid1 (= 2.42.4-0+regalia1), libc6 (>= 2.41), libcap-ng0 (>= 0.7.9), libcrypt1 (>= 1:4.1.0), liblastlog2-2 (= 2.42.4-0+regalia1), libmount1 (= 2.42.4-0+regalia1), libpam0g (>= 0.99.7.1), libselinux1 (>= 3.1~), libsmartcols1 (= 2.42.4-0+regalia1), libsystemd0 (>= 251), libtinfo6 (>= 6), libudev1 (>= 183), libuuid1 (= 2.42.4-0+regalia1)",
+      "Protected": "no",
+      "Replaces": "hardlink",
+      "Version": "2.42.4-0+regalia1"
+    },
+    "util-linux-extra": {
+      "Architecture": "arm64",
+      "Breaks": "initscripts (<< 3.08-2~), util-linux (<< 2.40.4-4~)",
+      "Depends": "libaudit1 (>= 1:2.2.1), libc6 (>= 2.38), libsmartcols1 (= 2.42.4-0+regalia1), zlib1g (>= 1:1.1.4)",
+      "Essential": "no",
+      "Multi-Arch": "foreign",
+      "Package": "util-linux-extra",
+      "Protected": "no",
+      "Replaces": "util-linux (<< 2.40.4-4~)",
+      "Source": "util-linux",
+      "Version": "2.42.4-0+regalia1"
+    }
+  },
+  "runtime": {
+    "cap_drop": [
+      "ALL"
+    ],
+    "devices": false,
+    "host_mounts": false,
+    "network": "none",
+    "no_new_privileges": true,
+    "process_exit_code": 0,
+    "read_only_root": true,
+    "user": "10001:10001"
+  },
+  "schema": "regalia.util-linux-debian-package-review/v1",
+  "source": {
+    "authentication": "pinned Debian InRelease -> Sources -> packaging authority; same-primary refreshed key -> signed upstream tar/notes",
+    "authority_sha256": "ab6fb7fab1351270d0520e8ee090e3b8d3e174023e8c18634801d8d16c4a6115",
+    "debian_packaging_version": "2.41.5-0+deb13u1",
+    "directory": "pool/main/u/util-linux",
+    "files": {
+      "util-linux-2.42.4.tar.sign": {
+        "bytes": 833,
+        "sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e"
+      },
+      "util-linux-2.42.4.tar.xz": {
+        "bytes": 10729748,
+        "sha256": "fbd62a100ab7bb8746ba0661255c3c48185b1e9021507c624da01fbc696330ec"
+      },
+      "util-linux_2.41.5-0+deb13u1.debian.tar.xz": {
+        "bytes": 107604,
+        "sha256": "5b327ccd22f0f4ed28a389870aa51d04ecedb8693e52a1d122850f2b3188cbf6"
+      },
+      "util-linux_2.41.5-0+deb13u1.dsc": {
+        "bytes": 4988,
+        "sha256": "43e9b2cbebd10fdc598c4ad10217c8202c28de53af6eafc892c8e9b5cbf3a3a5"
+      },
+      "util-linux_2.41.5.orig.tar.xz": {
+        "bytes": 9474992,
+        "sha256": "f586e35d320ff537aab3ffeca37e9ecd482ccbe013590db4429a414d8aa6a728"
+      },
+      "v2.42.4-ChangeLog": {
+        "bytes": 29598,
+        "sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503"
+      },
+      "v2.42.4-ChangeLog.sign": {
+        "bytes": 833,
+        "sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "bytes": 1713,
+        "sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16"
+      },
+      "v2.42.4-ReleaseNotes.sign": {
+        "bytes": 833,
+        "sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c"
+      }
+    },
+    "maintainer_dsc_signature_verified": false,
+    "package": "util-linux",
+    "packaged_authority_sha256": "00f98634547af7d591c1e1821848df3099ba48c716b8129887770cfe15be2e08",
+    "policy_sha256": "0718d12787d97001e27da1548b6b08e3ab5ce291b6d37bfbcecf5dd84c28da9b",
+    "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+    "production_approved": false,
+    "release": {
+      "date": "2026-09-12T07:55:41+00:00",
+      "inrelease_sha256": "0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675",
+      "primary_fingerprint": "04B54C3CDCA79751B16BC6B5225629DF75B188BD",
+      "suite": "trixie",
+      "valid_until": null
+    },
+    "schema": "regalia.util-linux-authenticated-source/v1",
+    "sources_index_sha256": "6002f81f463a2d976d84b34170367cc16da2d60bd0ba9ab9d868d6e1c1a935d9",
+    "status": "verified",
+    "timestamp": "20261003T000000Z",
+    "upstream_signatures": {
+      "util-linux-2.42.4.tar": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "d3b4e930a38c3b4512761708d0d226a55a1420995e3996c1efca0910d7effd3e",
+        "signed_sha256": "5eec78fac0908c1bc18dbe91478741115a3209156dc6105a78ec46dce0f590b3",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ChangeLog": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "91a958ea1673f94493073d77c78e79df0c052aa12cc5a885d5041b0dc3fc53d6",
+        "signed_sha256": "2bc9725049a3396cc209cddd91c0a3f65d8875e6d34da3256d66c9891945f503",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      },
+      "v2.42.4-ReleaseNotes": {
+        "primary_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284",
+        "signature_sha256": "92189c4af599596beadaac5c08e3f304dbd99374593270aab3f21d2a74a7ea1c",
+        "signed_sha256": "102c4dd03e99180b2b1035fc4d7412bc266ef735f24c9f6102d69885a413fb16",
+        "signing_fingerprint": "B0C64D14301CC6EFAEDF60E4E4B71D5EEC39C284"
+      }
+    },
+    "upstream_version": "2.42.4"
+  },
+  "tests": {
+    "first": {
+      "build_log_sha256": "290f3bfe50e7c738b28b3220bbab94b127073d1a512e978ac872121e65c0215c",
+      "declared_test_cases": 368,
+      "known_failed_lines": 8,
+      "skipped_lines": 180
+    },
+    "second": {
+      "build_log_sha256": "314f8daff1c9a7121e7a0a8a024d4a81d8046df7addc4df57f00549b6ec862f8",
+      "declared_test_cases": 368,
+      "known_failed_lines": 8,
+      "skipped_lines": 180
+    }
+  },
+  "version": "2.42.4-0+regalia1"
+}

@@ -60,21 +60,47 @@ builder identities, all executable/library hashes, signature status, the exact
 experimental recipe, build patch and limitations. This cached recipe is
 laboratory evidence; it is not an approved appliance build entry point.
 
+### Debian package evaluation of 2.42.4
+
+Two native ARM64 builds in different directories now produce identical bytes
+for all **43 Debian packages**, including the nine identities installed in the
+appliance. Both preserve the `bsdutils` version epoch and the Essential flags
+of `bsdutils` and `util-linux`. Debian's generated source metadata remains
+truthful: `Source` is implicit for the `util-linux` binary itself. The local
+fork has version `2.42.4-0+regalia1` and an explicit laboratory maintainer.
+
+The [package evaluation receipt](evidence/util-linux-debian-package-20261003.json)
+records both package hash sets, required package controls, recipes, compiler
+index signatures and runtime restrictions. All **338 compiler package versions**
+match freshly verified signed ARM64 archive records. This proves the version
+inventory binding, not every installed compiler filesystem byte or the cached
+development base's publisher signature.
+
+The initial root build skipped the upstream non-root suite. A BuildKit build
+as an ordinary user instead ran its suite and correctly failed `setarch` when
+Docker denied personality flags. A separate probe passes with only two exact
+personality argument values added to a pinned
+[Moby syscall profile](https://github.com/moby/profiles/blob/2ceae35d351c156cb5a8efc0fdc4a08cf94569d8/seccomp/default.json).
+Docker documents this restriction in its
+[seccomp reference](https://docs.docker.com/engine/security/seccomp/).
+This private test policy changes no appliance confinement setting.
+
+Both final ordinary-user builds pass Debian's gate, which reports 368 test cases.
+Their logs each contain **180 SKIPPED lines and eight KNOWN FAILED lines**;
+the latter comprise five individual subtests and three summaries. The actual
+Docker runtime causes upstream's `setarch` test to skip itself, so the separate
+probe is the available personality evidence. Root mount/cgroup operations,
+PAM integration and real initramfs recovery remain unproved for these packages.
+No test or vulnerability exception was added to the repository's gates.
+
 ## Residual Risk
 
-The initial 2.41.6 evaluation built no Debian packages. A subsequent native
-ARM64 2.42.4 trial builds actual Debian binary packages, preserving the package
-identities and `bsdutils` epoch/Essential flag; none are admitted or installed
-into the appliance. Its first build ran as root, causing Debian's non-root test
-suite to skip itself. That result does not qualify its tests. The ordinary-user
-build then ran 368 upstream tests and failed `setarch/setarch`: Docker refused
-the personality flags in its options sub-test. The build correctly stopped
-rather than ignoring that result. Container syscall denial and the test's
-expected behavior need to be distinguished before qualification; package
-reproduction is also outstanding. Tests skipped by upstream for missing root
-permissions or tools are not evidence that those operations work.
-All 36 matches remain. This is one development builder with an unsigned cached
-base, not independent reproduction or complete signed compiler admission.
+The initial 2.41.6 evaluation built no Debian packages. The 2.42.4 evaluation
+reproduces actual Debian packages, but none are admitted or installed into the
+appliance. All 36 matches remain. Tests skipped by upstream for missing root
+permissions or tools are not evidence that those operations work. This is one
+development builder with an unsigned cached base, not independent reproduction
+or complete signed compiler payload admission.
 Version/load checks and symbol equality do not prove structure/calling ABI,
 mount security, PAM/login, initramfs recovery, cgroup descriptor behavior or
 actual exploit resistance. Debian downstream patches and package scripts still
@@ -93,8 +119,8 @@ Source substitution tests reject a different Debian version, duplicate records,
 unsafe source paths, modified inputs, duplicate/symlinked authority members,
 unreviewed tar expansion and unauthenticated downloads. These fixtures test
 boundary handling; fresh verification of the actual bundle establishes its
-signature evidence. The TPM source report remains byte-for-byte equivalent as
-a JSON object after the shared verifier refactor.
+signature evidence. The TPM source report retains identical values after the
+shared verifier refactor.
 
 ## Recommendation
 
