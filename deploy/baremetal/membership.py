@@ -12,7 +12,7 @@ node claims (THREE-SITE-THREAT-MODEL.md S2, ADR-0002 D23).
                 "prev_digest": "<64 hex, or "" at epoch 1>",
                 "policy_version": "<text>", "issued_at": "YYYY-MM-DDTHH:MM:SSZ",
                 "heartbeat_max_lifetime_s": <int> (v2 only),
-                "revocation_keys": ["<hex Ed25519 public key>", ...],
+                "revocation_keys": ["<hex Ed25519 public key>" | {"alg": "ecdsa-p256", "key": "<hex>"}, ...],
                 "nodes": [{"node_id": ..., "state": ..., "ek_name": ..., "ak_name": ..., "wg_boot_pub": ...,
                            "wg_service_pub": ..., "hsm_serials": [...],
                            "ssh_host_pub": ... (v2; absent from a node retired before it had one)}]}
@@ -77,7 +77,10 @@ import re
 import subprocess
 
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 SCHEMA = "regalia.membership/v1"
 SCHEMA_V2 = "regalia.membership/v2"
@@ -185,6 +188,63 @@ def hex_field(value, n, label):
     require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{%d}" % n, value) is not None, "%s must be %d lowercase hex" % (label, n))
 
 
+# ---- revocation keys: Ed25519, or ECDSA P-256 (the HSM's: its PKCS#11 has no EdDSA) ----
+#
+# A manifest's revocation_keys entry is either a bare 64-hex string, an Ed25519 key for ever, or
+# {"alg": "ecdsa-p256", "key": "<130 hex: 04 || X || Y>"}. THE ALGORITHM COMES FROM THE ENTRY ONLY, never from
+# a signature or the message: a signature names its key by that key's hex, and is verified the way the
+# manifest's entry for that hex says. A malformed entry (an unknown alg, a point not on the curve, the
+# wrong length) makes the manifest invalid when it is validated, not when something is verified with it.
+# ECDSA signs SHA-256 over the same domain-separated bytes as Ed25519; the signature is r || s, 64 bytes,
+# and only the low-S form is accepted (the signer normalises). Introducing a P-256 key is a root-signed
+# change, like any change to revocation_keys. A node whose code predates this refuses a manifest with a
+# typed entry (fail closed): every node is upgraded before the root introduces one.
+REVOCATION_ALGS = ("ed25519", "ecdsa-p256")
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+
+
+def revocation_entry(entry, label="a revocation key"):
+    """(alg, key hex) of one revocation_keys entry, or Refused."""
+    if isinstance(entry, str):
+        hex_field(entry, 64, label)
+        return "ed25519", entry
+    exact(entry, ("alg", "key"), label)
+    require(entry["alg"] in REVOCATION_ALGS[1:], "%s: alg must be one of %s" % (label, ", ".join(REVOCATION_ALGS[1:])))
+    hex_field(entry["key"], 130, "%s: an ecdsa-p256 key (04 || X || Y)" % label)
+    require(entry["key"].startswith("04"), "%s: an ecdsa-p256 key must be an uncompressed point" % label)
+    try:
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), bytes.fromhex(entry["key"]))
+    except ValueError:
+        raise Refused("%s: not a point on P-256" % label) from None
+    return entry["alg"], entry["key"]
+
+
+def revocation_alg(manifest, key):
+    """The algorithm the manifest's revocation_keys give for `key` (its hex), or None if it names none."""
+    for entry in manifest["revocation_keys"]:
+        alg, hexkey = revocation_entry(entry)
+        if hexkey == key:
+            return alg
+    return None
+
+
+def verify_revocation(alg, key, message, sig, what):
+    """A revocation key's signature over `message`, the way its manifest entry's `alg` says."""
+    hex_field(sig, 128, "%s signature" % what)
+    raw = bytes.fromhex(sig)
+    try:
+        if alg == "ed25519":
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(key)).verify(raw, message)
+            return
+        require(alg == "ecdsa-p256", "unknown revocation key algorithm %r" % (alg,))
+        r, s = int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")
+        require(0 < r < P256_ORDER and 0 < s <= P256_ORDER // 2, "the %s signature is not a low-S P-256 signature" % what)
+        public = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), bytes.fromhex(key))
+        public.verify(encode_dss_signature(r, s), message, ec.ECDSA(hashes.SHA256()))
+    except (InvalidSignature, ValueError):
+        raise Refused("the %s signature does not verify" % what) from None
+
+
 def identity_keys(node):
     """The identity fields a validated node entry carries: v1's four, and ssh_host_pub in a v2 manifest."""
     return V2_IDENTITY_KEYS if "ssh_host_pub" in node else IDENTITY_KEYS
@@ -219,9 +279,8 @@ def validate(manifest):
         raise Refused("issued_at must be UTC, YYYY-MM-DDTHH:MM:SSZ")
     keys = manifest["revocation_keys"]
     require(isinstance(keys, list), "revocation_keys must be a list")
-    for k in keys:
-        hex_field(k, 64, "a revocation key")
-    require(len(set(keys)) == len(keys), "revocation_keys must be distinct")
+    named = [revocation_entry(k, "revocation_keys[%d]" % i)[1] for i, k in enumerate(keys)]
+    require(len(set(named)) == len(named), "revocation_keys must be distinct")
     nodes = manifest["nodes"]
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
@@ -261,19 +320,21 @@ def verify_envelope(envelope, root_key, current=None):
     sig = envelope["signature"]
     exact(sig, ("signer", "key", "sig"), "signature")
     require(sig["signer"] in ("root", "revocation"), "signer must be root or revocation")
-    hex_field(sig["key"], 64, "signature.key")
+    require(isinstance(sig["key"], str) and re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{130}", sig["key"]) is not None,
+            "signature.key must be 64 or 130 lowercase hex")
     hex_field(sig["sig"], 128, "signature.sig")
     if sig["signer"] == "root":
         require(sig["key"] == root_key, "the signature names a root key that is not the pinned root")
+        alg = "ed25519"                                  # the root is Ed25519, always
     else:
-        require(current is not None and sig["key"] in current["revocation_keys"],
-                "the signing revocation key is not named by the current manifest")
+        alg = revocation_alg(current, sig["key"]) if current is not None else None
+        require(alg is not None, "the signing revocation key is not named by the current manifest")
     manifest = envelope["manifest"]
     validate(manifest)
     try:
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(sig["key"])).verify(bytes.fromhex(sig["sig"]), DOMAIN + canonical(manifest))
-    except (InvalidSignature, ValueError):
-        raise Refused("the manifest signature does not verify")
+        verify_revocation(alg, sig["key"], DOMAIN + canonical(manifest), sig["sig"], "manifest")
+    except Refused:
+        raise Refused("the manifest signature does not verify") from None
     return manifest, sig["signer"]
 
 
