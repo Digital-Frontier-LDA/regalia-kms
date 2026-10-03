@@ -1344,7 +1344,9 @@ class OnSwtpm(unittest.TestCase):
             self.assertIn("round 1, %s (path epoch 1): unlock: the peer refused (DENIED)" % peer, err)
         self.assertNotIn("does not release the local contribution", err)
         refusal = "the subject's attestation is refused: the quoted PCR digest is not the expected PCR values"
-        self.assertEqual(self.reasons(since), [refusal] * 2)
+        # the native client speaks version 2: its PCR values came with the quote, so the peers name what differs
+        named = refusal + ". the set: PCR 11 is %s, expected %s" % (self.pcr("a", 11), self.reference["pcrs"]["11"])
+        self.assertEqual(self.reasons(since), [named] * 2)
         self.assertNotIn("PCR", err)                                  # the reason stays with the peers
         self.reboot("a", "a retired image")
         since = len(self.events)
@@ -1533,7 +1535,8 @@ class OnSwtpm(unittest.TestCase):
         code, took, err = attach()
         self.assertNotEqual(code, 0)
         self.assertFalse(os.path.exists("/dev/mapper/" + self.name))
-        self.assertEqual(self.reasons(since), ["the subject's attestation is refused: the quoted PCR digest is not the expected PCR values"] * 4)
+        retired = "the subject's attestation is refused: the quoted PCR digest is not the expected PCR values. the set: PCR 11 is %s, expected %s"
+        self.assertEqual(self.reasons(since), [retired % (self.pcr("a", 11), self.reference["pcrs"]["11"])] * 4)
 
         # 5-8  THE REAL CLIENT FAILS, in four ways, and the console must still be asked: the relay on the key socket
         #      starts whatever happens to the real client and gives nothing, within its bound. (Before the relay,
