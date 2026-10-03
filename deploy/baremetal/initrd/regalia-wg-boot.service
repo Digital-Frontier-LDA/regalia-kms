@@ -36,7 +36,7 @@ LoadCredentialEncrypted=regalia.wg-boot-key
 LoadCredential=regalia.wg-boot-conf
 LoadCredential=regalia.boot-nft
 LoadCredential=regalia.boot-env
-# where `up` notes the interface for `down`, which runs without the credentials; removed after it
+# where `up` notes the interface for `down`, which may run without the credentials; removed after it
 RuntimeDirectory=regalia-wg-boot
 RuntimeDirectoryMode=0700
 ExecStart=/usr/lib/regalia/wg-boot up

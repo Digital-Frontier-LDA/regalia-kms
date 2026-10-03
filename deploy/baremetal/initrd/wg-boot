@@ -25,8 +25,8 @@
 set -eu
 IF=wg-boot
 C="${CREDENTIALS_DIRECTORY:-}"
-# The unit's runtime directory keeps the one thing `down` needs and the credentials no longer give it: they
-# are gone when ExecStopPost runs. systemd removes the directory after that.
+# The unit's runtime directory keeps the one thing `down` needs, for an ExecStopPost that finds no
+# credentials (seen in the boot test when `up` failed early). systemd removes the directory after that.
 R="${RUNTIME_DIRECTORY:-}"
 fail() { echo "wg-boot: $*" >&2; exit 1; }
 nic_name() { case "$1" in ""|*[!A-Za-z0-9._-]*|????????????????*) return 1 ;; esac; }
@@ -41,7 +41,9 @@ down() {
     ip addr flush dev "$BOOT_NIC" 2>/dev/null || true
     ip link set "$BOOT_NIC" down 2>/dev/null || true
   fi
-  nft delete table inet regalia_boot 2>/dev/null || true
+  # every table, not only ours: nothing else in the initrd uses nftables, and a table that came in with the
+  # ruleset credential must not follow the host into its real root
+  nft flush ruleset 2>/dev/null || true
 }
 case "${1:-}" in
   up)
@@ -62,7 +64,12 @@ case "${1:-}" in
     done
     down                                  # whatever an earlier attempt of this boot left
     trap 'down' EXIT                      # and whatever this one leaves, unless it gets to the end
-    nft -f "$NFT"
+    # The ruleset is a credential from the ESP, which whoever holds the machine can write: it may hold one
+    # table, ours, and read no other file (an `include` of a credential would be printed, key and all, in
+    # nft's error). nft's messages are not passed on, for the same reason as wg's.
+    if grep -qiE '(^|[^a-z_])include([^a-z_]|$)' "$NFT"; then fail "regalia.boot-nft includes another file"; fi
+    nft -f "$NFT" 2>/dev/null || fail "nft refused regalia.boot-nft"
+    [ "$(nft list tables 2>/dev/null)" = "table inet regalia_boot" ] || fail "regalia.boot-nft made other tables than inet regalia_boot"
     ip link set "$BOOT_NIC" up
     ip addr add "$BOOT_ADDRESS" dev "$BOOT_NIC"
     if [ -n "${BOOT_GATEWAY:-}" ]; then ip route add default via "$BOOT_GATEWAY" dev "$BOOT_NIC"; else ip route add default dev "$BOOT_NIC"; fi

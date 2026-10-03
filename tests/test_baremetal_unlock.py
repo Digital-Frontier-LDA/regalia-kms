@@ -880,13 +880,22 @@ class Units(unittest.TestCase):
                     for number, line in enumerate(f, 1):
                         if not line.lstrip().startswith("#"):
                             self.assertNotIn("/etc/regalia", line, "%s:%d" % (name, number))
+        with open(os.path.join(here, "dracut/90regalia-unlock/module-setup.sh")) as f:
+            module = f.read()
+        install = module[module.index("install() {"):]
+        installed = re.findall(r"inst_(?:simple|multiple)\s+(?:-\S+\s+)?([^\n]+)", install)
+        # from the build machine: programs, the module's own units and script, and the crypttab line IN THE MODULE
+        self.assertEqual(installed, ["regalia-unlock wg nft ip sed cat sleep", "/usr/lib/regalia/wg-boot",
+                                     '"${systemdsystemunitdir:?}/$unit"', '"${moddir:?}/crypttab" /etc/crypttab'])
+        check = module[module.index("check() {"):module.index("depends() {")]
+        self.assertIn('if [ -n "${hostonly-}" ]; then', check)
         with open(os.path.join(here, "dracut/90regalia-unlock/crypttab")) as f:
             lines = [l.split() for l in f if l.strip() and not l.startswith("#")]
         self.assertEqual(lines, [["root", "PARTLABEL=regalia-root", unlock.KEY_SOCKET, "luks,x-initrd.attach"]])
         with open(os.path.join(here, "wg-boot")) as f:
             script = f.read()
         for credential in ("regalia.wg-boot-key", "regalia.wg-boot-conf", "regalia.boot-nft", "regalia.boot-env"):
-            self.assertIn('/%s"' % credential, script)
+            self.assertRegex(script, r'(?m)^[^#\n]*/%s"' % re.escape(credential))
 
     def test_the_service_is_given_the_local_half_by_systemd_and_can_do_nothing_else(self):
         service = self.unit("regalia-unlock.service")["Service"]

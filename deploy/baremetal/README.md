@@ -502,7 +502,7 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   volume is the GPT partition labelled `regalia-root`). **The image holds nothing per host**, so one
   image has one PCR 11 for every host. What differs per host and per manifest comes at boot as
   **system credentials**, which systemd-stub passes from the ESP (`loader/credentials/<name>.cred`,
-  measured into PCR 12, which no peer attests: changing one can stop a boot, not open a disk):
+  each measured into PCR 12):
   | credential | what | sealed |
   |---|---|---|
   | `regalia.unlock-local` | the local half | to the TPM (`unlock.seal_local`) |
@@ -516,6 +516,22 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   boot, decrypts the two sealed ones (a plain one under those names is refused), and treats a missing
   one as absent: the client then gives nothing and the console asks for the recovery key. The machine
   that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
+
+  **OPEN, and blocking for production: the ESP is a channel into the initrd.** Whoever can write the
+  ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
+  drop-in (`systemd.extra-unit.*`, `systemd.unit-dropin.*`), tmpfiles, sysctl and fstab lines. Sealed to
+  this machine's TPM with an empty PCR policy, which needs only the TPM's public storage key, such a
+  credential decrypts, and a drop-in on the unit that opens the disk could print the volume key, while
+  PCR 11 is unchanged and the peers answer. This is systemd-stub's behaviour with or without the files
+  here. What catches it is PCR 12: every credential is measured into it, so **the peers must attest PCR
+  12 in the initrd phase**, against the value the node's credentials give (the plain ones are rendered
+  from the manifest and the site configuration, the two sealed ones are fixed at enrolment). Until
+  then a changed ESP is not refused. (#66; the alternative, every per-host file signed and anything
+  else on the ESP refused, is heavier.)
+  The image must be built with `dracut --no-hostonly --no-hostonly-cmdline` (the module refuses
+  hostonly mode, which copies the build machine's identity and crypt settings into the image). The
+  ruleset credential may hold only `table inet regalia_boot` and include no file; `down` flushes every
+  table.
 - **Shown on a real boot** (`e2e/unlock-boot-qemu.sh`: a Debian 13 guest in QEMU with a software TPM,
   its whole disk one LUKS2 volume, the peers reached over WireGuard):
   - enrolment: with nothing enrolled the console asks "Please enter recovery key for disk root", and
@@ -527,7 +543,10 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   - no peer: the client gives nothing after its five rounds (about two minutes in the runs so far),
     and the console asks for the passphrase or recovery key, which opens the volume.
   The guest's initrd is the image as built, with no file added: the per-host files reach it as system
-  credentials through QEMU's SMBIOS, which systemd reads as it reads the ESP's.
+  credentials through QEMU's SMBIOS. systemd keeps those apart from the ESP's (which it searches
+  first, and which must decrypt to be used by name): the test shows the units and the names, not the
+  ESP path, and under SeaBIOS (no Secure Boot) it cannot show that a forged sealed credential is
+  refused.
   NOT shown: measured boot. The guest boots a plain kernel and initrd under SeaBIOS, so PCR 11 is zero
   and PCR 7 holds no Secure Boot state: sealing to the TPM and the peers' check of the quote are shown
   as mechanics, on this TPM and no other, and nothing there would refuse a changed initrd. That needs

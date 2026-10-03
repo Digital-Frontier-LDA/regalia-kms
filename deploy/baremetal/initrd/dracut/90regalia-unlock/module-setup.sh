@@ -15,6 +15,13 @@
 
 check() {
     require_binaries regalia-unlock wg nft ip || return 1
+    # One image for every host: in hostonly mode dracut copies the build machine's identity and crypt
+    # settings into the image (machine-id, rd.luks.uuid in cmdline.d, its crypttab). Build with
+    # --no-hostonly --no-hostonly-cmdline.
+    if [ -n "${hostonly-}" ]; then
+        derror "regalia-unlock: dracut runs in hostonly mode: build the image with --no-hostonly --no-hostonly-cmdline"
+        return 1
+    fi
     # systemd unseals the two credentials through this library, and its package only suggests it: without
     # it the image builds, and no boot can unseal anything
     local library found=

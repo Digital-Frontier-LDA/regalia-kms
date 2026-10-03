@@ -291,7 +291,16 @@ grep -q "not-a-wireguard-key" "$T/up.err" && F "the refused credential was print
 cp "$T/good" "$C/regalia.wg-boot-key"; printf '# a comment first\n' | cat - "$T/lisbon.boot.conf" > "$C/regalia.wg-boot-conf"
 initrd up 2>"$T/up.err" && F "the script accepted a configuration it did not render" || P "a configuration that does not begin with [Interface] is refused"
 grep -q "$(cat "$T/lisbon.boot.key")" "$T/up.err" && F "the key was printed" || P "and the key is not printed"
-cp "$T/lisbon.boot.conf" "$C/regalia.wg-boot-conf"; sed -i 's|^BOOT_TUNNEL=.*|BOOT_TUNNEL=not-an-address|' "$C/regalia.boot-env"
+cp "$T/lisbon.boot.conf" "$C/regalia.wg-boot-conf"
+# the ruleset is a credential from the ESP: it may read no other file (nft would print it, key and all) and
+# make no other table (one that outlived the boot would be in the running host's path)
+cp "$C/regalia.boot-nft" "$T/good.nft"; printf 'include "%s"\n' "$C/regalia.wg-boot-key" >> "$C/regalia.boot-nft"
+initrd up 2>"$T/up.err" && F "a ruleset that includes a file was loaded" || P "a ruleset that includes another file is refused"
+grep -q "$(cat "$T/lisbon.boot.key")" "$T/up.err" && F "the included key was printed" || P "and the key it named is not printed"
+cp "$T/good.nft" "$C/regalia.boot-nft"; printf 'table netdev extra {\n}\n' >> "$C/regalia.boot-nft"
+initrd up 2>/dev/null && F "a ruleset with another table was loaded" || P "a ruleset that makes another table is refused"
+[ "$(x lisbon nft list tables)" = "" ] && P "and no table at all is left" || F "tables left: $(x lisbon nft list tables | tr '\n' ' ')"
+cp "$T/good.nft" "$C/regalia.boot-nft"; sed -i 's|^BOOT_TUNNEL=.*|BOOT_TUNNEL=not-an-address|' "$C/regalia.boot-env"
 initrd up 2>/dev/null && F "the script succeeded with an impossible tunnel address" || P "a start that fails after the ruleset loaded"
 x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
   && F "the failed start left the interface, the ruleset or the address behind" || P "leaves no interface, no ruleset and no address behind"
