@@ -23,7 +23,7 @@ jobs:
         env:
           BASE_COMMIT: ${{ github.event.pull_request.base.sha }}
         run: |
-          python3 - <<'PY'
+          python3 -I - <<'PY'
           import os, re, subprocess
           base = os.environ['BASE_COMMIT']
           if base:
@@ -105,12 +105,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends gnupg
-          python3 -m venv "$RUNNER_TEMP/image-verification"
+          python3 -I -m venv "$RUNNER_TEMP/image-verification"
           "$RUNNER_TEMP/image-verification/bin/pip" install --quiet PyYAML==6.0.3
       - name: Real GPG tampering tests and image input inventory
         run: |
-          "$RUNNER_TEMP/image-verification/bin/python" -m unittest discover -s tests -p 'test_image_*.py' -v
-          "$RUNNER_TEMP/image-verification/bin/python" deploy/images/inventory.py
+          "$RUNNER_TEMP/image-verification/bin/python" -Es -m unittest discover -s tests -p 'test_image_*.py' -v
+          "$RUNNER_TEMP/image-verification/bin/python" -I deploy/images/inventory.py
       - name: Authenticate the pinned scanner publishers
         run: |
           mkdir -p "$RUNNER_TEMP/regalia-tools" deploy/images/.artifacts
@@ -196,8 +196,8 @@ jobs:
           persist-credentials: false
       - name: Audit pinned host harness dependencies and their transitive packages
         run: |
-          python3 -m venv "$RUNNER_TEMP/bootstrap-audit"
-          "$RUNNER_TEMP/bootstrap-audit/bin/python" -m pip install --quiet pip-audit==2.9.0
+          python3 -I -m venv "$RUNNER_TEMP/bootstrap-audit"
+          "$RUNNER_TEMP/bootstrap-audit/bin/python" -I -m pip install --quiet pip-audit==2.9.0
           "$RUNNER_TEMP/bootstrap-audit/bin/pip-audit" -r lab/bootstrap/harness-requirements.txt
 
   bootstrap-cluster:
@@ -261,8 +261,8 @@ jobs:
             --security-opt=no-new-privileges --user "$(id -u):$(id -g)" \
             --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777 --pids-limit 128 \
             --mount "type=bind,src=$PWD/lab/bootstrap/.artifacts,dst=/evidence" \
-            --env REGALIA_LAB_SWTPM_SECCOMP=kill --entrypoint python3 "$lab_test_image" \
-            /opt/tpm_soak.py --cycles 100 --output /evidence/tpm-soak-report.json
+            --env REGALIA_LAB_SWTPM_SECCOMP=kill --entrypoint /usr/bin/env "$lab_test_image" \
+            python3 -Es /opt/tpm_soak.py --cycles 100 --output /evidence/tpm-soak-report.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -400,7 +400,7 @@ jobs:
           # module in its place.
           REGALIA_EXPECT_CRYPTOGRAPHY: "1"
         run: |
-          python3 -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
+          python3 -I -m pip install --quiet --require-hashes -r tools/bench/requirements.txt
           python3 tools/bench/test_hsm_bench.py
 
   govulncheck:
@@ -593,7 +593,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends softhsm2 opensc jq
-          python3 -m venv "$RUNNER_TEMP/cosmpy"
+          python3 -I -m venv "$RUNNER_TEMP/cosmpy"
           "$RUNNER_TEMP/cosmpy/bin/pip" install --quiet cosmpy==0.12.2 cryptography==50.0.1
 
       - name: A live node accepts KMS-signed transactions, and every negative case fails for its own reason

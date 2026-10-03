@@ -22,14 +22,14 @@ jobs:
           persist-credentials: false
       - name: Prepare the laboratory harness
         run: |
-          python3 -m venv "$RUNNER_TEMP/soak-venv"
+          python3 -I -m venv "$RUNNER_TEMP/soak-venv"
           "$RUNNER_TEMP/soak-venv/bin/pip" install --quiet -r lab/bootstrap/harness-requirements.txt
       - name: Exercise every requested fault and preserve each round
         env:
           SOAK_ROUNDS: ${{ inputs.rounds }}
           SOAK_STEPS: ${{ inputs.steps }}
         run: |
-          "$RUNNER_TEMP/soak-venv/bin/python" -m lab.bootstrap.soak \
+          "$RUNNER_TEMP/soak-venv/bin/python" -I tools/lab_cli.py bootstrap-soak \
             --rounds "$SOAK_ROUNDS" --steps "$SOAK_STEPS" \
             --output lab/bootstrap/.artifacts/soak
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
