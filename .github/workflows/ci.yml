@@ -612,7 +612,11 @@ jobs:
           LINUX="$1" bash e2e/uki-build.sh | tee "$RUNNER_TEMP/uki.log"
           grep -q '^uki-build: 33 passed, 0 failed$' "$RUNNER_TEMP/uki.log"
           grep '^uki-build: image ' "$RUNNER_TEMP/uki.log" >> "$GITHUB_STEP_SUMMARY"
-      - name: Is a dracut initrd reproducible? (a measurement for the build design, regalia-kms#57)
+      # A MEASUREMENT, NOT A GATE: two runs gave identical bytes and one did not (regalia-kms#57, run
+      # 37080073972), so the answer so far is "not reliably". The step reports, and on a difference names
+      # the first cpio member that differs; it does not fail a PR that touches nothing in the image.
+      - name: Is a dracut initrd reproducible? (a measurement for the build design, regalia-kms#57; does not gate)
+        continue-on-error: true
         shell: bash
         run: |
           set -- /tmp/kernel/root/boot/vmlinuz-*
@@ -627,7 +631,15 @@ jobs:
             sleep 2
           done
           sha256sum /tmp/initrd-1.img /tmp/initrd-2.img | tee -a "$GITHUB_STEP_SUMMARY"
-          cmp /tmp/initrd-1.img /tmp/initrd-2.img
+          if cmp -s /tmp/initrd-1.img /tmp/initrd-2.img; then echo "dracut: the two builds are identical" >> "$GITHUB_STEP_SUMMARY"; exit 0; fi
+          # where: list each image's members with their sizes and digests, and show the first difference
+          for n in 1 2; do
+            mkdir -p "/tmp/x$n" && (cd "/tmp/x$n" && /usr/lib/dracut/skipcpio "/tmp/initrd-$n.img" 2>/dev/null | zstdcat -f 2>/dev/null | cpio -idm --quiet 2>/dev/null \
+              || lsinitrd --unpack "/tmp/initrd-$n.img" >/dev/null 2>&1)
+            (cd "/tmp/x$n" && find . -type f -exec sha256sum {} + | sort -k2) > "/tmp/members-$n.txt"
+          done
+          { echo "dracut: the two builds DIFFER; first differing members:"; diff /tmp/members-1.txt /tmp/members-2.txt | head -20; } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 1
 
   # regalia-kms#69: convergence, on two software TPMs. A revoked node's manifests reach one peer in a
   # bundle; the partitioned peer helps only until its heartbeat expires, catches up through the chain
