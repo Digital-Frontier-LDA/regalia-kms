@@ -222,6 +222,27 @@ class Heartbeats(Case):
             self.a.beat()
         self.assertEqual(self.events[-1]["outcome"], "STUCK")
 
+    def test_a_pending_path_that_cannot_be_cleared_stops_signing_before_a_number_is_spent(self):
+        os.mkdir(self.d + "/pending-heartbeat.json")          # a directory: unreadable, and not removable by unlink
+        for _ in range(3):
+            self.refused("cannot be cleared", self.a.beat)
+        self.assertEqual(self.a.counter.value(), 0)
+        os.rmdir(self.d + "/pending-heartbeat.json")
+        self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 1)
+
+    def test_a_pending_file_that_cannot_be_read_is_dropped(self):
+        with open(self.d + "/pending-heartbeat.json", "w") as f:
+            f.write("{}")
+        real = authority.Authority._read
+
+        def read(this, name):
+            if name == authority.PENDING:
+                raise PermissionError("unreadable")
+            return real(this, name)
+        with unittest.mock.patch.object(authority.Authority, "_read", read):
+            self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 1)
+        self.assertIn("DROPPED", [e["outcome"] for e in self.events if e.get("event") == "authority-heartbeat"])
+
     def test_wake_runs_the_next_beat_at_once(self):
         clock, beats = {"t": 0.0}, []
         self.a.beat = lambda reason="interval": beats.append(clock["t"])
@@ -423,6 +444,14 @@ class CommandLine(Case):
         self.assertEqual(code, 2)
         self.assertIn("another writer holds", err)
         self.refused("another writer holds", authority.one_writer, self.d)
+
+    def test_the_writer_lock_must_be_this_user_s_regular_file(self):
+        os.mkfifo(self.d + "/writer.lock")
+        self.refused("not this user's regular file", authority.one_writer, self.d)
+        os.unlink(self.d + "/writer.lock")
+        open(self.d + "/writer.lock", "w").close()
+        with unittest.mock.patch.object(authority.os, "geteuid", return_value=os.getuid() + 1):
+            self.refused("not this user's regular file", authority.one_writer, self.d)        # e.g. root's, from an older run
 
     def test_the_writer_lock_follows_no_link_and_serve_holds_it(self):
         os.symlink(self.d + "/elsewhere", self.d + "/writer.lock")

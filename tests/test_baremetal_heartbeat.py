@@ -536,6 +536,23 @@ class Sequence(Case):
         self.f.accept(beat(self.m1, 1500, issued=T0 + 120), self.m1)
         self.assertEqual(self.counter.value(), 1500)
 
+    def test_the_widened_bound_is_capped_too(self):
+        """A gap planted at the largest stored allowance, across a rotation, still loosens the bound to at
+        most MAX_ALLOWANCE in all."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        with open(self.state) as f:
+            state = json.load(f)
+        state["envelope"], state["allowance"] = beat(self.m1, 1 + hb.MAX_ALLOWANCE, issued=T0 + 60), hb.MAX_ALLOWANCE
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        newer = Ed25519PrivateKey.generate()
+        m2 = manifest(epoch=2, prev=m.digest(self.m1), keys=[pub(newer)])
+        self.later(3600)
+        self.refused("exceeds the bound %d" % hb.MAX_ALLOWANCE, self.f.accept, beat(m2, 2 + hb.MAX_ALLOWANCE, issued=T0 + 3600, key=newer), m2)
+        self.f.accept(beat(m2, 1 + hb.MAX_ALLOWANCE, issued=T0 + 3600, key=newer), m2)
+        self.assertEqual(self.counter.value(), 1 + hb.MAX_ALLOWANCE)
+
     def test_the_stored_allowance_never_exceeds_the_cap(self):
         self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
         self.later(2 * 366 * 86400)

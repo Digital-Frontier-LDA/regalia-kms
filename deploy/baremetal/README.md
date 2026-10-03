@@ -737,6 +737,10 @@ it (`service_mesh.authority`).
   running faster than time is refused.
 - **One writer:** `serve` holds `writer.lock` in the state directory for its life, `init` and `accept`
   for their write, each only as the service's own user.
+- **The one-year limit:** a node accepts a sequence jump of at most `heartbeat.MAX_ALLOWANCE` (about a
+  year of 600 s steps), however long it was away. A node offline for longer, or caught mid catch-up for
+  longer across a revocation-key rotation, refuses the next heartbeat and needs the counter's recovery
+  command (#244).
 - **A revocation** changes one node's state to QUARANTINED or REVOKED_STOLEN, nothing else. Membership's
   rule for revocation-signed changes is checked by the Store before it is kept. Anything permissive is
   the root's. If the process stops between the manifest and its heartbeat, the next start signs the

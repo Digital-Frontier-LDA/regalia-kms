@@ -224,8 +224,8 @@ class Authority:
         self._write(HEARTBEAT, raw, 0o644)
 
     def _unpend(self):
-        """Remove the pending file. One that cannot be removed is only republished (the same bytes), but say so:
-        while it stays, every beat republishes it until it nears expiry."""
+        """Remove the pending file. Returns whether the path is clear. One that cannot be removed is only
+        republished (the same bytes), but say so: while it stays, every beat republishes it."""
         try:
             os.unlink(self.path(PENDING))
         except FileNotFoundError:
@@ -234,6 +234,8 @@ class Authority:
             with contextlib.suppress(Exception):
                 self.trail({"event": "authority-heartbeat", "outcome": "STUCK", "reason": "the pending heartbeat cannot be removed: %s" % failure,
                             "signer": self.signer.kind})
+            return False
+        return True
 
     # ---- the sequence ----
 
@@ -273,8 +275,11 @@ class Authority:
                     require(heartbeat.MIN_INTERVAL_S <= expires - seconds, "too close to its expiry to be worth publishing")
                 except (Refused, ValueError, KeyError, TypeError, OSError) as stale:
                     # unreadable, for another epoch, or out of date: dropped, and its number is lost (never re-signed)
-                    self._unpend()
+                    cleared = self._unpend()
                     self.trail({"event": "authority-heartbeat", "outcome": "DROPPED", "reason": str(stale)[:240], "signer": self.signer.kind})
+                    # a path that cannot be cleared would take every new signature's pending write with it:
+                    # refuse before a number is reserved, rather than spend one (and a signature) per beat
+                    require(cleared, "the pending heartbeat path cannot be cleared: nothing is signed until it is")
                 else:
                     self._publish(json.dumps(pending, sort_keys=True).encode())     # the same bytes, again
                     self._unpend()
