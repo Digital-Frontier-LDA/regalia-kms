@@ -81,7 +81,7 @@ wg genkey > "$T/outsider.key"; wg genkey > "$T/wrong.key"
 # The manifests (epoch 1: all ACTIVE; epoch 2: lisbon REVOKED_STOLEN), the three site configs, and
 # everything rendered from them. The manifest is built here as a fixture; on a host it is the verified
 # one from membership.Store.
-PYTHONPATH="$HERE" python3 -Ps - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
+PYTHONPATH="$HERE" python3 -BPs - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
 import base64, json, sys
 from deploy.baremetal import bootnet, firewall, sitecfg
 from deploy.baremetal import membership as m
@@ -123,7 +123,7 @@ PY
 # WireGuard. The running peers: wg-unlock, WG-SERVICE key. The booting node: wg-boot, WG-BOOT key.
 # apply <namespace> <interface> <rendered configuration> <private key file>: the key is added in memory
 # and the whole thing piped to wg (bootnet.with_key): a configuration applied WITHOUT its key unsets it.
-apply(){ PYTHONPATH="$HERE" python3 -Ps -c '
+apply(){ PYTHONPATH="$HERE" python3 -BPs -c '
 import sys
 from deploy.baremetal import bootnet
 sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
@@ -179,7 +179,7 @@ sleep 1
 
 # asked <namespace> <address> [timeout] [node]: an unlock request in `node`'s name (lisbon's) is answered
 # by the peer with a nonce. Exit 3 when the peer answers with a refusal instead.
-asked(){ x "$1" env PYTHONPATH="$HERE" python3 -Ps -c "
+asked(){ x "$1" env PYTHONPATH="$HERE" python3 -BPs -c "
 import json, sys
 from deploy.baremetal import unlock
 unlock.IO_TIMEOUT = float(sys.argv[2])

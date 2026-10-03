@@ -301,7 +301,7 @@ fi
 
 hdr "4  the hardening and the OpenSC setting, measured on that process"
 # shellcheck disable=SC2024  # the report is this user's, on purpose: only the probe is root
-sudo env PYTHONPATH="$HERE" python3 -Ps - > "$W/probes" <<'PY'
+sudo env PYTHONPATH="$HERE" python3 -BPs - > "$W/probes" <<'PY'
 from deploy.baremetal import os_probe
 host = os_probe.Host()
 for name in ("kms_service_unprivileged", "kms_service_sandboxed", "kms_capabilities_minimal", "kms_opensc_leaves_piv_cards", "kms_apparmor_enforced"):
@@ -367,7 +367,7 @@ else
   [ "$mine" = 0 ] && P "this user ($(id -un)), with an active session, is refused too" || F "this user ($(id -un)) still sees the HSM under the shipped rule ($mine)"
 fi
 # The host probe's reading of the rule, on this machine as it is.
-IFS=$'\t' read -r value why < <(sudo env PYTHONPATH="$HERE" python3 -Ps -c '
+IFS=$'\t' read -r value why < <(sudo env PYTHONPATH="$HERE" python3 -BPs -c '
 from deploy.baremetal import os_probe
 ok, why = os_probe.PROBES["kms_pcscd_access_rule"](os_probe.Host())
 print("%s\t%s" % ("true" if ok else "false", why))')

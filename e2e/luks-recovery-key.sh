@@ -41,7 +41,7 @@ NEW_KEY="vvuuttrr-nnllkkjj-iihhggff-eeddccbb-cbdefghi-jklnrtuv-bcdefghi-jklnrtuc
 FAST=(--pbkdf pbkdf2 --pbkdf-force-iterations 1000)
 # unlock <secret>: open the volume for real, as the boot prompt does with what was typed there.
 unlock(){ cryptsetup open --key-file <(printf '%s' "$1") "$LOOP" "$NAME" </dev/null >/dev/null 2>&1; }
-judge(){ cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -I -c '
+judge(){ cryptsetup luksDump --dump-json-metadata "$LOOP" | python3 -IB -c '
 import json, sys
 sys.path.insert(0, "deploy/baremetal")
 import host_probe
@@ -103,7 +103,7 @@ mountpoint -q "$W/mnt" && umount "$W/mnt"; [ -e "/dev/mapper/$NAME" ] && cryptse
 why="$(judge)" && P "5: the probe still measures one recovery keyslot: $why" || F "5: after --replace the probe refuses: $why"
 
 # the file-backed half, where a skip is a failure
-out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -Es -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
+out="$(REGALIA_EXPECT_CRYPTSETUP=1 python3 -BEs -m unittest -v tests.test_baremetal_recovery_key 2>&1)"; rc=$?
 [ "$rc" = 0 ] && grep -q '^Ran 37 tests' <<< "$out" && ! grep -qi skipped <<< "$out" \
   && P "the 37 file-backed tests of recovery-key.sh ran and passed (the failure paths are there: a rollback that fails, a replace that stops half way, a signal)" || { F "the file-backed tests did not all run and pass"; printf '%s\n' "$out" | tail -30; }
 
