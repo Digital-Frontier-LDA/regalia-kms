@@ -267,9 +267,14 @@ def area_digest(device, keyslot):
     offset, size = int(area.get('offset', -1)), int(area.get('size', -1))
     if offset < 0 or not 0 < size <= 64 << 20:
         raise Refused('a keyslot area that cannot be read')
-    with open(device, 'rb') as stream:
-        stream.seek(offset)
-        data = stream.read(size)
+    fd = os.open(device, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        # cryptsetup wipes with O_DIRECT: the range is dropped from the page cache first, so this reads
+        # what the device holds, not a copy cached before the wipe (d9 on #255)
+        os.posix_fadvise(fd, offset, size, os.POSIX_FADV_DONTNEED)
+        data = os.pread(fd, size, offset)
+    finally:
+        os.close(fd)
     if len(data) != size:
         raise Refused('a keyslot area that cannot be read')
     return hashlib.sha256(data).hexdigest()
