@@ -626,6 +626,21 @@ class Verify(Case):
         junk = uki._ukify(self.inputs, self.record["uname"], os.path.join(self.d, "junk.efi"), self.tools, uki.TOOLS, pcrsig=self.write("junk.json", b"not json"))
         self.refused("is not a PCR signature document", self.check, **self.repointed(junk))
 
+    def test_the_image_must_carry_the_system_phase_key(self):
+        """A record and an image made to agree with each other (sections, PCR 11) but carrying another key as
+        .pcrpkey: the keys given are the record's, and the image is still refused."""
+        data = uki.read(self.image)
+        other = uki.read(self.key("other", "pub"))
+        old = dict(uki.sections(data))[".pcrpkey"]
+        self.assertEqual(len(other), len(old))
+        changed = data.replace(old, other)
+        parts = uki.measured(changed)
+        record = json.loads(json.dumps(self.record))
+        record["signed"]["image_sha256"] = hashlib.sha256(changed).hexdigest()
+        record["sections"] = {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()}
+        record["pcr11"] = {phase: uki.pcr11(parts, path) for phase, path in uki.PHASE_PATHS.items()}
+        self.refused("the image's .pcrpkey is not the system-phase key", self.check, image=self.write("pk.efi", changed), record=record)
+
     def test_the_stub_is_pinned_and_the_secure_boot_certificate_is_required(self):
         data = uki.read(self.image)
         hostile = data.replace(b"a stub", b"HOSTIL")

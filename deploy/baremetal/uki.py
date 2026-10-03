@@ -42,6 +42,10 @@ sign    takes TWO records of the same image built on two machines, which must be
         own password prompt (and keeps it in the user keyring as "measure-private-key-pin", which this
         tool purges after each signature; an inherited $CREDENTIALS_DIRECTORY is removed so the PIN cannot
         come in as a credential); sbsign asks through OpenSSL's engine. Three prompts in all.
+        ONE CARD ATTACHED: the engine loads its PKCS#11 module, which enumerates EVERY slot before any
+        login, and this tool cannot list them itself (it does not know the module). serial= in the URI is
+        what selects the card, but a session with other cards attached exposes them to every load: the
+        signing session attaches the signing HSM alone (a ceremony step, regalia#554).
 verify  what a host's operator runs before installing an image: its measured sections AND the stub's
         sections are the record's, its two PCR signatures verify under the keys the record names, for the
         PCR 11 the record predicts, and its Secure Boot signature verifies under the certificate the
