@@ -108,7 +108,9 @@ def main():
 
 def tpm(work):
     """A software TPM behind the kernel's vTPM proxy: a real /dev/tpmrm device, a real udev rule."""
-    sh("modprobe", "tpm_vtpm_proxy")
+    loaded = sh("modprobe", "tpm_vtpm_proxy", check=False)
+    if loaded.returncode != 0:
+        raise SystemExit("node-units-systemd: the kernel's vTPM proxy cannot be loaded: %s" % loaded.stderr.strip())
     state = work / "tpm"
     state.mkdir()
     done = sh("swtpm", "chardev", "--vtpm-proxy", "--tpm2", "--tpmstate", "dir=%s" % state, "--flags", "not-need-init,startup-clear",

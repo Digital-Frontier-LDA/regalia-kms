@@ -34,6 +34,10 @@ jobs:
             openssl python3-cryptography
           # tpm_vtpm_proxy is in the extra modules on the runner's kernel
           sudo apt-get install -y -qq --no-install-recommends "linux-modules-extra-$(uname -r)" || true
+          uname -r
+          grep -i VTPM "/boot/config-$(uname -r)" || true
+          find "/lib/modules/$(uname -r)" -name 'tpm_vtpm_proxy*' || true
+          sudo modprobe -v tpm_vtpm_proxy || true
       - name: The four units, as shipped, under systemd (part 1)
         run: |
           set -o pipefail
