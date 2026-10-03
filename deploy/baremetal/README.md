@@ -111,6 +111,10 @@ Commissioning has two halves:
     production binds PCR 7 alone until they are. The evidence records the two separately:
     `credential_tpm2_pcrs` (bound directly) and `credential_tpm2_signed_pcrs` with
     `credential_tpm2_pcr_key_pkfp` (the signed policy and its key; both `""` without one).
+    It also records `node_id` and `unlock_peers` (#67): which node of the membership manifest this
+    host is and which peers hold an unlock path for its root disk (`[]` when none). The probe judges a
+    peer-enrolled root disk against that signed record; `--node-id`/`--unlock-peer` given beside the
+    evidence must agree with it.
   The binary itself is covered by IMA attestation (above) and by the package signature.
 - The regalia-kms host role (unprivileged service, no core dumps, no hibernation, swap off or
   encrypted): measured by `deploy/baremetal/os_probe.py`.
