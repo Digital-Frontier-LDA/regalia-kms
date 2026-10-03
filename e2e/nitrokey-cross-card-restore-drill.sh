@@ -34,22 +34,8 @@ export HSM_PKCS11_MODULE="$MODULE"
 KEY_ID=10
 STATE="$(mktemp -d "${TMPDIR:-/tmp}/regalia-xcard.XXXXXX")"; chmod 700 "$STATE"
 LOG="$STATE/transcript.log"
-# OPENSC HIDES CARDS PAST 16 VIRTUAL SLOTS. Each reader takes 4 (slots_per_card), and
-# max_virtual_slots defaults to 16, so on a bench with two vpcd readers and three HSMs the FIFTH
-# reader gets no PKCS#11 slot at all (measured 2026-09-24: DENK0404547 vanished from `pkcs11-tool -L`
-# while `opensc-tool -l` still listed it). A drill that cannot see a card must not read that as "the
-# card has no key", so the drill raises the limit in its own config, and checks both cards resolve.
-cat > "$STATE/opensc.conf" <<'CONF'
-app default {
-}
-app opensc-pkcs11 {
-	pkcs11 {
-		max_virtual_slots = 32;
-		slots_per_card = 4;
-	}
-}
-CONF
-export OPENSC_CONF="${OPENSC_CONF:-$STATE/opensc.conf}"
+# OpenSC's configuration is written below, once the two cards are known: it shows ONLY them
+# (e2e/lib/bench_cards.sh), with the slot limits raised (OpenSC hides cards past 16 virtual slots).
 say(){ printf '%s %s\n' "$(date -u +%T)" "$*" | tee -a "$LOG"; }
 die(){ say "FAIL: $*"; say "state kept for inspection: $STATE"; exit 1; }
 for t in sc-hsm-tool pkcs11-tool pkcs15-tool opensc-tool openssl go; do command -v "$t" >/dev/null || die "$t is required"; done
@@ -59,6 +45,14 @@ for t in sc-hsm-tool pkcs11-tool pkcs15-tool opensc-tool openssl go; do command 
 . "$CEREMONY/qubes/scripts/ceremony-kcv.sh"
 
 pin_of(){ case "$1:$2" in "$SRC:so") echo "$SRC_SO_PIN";; "$SRC:user") echo "$SRC_USER_PIN";; "$DST:so") echo "$DST_SO_PIN";; "$DST:user") echo "$DST_USER_PIN";; esac; }
+# OpenSC sees ONLY the two cards under test, and every command that presents a PIN (or the SO-PIN, or
+# initialises) runs only while that card's serial is where it is expected (regalia-kms#174).
+# shellcheck source=lib/bench_cards.sh
+. "$ROOT/e2e/lib/bench_cards.sh"
+bench_isolate "$STATE/opensc.conf" "$MODULE" "$SRC" "$DST" || die "cannot isolate $SRC and $DST in OpenSC"
+gate(){ bench_gate "$1" ${2:+"$2"} || die "$1 is not where it is expected: no PIN presented"; }
+# The staging check reads each card's device certificate: done AFTER isolation, so that it
+# opens only the cards under test, not every reader on the bench.
 for s in "$SRC" "$DST"; do
   hsm_assert_staging_card "$s" || die "$s is not a registered staging card (or its DevAut does not match): refusing to initialise it"
 done
@@ -68,22 +62,27 @@ reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER"
 reader(){ reader_of "$1"; echo "$READER"; }
 # sc-hsm-tool's PINs and DKEK password are typed into its own prompts over a pty
 # (e2e/lib/sc-hsm-pty.py) and never appear in the process list. (`env:NAME` would do it too.)
-schsm(){ local card="$1"; shift
+# sc-hsm-tool is given a READER INDEX: the reader at that index must be this card's (two isolated cards
+# can still swap places when the readers re-enumerate).
+reader_arg(){ local next=0 a; for a in "$@"; do [ "$next" = 1 ] && { echo "$a"; return; }; [ "$a" = --reader ] && next=1; done; }
+schsm(){ local card="$1" r; shift; gate "$card"
+  r="$(reader_arg "$@")"; [ -z "$r" ] || bench_reader_gate "$card" "$r" || die "reader $r is not $card's: no PIN presented"
   SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$DKEK_PW" \
-    "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
+    python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 # Resolved in the MAIN shell, so a card PKCS#11 cannot see stops the drill instead of reading as empty.
 slot_of(){ local s; s="$(hsm_slot_id_for "$1" 2>/dev/null || true)"; [ -n "$s" ] || die "PKCS#11 cannot see $1 (OPENSC_CONF=$OPENSC_CONF)"; SLOT="$s"; }
 for s in "$SRC" "$DST"; do slot_of "$s"; done
 say "source $SRC (reader $(reader "$SRC")), target $DST (reader $(reader "$DST")); state $STATE; OPENSC_CONF=$OPENSC_CONF"
 
-p11(){ local card="$1"; shift; slot_of "$card"
+p11(){ local card="$1"; shift; slot_of "$card"; gate "$card" "$SLOT"
        REGALIA_DRILL_PIN="$(pin_of "$card" user)" pkcs11-tool --module "$MODULE" --slot "$SLOT" --login --pin env:REGALIA_DRILL_PIN "$@"; }
 # Lists the card's private keys; a failed listing stops the drill, it is never "no key".
-has_kek(){ local out; slot_of "$1"
+has_kek(){ local out; slot_of "$1"; gate "$1" "$SLOT"
   out="$(REGALIA_DRILL_PIN="$(pin_of "$1" user)" pkcs11-tool --module "$MODULE" --slot "$SLOT" --login --pin env:REGALIA_DRILL_PIN --list-objects --type privkey 2>&1)" \
     || die "cannot list the private keys on $1"
   grep -qiE "ID: *$KEY_ID\b" <<< "$out"; }
 phase(){ # phase <name> <card>
+  gate "$2"
   REGALIA_ENVDRILL_PHASE="$1" REGALIA_ENVDRILL_MODULE="$MODULE" REGALIA_ENVDRILL_SERIAL="$2" \
   REGALIA_ENVDRILL_OBJECT_ID="$KEY_ID" REGALIA_ENVDRILL_PIN="$(pin_of "$2" user)" REGALIA_ENVDRILL_STATE="$STATE" \
     go -C "$ROOT" test -count=1 -v -run '^TestEnvelopeSurvivesTokenWipeAndDKEKRestore$' ./internal/integration > "$STATE/phase.out" 2>&1 || true

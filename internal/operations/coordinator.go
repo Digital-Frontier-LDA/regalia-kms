@@ -10,9 +10,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
 	api "github.com/Digital-Frontier-LDA/regalia-kms/internal/api"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/approval"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
@@ -69,6 +71,8 @@ type Coordinator struct {
 	approvers        *approval.KeySet
 	authorizerDigest string
 	now              func() time.Time
+	// admission is nil unless the configuration requires a runtime lease (RequireAdmission).
+	admission Admission
 
 	// droppedMu guards droppedRecords, which Execute writes from concurrent request
 	// goroutines and the metrics handler reads.
@@ -103,6 +107,38 @@ func New(authorizer Authorizer, router Router, semantic Policy, recorder Auditor
 	return &Coordinator{authorizer: authorizer, router: router, policy: semantic, audit: recorder, runner: runner, hardware: hardware, policyDigest: policyDigest, authorizerDigest: digest, approvers: approvers, now: now}, nil
 }
 
+// Admission answers whether this node holds a runtime trust lease right now (internal/admission).
+type Admission interface {
+	Ready(context.Context) bool
+}
+
+// RequireAdmission makes every operation need a runtime lease. Call it before the coordinator
+// serves. The runner the coordinator was built with must be an admission runner over the same gate:
+// this check refuses before any policy state is spent, that one stops an operation whose lease
+// lapsed while it ran.
+func (coordinator *Coordinator) RequireAdmission(gate Admission) {
+	coordinator.admission = gate
+}
+
+// RecordAdmission writes the audit event for a change in this node's admission: it began to hold a
+// runtime lease, or stopped. The epoch is the manifest epoch the lease service decided under.
+func (coordinator *Coordinator) RecordAdmission(ctx context.Context, nodeID string, admitted bool, epoch uint64) error {
+	requestID, err := randomID()
+	if err != nil {
+		return err
+	}
+	decision, outcome := "deny", "not-admitted"
+	if admitted {
+		decision, outcome = "allow", "admitted"
+	}
+	return coordinator.audit.Record(ctx, audit.Draft{
+		Timestamp: coordinator.now(), RequestID: requestID, Principal: "system:runtime-admission",
+		Decision: decision, ObjectID: nodeID, Purpose: "epoch-" + strconv.FormatUint(epoch, 10),
+		Operation: "runtime-admission", Outcome: outcome,
+		RegistryDigest: coordinator.router.Digest(), PolicyDigest: coordinator.policyDigest, RBACDigest: coordinator.authorizerDigest,
+	}, false)
+}
+
 func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request) (api.Result, error) {
 	if coordinator == nil || coordinator.authorizer == nil || coordinator.router == nil || coordinator.policy == nil ||
 		coordinator.audit == nil || coordinator.runner == nil || coordinator.hardware == nil || coordinator.now == nil ||
@@ -113,6 +149,16 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 	if !coordinator.authorizer.Allowed(request.Principal, request.ObjectID, request.Operation, request.Context.Environment) {
 		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "rbac-denied", started, false, nil)
 		return api.Result{}, failure("DENIED", http.StatusForbidden, false)
+	}
+	// NOT ADMITTED: REFUSED BEFORE ROUTING AND BEFORE ANY POLICY STATE IS SPENT (regalia-kms#74). A
+	// node with no runtime lease must not consume a nonce or a quota for work it will not do, and it
+	// is refused HERE rather than after routing because routing asks the token whether it is healthy:
+	// a token waiting for a fresh lease (#72) is not, and the caller and the trail would then be told
+	// "backend unavailable" for what is really "this node is not admitted". The runner checks again
+	// while the operation runs and after it.
+	if coordinator.admission != nil && !coordinator.admission.Ready(ctx) {
+		coordinator.recordOrCount(ctx, request, registry.Route{}, "deny", "not-admitted", started, false, nil)
+		return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 	}
 	// Seal routes differently: RouteForSeal admits standby and qualified bindings, because an
 	// envelope sealed today must open after tomorrow's rotation. Release routes differently
@@ -279,6 +325,13 @@ func (coordinator *Coordinator) Execute(ctx context.Context, request api.Request
 		if errors.Is(err, envelope.ErrInvalidEnvelope) {
 			coordinator.recordOrCount(ctx, request, route, "allow", "integrity-failed", started, true, policyRequest.VerifiedApprovers)
 			return api.Result{}, failure("INVALID_ARGUMENT", http.StatusBadRequest, false)
+		}
+		// THE LEASE LAPSED WHILE THE OPERATION WAITED OR RAN. Policy had allowed it and the token may
+		// even have signed; the output is discarded above. Recorded as what it is, not as a backend
+		// fault: an operator reading "backend-failed" would go and look at a healthy token.
+		if errors.Is(err, admission.ErrNotAdmitted) {
+			coordinator.recordOrCount(ctx, request, route, "deny", "not-admitted", started, true, policyRequest.VerifiedApprovers)
+			return api.Result{}, failure("DEPENDENCY_UNAVAILABLE", http.StatusServiceUnavailable, true)
 		}
 		coordinator.recordOrCount(ctx, request, route, "allow", "backend-failed", started, true, policyRequest.VerifiedApprovers)
 		return api.Result{}, classifyExecution(err)

@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"math/big"
 	"os"
 	"testing"
 )
@@ -69,9 +70,10 @@ func TestPIVPhysicalReadOnlyQualification(t *testing.T) {
 		if err != nil {
 			t.Fatalf("sign with 9A: %v", err)
 		}
+		// r||s at the width of the curve, the one encoding every backend returns (sign_contract.go).
 		public, ok := key.(*ecdsa.PublicKey)
-		if !ok || !ecdsa.VerifyASN1(public, digest[:], signature) {
-			t.Fatal("9A signature did not verify against the discovered public key")
+		if !ok || len(signature) != 64 || !ecdsa.Verify(public, digest[:], new(big.Int).SetBytes(signature[:32]), new(big.Int).SetBytes(signature[32:])) {
+			t.Fatalf("9A signature (%d bytes) is not r||s that verifies against the discovered public key", len(signature))
 		}
 	}
 

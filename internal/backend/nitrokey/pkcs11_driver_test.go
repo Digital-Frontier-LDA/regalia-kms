@@ -26,6 +26,10 @@ func (module *fakeCryptoki) DestroyObject(pkcs11.SessionHandle, pkcs11.ObjectHan
 }
 
 type fakeCryptoki struct {
+	// mechanisms is what GetMechanismList answers. nil means every mechanism the driver uses, so
+	// that a test about something else is not also a test about the mechanism list.
+	mechanisms   []uint
+	mechanismErr error
 	serial       string
 	loginPIN     string
 	signature    []byte
@@ -40,6 +44,20 @@ type fakeCryptoki struct {
 func (fake *fakeCryptoki) GetSlotList(bool) ([]uint, error) { return []uint{7}, nil }
 func (fake *fakeCryptoki) GetTokenInfo(uint) (pkcs11.TokenInfo, error) {
 	return pkcs11.TokenInfo{SerialNumber: fake.serial}, nil
+}
+func (fake *fakeCryptoki) GetMechanismList(uint) ([]*pkcs11.Mechanism, error) {
+	if fake.mechanismErr != nil {
+		return nil, fake.mechanismErr
+	}
+	listed := fake.mechanisms
+	if listed == nil {
+		listed = []uint{pkcs11.CKM_ECDSA, ckmEdDSA, pkcs11.CKM_RSA_PKCS, pkcs11.CKM_RSA_PKCS_OAEP, pkcs11.CKM_AES_KEY_WRAP_PAD, pkcs11.CKM_ECDH1_DERIVE}
+	}
+	mechanisms := make([]*pkcs11.Mechanism, 0, len(listed))
+	for _, mechanism := range listed {
+		mechanisms = append(mechanisms, pkcs11.NewMechanism(mechanism, nil))
+	}
+	return mechanisms, nil
 }
 func (*fakeCryptoki) OpenSession(uint, uint) (pkcs11.SessionHandle, error) { return 11, nil }
 func (fake *fakeCryptoki) CloseSession(pkcs11.SessionHandle) error         { fake.closed = true; return nil }

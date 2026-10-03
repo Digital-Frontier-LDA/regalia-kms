@@ -51,9 +51,19 @@ def beat(man, sequence, issued=T0, lifetime=hb.MAX_LIFETIME, key=REVOKE, domain=
     return {"heartbeat": body, "signature": {"key": pub(key), "sig": key.sign(domain + m.canonical(body)).hex()}}
 
 
+def simulated_ticks(test, tcti):
+    """The TPM clock for a swtpm test whose wall clock (`test.now`) is simulated. The real TPM is read on
+    every call, so TpmClock runs against swtpm; the value handed on is the test's own time in milliseconds.
+    Feeding the real TPM's elapsed time to a clock that stands still makes the time floor depend on how
+    long the test took: past about six seconds it refuses "the clock went backwards"."""
+    real = hb.TpmClock(tcti=tcti)
+    return lambda: (real(), int((test.now - T0 + 10 ** 6) * 1000))[1]
+
+
 class FakeTpm:
     """tpm2-tools as HighWater calls them: NV indices with the real rules. A counter's first increment
-    lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes."""
+    lands above the highest value any counter on this TPM ever held; a write-locked index refuses writes.
+    A counter's value is an integer; an ordinary index holds bytes, at most the size it was defined with."""
     COUNTER, WRITTEN, LOCKED = 0x10, 0x20000000, 0x800
 
     def __init__(self, highest=0):
@@ -68,21 +78,24 @@ class FakeTpm:
         if tool == "nvdefine":
             if index in self.nv:
                 return no
-            self.nv[index] = [self.COUNTER if "nt=counter" in argv[argv.index("-a") + 1] else 0, None]
+            self.nv[index] = [self.COUNTER if "nt=counter" in argv[argv.index("-a") + 1] else 0, None, int(argv[argv.index("-s") + 1])]
             return ok()
         if index not in self.nv:
             return no
         entry = self.nv[index]
         if tool == "nvreadpublic":
-            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: 8\n" % (index, entry[0] | 0x60006)).encode())
+            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: %d\n" % (index, entry[0] | 0x60006, entry[2])).encode())
         if tool == "nvread":
-            return ok(entry[1].to_bytes(8, "big")) if entry[1] is not None else no
+            size = int(argv[argv.index("-s") + 1])
+            if entry[1] is None or size > entry[2]:
+                return no
+            return ok((entry[1].to_bytes(8, "big") if entry[0] & self.COUNTER else entry[1])[:size])
         if tool == "nvincrement" and entry[0] & self.COUNTER:
             entry[1] = self.highest + 1 if entry[1] is None else entry[1] + 1
             self.highest, entry[0] = max(self.highest, entry[1]), entry[0] | self.WRITTEN
             return ok()
-        if tool == "nvwrite" and not entry[0] & (self.COUNTER | self.LOCKED):
-            entry[1], entry[0] = int.from_bytes(input, "big"), entry[0] | self.WRITTEN
+        if tool == "nvwrite" and not entry[0] & (self.COUNTER | self.LOCKED) and len(input) <= entry[2]:
+            entry[1], entry[0] = input + (entry[1] or b"\xff" * entry[2])[len(input):], entry[0] | self.WRITTEN
             return ok()
         if tool == "nvwritelock":
             entry[0] |= self.LOCKED
@@ -137,8 +150,8 @@ class Heartbeats(Case):
         self.f.accept(beat(self.m1, 2, issued=self.now - 10), self.m1)                      # the next one restores it
         self.assertEqual(self.f.check(self.m1), hb.MAX_LIFETIME - 10)
 
-    def test_a_heartbeat_lives_at_most_24_hours_whatever_the_signer_wrote(self):
-        self.refused("at most 24 hours", self.f.accept, beat(self.m1, 1, lifetime=hb.MAX_LIFETIME + 1), self.m1)
+    def test_a_heartbeat_lives_at_most_24_hours_under_a_v1_manifest_whatever_the_signer_wrote(self):
+        self.refused("at most 86400 s under the current manifest", self.f.accept, beat(self.m1, 1, lifetime=hb.MAX_LIFETIME + 1), self.m1)
         self.refused("expires_at must be after issued_at", self.f.accept, beat(self.m1, 1, lifetime=0), self.m1)
         self.refused("issued in the future", self.f.accept, beat(self.m1, 1, issued=self.now + hb.FUTURE_SKEW + 1), self.m1)
         self.f.accept(beat(self.m1, 1, issued=self.now + hb.FUTURE_SKEW), self.m1)
@@ -401,7 +414,8 @@ class Sequence(Case):
                 ("a stranger's signature", "not a revocation key named by the current manifest", beat(self.m1, 900, key=OTHER)),
                 ("an altered sequence", "signature does not verify", dict(beat(self.m1, 2), heartbeat=dict(beat(self.m1, 2)["heartbeat"], sequence=900))),
                 ("another manifest", "digest mismatch", beat(manifest(c="DRAINING"), 900)),
-                ("too long a life", "at most 24 hours", beat(self.m1, 900, lifetime=hb.MAX_LIFETIME * 30)),
+                ("too long a life", "at most 604800 s under any manifest", beat(self.m1, 900, lifetime=hb.MAX_LIFETIME * 30)),
+                ("too long a life for this manifest", "at most 86400 s under the current manifest", beat(self.m1, 900, lifetime=hb.MAX_LIFETIME * 2)),
                 ("expired", "EXPIRED", beat(self.m1, 900, issued=T0 - 2 * hb.MAX_LIFETIME)),
                 ("from the future", "issued in the future", beat(self.m1, 900, issued=self.now + 3600)),
                 ("a jump", "exceeds the bound 1000: anomaly", beat(self.m1, 5000))):
@@ -555,7 +569,7 @@ class OnSwtpm(unittest.TestCase):
         self.counter.define()
         self.now = T0 + 60
         self.state = self.d + "/freshness.json"
-        self.f = hb.Freshness(self.counter, lambda: (self.now, True), hb.TpmClock(tcti=self.tcti), self.state)
+        self.f = hb.Freshness(self.counter, lambda: (self.now, True), simulated_ticks(self, self.tcti), self.state)
         self.m1 = manifest()
 
     def refused(self, reason, fn, *args):
@@ -603,7 +617,12 @@ class OnSwtpm(unittest.TestCase):
         time.sleep(0.3)
         self.assertGreater(clock(), first)
         self.f.accept(beat(self.m1, 1), self.m1)
+        # the real TPM clock behind the floor (the other tests simulate it: see simulated_ticks)
+        real = hb.Freshness(self.counter, lambda: (self.now, True), clock, self.d + "/real-clock.json")
+        real.accept(beat(self.m1, 2), self.m1)
+        self.assertGreater(real.check(self.m1), 0)
         self.now -= 3600
+        self.refused("the clock went backwards", real.check, self.m1)
         self.refused("the clock went backwards", self.f.check, self.m1)
         self.refused("the TPM clock cannot be read", hb.TpmClock(tcti="swtpm:path=" + self.d + "/absent"))
         self.refused("fail closed", hb.Counter("0x1500018", lock_path=self.d + "/lock", tcti="swtpm:path=" + self.d + "/absent").value)

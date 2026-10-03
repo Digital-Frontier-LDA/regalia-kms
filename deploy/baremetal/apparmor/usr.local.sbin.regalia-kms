@@ -95,6 +95,16 @@ profile regalia-kms {
   /run/regalia-kms/ r,
   /run/regalia-kms/*.json r,
 
+  # ---- runtime admission (regalia-kms#74) ----
+  # runtime_admission_path: written by the root lease service (deploy/baremetal/admission.py), read
+  # here; boot_session_path: this boot's attested session, written once by the bootstrap. The
+  # directory is examined too (it must be root's alone), and the kernel's boot ID ties the file's
+  # CLOCK_BOOTTIME values to this boot.            internal/admission/admission.go readTrusted, KernelBootID
+  /run/regalia/ r,
+  /run/regalia/admission.json r,
+  /run/regalia/boot-session r,
+  @{PROC}/sys/kernel/random/boot_id r,
+
   # ---- the token: PKCS#11 over PC/SC ----
   # pkcs11_module_path, dlopen()ed.  internal/backend/nitrokey/pkcs11_driver.go, probes.go
   /usr/lib/opensc-pkcs11.so mr,
@@ -128,6 +138,10 @@ profile regalia-kms {
   # for real denials.
   owner @{PROC}/@{pid}/cgroup r,
   owner @{PROC}/@{pid}/mountinfo r,
+  # When this process started (admission.ProcessStart): the moment a runtime lease must have been
+  # asked for since, which the lease service reads for the same PID. Refused, the daemon dates it
+  # from "now" and waits for the next scheduled renewal.
+  owner @{PROC}/@{pid}/stat r,
   @{sys}/fs/cgroup/**/cpu.max r,
 
   # ---- stated refusals: denied by default already, written down so that no later rule or
@@ -138,5 +152,7 @@ profile regalia-kms {
   # Nor reads a sealed blob, nor changes its own configuration or binary.
   audit deny /etc/credstore.encrypted/** rwklx,
   audit deny /etc/regalia-kms/** wkl,
+  # Nor writes its own admission: only the root lease service says whether this node may serve.
+  audit deny /run/regalia/** wkl,
   audit deny /usr/local/sbin/** wkl,
 }

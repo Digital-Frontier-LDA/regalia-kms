@@ -1,0 +1,55 @@
+# The service tunnel (wg-svc) and the unlock tunnel (wg-unlock), made what the CURRENT manifest says and
+# read back from the kernel (deploy/baremetal/wgsvc.py, bootnet.py). A oneshot: at boot, and again each
+# time regalia-sync publishes a new chain (regalia-wg-apply.path). It reads the published chain and
+# verifies it itself against the root key and the TPM anchor. It holds CAP_NET_ADMIN, and nothing that
+# parses what a peer sends ever runs here.
+[Unit]
+Description=Regalia KMS: the WireGuard tunnels, from the manifest
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=network-online.target
+Wants=network-online.target
+
+# Triggered by a file regalia-sync writes: a burst of triggers must not stop the path unit (every run
+# re-verifies the chain, so running again is harmless).
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip, tpm2_*, chronyc and openssl are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json wg-apply
+User=root
+# the TPM (the anchor the published chain is checked against) is the tss group's: root without
+# CAP_DAC_OVERRIDE is held to file modes like anyone
+SupplementaryGroups=tss
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+# it configures the network and sends nothing on it
+IPAddressDeny=any
+# a run that hangs (a TPM call that does not return) must not absorb every later trigger
+TimeoutStartSec=60
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

@@ -201,7 +201,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Refuse a FIDO retirement that would leave an account without continuity.",
     )
-    # POSITIONAL, matching `python3 -m tools.custody_manifest <manifest>`. An operator who has
+    # POSITIONAL, matching `python3 -Es -m tools.custody_manifest <manifest>`. An operator who has
     # run one of these has run the other, and a second calling convention for the same artifact is
     # a paper cut every single time.
     parser.add_argument("manifest", help="path to the custody manifest")

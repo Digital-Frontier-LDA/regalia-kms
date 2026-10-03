@@ -4,7 +4,7 @@ the REAL daemon, serving from a REAL Nitrokey, loses its host state and gets it 
 control-plane export.
 
     REGALIA_CEREMONY_DIR=… HSM_STAGING_REGISTRY_FILE=… CARD_PIN=… \
-      python3 e2e/control-plane-restore-drill.py --serial DENK0404380 --object-id 10 --workdir /build/cpdrill
+      python3 -Es e2e/control-plane-restore-drill.py --serial DENK0404380 --object-id 10 --workdir /build/cpdrill
 
 Sequence:
   1 seal     an envelope to the card's KEK (TestEnvelopeSurvivesTokenWipeAndDKEKRestore, phase seal)
@@ -255,7 +255,9 @@ def main():
         # off-host copy), so the drill runs the real collector: the OFF-HOST memory of what was shipped.
         "audit_sink_url": f"https://127.0.0.1:{args.port + 1}",
         "fencing_lease_path": str(etc / "lease.json"), "fencing_state_path": str(state / "epochs.jsonl"),
-        "fencing_public_key_path": str(etc / "fence.pub")})
+        "fencing_public_key_path": str(etc / "fence.pub"),
+        # A drill host runs no lease service; with a token configured the daemon requires this to be said.
+        "runtime_admission": "disabled-for-lab"})
     check = run([str(binary), "-config", str(config), "-check-config"], env=env, check=False)
     if check.returncode != 0:
         die(f"-check-config refused the bench config: {(check.stderr or check.stdout).strip()[-900:]}")

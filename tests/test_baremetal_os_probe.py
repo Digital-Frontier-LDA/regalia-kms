@@ -2,6 +2,10 @@
 unprivileged service) and the pcscd client check, against a fake host. Moved here with the probes from
 the Proxmox guest probe, since removed (ADR-0002 D22, #55)."""
 import configparser
+import hashlib
+import json
+import os
+import pathlib
 import unittest
 from pathlib import Path
 
@@ -24,6 +28,27 @@ ROOT = Path(__file__).resolve().parents[1]
 SANDBOX_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", ",".join(os_probe.SANDBOX_PROPERTIES) + ",LoadState")
 CAPS_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "CapabilityBoundingSet,AmbientCapabilities,LoadState")
 PID_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "MainPID")
+EXEC_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "ExecStart,LoadState")
+CONFIG = "/etc/regalia-kms/config.json"
+ADMISSION = {"listen_address": "0.0.0.0:8443", "runtime_admission": "required", "runtime_admission_path": "/run/regalia/admission.json",
+             "node_id": "site-a", "boot_session_path": "/run/regalia/boot-session"}
+
+
+RULE_STAT = ("stat", "-c", "%u %a", os_probe.PCSCD_RULE_PATH)
+MAINPID_VALUE = ("systemctl", "show", os_probe.SERVICE, "-p", "MainPID", "--value")
+SHIPPED_PCSCD_RULE = (Path(__file__).resolve().parent.parent / "deploy/polkit/50-regalia-kms-pcscd.rules").read_text()
+# Debian's own rule file (polkitd 126): who is an administrator. It grants nothing by itself. The
+# probe knows the distribution's files by digest; this stand-in's digest is put in its place below.
+DEBIAN_DEFAULT_RULE = 'polkit.addAdminRule(function(action, subject) {\n    return ["unix-group:sudo"];\n});\n'
+REAL_KNOWN_RULES_FILES = dict(os_probe.KNOWN_RULES_FILES)
+os_probe.KNOWN_RULES_FILES["/usr/share/polkit-1/rules.d/50-default.rules"] = hashlib.sha256(DEBIAN_DEFAULT_RULE.encode()).hexdigest()
+
+
+def exec_start(arguments="-config " + CONFIG, load="loaded"):
+    """What `systemctl show -p ExecStart,LoadState` prints for the shipped unit (systemd 257)."""
+    binary = "/usr/local/sbin/regalia-kms"
+    return ("ExecStart={ path=%s ; argv[]=%s %s ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; "
+            "code=(null) ; status=0/0 }\nLoadState=%s\n" % (binary, binary, arguments, load))
 # What `systemctl show` prints for a unit that sets none of this (measured, systemd 257).
 UNSET_BOUNDING_SET = ("cap_chown cap_dac_override cap_dac_read_search cap_fowner cap_fsetid cap_kill cap_setgid "
                       "cap_setuid cap_setpcap cap_linux_immutable cap_net_bind_service cap_net_broadcast cap_net_admin "
@@ -65,7 +90,13 @@ class FakeHost:
             "/sys/module/apparmor/parameters/enabled": "Y\n",
             "/proc/20/status": proc_status(),
             "/proc/20/attr/apparmor/current": "regalia-kms (enforce)\n",
+            CONFIG: json.dumps(ADMISSION),
+            os_probe.PCSCD_RULE_PATH: SHIPPED_PCSCD_RULE,
+            "/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE,
         }
+        self.dirs = {"/etc/polkit-1/rules.d": ["50-regalia-kms-pcscd.rules"], "/usr/share/polkit-1/rules.d": ["50-default.rules"],
+                     "/run/polkit-1/rules.d": [], "/usr/local/share/polkit-1/rules.d": []}
+        self.unlistable = set()
         self.commands = {
             ("systemctl", "show", os_probe.SERVICE, "-p", "LimitCORE,LoadState"): "LimitCORE=0\nLoadState=loaded\n",
             ("systemctl", "show", os_probe.SERVICE, "-p", "User,NoNewPrivileges,LoadState"):
@@ -73,6 +104,11 @@ class FakeHost:
             SANDBOX_SHOW: hardened_sandbox(),
             CAPS_SHOW: show(CapabilityBoundingSet="", AmbientCapabilities="", LoadState="loaded"),
             PID_SHOW: "MainPID=20\n",
+            RULE_STAT: "0 644\n",
+            MAINPID_VALUE: "20\n",
+            ("pkcheck", "--action-id", "org.debian.pcsc-lite.access_pcsc", "--process", "20"): "",
+            ("pkcheck", "--action-id", "org.debian.pcsc-lite.access_card", "--process", "20"): "",
+            EXEC_SHOW: exec_start(),
             ("systemd-analyze", "cat-config", "systemd/coredump.conf"): "[Coredump]\n#Storage=external\nStorage=none\n",
             ("systemd-analyze", "cat-config", "systemd/sleep.conf"): "[Sleep]\n",
             # The real layout (measured with pcsc_scan): the server endpoint carries the socket path,
@@ -80,6 +116,11 @@ class FakeHost:
             ("ss", "-xpn"): 'u_str ESTAB 0 0 /run/pcscd/pcscd.comm 111 * 222 users:(("pcscd",pid=10,fd=5))\n'
                             'u_str ESTAB 0 0 * 222 * 111 users:(("regalia-kms",pid=20,fd=9))\n',
         }
+        for directory in os_probe.POLKIT_RULE_DIRECTORIES:
+            self.commands[("test", "-d", directory)] = ""
+            self.commands[("test", "-e", directory)] = ""
+            self.commands[("stat", "-L", "-c", "%u %a", directory)] = "0 755\n"
+            self.commands[("stat", "-L", "-c", "%u %a", os.path.dirname(directory))] = "0 755\n"
         self.links = {"/proc/20/exe": "/usr/local/sbin/regalia-kms", "/proc/10/exe": "/usr/sbin/pcscd"}
         for target in os_probe.HIBERNATING_TARGETS:
             self.commands[("systemctl", "is-enabled", target)] = "masked\n"
@@ -89,9 +130,15 @@ class FakeHost:
         return self.files.get(path)
 
     def listdir(self, path):
-        return []
+        return list(self.dirs.get(path, []))
+
+    def read_bytes(self, path):
+        text = self.files.get(path)
+        return None if text is None else text.encode()
 
     def run(self, argv):
+        if argv[:2] == ["find", "-H"] and argv[2] in self.dirs and argv[2] not in self.unlistable:
+            return 0, "".join(name + "\n" for name in self.dirs[argv[2]] if name.endswith(".rules"))
         out = self.commands.get(tuple(argv))
         return (0, out) if out is not None else (1, "")
 
@@ -247,6 +294,70 @@ class OSProbeTests(unittest.TestCase):
                     # And nothing here touches the host-role controls measured beside them.
                     self.assertTrue(all(v["value"] for k, v in measure(host).items() if k not in SANDBOX))
 
+    def test_the_daemon_s_own_configuration_must_require_a_runtime_lease(self):
+        """kms_runtime_admission_required reads the file the unit starts the daemon with (#74)."""
+        results = measure(FakeHost())
+        self.assertTrue(results["kms_runtime_admission_required"]["value"])
+        self.assertIn("runtime_admission required, node site-a, admission file /run/regalia/admission.json",
+                      results["kms_runtime_admission_required"]["why"])
+
+        def config(**changed):
+            document = dict(ADMISSION)
+            for key, value in changed.items():
+                if value is None:
+                    document.pop(key)
+                else:
+                    document[key] = value
+            return lambda g: g.files.__setitem__(CONFIG, json.dumps(document))
+
+        def started(arguments, load="loaded"):
+            return lambda g: g.commands.__setitem__(EXEC_SHOW, exec_start(arguments, load))
+        cases = (
+            ("the lab value", 'says runtime_admission "disabled-for-lab": this daemon serves with no runtime lease', config(runtime_admission="disabled-for-lab")),
+            ("the setting left out", "does not state runtime_admission \"required\" (it says None)", config(runtime_admission=None)),
+            ("another word", "does not state runtime_admission \"required\" (it says 'optional')", config(runtime_admission="optional")),
+            ("true instead of the word", "does not state runtime_admission \"required\" (it says True)", config(runtime_admission=True)),
+            ("no admission file", "requires runtime admission but lacks runtime_admission_path", config(runtime_admission_path=None)),
+            ("an empty node ID", "requires runtime admission but lacks node_id", config(node_id="")),
+            ("no boot session file", "requires runtime admission but lacks boot_session_path", config(boot_session_path=None)),
+            ("a node ID that is not text", "requires runtime admission but lacks node_id", config(node_id=7)),
+            ("a configuration that cannot be read", "cannot read the daemon's configuration " + CONFIG, lambda g: g.files.pop(CONFIG)),
+            ("not JSON", CONFIG + " is not valid JSON", lambda g: g.files.__setitem__(CONFIG, "{")),
+            ("not an object", CONFIG + " is not a JSON object", lambda g: g.files.__setitem__(CONFIG, "[]")),
+            ("no -config", "is not started with exactly one absolute -config file", started("-listen 127.0.0.1:8443")),
+            ("a relative -config", "is not started with exactly one absolute -config file", started("-config config.json")),
+            ("two -config", "is not started with exactly one absolute -config file", started("-config /etc/a.json -config " + CONFIG)),
+            ("-config last, with no value", "is not started with exactly one absolute -config file", started("-check-config -config")),
+            ("the unit not loaded", "regalia-kms.service is not loaded", started("-config " + CONFIG, "not-found")),
+            ("systemctl answers nothing", "regalia-kms.service is not loaded", lambda g: g.commands.pop(EXEC_SHOW)),
+            ("another file than the one the unit names", "cannot read the daemon's configuration /etc/other.json", started("-config /etc/other.json")),
+        )
+        for label, reason, breaker in cases:
+            with self.subTest(label):
+                host = FakeHost()
+                breaker(host)
+                results = measure(host)
+                self.assertFalse(results["kms_runtime_admission_required"]["value"])
+                self.assertIn(reason, results["kms_runtime_admission_required"]["why"])
+                # The other control read from that same file: where the file cannot be read at all, it
+                # fails for the same reason (what the daemon is started with is unknown, so nothing can
+                # be said about its token backends); where the file is readable and only its admission
+                # setting is wrong, it is not affected.
+                from_the_config = ("kms_runtime_admission_required", "kms_opensc_leaves_piv_cards")
+                opensc = results["kms_opensc_leaves_piv_cards"]
+                self.assertEqual(opensc["value"], reason not in opensc["why"], opensc["why"])
+                self.assertTrue(all(v["value"] for k, v in results.items() if k not in from_the_config))
+        # the other spellings of the flag are read too, and it is the file the unit names that counts
+        for arguments in ("--config " + CONFIG, "-config=" + CONFIG, "--config=" + CONFIG, "-listen 0.0.0.0:8443 -config " + CONFIG):
+            with self.subTest(arguments=arguments):
+                host = FakeHost()
+                host.commands[EXEC_SHOW] = exec_start(arguments)
+                self.assertTrue(measure(host)["kms_runtime_admission_required"]["value"])
+        host = FakeHost()
+        host.files["/etc/other.json"] = json.dumps(dict(ADMISSION, runtime_admission="disabled-for-lab"))
+        host.commands[EXEC_SHOW] = exec_start("-config /etc/other.json")
+        self.assertFalse(measure(host)["kms_runtime_admission_required"]["value"])
+
     def test_a_stopped_service_cannot_prove_its_capabilities_or_its_confinement(self):
         for pid in ("MainPID=0\n", "MainPID=\n", ""):
             with self.subTest(pid=pid):
@@ -308,6 +419,258 @@ class OSProbeTests(unittest.TestCase):
                 host = FakeHost()
                 breaker(host)
                 self.assertFalse(os_probe.pcscd_clients(host)[0])
+
+
+ENV_SHOW = ("systemctl", "show", os_probe.SERVICE, "-p", "Environment,EnvironmentFiles")
+OPENSC = "/etc/regalia-kms/opensc.conf"
+BOTH_TOKENS = dict(ADMISSION, pkcs11_module_path="/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so", yubikey_devices={"yubikey-site-a": "35718625"})
+IGNORE_YUBIKEY = (pathlib.Path(__file__).resolve().parent.parent / "deploy/opensc/ignore-yubikey.conf").read_text()
+
+
+class OpenSCLeavesThePIVCards(unittest.TestCase):
+    """kms_opensc_leaves_piv_cards: a daemon with a PKCS#11 module AND YubiKey PIV devices is started with
+    an OpenSC configuration that ignores the YubiKey's reader (regalia#541)."""
+
+    control = "kms_opensc_leaves_piv_cards"
+
+    def host(self, config=BOTH_TOKENS, environment="OPENSC_CONF=" + OPENSC, conf=IGNORE_YUBIKEY, environment_files=""):
+        host = FakeHost()
+        host.files[CONFIG] = json.dumps(config)
+        if environment is not None:
+            host.commands[ENV_SHOW] = "Environment=%s\nEnvironmentFiles=%s\n" % (environment, environment_files)
+        if conf is not None:
+            host.files[OPENSC] = conf
+        return host
+
+    def verdict(self, host):
+        result = measure(host)[self.control]
+        return result["value"], result["why"]
+
+    def test_the_shipped_unit_and_the_shipped_configuration_pass(self):
+        unit = (pathlib.Path(__file__).resolve().parent.parent / "deploy/systemd/regalia-kms.service").read_text()
+        stated = [line.split("=", 1)[1] for line in unit.splitlines() if line.startswith("Environment=")]
+        self.assertEqual(stated, ["OPENSC_CONF=" + OPENSC], "the shipped unit must name the daemon's own OpenSC configuration")
+        value, why = self.verdict(self.host(environment=" ".join(stated)))
+        self.assertTrue(value, why)
+        self.assertIn("ignored_readers 'Yubico'", why)
+        # and nothing else on the host is disturbed by the measurement
+        self.assertTrue(all(v["value"] for v in measure(self.host()).values()))
+
+    def test_one_backend_or_none_has_nothing_to_keep_apart(self):
+        for name, config in {"neither": ADMISSION,
+                             "only the module": dict(ADMISSION, pkcs11_module_path="/usr/lib/opensc-pkcs11.so"),
+                             "only the cards": dict(ADMISSION, yubikey_devices={"yubikey-site-a": "35718625"}),
+                             "an empty device map": dict(BOTH_TOKENS, yubikey_devices={}),
+                             "an empty module path": dict(BOTH_TOKENS, pkcs11_module_path="")}.items():
+            with self.subTest(name):
+                value, why = self.verdict(self.host(config=config, environment=None, conf=None))
+                self.assertTrue(value, why)
+                self.assertIn("nothing to keep apart", why)
+
+    def test_both_backends_need_the_unit_to_name_a_configuration_that_ignores_the_yubikey(self):
+        broken = {
+            "the unit sets no Environment": (dict(environment=None), "does not set OPENSC_CONF"),
+            "the unit sets another variable only": (dict(environment="SOFTHSM2_CONF=/etc/softhsm2.conf"), "does not set OPENSC_CONF"),
+            "OPENSC_CONF is not absolute": (dict(environment="OPENSC_CONF=opensc.conf"), "does not set OPENSC_CONF"),
+            "the named file is missing": (dict(conf=None), "cannot read the OpenSC configuration " + OPENSC),
+            "the file ignores nothing": (dict(conf="app default {\n}\n"), "no ignored_readers entry"),
+            "the line is commented out": (dict(conf='app default {\n  # ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "it ignores another reader": (dict(conf='app default {\n  ignored_readers = "ACS ACR40U";\n}\n'), "no ignored_readers entry"),
+            "an empty entry matches nothing": (dict(conf='app default {\n  ignored_readers = "";\n}\n'), "no ignored_readers entry"),
+            "the applet configuration, which asks OpenSC to drive the card": (dict(conf=(
+                pathlib.Path(__file__).resolve().parent.parent / "deploy/opensc/yubikey-openpgp.conf").read_text()), "no ignored_readers entry"),
+            # where OpenSC would not apply the line
+            "the line is in another application's block": (dict(conf='app opensc-tool {\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "the line is at the top level": (dict(conf='ignored_readers = "Yubico";\napp default {\n}\n'), "no ignored_readers entry"),
+            "the line is in a nested block": (dict(conf='app default {\n  reader_driver pcsc {\n    ignored_readers = "Yubico";\n  }\n}\n'), "no ignored_readers entry"),
+            "an opensc-pkcs11 block exists and the line is only in default": (dict(
+                conf='app opensc-pkcs11 {\n  pkcs11 {\n    max_virtual_slots = 32;\n  }\n}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "a second statement in the block, where the first names another reader": (dict(
+                conf='app default {\n  ignored_readers = "ACS";\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "a # inside a comment hides the rest of the line": (dict(conf='app default {\n  debug = 0; # ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            # entries that would take the HSM's reader too
+            "an entry that matches every reader": (dict(conf='app default {\n  ignored_readers = " ";\n}\n'), "no ignored_readers entry"),
+            "a single letter": (dict(conf='app default {\n  ignored_readers = "i";\n}\n'), "no ignored_readers entry"),
+            "a second app default block has it, the first does not": (dict(
+                conf='app default {\n}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "no ignored_readers entry"),
+            "the app block is inside another block": (dict(
+                conf='reader_driver pcsc {\n  app default {\n    ignored_readers = "Yubico";\n  }\n}\n'), "no ignored_readers entry"),
+            "a backslash before the name": (dict(conf='app default {\n  ignored_readers = "\\Yubico";\n}\n'), "no ignored_readers entry"),
+            # what OpenSC might not parse proves nothing
+            "a missing semicolon swallows the next statement": (dict(
+                conf='app default {\n  ignored_readers = "ACS"\n  foo = "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "braces round the value": (dict(conf='app default {\n  ignored_readers = { "Yubico" };\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a block that is not closed": (dict(conf='app default {\n  ignored_readers = "Yubico";\n'), "cannot be read as an OpenSC configuration"),
+            "a } that closes nothing, after": (dict(conf='app default {\n  ignored_readers = "Yubico";\n}\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a } that closes nothing, before": (dict(conf='}\napp default {\n  ignored_readers = "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "two values with no comma": (dict(conf='app default {\n  ignored_readers = "ACS" "Yubico";\n}\n'), "cannot be read as an OpenSC configuration"),
+            "a list ending in a comma": (dict(conf='app default {\n  ignored_readers = "Yubico",;\n}\n'), "cannot be read as an OpenSC configuration"),
+            # what cannot be read
+            "a string that never ends": (dict(conf='app default {\n  ignored_readers = "Yubico;\n}\n'), "cannot be read as an OpenSC configuration"),
+            "the unit has an EnvironmentFile": (dict(environment_files="/etc/default/regalia-kms (ignore_errors=no)"), "has an EnvironmentFile"),
+            "the Environment cannot be parsed": (dict(environment='OPENSC_CONF="/etc/regalia-kms/opensc.conf'), "cannot read the Environment"),
+            "OPENSC_CONF is set twice and the last one is not a path": (dict(environment="OPENSC_CONF=" + OPENSC + " OPENSC_CONF=relative.conf"), "does not set OPENSC_CONF"),
+        }
+        for name, (change, reason) in broken.items():
+            with self.subTest(name):
+                host = self.host(**change)
+                value, why = self.verdict(host)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
+                self.assertTrue(all(v["value"] for k, v in measure(host).items() if k != self.control))
+
+    def test_an_entry_counts_when_openSC_would_match_it_against_the_reader_name(self):
+        for entry in ("Yubico", "YubiKey", "Yubico YubiKey", "Yubi"):
+            with self.subTest(entry):
+                value, why = self.verdict(self.host(conf='app default {\n  ignored_readers = "ACS", "%s";\n}\n' % entry))
+                self.assertTrue(value, why)
+
+    def test_the_configuration_is_read_as_openSC_reads_it(self):
+        accepted = {
+            "a list over several lines": 'app default {\n  ignored_readers = "ACS",\n    "Yubico";\n}\n',
+            "a block on one line": 'app default { ignored_readers = "Yubico"; }\n',
+            "after another statement on the line": 'app default {\n  debug = 0; ignored_readers = "Yubico";\n}\n',
+            "an unquoted value": 'app default {\n  ignored_readers = Yubico;\n}\n',
+            "a # inside an earlier string": 'app default {\n  ignored_readers = "A#1", "Yubico";\n}\n',
+            "in the opensc-pkcs11 block, which is the one preferred": 'app default {\n}\napp opensc-pkcs11 {\n  ignored_readers = "Yubico";\n}\n',
+            "the first of two app default blocks has it": 'app default {\n  ignored_readers = "Yubico";\n}\napp default {\n}\n',
+            "the application name quoted": 'app "default" {\n  ignored_readers = "Yubico";\n}\n',
+            "no space before the brace, CRLF line ends": 'app default{\r\n  ignored_readers = "Yubico";\r\n}\r\n',
+            "after a nested block in the same application block": 'app default {\n  reader_driver pcsc {\n    max_send_size = 255;\n  }\n  ignored_readers = "Yubico";\n}\n',
+        }
+        for name, conf in accepted.items():
+            with self.subTest(name):
+                value, why = self.verdict(self.host(conf=conf))
+                self.assertTrue(value, why)
+
+    def test_a_variable_set_twice_counts_as_the_last(self):
+        value, why = self.verdict(self.host(environment="OPENSC_CONF=/etc/other.conf OPENSC_CONF=" + OPENSC))
+        self.assertTrue(value, why)
+
+    def test_a_module_path_of_spaces_is_no_module(self):
+        value, why = self.verdict(self.host(config=dict(BOTH_TOKENS, pkcs11_module_path="  "), environment=None, conf=None))
+        self.assertTrue(value, why)
+        self.assertIn("nothing to keep apart", why)
+
+    def test_a_daemon_configuration_that_cannot_be_read_fails_the_control(self):
+        host = self.host()
+        host.files[CONFIG] = "{"
+        value, why = self.verdict(host)
+        self.assertFalse(value)
+        self.assertIn("not valid JSON", why)
+
+
+
+class OnlyTheKMSReachesPcscd(unittest.TestCase):
+    """kms_pcscd_access_rule: the shipped polkit rule is installed byte for byte and readable by polkitd,
+    nothing else on the host is seen to speak about pcscd or grant first, and polkit admits the running
+    daemon (regalia#541)."""
+
+    control = "kms_pcscd_access_rule"
+
+    def verdict(self, host):
+        result = measure(host)[self.control]
+        return result["value"], result["why"]
+
+    def test_the_probe_s_digests_are_the_shipped_rule_s(self):
+        self.assertEqual(hashlib.sha256(SHIPPED_PCSCD_RULE.encode()).hexdigest(), os_probe.PCSCD_RULE_SHA256,
+                         "deploy/polkit/50-regalia-kms-pcscd.rules changed: update os_probe.PCSCD_RULE_SHA256")
+        bench = SHIPPED_PCSCD_RULE.replace("var ONLY_THE_KMS = true;", "var ONLY_THE_KMS = false;")
+        self.assertNotEqual(bench, SHIPPED_PCSCD_RULE, "the shipped rule must have the setting to switch")
+        self.assertEqual(hashlib.sha256(bench.encode()).hexdigest(), os_probe.PCSCD_RULE_BENCH_SHA256)
+        # The setting is inside a function: another rules file, sharing the context, cannot reach it.
+        self.assertTrue(SHIPPED_PCSCD_RULE.split("(function () {", 1)[0].count("ONLY_THE_KMS =") == 1
+                        and "(function () {\n    var ONLY_THE_KMS = true;" in SHIPPED_PCSCD_RULE)
+
+    def test_the_shipped_rule_installed_as_shipped_passes(self):
+        value, why = self.verdict(FakeHost())
+        self.assertTrue(value, why)
+        self.assertIn("polkit authorizes the running KMS (pid 20) for pcscd", why)
+
+    def test_what_fails_it(self):
+        def other(name, text, directory="/etc/polkit-1/rules.d"):
+            def breaker(host):
+                host.dirs.setdefault(directory, []).append(name)
+                if text is not None:
+                    host.files[directory + "/" + name] = text
+            return breaker
+        def installed(text):
+            return lambda h: h.files.update({os_probe.PCSCD_RULE_PATH: text})
+        qubes = 'polkit.addRule(function(action,subject) { if (subject.isInGroup("qubes")) return polkit.Result.YES; });\n'
+        harmless = 'polkit.addRule(function(action, s) { if (action.id == "org.freedesktop.udisks2.filesystem-mount" && s.user == "backup") return polkit.Result.YES; });\n'
+        cases = {
+            "the rule is not installed": (lambda h: h.files.pop(os_probe.PCSCD_RULE_PATH), "missing or unreadable"),
+            "the bench variant, which refuses nobody": (installed(SHIPPED_PCSCD_RULE.replace("ONLY_THE_KMS = true", "ONLY_THE_KMS = false")), "refuses nobody"),
+            "another user is granted": (installed(SHIPPED_PCSCD_RULE.replace('subject.user == "root"', 'subject.user == "operator"')), "byte for byte"),
+            "code after the rule": (installed(SHIPPED_PCSCD_RULE + 'polkit.addRule(function(a, s) { return "yes"; });\n'), "byte for byte"),
+            "code before the rule": (installed("polkit.Result.NO=null;\n" + SHIPPED_PCSCD_RULE), "byte for byte"),
+            "a form feed that turns the refusal into a comment": (installed(SHIPPED_PCSCD_RULE.replace('        return ONLY_THE_KMS', '        //\x0c return ONLY_THE_KMS')), "byte for byte"),
+            "comments changed": (installed(SHIPPED_PCSCD_RULE.replace("// pcscd access", "// PCSCD access")), "byte for byte"),
+            "an empty file": (installed(""), "byte for byte"),
+            "the file is another user's": (lambda h: h.commands.update({RULE_STAT: "1000 644\n"}), "not root's alone to change"),
+            "the file is group-writable": (lambda h: h.commands.update({RULE_STAT: "0 664\n"}), "not root's alone to change"),
+            "the file is world-writable": (lambda h: h.commands.update({RULE_STAT: "0 646\n"}), "not root's alone to change"),
+            "the file cannot be stat'ed": (lambda h: h.commands.pop(RULE_STAT), "not root's alone to change"),
+            "stat prints something else": (lambda h: h.commands.update({RULE_STAT: "0 644 extra\n"}), "not root's alone to change"),
+            "root-only (polkitd would not load it)": (lambda h: h.commands.update({RULE_STAT: "0 600\n"}), "not readable by others"),
+            "root and group only": (lambda h: h.commands.update({RULE_STAT: "0 640\n"}), "not readable by others"),
+            # Any other rules file is refused by name, whatever it says: the bypasses an independent
+            # read found in a word list, and a file that is harmless, alike.
+            "a group allowed everything, as Qubes ships": (other("00-qubes-allow-all.rules", qubes), "not known to need"),
+            "results rewritten without spaces": (other("60-x.rules", "polkit.Result.NO=null;\n"), "not known to need"),
+            "results rewritten by index": (other("60-x.rules", 'polkit.Result["NO"] = null;\n'), "not known to need"),
+            "results rewritten by defineProperty": (other("60-x.rules", "Object.defineProperty(polkit.Result, 'NO', {value: null});\n"), "not known to need"),
+            "the rule runner replaced": (other("60-x.rules", 'polkit._runRules = function(a,s){ return "y"+"es"; };\n'), "not known to need"),
+            "a grant exempted by an unrelated action.id": (other("10-x.rules", 'if (action.id == "org.foo.bar") {} if (subject.isInGroup("sudo")) return polkit.Result.YES;\n'), "not known to need"),
+            "a grant spelled in pieces": (other("10-x.rules", 'polkit.addRule(function(a, s) { return "y" + "es"; });\n'), "not known to need"),
+            "spawn spelled differently": (other("10-x.rules", 'polkit.addRule(function(a, s) { return polkit["spawn"](["/bin/x"]); });\n'), "not known to need"),
+            "a harmless rule for another action": (other("10-backup.rules", harmless), "not known to need"),
+            "the same in the distribution's directory": (other("00-allow.rules", qubes, "/usr/share/polkit-1/rules.d"), "not known to need"),
+            "the same in /usr/local": (other("00-allow.rules", qubes, "/usr/local/share/polkit-1/rules.d"), "not known to need"),
+            "the same in /run": (other("00-allow.rules", qubes, "/run/polkit-1/rules.d"), "not known to need"),
+            "a file of the same name in another directory": (other("50-regalia-kms-pcscd.rules", SHIPPED_PCSCD_RULE, "/usr/share/polkit-1/rules.d"), "not known to need"),
+            "the distribution's file, changed": (lambda h: h.files.update({"/usr/share/polkit-1/rules.d/50-default.rules": DEBIAN_DEFAULT_RULE + qubes}), "digest differs"),
+            "the distribution's file, unreadable": (lambda h: h.files.pop("/usr/share/polkit-1/rules.d/50-default.rules"), "cannot be read"),
+            "a rules directory that cannot be listed": (lambda h: h.unlistable.add("/usr/share/polkit-1/rules.d"), "cannot be listed"),
+            "a rules directory another user can change": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/usr/share/polkit-1/rules.d"): "0 777\n"}), "not root's alone to change"),
+            "an EMPTY rules directory anyone can write": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/usr/local/share/polkit-1/rules.d"): "1000 777\n"}), "not root's alone to change"),
+            "the parent of a rules directory anyone can write": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/run/polkit-1"): "0 777\n"}), "not root's alone to change"),
+            "a rules directory that is not root's": (lambda h: h.commands.update({("stat", "-L", "-c", "%u %a", "/etc/polkit-1/rules.d"): "1000 755\n"}), "not root's alone to change"),
+            "the daemon is not running": (lambda h: h.commands.update({MAINPID_VALUE: "0\n"}), "is not running"),
+            "polkit refuses the daemon access_pcsc": (lambda h: h.commands.pop(("pkcheck", "--action-id", "org.debian.pcsc-lite.access_pcsc", "--process", "20")), "does not authorize the running KMS"),
+            "polkit refuses the daemon access_card": (lambda h: h.commands.pop(("pkcheck", "--action-id", "org.debian.pcsc-lite.access_card", "--process", "20")), "does not authorize the running KMS"),
+        }
+        for name, (breaker, reason) in cases.items():
+            with self.subTest(name):
+                host = FakeHost()
+                breaker(host)
+                value, why = self.verdict(host)
+                self.assertFalse(value, why)
+                self.assertIn(reason, why)
+                self.assertTrue(all(v["value"] for k, v in measure(host).items() if k != self.control))
+
+    def test_a_rules_directory_that_does_not_exist_needs_no_stat(self):
+        host = FakeHost()
+        for key in (("test", "-d", "/run/polkit-1/rules.d"), ("test", "-e", "/run/polkit-1/rules.d"),
+                    ("stat", "-L", "-c", "%u %a", "/run/polkit-1/rules.d"), ("stat", "-L", "-c", "%u %a", "/run/polkit-1")):
+            host.commands.pop(key)
+        host.dirs.pop("/run/polkit-1/rules.d")
+        value, why = self.verdict(host)
+        self.assertTrue(value, why)
+        self.assertIn("the only other rules files are the distribution's", why)
+
+    def test_the_known_digests_are_this_machine_s_files_where_it_has_them(self):
+        """The digests were measured on Debian 13; where this machine has the files, they must agree."""
+        checked = 0
+        for path, digest in REAL_KNOWN_RULES_FILES.items():
+            try:
+                data = Path(path).read_bytes()
+            except OSError:
+                continue
+            checked += 1
+            self.assertEqual(hashlib.sha256(data).hexdigest(), digest, f"{path} on this machine is not the file the probe knows")
+        if not checked:
+            self.skipTest("no distribution polkit rules file is readable here")
 
 
 if __name__ == "__main__":

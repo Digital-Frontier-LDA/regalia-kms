@@ -175,20 +175,20 @@ yes "control: the signed kernel, PCR 7 and phase as sealed, opens again" --tpm2-
 # A TPM in dictionary-attack lockout refuses everything, which would make every refusal above pass
 # for the wrong reason (it did, until stop() shut the TPM down in order: three killed swtpms = three
 # failed tries = lockout, at swtpm's default limit of 3).
-tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' <<< "$(tpm2_getcap properties-variable 2>/dev/null)" \
   && P "the TPM's lockout counter is still 0: no refusal above was a lockout" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 hdr "6  host_probe reads the binding from the blob, and a header that lies does not open"
 # deploy/baremetal/host_probe.py (pin_credentials_sealed_as_recorded) reads what a blob is sealed to
 # from its header. Here on the blob the script installed, not on a fixture.
-header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -c 'import sys
+header="$(sudo cat "$BLOB" | python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1)); import sys
 from deploy.baremetal import host_probe
 direct, signed, pkfp = host_probe.credential_header(sys.stdin.read())
-print("+".join(map(str, direct)), "+".join(map(str, signed)), pkfp)')"
+print("+".join(map(str, direct)), "+".join(map(str, signed)), pkfp)' "$HERE")"
 [ "$header" = "7 11 $fp" ] && P "the installed blob's header: PCR 7 direct, PCR 11 signed, by the key in the record" || F "host_probe read '$header', want '7 11 $fp'"
 # The header is only worth reading if systemd refuses a blob whose header was edited: drop PCR 7 from
 # the direct mask (offset 48), then drop PCR 11 from the signed mask, and try to open each.
-sudo cat "$BLOB" | python3 -c 'import base64, struct, sys
+sudo cat "$BLOB" | python3 -I -c 'import base64, struct, sys
 raw = bytearray(base64.b64decode(sys.stdin.read()))
 at = (32 + struct.unpack_from("<I", raw, 24)[0] + 7) & ~7
 mask, _, _, blob, policy = struct.unpack_from("<QHHII", raw, at)
@@ -246,12 +246,12 @@ printf '%s' "$PIN" | sudo systemd-creds encrypt --with-key=tpm2-with-public-key 
   --tpm2-public-key=pcr.pub --tpm2-public-key-pcrs=11 --name=t.pin - "$W/tpm-only.cred" 2>/dev/null
 [ "$(sudo env SYSTEMD_CREDENTIAL_SECRET="$W/absent.secret" systemd-creds decrypt --tpm2-device="$D" --name=t.pin --tpm2-signature=sig1.json "$W/tpm-only.cred" - 2>/dev/null)" = "$PIN" ] \
   && P "a TPM-only credential (the old form) opens on a signed image with NO host key: the gap" || F "the TPM-only control blob did not open"
-refusal="$(sudo cat "$W/tpm-only.cred" | PYTHONPATH="$HERE" python3 -c 'import sys
+refusal="$(sudo cat "$W/tpm-only.cred" | python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1)); import sys
 from deploy.baremetal import host_probe
 try: host_probe.credential_header(sys.stdin.read()); print("accepted")
-except ValueError as e: print(e)')"
+except ValueError as e: print(e)' "$HERE")"
 grep -q "the TPM alone, with no host key" <<< "$refusal" && P "host_probe refuses that credential and says to reseal it" || F "host_probe on a TPM-only blob: $refusal"
-tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' <<< "$(tpm2_getcap properties-variable 2>/dev/null)" \
   && P "the TPM's lockout counter is still 0: no refusal in this section was a lockout" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 hdr "9  no signed policy: --pcrs 7 alone is sealed to the host key and the TPM too"
@@ -266,14 +266,14 @@ plain(){ sudo env SYSTEMD_CREDENTIAL_SECRET="$W/$1" systemd-creds decrypt --tpm2
 for k in other absent; do
   o="$(plain "$k.secret")"; [ $? != 0 ] && [ -z "$o" ] && P "it does not open with $k host key" || F "the unsigned blob opened with $k host key"
 done
-header="$(sudo cat "$BLOB" | PYTHONPATH="$HERE" python3 -c 'import sys
+header="$(sudo cat "$BLOB" | python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1)); import sys
 from deploy.baremetal import host_probe
 direct, signed, pkfp = host_probe.credential_header(sys.stdin.read())
-print("+".join(map(str, direct)), "+".join(map(str, signed)) or "-", pkfp or "-")')"
+print("+".join(map(str, direct)), "+".join(map(str, signed)) or "-", pkfp or "-")' "$HERE")"
 [ "$header" = "7 - -" ] && P "host_probe reads it as PCR 7, no signed policy" || F "host_probe read '$header', want '7 - -'"
 boot 1 another-secure-boot-state
 o="$(plain host.secret)"; [ $? != 0 ] && [ -z "$o" ] && P "under a different PCR 7 it does not open, host key or not" || F "the unsigned blob opened under another PCR 7"
-tpm2_getcap properties-variable 2>/dev/null | grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' \
+grep -q 'TPM2_PT_LOCKOUT_COUNTER: 0x0$' <<< "$(tpm2_getcap properties-variable 2>/dev/null)" \
   && P "the TPM's lockout counter is still 0" || F "the TPM counted failed tries: the refusals above prove nothing"
 
 echo; echo "pcr-signed-policy-swtpm: $pass passed, $fail failed"
