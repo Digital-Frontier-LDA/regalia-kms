@@ -29,6 +29,9 @@ import tests.test_baremetal_unlock as tub
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
+# the guest's card, by an address that is NOT QEMU's default for a first card (52:54:00:12:34:56): the boot
+# passes only if wg-boot finds the card by its address, not by being the first one
+GUEST_MAC = "52:54:00:ab:cd:02"
 # systemd sees the systemd-recovery token in the header and asks for the recovery key by that name, naming
 # the disk by its label when it has one ("for disk regalia-root (root)")
 # ("recovery key" when that is the only kind of keyslot it knows of, "passphrase or recovery key" otherwise)
@@ -73,7 +76,7 @@ class OnQemu(tub.OnSwtpm):
             "client_cidrs": ["198.18.0.0/24"], "monitoring_cidrs": ["198.18.1.1/32"], "admin_cidrs": ["198.18.2.0/28"],
             "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514}, {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
             "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUNNEL[node], "unlock_port": 7443,
-                          "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
+                          "nic_mac": GUEST_MAC, "prefix": 32, "gateway": None,
                           "peers": [{"node_id": p, "underlay": UNDERLAY[p], "address": TUNNEL[p]} for p in "abc" if p != node]},
             "service_mesh": None})
 
@@ -209,7 +212,7 @@ class OnQemu(tub.OnSwtpm):
                 "-drive", "if=pflash,format=raw,unit=0,readonly=on,file=%s/OVMF_CODE_4M.fd" % OVMF,
                 "-drive", "if=pflash,format=raw,unit=1,file=" + variables,
                 "-drive", "file=%s,format=raw,if=virtio" % self.image,
-                "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0,mac=52:54:00:12:34:56",
+                "-netdev", "tap,id=n0,ifname=tap0,script=no,downscript=no", "-device", "virtio-net-pci,netdev=n0,mac=%s" % GUEST_MAC,
                 "-chardev", "socket,id=chrtpm,path=" + ctrl, "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", "tpm-tis,tpmdev=tpm0"]
         if enrol_disk:
             argv += ["-drive", "file=%s,format=raw,if=virtio" % enrol_disk]

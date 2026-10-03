@@ -548,7 +548,9 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
 
   The four unsealed ones are rendered by **`deploy/baremetal/bootcreds.py`**: `render(manifest, site, device)`
   is deterministic (a peer recomputes them, and the PCR 12 they give), and `esp_files(site, envelopes, root_key,
-  device)` is the one call enrolment and the update path make, for a chain it verifies itself (#66). B3 moves
+  device, anchor)` is the one call enrolment and the update path make, for a chain it verifies itself, from the
+  root and against the host's TPM high-water anchor: a stale or forked chain, however well signed, renders
+  nothing (#66). B3 moves
   the three derived from the manifest into the initrd, rendered there from the signed chain, so that a
   membership change does not move PCR 12; esp_files' callers do not change.
 

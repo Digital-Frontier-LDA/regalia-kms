@@ -29,7 +29,9 @@ network_probe.py checks the result from each zone, so the two can never describe
                                                      #   name can differ between the installed system and the initrd
       "prefix": 24,                                  # host_ipv4's prefix length on that card, in the initrd
       "gateway": "192.0.2.1",                        # the initrd's gateway to the peers' underlays, inside that
-                                                     #   prefix; null when they are on the link
+                                                     #   prefix; null: every underlay is on the link (wg-boot
+                                                     #   then routes by default on the card), which this file
+                                                     #   cannot show: network_probe.py checks reachability
       "peers": [                                     # the other nodes: where each is, outside and inside the tunnel
         {"node_id": "porto", "underlay": "198.51.100.7", "address": "10.89.0.2"},
         {"node_id": "faro", "underlay": "198.51.100.9", "address": "10.89.0.3"}

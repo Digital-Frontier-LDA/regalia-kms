@@ -81,6 +81,9 @@ case "${1:-}" in
     done < "$NFT"
     nft -f "$NFT" 2>/dev/null || fail "nft refused regalia.boot-nft"
     [ "$(nft list tables 2>/dev/null)" = "table inet regalia_boot" ] || fail "regalia.boot-nft made other tables than inet regalia_boot"
+    # once more, at the last moment: a bond or a VLAN made over the card since the first look (a driver still
+    # settling) would share its address, and the card would be taken from under it
+    [ "$(nics_of "$BOOT_NIC_MAC")" = "$BOOT_NIC" ] || fail "the interfaces with the address $BOOT_NIC_MAC changed as the mesh came up"
     ip link set "$BOOT_NIC" up
     ip addr add "$BOOT_ADDRESS" dev "$BOOT_NIC"
     if [ -n "${BOOT_GATEWAY:-}" ]; then ip route add default via "$BOOT_GATEWAY" dev "$BOOT_NIC"; else ip route add default dev "$BOOT_NIC"; fi

@@ -3,6 +3,8 @@ manifest and the site config. Deterministic (a peer recomputes them, and from th
 renderers that already exist, and handed out by esp_files only for a chain that verifies."""
 import copy
 import json
+import shutil
+import tempfile
 import unittest
 
 from deploy.baremetal import bootcreds, bootnet, espcreds, sitecfg, unlock
@@ -72,10 +74,22 @@ class EspFiles(unittest.TestCase):
     def setUp(self):
         self.cfg = sitecfg.validate(bn.site())
         self.root = hbt.pub(hbt.ROOT)
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.tpm = hbt.FakeTpm()
+        self.anchor = m.HighWater("0x1500016", run=self.tpm, lock_path=d + "/hw.lock")
+        self.anchor.define()
+
+    def anchor_to(self, envelopes):
+        """This host's TPM anchored through `envelopes`, as Store does after it accepts each."""
+        digests = m.Store._digests([m.accept_chain(None, envelopes[:i], self.root) for i in range(1, len(envelopes) + 1)])
+        for epoch in range(1, len(envelopes) + 1):
+            self.anchor.anchor(epoch, digests)
 
     def test_the_files_of_the_chain_current_manifest_under_loader_credentials(self):
         envelopes = chain(hbt.manifest(), hbt.manifest(c="QUARANTINED"))
-        files = bootcreds.esp_files(self.cfg, envelopes, self.root, DEVICE)
+        self.anchor_to(envelopes)
+        files = bootcreds.esp_files(self.cfg, envelopes, self.root, DEVICE, self.anchor)
         current = m.accept_chain(None, envelopes, self.root)
         self.assertEqual(files, {"loader/credentials/%s.cred" % n: b for n, b in bootcreds.render(current, self.cfg, DEVICE).items()})
         self.assertNotIn("# c", files["loader/credentials/regalia.wg-boot-conf.cred"].decode())        # the current manifest's, not epoch 1's
@@ -97,7 +111,26 @@ class EspFiles(unittest.TestCase):
         for label, (envelopes, root, why) in cases.items():
             with self.subTest(label):
                 with self.assertRaisesRegex(m.Refused, why):
-                    bootcreds.esp_files(self.cfg, envelopes, root, DEVICE)
+                    bootcreds.esp_files(self.cfg, envelopes, root, DEVICE, self.anchor)
+
+    def test_nothing_for_a_validly_signed_chain_the_tpm_did_not_anchor(self):
+        """The writer applies the initrd's rule: a stale chain (a restored disk, a withheld update) would render
+        an older manifest's peers, a node revoked since among them; a fork is a substitution."""
+        # c may authorize at epochs 1 and 2, and is revoked as stolen at 3
+        current = chain(hbt.manifest(), hbt.manifest(a="MAINTENANCE"), hbt.manifest(a="MAINTENANCE", c="REVOKED_STOLEN"))
+        self.anchor_to(current)
+        stale = current[:2]                                   # signed by the root, and c still a peer in it
+        self.assertIn("# c", bootcreds.render(m.accept_chain(None, stale, self.root), self.cfg, DEVICE)["regalia.wg-boot-conf"].decode())
+        with self.assertRaisesRegex(m.Refused, "ROLLBACK: the chain ends at epoch 2 but the TPM high-water is 3"):
+            bootcreds.esp_files(self.cfg, stale, self.root, DEVICE, self.anchor)
+        fork = chain(hbt.manifest(), hbt.manifest(a="MAINTENANCE"), hbt.manifest(a="MAINTENANCE", c="RETIRED"))    # another epoch 3, root-signed
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: the manifest at epoch 3 is not the one this node's TPM recorded"):
+            bootcreds.esp_files(self.cfg, fork, self.root, DEVICE, self.anchor)
+        ahead = chain(hbt.manifest(), hbt.manifest(a="MAINTENANCE"), hbt.manifest(a="MAINTENANCE", c="REVOKED_STOLEN"), hbt.manifest(c="REVOKED_STOLEN"))
+        self.assertNotIn("# c", bootcreds.esp_files(self.cfg, ahead, self.root, DEVICE, self.anchor)["loader/credentials/regalia.wg-boot-conf.cred"].decode())
+        self.tpm.broken = True
+        with self.assertRaisesRegex(m.Refused, "does not answer"):
+            bootcreds.esp_files(self.cfg, current, self.root, DEVICE, self.anchor)
 
 
 if __name__ == "__main__":
