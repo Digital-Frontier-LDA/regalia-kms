@@ -1417,10 +1417,14 @@ class OnSwtpm(unittest.TestCase):
             shutil.copy(os.path.join(source, name), units)
         os.mkdir(installed[3])
         os.mkdir(installed[7])
-        relay_wait = 20
-        with open(installed[7] + "/e2e.conf", "w") as f:                 # the binary under test, and a shorter bound
-            f.write("[Service]\nExecStart=\nExecStart=%s -relay /run/regalia-unlock-core/core.sock -listen %s -relay-wait %ds\n"
-                    % (binary, unlock.KEY_SOCKET, relay_wait))
+        # The binary under test. Its bound: long enough for every attempt the steps below make (step 3 runs four
+        # verified asks, which took up to 17 s under load, measured), short only where a hang is the point (5-8).
+        # A 20 s bound for all of them made the relay answer before step 3's client had finished, and its count of
+        # refusals was then taken early: one run in four failed (#235).
+        relay_conf = "[Service]\nExecStart=\nExecStart=%s -relay /run/regalia-unlock-core/core.sock -listen %s -relay-wait %ds\n"
+        with open(installed[7] + "/e2e.conf", "w") as f:
+            f.write(relay_conf % (binary, unlock.KEY_SOCKET, 120))
+        relay_wait = 20                                                # the bound of steps 5-8
         config, local = self.d + "/unlock.json", self.d + "/local"
 
         def boot(endpoints):
@@ -1543,6 +1547,11 @@ class OnSwtpm(unittest.TestCase):
         #      a real client that could not start left systemd-cryptsetup with a reset connection, and it failed
         #      without asking for the recovery key.)
         failing = installed[3] + "/zz-failing.conf"                     # after e2e.conf, which it overrides
+        short = installed[7] + "/zz-short.conf"
+        with open(short, "w") as f:
+            f.write(relay_conf % (binary, unlock.KEY_SOCKET, relay_wait))
+        self.assertEqual(run(["systemctl", "daemon-reload"], capture_output=True).returncode, 0)
+        self.assertEqual(run(["systemctl", "restart", "regalia-unlock-relay.service"], capture_output=True).returncode, 0)
         garbage = self.d + "/not-a-sealed-credential"
         with open(garbage, "w") as f:
             f.write("bm90IGEgY3JlZGVudGlhbA==\n")
@@ -1576,6 +1585,7 @@ class OnSwtpm(unittest.TestCase):
                 self.assertEqual(state("regalia-unlock-relay.service", "ActiveState"), "active")
                 print("%s: systemd-cryptsetup got nothing after %.1fs" % (label, took), file=sys.stderr)
         os.unlink(failing)
+        os.unlink(short)
 
         # 9  THE RELAY ITSELF CANNOT START: then there is no key socket at all, and systemd-cryptsetup, finding the
         #    key file missing, asks for the recovery key (it would fail without asking on a refused connection)

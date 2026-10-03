@@ -1430,6 +1430,30 @@ func TestAPeerThatSpeaksOnlyVersion1IsAskedInVersion1(t *testing.T) {
 	}
 }
 
+// A quote whose PCRs would not hold still goes, without values, in version 1; the diagnostics say so once.
+func TestAQuoteWithoutValuesIsSaid(t *testing.T) {
+	porto := newFakePeer(t, "porto")
+	paths, _ := pathsOf(t, tokensFor(porto))
+	unsteady := func(qualifying []byte) ([]byte, []byte, map[string]string, error) {
+		attest, signature, _, err := noQuote(qualifying)
+		return attest, signature, nil, err
+	}
+	var log bytes.Buffer
+	_, _, _, err := deriveKey(configFor(porto), options{rounds: 1}, paths, bytes.Repeat([]byte{0x11}, 32), testSession(t), dialer(porto),
+		unsteady, func(time.Duration) {}, &log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(log.String(), "the quoted PCRs kept changing") != 1 {
+		t.Fatalf("the diagnostics: %s", log.String())
+	}
+	for _, request := range porto.requests {
+		if request["op"] == "unlock" && request["v"] != float64(1) {
+			t.Fatalf("a request without values in version %v", request["v"])
+		}
+	}
+}
+
 // tests/vectors/pcr-values-v2.json: a real quote from a software TPM and the values read beside it. The
 // client's own check (tpmQuote sends values only when they hash to the quote's digest) holds on it, and
 // fails on every value the verifier refuses as "not the quote".
