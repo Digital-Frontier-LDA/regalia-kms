@@ -226,7 +226,7 @@ def main():
         return scenario(work, binaries, os.environ["SUDO_USER"])
     finally:
         STOP.append(True)
-        for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("e2e-tabrmd.service",):
+        for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("tpm2-abrmd.service",):
             sh("systemctl", "stop", name, check=False)
         sh("ip", "netns", "del", NS, check=False)
         sh("ip", "link", "del", "e2e-b0", check=False)
@@ -637,9 +637,16 @@ def part2(work, binaries, user, ctx, servers, status):
     header("6  peer b: its own namespace and TPM, its tunnel to a from the same manifest")
     sh("systemctl", "stop", "regalia-admission.service")
     # a resource manager in front of the CUSE device, as the kernel's is on a host (see the docstring)
-    sh("systemd-run", "--unit=e2e-tabrmd", "--collect", "-p", "User=tss", "--", "tpm2-abrmd", "--tcti=device:/dev/tpmrm0")
-    managed = until(lambda: sh("tpm2_getrandom", "-T", "tabrmd:bus_type=system", "--hex", "8", check=False).returncode == 0, 30, 1)
-    ok(managed is True, "tpm2-abrmd serves a's TPM; the units use it from here", journal("e2e-tabrmd.service")[-600:])
+    # the distribution's unit (D-Bus activated, as the tss user), pointed at this device instead of /dev/tpm0
+    os.makedirs("/etc/systemd/system/tpm2-abrmd.service.d", exist_ok=True)
+    pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf").write_text(
+        "[Service]\nExecStart=\nExecStart=/usr/sbin/tpm2-abrmd --tcti=device:/dev/tpmrm0\n")
+    sh("systemctl", "daemon-reload")
+    sh("systemctl", "restart", "tpm2-abrmd.service", check=False)
+    probe = lambda: sh("tpm2_getrandom", "-T", "tabrmd:bus_type=system", "--hex", "8", check=False)     # noqa: E731
+    managed = until(lambda: probe().returncode == 0, 30, 1)
+    ok(managed is True, "tpm2-abrmd serves a's TPM; the units use it from here",
+       "%s\n%s" % (probe().stderr[-600:], journal("tpm2-abrmd.service")[-1200:]))
     cfg = dict(cfg, tcti="tabrmd:bus_type=system")
     pathlib.Path("/etc/regalia/node.json").write_text(json.dumps(cfg))
     servers[1] = nts_server(work, 2)                     # both time sources again
