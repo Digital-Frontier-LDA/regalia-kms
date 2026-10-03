@@ -75,9 +75,14 @@ else
   # past its Valid-Until, which only a snapshot may be
   APTOPT=()
   case "${REGALIA_BOOT_MIRROR:-}" in *snapshot.debian.org*) APTOPT=(--aptopt='Acquire::Check-Valid-Until "false"') ;; esac
+  # the main suite, its updates and its SECURITY suite (REGALIA_BOOT_SECURITY_MIRROR, the security archive's
+  # snapshot at the same time in CI): a reviewed baseline without security updates is not one to ship (#198)
+  MIRROR="${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}"
+  SOURCES=("deb $MIRROR $SUITE main" "deb $MIRROR $SUITE-updates main"
+           "deb ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
   mmdebstrap --variant=minbase "${APTOPT[@]}" \
     --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
-    "$SUITE" "$ROOT" "${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}" >"$W/mmdebstrap.log" 2>&1 \
+    "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
 fi
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
