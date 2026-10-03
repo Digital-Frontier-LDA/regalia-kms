@@ -52,5 +52,5 @@ jobs:
         run: |
           set -o pipefail
           sudo --preserve-env=GITHUB_ACTIONS python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
-          grep -q '^node-units-systemd: [0-9]* passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
-            echo "::error::the units test failed" >&2; exit 1; }
+          grep -q '^node-units-systemd: 21 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
+            echo "::error::the units test did not pass all 21 checks" >&2; exit 1; }
