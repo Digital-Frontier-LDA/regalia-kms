@@ -181,13 +181,37 @@ def signed(man):
     return {"manifest": man, "signature": {"signer": "root", "key": hbt.pub(hbt.ROOT), "sig": hbt.ROOT.sign(m.DOMAIN + m.canonical(man)).hex()}}
 
 
+class ConcurrentService(Case):
+    def test_an_advance_by_the_service_waits_for_the_recount(self):
+        """#261 (regalia-kms-3e, decided by regalia-kms-24): recount holds the counter's own lock, the one the
+        service's Counter takes, so a concurrent advance blocks until the new counter is in place."""
+        import threading
+        self.break_counter()
+        service = hb.Counter("0x1500018", lock_path=self.d + "/lock", run=self.tpm)    # the service's construction
+        real = self.counter._define_counter
+        seen = {}
+
+        def define(floor):
+            thread = threading.Thread(target=lambda: seen.setdefault("value", service.advance(floor + 1)))
+            thread.start()
+            thread.join(0.3)
+            seen["blocked"] = thread.is_alive()
+            seen["thread"] = thread
+            return real(floor)
+        self.counter._define_counter = define
+        recount.recount(self.counter, self.m1, [self.state()], lambda p: recount.phrase(self.counter.index, p), self.events.append, self.floor)
+        seen["thread"].join(5)
+        self.assertTrue(seen["blocked"])                                       # it waited for the recount
+        self.assertEqual((seen["value"], service.value()), (41, 41))           # then advanced on the new counter
+
+
 class CommandLine(TheHostsTpmAndChain):
-    def test_end_to_end_from_the_node_s_configuration(self):
+    def node_setup(self, sync="inactive"):
         tpm = hbt.FakeTpm()                                   # the indices as node.json spells them
         anchor = m.HighWater("0x01500016", lock_path=self.d + "/hw.lock", run=tpm)
         anchor.define()
         m.Store(self.d + "/membership.json", hbt.pub(hbt.ROOT), anchor).commit(signed(self.m1))
-        counter = hb.Counter("0x01500018", lock_path=self.d + "/c.lock", run=tpm)
+        counter = hb.Counter("0x01500018", lock_path=self.d + "/heartbeat-counter.lock", run=tpm)
         counter.define()
         hb.Freshness(counter, lambda: (T0 + 60, True), lambda: 5000, self.d + "/freshness.json").accept(hbt.beat(self.m1, 41, issued=T0), self.m1)
         tpm.nv.pop("0x01500018")                              # the counter's index gone: unusable
@@ -196,12 +220,43 @@ class CommandLine(TheHostsTpmAndChain):
         cfg.update(root_key=hbt.pub(hbt.ROOT), tcti=None, state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018")
         with open(self.d + "/node.json", "w") as f:
             json.dump(cfg, f)
+        import subprocess
+
+        def run(argv, **kw):
+            if argv[0] == "systemctl":
+                return subprocess.CompletedProcess(argv, 0 if sync == "active" else 3, (sync + "\n").encode(), b"")
+            return tpm(argv, **kw)
+        return counter, run
+
+    def test_end_to_end_from_the_node_s_configuration(self):
+        counter, run = self.node_setup()
         argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl"]
-        self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=tpm), 0)
+        self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=run), 0)
         self.assertEqual(counter.value(), 41)
         with open(self.d + "/audit.jsonl") as f:
             self.assertEqual([json.loads(line)["event"] for line in f], ["recount-requested", "recount"])
-        self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=tpm), 1)             # usable now: refused
+        self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=run), 1)             # usable now: refused
+
+    def test_refused_while_regalia_sync_runs(self):
+        counter, run = self.node_setup(sync="active")
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl"]
+        self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=run), 1)
+        self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))                           # nothing asked, nothing done
+
+    def test_an_explicit_heartbeat_that_does_not_exist_is_refused(self):
+        counter, run = self.node_setup()
+        argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl", "--heartbeat", self.d + "/nope.json"]
+        self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=run), 1)
+
+    def test_on_the_authority_refused_while_it_runs(self):
+        import tests.test_baremetal_authority as at
+        from deploy.baremetal import authority
+        with open(self.d + "/authority.json", "w") as f:
+            json.dump(at.config(self.d), f)
+        held = authority.one_writer(self.d)                   # what regalia-authority holds while it serves
+        self.addCleanup(os.close, held)
+        argv = ["--config", self.d + "/authority.json", "--audit-log", self.d + "/audit.jsonl"]
+        self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=self.tpm), 1)
 
 
 if __name__ == "__main__":

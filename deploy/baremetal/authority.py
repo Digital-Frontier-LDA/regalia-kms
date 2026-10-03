@@ -174,6 +174,12 @@ def signer_for(cfg):
 
 # ---- the authority ----
 
+def sequence_counter(cfg, run):
+    """The authority's heartbeat sequence counter, with the lock its users take: the one construction the
+    service and the recovery command (recount.py) share."""
+    return heartbeat.Counter(cfg["nv_sequence"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "sequence.lock"))
+
+
 class Authority:
     """The parts, from the configuration. `clock()` returns (unix seconds, authenticated)."""
 
@@ -185,7 +191,7 @@ class Authority:
         self.trail = trail or node.Trail(self.path("audit.jsonl"))
         tcti = cfg["tcti"]
         self.anchor = membership.HighWater(cfg["nv_epoch"], tcti, self.run, lock_path=self.path("highwater.lock"))
-        self.counter = heartbeat.Counter(cfg["nv_sequence"], tcti, self.run, lock_path=self.path("sequence.lock"))
+        self.counter = sequence_counter(cfg, self.run)
         self.store = membership.Store(self.path("membership.json"), cfg["root_key"], self.anchor)
         # One writer: beat and revoke each hold this from loading the manifest to publishing. A revocation
         # arrives through the control socket of the running `serve`, never from a second process.

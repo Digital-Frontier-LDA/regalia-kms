@@ -16,6 +16,10 @@ A NEW COUNTER FORGETS WHAT THE TPM KNEW, so it is fenced as reanchor.py is:
   * THE TPM AND THE CHAIN ARE PROVEN THE HOST'S: before anything, the chain on disk is verified from the
     root key AND against the membership anchor on the same TPM (#182's lock-free check). A wrong TPM, or a
     stale or forked chain (whose old revocation key could otherwise sign its way to a floor), is refused.
+  * NOTHING ELSE TOUCHES THE COUNTER MEANWHILE: on a node, regalia-sync (the service that advances it) must
+    be stopped, and recount takes the counter's own lock, built by the same code the service uses; on the
+    authority, recount takes writer.lock, so it is refused while regalia-authority runs, and the sequence
+    counter's own lock.
   * A USABLE COUNTER IS NEVER RESET (judged by the counter's own read: a counter keeps no record).
   * A TPM THAT DOES NOT ANSWER IS NOT RECOUNTED: only an index the TPM says is missing or wrong is.
   * NEVER BELOW WHAT IS KNOWN, EVEN ACROSS A CUT. The new counter is defined AT a floor: the highest of
@@ -31,6 +35,9 @@ A NEW COUNTER FORGETS WHAT THE TPM KNEW, so it is fenced as reanchor.py is:
 The heartbeats a floor is taken from: a node's own freshness state (by default); the authority's
 published and pending heartbeat (by default, on the authority). If the authority's are lost, its latest
 published heartbeat is in any node's freshness state: give that file with --heartbeat.
+
+When the membership anchor is unusable too (a replaced TPM), the chain cannot be proven and this refuses:
+re-anchor first (reanchor.py), then recount.
 
     python3 -Es -m deploy.baremetal.recount --config /etc/regalia/node.json --audit-log /var/log/regalia/recount.jsonl
 
@@ -212,21 +219,29 @@ def main(argv=None, ask=None, run=None):
         require("TPM2TOOLS_TCTI" not in os.environ, "TPM2TOOLS_TCTI is set in the environment: the TPM is the configuration's; unset it")
         raw = _read_json(args.config, 64 * 1024)
         require(isinstance(raw, dict) and raw.get("schema") in (node.SCHEMA, authority.SCHEMA), "--config must be a node or authority configuration")
+        import subprocess
+        run = run or subprocess.run
+        writer = None
         if raw["schema"] == node.SCHEMA:
             cfg = node.validate(raw)
             index, defaults = cfg["nv_heartbeat"], [os.path.join(cfg["state_dir"], "freshness.json")]
+            counter = node.heartbeat_counter(cfg, run)            # the service's own construction and lock
+            active = run(["systemctl", "is-active", "regalia-sync.service"], capture_output=True, timeout=10)
+            require(active.stdout.decode(errors="replace").strip() != "active",
+                    "regalia-sync is running and advances this counter: stop it first (systemctl stop regalia-sync)")
         else:
             cfg = authority.validate(raw)
             index, defaults = cfg["nv_sequence"], [os.path.join(cfg["state_dir"], n) for n in (authority.HEARTBEAT, authority.PENDING)]
-        import subprocess
-        run = run or subprocess.run
+            writer = authority.one_writer(cfg["state_dir"])       # refused while regalia-authority runs: one writer
+            counter = authority.sequence_counter(cfg, run)
         state = cfg["state_dir"]
-        counter = heartbeat.Counter(index, cfg["tcti"], run, lock_path=os.path.join(state, "recount-%s.lock" % index))
+        missing = [path for path in args.heartbeat if not os.path.exists(path)]
+        require(not missing, "--heartbeat %s does not exist" % ", ".join(missing))
         anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=os.path.join(state, "highwater.lock"))
         chain = _read_json(os.path.join(state, "membership.json"), membership.MAX_CHAIN_BYTES)
         require(isinstance(chain, list) and chain, "the host holds no membership chain")
         manifest = current(chain, cfg["root_key"], anchor)
-        documents = [_read_json(path, heartbeat.MAX_BYTES * 2) for path in defaults + args.heartbeat if os.path.exists(path)]
+        documents = [_read_json(path, heartbeat.MAX_BYTES * 2) for path in [p for p in defaults if os.path.exists(p)] + args.heartbeat]
         tpm = cfg["tcti"] or "the default TPM"
 
         def typed(planned):
@@ -242,7 +257,11 @@ def main(argv=None, ask=None, run=None):
                 return (ask or input)("Type exactly: %s\n> " % phrase(index, planned))
             except EOFError:
                 return None
-        value = recount(counter, manifest, documents, typed, record, os.path.join(state, "recount-floor-%s.json" % index))
+        try:
+            value = recount(counter, manifest, documents, typed, record, os.path.join(state, "recount-floor-%s.json" % index))
+        finally:
+            if writer is not None:
+                os.close(writer)
     except Incomplete as failure:
         print("INCOMPLETE: %s: run it again" % failure, file=sys.stderr)
         return 3
