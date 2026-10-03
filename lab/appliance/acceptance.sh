@@ -51,7 +51,7 @@ for tool in mount umount findmnt lsblk su sulogin; do
   check "$tool" --help
 done
 check cryptsetup --version
-check sh -c '! ldd /usr/bin/mount /usr/bin/blkid /usr/sbin/cryptsetup | grep -q "not found"'
+check sh -c 'libraries=$(ldd /usr/bin/mount /usr/sbin/blkid /usr/sbin/cryptsetup) && ! printf "%s\n" "$libraries" | grep -q "not found"'
 echo REGALIA_KERNEL_NETWORK_CRYPTO_PASS
 /usr/local/sbin/regalia-kms -version
 check systemctl start regalia-kms.service
