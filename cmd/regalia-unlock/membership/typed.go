@@ -95,3 +95,34 @@ func revocationAlg(manifest map[string]any, key string) string {
 	}
 	return ""
 }
+
+// RootKeyPath is where the image holds the membership root it trusts: one JSON value in RootEntries' grammar
+// (a list only while a root rotation overlaps), written by the image builder as canonical bytes.
+const RootKeyPath = "/usr/lib/regalia/root-key.json"
+
+const rootKeyMaxBytes = 64 << 10
+
+// LoadRoot reads the pinned root: strict JSON (Load), in canonical bytes (so the image builder's input and
+// the initrd's file compare byte for byte), and valid as RootEntries. Anything else is refused: an image
+// whose root cannot be read accepts no membership.
+func LoadRoot(read func(string) ([]byte, error), path string) (any, []KeyEntry, error) {
+	raw, err := read(path)
+	if err != nil {
+		return nil, nil, refuse("the membership root %s cannot be read: %v", path, err)
+	}
+	if len(raw) > rootKeyMaxBytes {
+		return nil, nil, refuse("the membership root %s is over %d bytes", path, rootKeyMaxBytes)
+	}
+	root, err := LoadDocument(raw)
+	if err != nil {
+		return nil, nil, refuse("the membership root %s is not JSON: %v", path, err)
+	}
+	if string(Canonical(root)) != string(raw) {
+		return nil, nil, refuse("the membership root %s is not in canonical form (sorted keys, no whitespace, no newline)", path)
+	}
+	entries, err := RootEntries(root, "the root key")
+	if err != nil {
+		return nil, nil, err
+	}
+	return root, entries, nil
+}
