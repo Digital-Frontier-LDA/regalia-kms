@@ -1,6 +1,7 @@
 """regalia-node enrol init (#190), on a software TPM: the keys are made on the host, the bundle names them,
 nothing that this enrolment did not make is touched, and a crash at any call is finished by running it again."""
 import base64
+import copy
 import datetime
 import io
 import json
@@ -322,6 +323,49 @@ class InitOnSwtpm(unittest.TestCase):
             with self.assertRaisesRegex(enrol.Refused, "nor a sticky one|not a real directory owned"):
                 enrol._safe_directory(self.dir)
         enrol._safe_directory(self.dir)          # our own entry under the sticky parent: trusted
+
+
+    def test_commit_anchors_the_checked_chain_on_this_tpm(self):
+        """init, then commit with a root-signed manifest that names this host: the configuration installed and
+        the anchor, the store and the heartbeat counter set up on THIS TPM (in-process here; on a host, as
+        regalia-sync through runuser)."""
+        import tests.test_baremetal_heartbeat as hbt
+        import tests.test_baremetal_node as nt
+        import tests.test_baremetal_replacement as rt
+        from deploy.baremetal import measurements
+        from deploy.baremetal import membership as m
+        bundle = self.init()
+        etc = self.d + "/etc-regalia/"
+        os.makedirs(etc)
+        entry = {"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}
+        document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {n: {"accepted": [entry]} for n in "abc"}}
+        man = hbt.manifest()
+        man["policy_version"] = measurements.version(document)
+        man["nodes"][0].update(ek_name=bundle["ek_name"], ak_name=bundle["ak_name"],
+                               wg_service_pub=base64.b64decode(bundle["wg_service_pub"]).hex(),
+                               wg_boot_pub=base64.b64decode(bundle["wg_boot_pub"]).hex())
+        root = hbt.pub(hbt.ROOT)
+        example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
+                   "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
+                   "state_dir": self.d + "/state", "admission_dir": self.d + "/admission", "run_dir": self.d + "/run",
+                   "wg_service_key": self.wg, "measurements": etc + "measurements.json", "pcrs": [7, 11],
+                   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"], "pull_interval": 60}
+        with unittest.mock.patch.object(enrol, "CONFIG_DIR", etc), unittest.mock.patch.object(enrol, "NODE_JSON", etc + "node.json"):
+            in_process = lambda config, chain: enrol.anchor_and_store(config, m.load(open(chain, "rb").read()))   # noqa: E731
+            epoch, digest = enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
+                                         as_sync=in_process, out=io.StringIO())
+            self.assertEqual((epoch, digest), (1, m.digest(man)))
+            hw = m.HighWater("0x01500016", os.environ["TPM2TOOLS_TCTI"], lock_path=self.d + "/state/highwater.lock")
+            self.assertEqual((hw.value(), hw.record()), (1, (1, digest)))
+            # the commit re-checks: a manifest for another host is refused before anything is written again
+            other = copy.deepcopy(man)
+            other["nodes"][0]["ak_name"] = "000b" + "77" * 32
+            with self.assertRaisesRegex(enrol.Refused, "manifest's ak_name for a is not this host's"):
+                enrol.commit(self.dir, rt.sign(other), root, enrol.fingerprint(root), document, nt.SITE, example,
+                             as_sync=in_process, out=io.StringIO())
+            # and run again with the same inputs, it changes nothing
+            self.assertEqual(enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
+                                          as_sync=in_process, out=io.StringIO()), (1, digest))
 
 
 if __name__ == "__main__":

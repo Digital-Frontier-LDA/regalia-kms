@@ -533,6 +533,109 @@ def install_config(journal, node_id, root_key, example, site, document, prefix="
     return config
 
 
+SYNC_USER = "regalia-sync"
+PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def anchor_and_store(config_path, chain, run=subprocess.run):
+    """Phase 2's trust anchors, run AS regalia-sync (the user that owns them from then on, #214): the
+    membership epoch anchor (membership.HighWater: the counter, its base and the two record slots, #68),
+    the store committed with the whole chain, so the anchor stands at its last epoch N, and the heartbeat
+    counter. Returns (epoch, digest of the last manifest).
+
+    RESUMED, it never takes over indices it cannot prove are this chain's: a store that exists must load
+    (Store checks it against the anchor) and be a PREFIX of `chain`, and the rest is committed; indices
+    without a store are accepted only as `define` leaves them (epoch 0, the zero record), the state of an
+    enrolment stopped before its first commit. Anything else is refused and left."""
+    from deploy.baremetal import heartbeat, node as node_module
+    with open(config_path, "rb") as f:
+        cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
+    n = node_module.Node(cfg, run)
+    hw, store = n.anchor(), n.store()
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"))
+    envelopes = chain if isinstance(chain, list) else [chain]
+
+    def defined(owner, indices):
+        return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
+    anchor_indices = hw._indices()
+    already = 0
+    if os.path.exists(store.path):
+        store.load()                                   # refuses a store the TPM anchor does not vouch for
+        held = [membership.digest(m) for m in store.manifests]
+        current, mine = None, []
+        for envelope in envelopes:
+            current = membership.accept(current, envelope, cfg["root_key"])
+            mine.append(membership.digest(current))
+        require(held == mine[:len(held)], "%s holds a chain that is not the beginning of this one: an enrolment of "
+                "another manifest, or a node already in service. Enrolment does not touch it (re-enrolment is #76)" % store.path)
+        already = len(held)
+    else:
+        present = defined(hw, anchor_indices)
+        if present:
+            require(len(present) == len(anchor_indices) and hw.value() == 0 and hw.record() == (0, membership.HighWater.ZERO),
+                    "the TPM already holds the anchor's indices (%s) and no store goes with them: they are not an enrolment "
+                    "stopped before its first commit. Enrolment does not take them over (re-enrolment is replacement, #76)"
+                    % ", ".join(present))
+        else:
+            hw.define()
+    for envelope in envelopes[already:]:            # what the store holds already is this chain's beginning (checked)
+        store.commit(envelope)
+    manifest = store.load()
+    counter_indices = (counter.index, counter.base_index)
+    present = defined(counter, counter_indices)
+    if not present:
+        counter.define()
+    else:
+        require(len(present) == 2 and counter.value() == 0, "the TPM already holds the heartbeat counter's indices (%s) at "
+                "a value other than a fresh one: enrolment does not take them over" % ", ".join(present))
+    return manifest["epoch"], membership.digest(manifest)
+
+
+def run_as_sync(config_path, chain_path, run=subprocess.run):
+    """anchor_and_store, in a process of regalia-sync with the tss group (the TPM), started from the package
+    root so `-m` finds it. The journal is root's and stays with the caller."""
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", sys.executable, "-Es", "-m",
+                "deploy.baremetal.enrol", "_anchor", "--config", config_path, "--chain", chain_path],
+               cwd=PACKAGE_ROOT, capture_output=True, text=True)
+    require(done.returncode == 0, "the anchor step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
+    m = re.search(r"^ANCHORED epoch (\d+) digest ([0-9a-f]{64})$", done.stdout, re.M)
+    require(m is not None, "the anchor step did not report its result")
+    return int(m.group(1)), m.group(2)
+
+
+def commit(directory, chain, root_key, typed, document, site, example, run=subprocess.run, prefix="", as_sync=None, out=sys.stdout):
+    """Phase 2, as far as the trust anchors (#190): this host's TPM identity re-checked by Name, the manifest
+    chain checked again (never trusted from an earlier `check`), the configuration installed, the state
+    directory made regalia-sync's, and the anchor, the store and the heartbeat counter set up AS regalia-sync.
+    The ESP credentials and the enrolment record follow in later steps."""
+    journal = Journal(directory, json.load(open(os.path.join(directory, "bundle.json")))["node_id"])
+    require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
+    identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
+    manifest = check_manifest(directory, chain, root_key, typed, document)
+    config = install_config(journal, journal.doc["node_id"], root_key, example, site, document, prefix)
+    state = prefix + config["state_dir"]
+    if not os.path.isdir(state):
+        os.makedirs(state, 0o755)
+    if as_sync is None:
+        import pwd
+        user = pwd.getpwnam(SYNC_USER)
+        st = os.lstat(state)
+        if st.st_uid != user.pw_uid:
+            require(not os.listdir(state), "%s is not %s's and is not empty: enrolment does not take it over" % (state, SYNC_USER))
+            os.chown(state, user.pw_uid, user.pw_gid)
+    chain_path = os.path.join(directory, "chain.json")
+    _write_private(chain_path, membership.canonical(chain if isinstance(chain, list) else [chain]), exclusive=False)
+    os.chmod(chain_path, 0o644)                       # public values; regalia-sync reads it
+    journal.started("anchor")
+    epoch, digest = (as_sync or run_as_sync)(prefix + NODE_JSON, chain_path)
+    require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
+            "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
+    journal.done("anchor", epoch=epoch, digest=digest)
+    print("ENROLLED (trust anchors): node %s, membership epoch %d (%s) anchored in the TPM and committed as %s"
+          % (journal.doc["node_id"], epoch, digest[:16], SYNC_USER), file=out)
+    return epoch, digest
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.enrol", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="command", required=True)
@@ -546,7 +649,46 @@ def main(argv=None):
     c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
     c.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
     c.add_argument("--enrol-dir", default=ENROL_DIR)
+    k = sub.add_parser("commit", help="enrol this host's trust anchors from the checked manifest chain")
+    k.add_argument("--manifest", required=True, help="the root-signed envelope, or the JSON list of envelopes from epoch 1")
+    k.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
+    k.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
+    k.add_argument("--site", required=True, help="this host's site configuration (with boot_mesh and service_mesh)")
+    k.add_argument("--example", default=os.path.join(PACKAGE_ROOT, "deploy", "baremetal", "node.example.json"),
+                   help="the node configuration this enrolment starts from (default: the shipped example)")
+    k.add_argument("--enrol-dir", default=ENROL_DIR)
+    a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
+    a.add_argument("--config", required=True)
+    a.add_argument("--chain", required=True)
     args = ap.parse_args(argv)
+    if args.command == "_anchor":                    # run by commit, as regalia-sync
+        try:
+            with open(args.chain, "rb") as f:
+                chain = membership.load(f.read())
+            epoch, digest = anchor_and_store(args.config, chain)
+        except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        print("ANCHORED epoch %d digest %s" % (epoch, digest))
+        return 0
+    if args.command == "commit":
+        if os.geteuid() != 0:
+            print("REFUSED: enrolment runs as root, at the host's console", file=sys.stderr)
+            return 2
+        try:
+            with open(args.manifest, "rb") as f:
+                chain = membership.load(f.read())
+            loaded = {}
+            for name in ("measurements", "site", "example"):
+                with open(getattr(args, name)) as f:
+                    loaded[name] = json.load(f)
+            require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
+            typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
+            commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"])
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "check":
         try:
             with open(args.manifest) as f:
