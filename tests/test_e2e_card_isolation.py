@@ -27,9 +27,22 @@ TOOLS = re.compile(r"(?<![\w/.-])(pkcs11-tool|sc-hsm-tool|opensc-tool|pkcs15-too
 # or could: the tools' own flags, the ceremony helpers, a PIN handed to a Go test or a systemd unit.
 PIN = re.compile(r"--login\b|--pin\b|--so-pin\b|--new-pin\b|--change-pin\b|--unlock-pin\b|--unblock-pin\b|--puk\b"
                  r"|--init-token\b|--initialize\b|--pin-file\b|--wrap-key\b|--unwrap-key\b|\bpkcs15-init\b|\bopensc-explorer\b"
-                 r"|sc-hsm-pty\.py|\"\$SEAL\"|(?<!export )\bREGALIA_[A-Z0-9_]*PIN(_[A-Z])?=|LoadCredential(Encrypted)?="
+                 r"|sc-hsm-pty\.py|\"\$SEAL\"|LoadCredential(Encrypted)?="
                  r"|\bsystemctl\s+(re)?start\b|\bsystemctl\s+enable\s+--now\b|--verify-pin\b"
                  r"|\b(pkcs11-tool|\$P11|\$\{P11\})\b[^;|&]*\s-l\b|\s-p\s+env:")
+# A PIN handed to one command in its environment, in ANY variable whose name has PIN as a word (NK_PIN, SO_PIN,
+# REGALIA_X_PIN, PIN; not KEYPIN), not only REGALIA_*: a Go test or a unit reads it from there (#225). Searched
+# on the view with every quoted string blanked to one word, so a quoted value is one token and only an
+# assignment followed by a command word is one; reading a PIN into a shell variable is not presenting it.
+PIN_PREFIX = re.compile(r"(?<![\w$-])(?<!export )(?:[A-Z0-9_]*_)?PIN(?:_[A-Z0-9_]+)?=[^\s;&|]*\s+(?=[^\s;&|#)])")
+
+
+def pin_at(line, bare_line):
+    """The first PIN use on a line: PIN (on the line) or PIN_PREFIX (on its blanked view, same positions)."""
+    found = [m for m in (PIN.search(line), PIN_PREFIX.search(bare_line)) if m]
+    return min(found, key=lambda m: m.start()) if found else None
+
+
 # The serial gates. bench_gate (e2e/lib/bench_cards.sh), target_ok (the #62 suites) and yk_gate (a
 # YubiKey named by serial). A drill's wrapper is a gate only through gated_functions.
 GATES = ("bench_gate", "target_ok")
@@ -53,6 +66,38 @@ NO_REAL_CARD = {
 
 def softhsm_only(text):
     return "libsofthsm2" in text and "opensc-pkcs11" not in text
+
+
+# What a real-card script may not do, each a way past the gate check (#225). Each finding: (line, why).
+LIB_GATE_NAMES = ("bench_gate", "bench_reader_gate", "bench_isolate", "bench_slot")
+
+
+def script_problems(text):
+    lines, bare = code_lines(text), code_lines(text, blank_strings=True)
+    found = []
+    for name, start, end, _ in functions(bare):
+        body = " ".join(bare[start:end])
+        if name in LIB_GATE_NAMES:
+            found.append((start + 1, "redefines %s, e2e/lib/bench_cards.sh's gate" % name))
+        if name in ("die", "fail") and not re.search(r"\bexit\b", body):
+            found.append((start + 1, "%s does not exit: a gate's \"|| %s\" would go on to the PIN" % (name, name)))
+    for n, (line, b) in enumerate(zip(lines, bare), 1):
+        if re.search(r"\beval\b", b):
+            found.append((n, "eval: what it runs is not read by this check"))
+        if re.search(r"\b(bash|sh)\b[^|;&]*<<", b):
+            found.append((n, "a here-document fed to a shell: its body is not read by this check"))
+        for m in re.finditer(r"\b(bash|sh)\s+-[a-z]*c\s+(\S)", line):
+            literal = re.match(r"'([^']*)'", line[m.start(2):])
+            if not literal:
+                found.append((n, "%s -c with a command that is not one single-quoted literal" % m.group(1)))
+            elif TOOLS.search(literal.group(1)) or PIN.search(literal.group(1)):
+                found.append((n, "%s -c runs a card tool or a PIN line inside a string" % m.group(1)))
+        if re.search(r"\b(if|while|until)\s+(!\s*)?(false|true|:)\s*;", b):
+            found.append((n, "a constant condition: a gate under it may never run"))
+        # (export -n UN-exports: that is the right thing, not this)
+        if re.search(r"\bexport\s+(?!-n\b)(?:-\w+\s+)*(?:[A-Z0-9_]*_)?PIN(?:_[A-Z0-9_]+)?\b", line):
+            found.append((n, "a PIN exported to every later command: hand it to the one gated command that uses it"))
+    return found
 
 
 def strip_strings(line, blank=True, every=False):
@@ -119,18 +164,56 @@ def code_lines(text, blank_strings=False):
     return out
 
 
+# A gate's failure must stop the PIN (#225): "|| die|exit|return|fail" (or a brace group ending in one) after the
+# call, an "if gate; then" or "gate &&" that reaches the PIN only on success, or a plain statement in a "set -e"
+# script outside any function. "|| true", a subshell, a command substitution, a background job or a bare call
+# with nothing stopping on its status are not gates. die and fail must exit (checked below).
+ABORT = re.compile(r"\|\|\s*(?:\{[^}]*?\b(?:exit|return|die|fail)\b|(?:exit|return|die|fail)\b)")
+ABORT_EXITS = re.compile(r"\|\|\s*(?:\{[^}]*?\b(?:exit|die|fail)\b|(?:exit|die|fail)\b)")
+SET_E = re.compile(r"(?m)^\s*set\s+-[a-z]*e")
+
+
+def effective(line, match, exiting=(), set_e=False, toplevel=False, tail_of_function=False):
+    """Whether this call of a gate (match.group(1) is its name, or the YubiKey bus check) stops what follows
+    when it fails. `exiting`: wrappers whose own failure exits the shell, so a plain call of one is enough."""
+    name_start = match.start(1) if match.re.groups else match.start()
+    prefix, rest = line[:name_start], line[match.end():]
+    rest = re.sub(r"\d*[<>]&\d*-?|&>>?", " ", rest)  # a redirection's "&" (2>&1, &>) is not a list operator
+    if re.search(r"\$\(\s*$|(?:^|[^$\w])\(\s*$", prefix):
+        return False                                   # a subshell or a command substitution: its exit ends only itself
+    if re.search(r"(?<!&)&(?!&)", re.split(r"\|\||&&|;|\|", rest)[0]):
+        return False                                   # in the background: nothing waits for its status
+    name = match.group(1) if match.re.groups else ""
+    if name in exiting:
+        return True
+    if ABORT.search(rest) or re.match(r"[^;|&]*&&", rest) or re.search(r"\bif\s+$", prefix):
+        return True
+    if tail_of_function and re.fullmatch(r"[^;&]*\s*;?\s*\}?\s*", rest):
+        return True                                    # its status is the function's: the caller's "||" decides
+    return set_e and toplevel and not prefix.strip() and not re.search(r"\|\||&&|\||&", rest)
+
+
 class _Calls:
-    """Matches a call of one of the names, or the YubiKey bus check."""
+    """Calls of one of the names (and, unless yubikey=False, the YubiKey bus check) that are effective gates."""
 
-    def __init__(self, names):
-        self.names = re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, names))))
+    def __init__(self, names, exiting=(), yubikey=True, set_e=False):
+        self.names = re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, names)))) if names else None
+        self.exiting, self.yubikey, self.set_e = set(exiting), yubikey, set_e
 
-    def search(self, line):
-        return self.names.search(line) or YK_PRIMITIVE.search(line)
+    def search(self, line, toplevel=False, continued="", tail_of_function=False):
+        """continued: the next line, when this one ends with a backslash (its "&&" or "||" may be there)."""
+        found = list(self.names.finditer(line)) if self.names else []
+        if self.yubikey:
+            found += list(YK_PRIMITIVE.finditer(line))
+        joined = line.rstrip()[:-1] + " " + continued if continued and line.rstrip().endswith("\\") else line
+        for m in sorted(found, key=lambda m: m.start()):
+            if effective(joined, m, self.exiting, self.set_e, toplevel, tail_of_function):
+                return m
+        return None
 
 
-def calls(names):
-    return _Calls(names)
+def calls(names, exiting=(), yubikey=True, set_e=False):
+    return _Calls(names, exiting, yubikey, set_e)
 
 
 def functions(bare):
@@ -154,13 +237,15 @@ def functions(bare):
     return found
 
 
-def gated_functions(lines, bare=None):
-    """Shell functions whose body calls a gate (or a gated function) before its first PIN line."""
+def gated_functions(lines, bare=None, yubikey=True, with_exiting=False):
+    """Shell functions whose body has an effective gate (or a gated function) before its first PIN line. With
+    yubikey=False the YubiKey bus check is not a gate (for an OpenSC PIN line). With with_exiting, also the
+    subset whose gate's failure exits the shell (a plain call of one of those is a gate)."""
     bare = bare if bare is not None else lines
-    defs, gated = functions(bare), set()
+    defs, gated, exiting = functions(bare), set(), set()
     while True:
-        gate_call = calls(GATES + tuple(gated))
-        added, ungated = set(), set()
+        gate_call = calls(GATES + tuple(gated), exiting, yubikey)
+        added, ungated = {}, set()
         for name, start, end, head in defs:
             if name in gated:
                 continue
@@ -168,19 +253,24 @@ def gated_functions(lines, bare=None):
             for k in range(start, end):
                 code_b = bare[k][head:] if k == start else bare[k]
                 code_l = lines[k][head:] if k == start else lines[k]
-                g, pin = gate_call.search(code_b), PIN.search(code_l)
+                g = gate_call.search(code_b, continued=bare[k + 1] if k + 1 < len(bare) else "", tail_of_function=(k == end - 1))
+                pin = pin_at(code_l, code_b)
                 if first_gate is None and g:
-                    first_gate = (k, g.start())
+                    first_gate = (k, g.start(), g, code_b)
                 if first_pin is None and pin:
                     first_pin = (k, pin.start())
-            if first_gate is not None and (first_pin is None or first_gate < first_pin):
-                added.add(name)
+            if first_gate is not None and (first_pin is None or first_gate[:2] < first_pin):
+                g, code_b = first_gate[2], first_gate[3]
+                called = g.group(1) if g.re.groups else ""
+                added[name] = called in exiting or bool(ABORT_EXITS.search(code_b[g.end():]))
             else:
                 ungated.add(name)
-        added -= ungated
+        for name in ungated:
+            added.pop(name, None)
         if not added:
-            return gated
-        gated |= added
+            return (gated, exiting) if with_exiting else gated
+        gated |= set(added)
+        exiting |= {name for name, exits in added.items() if exits}
 
 
 def real_card_scripts():
@@ -194,13 +284,21 @@ def real_card_scripts():
         yield path, text, lines
 
 
+# A PIN line that reaches a card through OpenSC: a YubiKey on the bus (ykman's view) is no gate for it (#225).
+OPENSC_PIN = re.compile(TOOLS.pattern + r"|--login\b|--so-pin\b|--pin\b|\$P11\b|\$\{P11\}|sc-hsm-pty|\s-l\b")
+
+
 def ungated_pin_lines(lines, raw=None):
     """lines: code_lines(text); raw: text.splitlines()."""
     raw = raw if raw is not None else lines
     bare = code_lines("\n".join(raw), blank_strings=True) if raw is not lines else lines
-    gated = gated_functions(lines, bare)
-    gate_call = calls(GATES + tuple(gated))
-    helper_call = re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, gated)))) if gated else None
+    set_e = bool(SET_E.search("\n".join(lines)))
+    gated, exiting = gated_functions(lines, bare, with_exiting=True)
+    gated_o, exiting_o = gated_functions(lines, bare, yubikey=False, with_exiting=True)
+    any_gate = calls(GATES + tuple(gated), exiting, True, set_e)
+    opensc_gate = calls(GATES + tuple(gated_o), exiting_o, False, set_e)
+    helper_any = re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, gated)))) if gated else None
+    helper_o = re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, gated_o)))) if gated_o else None
     # A function's header is not a call of it, so every header is removed before looking for calls.
     # And a line inside a function looks for its gate only inside that function: a gate in the function
     # defined just above it is not this function's.
@@ -210,9 +308,11 @@ def ungated_pin_lines(lines, raw=None):
         for k in range(start, end):
             owner[k] = start
     for i, line in enumerate(lines):
-        pin = PIN.search(line)
+        pin = pin_at(line, bare[i])
         if not pin:
             continue
+        opensc = bool(OPENSC_PIN.search(line))
+        gate_call, helper_call = (opensc_gate, helper_o) if opensc else (any_gate, helper_any)
         floor = max(0, i - WINDOW) if owner[i] is None else max(owner[i], i - WINDOW)
         if owner[i] is None:
             # outside a function, the window must not reach into one
@@ -220,7 +320,8 @@ def ungated_pin_lines(lines, raw=None):
         here = calls_only[i]
         cut = max(0, pin.start() - (len(bare[i]) - len(here)))
         before = calls_only[floor:i] + [here[:cut]]
-        if any(gate_call.search(l) for l in before) or (helper_call and helper_call.search(here) and helper_call.search(here).start() <= cut):
+        toplevel = owner[i] is None
+        if any(gate_call.search(l, toplevel, continued=(before[j + 1] if j + 1 < len(before) else here)) for j, l in enumerate(before)) or (helper_call and helper_call.search(here) and helper_call.search(here).start() <= cut):
             continue
         if i > 0 and raw[i - 1].strip().startswith(EMULATED) and re.search(r"softhsm", raw[i], re.I):
             continue
@@ -251,6 +352,22 @@ class RealCardScriptsAreIsolatedAndGated(unittest.TestCase):
                               f"within {WINDOW} lines above, and not through a gated helper: {line[:120]}")
 
 
+    def test_no_real_card_script_has_a_way_past_the_gate_check(self):
+        for path, text, _ in real_card_scripts():
+            for number, why in script_problems(text):
+                with self.subTest(script=path.name, line=number):
+                    self.fail(f"{path.name}:{number}: {why}")
+
+    def test_a_softhsm_only_script_cannot_be_pointed_at_another_module(self):
+        # softhsm_only exempts it from isolation and gates; a variable that could name opensc-pkcs11.so
+        # instead would take a real card out of reach of both (#225)
+        for path in sorted(E2E.glob("*.sh")):
+            text = path.read_text()
+            if softhsm_only(text):
+                with self.subTest(script=path.name):
+                    self.assertNotRegex(text, r"\$\{\w+:-[^}\n]*libsofthsm2", f"{path.name}'s SoftHSM module can be overridden by a variable")
+
+
 class TheCheckItself(unittest.TestCase):
     """The rule must catch what it is for (each case is one a review found or could have found)."""
 
@@ -272,7 +389,7 @@ class TheCheckItself(unittest.TestCase):
                        "bench_gate S\n" + "true\n" * 5 + "pkcs11-tool --login\n", "gate S\npkcs11-tool --login\n"):
             with self.subTest(script):
                 self.assertEqual(len(self.ungated(script)), 1)
-        for script in ("bench_gate S\n" + "true\n" * 3 + "pkcs11-tool --login\n", "bench_gate S || exit; pkcs11-tool --login\n",
+        for script in ("set -e\nbench_gate S\n" + "true\n" * 2 + "pkcs11-tool --login\n", "bench_gate S || exit; pkcs11-tool --login\n",
                        "if bench_gate S; then pkcs11-tool --login; fi\n", "target_ok && pkcs11-tool --login\n"):
             with self.subTest(script):
                 self.assertEqual(self.ungated(script), [])
@@ -290,7 +407,7 @@ class TheCheckItself(unittest.TestCase):
                                                 "pkcs11-tool --login", "echo good; pkcs11-tool --login"])
 
     def test_a_brace_in_a_string_does_not_join_two_functions(self):
-        script = 'bad(){ echo "{"; pkcs11-tool --login; }\ngood(){ bench_gate S; pkcs11-tool --login; }\n'
+        script = 'bad(){ echo "{"; pkcs11-tool --login; }\ngood(){ bench_gate S || return 97; pkcs11-tool --login; }\n'
         self.assertEqual(gated_functions(code_lines(script), code_lines(script, blank_strings=True)), {"good"})
 
     def test_comments_and_here_documents_are_not_code(self):
@@ -349,6 +466,52 @@ class TheCheckItself(unittest.TestCase):
     def test_a_softhsm_only_script_is_not_a_real_card_script(self):
         self.assertTrue(softhsm_only('MODULE=/usr/lib/softhsm/libsofthsm2.so\npkcs11-tool --module "$MODULE" --login'))
         self.assertFalse(softhsm_only('M=/usr/lib/softhsm/libsofthsm2.so\nN=/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so'))
+
+
+    def test_a_gate_whose_status_is_ignored_is_not_a_gate(self):
+        """#225: a gate counts only when its failure stops what follows."""
+        for script in ("bench_gate S || true\npkcs11-tool --login\n", "bench_gate S\npkcs11-tool --login\n",
+                       "( bench_gate S )\npkcs11-tool --login\n", "x=$(bench_gate S)\npkcs11-tool --login\n",
+                       "bench_gate S &\npkcs11-tool --login\n", "if ! bench_gate S; then :; fi\npkcs11-tool --login\n",
+                       "if false; then bench_gate S; fi\npkcs11-tool --login\n",
+                       "set -e\nf(){ bench_gate S; pkcs11-tool --login; }\n",
+                       "w(){ bench_gate \"$1\" || return 97; }\n" + "true\n" * 6 + "w S\npkcs11-tool --login\n"):
+            with self.subTest(script):
+                self.assertEqual(len(self.ungated(script)), 1, script)
+        for script in ("bench_gate S || die x\npkcs11-tool --login\n", "bench_gate S || { echo no; exit 2; }\npkcs11-tool --login\n",
+                       "set -e\nbench_gate S\npkcs11-tool --login\n", "bench_gate S 2>&1 || exit 1\npkcs11-tool --login\n",
+                       "w(){ bench_gate \"$1\" || die no; }\n" + "true\n" * 6 + "w S\npkcs11-tool --login\n",
+                       "w(){ bench_gate \"$1\" || return 97; }\n" + "true\n" * 6 + "w S || exit\npkcs11-tool --login\n",
+                       "bench_gate S \\\n  || exit 1\npkcs11-tool --login\n"):
+            with self.subTest(script):
+                self.assertEqual(self.ungated(script), [], script)
+
+    def test_a_yubikey_on_the_bus_is_no_gate_for_an_opensc_pin(self):
+        yk = 'yk_gate(){ ykman list --serials | grep -qx "$1" || return 97; }\n' + "true\n" * 6
+        self.assertEqual(len(self.ungated(yk + 'yk_gate S || exit\npkcs11-tool --login\n')), 1)
+        self.assertEqual(self.ungated(yk + 'yk_gate S || exit\nsystemd-run -p LoadCredentialEncrypted=x.pin:/c t\n'), [])
+
+    def test_a_pin_in_any_variable_before_a_command_is_a_pin_line(self):
+        for line in ('NK_PIN="$P" go test ./x', "PIN=1234 ./cmd", 'MY_SO_PIN="$S" ./tool --x'):
+            with self.subTest(line):
+                self.assertEqual(self.ungated("true\n" + line + "\n"), [line])
+        self.assertEqual(self.ungated('true\nHSM_PIN="$(cat f)"\nX_PIN=1; echo ok\n'), [])   # reading a PIN is not presenting it
+
+    def test_the_ways_past_the_check_are_refused(self):
+        cases = {
+            "bench_gate(){ :; }\n": "redefines bench_gate",
+            "die(){ echo no; }\n": "die does not exit",
+            'eval "$CMD"\n': "eval",
+            "bash <<EOF\npkcs11-tool --login\nEOF\n": "here-document fed to a shell",
+            'sh -c "$X"\n': "not one single-quoted literal",
+            "sh -c 'pkcs11-tool --login'\n": "card tool or a PIN line inside a string",
+            "if false; then bench_gate S; fi\n": "constant condition",
+            'export NK_PIN="$P"\n': "PIN exported",
+        }
+        for script, why in cases.items():
+            with self.subTest(script):
+                self.assertTrue(any(why in w for _, w in script_problems(script)), script_problems(script))
+        self.assertEqual(script_problems("sh -c 'ls /etc' sh x\ndie(){ echo no; exit 2; }\n"), [])
 
 
 if __name__ == "__main__":
