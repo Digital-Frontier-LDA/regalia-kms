@@ -290,20 +290,20 @@ class Pkcs11Signer:
     def _login(self, session, slot, pin):
         flags = int(self.lib.getTokenInfo(slot).flags)
         low = [name for name in self.PIN_LOW if flags & getattr(self.pkcs11, name)]
-        require(not low, "the token reports %s: no login is tried, its last tries are kept for a human" % ", ".join(low))
+        require(not low, "the token reports %s: no login is tried, its last tries are kept for a human. One correct login "
+                "(`pkcs11-tool --login --test` with the right PIN) resets the counter; then restart" % ", ".join(low))
         try:
             session.login(pin)
         except self.pkcs11.PyKCS11Error as error:
             refused = [name for name in self.PIN_REFUSALS if getattr(error, "value", None) == getattr(self.pkcs11, name)]
             if refused:
                 self._latch(refused[0])
-                raise Refused("the token refused the PIN (%s): latched, no further attempt is made; fix the credential, "
-                              "then `authority.py clear-pin-latch` as root and restart" % refused[0]) from error
+                raise Refused("the token refused the PIN (%s): latched, no further attempt is made; %s" % (refused[0], WAY_OUT)) from error
             raise
 
     def sign(self, message):
-        require(not self.latched, "the token refused the PIN (%s) and the signer is latched: fix the credential, then "
-                "`authority.py clear-pin-latch` as root and restart; no further attempt is made" % (self.latched or {}).get("reason"))
+        require(not self.latched, "the token refused the PIN (%s) and the signer is latched, no further attempt is made: %s"
+                % ((self.latched or {}).get("reason"), WAY_OUT))
         pin = self._pin()                                # before any session: a missing PIN touches no token
         session, slot = self._session()
         try:
@@ -325,6 +325,10 @@ class Pkcs11Signer:
 
 
 PIN_LATCH = "pin-latch.json"
+# The way out of a PIN latch. The refusal left the token's counter low (CKF_USER_PIN_COUNT_LOW), which
+# the signer also refuses, and only a correct login resets it (regalia-kms-d9).
+WAY_OUT = ("fix the credential, reset the token's counter with one correct login (`pkcs11-tool --login --test` with the "
+           "right PIN), then `authority.py clear-pin-latch` as root and restart the service")
 
 
 def _read_latch(path):
@@ -776,7 +780,8 @@ def main(argv=None):
     sub.add_parser("serve")
     sub.add_parser("status")
     sub.add_parser("wg-apply")
-    sub.add_parser("clear-pin-latch", help="after fixing the PIN credential: let the token signer log in again (then restart)")
+    sub.add_parser("clear-pin-latch", help="let the token signer log in again. First fix the PIN credential and reset the token's "
+                   "counter with one correct login (pkcs11-tool --login --test); then this; then restart the service")
     revoke = sub.add_parser("revoke")
     revoke.add_argument("--node", required=True)
     revoke.add_argument("--state", required=True, choices=RESTRICTIVE)
