@@ -429,13 +429,19 @@ class Verifier:
         require(isinstance(node_id, str) and node_id in self.nodes, "unknown node: not in the policy")
         return self.nodes[node_id]
 
-    def challenge(self, node_id, ek_public, ak_public, replace=False):
-        """Step 1 of enrollment: a credential only the TPM holding this EK and this AK can open."""
+    def challenge(self, node_id, ek_public, ak_public, replace=False, ak_name=None):
+        """Step 1 of enrollment: a credential only the TPM holding this EK and this AK can open. With `ak_name`
+        (the AK Name the root-signed manifest gives this node, #190), the AK offered must be exactly that one:
+        the challenge then proves the manifest's AK sits in the TPM with the manifest's EK."""
         expected = self.node(node_id)
         require(len(ek_public) <= 1024 and len(ak_public) <= 1024, "a public area exceeds 1 KiB")
         ek_name = name_of(public_area(ek_public, "the EK public area"))
         require(hmac.compare_digest(ek_name.hex(), expected["ek_name"]), "the EK is not the one recorded for this node at intake")
-        ak_name, _ = ak_identity(ak_public)
+        ak_name_offered, _ = ak_identity(ak_public)
+        if ak_name is not None:
+            require(isinstance(ak_name, str) and hmac.compare_digest(ak_name_offered.hex(), ak_name.lower()),
+                    "the AK offered is not the one the manifest names for this node")
+        ak_name = ak_name_offered
         secret = self.rand(32)
         credential = make_credential(ek_public, ak_name, secret, self.run)
         with locked_state(self.state_path) as (state, save):
