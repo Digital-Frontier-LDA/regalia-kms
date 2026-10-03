@@ -2,7 +2,7 @@
 """The node's four units under a real systemd, part 1 (#80, step 3b): they start, reach what their sandboxes
 let them reach, and do their first job.
 
-    sudo python3 -Es e2e/node-units-systemd.py      (CI only: GITHUB_ACTIONS, or REGALIA_NODE_HOST_OK=1)
+    sudo --preserve-env=GITHUB_ACTIONS python3 -Es e2e/node-units-systemd.py   (CI only; elsewhere REGALIA_NODE_HOST_OK=1)
 
 IT CHANGES THE MACHINE, which is why it refuses to run anywhere but a throwaway CI runner: it loads the
 kernel's tpm_vtpm_proxy module and gives a software TPM a /dev/tpmrm device, replaces the system chrony's
