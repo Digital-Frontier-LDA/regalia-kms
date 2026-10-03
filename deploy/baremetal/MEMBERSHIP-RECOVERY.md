@@ -69,7 +69,8 @@ be computed from the chain files.
 | 0 | `ALLOW` | Done | Start the service |
 | 1 | `DENY`, or none if the arguments were refused | Refused. Nothing was changed | Read the reason |
 | 2 | none | The command line itself is wrong (a missing or unknown option). Nothing was read or changed | Correct the arguments |
-| 3 | `INCOMPLETE` | The re-anchor had begun and did not finish: the chain file was being written, or a TPM command failed, or power was lost. The verified chain may or may not be on disk yet; the node's membership does not load | If the reason is a storage error (disk full, read-only), fix that first. Then **run the same command again with the same chains**: it completes from wherever it stopped. A shorter or different chain is refused: the file on disk, if it was written, and whatever the TPM still holds bind the second attempt |
+| 3 | `INCOMPLETE` | The re-anchor had begun and a step failed (the chain file could not be written, or a TPM command was refused). The verified chain may or may not be on disk yet; the node's membership does not load | If the reason is a storage error (disk full, read-only), fix that first. Then **run the same command again with the same chains**: it completes from wherever it stopped. A shorter or different chain is refused: the file on disk, if it was written, and whatever the TPM still holds bind the second attempt |
+| none | a `reanchor-requested` line with no outcome after it | The process was killed or the power was lost while it ran: there is no exit status and no outcome line. Anything from nothing changed to finished is possible | The same as status 3: run the same command again with the same chains. If the anchor is already usable, it says so and changes nothing; start the service |
 | 4 | request line only | Done, but the outcome could not be written to the audit log | Record it by hand; the message gives the epoch and digest |
 
 ### Deciding that the sources are right
