@@ -22,6 +22,13 @@
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key from the socket, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
+#   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
+#           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
+#           unattended, as boot 2.
+#   boot 2d THE SAME IMAGE, RETIRED: the document lists the current image only. The TPM releases the local
+#           half all the same (its signed PCR 11 policy has no counter), both peers refuse the quote naming
+#           PCR 11, nothing is given, the disk stays locked and the console asks for the recovery key.
+#           Boot 2b then boots the current image again: retiring one image strands nothing.
 #   boot 2b A CREDENTIAL FROM SMBIOS (a unit drop-in, as the firmware could pass one): not acted on, since
 #           the image's command line stops systemd importing credentials; the unlock goes on.
 #   boots 3-6  A PLANTED CREDENTIAL on the ESP (a unit drop-in, an extra unit, a tmpfiles line, an empty
@@ -70,10 +77,24 @@ if [ -n "${REGALIA_BOOT_ROOTFS:-}" ]; then
   cp -a "$REGALIA_BOOT_ROOTFS" "$ROOT"
 else
   command -v mmdebstrap >/dev/null || { echo "unlock-boot-qemu: mmdebstrap is required (or REGALIA_BOOT_ROOTFS)"; exit 2; }
-  mmdebstrap --variant=minbase \
+  # a snapshot of the archive (REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/<time>/ in CI) gives
+  # the same packages on every run, so the initrd matches its reviewed inventory (#198); its Release file is
+  # past its Valid-Until, which only a snapshot may be
+  APTOPT=()
+  case "${REGALIA_BOOT_MIRROR:-}" in *snapshot.debian.org*) APTOPT=(--aptopt='Acquire::Check-Valid-Until "false"') ;; esac
+  # the main suite, its updates and its SECURITY suite (REGALIA_BOOT_SECURITY_MIRROR, the security archive's
+  # snapshot at the same time in CI): a reviewed baseline without security updates is not one to ship (#198)
+  MIRROR="${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}"
+  # (explicit lines name their keyring: mmdebstrap only picks one by itself for a bare mirror URL)
+  KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"      # Debian's own, pinned: the runner's predates trixie's keys
+  SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
+           "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
+  mmdebstrap --variant=minbase "${APTOPT[@]}" \
     --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
-    "$SUITE" "$ROOT" "${REGALIA_BOOT_MIRROR:-http://deb.debian.org/debian}" >"$W/mmdebstrap.log" 2>&1 \
+    "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
+  # the guest's own apt reads the same lines: the keyring at the same path inside it
+  install -D -m 0644 "$KEYRING" "$ROOT$KEYRING"
 fi
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
@@ -152,14 +173,43 @@ IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmd
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
 KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/uki/keys/TEST-secure-boot.key --secure-boot-cert /tmp/uki/keys/TEST-secure-boot.crt"
+# #198: the review build records, run alone first, so that a refusal says what. The image is checked
+# against deploy/baremetal/initrd/initrd-inventory.txt, every entry pinned; on a difference the lines that
+# differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
+# before a pull request changes the inventory.
+cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
+if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled" >"$W/review.json" 2>&1; then
+  python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
+    || cat "$W/review.json"
+  chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true
+  { grep -v '^#' deploy/baremetal/initrd/initrd-inventory.txt || true; } | sed '/^$/d' | sort > "$W/pinned.txt"
+  sort "$W/inventory.txt" > "$W/found.txt"
+  echo "### the image's inventory lines the reviewed inventory does not hold (+) and the reverse (-):"
+  comm -23 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY+ /' || true
+  comm -13 "$W/found.txt" "$W/pinned.txt" | sed 's/^/INVENTORY- /' || true
+  echo "unlock-boot-qemu: the image's initrd does not pass uki.py's review"; exit 2
+fi
+echo "the initrd passes uki.py's review (#198): inventory $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["inventory_sha256"][:16])' "$W/review.json")"
 # shellcheck disable=SC2086  # the two lists are words on purpose
 # two builds (the signer requires a second builder's identical record), then the signature
-chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out \
-  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second \
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN --record /tmp/uki/out/e2e.record.json --second-record /tmp/uki/second/e2e.record.json --out /tmp/uki/out $KEYS" >"$W/uki.log" 2>&1 \
   || { cat "$W/uki.log"; echo "unlock-boot-qemu: the image did not build or sign"; exit 2; }
 grep 'PCR 11' "$W/uki.log" || true
+# A SECOND SIGNED IMAGE of the same build (#135): the same initrd and kernel, one inert word more on its command
+# line, so another PCR 11, signed by the same keys. The TPM's signed PCR 11 policy accepts both; only the peers'
+# measurement document tells them apart. Boots 2c and 2d approve it and then retire it.
+printf '%s regalia.e2e-image=old\n' "$(cat "$ROOT/tmp/uki/cmdline")" > "$ROOT/tmp/uki/cmdline-old"
+IN_OLD="${IN/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-old }"
+# shellcheck disable=SC2086  # the two lists are words on purpose
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki sign $IN_OLD --record /tmp/uki/out/e2e-old.record.json --second-record /tmp/uki/second/e2e-old.record.json --out /tmp/uki/out $KEYS" >"$W/uki-old.log" 2>&1 \
+  || { cat "$W/uki-old.log"; echo "unlock-boot-qemu: the second image did not build or sign"; exit 2; }
 cp "$ROOT/tmp/uki/out/e2e.efi" "$W/e2e.efi"; cp "$ROOT/tmp/uki/out/e2e.signed.json" "$W/e2e.record.json"; cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"
+cp "$ROOT/tmp/uki/out/e2e-old.efi" "$W/e2e-old.efi"; cp "$ROOT/tmp/uki/out/e2e-old.signed.json" "$W/e2e-old.record.json"
+cmp -s "$W/e2e.efi" "$W/e2e-old.efi" && { echo "unlock-boot-qemu: the two images are the same file"; exit 2; }
 rm -rf "$ROOT/tmp/uki" "$W/keys"
 for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
@@ -186,7 +236,7 @@ cryptsetup close regalia-boot-build
 losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
-echo "### ten boots"
+echo "### twelve boots"
 out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
@@ -197,4 +247,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 10 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer and the recovery key)"
+echo "unlock-boot-qemu: 12 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an older signed image approved and then retired (refused, the disk stays locked), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer and the recovery key)"
