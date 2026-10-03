@@ -1,0 +1,80 @@
+# regalia-kms#198: the KMS host's initrd is pinned, entry by entry, in deploy/baremetal/initrd/initrd-inventory.txt,
+# and its images are built from a dated snapshot of the Debian archive. A snapshot also freezes security fixes. So once
+# a day this builds the same initrd from TODAY's archive (with its security suite), compares it with the reviewed
+# inventory, and keeps ONE open issue (label initrd-drift) saying what moved: packages A -> B (security fixes in
+# bold) and the lines dracut generated differently. The issue is read and closed by a pull request that moves the
+# snapshot date and refreshes the inventory (KERNEL-UPDATE.md). Nothing here changes the repository.
+name: initrd drift
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+  # on a pull request that changes the drift check or the inventory: the report is shown, no issue is filed
+  pull_request:
+    paths:
+      - .github/workflows/initrd-drift.yml
+      - e2e/initrd-drift.sh
+      - deploy/baremetal/initrd_drift.py
+      - deploy/baremetal/initrd/initrd-inventory.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: initrd-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the guest builder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
+      - name: Build the pre-root client (static, no cgo)
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: Build today's initrd and compare it with the reviewed inventory
+        id: drift
+        run: |
+          rc=0
+          sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/initrd-drift.sh "$RUNNER_TEMP/report.md" || rc=$?
+          [ ! -e "$RUNNER_TEMP/report.md" ] || sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/report.md"   # written as root
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          [ "$rc" -le 1 ]
+      - name: Show the report
+        if: steps.drift.outputs.rc == '1'
+        run: cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: File or update the drift issue
+        if: steps.drift.outputs.rc == '1' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/report.md"
+          printf '\n_Found by %s._\n' "$RUN_URL" >> "$report"
+          gh label create initrd-drift --color B60205 --description "The initrd moved since its inventory was reviewed (#198)" 2>/dev/null || true
+          issue="$(gh issue list --state open --label initrd-drift --json number --jq '.[0].number // empty')"
+          if [ -z "$issue" ]; then
+            gh issue create --title "The initrd has moved since its inventory was reviewed (#198)" --label initrd-drift --body-file "$report"
+            exit 0
+          fi
+          # the same findings as last time: nothing to add (the report ends with a digest of its findings)
+          digest="$(grep -o 'initrd-drift [0-9a-f]*' "$report" | head -1)"
+          if gh issue view "$issue" --json body,comments --jq '[.body] + [.comments[].body] | join("\n")' | grep -qF "$digest"; then
+            echo "issue #$issue already says this"
+          else
+            gh issue comment "$issue" --body-file "$report"
+          fi
