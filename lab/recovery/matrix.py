@@ -466,11 +466,12 @@ def run(script, output, mode='all', shard=(1, 1), reconciler=None):
             directory = Path(temp)
             # The script runs from a staged copy, with recovery_state.py and a trail writer beside it (#278): the real
             # trails.py writes root's /var/log/regalia, which this harness (no root) does not touch. The stand-in
-            # accepts every event; the trail itself is tested in tests/test_baremetal_recovery_key.py and the e2e.
+            # accepts every event and reports no open request; the trail itself is tested in tests/test_baremetal_recovery_key.py and the e2e.
             staged = directory/'tool'; staged.mkdir()
             shutil.copy(script, staged/script.name)
             shutil.copy(script.parent/'recovery_state.py', staged/'recovery_state.py')
-            (staged/'trails.py').write_text('import sys\nsys.stdin.read()\nprint(1)\n')
+            # append: accepted, seq 1; unanswered: no open request (nothing printed)
+            (staged/'trails.py').write_text("import sys\nif sys.argv[1:2] == ['append']:\n    sys.stdin.read()\n    print(1)\n")
             script = staged/script.name
             alphabet='cbdefghijklnrtuv'
             recovery=lambda: '-'.join(''.join(secrets.choice(alphabet) for _ in range(8)) for _ in range(8))
