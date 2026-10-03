@@ -158,6 +158,41 @@ class Heartbeats(Case):
         self.assertEqual(self.a.beat()["heartbeat"]["sequence"], 2)
         self.assertIn(("authority-heartbeat", "DROPPED"), [(e["event"], e["outcome"]) for e in self.events])
 
+    def test_a_pending_file_that_cannot_be_used_is_dropped_and_serving_goes_on(self):
+        """#230 second read (regalia-kms-51): a valid-JSON pending file without its fields crashed every beat."""
+        for label, raw in (("fields missing", b'{"heartbeat": {}}'), ("not JSON", b"{"), ("another key", None)):
+            with self.subTest(label):
+                if raw is None:
+                    stranger = Ed25519PrivateKey.generate()
+                    body = {"schema": hb.SCHEMA, "epoch": 1, "sequence": 99, "issued_at": authority.stamp(self.now), "expires_at": authority.stamp(self.now + 3600),
+                            "manifest_digest": m.digest(self.m1)}
+                    raw = json.dumps(hbt.beat(self.m1, 99, issued=self.now, key=stranger)).encode()
+                with open(self.d + "/pending-heartbeat.json", "wb") as f:
+                    f.write(raw)
+                before = self.a.counter.value()
+                envelope = self.a.beat()
+                self.assertEqual(envelope["heartbeat"]["sequence"], before + 1)
+                self.assertFalse(os.path.exists(self.d + "/pending-heartbeat.json"))
+                self.assertEqual(self.events[-2]["outcome"], "DROPPED")
+
+    def test_a_failed_pending_write_never_signs_the_number_again(self):
+        real = authority.Authority._write
+        calls = {"n": 0}
+
+        def write(this, name, raw, mode):
+            if name == authority.PENDING and calls["n"] == 0:
+                calls["n"] += 1
+                raise OSError("no space left")
+            return real(this, name, raw, mode)
+        signed = []
+        real_sign = self.a.signer.sign
+        self.a.signer.sign = lambda message: (signed.append(json.loads(message[len(hb.DOMAIN):])["sequence"]), real_sign(message))[1]
+        with unittest.mock.patch.object(authority.Authority, "_write", write):
+            with self.assertRaises(OSError):
+                self.a.beat()
+            self.a.beat()
+        self.assertEqual(signed, [1, 2])                   # number 1 lost, never signed twice
+
     def test_a_signer_failing_for_a_day_reserves_one_number(self):
         clock = {"t": 0.0}
         failing = unittest.mock.patch.object(self.a.signer, "sign", side_effect=OSError("token gone"))
@@ -219,8 +254,9 @@ class Revocation(Case):
         restart the authority still publishes the new epoch, with a higher sequence."""
         self.a.beat()
         with unittest.mock.patch.object(authority.Authority, "beat", side_effect=OSError("power lost")):
-            with self.assertRaises(OSError):
+            with self.assertRaises(authority.Committed) as caught:          # committed, heartbeat not yet out
                 self.a.revoke("b", "QUARANTINED", "suspected tampering", "local-root")
+        self.assertEqual(caught.exception.epoch, 2)
         self.assertEqual((self.a.store.load()["epoch"], self.a.held()["heartbeat"]["epoch"]), (2, 1))
         restarted = self.authority()
         beat = restarted.catch_up()
@@ -262,6 +298,13 @@ class Revocation(Case):
         self.assertEqual([sequence for _, sequence in published], [1, 2])          # never two signatures under one number
         self.assertEqual(self.a.held()["heartbeat"]["epoch"], 2)
 
+    def test_a_revocation_committed_but_not_published_says_so(self):
+        with unittest.mock.patch.object(authority.Authority, "_publish", side_effect=OSError("disk full")):
+            answer = self.a.control(json.dumps({"op": "revoke", "node": "c", "state": "QUARANTINED", "reason": "half done"}).encode(), 0)
+        self.assertEqual((answer["ok"], answer["epoch"], answer["published"]), (True, 2, False))
+        self.assertIn("the next beat will", answer["reason"])
+        self.assertEqual(self.a.catch_up()["heartbeat"]["epoch"], 2)
+
     def test_unauthenticated_time_signs_no_revocation(self):
         self.authenticated = False
         self.refused("time is not authenticated", self.a.revoke, "c", "QUARANTINED", "x-ray", "local-root")
@@ -277,6 +320,16 @@ class Control(Case):
         self.assertEqual((answer["ok"], answer["epoch"]), (True, 2))
         self.assertFalse(self.a.control(b'{"op":"revoke","node":"c","state":"ACTIVE","reason":"no"}', 0)["ok"])
         self.assertFalse(self.a.control(b'{"op":"rotate"}', 0)["ok"])
+
+    def test_a_request_that_breaks_the_handler_does_not_take_the_socket_down(self):
+        stop = []
+        thread = self.a.control_listener(lambda: bool(stop), allowed_uid=os.getuid())
+        self.addCleanup(lambda: (stop.append(True), thread.join(5)))
+        answer = authority.ask(self.d + "/control.sock", {"op": "revoke", "node": ["c"], "state": "QUARANTINED", "reason": "list"})
+        self.assertEqual(answer["ok"], False)
+        with unittest.mock.patch.object(authority.Authority, "status", side_effect=TypeError("unexpected")):
+            self.assertIn("internal error (TypeError)", authority.ask(self.d + "/control.sock", {"op": "status"})["refused"])
+        self.assertTrue(authority.ask(self.d + "/control.sock", {"op": "status"})["ok"])       # still answering
 
     def test_over_a_real_socket_with_the_peer_s_credentials(self):
         stop = []
@@ -314,6 +367,16 @@ class CommandLine(Case):
             code, out, _ = self.run_main("status")
         self.assertEqual((code, asked.call_args.args[1]), (0, {"op": "status"}))
         self.assertIn('"signer": "file"', out)
+
+    def test_init_and_accept_are_refused_while_serve_answers(self):
+        with open(self.d + "/chain.json", "w") as f:
+            json.dump([m_sign(self.m1)], f)
+        stop = []
+        thread = self.a.control_listener(lambda: bool(stop), allowed_uid=os.getuid())
+        self.addCleanup(lambda: (stop.append(True), thread.join(5)))
+        code, _, err = self.run_main("accept", "--chain", self.d + "/chain.json")
+        self.assertEqual(code, 2)
+        self.assertIn("the authority is running", err)
 
     def test_init_and_accept_only_as_the_service_s_own_user(self):
         with open(self.d + "/chain.json", "w") as f:

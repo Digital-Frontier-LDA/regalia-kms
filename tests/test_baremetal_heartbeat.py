@@ -454,6 +454,35 @@ class Sequence(Case):
                         self.assertEqual(counter.value(), target + 1)
                     os.unlink(state)
 
+    def test_a_node_killed_early_in_a_huge_catch_up_still_takes_a_later_heartbeat(self):
+        """#230 second read (regalia-kms-51): after 50,000 steps owed and a crash at increment 10, a heartbeat
+        13,000 further must be taken: the owed advance is finished first, and the new one measured from it."""
+        tpm = hbt_killing(10)
+        counter = hb.Counter("0x1500018", lock_path=self.d + "/k.lock", run=tpm)
+        counter.define()
+        clock = {"now": T0 + 60, "ticks": 5000}
+        fresh = hb.Freshness(counter, lambda: (clock["now"], True), lambda: clock["ticks"], self.d + "/huge.json")
+        fresh.accept(beat(self.m1, 1, issued=T0), self.m1)
+        away = 50000 * hb.MIN_INTERVAL_S
+        clock["now"] += away
+        clock["ticks"] += away * 1000
+        tpm.armed = True
+        with self.assertRaises(OSError):
+            fresh.accept(beat(self.m1, 50001, issued=T0 + away), self.m1)
+        tpm.armed = False
+        later = 13000 * hb.MIN_INTERVAL_S
+        clock["now"] += later
+        clock["ticks"] += later * 1000
+        fresh.accept(beat(self.m1, 63001, issued=T0 + away + later), self.m1)
+        self.assertEqual(counter.value(), 63001)
+
+    def test_the_stored_allowance_never_exceeds_the_cap(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(2 * 366 * 86400)
+        self.f.accept(beat(self.m1, 2, issued=T0 + 2 * 366 * 86400), self.m1)
+        with open(self.state) as f:
+            self.assertEqual(json.load(f)["allowance"], hb.MAX_ALLOWANCE)
+
     def test_an_issue_time_before_the_held_one_buys_nothing(self):
         held = beat(self.m1, 1, issued=T0 + 86400)
         self.assertEqual(hb.allowed_jump(beat(self.m1, 2, issued=T0)["heartbeat"], held, 1000), 1000)

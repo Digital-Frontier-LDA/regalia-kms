@@ -324,15 +324,17 @@ class Freshness:
         now = self._now(state)
         left = self._live(heartbeat, now)
         held = self.counter.value()
-        # An advance a crash interrupted (the held heartbeat is above the counter) is still owed: its gap is
-        # added to this heartbeat's allowance, at most the allowance it was accepted under, so a node that
-        # stopped at ANY increment of a long catch-up is not stranded by the counter it left behind.
+        # An advance a crash interrupted (the held heartbeat is above the counter) is finished FIRST, under
+        # the allowance it was accepted under: a node that stopped at ANY increment of a long catch-up is
+        # not stranded by the counter it left behind, and the new heartbeat is measured from there.
         owed = pending(state, held, self.counter.MAX_JUMP)
-        allowance = allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP) + owed
+        if owed:
+            held = self.counter.advance(held + owed, state["allowance"] or self.counter.MAX_JUMP)
+        allowance = min(allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP), MAX_ALLOWANCE)
         require(heartbeat["sequence"] > held, "REPLAY: sequence %d is not above the TPM counter %d" % (heartbeat["sequence"], held))
         require(heartbeat["sequence"] - held <= allowance, "sequence jump %d exceeds the bound %d: anomaly"
                 % (heartbeat["sequence"] - held, allowance))
-        state["envelope"], state["allowance"] = envelope, min(allowance, MAX_ALLOWANCE)
+        state["envelope"], state["allowance"] = envelope, allowance
         self._write(state)                                                # disk first, durably
         self.counter.advance(heartbeat["sequence"], state["allowance"])  # then the counter
         return left

@@ -250,18 +250,21 @@ class Authority:
             manifest = self.store.load()
             seconds, authenticated = self.clock()
             require(authenticated, "time is not authenticated: no heartbeat is signed")
-            pending = self._read(PENDING)
-            if pending is not None:
-                body = pending["heartbeat"]
-                live = heartbeat.parse_time(body["expires_at"], "expires_at") > seconds
-                if live and body["epoch"] == manifest["epoch"] and body["manifest_digest"] == membership.digest(manifest):
-                    raw = json.dumps(pending, sort_keys=True).encode()
-                    self._publish(raw)                                  # the same bytes, again
+            if os.path.exists(self.path(PENDING)):
+                try:
+                    pending = self._read(PENDING)
+                    heartbeat.verify(pending, manifest)                 # for THIS manifest, by a key it names, intact
+                    expires = heartbeat.parse_time(pending["heartbeat"]["expires_at"], "expires_at")
+                    require(expires > seconds, "expired unpublished")
+                    require(heartbeat.MIN_INTERVAL_S <= expires - seconds, "too close to its expiry to be worth publishing")
+                except (Refused, ValueError, KeyError, TypeError) as stale:
+                    # unreadable, for another epoch, or out of date: dropped, and its number is lost (never re-signed)
+                    os.unlink(self.path(PENDING))
+                    self.trail({"event": "authority-heartbeat", "outcome": "DROPPED", "reason": str(stale)[:240], "signer": self.signer.kind})
+                else:
+                    self._publish(json.dumps(pending, sort_keys=True).encode())     # the same bytes, again
                     os.unlink(self.path(PENDING))
                     return pending
-                os.unlink(self.path(PENDING))                           # expired or superseded: that number is lost
-                self.trail({"event": "authority-heartbeat", "outcome": "DROPPED", "sequence": body["sequence"], "epoch": body["epoch"],
-                            "reason": "expired unpublished" if not live else "superseded by epoch %d" % manifest["epoch"], "signer": self.signer.kind})
             lifetime = self.lifetime(manifest)
             # checked BEFORE a number is reserved: a key the manifest does not name would burn one per retry
             require(self.signer.public() in manifest["revocation_keys"], "the revocation key %s... is not named by the manifest at epoch %d: "
@@ -273,8 +276,8 @@ class Authority:
                                                          "sig": self.signer.sign(heartbeat.DOMAIN + membership.canonical(body)).hex()}}
             heartbeat.verify(envelope, manifest)
             raw = json.dumps(envelope, sort_keys=True).encode()
-            self._write(PENDING, raw, 0o600)                            # signed: from here only these bytes go out under this number
-            self.reserved = None
+            self.reserved = None                                        # signed: this number is never signed again
+            self._write(PENDING, raw, 0o600)                            # from here only these bytes go out under it
             self.trail({"event": "authority-heartbeat", "outcome": "SIGNED", "epoch": manifest["epoch"], "sequence": sequence,
                         "digest": body["manifest_digest"], "expires_at": body["expires_at"], "key": self.signer.public(),
                         "signer": self.signer.kind, "reason": reason})
@@ -314,7 +317,10 @@ class Authority:
             self.trail({"event": "authority-revoke", "outcome": "SIGNED", "epoch": candidate["epoch"], "node": node_id, "state": state,
                         "digest": membership.digest(candidate), "key": self.signer.public(), "signer": self.signer.kind,
                         "requester": requester, "reason": reason})
-            return envelope, self.beat("revocation of %s" % node_id)           # the pending old-epoch bytes are dropped there
+            try:
+                return envelope, self.beat("revocation of %s" % node_id)       # the pending old-epoch bytes are dropped there
+            except (Refused, OSError) as failure:
+                raise Committed(candidate["epoch"], failure) from None
 
     def init(self, envelopes):
         """First start: define the TPM anchor and the sequence counter, then take the root's chain."""
@@ -350,10 +356,16 @@ class Authority:
             if request["op"] == "status":
                 return {"ok": True, "status": self.status()}
             membership.exact(request, ("op", "node", "state", "reason"), "revoke request")
+            require(all(isinstance(request[k], str) for k in ("node", "state", "reason")), "node, state and reason must be strings")
             envelope, beat = self.revoke(request["node"], request["state"], request["reason"], "local-root")
-            return {"ok": True, "epoch": envelope["manifest"]["epoch"], "sequence": beat["heartbeat"]["sequence"]}
+            return {"ok": True, "epoch": envelope["manifest"]["epoch"], "sequence": beat["heartbeat"]["sequence"], "published": True}
+        except Committed as committed:
+            return {"ok": True, "epoch": committed.epoch, "published": False, "reason": str(committed)[:240]}
         except (Refused, ValueError, OSError) as failure:
             return {"ok": False, "refused": str(failure)[:240]}
+        except Exception as failure:          # noqa: BLE001 - one bad request must not take the socket down
+            self.trail({"event": "authority-control", "outcome": "FAILED", "reason": "%s: %s" % (type(failure).__name__, str(failure)[:200])})
+            return {"ok": False, "refused": "internal error (%s): recorded" % type(failure).__name__}
 
     def control_listener(self, stop, allowed_uid=0):
         """The control socket, in its own thread: one JSON request per connection, from root only."""
@@ -377,12 +389,12 @@ class Authority:
                     except socket.timeout:
                         continue
                     with conn:
-                        conn.settimeout(10)
-                        uid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))[1]
-                        try:
+                        try:                       # whatever one connection does, the listener goes on
+                            conn.settimeout(10)
+                            uid = struct.unpack("3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))[1]
                             raw = conn.recv(4097)
                             conn.sendall(json.dumps(self.control(raw, uid, allowed_uid), sort_keys=True).encode())
-                        except OSError:
+                        except Exception:          # noqa: BLE001
                             pass
             finally:
                 listener.close()
@@ -414,8 +426,9 @@ class Authority:
                 try:
                     self.catch_up() or self.beat()
                     due, failures = clock() + self.cfg["interval_s"], 0
-                except (Refused, OSError) as failure:
-                    self.trail({"event": "authority-heartbeat", "outcome": "FAILED", "reason": str(failure)[:240], "signer": self.signer.kind})
+                except Exception as failure:      # noqa: BLE001 - a beat that fails is retried, never the end of serve
+                    self.trail({"event": "authority-heartbeat", "outcome": "FAILED", "reason": "%s: %s" % (type(failure).__name__, str(failure)[:220]),
+                                "signer": self.signer.kind})
                     due, failures = clock() + retry_delay(failures, self.cfg["interval_s"]), failures + 1
             sleep(1)
 
@@ -423,6 +436,15 @@ class Authority:
         with open(self.cfg["wg_service_key"]) as f:
             private = f.read(200).strip()
         return wgsvc.hex_key(self.run(["wg", "pubkey"], input=(private + "\n").encode(), capture_output=True, timeout=10).stdout.decode().strip())
+
+
+class Committed(Refused):
+    """The revocation is committed (the store is at `epoch`), but its heartbeat is not yet published: the
+    next beat publishes it. Asking again would only be told the node is already revoked."""
+
+    def __init__(self, epoch, failure):
+        super().__init__("epoch %d is committed; its heartbeat is not yet published (%s): the next beat will" % (epoch, failure))
+        self.epoch = epoch
 
 
 def retry_delay(failures, interval):
@@ -483,6 +505,9 @@ def main(argv=None):
             print(json.dumps(answer.get("status", answer), indent=1, sort_keys=True))
             return 0
         if args.command in ("init", "accept"):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                running = probe.connect_ex(cfg["control_socket"]) == 0
+            require(not running, "the authority is running (its control socket answers): stop regalia-authority first, one writer")
             owner = os.stat(cfg["state_dir"]).st_uid
             require(os.geteuid() == owner, "run as the authority's own user (uid %d), e.g. runuser -u regalia-authority -- ...: "
                     "files written as anyone else would lock the service out" % owner)
