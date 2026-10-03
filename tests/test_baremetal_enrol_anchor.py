@@ -44,6 +44,28 @@ class Anchor(nt.Case):
         self.assertEqual(self.anchor(chain), (3, digest))
         self.assertEqual(node.anchor().value(), 3)
 
+    def late_chain(self):
+        """epoch 1 without this node, epoch 2 (root-signed) adding it: a node joining a running network."""
+        me = self.cfg["node_id"]
+        first = hbt.manifest()
+        first["nodes"] = [n for n in first["nodes"] if n["node_id"] != me]
+        second = dict(copy.deepcopy(first), epoch=2, prev_digest=m.digest(first))
+        second["nodes"] = [hbt.node(me, "ACTIVE", 0)] + second["nodes"]
+        return [rt.sign(first), rt.sign(second)]
+
+    def test_a_late_node_gets_no_counter_at_zero(self):
+        """#190: its counter is defined AT the network's sequence by the first-heartbeat step, never at 0 here."""
+        chain = self.late_chain()
+        self.assertEqual(self.anchor(chain)[0], 2)
+        counter = self.node().freshness().counter
+        self.assertNotEqual(counter._tpm("nvreadpublic", counter.index).returncode, 0, "no heartbeat counter yet")
+        self.assertEqual(self.anchor(chain)[0], 2)                  # resumed: still none
+
+    def test_a_late_node_whose_counter_exists_already_is_refused(self):
+        self.node().freshness().counter.define()
+        with self.assertRaisesRegex(enrol.Refused, "joins after epoch 1 and the TPM already holds the heartbeat counter"):
+            self.anchor(self.late_chain())
+
     def test_a_longer_chain_continues_a_shorter_enrolment(self):
         chain = self.chain(3)
         self.anchor(chain[:1])
