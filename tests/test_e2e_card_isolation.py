@@ -16,6 +16,7 @@ sc-hsm-tool, opensc-tool or pkcs15-tool against real cards must
 This reads the scripts. It cannot prove a gate is correct; it proves no PIN line was written without one.
 """
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -152,7 +153,32 @@ ALLOWED_EXPORTS = {"OPENSC_CONF", "PCSCLITE_CSOCK_NAME", "HSM_PKCS11_MODULE", "S
                    "LC_COLLATE", "LC_ALL",
                    # cosmos-simapp-kms-tx.sh hands the Go node test two file paths: where to read the sign doc,
                    # where to write the signature
-                   "REGALIA_COSMOS_NODE_SIGNDOC", "REGALIA_COSMOS_NODE_SIGNATURE_OUT"}
+                   "REGALIA_COSMOS_NODE_SIGNDOC", "REGALIA_COSMOS_NODE_SIGNATURE_OUT",
+                   # nitrokey-pin-import-drill.sh hands seal-hsm-pin.sh the TPM it seals to and its credential store
+                   "TPM2TOOLS_TCTI", "REGALIA_CREDSTORE",
+                   # kms-two-token-systemd.sh imports this repository's host probe (value: the repository only)
+                   "PYTHONPATH"}
+# The values an allowed name may take where a wrong one would undo the isolation (51): OpenSC's configuration
+# only the drill's own generated file (or passed on unchanged), PATH only literal additions, the PKCS#11
+# module only the one the drill chose.
+EXPORT_VALUES = {
+    "OPENSC_CONF": re.compile(r'"\$\{?(?:W|STATE)\}?/[\w.-]+"|"\$OPENSC_CONF"'),
+    "PATH": re.compile(r'"\$PATH(?::/[\w./-]+)+"'),
+    "HSM_PKCS11_MODULE": re.compile(r'"\$(?:MODULE|HSM_PKCS11_MODULE)"'),
+    "PYTHONPATH": re.compile(r'"\$(?:HERE|ROOT)"'),
+}
+# What may set a drill's own directory variables: a fresh mktemp directory, the repository from the drill's
+# own path, or a literal absolute path. Anything else would make "$W/…" any path at all.
+DIR_INIT = re.compile(r'"\$\(mktemp -d(?: "\$\{TMPDIR:-/tmp\}/[\w.-]+")?\)"'
+                      r'|"\$\(cd "\$\(dirname "(?:\$0|\$\{BASH_SOURCE\[0\]\})"\)(?:/\.\.)?" && pwd\)"'
+                      r'|/(?:var/lib|etc|run)/[\w.-]+(?:/[\w.-]+)*')     # a literal: the KMS's own state, configuration, run directory
+# Names a drill's function may not take: a shell builtin or keyword (an "exit(){ :; }" makes every
+# "|| exit" go on), or a command a gate or this check relies on (51).
+SHADOWED = set(subprocess.run(["bash", "-c", "compgen -b; compgen -k"], capture_output=True, text=True).stdout.split()) | {
+    "exit", "return", "command", "builtin", "eval", "exec", "source", "trap", "set", "unset", "export", "declare", "local",
+    "true", "false", "test", "[", "grep", "awk", "sed", "python", "python3", "ykman", "opensc-tool", "pkcs11-tool",
+    "sc-hsm-tool", "pkcs15-tool", "pkcs15-init", "timeout", "sudo", "env", "systemctl", "systemd-run", "openssl", "flock",
+    "sha256sum", "cat", "head", "tail", "cut", "tr", "mktemp", "printf", "echo", "bash", "sh"}
 SHELL_WORD = re.compile(r"(?<![\w.$-])(?:/[\w.-]+)*/?(?:ba|da|z|k)?sh(?![\w.-])")
 GATE_NAMES = LIB_GATE_NAMES = ("bench_gate", "bench_reader_gate", "bench_isolate", "bench_slot")
 
@@ -174,6 +200,8 @@ def script_problems(text, script=None):
         body = " ".join(bare[start:end])
         if name in LIB_GATE_NAMES:
             found.append((start + 1, "shadows %s, a gate e2e/lib/bench_cards.sh defines" % name))
+        if name in SHADOWED:
+            found.append((start + 1, "a function named %s shadows a shell builtin or a command the gates rely on" % name))
         if name in ("die", "fail") and not re.search(r"\bexit\b", body):
             found.append((start + 1, "%s does not exit: a gate's \"|| %s\" would go on to the PIN" % (name, name)))
     for n, (line, b) in enumerate(zip(lines, bare), 1):
@@ -194,12 +222,31 @@ def script_problems(text, script=None):
             if re.match(r'(?:"[^"]*"|\$\{?\w+\}?)(?:\s*\|\s*(?:"[^"]*"|\S+))*\s*\)', word):
                 continue                                     # a case label: "$A") or "$A:so"|"$B")
             name = re.match(r'"?\$\{?(\w*)', word).group(1)
-            if (script, name) in COMMAND_VARIABLES or OWN_PATH.match(word):
+            if (script, name) in COMMAND_VARIABLES or (OWN_PATH.match(word) and "/.." not in OWN_PATH.match(word).group(0)):
                 continue
             found.append((n, "a variable (or a command's output) used as a command: not on the allow-list"))
             break
         if re.search(r"\benv\s+(?:-\S+\s+)*-S", line):
             found.append((n, "env -S: it runs a whole command line given as a string"))
+        # code taken from a string by an interpreter other than a shell (51)
+        for m in re.finditer(r"(?<![\w.-])python[\d.]*\s+(?:-\w+\s+)*-\w*c\s+(\S)", line):
+            if not line[m.start(1):].startswith("'"):          # a single-quoted literal, closed here or lines below
+                found.append((n, "python -c with code that is not one single-quoted literal"))
+        if re.search(r"(?<![\w.-])python[\d.]*\s+(?:-\w+\s+)*-(?:\s|$)", line) and not re.search(r"<<-?\s*['\"]?\w", line):
+            found.append((n, "python reading its program from standard input that is not a here-document"))
+        if re.search(r"(?<![\w.-])(?:perl|ruby|node|php|lua)\b[^|;&]*\s-\w*[eE]\b", line):
+            found.append((n, "an interpreter given code with -e"))
+        if re.search(r"(?<![\w.-])[gm]?awk\b", line) and re.search(r"\bsystem\s*\(|\|\s*getline|print[^;}]*\|\s*\"", line):
+            found.append((n, "awk running a command (system(), a pipe)"))
+        for m in re.finditer(CALL_START + r"trap\s+(\S+)", line):
+            arg = m.group(1)
+            if not (re.match(r"'[^']*'", line[m.start(1):]) or re.fullmatch(r"[A-Za-z_][\w-]*", arg) or arg == "-"):
+                found.append((n, "trap with code that is not one single-quoted literal or a function's name"))
+        # the drill's own directories are set only by their known initialisations
+        for m in re.finditer(r"(?:^|[;&|\s])(?:local\s+|declare\s+)?(W|STATE|ROOT|HERE)=", line):
+            known = DIR_INIT.match(line, m.end())
+            if not known or (known.end() < len(line) and not re.match(r"[\s;]", line[known.end()])):
+                found.append((n, "%s set to something other than a fresh mktemp directory, the drill's own repository or a literal path" % m.group(1)))
         if re.search(r"(?<![\w.-])eval\b", b):
             found.append((n, "eval: what it runs is not read by this check"))
         for m in re.finditer(CALL_START + r"(?:source|\.)\s+\S", line):
@@ -212,7 +259,7 @@ def script_problems(text, script=None):
             found.append((n, "a constant condition: a gate under it may never run"))
         if re.search(r"\bset\s+(?:-\w*a\w*\b|-o\s+allexport\b)", b):
             found.append((n, "allexport: every variable set later, a PIN too, is exported"))
-        for m in re.finditer(CALL_START + r"(export|declare|typeset|readonly|local|env)\b(.*)", line):
+        for m in re.finditer(r"(?:" + CALL_START + r"|\bsudo\s+(?:-\S+\s+)*)(export|declare|typeset|readonly|local|env)\b(.*)", line):
             words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", re.split(r"[;&|]", m.group(2))[0])
             flags = [w for w in words if w.startswith("-")]
             if m.group(1) in ("declare", "typeset", "readonly", "local") and not any("x" in f for f in flags):
@@ -220,11 +267,16 @@ def script_problems(text, script=None):
             if m.group(1) == "export" and "-n" in flags:
                 continue                                     # export -n UN-exports
             for word in (w for w in words if not w.startswith("-")):
+                inner = re.fullmatch(r"\$\{(\w+):\+(.*)\}", word)       # ${X:+X="$X"}: the assignment inside
+                word = inner.group(2) if inner else word
                 if m.group(1) == "env" and "=" not in word:
                     break                                    # env's command: its assignments are done
-                exported = word.strip("\"'").split("=")[0]
+                exported, _, value = word.strip("'").partition("=")
+                exported = exported.strip('"')
                 if exported not in ALLOWED_EXPORTS:
                     found.append((n, "exports %s, which is not on the allow-list of non-secret names" % (exported or word)))
+                elif exported in EXPORT_VALUES and value and not EXPORT_VALUES[exported].fullmatch(value):
+                    found.append((n, "exports %s with a value not on its allow-list" % exported))
     return found
 
 
@@ -649,20 +701,34 @@ class TheCheckItself(unittest.TestCase):
             'export "NK_PIN=$P"\n': "exports NK_PIN", 'export A NK_PIN="$P"\n': "exports A", 'export "$name"\n': "exports $name",
             'pin="$P"; export pin\n': "exports pin", "export SOMETHING=1\n": "exports SOMETHING",
             "env NK_PIN=1 cmd\n": "exports NK_PIN", "set -a\n": "allexport", "set -o allexport\n": "allexport",
+            "sudo env NK_PIN=1 cmd\n": "exports NK_PIN",
+            # 51's third read: builtins shadowed, other interpreters, unchecked values
+            "exit(){ :; }\n": "shadows a shell builtin", "grep(){ return 0; }\n": "shadows a shell builtin",
+            "command(){ :; }\n": "shadows a shell builtin", "ykman(){ :; }\n": "shadows a shell builtin",
+            'python3 -c "$X"\n': "python -c", 'python3 -I -c "$X"\n': "python -c", "python3 - <<< \"$X\"\n": "standard input",
+            'perl -e "$X"\n': "-e", "awk '{system($0)}' <<< \"$X\"\n": "awk running a command", 'trap "$X" EXIT\n': "trap",
+            '"$W/../../usr/bin/pkcs11-tool" --login\n': "used as a command", "W=/usr/bin\n": "W set to",
+            'W="$X"\n': "W set to", 'export OPENSC_CONF="$X"\n': "OPENSC_CONF with a value",
+            'env OPENSC_CONF="$X" pkcs11-tool -L\n': "OPENSC_CONF with a value", 'export PATH="$W:$PATH"\n': "PATH with a value",
         }
         for script, why in cases.items():
             with self.subTest(script):
                 self.assertTrue(any(why in w for w in self.problems(script)), self.problems(script))
 
     def test_the_known_good_forms_pass(self):
-        for fine in ("export -n NK_PIN\n", "export OPENSC_CONF=/x\n", "export PATH=\"$PATH:/sbin\"\n", "declare -A SLOT\n",
+        for fine in ("export -n NK_PIN\n", "export PATH=\"$PATH:/sbin\"\n", "declare -A SLOT\n",
                      "local pin=1\n", '. "$ROOT/e2e/lib/bench_cards.sh"\n', '. "$CEREMONY/tools/hsm-reader-select.sh"\n',
                      "set -euo pipefail\n", "die(){ echo no; exit 2; }\n", "x=$(ls)\n", 'for f in "$@"; do :; done\n',
                      "printf '%s' x | grep -q y\n", "./scripts/build.sh\n", "ssh host true\n",
                      # not commands: case labels, a "…" nested in "$(…)", an awk program over several lines
                      'f(){ case "$1" in "$A") echo a;; "$B:so"|"$C") echo b;; esac; }\n',
                      'n="$(grep -cE "ID: *($X|$Y)" <<< "$l")"\n', "r=\"$(awk '\n  { if ($NF == w) print $1 }' f)\"\n",
-                     '"$W/regalia-audit-collector" -state "$W/s"\n'):
+                     '"$W/regalia-audit-collector" -state "$W/s"\n',
+                     "trap cleanup EXIT\n", "trap 'cleanup_keys; rm -rf \"$W\"' EXIT\n", "python3 -I -c 'import sys'\n",
+                     "python3 -I - x <<'PY'\nprint(1)\nPY\n", 'W="$(mktemp -d)"\n', 'STATE="$(mktemp -d "${TMPDIR:-/tmp}/x.XXXX")"\n',
+                     'ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\n', "STATE=/var/lib/regalia-kms\n",
+                     'export OPENSC_CONF="$W/opensc.conf"\n', 'export PATH="$PATH:/usr/sbin:/sbin"\n',
+                     'export HSM_PKCS11_MODULE="$MODULE"\n', "awk '{print $1}' f\n"):
             with self.subTest(fine):
                 self.assertEqual(self.problems(fine), [])
         # an allow-listed line passes only in its own script
