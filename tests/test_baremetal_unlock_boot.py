@@ -27,9 +27,10 @@ import tests.test_baremetal_unlock as tub
 BOOT = os.environ.get("REGALIA_BOOT_DIR", "")
 UNDERLAY = {"a": "192.0.2.10", "b": "198.51.100.7", "c": "198.51.100.9"}
 TUNNEL = {"a": "10.89.0.1", "b": "10.89.0.2", "c": "10.89.0.3"}
-# systemd sees the systemd-recovery token in the header and asks for the recovery key by that name
+# systemd sees the systemd-recovery token in the header and asks for the recovery key by that name, naming
+# the disk by its label when it has one ("for disk regalia-root (root)")
 # ("recovery key" when that is the only kind of keyslot it knows of, "passphrase or recovery key" otherwise)
-PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk root")
+PROMPT = re.compile(rb"Please enter (?:passphrase or )?(?:recovery key|passphrase) for disk (?:root|regalia-root \(root\))")
 CMDLINE = ("root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 "
            "rd.shell=0 rd.emergency=poweroff panic=30 loglevel=4")
 run = tub.run

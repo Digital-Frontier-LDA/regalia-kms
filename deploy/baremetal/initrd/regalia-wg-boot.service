@@ -36,6 +36,9 @@ LoadCredentialEncrypted=regalia.wg-boot-key
 LoadCredential=regalia.wg-boot-conf
 LoadCredential=regalia.boot-nft
 LoadCredential=regalia.boot-env
+# where `up` notes the interface for `down`, which runs without the credentials; removed after it
+RuntimeDirectory=regalia-wg-boot
+RuntimeDirectoryMode=0700
 ExecStart=/usr/lib/regalia/wg-boot up
 # ExecStopPost, not ExecStop: it also runs when the start failed or timed out. Nothing of the boot mesh,
 # least of all its default-deny ruleset, may be left for the real root to inherit.

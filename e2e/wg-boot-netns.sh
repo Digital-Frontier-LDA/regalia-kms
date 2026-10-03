@@ -278,7 +278,8 @@ C="$T/creds"; mkdir "$C"; cp "$T/lisbon.boot.conf" "$C/regalia.wg-boot-conf"; cp
 # exported (LD_PRELOAD, a command substitution) is in it, and must change nothing.
 printf 'BOOT_NIC=eth0\nBOOT_ADDRESS=%s/32\nBOOT_GATEWAY=\nBOOT_TUNNEL=%s\nLD_PRELOAD=%s/evil.so\nBOOT_EXTRA=$(touch %s/sourced)\n' \
   "${IP[lisbon]}" "${TUN[lisbon]}" "$T" "$T" > "$C/regalia.boot-env"
-initrd(){ x lisbon env CREDENTIALS_DIRECTORY="$C" sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
+R="$T/run-wg-boot"; mkdir "$R"
+initrd(){ x lisbon env CREDENTIALS_DIRECTORY="$C" RUNTIME_DIRECTORY="$R" sh "$HERE/deploy/baremetal/initrd/wg-boot" "$1"; }
 initrd up && P "the initrd's script brings the boot mesh up" || F "deploy/baremetal/initrd/wg-boot up failed"
 [ "$(x lisbon wg show wg-boot private-key)" = "$(cat "$T/lisbon.boot.key")" ] && [ "$(x lisbon wg show wg-boot peers | wc -l)" = 2 ] \
   && P "wg-boot has the node's key and its two peers" || F "wg-boot is not configured as rendered"
@@ -372,9 +373,11 @@ x faro wg syncconf wg-unlock "$T/faro.unlock.conf"
 boot_up lisbon "$T/wrong.key"
 timed asked lisbon "${TUN[porto]}" 3; rc=$?
 [ "$rc" != 0 ] && [ "$took" -le 10 ] && P "a wrong WG-BOOT key: no answer, after ${took}s" || F "a wrong key: rc=$rc after ${took}s"
-initrd down
+initrd up >/dev/null 2>&1
+# as ExecStopPost runs it: the credentials are gone, the runtime directory is still there
+x lisbon env RUNTIME_DIRECTORY="$R" sh "$HERE/deploy/baremetal/initrd/wg-boot" down
 x lisbon ip link show wg-boot >/dev/null 2>&1 || x lisbon nft list table inet regalia_boot >/dev/null 2>&1 || [ -n "$(x lisbon ip -4 addr show dev eth0)" ] \
-  && F "the boot interface, its ruleset or its address is still there" || P "the script takes the interface, the ruleset and the address down, as it does when the root filesystem takes over"
+  && F "the boot interface, its ruleset or its address is still there" || P "without its credentials, as at switch-root, the script takes the interface, the ruleset and the address down"
 
 echo; echo "wg-boot-netns: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
