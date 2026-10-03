@@ -521,41 +521,51 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   one as absent: the client then gives nothing and the console asks for the recovery key. The machine
   that builds the image needs no `/etc/regalia`, and the module takes nothing from it.
 
-  **OPEN, and blocking for production: the ESP is a channel into the initrd.** Whoever can write the
+  **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
   drop-in (`systemd.extra-unit.*`, `systemd.unit-dropin.*`), tmpfiles, sysctl and fstab lines. Sealed to
   this machine's TPM with an empty PCR policy, which needs only the TPM's public storage key, such a
   credential decrypts, and a drop-in on the unit that opens the disk could print the volume key, while
   PCR 11 is unchanged and the peers answer. This is systemd-stub's behaviour with or without the files
   here. What catches it is PCR 12: every credential is measured into it, so **the peers must attest PCR
-  12 in the initrd phase**, against the value the node's credentials give (the plain ones are rendered
-  from the manifest and the site configuration, the two sealed ones are fixed at enrolment). Until
-  then a changed ESP is not refused. (#66; the alternative, every per-host file signed and anything
-  else on the ESP refused, is heavier.)
+  12 in the initrd phase**, against the value the node's credentials give: `espcreds.pcr12(files)`,
+  the stub's own computation (one extend with the SHA-256 of a cpio archive of the files, sorted by
+  name), shown equal to a real boot's. The boot test's peers do; a planted credential is refused.
+  **Not every credential channel is measured.** systemd in the initrd also imports credentials from
+  SMBIOS type 11 strings and from QEMU's fw_cfg, and nothing puts those in PCR 12 (SMBIOS reaches PCR
+  1 at most, through the firmware, which no peer attests). Whoever can set SMBIOS strings on a host
+  (firmware, iLO) could pass credentials the peers never see; what systemd acts on by name must
+  therefore also be restricted in the image (B2 on #66).
+  OPEN for production: the measurement set's PCR 12 per node, computed by a tool from the node's
+  credentials (#66, d9), and the split decided on #66 (membership-derived data signed and verified in
+  the initrd, B3; refusal of unexpected credential names, B2).
   The image must be built with `dracut --no-hostonly --no-hostonly-cmdline` (the module refuses
   hostonly mode, which copies the build machine's identity and crypt settings into the image). The
   ruleset credential may hold only `table inet regalia_boot` and include no file; `down` flushes every
   table.
-- **Shown on a real boot** (`e2e/unlock-boot-qemu.sh`: a Debian 13 guest in QEMU with a software TPM,
-  its whole disk one LUKS2 volume, the peers reached over WireGuard):
-  - enrolment: with nothing enrolled the console asks "Please enter recovery key for disk root", and
-    the key opens the volume; the running guest seals the two boot credentials to its own TPM;
-  - unattended: systemd unseals both credentials in the initrd, the boot mesh comes up, a peer
-    verifies the guest's quote and gives its half, and the root volume opens with nobody typing
-    anything (a few seconds after the kernel started, in the runs so far); after switch-root the boot
-    interface, its ruleset and its addresses are gone and the link is down;
-  - no peer: the client gives nothing after its five rounds (about two minutes in the runs so far),
-    and the console asks for the passphrase or recovery key, which opens the volume.
-  The guest's initrd is the image as built, with no file added: the per-host files reach it as system
-  credentials through QEMU's SMBIOS. systemd keeps those apart from the ESP's (which it searches
-  first, and which must decrypt to be used by name): the test shows the units and the names, not the
-  ESP path, and under SeaBIOS (no Secure Boot) it cannot show that a forged sealed credential is
-  refused.
-  NOT shown: measured boot. The guest boots a plain kernel and initrd under SeaBIOS, so PCR 11 is zero
-  and PCR 7 holds no Secure Boot state: sealing to the TPM and the peers' check of the quote are shown
-  as mechanics, on this TPM and no other, and nothing there would refuse a changed initrd. That needs
-  a unified kernel image under UEFI, with the credentials on its ESP (next). Also not shown: a network
-  card that udev renames in the initrd (the guest's is `eth0`), and any physical machine.
+- **Shown on a real boot** (`e2e/unlock-boot-qemu.sh`: a Debian 13 guest in QEMU under UEFI (OVMF)
+  with a software TPM, MEASURED BOOT of a unified kernel image built and signed by
+  `deploy/baremetal/uki.py` with test keys, its disk an ESP and the LUKS2 partition, the peers reached
+  over WireGuard):
+  - enrolment: with no credential on the ESP the client gives nothing, the console asks "Please enter
+    recovery key for disk regalia-root (root)", and the key opens the volume; the running guest seals
+    the two boot credentials to its own TPM, to PCR 7 and to the image's initrd-phase signature of PCR
+    11; its PCR 11 is the build record's booted-phase value, and its PCR 12 is zero;
+  - unattended: systemd-stub passes the six credentials from the ESP, systemd unseals the two sealed
+    ones in the initrd, the boot mesh comes up, a peer verifies the guest's quote of PCR 7, PCR 11
+    (the record's initrd-phase value) and PCR 12, gives its half, and the root volume opens with
+    nobody typing anything (about five seconds after the kernel started, in the runs so far); the
+    booted PCR 12 is exactly what `deploy/baremetal/espcreds.py` computes from the ESP's files, and
+    nothing moves it after the initrd; after switch-root the boot interface, its ruleset and its
+    addresses are gone and the link is down;
+  - a planted credential: one more file on the ESP (a unit drop-in for the unlock client, an extra
+    unit, a tmpfiles line) changes PCR 12, and both peers refuse the quote, so the console asks;
+  - no peer: the client gives nothing after its five rounds, and the console asks for the passphrase
+    or recovery key, which opens the volume.
+  NOT shown: Secure Boot (OVMF runs with no enrolled keys, so nothing checks the image's signature
+  and PCR 7 says so), the membership-derived parts of the configuration verified in the initrd
+  instead of passed as credentials (B3 on #66), a network card that udev renames in the initrd (the
+  guest's is `eth0`), and any physical machine.
 - **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
   keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen
   in the boot test). `/etc/crypttab` on the root is only what the initrd was built from, if it was

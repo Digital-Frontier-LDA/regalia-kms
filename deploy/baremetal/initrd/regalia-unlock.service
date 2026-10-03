@@ -30,8 +30,7 @@ Before=initrd-switch-root.target shutdown.target
 Type=exec
 # Everything that differs per host comes as a SYSTEM CREDENTIAL, none from the image: the image is the
 # same for every host (one PCR 11 to sign). In production systemd-stub passes them from the ESP
-# (loader/credentials/<name>.cred, measured into PCR 12; see README: that channel needs PCR 12 attested);
-# in the boot test, QEMU's SMBIOS. Named
+# (loader/credentials/<name>.cred, measured into PCR 12, which the peers attest; see README). Named
 # without a path, a missing one is not fatal: the client then gives nothing, and the console asks.
 #   regalia.unlock-local   the local half, sealed to this TPM (decrypted here, never accepted in plain)
 #   regalia.unlock-config  the boot configuration (unlock.boot_config): not secret
