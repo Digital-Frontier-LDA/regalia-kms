@@ -244,6 +244,20 @@ class Case(unittest.TestCase):
             f.write(content)
         return path
 
+    def initrd_build(self, name="initrd-build.json", initrd=None, client=CLIENT, **change):
+        """An initrd build record (build-initrd.sh, #248) for `initrd` (default: the input's) and `client`."""
+        with open(initrd or self.inputs["initrd"], "rb") as f:
+            initrd_sha256 = uki.sha256(f.read())
+        record = {"schema": uki.INITRD_BUILD_SCHEMA, "commit": "ab" * 20, "go": "go1.26.6", "snapshot": "20261003T121500Z",
+                  "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "6.12.111+deb13-amd64", "dracut": "106-6",
+                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "repository_files": {},
+                  "packages_sha256": "cd" * 32, "packages": ["dracut=106-6"], "initrd_sha256": initrd_sha256,
+                  "initrd_size": 1, "initrd_entries": 1}
+        record.update(change)
+        for key in [k for k, v in change.items() if v is None]:
+            del record[key]
+        return self.write(name, json.dumps(record).encode())
+
     def build(self, **kw):
         kw.setdefault("unlock_client", self.write("regalia-unlock.compiled", CLIENT))
         return uki.build(dict(self.inputs, **kw.pop("inputs", {})), kw.pop("uname", "6.12.41+deb13-amd64"), kw.pop("name", "image-7"), self.out,
@@ -873,7 +887,7 @@ class Records(Case):
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
         argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
-                "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
+                "--initrd-build", self.initrd_build(), "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(argv), 1)
         self.assertEqual(out.getvalue(), "")
@@ -887,6 +901,50 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+
+class InitrdBuildRecord(Case):
+    """#248: the initrd's build record is an input, pinned like the others, and must name THIS initrd and THIS
+    client; the build and sign commands require it."""
+
+    def test_a_record_for_this_initrd_and_this_client_is_pinned_as_an_input(self):
+        record = self.build(inputs={"initrd_build": self.initrd_build()})
+        self.assertIn("initrd_build", record["inputs"])
+        with open(self.initrd_build(name="again.json"), "rb") as f:
+            self.assertEqual(record["inputs"]["initrd_build"]["sha256"], uki.sha256(f.read()))
+
+    def test_a_record_for_another_initrd_or_client_or_of_another_shape_is_refused(self):
+        other = self.write("other-initrd", b"another initrd")
+        cases = {
+            "the initrd's build record is for another initrd": self.initrd_build("a.json", initrd=other),
+            "the initrd's build record names another unlock client": self.initrd_build("b.json", client=b"another client"),
+            "the initrd's build record is not a regalia.initrd-build/v1": self.initrd_build("c.json", schema="regalia.initrd-build/v0"),
+            "the initrd's build record names no commit": self.initrd_build("d.json", commit="HEAD"),
+            "the initrd's build record names no exact Go release": self.initrd_build("e.json", go="go1.26"),
+            "the initrd's build record names no archive snapshot": self.initrd_build("f.json", snapshot="latest"),
+            "the initrd's build record has no packages_sha256": self.initrd_build("g.json", packages_sha256="x"),
+            "the initrd's build record": self.initrd_build("h.json", packages=None),          # a field missing
+            "not valid JSON": self.write("i.json", b"{"),
+        }
+        for reason, path in cases.items():
+            with self.subTest(reason=reason):
+                self.refused(reason, self.build, inputs={"initrd_build": path}, name="image-%d" % len(reason))
+
+    def test_sign_holds_the_record_to_the_inputs_and_rechecks_it(self):
+        inputs = dict(self.inputs, initrd_build=self.initrd_build())
+        record = self.build(inputs={"initrd_build": inputs["initrd_build"]})
+        self.sign(record=record, inputs=inputs)
+        swapped = dict(inputs, initrd_build=self.initrd_build("swapped.json", commit="ef" * 20))
+        self.refused("the input --initrd-build is not the one the record was built from", self.sign, record=record, inputs=swapped)
+        self.refused("the input --initrd-build is not the one the record was built from", self.sign, record=record, inputs=self.inputs)   # left out
+
+    def test_the_commands_require_it(self):
+        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.inputs["cmdline"],
+                "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
+                "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
+        with contextlib.redirect_stderr(io.StringIO()) as err, self.assertRaises(SystemExit):
+            uki.main(argv)
+        self.assertIn("--initrd-build", err.getvalue())
 
 
 class InitrdReview(Case):

@@ -487,12 +487,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 mmdebstrap debian-archive-keyring \
             swtpm swtpm-tools tpm2-tools cryptsetup-bin wireguard-tools nftables iproute2 cpio e2fsprogs ovmf dosfstools openssl
-      - name: Build the pre-root client (static, no cgo)
-        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: A guest boots a measured UKI through a peer (QEMU, OVMF, swtpm, dracut, LUKS2, WireGuard before root, PCR 12)
         # the archive as of the reviewed initrd's inventory (deploy/baremetal/initrd/initrd-inventory.txt, #198):
-        # moving this date is an update of that inventory, in the same pull request
-        run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
+        # moving this date is an update of that inventory, in the same pull request. The initrd and its client
+        # are built by deploy/baremetal/initrd/build-initrd.sh (#248), with the Go release go.mod pins.
+        run: sudo REGALIA_GO="$(command -v go)" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ REGALIA_BOOT_SECURITY_MIRROR=https://snapshot.debian.org/archive/debian-security/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
 
   # regalia-kms#248: the KMS host initrd is REPRODUCIBLE, and stays so. deploy/baremetal/initrd/build-initrd.sh
   # builds it from pinned inputs (one snapshot.debian.org time with the security suite, dracut --reproducible,
