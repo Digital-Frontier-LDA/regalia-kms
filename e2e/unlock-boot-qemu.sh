@@ -131,13 +131,13 @@ for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
 echo "### the disk: the ESP with the image, and a GPT partition labelled regalia-root, a LUKS2 volume opened only by the recovery key so far"
 truncate -s 4G "$W/disk.img"
-printf 'label: gpt\nsize=64MiB, type=uefi, name=ESP\nname=regalia-root\n' | sfdisk -q "$W/disk.img"
+printf 'label: gpt\nsize=512MiB, type=uefi, name=ESP\nname=regalia-root\n' | sfdisk -q "$W/disk.img"
 LOOP="$(losetup --find --show --partscan "$W/disk.img")"
 PART="${LOOP}p2"
 for _ in $(seq 1 50); do [ -b "${LOOP}p1" ] && break; sleep 0.1; done
 mkfs.vfat -n ESP "${LOOP}p1" >/dev/null
 mkdir "$W/esp"; mount "${LOOP}p1" "$W/esp"; MOUNTED+=("$W/esp")
-mkdir -p "$W/esp/EFI/BOOT" "$W/esp/loader/credentials"; cp "$W/e2e.efi" "$W/esp/EFI/BOOT/BOOTX64.EFI"
+mkdir -p "$W/esp/EFI/BOOT" "$W/esp/loader/credentials"; cp "$W/e2e.efi" "$W/esp/EFI/BOOT/BOOTX64.EFI"; echo "the image: $(stat -c %s "$W/e2e.efi") bytes"
 umount "$W/esp"; MOUNTED=()
 for _ in $(seq 1 50); do [ -b "$PART" ] && break; sleep 0.1; done
 [ -b "$PART" ] || { echo "unlock-boot-qemu: no partition device $PART"; exit 2; }
