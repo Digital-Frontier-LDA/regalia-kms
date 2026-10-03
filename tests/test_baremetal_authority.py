@@ -415,12 +415,22 @@ class TunnelApply(Case):
 SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so") if os.path.exists(c)), None)
 
 
-@unittest.skipUnless(SOFTHSM and shutil.which("pkcs11-tool") and shutil.which("softhsm2-util"), "SoftHSM and pkcs11-tool are not installed")
+try:
+    import PyKCS11
+except ImportError:
+    PyKCS11 = None
+EXPECT_PKCS11 = os.environ.get("REGALIA_EXPECT_PYKCS11", "") not in ("", "0")
+
+
 class Pkcs11(unittest.TestCase):
-    """Pkcs11Signer against SoftHSM: the same pkcs11-tool calls the Nitrokey gets."""
+    """Pkcs11Signer against SoftHSM: the same PKCS#11 calls the Nitrokey gets, in this process."""
 
     def setUp(self):
         import subprocess
+        if not (PyKCS11 and SOFTHSM and shutil.which("pkcs11-tool") and shutil.which("softhsm2-util")):
+            if EXPECT_PKCS11:
+                self.fail("REGALIA_EXPECT_PYKCS11 is set, but PyKCS11, SoftHSM or pkcs11-tool is missing")
+            self.skipTest("PyKCS11, SoftHSM and pkcs11-tool are not all installed")
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
         os.makedirs(self.d + "/tokens")
@@ -478,14 +488,12 @@ class Pkcs11(unittest.TestCase):
         with self.assertRaises(OSError):
             signer.sign(b"x")
 
-    def test_the_pin_never_reaches_argv(self):
-        signer = self.signer()
-        seen = []
-        real = signer.run
-        signer.run = lambda argv, **kw: (seen.append(argv), real(argv, **kw))[1]
-        signer.sign(b"y")
-        self.assertTrue(seen and not any(self.pin in " ".join(argv) for argv in seen))
-        self.assertTrue(any("env:REGALIA_REVOCATION_PIN" in argv for argv in seen))
+    def test_it_runs_no_program(self):
+        """In process: no pkcs11-tool, so the PIN is in no argv and no child's environment."""
+        with unittest.mock.patch("subprocess.run", side_effect=AssertionError("a program was run")), \
+                unittest.mock.patch("subprocess.Popen", side_effect=AssertionError("a program was run")):
+            signer = self.signer()
+            m.verify_revocation("ecdsa-p256", signer.public(), b"y", signer.sign(b"y").hex(), "test")
 
     def test_a_key_that_is_not_p256_is_refused(self):
         import subprocess
@@ -494,6 +502,154 @@ class Pkcs11(unittest.TestCase):
         with self.assertRaises(m.Refused) as caught:
             self.signer(key_id="52")
         self.assertIn("not a P-256 key", str(caught.exception))
+
+
+class FakeToken:
+    """A stand-in for PyKCS11 with one or more tokens, whose serials a test changes at a chosen call."""
+    CKA_CLASS, CKA_ID, CKA_EC_POINT, CKA_EC_PARAMS = "class", "id", "point", "params"
+    CKO_PUBLIC_KEY, CKO_PRIVATE_KEY, CKM_ECDSA = "public", "private", "ecdsa"
+
+    def __init__(self, serials, point):
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        self.serials, self.point, self.calls, self.logins = dict(serials), point, [], []
+        self.swap_at, self.removed = None, False
+        self.key = _ec.generate_private_key(_ec.SECP256R1())
+        fake = self
+
+        class Info:
+            def __init__(self, serial):
+                self.serialNumber, self.slotID = serial, None
+
+        class Session:
+            def __init__(self, slot):
+                self.slot = slot
+
+            def _step(self, name):
+                fake.calls.append(name)
+                if fake.swap_at == name:
+                    fake.serials[self.slot] = "SWAPPED"
+                    fake.removed = True                  # the card left the reader: the session is gone
+                if fake.removed and name in ("login", "sign"):
+                    raise RuntimeError("CKR_DEVICE_REMOVED")
+
+            def getSessionInfo(self):
+                self._step("info")
+                info = Info(None)
+                info.slotID = self.slot
+                return info
+
+            def findObjects(self, template):
+                return [dict(template)[fake.CKA_CLASS]]
+
+            def getAttributeValue(self, obj, attrs):
+                return [list(fake.point), list(bytes.fromhex("06082a8648ce3d030107"))]
+
+            def login(self, pin):
+                self._step("login")
+                fake.logins.append((self.slot, pin))
+
+            def sign(self, key, digest, mechanism):
+                self._step("sign")
+                from cryptography.hazmat.primitives import hashes
+                from cryptography.hazmat.primitives.asymmetric import utils
+                der = fake.key.sign(digest, _ec.ECDSA(utils.Prehashed(hashes.SHA256())))
+                r, s_ = utils.decode_dss_signature(der)
+                return list(r.to_bytes(32, "big") + s_.to_bytes(32, "big"))
+
+            def logout(self):
+                pass
+
+            def closeSession(self):
+                pass
+
+        class Lib:
+            def load(self, module):
+                pass
+
+            def getSlotList(self, tokenPresent=True):
+                fake.calls.append("slots")
+                return sorted(fake.serials)
+
+            def getTokenInfo(self, slot):
+                fake.calls.append("token")
+                return Info(fake.serials[slot])
+
+            def openSession(self, slot):
+                fake.calls.append("open")
+                if fake.swap_at == "open":
+                    fake.serials[slot] = "SWAPPED"
+                return Session(slot)
+        self.PyKCS11Lib = Lib
+        self.Mechanism = lambda mechanism: mechanism
+
+
+class TokenChosenInItsSession(unittest.TestCase):
+    """#262 (regalia-kms-d9, decided by regalia-kms-24): the PIN reaches only the token whose serial was
+    read in the session that logs in. A swap at every step between finding the token and signing."""
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric import ec as _ec
+        from cryptography.hazmat.primitives import serialization as _s
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        os.makedirs(self.d + "/credentials")
+        with open(self.d + "/credentials/pin", "w") as f:
+            f.write("648219\n")
+        self.fake = FakeToken({0: "DENK0404144", 1: "OTHERCARD"}, b"")
+        self.fake.point = b"\x04\x41" + self.fake.key.public_key().public_bytes(_s.Encoding.X962, _s.PublicFormat.UncompressedPoint)
+
+    def signer(self):
+        return authority.Pkcs11Signer("module.so", "DENK0404144", "51", "pin", credentials=self.d + "/credentials", pkcs11=self.fake)
+
+    def test_it_signs_with_the_token_of_its_serial(self):
+        signer = self.signer()
+        m.verify_revocation("ecdsa-p256", signer.public(), b"m", signer.sign(b"m").hex(), "test")
+        self.assertEqual(self.fake.logins, [(0, "648219")])
+
+    def test_a_token_swapped_before_the_session_s_own_check_never_gets_the_pin(self):
+        signer = self.signer()
+        self.fake.swap_at, self.fake.logins = "open", []
+        with self.assertRaises(m.Refused) as caught:
+            signer.sign(b"m")
+        self.assertIn("refused before the PIN", str(caught.exception))
+        self.assertEqual(self.fake.logins, [])
+
+    def test_a_token_removed_after_the_check_ends_the_session_and_nothing_is_signed(self):
+        signer = self.signer()
+        for step in ("info", "login"):
+            with self.subTest(step):
+                self.fake.serials[0], self.fake.removed, self.fake.swap_at, self.fake.logins = "DENK0404144", False, step, []
+                with self.assertRaises((m.Refused, RuntimeError)):
+                    signer.sign(b"m")
+                self.assertEqual(self.fake.logins, [])
+
+    def test_a_serial_that_changed_while_it_signed_is_refused(self):
+        signer = self.signer()
+        self.fake.calls = []
+        original = self.fake.serials.copy()
+        # the token answers the signature, then reads as another serial: refused, no signature returned
+        orig_lib_info = signer.lib.getTokenInfo
+
+        def info_after_sign(slot):
+            if "sign" in self.fake.calls:
+                self.fake.serials[slot] = "SWAPPED"
+            return orig_lib_info(slot)
+        signer.lib.getTokenInfo = info_after_sign
+        with self.assertRaises(m.Refused) as caught:
+            signer.sign(b"m")
+        self.assertIn("changed while it signed", str(caught.exception))
+        self.fake.serials.update(original)
+
+    def test_no_token_or_two_tokens_of_the_serial_are_refused_before_any_session(self):
+        self.fake.serials = {0: "OTHERCARD"}
+        with self.assertRaises(m.Refused):
+            self.signer()
+        self.fake.serials = {0: "DENK0404144", 1: "DENK0404144"}
+        self.fake.calls = []
+        with self.assertRaises(m.Refused) as caught:
+            self.signer()
+        self.assertIn("more than one", str(caught.exception))
+        self.assertNotIn("open", self.fake.calls)
 
 
 class Control(Case):

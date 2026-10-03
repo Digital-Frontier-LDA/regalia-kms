@@ -176,49 +176,74 @@ class FileSigner:
 class Pkcs11Signer:
     """The revocation key on a token (owner, 2026-10-03: a Nitrokey HSM 2, the key generated on the token,
     recovered by a DKEK-share ceremony under ADR-0002 D19). ECDSA P-256: the token's PKCS#11 offers no
-    EdDSA (measured on the bench). Driven through pkcs11-tool, as the rest of the bench tooling is:
-      * the token is chosen by SERIAL and its slot re-checked before every signature, never by label;
-      * the PIN comes from a systemd credential ($CREDENTIALS_DIRECTORY/<pin_credential>) and reaches
-        pkcs11-tool through `env:`, never argv;
-      * `opensc_conf` (e.g. deploy/opensc/ignore-yubikey.conf) keeps OpenSC off every other reader, so a
-        PIN cannot reach another card;
-      * the signature is CKM_ECDSA over SHA-256 of the message, returned as r || s and normalised to low-S
-        (the verifier refuses high-S)."""
-    kind, alg = "pkcs11", "ecdsa-p256"
+    EdDSA (measured on the bench).
 
-    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, run=None, credentials=None):
-        import subprocess
-        self.module, self.serial, self.key_id, self.run = module, serial, key_id, run or subprocess.run
+    IN PROCESS, ONE SESSION (regalia-kms-d9's read of #262, decided by regalia-kms-24). The token is
+    chosen by SERIAL, never by label or slot number, and the serial is read in the very session that
+    logs in: the one slot whose token has it is found, a session opened on it, the serial read again
+    from that session's slot, and only then C_Login and C_Sign. A token removed or swapped after that
+    read ends the session (CKR_DEVICE_REMOVED, CKR_SESSION_HANDLE_INVALID), so the PIN can reach only
+    the token whose serial was read: a slot renumbered by a hot-plugged reader, or another card in the
+    same reader, never receives it. (Two pkcs11-tool runs, one to find the slot and one to log in, could
+    not promise that.) The serial is read once more after signing, and a difference is refused.
+      * The PIN comes from a systemd credential ($CREDENTIALS_DIRECTORY/<pin_credential>), alphanumeric,
+        4 to 64 characters (what the ceremony issues). It stays in this process: no argv, no child's
+        environment.
+      * `opensc_conf` (e.g. deploy/opensc/ignore-yubikey.conf) keeps OpenSC off every other reader; set
+        before the module is loaded.
+      * The signature is CKM_ECDSA over SHA-256 of the message, r || s, normalised to low-S (the
+        verifiers refuse high-S), and verified against the token's public key before it is returned.
+    `pkcs11` is the PyKCS11 module (Debian: python3-pykcs11); a test passes a stand-in."""
+    kind, alg = "pkcs11", "ecdsa-p256"
+    P256_PARAMS = bytes.fromhex("06082a8648ce3d030107")   # DER OID prime256v1
+
+    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, credentials=None, pkcs11=None):
+        if pkcs11 is None:
+            import PyKCS11 as pkcs11
+        self.pkcs11, self.serial, self.key_id = pkcs11, serial, bytes.fromhex(key_id)
         self.credentials = credentials or os.environ.get("CREDENTIALS_DIRECTORY")
         self.pin_credential = pin_credential
-        self.env = dict(os.environ, **({"OPENSC_CONF": opensc_conf} if opensc_conf else {}))
-        self._public = self._read_public()
+        if opensc_conf:
+            os.environ["OPENSC_CONF"] = opensc_conf         # read by OpenSC when the module loads, below
+        self.lib = pkcs11.PyKCS11Lib()
+        self.lib.load(module)
+        session, _ = self._session()
+        try:
+            self._public = self._read_public(session)
+        finally:
+            session.closeSession()
 
-    def _tool(self, *args, env=None):
-        done = self.run(["pkcs11-tool", "--module", self.module, *args], capture_output=True, timeout=60, env=env or self.env)
-        require(done.returncode == 0, "pkcs11-tool %s failed: %s" % (args[0] if args else "", done.stderr.decode(errors="replace").strip()[-200:]))
-        return done.stdout.decode(errors="replace")
+    def _serial_of(self, slot):
+        return str(self.lib.getTokenInfo(slot).serialNumber).strip()
 
-    def _slot(self):
-        """The one slot whose token has this serial; refused if none or several."""
-        slots, current = [], None
-        for line in self._tool("--list-slots").splitlines():
-            found = re.match(r"Slot \d+ \((0x[0-9a-fA-F]+)\):", line)
-            if found:
-                current = int(found.group(1), 16)
-            elif current is not None and re.match(r"\s*serial num\s*:\s*(\S+)\s*$", line):
-                if re.match(r"\s*serial num\s*:\s*(\S+)\s*$", line).group(1) == self.serial:
-                    slots.append(current)
+    def _session(self):
+        """A session on the one token with this serial, its serial read again from the session's slot."""
+        slots = [slot for slot in self.lib.getSlotList(tokenPresent=True) if self._serial_of(slot) == self.serial]
         require(len(slots) == 1, "%s token with serial %s is present" % ("no" if not slots else "more than one", self.serial))
-        return str(slots[0])
+        session = self.lib.openSession(slots[0])
+        try:
+            slot = session.getSessionInfo().slotID
+            require(slot == slots[0] and self._serial_of(slot) == self.serial,
+                    "the token in the session's slot is not serial %s: refused before the PIN" % self.serial)
+        except BaseException:
+            session.closeSession()
+            raise
+        return session, slot
 
-    def _read_public(self):
-        with tempfile.TemporaryDirectory(prefix="revocation-pub-") as d:
-            self._tool("--slot", self._slot(), "--read-object", "--type", "pubkey", "--id", self.key_id, "--output-file", d + "/pub.der")
-            with open(d + "/pub.der", "rb") as f:
-                key = serialization.load_der_public_key(f.read())
-        require(isinstance(key, ec.EllipticCurvePublicKey) and isinstance(key.curve, ec.SECP256R1), "the token's key %s is not a P-256 key" % self.key_id)
-        return key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint).hex()
+    def _object(self, session, cls):
+        found = session.findObjects([(self.pkcs11.CKA_CLASS, cls), (self.pkcs11.CKA_ID, self.key_id)])
+        require(len(found) == 1, "the token holds %d objects with id %s of that class, not one" % (len(found), self.key_id.hex()))
+        return found[0]
+
+    def _read_public(self, session):
+        point, params = session.getAttributeValue(self._object(session, self.pkcs11.CKO_PUBLIC_KEY),
+                                                  [self.pkcs11.CKA_EC_POINT, self.pkcs11.CKA_EC_PARAMS])
+        point, params = bytes(point), bytes(params)
+        if len(point) == 67 and point[:2] == b"\x04\x41":     # DER OCTET STRING around the point
+            point = point[2:]
+        require(params == self.P256_PARAMS and len(point) == 65 and point[0] == 4, "the token's key %s is not a P-256 key" % self.key_id.hex())
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)   # on the curve
+        return point.hex()
 
     def _pin(self):
         require(self.credentials, "no systemd credentials directory: the PIN comes from LoadCredentialEncrypted=")
@@ -228,21 +253,25 @@ class Pkcs11Signer:
             pin = os.read(fd, 256).decode().strip()
         finally:
             os.close(fd)
-        require(re.fullmatch(r"[0-9A-Za-z]{4,64}", pin) is not None, "the PIN credential is not a PIN")
+        require(re.fullmatch(r"[0-9A-Za-z]{4,64}", pin) is not None, "the PIN credential is not a PIN (alphanumeric, 4 to 64)")
         return pin
 
     def public(self):
         return self._public
 
     def sign(self, message):
-        slot = self._slot()                              # the serial, re-checked before the PIN is presented
-        with tempfile.TemporaryDirectory(prefix="revocation-sig-") as d:
-            with open(d + "/digest", "wb") as f:
-                f.write(hashlib.sha256(message).digest())
-            self._tool("--slot", slot, "--login", "--pin", "env:REGALIA_REVOCATION_PIN", "--sign", "--mechanism", "ECDSA", "--id", self.key_id,
-                       "--input-file", d + "/digest", "--output-file", d + "/sig", env=dict(self.env, REGALIA_REVOCATION_PIN=self._pin()))
-            with open(d + "/sig", "rb") as f:
-                raw = f.read()
+        pin = self._pin()                                # before any session: a missing PIN touches no token
+        session, slot = self._session()
+        try:
+            session.login(pin)
+            try:
+                raw = bytes(session.sign(self._object(session, self.pkcs11.CKO_PRIVATE_KEY), hashlib.sha256(message).digest(),
+                                         self.pkcs11.Mechanism(self.pkcs11.CKM_ECDSA)))
+                require(self._serial_of(slot) == self.serial, "the token's serial changed while it signed: refused")
+            finally:
+                session.logout()
+        finally:
+            session.closeSession()
         require(len(raw) == 64, "the token returned a %d-byte ECDSA signature, not r || s" % len(raw))
         r, s = int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")
         s = min(s, membership.P256_ORDER - s)            # low-S: the verifiers refuse the other form

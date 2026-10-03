@@ -768,7 +768,9 @@ it (`service_mesh.authority`).
   heartbeat first.
 - **The owner's decisions are settings in `/etc/regalia/authority.json`:**
   - `signer.kind`: `file` now, a stopgap recorded on every trail line and in `status`; `pkcs11` once a
-    token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19);
+    token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19). The `pkcs11` signer signs in
+    process with PyKCS11 (Debian `python3-pykcs11`), choosing the token by serial and reading that serial in
+    the very session that logs in, so its PIN reaches no other card (#262);
   - `sequence_offset`/`sequence_stride`: kept for several authorities, refused above one until a second can
     take over (#231);
   - `interval_s`, `lifetime_s`;
