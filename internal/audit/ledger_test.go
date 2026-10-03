@@ -492,14 +492,16 @@ func liveSources(t *testing.T) citationSources {
 
 // resolveCitation finds the source line a citation names, and returns it with its text.
 //
-// The function is found by the parser, and the anchor is searched only within its declaration:
+// The function is found by the parser, and the anchor is searched only within its declaration,
+// and only in its code: comments are blanked first, so a comment that still says the anchor text
+// after the guard is gone cannot stand in for it (regalia-kms-d9).
 //   - {text}: the one line of the function holding text. None, or more than one, is an error: an
 //     ambiguous anchor names no line.
 //   - {text#n}: the n-th line holding text, for a guard written twice word for word in one
 //     function; refused when text is on one line only, so every citation has one spelling.
-//   - {first then text}: the first line holding text at or after the one line holding first, at
-//     most five lines on -- for the guards whose own text is not unique, `err != nil` after the
-//     call that set err.
+//   - {first then text}: for the guards whose own text is not unique, `err != nil` after the call
+//     that set err. text must be on the one line holding first, or on the next line holding code;
+//     a line put between them is an error, not a citation that silently moves to another guard.
 func resolveCitation(sources citationSources, citation string) (int, string, error) {
 	match := citationPattern.FindStringSubmatch(citation)
 	if match == nil || match[0] != citation {
@@ -511,11 +513,20 @@ func resolveCitation(sources citationSources, citation string) (int, string, err
 		return 0, "", err
 	}
 	positions := token.NewFileSet()
-	parsed, err := parser.ParseFile(positions, file, source, parser.SkipObjectResolution)
+	parsed, err := parser.ParseFile(positions, file, source, parser.SkipObjectResolution|parser.ParseComments)
 	if err != nil {
 		return 0, "", err
 	}
 	lines := strings.Split(source, "\n")
+	code := []byte(source)
+	for _, group := range parsed.Comments {
+		for offset := positions.Position(group.Pos()).Offset; offset < positions.Position(group.End()).Offset; offset++ {
+			if code[offset] != '\n' {
+				code[offset] = ' '
+			}
+		}
+	}
+	codeLines := strings.Split(string(code), "\n")
 	first, last := 0, 0
 	for _, declaration := range parsed.Decls {
 		decl, ok := declaration.(*ast.FuncDecl)
@@ -539,7 +550,7 @@ func resolveCitation(sources citationSources, citation string) (int, string, err
 	}
 	var holding []int
 	for number := first; number <= last; number++ {
-		if strings.Contains(lines[number-1], text) {
+		if strings.Contains(codeLines[number-1], text) {
 			holding = append(holding, number)
 		}
 	}
@@ -554,18 +565,15 @@ func resolveCitation(sources citationSources, citation string) (int, string, err
 		return 0, "", fmt.Errorf("%q is on %d lines of %s: an anchor must name one", text, len(holding), function)
 	}
 	line := holding[0]
-	if chained {
-		found := 0
-		for number := line; number <= last && number <= line+5; number++ {
-			if strings.Contains(lines[number-1], then) {
-				found = number
-				break
-			}
+	if chained && !strings.Contains(codeLines[line-1], then) {
+		next := line + 1
+		for next <= last && strings.TrimSpace(codeLines[next-1]) == "" {
+			next++
 		}
-		if found == 0 {
-			return 0, "", fmt.Errorf("%q is not within five lines after %q in %s", then, text, function)
+		if next > last || !strings.Contains(codeLines[next-1], then) {
+			return 0, "", fmt.Errorf("%q is not on the line holding %q or the next line of code in %s", then, text, function)
 		}
-		line = found
+		line = next
 	}
 	return line, strings.TrimRight(lines[line-1], " \t\r"), nil
 }
@@ -576,16 +584,18 @@ func declName(decl *ast.FuncDecl) string {
 		return decl.Name.Name
 	}
 	receiver := decl.Recv.List[0].Type
-	if index, ok := receiver.(*ast.IndexExpr); ok {
-		receiver = index.X
+	star := ""
+	if pointer, ok := receiver.(*ast.StarExpr); ok {
+		receiver, star = pointer.X, "*"
 	}
-	if star, ok := receiver.(*ast.StarExpr); ok {
-		if ident, ok := star.X.(*ast.Ident); ok {
-			return "(*" + ident.Name + ")." + decl.Name.Name
-		}
+	switch generic := receiver.(type) {
+	case *ast.IndexExpr:
+		receiver = generic.X
+	case *ast.IndexListExpr:
+		receiver = generic.X
 	}
 	if ident, ok := receiver.(*ast.Ident); ok {
-		return "(" + ident.Name + ")." + decl.Name.Name
+		return "(" + star + ident.Name + ")." + decl.Name.Name
 	}
 	return decl.Name.Name
 }
