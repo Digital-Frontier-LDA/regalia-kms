@@ -731,6 +731,36 @@ class ReportedValues(Verification):
                          % ("a9" * 32, "a1" * 32))
 
 
+class ReportedValuesVector(unittest.TestCase):
+    """tests/vectors/pcr-values-v2.json, the vector the Go client's test reads too: a real quote from a software
+    TPM and the values read beside it. The verifier takes those values, and refuses each case the vector
+    lists with the very reason it records, so the two sides of the exchange agree on one file. The reasons were
+    written by check_reported_values itself when the vector was made: they pin today's wording against drift,
+    they are not an outside oracle. The independent part is the real swtpm quote and the values read beside it."""
+
+    def setUp(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "pcr-values-v2.json")
+        with open(path) as f:
+            self.vector = json.load(f)
+        self.quote = attest.parse_quote(bytes.fromhex(self.vector["quote"]))
+
+    def test_the_quote_selects_and_digests_what_the_vector_says(self):
+        self.assertEqual(self.quote["pcrs"], self.vector["selection"])
+        self.assertEqual(self.quote["pcr_digest"].hex(), self.vector["pcr_digest"])
+
+    def test_the_values_read_beside_the_quote_are_taken(self):
+        values = self.vector["pcr_values"]
+        self.assertEqual(attest.check_reported_values(values, self.quote["pcrs"], self.quote["pcr_digest"]), values)
+        self.assertIsNone(attest.check_reported_values(None, self.quote["pcrs"], self.quote["pcr_digest"]))
+
+    def test_every_refused_case_is_refused_with_the_reason_the_vector_records(self):
+        self.assertEqual(sorted(self.vector["refused"]), ["another_spelling", "malformed", "missing", "outside_the_selection", "tampered"])
+        for name, case in self.vector["refused"].items():
+            with self.subTest(name), self.assertRaises(attest.Refused) as refused:
+                attest.check_reported_values(case["pcr_values"], self.quote["pcrs"], self.quote["pcr_digest"])
+            self.assertEqual(str(refused.exception), case["reason"])
+
+
 class Node(unittest.TestCase):
     """The node's half, with tpm2-tools faked: what it asks the TPM for, and what it does when the TPM refuses."""
 

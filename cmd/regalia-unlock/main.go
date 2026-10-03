@@ -513,8 +513,11 @@ func deriveKey(config *bootConfig, o options, paths map[string][]pathToken, loca
 					return nil, "", "", fmt.Errorf("the disk stays locked: no peer helped within %s", o.budget)
 				}
 				asked = true
-				spoke := boot.spokeVersion1
+				spoke, unsteady := boot.spokeVersion1, boot.unsteadyPCRs
 				contribution, err := boot.ask(peer, token.PathEpoch, dial(peer.Endpoint, until), quote)
+				if boot.unsteadyPCRs && !unsteady {
+					fmt.Fprintf(diagnostics, "regalia-unlock: the quoted PCRs kept changing between the quote and their reading: asked %s without PCR values\n", peer.NodeID)
+				}
 				if boot.spokeVersion1 && !spoke {
 					fmt.Fprintf(diagnostics, "regalia-unlock: %s speaks only version 1 of the exchange: asked without PCR values (upgrade the peers)\n", peer.NodeID)
 				}

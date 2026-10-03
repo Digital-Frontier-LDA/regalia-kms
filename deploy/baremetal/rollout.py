@@ -74,7 +74,7 @@ check and sign.
 
     python3 -Es -m deploy.baremetal.rollout version   --measurements NEW.json
     python3 -Es -m deploy.baremetal.rollout transition --old OLD.json --new NEW.json [--emergency] [--dropped NODE]...
-    python3 -Es -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016]
+    python3 -Es -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016 [--tcti TCTI]]
     python3 -Es -m deploy.baremetal.rollout propose   --membership CHAIN.json --root-key HEX --old OLD.json --new NEW.json
                                                   [--emergency] [--dropped NODE]... [--issued-at YYYY-MM-DDTHH:MM:SSZ]
     python3 -Es -m deploy.baremetal.rollout may-reboot --membership CHAIN.json --root-key HEX --measurements DOC.json
@@ -92,6 +92,9 @@ the node's service yet), and its manifest at that epoch must be the one the TPM 
 root-signed chain of the same length is refused with CONFLICT, as membership.Store.load refuses it; the
 record is read, never repaired). Without it the output says the chain was NOT checked against the TPM,
 and a restored older file, or a substituted one, would be believed.
+The TPM read is the one --tcti names (default device:/dev/tpmrm0, the kernel's resource manager), never
+one a TPM2TOOLS_TCTI left in the operator's shell would pick: with --tpm-index that variable is refused,
+and the output names the TPM that was read.
 Exit status: 0 yes, 1 refused (the reason on standard error, or in the JSON), 2 a usage error.
 --json prints one JSON object instead of text.
 
@@ -102,6 +105,7 @@ from the system clock, and then says so: an unauthenticated clock is good enough
 import argparse
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
@@ -294,6 +298,11 @@ def _json(path, label):
     return value
 
 
+DEFAULT_TCTI = "device:/dev/tpmrm0"
+TCTI_PATTERN = r"(?:device|swtpm|mssim|tabrmd)(?::[!-~]{1,200})?"
+SIMULATORS = ("swtpm", "mssim")      # accepted (the tests, a lab), and said so in the output
+
+
 def _current(args):
     """(the current manifest, whether it was checked against this host's TPM high-water)."""
     membership.hex_field(args.root_key, 64, "--root-key")
@@ -306,13 +315,21 @@ def _current(args):
         manifests.append(accepted)
         manifest = accepted
     if not args.tpm_index:
+        require(args.tcti is None, "--tcti names the TPM --tpm-index reads: give both, or neither")
         return manifest, False
     require(isinstance(args.tpm_index, str) and re.fullmatch(r"0x[0-9a-fA-F]{1,8}", args.tpm_index),
             "--tpm-index must be an NV index as 0x followed by 1 to 8 hex digits, e.g. 0x1500016")
+    # The check is run on a peer during a recovery: a TPM2TOOLS_TCTI left in the operator's shell would point
+    # it at another TPM (a simulator, another host's socket) and its answer would be believed.
+    require("TPM2TOOLS_TCTI" not in os.environ, "TPM2TOOLS_TCTI is set in the environment: unset it and name the TPM with --tcti "
+            "(default %s)" % DEFAULT_TCTI)
+    args.tcti = DEFAULT_TCTI if args.tcti is None else args.tcti
+    require(isinstance(args.tcti, str) and re.fullmatch(TCTI_PATTERN, args.tcti),
+            "--tcti must be device, swtpm, mssim or tabrmd, optionally followed by :CONFIG (printable, no spaces)")
     # READ the anchor; never advance or repair it. membership.Store.load anchors a verified newer chain
     # and completes a record a crash left behind, and that is the node's own service's to do, not an
     # operator's check.
-    anchor = membership.HighWater(args.tpm_index)
+    anchor = membership.HighWater(args.tpm_index, tcti=args.tcti)
     high_water = anchor.value()
     require(manifest["epoch"] >= high_water, "ROLLBACK: %s is at epoch %d but this host's TPM high-water is %d: the file is older "
             "than what this host has accepted; fetch the chain from a peer" % (args.membership, manifest["epoch"], high_water))
@@ -335,10 +352,28 @@ def _current(args):
     return manifest, True
 
 
-def _summary(manifest, anchored):
-    return {"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "policy_version": manifest["policy_version"],
-            "issued_at": manifest["issued_at"], "nodes": {n["node_id"]: n["state"] for n in manifest["nodes"]},
-            "checked_against_tpm": anchored}
+def _tpm(anchored, tcti):
+    """What every result says of the TPM it was checked against: whether, which, and whether a simulator."""
+    fields = {"checked_against_tpm": anchored}
+    if anchored:
+        fields["tpm"] = tcti
+        if tcti.split(":")[0] in SIMULATORS:
+            fields["tpm_is_a_simulator"] = True
+    return fields
+
+
+def _tpm_text(anchored, tcti):
+    """The lines a checked result adds (the TPM through %(tpm)s: a TCTI may hold a '%')."""
+    if not anchored:
+        return ""
+    return "\nchecked against the TPM epoch counter of %(tpm)s" + (
+        "\nWARNING: that is a TPM SIMULATOR, not this host's TPM: on a KMS host this answer proves nothing"
+        if tcti.split(":")[0] in SIMULATORS else "")
+
+
+def _summary(manifest, anchored, tcti=None):
+    return dict({"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "policy_version": manifest["policy_version"],
+                 "issued_at": manifest["issued_at"], "nodes": {n["node_id"]: n["state"] for n in manifest["nodes"]}}, **_tpm(anchored, tcti))
 
 
 def _cmd_version(args):
@@ -355,8 +390,8 @@ def _cmd_transition(args):
 
 def _cmd_epoch(args):
     manifest, anchored = _current(args)
-    return _summary(manifest, anchored), "epoch %(epoch)d, measurements %(policy_version)s, manifest %(manifest_digest)s" + (
-        "" if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
+    return _summary(manifest, anchored, args.tcti), "epoch %(epoch)d, measurements %(policy_version)s, manifest %(manifest_digest)s" + (
+        _tpm_text(anchored, args.tcti) if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
 
 
 def _cmd_propose(args):
@@ -371,7 +406,7 @@ def _cmd_propose(args):
     membership.validate(proposal)
     measurements.bind(proposal, new)
     return {"transition": kind, "unsigned_manifest": proposal, "signs_over": "regalia-membership/v1\\0 + canonical JSON of unsigned_manifest",
-            "follows": _summary(current, anchored)}, \
+            "follows": _summary(current, anchored, args.tcti)}, \
         "%(transition)s: UNSIGNED manifest for the root to sign (nothing here signs)\n" + json.dumps(proposal, indent=2, sort_keys=True)
 
 
@@ -381,10 +416,10 @@ def _cmd_may_reboot(args):
     authenticated = args.now is not None
     verdict = may_reboot(manifest, _document(args.measurements), args.node_id, args.running, args.session_id,
                          _json(args.attest_state, "--attest-state"), leases, args.now if authenticated else int(time.time()))
-    verdict.update(node_id=args.node_id, epoch=manifest["epoch"], checked_against_tpm=anchored, time_authenticated=authenticated)
+    verdict.update(node_id=args.node_id, epoch=manifest["epoch"], time_authenticated=authenticated, **_tpm(anchored, args.tcti))
     return verdict, "YES: %(node_id)s may reboot into %(target)s (vouched for by %(authorizers)s; the shortest lease has %(seconds)d s left)" + (
         "" if authenticated else "\nTIME IS THE SYSTEM CLOCK, not authenticated (no --now): do not act on a lease that is about to expire") + (
-        "" if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)") + (
+        _tpm_text(anchored, args.tcti) if anchored else "\nthe manifest was NOT checked against this host's TPM epoch counter (no --tpm-index)") + (
         "\nWait until this host is back and serving before starting the next one (KERNEL-UPDATE.md, step 3.5)")
 
 
@@ -397,9 +432,9 @@ def _cmd_retire_ready(args):
         require(node_id not in states, "--state names %s twice" % node_id)
         states[node_id] = _json(path, "--state %s" % node_id)
     seen = retire_ready(manifest, _document(args.measurements), states)
-    return {"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"], "checked_against_tpm": anchored}, \
+    return dict({"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"]}, **_tpm(anchored, args.tcti)), \
         "YES: every node was last seen on its target by every peer that has seen it (epoch %(epoch)d). The state files are " \
-        "unsigned: this guards against retiring too early, it is not proof"
+        "unsigned: this guards against retiring too early, it is not proof" + _tpm_text(anchored, args.tcti)
 
 
 def _cmd_check_replacement(args):
@@ -407,8 +442,9 @@ def _cmd_check_replacement(args):
     candidate = _json(args.candidate, "--candidate")
     candidate = candidate.get("manifest", candidate) if set(candidate) == {"manifest", "signature"} else candidate
     measurements.check_replacement(current, candidate, _document(args.old), _document(args.new), args.old_id, args.new_id)
-    return {"replacement": "%s by %s" % (args.old_id, args.new_id), "epoch": candidate["epoch"], "policy_version": candidate["policy_version"],
-            "checked_against_tpm": anchored}, "the candidate replaces %(replacement)s and changes nothing else (epoch %(epoch)d, measurements %(policy_version)s)"
+    return dict({"replacement": "%s by %s" % (args.old_id, args.new_id), "epoch": candidate["epoch"], "policy_version": candidate["policy_version"]},
+                **_tpm(anchored, args.tcti)), \
+        "the candidate replaces %(replacement)s and changes nothing else (epoch %(epoch)d, measurements %(policy_version)s)" + _tpm_text(anchored, args.tcti)
 
 
 def main(argv=None):
@@ -421,6 +457,8 @@ def main(argv=None):
         c.add_argument("--membership", required=True, metavar="CHAIN.json", help="this node's membership file (the signed chain)")
         c.add_argument("--root-key", required=True, metavar="HEX", help="the pinned membership root public key (64 hex)")
         c.add_argument("--tpm-index", metavar="0x…", help="also check the chain against this host's TPM epoch counter at this NV index")
+        c.add_argument("--tcti", metavar="TCTI",
+                       help="the TPM --tpm-index reads (default %s); TPM2TOOLS_TCTI in the environment is refused" % DEFAULT_TCTI)
 
     def step(c):
         c.add_argument("--emergency", action="store_true", help="allow a compromised image to be dropped with no overlap")
