@@ -30,8 +30,8 @@ StartLimitIntervalSec=0
 Type=notify
 NotifyAccess=main
 # The wait covers the real client's start (the boot mesh may take up to its own 60 s start limit) and its
-# attempt, which the client itself ends within its -budget of 200 s (checked before each ask, so the last
-# ask's own 20 s of dial and reply, and a quote, come on top); a client that hangs beyond it yields the prompt.
+# attempt, which the client itself ends within its -budget of 200 s (each ask's dial and reply are cut at it;
+# only a TPM quote can run past it); a client that hangs beyond it yields the prompt.
 ExecStart=/usr/bin/regalia-unlock -relay /run/regalia-unlock-core/core.sock -listen /run/regalia-unlock/key.sock -relay-wait 330s
 Restart=always
 RestartSec=1s

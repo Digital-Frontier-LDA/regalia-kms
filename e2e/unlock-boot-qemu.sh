@@ -122,6 +122,10 @@ for unit in "$ROOT"/tmp/ird/usr/lib/systemd/system/*.service; do
   [ "${last##*/}" = 99-regalia-no-credentials.conf ] || uncovered="$uncovered $name"
 done
 [ -f "$ROOT/tmp/ird/usr/lib/systemd/system/systemd-cryptsetup@.service.d/99-regalia-no-credentials.conf" ] || uncovered="$uncovered systemd-cryptsetup@.service"
+# a drop-in under etc/ would come after every one under usr/: none may set a credential
+if grep -rqsE '^(ImportCredential|LoadCredential|LoadCredentialEncrypted)=[^[:space:]]' "$ROOT"/tmp/ird/etc/systemd/system/; then
+  uncovered="$uncovered (a credential setting under etc/systemd/system)"
+fi
 [ -z "$uncovered" ] || { echo "unlock-boot-qemu: units in the image that take credentials by name, with no reset:$uncovered"; exit 2; }
 # not vacuous: journald takes credentials in every systemd 257 initrd, and it was found and reset
 case " $taking " in *" systemd-journald.service "*) ;; *) echo "unlock-boot-qemu: the check found no credential-taking unit (journald):$taking"; exit 2 ;; esac
