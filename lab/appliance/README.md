@@ -41,9 +41,9 @@ From the repository root:
 
 ```sh
 mkdir -p deploy/images/.artifacts
-python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
-python3 -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
-python3 -m lab.appliance.build --media deploy/images/.artifacts/debian
+python3 -Es -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+python3 -Es -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
+python3 -I tools/lab_cli.py appliance-build --media deploy/images/.artifacts/debian
 ```
 
 The builder requires QEMU x86, xorriso, cpio, gzip, GnuPG and Python 3.11+.
@@ -106,9 +106,9 @@ Build inputs are copied into private staging before QEMU starts and their exact
 hashes appear in the report.
 
 ```sh
-python3 -m deploy.images.scan lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
+python3 -Es -m deploy.images.scan lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
   --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan
-python3 -m lab.appliance.collect --build lab/appliance/.artifacts/debian13-prototype \
+python3 -I tools/lab_cli.py appliance-collect --build lab/appliance/.artifacts/debian13-prototype \
   --scan lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/release \
   --commit FULL_SOURCE_COMMIT --ref refs/heads/main
 ```
@@ -123,7 +123,7 @@ Linux kernel packages contain filenames differing only by case. macOS's default
 filesystem cannot faithfully project these names. On this development machine use:
 
 ```sh
-python3 -m lab.appliance.scan_docker lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
+python3 -I tools/lab_cli.py appliance-scan-docker lab/appliance/.artifacts/debian13-prototype/export/rootfs.tar.gz \
   --tools deploy/images/.artifacts/scanners-linux --output lab/appliance/.artifacts/docker-scan
 ```
 
@@ -191,7 +191,7 @@ the complete final filesystem scan and signing gate.
 ### Exact build scan gate
 
 PR CI authenticates Syft/Grype and scans the exact filesystem exported by its
-fresh passing build. `python3 -m lab.appliance.scan_build` first binds both rootfs
+fresh passing build. `python3 -I tools/lab_cli.py appliance-scan` first binds both rootfs
 and executable bytes to the expected full source commit and passing report.
 Its `build-binding.json` records the scan report and build report hashes. High
 or Critical findings fail this CI gate and keep `release_admissible: false`;

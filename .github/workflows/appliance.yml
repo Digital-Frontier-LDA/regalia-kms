@@ -39,19 +39,19 @@ jobs:
         run: sh lab/appliance/ci-kvm.sh
       - name: Authenticate installer and scanner publishers
         run: |
-          python3 -m deploy.images.fetch_debian deploy/images/.artifacts/debian
-          python3 -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
-          python3 -m deploy.images.tools deploy/images/.artifacts/scanners
+          python3 -Es -m deploy.images.fetch_debian deploy/images/.artifacts/debian
+          python3 -Es -m deploy.images.snapshot deploy/images/.artifacts/package-snapshot
+          python3 -Es -m deploy.images.tools deploy/images/.artifacts/scanners
       - name: Install and boot the hardened prototype
-        run: sudo -u "$(id -un)" -g kvm -- python3 -m lab.appliance.build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
+        run: sudo -u "$(id -un)" -g kvm -- python3 -I tools/lab_cli.py appliance-build --media deploy/images/.artifacts/debian --timeout 9000 --acceleration kvm
       - name: Scan final image contents and prepare exact release manifest
         env:
           SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
         run: |
-          python3 -m lab.appliance.scan_build --build lab/appliance/.artifacts/debian13-prototype \
+          python3 -I tools/lab_cli.py appliance-scan --build lab/appliance/.artifacts/debian13-prototype \
             --tools deploy/images/.artifacts/scanners --output lab/appliance/.artifacts/scan \
             --commit "$SOURCE_COMMIT"
-          python3 -m lab.appliance.collect --build lab/appliance/.artifacts/debian13-prototype \
+          python3 -I tools/lab_cli.py appliance-collect --build lab/appliance/.artifacts/debian13-prototype \
             --scan lab/appliance/.artifacts/scan --output lab/appliance/.artifacts/release \
             --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
       - name: Retain passing prototype artifacts
@@ -65,9 +65,9 @@ jobs:
       - name: Prepare Debian review evidence without overriding scan results
         if: ${{ always() && hashFiles('lab/appliance/.artifacts/scan/scan-report.json') != '' }}
         run: |
-          python3 -m deploy.images.triage lab/appliance/.artifacts/scan \
+          python3 -Es -m deploy.images.triage lab/appliance/.artifacts/scan \
             --output lab/appliance/.artifacts/triage
-          python3 -m deploy.images.remediation lab/appliance/.artifacts/scan \
+          python3 -Es -m deploy.images.remediation lab/appliance/.artifacts/scan \
             --review lab/appliance/.artifacts/triage --snapshot deploy/images/.artifacts/package-snapshot \
             --output lab/appliance/.artifacts/remediation
       - name: Retain diagnostics, including blocked scans
@@ -115,7 +115,7 @@ jobs:
         env:
           SOURCE_COMMIT: ${{ needs.build.outputs.commit }}
         run: |
-          python3 -m deploy.images.release prepare release/payload --output "$RUNNER_TEMP/release.json" \
+          python3 -Es -m deploy.images.release prepare release/payload --output "$RUNNER_TEMP/release.json" \
             --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
           cmp release/release.json "$RUNNER_TEMP/release.json"
           mkdir -p "$RUNNER_TEMP/regalia-tools"
@@ -143,13 +143,13 @@ jobs:
         run: |
           cp "$PROVENANCE_BUNDLE" release/provenance.jsonl
           cp "$SBOM_BUNDLE" release/sbom-attestation.jsonl
-          python3 -m deploy.images.release verify release/payload --manifest release/release.json \
+          python3 -Es -m deploy.images.release verify release/payload --manifest release/release.json \
             --bundle release/release.sigstore.json --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF" \
             --identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/appliance.yml@$GITHUB_REF" \
             --issuer https://token.actions.githubusercontent.com
-          python3 -m deploy.images.release verify-attestation release/release.json \
+          python3 -Es -m deploy.images.release verify-attestation release/release.json \
             --bundle release/provenance.jsonl --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
-          python3 -m deploy.images.release verify-attestation release/payload/regalia-debian13-amd64.qcow2 \
+          python3 -Es -m deploy.images.release verify-attestation release/payload/regalia-debian13-amd64.qcow2 \
             --bundle release/sbom-attestation.jsonl --sbom release/payload/sbom.attestation.spdx.json \
             --commit "$SOURCE_COMMIT" --ref "$GITHUB_REF"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

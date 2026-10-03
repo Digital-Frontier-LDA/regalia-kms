@@ -40,7 +40,7 @@ Commissioning has two halves:
 
 Authenticate installation media **before** writing it to USB or booting it. On the
 trusted workstation, from the repository root run
-`python3 -m deploy.images.fetch_debian OUTPUT_DIR`. It pins
+`python3 -Es -m deploy.images.fetch_debian OUTPUT_DIR`. It pins
 Debian 13.7.0/amd64 and the full Debian CD signing-key fingerprint, verifies the
 detached GPG signature and SHA-512, and publishes the directory only after success.
 Re-run `deploy/images/verify.py gpg` against the image immediately before use;

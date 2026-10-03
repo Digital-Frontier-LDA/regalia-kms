@@ -6,7 +6,7 @@ if [ ! -c /dev/kvm ]; then
   exit 1
 fi
 sudo usermod -a -G kvm "$(id -un)"
-sudo -u "$(id -un)" -g kvm -- python3 - <<'PY'
+sudo -u "$(id -un)" -g kvm -- python3 -I - <<'PY'
 import json
 import os
 from pathlib import Path

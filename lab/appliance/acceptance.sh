@@ -51,7 +51,7 @@ check sh -c 'systemctl show-environment | grep -qx "LANG=C.UTF-8"'
 check test -r /var/log/regalia-minimization.json
 # Root already mounts the export disk below. The same helpers must not grant
 # mounting privileges to a plain appliance UID, outside daemon-specific NNP.
-check python3 - <<'PY'
+check python3 -I - <<'PY'
 import os
 import pathlib
 import pwd
@@ -93,7 +93,7 @@ chmod 0640 /etc/regalia-kms/config.json
 touch /etc/regalia-kms/commissioned
 check systemctl start regalia-kms.service
 check systemctl is-active regalia-kms.service
-check python3 - <<'PY'
+check python3 -I - <<'PY'
 import time
 import urllib.error
 import urllib.request

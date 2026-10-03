@@ -196,7 +196,7 @@ and [Ed25519](https://cryptography.io/en/latest/hazmat/primitives/asymmetric/ed2
 ## Bounded extended runs
 
 ```sh
-python3 -m lab.bootstrap.soak --rounds 2 --steps 128 --seed 20261002 \
+python3 -I tools/lab_cli.py bootstrap-soak --rounds 2 --steps 128 --seed 20261002 \
   --output lab/bootstrap/.artifacts/soak
 ```
 

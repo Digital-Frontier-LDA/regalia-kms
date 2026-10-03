@@ -33,9 +33,9 @@ checksum-only and is not an approved deployment path.
 - `inventory.py`: enumerate repository image inputs and report trust gaps.
 - `tests/test_image_verification.py`: real GPG adversarial integration tests.
 
-Run tests with `python3 -m unittest discover -s tests -p 'test_image_*.py'`.
+Run tests with `python3 -Es -m unittest discover -s tests -p 'test_image_*.py'`.
 From the repository root, fetch verified Debian media with
-`python3 -m deploy.images.fetch_debian OUTPUT_DIR`.
+`python3 -Es -m deploy.images.fetch_debian OUTPUT_DIR`.
 Dependencies: Python 3.11+, GnuPG; Cosign for OCI verification and PyYAML 6.0.3
 for the inventory (already pinned in the lab harness requirements). Tests create and
 destroy disposable signing keys and never access personal GPG keyrings.
@@ -43,7 +43,7 @@ destroy disposable signing keys and never access personal GPG keyrings.
 Repeat a downloaded or exported disk check immediately before use:
 
 ```sh
-python3 deploy/images/verify.py gpg \
+python3 -I deploy/images/verify.py gpg \
   --image OUTPUT_DIR/debian-13.7.0-amd64-netinst.iso \
   --manifest OUTPUT_DIR/SHA512SUMS --signature OUTPUT_DIR/SHA512SUMS.sign \
   --key OUTPUT_DIR/debian-cd.pub \
@@ -53,7 +53,7 @@ python3 deploy/images/verify.py gpg \
 For OCI inputs, pass a digest and the exact approved signer:
 
 ```sh
-python3 deploy/images/verify.py oci REGISTRY/IMAGE@sha256:DIGEST \
+python3 -I deploy/images/verify.py oci REGISTRY/IMAGE@sha256:DIGEST \
   --identity APPROVED_IDENTITY --issuer https://APPROVED_OIDC_ISSUER
 ```
 
@@ -113,8 +113,8 @@ Cosign 3.0.6 from a separately reviewed binary hash in `bootstrap-cosign.sh`.
 That initial pin, repository policy and build machine are trust anchors.
 
 ```sh
-python3 -m deploy.images.tools deploy/images/.artifacts/scanners
-python3 -m deploy.images.scan FINAL_ROOTFS.tar.gz \
+python3 -Es -m deploy.images.tools deploy/images/.artifacts/scanners
+python3 -Es -m deploy.images.scan FINAL_ROOTFS.tar.gz \
   --tools deploy/images/.artifacts/scanners --output SCAN_OUTPUT
 ```
 
@@ -142,14 +142,14 @@ contents for consumption; it never executes the artifact to discover its version
 Expected repository, workflow, issuer, source ref and commit are caller policy.
 
 ```sh
-python3 -m deploy.images.release verify RELEASE/payload \
+python3 -Es -m deploy.images.release verify RELEASE/payload \
   --manifest RELEASE/release.json --bundle RELEASE/release.sigstore.json \
   --commit FULL_APPROVED_COMMIT --ref refs/heads/main \
   --identity 'https://github.com/Digital-Frontier-LDA/regalia-kms/.github/workflows/appliance.yml@refs/heads/main' \
   --issuer https://token.actions.githubusercontent.com
-python3 -m deploy.images.release verify-attestation RELEASE/release.json \
+python3 -Es -m deploy.images.release verify-attestation RELEASE/release.json \
   --bundle RELEASE/provenance.jsonl --commit FULL_APPROVED_COMMIT --ref refs/heads/main
-python3 -m deploy.images.release verify-attestation RELEASE/payload/regalia-debian13-amd64.qcow2 \
+python3 -Es -m deploy.images.release verify-attestation RELEASE/payload/regalia-debian13-amd64.qcow2 \
   --bundle RELEASE/sbom-attestation.jsonl --sbom RELEASE/payload/sbom.attestation.spdx.json \
   --commit FULL_APPROVED_COMMIT --ref refs/heads/main
 ```
@@ -161,7 +161,7 @@ into GitHub Actions. Consumers obtain the public key and full fingerprint throug
 an independent trusted channel, then run:
 
 ```sh
-python3 -m deploy.images.release verify-offline RELEASE/payload \
+python3 -Es -m deploy.images.release verify-offline RELEASE/payload \
   --manifest RELEASE/release.json --checksums SHA512SUMS --signature SHA512SUMS.sign \
   --key OFFLINE_RELEASE_PUBLIC_KEY --fingerprint FULL_APPROVED_FINGERPRINT \
   --commit FULL_APPROVED_COMMIT --ref refs/heads/main
@@ -178,8 +178,8 @@ registry image or GitHub Release. Configure protected branches separately.
 ## Repeatability
 
 ```sh
-python3 -m deploy.images.rebuild --commit FULL_COMMIT --output REBUILD_OUTPUT
-python3 -m deploy.images.release compare FIRST_ARTIFACT_DIRECTORY SECOND_ARTIFACT_DIRECTORY
+python3 -Es -m deploy.images.rebuild --commit FULL_COMMIT --output REBUILD_OUTPUT
+python3 -Es -m deploy.images.release compare FIRST_ARTIFACT_DIRECTORY SECOND_ARTIFACT_DIRECTORY
 ```
 
 The executable check uses two source directories and independent compiler caches
@@ -195,7 +195,7 @@ After a completed scan, create a diagnostic report against the current
 [Debian security tracker](https://security-tracker.debian.org/tracker):
 
 ```sh
-python3 -m deploy.images.triage SCAN_EVIDENCE --output NEW_REVIEW_DIRECTORY
+python3 -Es -m deploy.images.triage SCAN_EVIDENCE --output NEW_REVIEW_DIRECTORY
 ```
 
 This requires `dpkg` for Debian version ordering. The tool verifies inventory and

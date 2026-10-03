@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-PROBE = (ROOT / 'lab/appliance/ci-kvm.sh').read_text().split("-- python3 - <<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+PROBE = (ROOT / 'lab/appliance/ci-kvm.sh').read_text().split("-- python3 -I - <<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
 # This producer emulates QMP only. It cannot qualify an actual KVM host.
 PRODUCER = '''import json,os,pathlib,socket,sys
 pathlib.Path(os.environ['REGALIA_PROBE_PID']).write_text(str(os.getpid()))

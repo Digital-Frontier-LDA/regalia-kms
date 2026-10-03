@@ -19,9 +19,9 @@ done
 ip link set eth0 up
 ip addr add 10.0.2.15/24 dev eth0
 ip route add default via 10.0.2.2
-export TPM2TOOLS_TCTI=device:/dev/tpmrm0 PYTHONPATH=/bootstrap PYTHONDONTWRITEBYTECODE=1
-python3 -c 'print("REGALIA_PYTHON_READY")'
-if python3 /bootstrap/guest.py | cryptsetup open --batch-mode --key-file - /dev/vda root; then
+export TPM2TOOLS_TCTI=device:/dev/tpmrm0 PYTHONDONTWRITEBYTECODE=1
+python3 -I -c 'print("REGALIA_PYTHON_READY")'
+if python3 -Es /bootstrap/guest.py | cryptsetup open --batch-mode --key-file - /dev/vda root; then
   echo REGALIA_DISK_OPENED
   if grep -q 'lab.format=1' /proc/cmdline; then
     mkfs.ext4 -q -F /dev/mapper/root
