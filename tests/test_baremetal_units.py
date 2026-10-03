@@ -151,7 +151,7 @@ class AuthorityUnit(unittest.TestCase):
         self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("regalia-authority", "", "", "yes"))
         self.assertEqual((service["SupplementaryGroups"], service["DevicePolicy"], service["DeviceAllow"]), ("tss", "closed", "/dev/tpmrm0 rw"))
-        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0700", "0077"))
+        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0750", "0077"))   # its shipper lists it (#278)
         self.assertEqual((service["RuntimeDirectory"], service["RuntimeDirectoryMode"]), ("regalia-authority", "0700"))   # the control socket
         users = (UNITS / "regalia-authority.sysusers.conf").read_text()
         self.assertIn("u regalia-authority - ", users)
@@ -174,14 +174,31 @@ class AuthorityUnit(unittest.TestCase):
 class AuditShipUnit(unittest.TestCase):
     """regalia-audit-ship@.service, one instance a trail (#278)."""
 
-    def test_a_tampered_trail_stays_stopped_and_it_may_only_read_past_permissions(self):
+    def test_a_tampered_trail_stays_stopped_and_it_holds_no_capability(self):
         service = unit("regalia-audit-ship@.service")["Service"]
         self.assertTrue(service["ExecStart"].startswith("/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} "))
         self.assertEqual((service["Restart"], service["RestartPreventExitStatus"]), ("on-failure", "3"))   # cmd/regalia-audit-ship exitTampered
-        self.assertEqual((service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
-                         ("CAP_DAC_READ_SEARCH", "", "yes"))
+        self.assertEqual((service["User"], service["Group"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
+                         ("regalia-audit-ship", "regalia-audit-ship", "", "", "yes"))
+        self.assertNotIn("SupplementaryGroups", service)                           # each instance's, from its drop-in
+        users = (UNITS / "regalia-audit-ship.sysusers.conf").read_text()
+        self.assertIn("u regalia-audit-ship - ", users)
+        self.assertIn("g regalia-audit -", users)
         self.assertEqual((service["ProtectSystem"], service["StateDirectory"]), ("strict", "regalia-audit-ship"))
         self.assertNotIn("ReadWritePaths", service)
+
+    def test_each_trail_s_instance_reads_through_the_registry_s_group_and_only_that(self):
+        """#283 (regalia-kms-24): one drop-in per trail in trails.py's registry, naming its group: the
+        writer's own for a service's trail, regalia-audit for the operator tools'. No other drop-in."""
+        from deploy.baremetal import trails
+        dropins = sorted(p.name for p in UNITS.glob("regalia-audit-ship@*.service.d"))
+        self.assertEqual(dropins, sorted("regalia-audit-ship@%s.service.d" % name for name in trails.TRAILS))
+        for name, (_, _, _, group) in trails.TRAILS.items():
+            with self.subTest(name):
+                parser = configparser.ConfigParser(strict=False, interpolation=None, delimiters=("=",))
+                parser.optionxform = str
+                parser.read(UNITS / ("regalia-audit-ship@%s.service.d" % name) / "reader.conf")
+                self.assertEqual(dict(parser["Service"]), {"SupplementaryGroups": group})
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_an_instance_and_scores_it_well_exposed_at_most_a_little(self):

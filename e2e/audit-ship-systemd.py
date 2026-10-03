@@ -4,20 +4,24 @@
     REGALIA_E2E_BIN=<dir with regalia-audit-ship, regalia-audit-collector> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN \\
         python3 -Es e2e/audit-ship-systemd.py
 
-IT CHANGES THE MACHINE (a binary in /usr/bin, a unit, /etc/regalia/audit-ship*), so it runs only on a
+IT CHANGES THE MACHINE (a binary in /usr/bin, a unit, /etc/regalia/audit-ship*, users from the shipped
+sysusers files, which stay), so it runs only on a
 GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted), or on a throwaway host whose /etc/machine-id is in
 REGALIA_SHIP_HOST_OK.
 
-  1  units/regalia-audit-ship@.service, as shipped, ships a trail that trails.py writes as `nobody`, 0600,
-     in a 0700 directory: the shipper reads it only through CAP_DAC_READ_SEARCH, its one capability;
+  0  the shipper runs as its own user with no capability: without its instance's drop-in (the trail's
+     group) it cannot read the trail regalia-sync wrote, 0640, and ships nothing;
+  1  with units/regalia-audit-ship@sync.service.d as shipped, it reads it through the group and ships it;
   2  a line appended later ships on the next pass, and the collector's stream holds every line;
   3  the trail cut short under what was shipped: the instance ends with status 3, systemd does NOT restart
      it, the collector's alarm log holds the shipper's alarm, and the metrics say tampered;
   4  a manual start repeats the refusal: it never quietly resumes.
 """
+import grp
 import json
 import os
 import pathlib
+import pwd
 import shutil
 import subprocess
 import sys
@@ -32,6 +36,8 @@ BIN = pathlib.Path("/usr/bin/regalia-audit-ship")
 ETC = pathlib.Path("/etc/regalia/audit-ship")
 ENV = pathlib.Path("/etc/regalia/audit-ship.env")
 INSTALLED = pathlib.Path("/etc/systemd/system/regalia-audit-ship@.service")
+DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@sync.service.d")
+UNITS = HERE.parent / "deploy" / "baremetal" / "units"
 METRICS = pathlib.Path("/var/lib/regalia-audit-ship/sync.prom")
 PORT = 18443
 WORK = pathlib.Path("/var/lib/audit-ship-e2e")   # not under /tmp: the unit has PrivateTmp=yes and would not see it
@@ -75,10 +81,10 @@ def journal(unit, lines=30):
     return sh("journalctl", "-u", unit, "-n", str(lines), "--no-pager", check=False).stdout
 
 
-def append_as_nobody(path, n, start):
-    """trails.append, run as the trail's owner: the writer is never the shipper."""
+def append_as_writer(path, n, start):
+    """trails.append, run as regalia-sync, the sync trail's writer: never the shipper."""
     script = "import sys; sys.path.insert(0, sys.argv[1]); import trails\nfor i in range(int(sys.argv[3])): trails.append(sys.argv[2], {'event': 'sync-pull', 'outcome': 'ALLOW', 'i': int(sys.argv[4]) + i})"
-    sh("setpriv", "--reuid=nobody", "--regid=nogroup", "--clear-groups", "--", sys.executable, "-Es", "-c", script, str(WORK / "lib"), str(path), str(n), str(start))
+    sh("setpriv", "--reuid=regalia-sync", "--regid=regalia-sync", "--clear-groups", "--", sys.executable, "-Es", "-c", script, str(WORK / "lib"), str(path), str(n), str(start))
 
 
 def certificates(work):
@@ -106,12 +112,13 @@ def stream_lines(state):
 def scenario(work, binaries):
     certificates(work)
     (work / "lib").mkdir()
-    shutil.copy(TRAILS, work / "lib" / "trails.py")             # nobody may not traverse the checkout: a copy it can read
+    shutil.copy(TRAILS, work / "lib" / "trails.py")             # the writer may not traverse the checkout: a copy it can read
     state = work / "collector"
-    trail_dir = work / "trail"
+    sh("systemd-sysusers", str(UNITS / "regalia.sysusers.conf"), str(UNITS / "regalia-audit-ship.sysusers.conf"))
+    trail_dir = work / "regalia-sync"                          # as its StateDirectory: regalia-sync's, 0755
     trail_dir.mkdir()
-    shutil.chown(trail_dir, "nobody", "nogroup")
-    os.chmod(trail_dir, 0o700)
+    shutil.chown(trail_dir, "regalia-sync", "regalia-sync")
+    os.chmod(trail_dir, 0o755)
     trail = trail_dir / "sync-audit.jsonl"
 
     sh("systemd-run", "--unit", COLLECTOR_UNIT, "--collect", str(binaries / "regalia-audit-collector"), "-state", str(state),
@@ -120,24 +127,38 @@ def scenario(work, binaries):
     shutil.copy(binaries / "regalia-audit-ship", BIN)
     os.chmod(BIN, 0o755)
     ETC.mkdir(parents=True)
-    for source, target in (("shipper.pem", "client.crt"), ("shipper.key", "client.key"), ("ca.pem", "collector-ca.pem")):
+    for source, target, mode in (("shipper.pem", "client.crt", 0o644), ("shipper.key", "client.key", 0o640), ("ca.pem", "collector-ca.pem", 0o644)):
         shutil.copy(work / source, ETC / target)
-        os.chmod(ETC / target, 0o600)
+        shutil.chown(ETC / target, "root", "regalia-audit-ship")
+        os.chmod(ETC / target, mode)
     ENV.write_text("COLLECTOR=https://127.0.0.1:%d\nSITE=sitea\n" % PORT)
     (ETC / "sync.env").write_text("TRAIL_PATH=%s\n" % trail)
     shutil.copy(UNIT, INSTALLED)
     sh("systemctl", "daemon-reload")
 
-    print("\n### 1  the shipped unit ships another user's 0600 trail")
-    append_as_nobody(trail, 3, 0)
-    ok(oct(trail.stat().st_mode & 0o777) == "0o600" and trail.stat().st_uid != 0, "the trail is nobody's, 0600, in a 0700 directory")
+    print("\n### 0  its own user, no capability: outside the trail's group it reads nothing")
+    append_as_writer(trail, 3, 0)
+    info = trail.stat()
+    ok((info.st_mode & 0o777, info.st_uid, info.st_gid) == (0o640, pwd.getpwnam("regalia-sync").pw_uid, grp.getgrnam("regalia-sync").gr_gid),
+       "the trail is regalia-sync's, 0640, in its group", oct(info.st_mode))
+    sh("systemctl", "start", INSTANCE)
+    time.sleep(8)
+    unit = show(INSTANCE, "ActiveState", "CapabilityBoundingSet", "User")
+    ok(unit.get("User") == "regalia-audit-ship" and unit.get("CapabilityBoundingSet") == "" and unit.get("ActiveState") == "active",
+       "it runs as regalia-audit-ship with no capability", unit)
+    ok(stream_lines(state) == 0 and "permission denied" in journal(INSTANCE), "without the drop-in it cannot read the trail, and ships nothing",
+       journal(INSTANCE, 5))
+    sh("systemctl", "stop", INSTANCE)
+
+    print("\n### 1  with its drop-in it reads through the trail's group, and ships")
+    DROPIN.mkdir()
+    shutil.copy(UNITS / "regalia-audit-ship@sync.service.d" / "reader.conf", DROPIN / "reader.conf")
+    sh("systemctl", "daemon-reload")
     sh("systemctl", "start", INSTANCE)
     ok(until(lambda: stream_lines(state) == 3, 60), "the collector's stream holds the trail's 3 lines", stream_lines(state))
-    caps = show(INSTANCE, "CapabilityBoundingSet", "User")
-    ok(caps.get("CapabilityBoundingSet") == "cap_dac_read_search", "its one capability is CAP_DAC_READ_SEARCH", caps)
 
     print("\n### 2  a line appended later ships on the next pass")
-    append_as_nobody(trail, 2, 3)
+    append_as_writer(trail, 2, 3)
     ok(until(lambda: stream_lines(state) == 5, 75), "the stream holds 5 lines after the next pass", stream_lines(state))
     metrics = METRICS.read_text() if METRICS.exists() else ""
     ok('regalia_audit_trail_committed{trail="sync"} 5' in metrics and 'regalia_audit_trail_tampered{trail="sync"} 0' in metrics,
@@ -145,7 +166,7 @@ def scenario(work, binaries):
 
     print("\n### 3  the trail cut short: an alarm, status 3, and no restart")
     lines = trail.read_bytes().splitlines(keepends=True)
-    trail.write_bytes(b"".join(lines[:2]))                     # root rewrites it in place: still nobody's, 0600
+    trail.write_bytes(b"".join(lines[:2]))                     # root rewrites it in place: still regalia-sync's, 0640
     stopped = until(lambda: show(INSTANCE, "ActiveState").get("ActiveState") == "failed", 75)
     status = show(INSTANCE, "ActiveState", "ExecMainStatus", "NRestarts")
     ok(stopped and status.get("ExecMainStatus") == "3", "the instance failed with status 3", status)
@@ -181,7 +202,7 @@ def main():
         print("audit-ship-systemd: refused: this changes the machine (/usr/bin, a unit, /etc/regalia). It runs on a GitHub-hosted "
               "runner; on another throwaway host set REGALIA_SHIP_HOST_OK to its /etc/machine-id.")
         return 2
-    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, METRICS.parent, WORK) if p.exists()]
+    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, DROPIN, METRICS.parent, WORK) if p.exists()]
     if present:
         print("audit-ship-systemd: refused: %s exists: this looks like a host where the shipper is installed" % ", ".join(present))
         return 2
@@ -201,10 +222,10 @@ def main():
         for unit in (INSTANCE, COLLECTOR_UNIT):
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
-        for path in (INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS):
+        for path in (DROPIN / "reader.conf", INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS):
             if path.exists():
                 path.unlink()
-        for directory in (ETC, METRICS.parent):
+        for directory in (DROPIN, ETC, METRICS.parent):
             if directory.exists():
                 directory.rmdir()
         sh("systemctl", "daemon-reload", check=False)

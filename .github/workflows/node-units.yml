@@ -78,8 +78,9 @@ jobs:
           grep -q '^node-units-systemd: 49 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
             echo "::error::the units test did not pass all 49 checks" >&2; exit 1; }
 
-  # #278: the trail shipper's unit, as shipped, against the real collector: it ships another user's 0600
-  # trail, and a trail cut short under what was shipped stops it with an alarm and no restart.
+  # #278: the trail shipper's unit, as shipped, against the real collector: as its own user with no
+  # capability it reads a trail only through its instance's group, and a trail cut short under what was
+  # shipped stops it with an alarm and no restart.
   audit-ship-systemd:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -98,5 +99,5 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/audit-ship-systemd.py | tee "$RUNNER_TEMP/ship.log"
-          grep -q '^audit-ship-systemd: 12 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
-            echo "::error::the shipper test did not pass all 12 checks" >&2; exit 1; }
+          grep -q '^audit-ship-systemd: 13 passed, 0 failed$' "$RUNNER_TEMP/ship.log" || {
+            echo "::error::the shipper test did not pass all 13 checks" >&2; exit 1; }

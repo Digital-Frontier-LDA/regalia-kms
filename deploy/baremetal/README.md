@@ -785,7 +785,14 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
   (each shipped line's SHA-256 is in its event's detail, to check the copy against), and start the unit
   again.
 - **Metrics** are in `/var/lib/regalia-audit-ship/<trail>.prom`: lines, committed, backlog, tampered.
-- Root with only `CAP_DAC_READ_SEARCH`, to read trails owned by several service users.
+- **Its own user, no capability.** `regalia-audit-ship` (`units/regalia-audit-ship.sysusers.conf`) reads
+  each trail through that trail's group only, given per instance by
+  `units/regalia-audit-ship@<trail>.service.d/reader.conf`. The service trails use their writer's own group;
+  the operator tools' trails use `regalia-audit`. Trails are 0640, and `/var/log/regalia` is
+  root:regalia-audit 2750 (`trails.py` makes both so). The authority's state directory is 0750 for this.
+  The client key in `/etc/regalia/audit-ship/` is 0640 root:regalia-audit-ship.
+- **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
+  records one "alarm flood" alarm of its own and answers 429.
 
 ### The revocation authority (#199)
 

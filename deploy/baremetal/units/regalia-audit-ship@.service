@@ -11,7 +11,11 @@
 #   /etc/regalia/audit-ship.env       COLLECTOR=https://collector.example:8443  SITE=sitea
 #   /etc/regalia/audit-ship/%i.env    TRAIL_PATH=/var/lib/regalia-sync/sync-audit.jsonl
 #   (the path is trails.where(%i, the node's or authority's configuration))
-# Root, to read trails owned by several service users; it opens nothing for writing but its metrics.
+#   /etc/regalia/audit-ship/client.crt, client.key (0640 root:regalia-audit-ship), collector-ca.pem
+# Its own user (regalia-audit-ship.sysusers.conf) and NO capability: each instance reads its one trail
+# through that trail's group, from its drop-in regalia-audit-ship@%i.service.d/reader.conf (the
+# registry's group: the writer's own, or regalia-audit for the operator tools'). Trails are 0640.
+# It writes nothing but its metrics, in its state directory.
 [Unit]
 Description=Regalia KMS: ship the %i audit trail to the audit collector
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
@@ -28,9 +32,11 @@ ExecStart=/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} -collector $
 Restart=on-failure
 RestartSec=30s
 RestartPreventExitStatus=3
+User=regalia-audit-ship
+Group=regalia-audit-ship
 StateDirectory=regalia-audit-ship
 StateDirectoryMode=0755
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict

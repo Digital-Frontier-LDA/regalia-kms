@@ -27,8 +27,10 @@ AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
 StateDirectory=regalia-authority
-# 0700: the directory holds the revocation key (0600) and the store; the heartbeat is served over the tunnel
-StateDirectoryMode=0700
+# 0750: the directory holds the revocation key (0600) and the store; the heartbeat is served over the tunnel.
+# Group regalia-authority, whose only other member is regalia-audit-ship@authority (#278), may list it and
+# read the audit trail (0640) and nothing else: under UMask=0077 every other file here is 0600.
+StateDirectoryMode=0750
 # the control socket (control_socket: /run/regalia-authority/control.sock)
 RuntimeDirectory=regalia-authority
 RuntimeDirectoryMode=0700
