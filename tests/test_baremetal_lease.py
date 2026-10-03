@@ -352,7 +352,7 @@ class Issue(Case):
         for label, reason, change in (("an extra field", "attestation evidence fields mismatch", lambda e: e.update(verdict="ok")),
                                       ("uppercase", "evidence.quote must be lowercase hex", lambda e: e.update(quote=e["quote"].upper())),
                                       ("an oversized key", "evidence.ephemeral_public must be lowercase hex, at most 512 bytes", lambda e: e.update(ephemeral_public="00" * 513)),
-                                      ("an altered signature", "attestation is refused: the quote's signature does not verify", lambda e: e.update(signature=e["signature"][:-2] + "00"))):
+                                      ("an altered signature", "attestation is refused: the quote's signature does not verify", lambda e: e.update(signature=e["signature"][:-2] + "%02x" % (int(e["signature"][-2:], 16) ^ 0xff)))):   # never the byte it was
             with self.subTest(label):
                 evidence = dict(good)
                 change(evidence)

@@ -249,7 +249,7 @@ status="$(sign "e2e-nonce-$(openssl rand -hex 12)" "${mtls[@]}")"
 
 hdr "4  the hardening, measured on that process"
 # shellcheck disable=SC2024  # the report is this user's, on purpose: only the probe is root
-sudo env PYTHONPATH="$HERE" python3 -Ps - > "$W/probes" <<'PY'
+sudo env PYTHONPATH="$HERE" python3 -BPs - > "$W/probes" <<'PY'
 from deploy.baremetal import os_probe
 host = os_probe.Host()
 for name in ("kms_service_unprivileged", "kms_service_sandboxed", "kms_capabilities_minimal", "kms_apparmor_enforced"):

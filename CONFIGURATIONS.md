@@ -111,6 +111,13 @@ Measured on one YubiKey 5 NFC (firmware 5.7.4) and a Nitrokey HSM 2 in one daemo
   fail and the daemon logs the cause by name.
   On the host, `kms_opensc_leaves_piv_cards` (`deploy/baremetal/os_probe.py`) checks the unit and
   the file before the daemon is started.
+- **Run as deployed.** The piv-tagged daemon, started by systemd from the shipped unit and the
+  shipped hardening drop-in as the unprivileged service user, signed through a Nitrokey HSM 2
+  (OpenSC) and a YubiKey (PIV) in one process, and the host probe's sandbox and OpenSC measurements
+  were true on that process (`e2e/kms-two-token-systemd.sh`, 2026-10-02). It needed one thing nothing
+  shipped: a polkit rule, because Debian's pcscd refuses a service user
+  ([`deploy/polkit/50-regalia-kms-pcscd.rules`](deploy/polkit/50-regalia-kms-pcscd.rules)). **Not
+  run: the AppArmor profile**, which the bench kernel does not enable.
 - **So a host's YubiKeys serve PIV or the OpenPGP applet, not both.** The applet path needs OpenSC
   to drive the YubiKey; the PIV path needs it not to, and `ignored_readers = "Yubico"` matches every
   YubiKey reader. A deployment that wants one YubiKey uses PIV for everything, Ed25519 included.
