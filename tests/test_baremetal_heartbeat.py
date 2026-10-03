@@ -210,6 +210,25 @@ class DefineAt(unittest.TestCase):
             fresh.accept_first(beat(man, 60000, issued=T0 + 40), man)
         self.assertIn("already held", str(caught.exception))
 
+    def test_a_damaged_counter_is_recount_s_case_not_a_first_heartbeat_s(self):
+        """#261 (regalia-kms-3e): a counter whose base is gone, on a node whose disk state is lost, is not
+        redefined by a first heartbeat: that would skip recount's floor, phrase, audit and proofs."""
+        man = manifest()
+        for damage in ("base gone", "complete"):
+            with self.subTest(damage):
+                tpm = FakeTpm()
+                counter = hb.Counter("0x1500018", lock_path=self.d + "/" + damage + ".lock", run=tpm)
+                counter.define_at(5000)
+                if damage == "base gone":
+                    tpm.nv.pop(counter.base_index)
+                before = {k: list(v) for k, v in tpm.nv.items()}
+                fresh = hb.Freshness(counter, lambda: (T0 + 60, True), lambda: 5000, self.d + "/" + damage + ".json")
+                with self.assertRaises(m.Refused) as caught:
+                    fresh.accept_first(beat(man, 70000, issued=T0), man)
+                self.assertIn("use recount", str(caught.exception))
+                self.assertEqual({k: list(v) for k, v in tpm.nv.items()}, before)      # nothing touched
+                self.assertFalse(os.path.exists(self.d + "/" + damage + ".json"))       # nothing held
+
     def test_a_first_heartbeat_is_checked_like_any_other(self):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         man = manifest()
