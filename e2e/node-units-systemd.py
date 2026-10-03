@@ -738,8 +738,12 @@ def part2(work, binaries, user, ctx, servers, status):
        "a asked b to renew; b refused it by name, under epoch 3", refused[-2:] or events[-4:])
     granted = [e for e in events[mark:] if e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"]
     ends = [d["serve_until_boottime_ms"] for d in seen if d["serve_until_boottime_ms"]]
-    ok(not granted and ends == sorted(ends) and len(set(ends[-len(ends) // 2:])) <= 1,
-       "b granted no lease after the revocation, and a's admission stopped moving at the end of the last one", (granted, sorted(set(ends))))
+    # regalia-admission maps the lease's wall-clock expiry onto CLOCK_BOOTTIME every round, so while chrony
+    # slews the clock the end moves by milliseconds (about 0.3 % here); a renewal would move it by minutes
+    late = ends[len(ends) // 2:]
+    ok(not granted and late and max(late) - min(late) <= 3000,
+       "b granted no lease after the revocation, and a's admission stayed at the end of the last one (within %d ms of clock slew)"
+       % ((max(late) - min(late)) if late else -1), (granted, ends[:3], ends[-3:]))
     code, answer = daemon.sign(b"after the lease")
     ok(stopped is True and code == 503, "at the end of the lease the daemon refuses (503) and reports not ready, with nobody touching it",
        (code, answer, daemon.log()[-600:]))
