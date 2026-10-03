@@ -1,0 +1,68 @@
+# The relay on the root volume's key socket (regalia-kms#66), the path crypttab names:
+#
+#     root  PARTLABEL=regalia-root  /run/regalia-unlock/key.sock  luks,x-initrd.attach
+#
+# It holds no credential, no TPM and no network, and needs nothing that can fail. It asks the real client
+# (regalia-unlock.service, on regalia-unlock-core.socket) and passes on exactly one whole key, or nothing
+# within a bounded wait; with nothing, systemd-cryptsetup asks for the recovery key. It never logs, keeps
+# or writes the key anywhere but to the connection that asked.
+#
+# It makes the key socket ITSELF (no .socket unit) because of what systemd-cryptsetup does with a key file
+# it cannot read: a path that does not exist makes it ask for the recovery key, while a refused or reset
+# connection makes it fail WITHOUT asking (systemd 257, src/cryptsetup/cryptsetup.c). So if this unit
+# cannot start, or is gone, there is no socket, and the console asks. It is restarted without limit, and
+# its runtime directory, the socket in it, is removed whenever it stops. The path is unlock.KEY_SOCKET in
+# deploy/baremetal/unlock.py, and host_probe checks crypttab against it.
+
+[Unit]
+Description=Key socket relay of the root volume (TPM plus one peer)
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+DefaultDependencies=no
+# the real client's socket, if it can be had: a weak wish and an order, never a requirement
+Wants=regalia-unlock-core.socket
+After=regalia-unlock-core.socket
+Conflicts=initrd-switch-root.target shutdown.target
+Before=initrd-switch-root.target shutdown.target
+StartLimitIntervalSec=0
+
+[Service]
+# ready once the socket listens: systemd-cryptsetup is ordered after it (the module's drop-in)
+Type=notify
+NotifyAccess=main
+# The wait covers the real client's start (the boot mesh may take up to its own 60 s start limit) and its
+# attempt, which the client itself ends within its -budget of 200 s (each ask's dial and reply are cut at it;
+# only a TPM quote can run past it); a client that hangs beyond it yields the prompt.
+ExecStart=/usr/bin/regalia-unlock -relay /run/regalia-unlock-core/core.sock -listen /run/regalia-unlock/key.sock -relay-wait 330s
+Restart=always
+RestartSec=1s
+RuntimeDirectory=regalia-unlock
+RuntimeDirectoryMode=0700
+LimitCORE=0
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# (no PrivateTmp=: it would add dependencies on the /tmp mounts, and a failing one would keep this unit, and
+# with it the unattended unlock, from starting)
+PrivateNetwork=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=cryptsetup.target

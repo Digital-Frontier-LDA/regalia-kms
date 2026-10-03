@@ -76,11 +76,15 @@ type options struct {
 	tpm        string
 	sessionDir string
 	once       bool
+	budget     time.Duration // the longest one attempt may take, all rounds together (0: no limit)
 	rounds     int
 	wait       time.Duration
 }
 
 func run(arguments []string, out, diagnostics io.Writer) error {
+	if len(arguments) > 0 && arguments[0] == "-relay" {
+		return runRelay(arguments, out, diagnostics)
+	}
 	// The socket first, before anything that can fail. A start that cannot serve still answers whoever
 	// waits on it, with nothing: systemd-cryptsetup then asks at the console, and systemd does not start
 	// this program again for a connection left waiting. That holds for a bad flag or a bad configuration too.
@@ -102,11 +106,12 @@ func run(arguments []string, out, diagnostics io.Writer) error {
 	flags.StringVar(&o.sessionDir, "session-dir", "/run/regalia", "where the boot session's ID and public key are left for the running system")
 	flags.BoolVar(&o.once, "once", false, "answer one connection and exit (tests); without it the program serves until it is stopped")
 	flags.IntVar(&o.rounds, "rounds", 5, "how many times to go round the peers before giving up")
+	flags.DurationVar(&o.budget, "budget", 200*time.Second, "the longest one attempt may take, all rounds together: less than the relay's wait")
 	flags.DurationVar(&o.wait, "wait", 5*time.Second, "pause between rounds")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
-	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 {
+	if flags.NArg() != 0 || o.rounds < 1 || o.rounds > 100 || o.wait < 0 || o.budget < 0 {
 		return errors.New("usage: regalia-unlock [-config FILE] [-tpm DEVICE] [-session-dir DIR] [-once] [-rounds N] [-wait DURATION]")
 	}
 	if listenerError != nil {
@@ -182,7 +187,7 @@ type unlocker struct {
 	paths       map[string][]pathToken
 	local       []byte
 	boot        *session
-	dial        func(string) transport
+	dial        func(endpoint string, until time.Time) transport
 	quote       quoter
 	sleep       func(time.Duration)
 	out         io.Writer
@@ -427,14 +432,26 @@ func giveNothing(listener *net.UnixListener) {
 // tcpTransport is one request per connection: the request ends when this side closes its half, and
 // the reply is everything the peer sends before it closes, bounded in size and time. The network under
 // it (WG-BOOT, #66) decides who can reach a peer; the exchange needs no secrecy from the transport.
-func tcpTransport(endpoint string) transport {
+// `until` (zero: none) bounds it too: the attempt's budget, so that its last ask cannot outlast it.
+func tcpTransport(endpoint string, until time.Time) transport {
+	limit := func() time.Time {
+		deadline := time.Now().Add(ioTimeout)
+		if !until.IsZero() && until.Before(deadline) {
+			deadline = until
+		}
+		return deadline
+	}
 	return func(request []byte) ([]byte, error) {
-		connection, err := net.DialTimeout("tcp", endpoint, ioTimeout)
+		if !until.IsZero() && !time.Now().Before(until) {
+			return nil, errors.New("the attempt's time is spent")
+		}
+		dialer := net.Dialer{Deadline: limit()}
+		connection, err := dialer.Dial("tcp", endpoint)
 		if err != nil {
 			return nil, errors.New("no connection")
 		}
 		defer connection.Close()
-		_ = connection.SetDeadline(time.Now().Add(ioTimeout))
+		_ = connection.SetDeadline(limit())
 		if _, err := connection.Write(request); err != nil {
 			return nil, errors.New("the request was not sent")
 		}
@@ -454,14 +471,21 @@ func tcpTransport(endpoint string) transport {
 // credential, the peer and the keyslot, or an error after the last round. Every reason is written to
 // diagnostics as it happens; none of them holds a secret. Whether the credential opens the keyslot is
 // systemd-cryptsetup's to find out: this boot's one response is spent either way.
-func deriveKey(config *bootConfig, o options, paths map[string][]pathToken, local []byte, boot *session, dial func(string) transport,
+func deriveKey(config *bootConfig, o options, paths map[string][]pathToken, local []byte, boot *session, dial func(string, time.Time) transport,
 	quote quoter, sleep func(time.Duration), diagnostics io.Writer) (key []byte, peerID, slot string, err error) {
-	asked := false
+	asked, started, until := false, time.Now(), time.Time{}
+	if o.budget > 0 {
+		until = started.Add(o.budget)
+	}
 	for round := 1; round <= o.rounds; round++ {
 		for _, peer := range config.Peers {
 			for _, token := range paths[peer.NodeID] {
+				// the relay in front waits a bounded time: an answer after it would come too late for anyone
+				if o.budget > 0 && time.Since(started) >= o.budget {
+					return nil, "", "", fmt.Errorf("the disk stays locked: no peer helped within %s", o.budget)
+				}
 				asked = true
-				contribution, err := boot.ask(peer, token.PathEpoch, dial(peer.Endpoint), quote)
+				contribution, err := boot.ask(peer, token.PathEpoch, dial(peer.Endpoint, until), quote)
 				if err != nil {
 					fmt.Fprintf(diagnostics, "regalia-unlock: round %d, %s (path epoch %d): %s\n", round, peer.NodeID, token.PathEpoch, err)
 					continue
