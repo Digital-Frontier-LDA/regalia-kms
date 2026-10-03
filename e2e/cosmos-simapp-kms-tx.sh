@@ -87,22 +87,15 @@ if [ -n "${REGALIA_COSMOS_TOKEN_SERIAL:-}" ]; then
   SERIAL="$REGALIA_COSMOS_TOKEN_SERIAL"
   PIN="${REGALIA_COSMOS_TOKEN_PIN:?REGALIA_COSMOS_TOKEN_PIN is required with a physical token}"
   OBJECT_ID="${REGALIA_COSMOS_TOKEN_OBJECT_ID:?REGALIA_COSMOS_TOKEN_OBJECT_ID is required with a physical token}"
-  SLOT_ID="$(pkcs11-tool --module "$MODULE" --list-slots 2>/dev/null | awk -v want="$SERIAL" '
-      /^Slot [0-9]+ \(0x[0-9a-fA-F]+\)/ { match($0, /\(0x[0-9a-fA-F]+\)/); id = substr($0, RSTART + 1, RLENGTH - 2) }
-      /serial num *:/ { v = $NF; if (v == want) { n++; found = id } }
-      END { if (n > 1) print "AMBIGUOUS"; else if (n == 1) print found }')"
-  [ "$SLOT_ID" != AMBIGUOUS ] || fail "more than one slot reports serial $SERIAL — refusing to guess which token signs"
-  [ -n "$SLOT_ID" ] || fail "no slot reports serial $SERIAL"
-  # Through OpenSC, OpenSC is shown ONLY this card (here and in the KMS path below, which inherits
-  # OPENSC_CONF), and the PIN goes only to a slot that holds this serial alone (e2e/lib/bench_cards.sh,
-  # regalia-kms#174).
-  case "$(basename "$MODULE")" in *softhsm*) ;; *)
-    # shellcheck source=lib/bench_cards.sh
-    . "$(dirname "$0")/lib/bench_cards.sh"
-    bench_isolate "$STATE/opensc.conf" "$MODULE" "$SERIAL" || fail "cannot isolate $SERIAL in OpenSC"
-    SLOT_ID="$(bench_slot "$SERIAL")"; [ -n "$SLOT_ID" ] || fail "no slot reports serial $SERIAL after isolation";;
-  esac
-  P11() { if [ -n "${BENCH_CARDS[*]:-}" ]; then bench_gate "$SERIAL" "$SLOT_ID" || fail "$SERIAL is not the one card visible: no PIN"; fi
+  # A real card is isolated BEFORE anything lists the slots: OpenSC is shown ONLY this card (here and
+  # in the KMS path below, which inherits OPENSC_CONF), and the PIN goes only to the slot that holds
+  # this serial alone (e2e/lib/bench_cards.sh, regalia-kms#174).
+  case "$(basename "$MODULE")" in *softhsm*) fail "a physical token through SoftHSM is not a physical token";; esac
+  # shellcheck source=lib/bench_cards.sh
+  . "$(dirname "$0")/lib/bench_cards.sh"
+  bench_isolate "$STATE/opensc.conf" "$MODULE" "$SERIAL" || fail "cannot isolate $SERIAL in OpenSC (is it attached, alone under its serial?)"
+  SLOT_ID="$(bench_slot "$SERIAL")"; [ -n "$SLOT_ID" ] || fail "no single slot reports serial $SERIAL"
+  P11() { bench_gate "$SERIAL" "$SLOT_ID" || fail "$SERIAL is not the one card visible: no PIN"
           REGALIA_E2E_PIN="$PIN" pkcs11-tool --module "$MODULE" --slot "$SLOT_ID" --login --pin env:REGALIA_E2E_PIN "$@"; }
   P11 --read-object --type pubkey --id "$OBJECT_ID" --output-file "$STATE/pub.der" >/dev/null 2>&1 \
     || fail "no public key at object $OBJECT_ID on $SERIAL"

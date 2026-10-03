@@ -18,12 +18,16 @@ REGALIA_COSMOS_PKCS11_PIN="$STAGING_PIN" \
 e2e/run.sh --mode cosmos-hardware
 ```
 
-With OpenSC's module (`opensc-pkcs11.so`) the card is chosen by its serial and nothing else:
-`REGALIA_COSMOS_PKCS11_SERIAL` is required, the label and slot are ignored, OpenSC is shown only that
-card (`e2e/lib/bench_cards.sh`), and the PIN is presented only while that serial is the one card
-visible (regalia-kms#174). A label is shared by every token left at its default (both PicoHSM2 tokens
-are `Pico-HSM`), and a slot index moves when another reader comes or goes. Other modules (SoftHSM)
-still take the label or the slot.
+With any module but SoftHSM (OpenSC's `opensc-pkcs11.so`, and also `p11-kit-proxy` or `pkcs11-spy` in
+front of it) the card is chosen by its serial and nothing else: `REGALIA_COSMOS_PKCS11_SERIAL` is
+required, the label and slot are ignored, OpenSC is shown only that card (`e2e/lib/bench_cards.sh`),
+and the PIN is presented only while that serial is the one card visible (regalia-kms#174). A label is
+shared by every token left at its default, and a slot index moves when another reader comes or goes.
+SoftHSM still takes the label or the slot. Through `p11-kit-proxy` the other modules it aggregates add
+slots of their own, so the visible set never matches and the run refuses: use OpenSC's module directly.
+
+**Two Pico HSMs cannot be told apart by reader name** (both are "Pol Henarejos Pico Key CCID
+Interface"), so one cannot be isolated while the other is attached: attach only the Pico under test.
 
 The command first runs the normal software battery, then hashes
 `internal/policy/testdata/signdoc-akashnet2-msgsend.hex`, signs that digest through the token, and

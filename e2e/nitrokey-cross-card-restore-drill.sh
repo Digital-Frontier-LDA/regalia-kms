@@ -62,7 +62,11 @@ reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER"
 reader(){ reader_of "$1"; echo "$READER"; }
 # sc-hsm-tool's PINs and DKEK password are typed into its own prompts over a pty
 # (e2e/lib/sc-hsm-pty.py) and never appear in the process list. (`env:NAME` would do it too.)
-schsm(){ local card="$1"; shift; gate "$card"
+# sc-hsm-tool is given a READER INDEX: the reader at that index must be this card's (two isolated cards
+# can still swap places when the readers re-enumerate).
+reader_arg(){ local next=0 a; for a in "$@"; do [ "$next" = 1 ] && { echo "$a"; return; }; [ "$a" = --reader ] && next=1; done; }
+schsm(){ local card="$1" r; shift; gate "$card"
+  r="$(reader_arg "$@")"; [ -z "$r" ] || bench_reader_gate "$card" "$r" || die "reader $r is not $card's: no PIN presented"
   SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$DKEK_PW" \
     python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 # Resolved in the MAIN shell, so a card PKCS#11 cannot see stops the drill instead of reading as empty.

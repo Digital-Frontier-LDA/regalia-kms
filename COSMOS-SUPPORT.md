@@ -60,8 +60,8 @@ The software pipeline is runnable without a token. For a staging PicoHSM2 or com
 device, `e2e/cosmos-hardware-sign-verify.sh` hashes the
 generated SignDoc fixture, signs the digest through the configured secp256k1 object, and verifies
 the raw ECDSA result against the public key read from that same token. It requires explicit
-`REGALIA_COSMOS_PKCS11_MODULE`, a token selector (`REGALIA_COSMOS_PKCS11_SERIAL` with OpenSC's
-module, where the card is chosen by serial only; a label or slot with any other module), and
+`REGALIA_COSMOS_PKCS11_MODULE`, a token selector (`REGALIA_COSMOS_PKCS11_SERIAL` with any module but
+SoftHSM, where the card is chosen by serial only; a label or slot with SoftHSM), and
 `REGALIA_COSMOS_PKCS11_PIN` variables; it never guesses a PIN or runs as part of ordinary tests.
 The same check can be selected after the standard software battery with
 `e2e/run.sh --mode cosmos-hardware`.

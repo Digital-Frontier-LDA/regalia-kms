@@ -68,10 +68,18 @@ for s in $CARDS; do hsm_assert_staging_card "$s" || die "$s is not a registered 
 # Readers and slots resolve in the MAIN shell: a failed inline lookup would pass "" (= reader 0).
 declare -A READER SLOT
 # Resolved again after the deliberate outage: a reader that leaves and returns can be renumbered.
-resolve(){ local s
+# resolve dies on a card it cannot find; resolve_quiet, for restore(), leaves the old value and goes on
+# (a stale slot then fails the gate, and the restore says so, instead of exiting before the host key).
+resolve_quiet(){ local s r sl
   for s in $CARDS; do
-    READER[$s]="$(hsm_reader_for "$s" 2>/dev/null || true)"; [ -n "${READER[$s]}" ] || die "cannot resolve $s to a PC/SC reader"
-    SLOT[$s]="$(hsm_slot_id_for "$s" 2>/dev/null || true)"; [ -n "${SLOT[$s]}" ] || die "PKCS#11 cannot see $s"
+    r="$(hsm_reader_for "$s" 2>/dev/null || true)"; [ -z "$r" ] || READER[$s]="$r"
+    sl="$(hsm_slot_id_for "$s" 2>/dev/null || true)"; [ -z "$sl" ] || SLOT[$s]="$sl"
+  done; }
+resolve(){ local s
+  resolve_quiet
+  for s in $CARDS; do
+    [ -n "${READER[$s]:-}" ] || die "cannot resolve $s to a PC/SC reader"
+    [ -n "${SLOT[$s]:-}" ] || die "PKCS#11 cannot see $s"
   done; }
 resolve
 # The user-PIN counter, read with an empty VERIFY: no attempt is spent.
@@ -133,7 +141,7 @@ ROTATED=""; KEYS_MADE=""; DISABLED_USB=""
 restore(){ # always: the card PIN, the drill keys, the host key, USB authorisation
   set +e
   # Only the device THIS drill turned off: others may be off on purpose (Qubes, usbguard).
-  [ -z "$DISABLED_USB" ] || authorize "$DISABLED_USB" 1
+  [ -z "$DISABLED_USB" ] || { authorize "$DISABLED_USB" 1; sleep 2; resolve_quiet; }
   local keep=0 s
   if [ -n "$ROTATED" ]; then
     if change_pin "$PRIMARY" "$ROTATED" "$NK_PIN_PRIMARY"; then say "restore: $PRIMARY PIN put back"

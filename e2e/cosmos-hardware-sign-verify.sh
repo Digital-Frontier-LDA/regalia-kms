@@ -29,7 +29,7 @@ OPENSC=1; case "$(basename "$MODULE")" in *softhsm*) OPENSC=0;; esac
 
 [ -n "$MODULE" ] || { echo "REGALIA_COSMOS_PKCS11_MODULE is required" >&2; exit 2; }
 [ -f "$MODULE" ] || { echo "PKCS#11 module does not exist: $MODULE" >&2; exit 2; }
-[ -n "$TOKEN_LABEL" ] || [ -n "$SLOT" ] || [ -n "$SERIAL" ] || { echo "REGALIA_COSMOS_PKCS11_TOKEN_LABEL or REGALIA_COSMOS_PKCS11_SLOT is required" >&2; exit 2; }
+[ -n "$TOKEN_LABEL" ] || [ -n "$SLOT" ] || [ -n "$SERIAL" ] || { echo "REGALIA_COSMOS_PKCS11_SERIAL (a real card), or REGALIA_COSMOS_PKCS11_TOKEN_LABEL or REGALIA_COSMOS_PKCS11_SLOT (SoftHSM), is required" >&2; exit 2; }
 [ -z "$SLOT" ] || [[ "$SLOT" =~ ^[0-9]+$ ]] || { echo "PKCS#11 slot must be a decimal number: $SLOT" >&2; exit 2; }
 [ -n "$OBJECT_ID" ] || { echo "REGALIA_COSMOS_PKCS11_OBJECT_ID is required" >&2; exit 2; }
 case "$OBJECT_ID" in *[!0-9A-Fa-f]*) echo "REGALIA_COSMOS_PKCS11_OBJECT_ID must be hexadecimal" >&2; exit 2;; esac

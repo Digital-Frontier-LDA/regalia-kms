@@ -28,17 +28,22 @@ TOOLS = re.compile(r"(?<![\w/.-])(pkcs11-tool|sc-hsm-tool|opensc-tool|pkcs15-too
 PIN = re.compile(r"--login\b|--pin\b|--so-pin\b|--new-pin\b|--change-pin\b|--unlock-pin\b|--unblock-pin\b|--puk\b"
                  r"|--init-token\b|--initialize\b|--pin-file\b|--wrap-key\b|--unwrap-key\b|\bpkcs15-init\b|\bopensc-explorer\b"
                  r"|sc-hsm-pty\.py|\"\$SEAL\"|(?<!export )\bREGALIA_[A-Z0-9_]*PIN(_[A-Z])?=|LoadCredential(Encrypted)?="
-                 r"|\bsystemctl\s+(re)?start\b")
+                 r"|\bsystemctl\s+(re)?start\b|\bsystemctl\s+enable\s+--now\b|--verify-pin\b"
+                 r"|\b(pkcs11-tool|\$P11|\$\{P11\})\b[^;|&]*\s-l\b|\s-p\s+env:")
 # The serial gates. bench_gate (e2e/lib/bench_cards.sh), target_ok (the #62 suites) and yk_gate (a
 # YubiKey named by serial). A drill's wrapper is a gate only through gated_functions.
-GATES = ("bench_gate", "target_ok", "yk_gate")
+GATES = ("bench_gate", "target_ok")
+# A YubiKey named by serial and checked on the bus: the primitive itself, so a helper that wraps it is
+# a gate through gated_functions and a no-op helper of the same name is not. (It checks ykman's view
+# only: it is a gate for a YubiKey line, not for an OpenSC one; this check does not tell them apart.)
+YK_PRIMITIVE = re.compile(r"ykman list --serials")
 ISOLATION = re.compile(r"\bbench_isolate\b|opensc_isolate\.py|ignored_readers = \" \"")
 FUNCTION = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(\))?\s*\{")
 WINDOW = 4
 # A script that drives both a real card and SoftHSM marks each SoftHSM line with this comment on the line
 # directly above, and the marked line must itself name SoftHSM.
 EMULATED = "# emulated token: no real card"
-CALL_START = r"(?:^|[;&|({]|\bthen\b|\bdo\b|\belse\b|\bif\b|\b!)\s*"
+CALL_START = r"(?:^|[;&|(]|(?<!\$)\{|\bthen\b|\bdo\b|\belse\b|\bif\b|\b!)\s*"
 
 # Scripts whose OpenSC tools never meet a real card, and why.
 NO_REAL_CARD = {
@@ -64,7 +69,8 @@ def strip_strings(line, blank=True, every=False):
                 continue
             if c == quote:
                 content = "".join(buf)
-                out.append(("" if blank and (every or re.search(r"\s", content)) else content) + c)
+                # Blanked to the SAME LENGTH, so a position in this view is the same as in the other.
+                out.append(("_" * len(content) if blank and (every or re.search(r"\s", content)) else content) + c)
                 quote, buf = None, []
             else:
                 buf.append(c)
@@ -81,6 +87,19 @@ def strip_strings(line, blank=True, every=False):
     return "".join(out)
 
 
+def call_view(line):
+    """The line for finding CALLS: every quoted string blanked to its own length (a ";" or a gate's
+    name inside a string is not a call), and "${" taken apart (a "{" in a parameter expansion is not
+    the start of a command)."""
+    line = strip_strings(line, every=True)
+    # a whole parameter expansion, braces included, blanked to its length (nested ones from the inside)
+    while True:
+        new = re.sub(r"\$\{[^{}]*\}", lambda m: "$" + "_" * (len(m.group(0)) - 1), line)
+        if new == line:
+            return line
+        line = new
+
+
 def code_lines(text, blank_strings=False):
     """The script's lines as code: comments and here-documents blanked (line numbers kept), and with
     blank_strings the contents of quoted strings too (for finding calls: a word in a message is not one)."""
@@ -92,16 +111,26 @@ def code_lines(text, blank_strings=False):
                 heredoc = None
             continue
         code = strip_strings(line, blank=blank_strings)
-        bare = strip_strings(line)
+        bare = call_view(line)
         m = re.search(r"(?<![<$(])<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", line)
         if m and "<<<" not in line and "$((" not in line and "<<" in bare:
             heredoc = m.group(1)
-        out.append("" if line.lstrip().startswith("#") else code)
+        out.append("" if line.lstrip().startswith("#") else (call_view(line) if blank_strings else code))
     return out
 
 
+class _Calls:
+    """Matches a call of one of the names, or the YubiKey bus check."""
+
+    def __init__(self, names):
+        self.names = re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, names))))
+
+    def search(self, line):
+        return self.names.search(line) or YK_PRIMITIVE.search(line)
+
+
 def calls(names):
-    return re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, names))))
+    return _Calls(names)
 
 
 def functions(bare):
@@ -171,7 +200,7 @@ def ungated_pin_lines(lines, raw=None):
     bare = code_lines("\n".join(raw), blank_strings=True) if raw is not lines else lines
     gated = gated_functions(lines, bare)
     gate_call = calls(GATES + tuple(gated))
-    helper_call = calls(tuple(gated)) if gated else None
+    helper_call = re.compile(CALL_START + r"(%s)\b" % "|".join(sorted(map(re.escape, gated)))) if gated else None
     # A function's header is not a call of it, so every header is removed before looking for calls.
     # And a line inside a function looks for its gate only inside that function: a gate in the function
     # defined just above it is not this function's.
@@ -191,7 +220,7 @@ def ungated_pin_lines(lines, raw=None):
         here = calls_only[i]
         cut = max(0, pin.start() - (len(bare[i]) - len(here)))
         before = calls_only[floor:i] + [here[:cut]]
-        if any(gate_call.search(l) for l in before) or (helper_call and helper_call.search(here)):
+        if any(gate_call.search(l) for l in before) or (helper_call and helper_call.search(here) and helper_call.search(here).start() <= cut):
             continue
         if i > 0 and raw[i - 1].strip().startswith(EMULATED) and re.search(r"softhsm", raw[i], re.I):
             continue
@@ -289,6 +318,33 @@ class TheCheckItself(unittest.TestCase):
     def test_a_helper_that_calls_a_gated_helper_is_gated(self):
         script = 'g(){ bench_gate "$1" || exit 1; }\nw(){ g "$1"; sc-hsm-tool --initialize; }\n' + "true\n" * 6 + "w S\n"
         self.assertEqual(gated_functions(code_lines(script), code_lines(script, blank_strings=True)), {"g", "w"})
+
+    def test_positions_are_compared_on_the_same_text(self):
+        for script in ('pkcs11-tool --label "a b c d e f g h i j k l m" --login; bench_gate S\n',
+                       'f(){ say "a b c d e f g h i j k l m n o p q"; pkcs11-tool --login "$@"; bench_gate S; }\n' + "true\n" * 6 + "f -O\n",
+                       'echo "x;bench_gate"\npkcs11-tool --login\n', ': "${bench_gate:=1}"\npkcs11-tool --login\n'):
+            with self.subTest(script):
+                self.assertTrue(self.ungated(script))
+
+    def test_a_yubikey_gate_is_trusted_for_what_it_does_not_by_name(self):
+        real = 'yk_gate(){ ykman list --serials | grep -qx "$1"; }\nphase(){ yk_gate "$2" || exit; systemd-run -p LoadCredentialEncrypted=x.pin:/c t; }\n'
+        fake = 'yk_gate(){ :; }\nphase(){ yk_gate "$2" || exit; systemd-run -p LoadCredentialEncrypted=x.pin:/c t; }\n'
+        self.assertEqual(self.ungated(real), [])
+        self.assertEqual(len(self.ungated(fake)), 1)
+
+    def test_the_envelope_drills_key_listing_gates_in_the_main_shell(self):
+        # has_kek runs p11 in a pipeline: p11's own gate would only end a subshell, and "nothing listed"
+        # would read as "no key". The gate in has_kek itself is what stops the drill.
+        self.assertIn("has_kek(){ gate; p11", (E2E / "nitrokey-envelope-restore-drill.sh").read_text())
+
+    def test_a_gated_helper_after_the_pin_on_the_same_line_does_not_count(self):
+        script = 'good(){ bench_gate "$1" || return 97; }\n' + "true\n" * 6 + "pkcs11-tool --login; good S\n"
+        self.assertEqual(self.ungated(script), ["pkcs11-tool --login; good S"])
+
+    def test_short_flags_and_other_spellings(self):
+        for line in ("pkcs11-tool -l -p env:P -O", "pkcs15-tool --verify-pin", "systemctl enable --now kms"):
+            with self.subTest(line):
+                self.assertEqual(self.ungated("true\n" + line + "\n"), [line])
 
     def test_a_softhsm_only_script_is_not_a_real_card_script(self):
         self.assertTrue(softhsm_only('MODULE=/usr/lib/softhsm/libsofthsm2.so\npkcs11-tool --module "$MODULE" --login'))

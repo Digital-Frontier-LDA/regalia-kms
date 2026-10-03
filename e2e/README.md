@@ -115,5 +115,11 @@ presents a PIN only behind a serial check (`e2e/lib/bench_cards.sh`, regalia-kms
   line not behind a gate. SoftHSM-only scripts are exempt; a script with both kinds marks its emulated
   lines with `# emulated token: no real card`.
 
+What isolation cannot do: two readers with the same name (two Pico HSMs) cannot be told apart, so
+one cannot be isolated while the other is attached. The static test reads the scripts: it shows a PIN
+line was not written without a gate in front of it, not that the gate is effective (`bench_gate S ||
+true` would pass), and a PIN exported in one place and used in another is seen only where it is used
+by a tool it knows.
+
 OpenSC ignores a reader whose name CONTAINS an `ignored_readers` entry (a substring match): that is
 why overlapping reader names are refused, and why `ignored_readers = " "` ignores every reader.

@@ -57,7 +57,11 @@ for s in "$A" "$B"; do hsm_assert_staging_card "$s" || die "$s is not a register
 reader_of(){ READER="$(hsm_reader_for "$1" 2>/dev/null || true)"; [ -n "$READER" ] || die "cannot resolve $1 to a PC/SC reader"; }
 reader(){ reader_of "$1"; echo "$READER"; }
 # Secrets go into sc-hsm-tool's own prompts over a pty, never on argv (e2e/lib/sc-hsm-pty.py).
-schsm(){ local card="$1" pw="$2"; shift 2; gate "$card"
+# sc-hsm-tool is given a READER INDEX: the reader at that index must be this card's (two isolated cards
+# can still swap places when the readers re-enumerate).
+reader_arg(){ local next=0 a; for a in "$@"; do [ "$next" = 1 ] && { echo "$a"; return; }; [ "$a" = --reader ] && next=1; done; }
+schsm(){ local card="$1" pw="$2" r; shift 2; gate "$card"
+  r="$(reader_arg "$@")"; [ -z "$r" ] || bench_reader_gate "$card" "$r" || die "reader $r is not $card's: no PIN presented"
   SCHSM_SO_PIN="$(pin_of "$card" so)" SCHSM_USER_PIN="$(pin_of "$card" user)" SCHSM_DKEK_PW="$pw" \
     python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 # Also main-shell: a slot that does not resolve stops the drill here, not as an empty --slot later.
@@ -97,7 +101,7 @@ provision(){ local card="$1" r kcv pw
   kcv="$(kcv_of "$STATE/$card.import.log" || true)"; [ -n "$kcv" ] || die "no DKEK KCV from $card"
   printf '%s' "$kcv" > "$STATE/$card.kcv"
   ( umask 077; pin_of "$card" user > "$STATE/$card.pin" )
-  gate "$card" "$s"
+  gate "$card" "$s"; bench_reader_gate "$card" "$r" || die "reader $r is not $card's: no PIN presented"
   "$IMPORT" --p12 "$STATE/wallet.p12" --pw-file "$STATE/wallet.p12.pw" --id "$KEY_REF" --label two-site-wallet \
     --dkek "$STATE/$card.pbe" --dkek-pw "$STATE/$card.dkek.pw" --pin-file "$STATE/$card.pin" \
     --reader "$r" --slot "$s" --cert "$STATE/wallet.crt" >>"$LOG" 2>&1 || die "wallet import into $card failed"

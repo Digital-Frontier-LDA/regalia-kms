@@ -28,7 +28,8 @@
 # isolated from each other.
 #
 # Readers that are off the bus when bench_isolate runs (a YubiKey replugged later) are not in the
-# snapshot; HSM_IGNORE_READERS (comma-separated, default "Yubico") is always ignored as well.
+# snapshot; every YubiKey ("Yubico") and anything in HSM_IGNORE_READERS (comma-separated) are always
+# ignored as well: a caller's list ADDS to Yubico, it never replaces it.
 #
 # The isolated configuration keeps OpenSC's PKCS#11 slot limits raised (32 virtual slots, 4 per card):
 # with the default 16, a fifth reader gets no slot at all (measured 2026-09-24).
@@ -74,7 +75,7 @@ bench_isolate(){ # <conf> <module> <serial>…
   # Resolve the slots with OpenSC's slot limits raised and the caller's ignore list (default: every
   # YubiKey) already applied: even this first look must not open a YubiKey.
   local first
-  first="$(python3 -I -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()) or "\"__none__\"")' "${HSM_IGNORE_READERS:-Yubico}")"
+  first="$(python3 -I -c 'import sys; print(", ".join("\"%s\"" % n.strip().replace("\"", "") for n in sys.argv[1].split(",") if n.strip()) or "\"__none__\"")' "Yubico,${HSM_IGNORE_READERS:-}")"
   printf 'app default {\n  ignored_readers = %s;\n}\napp opensc-pkcs11 {\n\tpkcs11 {\n\t\tmax_virtual_slots = 32;\n\t\tslots_per_card = 4;\n\t}\n}\n' "$first" > "$conf"
   chmod 0644 "$conf"
   export OPENSC_CONF="$conf"
@@ -83,7 +84,7 @@ bench_isolate(){ # <conf> <module> <serial>…
     [ -n "$slot" ] || { echo "bench_isolate: no single PKCS#11 slot holds $serial" >&2; return 1; }
     slots="${slots:+$slots,}$slot"
   done
-  HSM_IGNORE_READERS="${HSM_IGNORE_READERS:-Yubico}" python3 -Es "$here/opensc_isolate.py" "$slots" "$conf.ignore" "$module" >/dev/null \
+  HSM_IGNORE_READERS="Yubico,${HSM_IGNORE_READERS:-}" python3 -Es "$here/opensc_isolate.py" "$slots" "$conf.ignore" "$module" >/dev/null \
     || { echo "bench_isolate: cannot isolate the readers of $*" >&2; return 1; }
   local ignored; ignored="$(grep -o 'ignored_readers = .*;' "$conf.ignore")"; rm -f "$conf.ignore"
   [ -n "$ignored" ] || { echo "bench_isolate: the isolation wrote no ignored_readers line" >&2; return 1; }
@@ -94,3 +95,20 @@ bench_isolate(){ # <conf> <module> <serial>…
     bench_gate "$serial" || { echo "bench_isolate: after isolation the visible slots are not exactly $*" >&2; return 1; }
   done; }
 
+bench_reader_gate(){ # <serial> <reader index>: the PC/SC reader at that index is this card's
+  # sc-hsm-tool and opensc-tool take a READER INDEX, which can change when readers re-enumerate even
+  # among the isolated ones (two cards can swap places). A Nitrokey's reader name carries its serial.
+  [ "${#BENCH_CARDS[@]}" -gt 0 ] || { echo "bench_reader_gate: bench_isolate was not called: no PIN" >&2; return 97; }
+  bench_gate "$1" || return 97
+  timeout 30 opensc-tool -l 2>/dev/null | python3 -I -c '
+import re, sys
+serial, index = sys.argv[1], sys.argv[2]
+for line in sys.stdin:
+    m = re.match(r"\s*(\d+)\s+\S+\s+(.*)$", line)
+    if m and m.group(1) == index:
+        ok = "(" + serial in m.group(2)
+        if not ok:
+            print("bench_reader_gate: reader %s is %r, not %s: no PIN" % (index, m.group(2).strip(), serial), file=sys.stderr)
+        sys.exit(0 if ok else 97)
+print("bench_reader_gate: no reader %s: no PIN" % index, file=sys.stderr)
+sys.exit(97)' "$1" "$2"; }

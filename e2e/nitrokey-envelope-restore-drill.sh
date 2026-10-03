@@ -66,7 +66,11 @@ phase(){ gate; REGALIA_ENVDRILL_PHASE="$1" REGALIA_ENVDRILL_MODULE="$MODULE" REG
 passed(){ grep -q -- "--- PASS: TestEnvelopeSurvivesTokenWipeAndDKEKRestore" <(tail -40 "$LOG"); }
 # PINs and the DKEK password are typed into sc-hsm-tool's prompts over a pty, never put on argv
 # (`env:NAME` would do it too). See e2e/lib/sc-hsm-pty.py.
-schsm(){ gate; SCHSM_SO_PIN="$HSM_SO_PIN" SCHSM_USER_PIN="$HSM_USER_PIN" SCHSM_DKEK_PW="$DKEK_PW" python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
+# sc-hsm-tool is given a READER INDEX: the reader at that index must be this card's (two isolated cards
+# can still swap places when the readers re-enumerate).
+reader_arg(){ local next=0 a; for a in "$@"; do [ "$next" = 1 ] && { echo "$a"; return; }; [ "$a" = --reader ] && next=1; done; }
+schsm(){ local r; gate; r="$(reader_arg "$@")"; [ -z "$r" ] || bench_reader_gate "$SERIAL" "$r" || die "reader $r is not $SERIAL's: no PIN presented"
+  SCHSM_SO_PIN="$HSM_SO_PIN" SCHSM_USER_PIN="$HSM_USER_PIN" SCHSM_DKEK_PW="$DKEK_PW" python3 -Es "$ROOT/e2e/lib/sc-hsm-pty.py" sc-hsm-tool "$@"; }
 initialise(){
   schsm --reader "$READER" --initialize \
     --dkek-shares 1 --label regalia-drill >>"$LOG" 2>&1 || die "initialise failed"
