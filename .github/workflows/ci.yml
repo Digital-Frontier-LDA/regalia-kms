@@ -490,7 +490,9 @@ jobs:
       - name: Build the pre-root client (static, no cgo)
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: A guest boots a measured UKI through a peer (QEMU, OVMF, swtpm, dracut, LUKS2, WireGuard before root, PCR 12)
-        run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/unlock-boot-qemu.sh
+        # the archive as of the reviewed initrd's inventory (deploy/baremetal/initrd/initrd-inventory.txt, #198):
+        # moving this date is an update of that inventory, in the same pull request
+        run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" REGALIA_BOOT_MIRROR=https://snapshot.debian.org/archive/debian/20261003T121500Z/ bash e2e/unlock-boot-qemu.sh
 
   # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
   # servers and a client on the loopback, none allowed to touch the runner's clock. The clock counts
