@@ -289,7 +289,7 @@ def cmdline_text(raw):
 #   crypttab    etc/crypttab holds exactly the one generic line of the dracut module
 #   cmdline.d   no fragment (etc/cmdline.d/*.conf, etc/cmdline) holds a word of the command line's refusal list
 #   our files   the unlock client's units, enable links, the module's drop-ins and the boot mesh script are this
-#               repository's; the client binary is there (and is the one the build compiled, when it is given)
+#               repository's; the client binary is the one the build compiled from this commit (required)
 #   the path    no copy of our units elsewhere in systemd's search path, and no drop-in that applies to a unit
 #               of the unlock path (per unit, every dash prefix, the template, the type-wide service.d,
 #               socket.d, target.d, cryptsetup, sockets.target, the initrd targets) other than the module's
@@ -317,6 +317,10 @@ UNIT_DIR = "usr/lib/systemd/system"
 UNLOCK_UNITS = ("regalia-unlock-relay.service", "regalia-unlock-core.socket", "regalia-unlock.service", "regalia-wg-boot.service")
 UNLOCK_SCRIPTS = {"usr/lib/regalia/wg-boot": "wg-boot"}
 UNLOCK_BINARIES = ("usr/bin/regalia-unlock",)
+# The client's line in the inventory says "the binary this commit compiles", not a hash: its source is what is
+# reviewed, and `build --unlock-client` (required) holds the image's client to the binary the build compiled.
+# sign and verify hold it to the hash the record states, which two builders compiled alike.
+COMPILED = "=compiled"
 UNLOCK_ENABLED = {"etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket": "/usr/lib/systemd/system/regalia-unlock-core.socket",
                   "etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service": "/usr/lib/systemd/system/regalia-unlock-relay.service"}
 # the module's drop-ins (module-setup.sh writes exactly these bytes): the relay ordering for
@@ -694,6 +698,8 @@ def initrd_inventory_lines(data, run=subprocess.run, tools=TOOLS, root=None):
     owners = _owners(root) if root else None
     rows = []
     for path, state in entries(files).items():
+        if path in UNLOCK_BINARIES:          # bound to the binary the build compiled, not to a hash here
+            state = " ".join(state.split(" ")[:3] + [COMPILED])
         raw = path
         if _ours_path(raw, files):
             cls, origin = "ours", "regalia-kms"
@@ -801,7 +807,9 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
             findings.append("%s, the unlock client, is not in the image" % path)
             continue
         clients[path] = sha256(body)
-        if client_sha256 is not None and clients[path] != client_sha256:
+        if client_sha256 is None:
+            findings.append("%s cannot be held to the client the build compiled: it was not given (build --unlock-client)" % path)
+        elif clients[path] != client_sha256:
             findings.append("%s is not the client this build compiled (%s, not %s)" % (path, clients[path], client_sha256))
     units, scripts, seen = {}, set(), set()
     for name in UNLOCK_UNITS:
@@ -823,7 +831,8 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
                 findings.append("inventory: + %s %s (not in the inventory)" % (path, state[path]))
             elif path not in state:
                 findings.append("inventory: - %s %s (in the inventory, not in the image)" % (path, expected[path]))
-            elif state[path] != expected[path]:
+            elif state[path] != expected[path] and not (path in UNLOCK_BINARIES and expected[path].endswith(" " + COMPILED)
+                                                        and state[path].split(" ")[:3] == expected[path].split(" ")[:3]):
                 findings.append("inventory: ~ %s %s, the inventory says %s" % (path, state[path], expected[path]))
     canonical = "".join("%s %s\n" % (p, state[p]) for p in sorted(state))
     return {"schema": INITRD_REVIEW, "passed": not findings, "findings": sorted(set(findings))[:200],
@@ -1118,9 +1127,9 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         for key, entry in record["inputs"].items():               # the copies, not the originals, are what is built
             require(sha256(read(inputs[key])) == entry["sha256"], "the input --%s changed while it was copied" % key.replace("_", "-"))
         # the review again, here, on the copy that is about to be built and signed: not taken on the record's word
-        mine = review_initrd(inputs["initrd"], run, tools, inventory)
-        # (the build may also have compared the client with the one it compiled: that finding-free fact is the record's)
-        require(dict(mine, clients=record["initrd_review"]["clients"]) == record["initrd_review"] and mine["clients"] == record["initrd_review"]["clients"],
+        # the client held to the hash the record states: the one both builders compiled
+        mine = review_initrd(inputs["initrd"], run, tools, inventory, record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0]))
+        require(mine == record["initrd_review"],
                 "this machine's review of the initrd is not the record's: nothing is signed")
         # the third build: this machine must get the bytes the record names before it signs anything
         data = _ukify(inputs, uname, os.path.join(work, "unsigned.efi"), run, tools)
@@ -1192,7 +1201,8 @@ def verify(image, record, public_keys, secure_boot_cert, run=subprocess.run, too
     _run(run, [tools["sbverify"], "--cert", secure_boot_cert, image], "checking the Secure Boot signature")
     # and the initrd it carries reviewed again, here, on the operator's machine (#198): the signatures say
     # the reviewed record was signed, this says the bytes still pass the same rules
-    require(record["initrd_review"]["passed"] and review_initrd_data(parts["initrd"], run, tools, inventory) == record["initrd_review"],
+    require(record["initrd_review"]["passed"] and review_initrd_data(parts["initrd"], run, tools, inventory,
+                                                                     record["initrd_review"]["clients"].get(UNLOCK_BINARIES[0])) == record["initrd_review"],
             "the image's initrd does not pass the review its record states")
     return dict(record["pcr11"])
 
@@ -1288,7 +1298,7 @@ def main(argv=None):
     c.add_argument("--name", required=True)
     c.add_argument("--out", required=True)
     c.add_argument("--initrd-inventory", default=None, help="the reviewed inventory the initrd must match (#198)")
-    c.add_argument("--unlock-client", help="the unlock client this build compiled: the initrd's must be it")
+    c.add_argument("--unlock-client", required=True, help="the unlock client this build compiled (from this commit's cmd/regalia-unlock): the initrd's must be it")
     c = sub.add_parser("sign", help="rebuild, sign PCR 11 per phase, sign for Secure Boot")
     input_args(c)
     c.add_argument("--record", required=True)
@@ -1315,6 +1325,7 @@ def main(argv=None):
     c.add_argument("--credentials-record", metavar="OUT", help="write what PCR 12 was computed from (espcreds.record)")
     c = sub.add_parser("initrd-review", help="review an initrd as build does, and print the findings")
     c.add_argument("--initrd", required=True)
+    c.add_argument("--unlock-client", required=True, help="the unlock client the build compiled")
     c.add_argument("--initrd-inventory", default=None)
     c = sub.add_parser("initrd-inventory", help="print an initrd's inventory (every entry, classed), to read in a pull request")
     c.add_argument("--initrd", required=True)
@@ -1322,7 +1333,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "initrd-review":
-            review = review_initrd(args.initrd, inventory=args.initrd_inventory)
+            review = review_initrd(args.initrd, inventory=args.initrd_inventory, client_sha256=sha256(read(args.unlock_client)))
             print(json.dumps(review, indent=2, sort_keys=True))
             return 0 if review["passed"] else 1
         if args.command == "initrd-inventory":

@@ -197,6 +197,7 @@ def newc(entries):
     return out
 
 
+CLIENT = b"\x7fELF regalia-unlock"          # the stand-in client binary, as the build compiled it
 INITRD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "baremetal", "initrd")
 
 
@@ -208,7 +209,7 @@ def unlock_initrd(change=None, drop=()):
         with open(os.path.join(INITRD, *parts), "rb") as f:
             return f.read()
     files = {"bin": (0o120777, b"usr/bin"), "lib": (0o120777, b"usr/lib"), "usr/bin/sh": (0o100755, b"\x7fELF sh"),
-             "usr/bin/regalia-unlock": (0o100755, b"\x7fELF regalia-unlock"), "usr/bin/ip": (0o100755, b"\x7fELF"),
+             "usr/bin/regalia-unlock": (0o100755, CLIENT), "usr/bin/ip": (0o100755, b"\x7fELF"),
              "usr/bin/wg": (0o100755, b"\x7fELF"), "usr/bin/nft": (0o100755, b"\x7fELF"), "usr/bin/sed": (0o100755, b"\x7fELF"),
              "etc/crypttab": (0o100644, mine("dracut", "90regalia-unlock", "crypttab")),
              "etc/cmdline.d/10-quiet.conf": (0o100644, b"quiet rd.shell=0\n"),
@@ -244,6 +245,7 @@ class Case(unittest.TestCase):
         return path
 
     def build(self, **kw):
+        kw.setdefault("unlock_client", self.write("regalia-unlock.compiled", CLIENT))
         return uki.build(dict(self.inputs, **kw.pop("inputs", {})), kw.pop("uname", "6.12.41+deb13-amd64"), kw.pop("name", "image-7"), self.out,
                          run=self.tools, **kw)
 
@@ -871,7 +873,7 @@ class Records(Case):
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
         argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
-                "--name", "x", "--out", self.out]
+                "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(argv), 1)
         self.assertEqual(out.getvalue(), "")
@@ -894,7 +896,8 @@ class InitrdReview(Case):
     def review(self, data, against=None):
         """The review of `data` against the inventory of `against` (default: of `data` itself, so that only the
         rules, layer 1, can refuse)."""
-        return uki.review_initrd_data(data, run=subprocess.run, inventory=write_inventory(data if against is None else against, self.d))
+        return uki.review_initrd_data(data, run=subprocess.run, inventory=write_inventory(data if against is None else against, self.d),
+                                      client_sha256=hashlib.sha256(CLIENT).hexdigest())
 
     def refused_by(self, data, *reasons, against=None):
         review = self.review(data, against)
@@ -914,7 +917,7 @@ class InitrdReview(Case):
         self.assertEqual(sorted(review["units"]), sorted(uki.UNLOCK_UNITS))
         self.assertEqual(review["clients"], {"usr/bin/regalia-unlock": hashlib.sha256(b"\x7fELF regalia-unlock").hexdigest()})
         record = self.build()
-        self.assertEqual(record["initrd_review"], uki.review_initrd_data(unlock_initrd()))
+        self.assertEqual(record["initrd_review"], uki.review_initrd_data(unlock_initrd(), client_sha256=hashlib.sha256(CLIENT).hexdigest()))
         uki.load_record(m.canonical(record), signed=False)
         with open(os.path.join(INITRD, "dracut", "90regalia-unlock", "module-setup.sh")) as f:
             setup = f.read()
@@ -929,11 +932,14 @@ class InitrdReview(Case):
                  "usr/lib/modules/6.12/kernel/drivers/x.ko": (0o100644, b"module")}
         baseline = unlock_initrd(extra)
         self.passes(baseline)
-        for path in list(extra) + ["usr/bin/regalia-unlock"]:
+        for path in extra:
             with self.subTest(path):
-                mode, body = dict(extra, **{"usr/bin/regalia-unlock": (0o100755, b"\x7fELF regalia-unlock")})[path]
+                mode, body = extra[path]
                 changed = unlock_initrd(dict(extra, **{path: (mode, body[:-1] + bytes([body[-1] ^ 1]))}))
                 self.refused_by(changed, "inventory: ~ %s f" % path, against=baseline)
+        # the client: one changed byte, refused by the comparison with the compiled binary
+        self.refused_by(unlock_initrd(dict(extra, **{"usr/bin/regalia-unlock": (0o100755, CLIENT[:-1] + b"u")})),
+                        "usr/bin/regalia-unlock is not the client this build compiled", against=baseline)
         # added, removed, a mode, an owner, a link's target
         self.refused_by(unlock_initrd(dict(extra, **{"etc/profile.d/z.sh": (0o100644, b"")})), "inventory: + etc/profile.d/z.sh", against=baseline)
         self.refused_by(unlock_initrd(extra, drop=("usr/lib/udev/rules.d/11-dm.rules",)), "inventory: - usr/lib/udev/rules.d/11-dm.rules", against=baseline)
@@ -962,7 +968,7 @@ class InitrdReview(Case):
         self.assertEqual(classes, sorted(classes, key=["ours", "generated", "package"].index))
         # the inventory reads back, and what is compared ignores the reader's columns
         path = self.write("inv.txt", ("\n".join(lines) + "\n").encode())
-        self.assertTrue(uki.review_initrd_data(data, inventory=path)["passed"])
+        self.assertTrue(uki.review_initrd_data(data, inventory=path, client_sha256=hashlib.sha256(CLIENT).hexdigest())["passed"])
         self.refused("is not CLASS ORIGIN TYPE MODE UID:GID PATH VALUE", uki.load_inventory, self.write("bad.txt", b"usr/lib/x sha256:00\n"))
 
     def test_a_planted_rd_luks_word_is_refused(self):
@@ -1007,6 +1013,25 @@ class InitrdReview(Case):
         self.refused_by(unlock_initrd(drop=(link,)), link + " is not in the image")
         self.refused_by(unlock_initrd({link: (0o120777, b"/usr/lib/systemd/system/evil.socket"), "usr/lib/systemd/system/evil.socket": (0o100644, b"")}),
                         link + " is not this repository's (a link to /usr/lib/systemd/system/evil.socket)")
+
+    def test_the_client_is_bound_to_the_binary_the_build_compiled_not_to_a_hash(self):
+        # the inventory says "=compiled" for it; the review fails without the compiled binary, or with another
+        lines = uki.initrd_inventory_lines(unlock_initrd())
+        self.assertIn("ours regalia-kms f 0755 0:0 usr/bin/regalia-unlock =compiled", lines)
+        self.assertFalse(any(l.startswith("ours") and "regalia-unlock " in l and l.endswith(hashlib.sha256(CLIENT).hexdigest()) for l in lines))
+        review = uki.review_initrd_data(unlock_initrd())
+        self.assertIn("usr/bin/regalia-unlock cannot be held to the client the build compiled: it was not given (build --unlock-client)",
+                      review["findings"])
+        self.assertFalse(review["passed"])
+        # a client of other bytes but the same type, mode and owner passes layer 2, and is refused by the comparison
+        other = unlock_initrd({"usr/bin/regalia-unlock": (0o100755, b"\x7fELF another")})
+        findings = uki.review_initrd_data(other, inventory=write_inventory(unlock_initrd(), self.d),
+                                          client_sha256=hashlib.sha256(CLIENT).hexdigest())["findings"]
+        self.assertEqual([f for f in findings if "regalia-unlock" in f],
+                         ["usr/bin/regalia-unlock is not the client this build compiled (%s, not %s)"
+                          % (hashlib.sha256(b"\x7fELF another").hexdigest(), hashlib.sha256(CLIENT).hexdigest())])
+        # its mode is still pinned
+        self.refused_by(unlock_initrd({"usr/bin/regalia-unlock": (0o104755, CLIENT)}), "inventory: ~ usr/bin/regalia-unlock f 4755", against=unlock_initrd())
 
     def test_the_client_must_be_the_one_the_build_compiled(self):
         compiled = self.write("regalia-unlock", b"\x7fELF regalia-unlock")

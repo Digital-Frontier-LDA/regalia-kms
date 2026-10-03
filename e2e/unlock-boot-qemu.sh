@@ -162,7 +162,7 @@ KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/u
 # differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
 # before a pull request changes the inventory.
 cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
-if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e" >"$W/review.json" 2>&1; then
+if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled" >"$W/review.json" 2>&1; then
   python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
     || cat "$W/review.json"
   chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true
@@ -177,7 +177,7 @@ echo "the initrd passes uki.py's review (#198): inventory $(python3 -I -c 'impor
 # shellcheck disable=SC2086  # the two lists are words on purpose
 # two builds (the signer requires a second builder's identical record), then the signature
 chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
-  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second \
+  && python3 -Es -m deploy.baremetal.uki build $IN --name e2e --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN --record /tmp/uki/out/e2e.record.json --second-record /tmp/uki/second/e2e.record.json --out /tmp/uki/out $KEYS" >"$W/uki.log" 2>&1 \
   || { cat "$W/uki.log"; echo "unlock-boot-qemu: the image did not build or sign"; exit 2; }
 grep 'PCR 11' "$W/uki.log" || true

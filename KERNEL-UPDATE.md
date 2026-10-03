@@ -181,3 +181,21 @@ Two limits, so this is not read as more than it is:
    sign an unreviewed image by hand, so the key's custody (the owner, #156) is part of this guarantee.
 2. It shows an image that passed the review when it was signed, not that it is the current one. A retired image
    that once passed still opens until it is retired: that is #135's (pcrlock retirement).
+
+## The initrd's inventory and the archive snapshot (#198)
+
+`uki build`, `sign` and `verify` compare every entry of the initrd with
+`deploy/baremetal/initrd/initrd-inventory.txt` and refuse any difference, so the image is built from a pinned
+snapshot of the Debian archive (`REGALIA_BOOT_MIRROR`, the date in `.github/workflows/ci.yml`).
+
+**Every image update starts by moving the snapshot date and refreshing the inventory**, in one pull request:
+
+1. Move the snapshot date.
+2. Build.
+3. Write the inventory with `python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD --root /`.
+4. Read the diff: the `generated` lines first, then the packages whose versions moved.
+
+A pinned snapshot also freezes security fixes, so how stale it may get has a limit. **The date must be moved
+whenever a Debian security advisory (DSA, or a point release's security update) touches a package that the
+inventory names**, and in any case before an image is signed for production. The client binary is not pinned by
+a hash: its line says `=compiled`, and `build --unlock-client` holds it to the binary this commit compiles.

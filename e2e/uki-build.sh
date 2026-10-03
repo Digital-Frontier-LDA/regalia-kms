@@ -21,7 +21,8 @@
 # NOT HERE: a boot. That the firmware and systemd-stub of a real machine measure these sections in this
 # order is systemd's documented behaviour and this script's assumption; the first boot of such an image
 # is the unlock test's (#66) and then a DL360 (#65). No hardware token is used: SoftHSM stands for it.
-# The initrd is whatever INITRD names, or a stand-in: the real one is built by #66's dracut module.
+# The initrd is whatever INITRD names (with UNLOCK_CLIENT, the client it holds), or a stand-in: the real one is
+# built by #66's dracut module.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 pass=0; fail=0
@@ -46,7 +47,8 @@ trap 'stop; $SUDO rm -rf "$W"' EXIT
 D="swtpm:path=$W/tpm.sock"
 # build, sign and verify review the initrd against an inventory (#198): here, the stand-in's own (written
 # below), since the reviewed image's inventory is e2e/unlock-boot-qemu.sh's to check
-uki(){ case "$1" in build|sign|verify) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" ;;
+uki(){ case "$1" in build) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" --unlock-client "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" ;;
+                    sign|verify) python3 -Es -m deploy.baremetal.uki "$@" --initrd-inventory "$W/initrd-inventory.txt" ;;
                     *) python3 -Es -m deploy.baremetal.uki "$@" ;; esac; }
 field(){ python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))
 for k in sys.argv[2].split("."): v=v[k]
