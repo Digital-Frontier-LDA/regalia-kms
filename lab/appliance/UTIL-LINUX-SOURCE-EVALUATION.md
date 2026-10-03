@@ -2,9 +2,10 @@
 
 ## Security Findings
 
-The qualified appliance retains 36 High matches against nine required
-`util-linux` binary packages at `2.41.5-0+deb13u1`. Removing SUID mount privileges
-is mitigation; these matches remain. Upstream's published advisories identify
+The current qualified appliance retains 40 High matches against ten required
+`util-linux` binary packages at source version `2.42.4-0+regalia1`. The earlier
+2.41.5 appliance retained 36 matches. Removing SUID mount privileges is
+mitigation; these matches remain. Upstream's published advisories identify
 maintenance releases containing fixes:
 
 | Advisory | Upstream evidence | Next step |
@@ -254,11 +255,30 @@ binds those actual bytes, source signatures, reproduction origin and installatio
 logs. All 112 image guards pass. New rejection cases cover missing/changed
 Protected flags, the old version, redirected conffile metadata and missing PAM
 configuration. The inventory gate admits exactly ten reviewed utility versions
-plus the separate TPM package; an old or unreviewed login row refuses. Full AMD64
-boot, confinement, rootfs admission and scanner qualification remain required.
+plus the separate TPM package; an old or unreviewed login row refuses. This native-stage review preceded the AMD64
+qualification recorded below.
 No old or new scanner finding is suppressed or claimed cleared by this review.
 
 ## Residual Risk
+
+AMD64 qualification succeeds for the ten-package candidate at `77577c0`
+in [CI 37153733459](https://github.com/Digital-Frontier-LDA/regalia-kms/actions/runs/37153733459).
+All 20 uploaded package outputs have been independently reinspected against
+that exact revision's policy and paired build receipt. Both vendor logs report
+368 cases, retaining 172 SKIPPED lines and eight KNOWN FAILED lines each.
+Boot, confinement, runtime checks and direct guest rootfs admission pass;
+the rootfs bytes remain unavailable for independent local inspection.
+The [ten-package qualification receipt](evidence/util-linux-login-amd64-qualified-20261003.json)
+records the limits. The raw scan remains **105 Critical + 640 High**:
+no High/Critical advisory/package pair disappears relative to the preceding
+[nine-package candidate](evidence/util-linux-amd64-qualified-20261003.json).
+Compared with the earlier archive-only utility image, adding `util-linux-extra`
+adds four matches. Debian source constraints remain `none (unknown)` with no
+fixed version. All 40 utility matches, including login's four, stay blocking.
+Physical PAM authentication and the source-advisory exploit regressions remain
+unproved by version, boot and confinement checks.
+
+The paragraphs below retain the earlier native-stage limitations.
 
 The initial 2.41.6 evaluation built no Debian packages. The 2.42.4 evaluation
 reproduces actual Debian packages, but none are admitted or installed into the

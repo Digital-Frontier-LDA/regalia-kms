@@ -1,0 +1,98 @@
+{
+  "actual_utility_packages_reinspected": 20,
+  "advisory_package_pair_changes_since_nine_package_candidate": {
+    "added": 0,
+    "removed": 0
+  },
+  "archive_packages": {
+    "inventory_sha256": "2bbf8ff5c8b05638141a1e38e481f37f8f77df9480a640f148e0c3c12c14364b",
+    "packages": 226,
+    "status": "verified"
+  },
+  "build_report_sha256": "ba38e2633abd3b7bdebd13c8c018bc89045a60abe0be27783b4c137f93b7c422",
+  "build_seconds": 1436,
+  "ci_run": 37153733459,
+  "compiler_inputs": {
+    "inventory_sha256": "fc25f5f4e04b07f5dfea29fafe85dec11b2a3539f75443ba2c6d109821ae69c3",
+    "packages": 425,
+    "status": "verified"
+  },
+  "counts": {
+    "Critical": 105,
+    "High": 640,
+    "Low": 37,
+    "Medium": 529,
+    "Negligible": 239,
+    "Unknown": 576
+  },
+  "database_built": "2026-10-03T06:31:58Z",
+  "distinct_blocking_cves": 367,
+  "findings_sha256": "07bc8394f66047866ffe97c776a3e9ec1e952799bc46faddc37e03963bd00262",
+  "guest_logs_sha256": {
+    "acceptance.log": "0cf8094faadb4ae8185d7b72f757257e23e607b70a7c1104d0706d5d000e7ee9",
+    "normal-boot.log": "fe76d8c115e56a273026f724fec779c3c8432b7a255ce992fb022e3051e80224"
+  },
+  "head": "77577c050695a3d75ba921e3f8e2dcc000434ab1",
+  "limits": [
+    "Rootfs and TPM package bytes are unavailable for independent local inspection; direct guest admission is a CI assertion.",
+    "Vendor test skips and known failures remain; login PAM authentication is not physically rehearsed.",
+    "No utility match is suppressed or cleared."
+  ],
+  "local_source_packages": {
+    "bsdutils": "1:2.42.4-0+regalia1",
+    "libblkid1": "2.42.4-0+regalia1",
+    "liblastlog2-2": "2.42.4-0+regalia1",
+    "libmount1": "2.42.4-0+regalia1",
+    "libsmartcols1": "2.42.4-0+regalia1",
+    "libuuid1": "2.42.4-0+regalia1",
+    "login": "1:4.16.0-2+really2.42.4-0+regalia1",
+    "mount": "2.42.4-0+regalia1",
+    "tpm2-tools": "5.7-1+regalia1",
+    "util-linux": "2.42.4-0+regalia1",
+    "util-linux-extra": "2.42.4-0+regalia1"
+  },
+  "normal_boot": {
+    "log_sha256": "fe76d8c115e56a273026f724fec779c3c8432b7a255ce992fb022e3051e80224",
+    "mode": "UEFI disk boot in disposable overlay",
+    "multi_user_seconds": 11.82,
+    "status": "passed",
+    "verification_reran": false
+  },
+  "production_approved": false,
+  "remediation_sha256": "388e6c4b87c125b14f5775a26398e387e2bb9dc382b5831dba14fc32fe3b6658",
+  "rootfs_bytes_independently_present": false,
+  "rootfs_payload_binding": {
+    "payload_binding_sha256": "776dc421362a68835c6d6832a9f819b4d4060716a7f81dd883295c0494978558",
+    "regular_files": 424,
+    "rootfs_sha256": "bff8c9f150136730726a4bddd5f79af48abf821da44b4b9218ef5f91d3bdf85c",
+    "status": "verified",
+    "symlinks": 19
+  },
+  "rootfs_sha256": "bff8c9f150136730726a4bddd5f79af48abf821da44b4b9218ef5f91d3bdf85c",
+  "sbom_sha256": "2ca9f30a2b2b0ccf0db6a1008c2bac8017b5603c2aba22f0114d99b385472a83",
+  "scan_report_sha256": "49674dfa0d57d03125b0752cf8c43718723f50e1c2d284a39da3999e171d5b6c",
+  "scanner_config_sha256": "00392cd4f00ef45aac1f325fe6f914efaa567e481760ef6704d55ddf34c85c21",
+  "schema": "regalia.util-linux-amd64-qualification/v1",
+  "source_commit": "d88bf8d557b47a320d7e42e2cd0e69bde1d3856d",
+  "status": "public_evidence_reverified",
+  "tpm_compiler_inputs": {
+    "inventory_sha256": "a3850fae9f4b9807ce786fad5c374e0f6e20e5aed0933435071258717538aa1b",
+    "packages": 463,
+    "status": "verified"
+  },
+  "triage_and_remediation_recomputed": true,
+  "triage_sha256": "078a9e5d2c3f4b9ad43b34c53f1d07b1d0fc24250146fd91c88914b5b291491b",
+  "utility_blocking_matches": 40,
+  "vendor_logs": {
+    "first": {
+      "known_failed_lines": 8,
+      "skipped_lines": 172,
+      "summary": "All 368 tests PASSED"
+    },
+    "second": {
+      "known_failed_lines": 8,
+      "skipped_lines": 172,
+      "summary": "All 368 tests PASSED"
+    }
+  }
+}
