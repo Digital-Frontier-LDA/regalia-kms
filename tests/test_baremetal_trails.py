@@ -124,6 +124,25 @@ class Writer(Case):
             node.Trail(self.path)({"event": "sync-pull", "outcome": "ALLOW"})
 
 
+class ToolDirectory(Case):
+    def test_the_tools_directory_is_made_and_must_be_root_s_and_private(self):
+        """#278 (regalia-kms-3e): append makes /var/log/regalia when absent, 0700, then requires a real
+        directory of root's with no group or other write: the rule in one place, not in every tool."""
+        tool_dir = os.path.join(self.d, "regalia")
+        with unittest.mock.patch.object(trails, "TOOL_DIR", tool_dir), unittest.mock.patch.object(trails, "TOOL_DIR_OWNER", os.getuid()):
+            trails.append(os.path.join(tool_dir, "recount.jsonl"), {"event": "e"})
+            self.assertEqual(os.stat(tool_dir).st_mode & 0o777, 0o700)
+            os.chmod(tool_dir, 0o770)
+            self.refused("no group or other can write", trails.append, os.path.join(tool_dir, "recount.jsonl"), {"event": "e"})
+            os.chmod(tool_dir, 0o700)
+        with unittest.mock.patch.object(trails, "TOOL_DIR", tool_dir):         # owned by this user, not root
+            self.refused("a directory of root's", trails.append, os.path.join(tool_dir, "recount.jsonl"), {"event": "e"})
+        link = os.path.join(self.d, "linked")
+        os.symlink(tool_dir, link)
+        with unittest.mock.patch.object(trails, "TOOL_DIR", link), unittest.mock.patch.object(trails, "TOOL_DIR_OWNER", os.getuid()):
+            self.refused("a directory of root's", trails.append, os.path.join(link, "recount.jsonl"), {"event": "e"})
+
+
 class Registry(Case):
     def test_every_trail_is_named_once_with_where_it_is(self):
         self.assertEqual(trails.where("enrol"), "/var/lib/regalia-enrol/enrol-audit.jsonl")

@@ -45,6 +45,7 @@ import time
 
 MAX_LINE = 64 * 1024                       # the collector's own bound on an event
 TOOL_DIR = "/var/log/regalia"
+TOOL_DIR_OWNER = 0                         # root: the operator tools run as root
 OWN = ("seq", "prev")
 
 # name: (where, writer, stream at the collector). "state_dir", "admission_dir": the configuration's.
@@ -110,12 +111,26 @@ def _sequence_of(line):
     return seq if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 1 else None
 
 
+def _tool_dir(directory):
+    """The operator tools' directory: made here when absent (0700), and then required to be a real
+    directory of root's that no group or other may write, so the rule lives in one place."""
+    try:
+        os.mkdir(directory, 0o700)
+    except FileExistsError:
+        pass
+    info = os.lstat(directory)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != TOOL_DIR_OWNER or info.st_mode & 0o022:
+        raise Refused("%s must be a directory of root's that no group or other can write" % directory)
+
+
 def append(path, event, now=time.time):
     """Append `event` (a dict) to the trail at `path`, chained. Returns its seq. Raises if it cannot."""
     if not isinstance(event, dict):
         raise Refused("an event is a JSON object")
     if any(k in event for k in OWN):
         raise Refused("an event may not carry %s: the trail sets them" % " or ".join(OWN))
+    if os.path.dirname(os.path.abspath(path)) == TOOL_DIR:
+        _tool_dir(TOOL_DIR)
     fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
     try:
         info = os.fstat(fd)
