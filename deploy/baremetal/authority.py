@@ -210,16 +210,31 @@ class Pkcs11Signer:
         FINAL_TRY or LOCKED set is refused with no login: its last tries are kept for a human.
       * Nothing else latches. A token pulled out, a session ended, or any other error refuses that
         signature and the next one tries again.
-    `pkcs11` is the PyKCS11 module (Debian: python3-pykcs11); a test passes a stand-in."""
+    `pkcs11` is the PyKCS11 module (Debian: python3-pykcs11); a test passes a stand-in.
+
+    FOR AN OPERATOR'S TOOL (manifest.py, #156: the membership root on its offline Nitrokey), each opt-in, the
+    authority's behaviour unchanged without them:
+      * `label`: the token's label is asserted beside its serial, in the same places: in the listing, and
+        again from the session's own slot before C_Login.
+      * `only_token`: exactly one initialised token is attached (CKF_TOKEN_INITIALIZED: a module's spare
+        empty slot or a blank card can take no PIN), counted in the same listing that finds the serial.
+      * `key_label`: the key is found by CKA_LABEL as well as (or instead of) CKA_ID; still exactly one
+        object of the class must match, so a label two keys share is refused rather than one picked.
+      * `pin`: a callable returning the PIN (the tool reads an environment variable or the terminal, no
+        echo). The latch and the low-tries refusal apply to it exactly as to the credential."""
     kind, alg = "pkcs11", "ecdsa-p256"
     P256_PARAMS = bytes.fromhex("06082a8648ce3d030107")   # DER OID prime256v1
     PIN_REFUSALS = ("CKR_PIN_INCORRECT", "CKR_PIN_INVALID", "CKR_PIN_LEN_RANGE", "CKR_PIN_LOCKED")
     PIN_LOW = ("CKF_USER_PIN_COUNT_LOW", "CKF_USER_PIN_FINAL_TRY", "CKF_USER_PIN_LOCKED")
 
-    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, credentials=None, pkcs11=None, latch_path=None):
+    def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, credentials=None, pkcs11=None, latch_path=None,
+                 label=None, only_token=False, key_label=None, pin=None):
         if pkcs11 is None:
             import PyKCS11 as pkcs11
-        self.pkcs11, self.serial, self.key_id = pkcs11, serial, bytes.fromhex(key_id)
+        require(key_id is not None or key_label is not None, "the key is named by its id, its label, or both")
+        require((pin_credential is None) != (pin is None), "the PIN comes from one source: a credential or the caller")
+        self.pkcs11, self.serial, self.key_id = pkcs11, serial, bytes.fromhex(key_id) if key_id is not None else None
+        self.label, self.only_token, self.key_label, self.pin_source = label, only_token, key_label, pin
         self.credentials = credentials or os.environ.get("CREDENTIALS_DIRECTORY")
         self.pin_credential = pin_credential
         self.latch_path, self.on_latch = latch_path, None
@@ -237,24 +252,47 @@ class Pkcs11Signer:
     def _serial_of(self, slot):
         return str(self.lib.getTokenInfo(slot).serialNumber).strip()
 
+    def _is_ours(self, slot):
+        """The token in `slot` has our serial, and our label when one is asserted."""
+        info = self.lib.getTokenInfo(slot)
+        return str(info.serialNumber).strip() == self.serial and (self.label is None or str(info.label).strip() == self.label)
+
+    def _named(self):
+        return "serial %s" % self.serial + ("" if self.label is None else " and label %r" % self.label)
+
     def _session(self):
-        """A session on the one token with this serial, its serial read again from the session's slot."""
-        slots = [slot for slot in self.lib.getSlotList(tokenPresent=True) if self._serial_of(slot) == self.serial]
-        require(len(slots) == 1, "%s token with serial %s is present" % ("no" if not slots else "more than one", self.serial))
+        """A session on the one token with this serial (and label), both read again from the session's slot."""
+        present = self.lib.getSlotList(tokenPresent=True)
+        if self.only_token:
+            # initialised tokens: a module's spare empty slot (SoftHSM always lists one) or a blank card can take no PIN
+            initialised = [slot for slot in present if int(self.lib.getTokenInfo(slot).flags) & self.pkcs11.CKF_TOKEN_INITIALIZED]
+            require(len(initialised) == 1, "%d initialised tokens are attached: attach only the one with %s"
+                    % (len(initialised), self._named()))
+        slots = [slot for slot in present if self._is_ours(slot)]
+        require(len(slots) == 1, "%s token with %s is present" % ("no" if not slots else "more than one", self._named()))
         session = self.lib.openSession(slots[0])
         try:
             slot = session.getSessionInfo().slotID
-            require(slot == slots[0] and self._serial_of(slot) == self.serial,
-                    "the token in the session's slot is not serial %s: refused before the PIN" % self.serial)
+            require(slot == slots[0] and self._is_ours(slot),
+                    "the token in the session's slot is not %s: refused before the PIN" % self._named())
         except BaseException:
             session.closeSession()
             raise
         return session, slot
 
     def _object(self, session, cls):
-        found = session.findObjects([(self.pkcs11.CKA_CLASS, cls), (self.pkcs11.CKA_ID, self.key_id)])
-        require(len(found) == 1, "the token holds %d objects with id %s of that class, not one" % (len(found), self.key_id.hex()))
+        template = [(self.pkcs11.CKA_CLASS, cls)]
+        if self.key_id is not None:
+            template.append((self.pkcs11.CKA_ID, self.key_id))
+        if self.key_label is not None:
+            template.append((self.pkcs11.CKA_LABEL, self.key_label))
+        found = session.findObjects(template)
+        require(len(found) == 1, "the token holds %d objects of that class with %s, not one" % (len(found), self._key_named()))
         return found[0]
+
+    def _key_named(self):
+        return " and ".join(([] if self.key_id is None else ["id %s" % self.key_id.hex()]) +
+                            ([] if self.key_label is None else ["label %r" % self.key_label]))
 
     def _read_public(self, session):
         point, params = session.getAttributeValue(self._object(session, self.pkcs11.CKO_PUBLIC_KEY),
@@ -262,11 +300,15 @@ class Pkcs11Signer:
         point, params = bytes(point), bytes(params)
         if len(point) == 67 and point[:2] == b"\x04\x41":     # DER OCTET STRING around the point
             point = point[2:]
-        require(params == self.P256_PARAMS and len(point) == 65 and point[0] == 4, "the token's key %s is not a P-256 key" % self.key_id.hex())
+        require(params == self.P256_PARAMS and len(point) == 65 and point[0] == 4, "the token's key %s is not a P-256 key" % self._key_named())
         ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)   # on the curve
         return point.hex()
 
     def _pin(self):
+        if self.pin_source is not None:
+            pin = self.pin_source()
+            require(isinstance(pin, str) and re.fullmatch(r"[0-9A-Za-z]{4,64}", pin) is not None, "the PIN given is not a PIN (alphanumeric, 4 to 64)")
+            return pin
         require(self.credentials, "no systemd credentials directory: the PIN comes from LoadCredentialEncrypted=")
         path = os.path.join(self.credentials, self.pin_credential)
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)

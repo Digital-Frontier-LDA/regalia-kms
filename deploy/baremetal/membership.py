@@ -417,6 +417,15 @@ def accept(current, envelope, root_key):
     """The next manifest, if `envelope` may follow `current` (None at enrollment, where only a
     root-signed epoch-1 manifest is accepted)."""
     candidate, signer = verify_envelope(envelope, root_key, current)
+    return transition(current, candidate, signer)
+
+
+def transition(current, candidate, signer):
+    """accept()'s rules for an already-verified candidate and its signer ("root" or "revocation"). The
+    manifest signer (manifest.py, #156) runs them BEFORE a signature exists, so nothing a node would refuse
+    is ever signed; accept() runs them after verifying one. One set of rules for both."""
+    require(signer in ("root", "revocation"), "signer must be root or revocation")
+    validate(candidate)
     if current is None:
         require(signer == "root" and candidate["epoch"] == 1, "the first manifest must be the root-signed epoch 1")
         return candidate

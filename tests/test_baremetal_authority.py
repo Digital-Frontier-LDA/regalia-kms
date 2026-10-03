@@ -520,10 +520,10 @@ class Pkcs11(unittest.TestCase):
 
 class FakeToken:
     """A stand-in for PyKCS11 with one or more tokens, whose serials a test changes at a chosen call."""
-    CKA_CLASS, CKA_ID, CKA_EC_POINT, CKA_EC_PARAMS = "class", "id", "point", "params"
+    CKA_CLASS, CKA_ID, CKA_EC_POINT, CKA_EC_PARAMS, CKA_LABEL = "class", "id", "point", "params", "label"
     CKO_PUBLIC_KEY, CKO_PRIVATE_KEY, CKM_ECDSA = "public", "private", "ecdsa"
     CKR_PIN_INCORRECT, CKR_PIN_INVALID, CKR_PIN_LEN_RANGE, CKR_PIN_LOCKED, CKR_DEVICE_REMOVED = 0xA0, 0xA1, 0xA2, 0xA4, 0x32
-    CKF_USER_PIN_COUNT_LOW, CKF_USER_PIN_FINAL_TRY, CKF_USER_PIN_LOCKED = 0x10000, 0x20000, 0x40000
+    CKF_USER_PIN_COUNT_LOW, CKF_USER_PIN_FINAL_TRY, CKF_USER_PIN_LOCKED, CKF_TOKEN_INITIALIZED = 0x10000, 0x20000, 0x40000, 0x400
 
     class PyKCS11Error(Exception):
         def __init__(self, value):
@@ -534,7 +534,8 @@ class FakeToken:
         from cryptography.hazmat.primitives.asymmetric import ec as _ec
         self.serials, self.point, self.calls, self.logins = dict(serials), point, [], []
         self.swap_at, self.removed = None, False
-        self.flags, self.login_error = 0, None
+        self.labels, self.objects = {}, None            # token labels by slot; objects: None (one of each class) or a list of dicts
+        self.flags, self.login_error = self.CKF_TOKEN_INITIALIZED, None
         self.key = _ec.generate_private_key(_ec.SECP256R1())
         fake = self
 
@@ -561,7 +562,9 @@ class FakeToken:
                 return info
 
             def findObjects(self, template):
-                return [dict(template)[fake.CKA_CLASS]]
+                if fake.objects is None:
+                    return [dict(template)[fake.CKA_CLASS]]
+                return [o[fake.CKA_CLASS] for o in fake.objects if all(o.get(k) == v for k, v in template)]
 
             def getAttributeValue(self, obj, attrs):
                 return [list(fake.point), list(bytes.fromhex("06082a8648ce3d030107"))]
@@ -596,7 +599,9 @@ class FakeToken:
 
             def getTokenInfo(self, slot):
                 fake.calls.append("token")
-                return Info(fake.serials[slot])
+                info = Info(fake.serials[slot])
+                info.label = fake.labels.get(slot, "")
+                return info
 
             def openSession(self, slot):
                 fake.calls.append("open")
