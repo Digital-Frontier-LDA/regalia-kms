@@ -4,7 +4,8 @@
 #   sudo REGALIA_UNLOCK_BIN=path/to/regalia-unlock bash e2e/initrd-drift.sh REPORT.md
 #
 # Builds the initrd as e2e/unlock-boot-qemu.sh does (the same packages, the same dracut module, the same
-# client), but from TODAY's Debian archive: the main suite, its updates and its security suite. It then
+# client), but from TODAY's Debian archive: the main suite, its updates and its security suite (each signed by
+# the archive key, checked by apt against debian-archive-keyring). It then
 # writes its inventory (`uki initrd-inventory --root`) and compares it with deploy/baremetal/initrd/initrd-inventory.txt.
 # Exit 0: nothing moved. Exit 1: REPORT.md says which packages moved (and which carry a security fix) and which
 # lines dracut generated differently. The scheduled workflow initrd-drift.yml files that report as an issue.
@@ -32,8 +33,10 @@ trap cleanup EXIT
 # THE SAME PACKAGES as e2e/unlock-boot-qemu.sh (tests/test_initrd_drift.py holds the two lists together)
 INCLUDE=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography
 echo "### today's archive: $SUITE, $SUITE-updates, $SUITE-security"
+KEYRING=/usr/share/keyrings/debian-archive-keyring.gpg
 mmdebstrap --variant=minbase --include="$INCLUDE" "$SUITE" "$ROOT" \
-  "deb $MIRROR $SUITE main" "deb $MIRROR $SUITE-updates main" "deb $SECURITY $SUITE-security main" >"$W/mmdebstrap.log" 2>&1 \
+  "deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main" \
+  "deb [signed-by=$KEYRING] $SECURITY $SUITE-security main" >"$W/mmdebstrap.log" 2>&1 \
   || { tail -40 "$W/mmdebstrap.log"; echo "initrd-drift: mmdebstrap failed"; exit 2; }
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 cp /etc/resolv.conf "$ROOT/etc/resolv.conf"
@@ -53,9 +56,13 @@ chroot "$ROOT" dracut --force --no-hostonly --no-hostonly-cmdline --add regalia-
 mkdir -p "$ROOT/tmp/src"; cp -r deploy "$ROOT/tmp/src/"
 chroot "$ROOT" sh -c "cd /tmp/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.drift --root /" > "$W/current.txt" \
   || { echo "initrd-drift: the inventory could not be written"; exit 2; }
-# the security suite's package list, to say which moved packages carry a security fix
-python3 -I -c 'import lzma,sys,urllib.request; sys.stdout.write(lzma.decompress(urllib.request.urlopen(sys.argv[1], timeout=120).read()).decode("utf-8","replace"))' \
-  "$SECURITY/dists/$SUITE-security/main/binary-amd64/Packages.xz" > "$W/security.txt" || { echo "initrd-drift: the security archive's package list could not be read"; exit 2; }
+# the security suite's package list, to say which moved packages carry a security fix: the one apt fetched and
+# VERIFIED for the build (InRelease signed by the archive key, then Packages by its hash), from the chroot's lists
+LIST="$(ls "$ROOT"/var/lib/apt/lists/*_dists_"$SUITE"-security_main_binary-amd64_Packages* 2>/dev/null | head -1)"
+[ -n "$LIST" ] || { echo "initrd-drift: apt holds no verified package list of $SUITE-security"; exit 2; }
+case "$LIST" in
+  *.lz4) lz4 -dc "$LIST" ;; *.gz) gzip -dc "$LIST" ;; *.xz) xz -dc "$LIST" ;; *.zst) zstd -dc "$LIST" ;; *) cat "$LIST" ;;
+esac > "$W/security.txt" || { echo "initrd-drift: the security suite's package list could not be read"; exit 2; }
 echo "kernel $KVER; $(grep -c . "$W/current.txt") entries"
 rc=0
 python3 -Es -m deploy.baremetal.initrd_drift --pinned deploy/baremetal/initrd/initrd-inventory.txt --current "$W/current.txt" \

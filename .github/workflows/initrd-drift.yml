@@ -1,9 +1,13 @@
 # regalia-kms#198: the KMS host's initrd is pinned, entry by entry, in deploy/baremetal/initrd/initrd-inventory.txt,
 # and its images are built from a dated snapshot of the Debian archive. A snapshot also freezes security fixes. So once
 # a day this builds the same initrd from TODAY's archive (with its security suite), compares it with the reviewed
-# inventory, and keeps ONE open issue (label initrd-drift) saying what moved: packages A -> B (security fixes in
-# bold) and the lines dracut generated differently. The issue is read and closed by a pull request that moves the
-# snapshot date and refreshes the inventory (KERNEL-UPDATE.md). Nothing here changes the repository.
+# inventory, and keeps ONE open issue (label initrd-drift, opened by this workflow) saying what moved: packages A -> B
+# (security fixes in bold) and the lines dracut generated differently; or that the check itself failed. The issue is
+# read and closed by a pull request that moves the snapshot date and refreshes the inventory (KERNEL-UPDATE.md).
+#
+# TWO JOBS, so that what runs archive code never holds a token that can write anything: `build` (contents:read) builds
+# as root from the archive and uploads the report; `file` (issues:write, no checkout, nothing from the archive
+# executed) downloads it and files it with gh. On a pull request only `build` runs, and shows the report.
 name: initrd drift
 
 on:
@@ -26,12 +30,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  drift:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,37 +49,69 @@ jobs:
       - name: Build the pre-root client (static, no cgo)
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: Build today's initrd and compare it with the reviewed inventory
-        id: drift
         run: |
+          mkdir -p "$RUNNER_TEMP/drift"
           rc=0
-          sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/initrd-drift.sh "$RUNNER_TEMP/report.md" || rc=$?
-          [ ! -e "$RUNNER_TEMP/report.md" ] || sudo chown "$(id -u):$(id -g)" "$RUNNER_TEMP/report.md"   # written as root
-          echo "rc=$rc" >> "$GITHUB_OUTPUT"
-          [ "$rc" -le 1 ]
-      - name: Show the report
-        if: steps.drift.outputs.rc == '1'
-        run: cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/initrd-drift.sh "$RUNNER_TEMP/drift/report.md" \
+            > "$RUNNER_TEMP/drift/log.txt" 2>&1 || rc=$?
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/drift"     # written as root
+          cat "$RUNNER_TEMP/drift/log.txt"
+          echo "$rc" > "$RUNNER_TEMP/drift/rc"
+          if [ "$rc" -ge 2 ]; then
+            # the check itself failed: what the issue says instead of silence (the log in a ~~~ fence, no ~ inside)
+            { echo "The daily drift check FAILED (exit $rc): the initrd could not be built or compared, so nothing says whether"
+              echo "today's archive moves it. The end of its log:"; echo; echo '~~~~~~~~'
+              tail -40 "$RUNNER_TEMP/drift/log.txt" | tr -d '~'; echo '~~~~~~~~'; } > "$RUNNER_TEMP/drift/report.md"
+          fi
+          [ ! -s "$RUNNER_TEMP/drift/report.md" ] || cat "$RUNNER_TEMP/drift/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the report for the filing job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: initrd-drift
+          path: |
+            ${{ runner.temp }}/drift/rc
+            ${{ runner.temp }}/drift/report.md
+          if-no-files-found: ignore
+          retention-days: 7
+
+  file:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: initrd-drift
+          path: drift
       - name: File or update the drift issue
-        if: steps.drift.outputs.rc == '1' && github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          report="$RUNNER_TEMP/report.md"
-          printf '\n_Found by %s._\n' "$RUN_URL" >> "$report"
+          rc="$(cat drift/rc 2>/dev/null || echo 2)"
+          if [ "$rc" = 0 ]; then echo "nothing moved"; exit 0; fi
+          report=drift/report.md
+          [ -s "$report" ] || echo "The daily drift check FAILED: it left no report." > "$report"
+          title="The initrd has moved since its inventory was reviewed (#198)"
+          [ "$rc" = 1 ] || title="The initrd drift check FAILED (#198)"
+          digest="initrd-drift $(sha256sum "$report" | cut -c1-16)"
+          printf '\n_Found by %s._\n<!-- %s -->\n' "$RUN_URL" "$digest" >> "$report"
           gh label create initrd-drift --color B60205 --description "The initrd moved since its inventory was reviewed (#198)" 2>/dev/null || true
-          # ONE issue, found by its label: a rerun edits it, never opens a second
-          issue="$(gh issue list --state open --label initrd-drift --limit 1 --json number --jq '.[0].number // empty')"
+          # ONE issue: the open one with the label that THIS workflow opened (a human-labelled issue is not touched).
+          # A rerun edits it, never opens a second.
+          issue="$(gh issue list --state open --label initrd-drift --author 'app/github-actions' --limit 1 --json number --jq '.[0].number // empty')"
           if [ -z "$issue" ]; then
-            gh issue create --title "The initrd has moved since its inventory was reviewed (#198)" --label initrd-drift --body-file "$report"
+            gh issue create --title "$title" --label initrd-drift --body-file "$report"
             exit 0
           fi
-          # the same findings as the body already states: nothing to change (the report ends with their digest)
-          digest="$(grep -o 'initrd-drift [0-9a-f]*' "$report" | head -1)"
           if gh issue view "$issue" --json body --jq .body | grep -qF "$digest"; then
-            echo "issue #$issue already states these findings"
+            echo "issue #$issue already states this"
           else
-            gh issue edit "$issue" --body-file "$report"
+            gh issue edit "$issue" --title "$title" --body-file "$report"
             gh issue comment "$issue" --body "The findings changed; the description now states today's."
           fi

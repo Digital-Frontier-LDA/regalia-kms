@@ -59,6 +59,16 @@ class Report(unittest.TestCase):
         fence = body[body.index("```\n") + 4:]
         self.assertNotIn("`", fence[:fence.index("\n```")])           # nothing inside can close the fence
 
+    def test_a_fence_and_a_mention_in_a_generated_line_stay_inside_the_block(self):
+        line = "generated dracut f 0644 0:0 etc/x" + "`" * 3 + "@digital-frontier-lda/x " + "3" * 64
+        changed, body = initrd_drift.report(parsed(BASE), parsed(BASE + [line]))
+        self.assertTrue(changed)
+        block = body[body.index("`" * 3 + "\n") + 4:]
+        block = block[:block.index("\n" + "`" * 3)]
+        self.assertNotIn("`", block)
+        self.assertIn("etc/x" + "'" * 3 + "@digital-frontier-lda/x", block)      # inside a code block: no notification
+        self.assertNotIn("@digital-frontier-lda", body.replace(block, ""))
+
     def test_the_same_findings_give_the_same_digest(self):
         today = BASE[:2] + ["package udev=257.14-1 f 0644 0:0 usr/lib/udev/rules.d/60-block.rules " + "9" * 64] + BASE[3:]
         one = initrd_drift.report(parsed(BASE), parsed(today))[1]
@@ -85,7 +95,7 @@ class Script(unittest.TestCase):
         self.assertIn("--no-hostonly --no-hostonly-cmdline --add regalia-unlock", drift)
         self.assertIn("$SUITE-security", drift)
 
-    def test_the_workflow_keeps_one_issue_and_writes_nothing_else(self):
+    def test_the_workflow_splits_building_from_filing(self):
         import yaml
         text = (ROOT / ".github" / "workflows" / "initrd-drift.yml").read_text()
         workflow = yaml.safe_load(text)
@@ -93,15 +103,30 @@ class Script(unittest.TestCase):
         self.assertEqual(sorted(triggers), ["pull_request", "schedule", "workflow_dispatch"])
         self.assertNotIn("pull_request_target", text)
         self.assertEqual(workflow["permissions"], {"contents": "read"})
-        self.assertEqual(workflow["jobs"]["drift"]["permissions"], {"contents": "read", "issues": "write"})
-        steps = workflow["jobs"]["drift"]["steps"]
-        filing = [s for s in steps if s.get("name") == "File or update the drift issue"][0]
-        self.assertIn("github.event_name != 'pull_request'", filing["if"])
-        self.assertIn("gh issue list --state open --label initrd-drift", filing["run"])
-        self.assertIn("gh issue edit", filing["run"])
-        self.assertIn("--body-file", filing["run"])
+        build, file_ = workflow["jobs"]["build"], workflow["jobs"]["file"]
+        # what runs archive code (as root) holds a token that can write nothing
+        self.assertEqual(build["permissions"], {"contents": "read"})
+        self.assertIn("initrd-drift.sh", " ".join(s.get("run", "") for s in build["steps"]))
+        # what can write issues runs no checkout and nothing from the archive: it downloads the report and calls gh
+        self.assertEqual(file_["permissions"], {"issues": "write"})
+        self.assertEqual(file_["needs"], "build")
+        self.assertEqual(file_["if"], "github.event_name != 'pull_request'")
+        self.assertEqual([s.get("uses", "").split("@")[0] for s in file_["steps"]], ["actions/download-artifact", ""])
+        filing = file_["steps"][1]["run"]
+        self.assertNotIn("checkout", filing)
+        self.assertNotIn("bash ", filing)
+        # one issue: labelled AND opened by this workflow; a rerun edits it; a failed check says so
+        self.assertIn("gh issue list --state open --label initrd-drift --author 'app/github-actions'", filing)
+        self.assertIn("gh issue edit", filing)
+        self.assertIn("The initrd drift check FAILED", filing)
+        self.assertIn("--body-file", filing)
         self.assertEqual(workflow["concurrency"]["group"], "initrd-drift")
 
+    def test_the_security_list_is_the_one_apt_verified(self):
+        script = (ROOT / "e2e" / "initrd-drift.sh").read_text()
+        self.assertNotIn("urlopen", script)
+        self.assertIn('/var/lib/apt/lists/*_dists_"$SUITE"-security_main_binary-amd64_Packages', script)
+        self.assertEqual(script.count("[signed-by=$KEYRING]"), 3)
 
 if __name__ == "__main__":
     unittest.main()
