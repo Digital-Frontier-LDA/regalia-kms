@@ -20,7 +20,7 @@
 # build (it runs with umask 022 and, in the root tree, `env -i` with a fixed PATH, LC_ALL=C and TZ=UTC).
 #
 # OUT: DIR/initrd.img, DIR/initrd-build.json (regalia.initrd-build/v1: the inputs and the result), and
-# DIR/initrd-listing.txt (one line per entry: path, type, mode, uid, gid, size, sha256, link, mtime).
+# DIR/initrd-listing.txt (one line per entry: path, type, mode, uid, gid, size, sha256, link).
 # Measured on two runners, in two directories and with another locale, time zone and umask
 # (e2e/initrd-reproducible.sh): byte-identical.
 set -euo pipefail
@@ -90,7 +90,11 @@ find "$ROOT/usr/bin/regalia-unlock" "$ROOT/usr/lib/regalia" "$ROOT/usr/lib/dracu
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
 KVER="$(find "$ROOT/lib/modules" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort -V | tail -1)"
 [ -n "$KVER" ] || die "the root tree holds no kernel modules"
-inroot(){ chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C TZ=UTC HOME=/root SOURCE_DATE_EPOCH="$EPOCH" "$@"; }
+# DRACUT_NO_MKNOD=1 on every builder: dracut sets it by itself inside a container (systemd-detect-virt -c) and
+# then leaves out /dev/null, kmsg, console, random and urandom, so the archive depended on the build host
+# (measured, #248). Without them the image boots the same: the kernel's built-in initramfs holds /dev/console,
+# and systemd mounts devtmpfs on /dev before anything else.
+inroot(){ chroot "$ROOT" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C TZ=UTC HOME=/root SOURCE_DATE_EPOCH="$EPOCH" DRACUT_NO_MKNOD=1 "$@"; }
 echo "### dracut --reproducible, kernel $KVER, SOURCE_DATE_EPOCH=$EPOCH"
 inroot dracut --force --reproducible --no-hostonly --no-hostonly-cmdline --add regalia-unlock --kver "$KVER" /tmp/initrd.img \
   >"$W/dracut.log" 2>&1 || { tail -40 "$W/dracut.log"; die "dracut failed"; }
@@ -98,9 +102,10 @@ cp "$ROOT/tmp/initrd.img" "$OUT/initrd.img"
 
 mkdir "$ROOT/tmp/unpacked"
 inroot sh -c 'cd /tmp/unpacked && lsinitrd --unpack /tmp/initrd.img' >/dev/null 2>&1 || die "cannot unpack the initrd"
-(cd "$ROOT/tmp/unpacked" && find . -mindepth 1 -printf '%P\t%y\t%m\t%U\t%G\t%s\t%T@\t%l\n' | sort | while IFS=$'\t' read -r p y m u g s t l; do
+# (no mtime: the unpacked copy carries the time it was unpacked; the archive's own times are covered by its sha256)
+(cd "$ROOT/tmp/unpacked" && find . -mindepth 1 -printf '%P\t%y\t%m\t%U\t%G\t%s\t%l\n' | sort | while IFS=$'\t' read -r p y m u g s l; do
    h=""; [ "$y" = f ] && h="$(sha256sum < "$p" | cut -d' ' -f1)"
-   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$y" "$m" "$u" "$g" "$s" "$h" "$l" "${t%%.*}"
+   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$p" "$y" "$m" "$u" "$g" "$s" "$h" "$l"
  done) > "$OUT/initrd-listing.txt"
 inroot dpkg-query -W -f '${Package}=${Version}\n' | sort > "$W/packages.txt"
 DRACUT_VERSION="$(inroot dpkg-query -W -f '${Version}' dracut)"

@@ -32,7 +32,7 @@ for n in $(seq 2 "$BUILDS"); do
   if ! cmp -s "$OUT/build-1/initrd.img" "$OUT/build-$n/initrd.img"; then
     same=no
     echo "initrd-reproducible: build $n DIFFERS from build 1"
-    echo "--- listing lines that differ (path, type, mode, uid, gid, size, sha256, link, mtime):"
+    echo "--- listing lines that differ (path, type, mode, uid, gid, size, sha256, link):"
     diff "$OUT/build-1/initrd-listing.txt" "$OUT/build-$n/initrd-listing.txt" | head -200 || true
   fi
   if ! cmp -s "$OUT/build-1/initrd-build.json" "$OUT/build-$n/initrd-build.json"; then
