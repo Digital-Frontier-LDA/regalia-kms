@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -382,7 +383,10 @@ class Sign(Case):
         self.assertIn("signed", signed)
         sbsign = next(c for c in self.tools.calls if c[0] == "sbsign")
         self.assertEqual(sbsign[1:5], ["--engine", "pkcs11", "--key", uri["secure_boot"]])
-        self.assertFalse([a for c in self.tools.calls for a in c if "pin" in a.lower()])
+        # the PIN's forms, not the letters: a random temporary directory can be called tmpindgrcel
+        pin_forms = re.compile(r"(^|[;?&])pin-(value|source)=|^--?pin(=|$)|^-p$|(^|_)PIN=", re.IGNORECASE)
+        self.assertFalse([a for c in self.tools.calls for a in c if pin_forms.search(a)])
+        self.assertTrue(pin_forms.search("pkcs11:token=X;pin-value=1") and pin_forms.search("--pin") and not pin_forms.search("/tmp/tmpindgrcel/key"))
         for bad, reason in (("pkcs11:token=IMAGE;object=initrd;pin-value=648219", "carries a PIN or a PIN file in the URI"),
                             ("pkcs11:token=IMAGE;object=initrd?pin-source=file:/tmp/pin", "carries a PIN or a PIN file in the URI"),
                             (self.key("initrd", "key"), "the initrd key must be a PKCS#11 URI"), ("pkcs11:token=a b", "must be a PKCS#11 URI")):
