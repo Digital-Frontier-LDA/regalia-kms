@@ -492,6 +492,63 @@ jobs:
       - name: A guest boots a measured UKI through a peer (QEMU, OVMF, swtpm, dracut, LUKS2, WireGuard before root, PCR 12)
         run: sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/unlock-boot-qemu.sh
 
+  # regalia-kms#248: is the KMS host initrd reproducible? A MEASUREMENT: each runner builds it twice from
+  # nothing (one pinned snapshot.debian.org timestamp, dracut --reproducible, a fixed SOURCE_DATE_EPOCH,
+  # two directories), and initrd-reproducible-compare compares the two runners. It reports; it does not
+  # fail on a difference yet (the result is recorded on #248, and decides dracut or mkosi-initrd).
+  initrd-reproducible:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [first, second]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Install the guest builder
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mmdebstrap debian-archive-keyring
+      - name: Build the pre-root client (static, no cgo, reproducible flags)
+        run: CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: Build the initrd twice from nothing, and compare on this runner
+        run: |
+          sha256sum "$RUNNER_TEMP/regalia-unlock"
+          sudo REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" bash e2e/initrd-reproducible.sh "$RUNNER_TEMP/repro"
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/repro"
+          sha256sum "$RUNNER_TEMP/regalia-unlock" | cut -d' ' -f1 > "$RUNNER_TEMP/repro/client-sha256.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: initrd-${{ matrix.builder }}
+          path: ${{ runner.temp }}/repro
+          retention-days: 7
+
+  initrd-reproducible-compare:
+    needs: initrd-reproducible
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/builds
+      - name: Compare the two runners' initrds
+        run: |
+          cd "$RUNNER_TEMP/builds"
+          for b in initrd-first initrd-second; do echo "$b: client $(cat "$b/client-sha256.txt") initrd $(cat "$b/sha256-1.txt") $(cat "$b/sha256-2.txt")"; done
+          if cmp -s initrd-first/initrd-1.img initrd-second/initrd-1.img; then
+            echo "initrd-reproducible: IDENTICAL across runners: $(cat initrd-first/sha256-1.txt)"
+          else
+            echo "initrd-reproducible: the two runners' initrds DIFFER"
+            echo "--- listing lines that differ (path, type, mode, uid, gid, size, sha256, link, mtime):"
+            diff initrd-first/listing-1.txt initrd-second/listing-1.txt | head -200 || true
+            echo "--- differing entries: $(diff initrd-first/listing-1.txt initrd-second/listing-1.txt | grep -c '^[<>]' || true)"
+          fi
+
   # regalia-kms#69 / #80: authenticated time, against live chrony daemons with NTS. Two private NTS
   # servers and a client on the loopback, none allowed to touch the runner's clock. The clock counts
   # as authenticated only while chrony is synchronised to two agreeing NTS sources; one server
