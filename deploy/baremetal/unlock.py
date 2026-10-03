@@ -373,7 +373,7 @@ class Peer:
                         and isinstance(message.get("op"), str), "not a request of version %s" % " or ".join(map(str, EXCHANGE_VERSIONS)))
                 handler = {"hello": self.hello, "unlock": self.unlock}.get(message["op"])
                 require(handler is not None, "unknown operation")
-            except (Refused, RecursionError):      # tens of thousands of nested brackets fit in one message
+            except Refused:                        # membership.load refuses deep nesting itself (#182)
                 asked = message.get("v") if isinstance(message, dict) else None
                 return {"v": asked if type(asked) is int and asked in EXCHANGE_VERSIONS else VERSION, "error": "INVALID_REQUEST"}
             if caller is not None and message.get("node_id") != caller:

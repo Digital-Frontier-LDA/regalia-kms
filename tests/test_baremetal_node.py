@@ -104,6 +104,24 @@ class Configuration(Case):
         self.refused("is not in the manifest", n.own_address, dict(self.m1, nodes=self.m1["nodes"][1:]))
 
 
+class Indices(unittest.TestCase):
+    """#182 (regalia-kms-51): the anchor occupies C, C+1, C+4, C+5 and the heartbeat counter H, H+1. The two
+    sets must be disjoint, as the classes define them."""
+
+    def test_overlapping_index_sets_are_refused(self):
+        base = json.loads(open(os.path.join(os.path.dirname(node.__file__), "node.example.json")).read())
+        epoch = int(base["nv_epoch"], 16)
+        for label, beat in (("H = C+4, a record slot", epoch + 4), ("H+1 = C+4", epoch + 3), ("H = C+5", epoch + 5),
+                            ("H = C+1, the base", epoch + 1), ("H+1 = C", epoch - 1)):
+            with self.subTest(label):
+                with self.assertRaises(m.Refused) as caught:
+                    node.validate(dict(base, nv_heartbeat="0x%08x" % beat))
+                self.assertIn("must not overlap", str(caught.exception))
+        node.validate(dict(base, nv_heartbeat="0x%08x" % (epoch + 2)))          # C+2, C+3: free between base and record
+        node.validate(dict(base, nv_heartbeat="0x%08x" % (epoch + 6)))
+        node.validate(base)
+
+
 class Publishing(Case):
     """sync owns the store; the root services read a published copy and verify it themselves."""
 
@@ -127,6 +145,19 @@ class Publishing(Case):
         late.start()                                                               # published a moment later, as sync does
         self.assertEqual(n.manifest(patience=5, step=0.05)["epoch"], 2)            # and the reader waited for it
         late.join()
+
+    def test_a_fork_the_tpm_never_recorded_is_refused_at_the_anchor_epoch(self):
+        """#213's deferred finding (regalia-kms-1e), on #182's lock-free check: a chain at the anchor's epoch
+        but not the manifest the TPM recorded (a root key that signed twice) used to pass the root services."""
+        n = self.node()
+        store = self.store(n)
+        store.commit(self.e1)
+        fork = dict(self.m1, issued_at="2026-09-30T00:00:00Z")                   # epoch 1, root-signed, never recorded
+        with open(n.path(node.PUBLISHED), "wb") as f:
+            f.write(m.canonical([rt.sign(fork)]))
+        self.refused("CONFLICT", n.manifest, patience=0)
+        node.publish(store, n.path(node.PUBLISHED))                               # the recorded chain is taken
+        self.assertEqual(n.manifest(), self.m1)
 
     def test_a_sync_that_withholds_or_rolls_back_stops_the_node_rather_than_misleading_it(self):
         n = self.node()

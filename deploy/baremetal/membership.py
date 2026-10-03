@@ -492,6 +492,10 @@ class HighWater:
     def _indices(self):
         return (self.index, self.base_index) + self.record_indices
 
+    def indices(self):
+        """Every NV index this anchor occupies, as integers: for a check that two anchors do not overlap."""
+        return {int(i, 16) for i in self._indices()}
+
     def _define(self, epoch, manifest_digest):
         """Defines the whole anchor AT `epoch`, recording `manifest_digest` (none of its indices may exist)."""
         for index in self._indices():

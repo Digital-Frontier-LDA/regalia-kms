@@ -96,8 +96,12 @@ def validate(doc):
     require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
             "tcti must be null (the kernel's resource manager) or a TCTI string")
     epoch, beat = _index(doc["nv_epoch"], "nv_epoch"), _index(doc["nv_heartbeat"], "nv_heartbeat")
-    # each takes a pair (and the membership record two slots more): they must not overlap
-    require(abs(int(epoch, 16) - int(beat, 16)) >= 2, "nv_epoch and nv_heartbeat take two indices each and must not overlap")
+    # what each really occupies, from the classes that define them (the anchor: counter, base and two record
+    # slots; the heartbeat counter: counter and base), never retyped here
+    overlap = membership.HighWater(epoch).indices() & heartbeat.Counter(beat).indices()
+    require(not overlap, "nv_epoch and nv_heartbeat must not overlap (both take %s): the anchor takes %s, the heartbeat counter %s" % (
+        ", ".join("0x%x" % i for i in sorted(overlap)), ", ".join("0x%x" % i for i in sorted(membership.HighWater(epoch).indices())),
+        ", ".join("0x%x" % i for i in sorted(heartbeat.Counter(beat).indices()))))
     for key in ("site", "state_dir", "admission_dir", "run_dir", "wg_service_key", "measurements"):
         _absolute(doc[key], key)
     # each directory has ONE writer: sync's, admission's (regalia-admission, #191), and the run directory (root)
@@ -138,8 +142,11 @@ def publish(store, path):
 
 
 def published(path, root_key, anchor):
-    """The current manifest by the published chain, verified here: every envelope from the root key, and
-    an epoch not below the TPM anchor (`anchor()` returns it). A chain below the anchor is refused."""
+    """The current manifest by the published chain, verified here: every envelope from the root key, and the
+    chain the TPM anchors (`anchor`, a membership.HighWater): not below its epoch (ROLLBACK), and at that
+    epoch the very manifest its record names, so a fork the TPM never recorded is refused (CONFLICT). The
+    read takes no lock (these services cannot write regalia-sync's lock directory); a CONFLICT can be a
+    commit racing the read, so it is read once more before it stands."""
     # The file is written by a process that parses what other machines send, and read here by root: no
     # symlink is followed, and nothing but a regular file is read (a FIFO would hang the reader).
     try:
@@ -158,14 +165,20 @@ def published(path, root_key, anchor):
         raw = b"".join(chunks)
     finally:
         os.close(fd)
-    try:
-        envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)
-    except RecursionError:      # tens of thousands of nested brackets: what the writer sends is not a chain
-        raise Refused("the published membership chain is not valid JSON (nested too deeply)") from None
+    envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)        # refuses a deeply nested document itself
     require(isinstance(envelopes, list) and envelopes, "the published membership chain is empty")
     manifest = membership.accept_chain(None, envelopes, root_key)
-    floor = anchor()
-    require(manifest["epoch"] >= floor, "ROLLBACK: the published chain ends at epoch %d, below the TPM anchor %d" % (manifest["epoch"], floor))
+    manifests = [e["manifest"] for e in envelopes]                       # verified, epoch 1 first
+
+    def digest_of(epoch):
+        require(epoch <= len(manifests), "ROLLBACK: the published chain ends at epoch %d, below the TPM anchor %d" % (len(manifests), epoch))
+        return membership.digest(manifests[epoch - 1]) if epoch else membership.HighWater.ZERO
+    try:
+        anchor.verify(digest_of, lock=False)
+    except Refused as refused:
+        if str(refused).startswith("ROLLBACK"):
+            raise
+        anchor.verify(digest_of, lock=False)        # a commit may have been racing the read: it stands only if it stays
     return manifest
 
 
@@ -266,7 +279,7 @@ class Node:
         anchor, deadline = self.anchor(), time.monotonic() + patience
         while True:
             try:
-                return published(self.path(PUBLISHED), self.cfg["root_key"], anchor.value)
+                return published(self.path(PUBLISHED), self.cfg["root_key"], anchor)
             except Refused as refused:
                 if not str(refused).startswith("ROLLBACK") or time.monotonic() >= deadline:
                     raise
