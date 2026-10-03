@@ -18,7 +18,7 @@ other's responses, and sessions survive between processes (on a host the kernel 
 connection closes). Part 1 therefore lets one unit at a time use the TPM after the first one. Part 2 needs
 several at once (regalia-sync writes the TPM while the path unit's regalia-wg-apply reads it), and a first
 run without a resource manager showed exactly that collision: so part 2 puts tpm2-abrmd, a resource
-manager like the kernel's, in front of the device and gives the units its TCTI. The test rests
+manager, in front of the device and gives the units its TCTI (below: what that changes). The test rests
 nothing on a session kept across processes (attest.activate does that: #190; a's AK is enrolled at b by
 hand, as the rest of the provisioning is).
 
@@ -43,6 +43,14 @@ Part 2: peer b, in a network namespace, on its own software TPM (a socket: it is
 tested), running the product's sync.Server with a real attestation verifier and lease signer, reached
 over real WireGuard. No revocation authority is configured: b receives what the root and the revocation
 key sign, by hand.
+
+HOW PART 2 DIFFERS FROM PRODUCTION, stated so nothing is read into it:
+  * a's TPM is behind tpm2-abrmd (D-Bus), not the kernel's /dev/tpmrm0: the units' DevicePolicy is not
+    exercised here (part 1 does that), and tabrmd keeps a disconnected client's sessions reclaimable where
+    the kernel flushes them, so nothing that uses a session across processes is proven by it (#65).
+  * the KMS daemon runs as the invoking user through systemd-run, not as the shipped regalia-kms.service
+    (its user, sandbox, AppArmor profile and credentials): what is proven is the admission contract
+    between the units and the daemon, not the daemon's own confinement (that is e2e/kms-hardened-serve.sh).
 
   6  b's tunnel to node a comes up from the same manifest
   7  catch-up: b holds epoch 2 and its heartbeat; regalia-sync pulls both over the tunnel, publishes, and
@@ -229,6 +237,10 @@ def main():
         for name in DAEMON_UNITS + tuple(reversed(UNITS)) + ("tpm2-abrmd.service",):
             sh("systemctl", "stop", name, check=False)
         sh("ip", "netns", "del", NS, check=False)
+        dropin = pathlib.Path("/etc/systemd/system/tpm2-abrmd.service.d/e2e.conf")
+        if dropin.exists():
+            dropin.unlink()
+            sh("systemctl", "daemon-reload", check=False)
         sh("ip", "link", "del", "e2e-b0", check=False)
         print("\nnode-units-systemd: %d passed, %d failed" % (passed, failed))
 
@@ -696,11 +708,16 @@ def part2(work, binaries, user, ctx, servers, status):
     ok(pulled and pulled[-1].get("outcome") == "ALLOW", "b recorded the caller as node a, by the tunnel address its key derives", pulled[-1:] or events[-3:])
     held = until(lambda: json.loads(pathlib.Path("/var/lib/regalia-sync/freshness.json").read_text())["envelope"]["heartbeat"]["epoch"] == 2, 60, 2)
     ok(held is True, "and a holds b's heartbeat for epoch 2 (regalia-sync's freshness state)")
-    rerun = until(lambda: (lambda now: now["InvocationID"] != before and now["ExecMainStatus"] == "0" and now["ActiveState"] == "inactive")(
-        show("regalia-wg-apply.service", "InvocationID", "ExecMainStatus", "ActiveState")), 60, 1)
-    ok(rerun is True, "the path unit ran regalia-wg-apply for the new chain, and it succeeded", journal("regalia-wg-apply.service")[-600:])
-    # one TPM user at a time from here (the CUSE device: see the docstring)
-    sh("systemctl", "stop", "regalia-wg-apply.path", "regalia-sync.service")
+    def applied_epoch_2():
+        now = show("regalia-wg-apply.service", "InvocationID", "ExecMainStatus", "ActiveState", "NRestarts")
+        if now["InvocationID"] == before or now["ExecMainStatus"] != "0" or now["ActiveState"] != "inactive":
+            return False
+        said = sh("journalctl", "_SYSTEMD_INVOCATION_ID=" + now["InvocationID"], "-o", "cat", "--no-pager", check=False).stdout
+        return "applied under epoch 2" in said and now
+    rerun = until(applied_epoch_2, 90, 1)
+    ok(bool(rerun), "regalia-wg-apply ran again and applied epoch 2, by its own run's journal (restarts: %s)"
+       % (rerun.get("NRestarts") if isinstance(rerun, dict) else "?"), journal("regalia-wg-apply.service")[-600:])
+    # regalia-sync and the path unit keep running from here, beside regalia-admission, as on a host
 
     header("8  the KMS daemon, and a lease from b over the tunnel")
     daemon = Daemon(work, binaries, user)
@@ -720,32 +737,38 @@ def part2(work, binaries, user, ctx, servers, status):
     code, answer = daemon.sign(message)
     ok(code == 200 and daemon.verifies(message, answer), "it signs, and openssl verifies the signature against the token's key", (code, answer))
 
-    header("9  b revokes a: no renewal, and the daemon stops at the end of the lease it holds")
+    header("9  b revokes a: no renewal, and the daemon stops at the end of the lease it holds, on its own clock")
     m3 = dict(m2, epoch=3, prev_digest=membership.digest(m2), issued_at="2026-10-02T01:00:00Z",
               nodes=[dict(n, state="REVOKED_STOLEN") if n["node_id"] == "a" else n for n in m2["nodes"]])
     store.commit(signed(m3, hbt.REVOKE, "revocation"))
     freshness.accept(hbt.beat(m3, 3, issued=int(time.time())), m3)
     mark = len(events)                   # from here b refuses; a lease it granted just before may still be landing
-    seen = []
 
-    def lapsed():
-        seen.append(json.loads(pathlib.Path("/run/regalia/admission.json").read_text()))
-        last = max(d["serve_until_boottime_ms"] for d in seen)
-        return admission.boottime_ms() > last + 2000 and daemon.ready() == 503
-    stopped = until(lapsed, lease.MAX_LIFETIME + 60, 3)
-    refused = [e for e in events if e.get("subject") == "a" and e.get("outcome") == "DENY"]
-    ok(any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in refused),
-       "a asked b to renew; b refused it by name, under epoch 3", refused[-2:] or events[-4:])
+    def lease_refusals():
+        return [e for e in events[mark:] if e.get("subject") == "a" and e.get("outcome") == "DENY"
+                and e.get("event") in ("sync-lease-nonce", "sync-lease")]
+    asked = until(lambda: lease_refusals(), lease.MAX_LIFETIME, 2)
+    # b refuses a when it identifies the caller (sync.py, peer_of), before any lease policy runs: the
+    # transport's refusal. The lease policy's own refusal of a revoked subject is #199's revoke e2e.
+    ok(bool(asked) and any("REVOKED_STOLEN under epoch 3" in e.get("reason", "") for e in asked),
+       "a asks b to renew; b refuses the caller by name, as REVOKED_STOLEN under epoch 3 (the transport, before the lease code)", events[-4:])
+    pulls = [e for e in events[mark:] if e.get("subject") == "a" and e.get("event") == "sync-pull"]
+    ok(bool(pulls) and all(e.get("outcome") == "DENY" for e in pulls), "a's own pulls are refused too: it is told nothing of its revocation", pulls[-2:])
+    # from here nothing writes the admission file: the daemon must stop on its own CLOCK_BOOTTIME
+    sh("systemctl", "stop", "regalia-admission.service")
+    frozen = pathlib.Path("/run/regalia/admission.json").read_bytes()
+    end = json.loads(frozen)["serve_until_boottime_ms"]
     granted = [e for e in events[mark:] if e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW"]
-    ends = [d["serve_until_boottime_ms"] for d in seen if d["serve_until_boottime_ms"]]
-    # regalia-admission maps the lease's wall-clock expiry onto CLOCK_BOOTTIME every round, so while chrony
-    # slews the clock the end moves by milliseconds (about 0.3 % here); a renewal would move it by minutes
-    late = ends[len(ends) // 2:]
-    ok(not granted and late and max(late) - min(late) <= 3000,
-       "b granted no lease after the revocation, and a's admission stayed at the end of the last one (within %d ms of clock slew)"
-       % ((max(late) - min(late)) if late else -1), (granted, ends[:3], ends[-3:]))
-    code, answer = daemon.sign(b"after the lease")
-    ok(stopped is True and code == 503, "at the end of the lease the daemon refuses (503) and reports not ready, with nobody touching it",
+    ok(not granted and end - admission.boottime_ms() > 15000,
+       "b granted no lease after the revocation; regalia-admission is stopped with %.0f s of the last lease left"
+       % ((end - admission.boottime_ms()) / 1000), (granted, end, admission.boottime_ms()))
+    time.sleep(max(0, (end - 5000 - admission.boottime_ms()) / 1000))
+    code, answer = daemon.sign(b"five seconds before the end")
+    ok(code == 200 and daemon.ready() == 200, "5 s before the end of the lease the daemon still signs and is ready", (code, answer))
+    time.sleep(max(0, (end + 2000 - admission.boottime_ms()) / 1000))
+    code, answer = daemon.sign(b"two seconds after the end")
+    ok(code == 503 and daemon.ready() == 503 and pathlib.Path("/run/regalia/admission.json").read_bytes() == frozen,
+       "2 s after the end it refuses (503) and is not ready, with the admission file untouched since the lease service stopped",
        (code, answer, daemon.log()[-600:]))
 
 
