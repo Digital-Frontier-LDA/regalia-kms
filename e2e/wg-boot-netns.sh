@@ -81,7 +81,8 @@ wg genkey > "$T/outsider.key"; wg genkey > "$T/wrong.key"
 # The manifests (epoch 1: all ACTIVE; epoch 2: lisbon REVOKED_STOLEN), the three site configs, and
 # everything rendered from them. The manifest is built here as a fixture; on a host it is the verified
 # one from membership.Store.
-PYTHONPATH="$HERE" python3 -BPs - "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
+python3 -IB - "$HERE" "$T" <<'PY' || { echo "wg-boot-netns: rendering failed"; exit 2; }
+import sys; sys.path.append(sys.argv.pop(1))
 import base64, json, sys
 from deploy.baremetal import bootnet, firewall, sitecfg
 from deploy.baremetal import membership as m
@@ -123,10 +124,10 @@ PY
 # WireGuard. The running peers: wg-unlock, WG-SERVICE key. The booting node: wg-boot, WG-BOOT key.
 # apply <namespace> <interface> <rendered configuration> <private key file>: the key is added in memory
 # and the whole thing piped to wg (bootnet.with_key): a configuration applied WITHOUT its key unsets it.
-apply(){ PYTHONPATH="$HERE" python3 -BPs -c '
+apply(){ python3 -IB -c 'import sys; sys.path.append(sys.argv.pop(1))
 import sys
 from deploy.baremetal import bootnet
-sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
+sys.stdout.write(bootnet.with_key(open(sys.argv[1]).read(), open(sys.argv[2]).read()))' "$HERE" "$3" "$4" | x "$1" wg syncconf "$2" /dev/stdin; }
 for h in porto faro; do
   x "$h" ip link add wg-unlock type wireguard || { echo "wg-boot-netns: this kernel has no WireGuard"; exit 2; }
   apply "$h" wg-unlock "$T/$h.unlock.conf" "$T/$h.service.key"
@@ -179,7 +180,7 @@ sleep 1
 
 # asked <namespace> <address> [timeout] [node]: an unlock request in `node`'s name (lisbon's) is answered
 # by the peer with a nonce. Exit 3 when the peer answers with a refusal instead.
-asked(){ x "$1" env PYTHONPATH="$HERE" python3 -BPs -c "
+asked(){ x "$1" python3 -IB -c "import sys; sys.path.append(sys.argv.pop(1))
 import json, sys
 from deploy.baremetal import unlock
 unlock.IO_TIMEOUT = float(sys.argv[2])
@@ -187,7 +188,7 @@ try:
     reply = json.loads(unlock.tcp_transport(sys.argv[1] + ':$UNLOCK')(json.dumps({'v': 1, 'op': 'hello', 'node_id': sys.argv[3]}).encode()))
 except (OSError, ValueError):
     sys.exit(1)
-sys.exit(0 if reply.get('nonce') else 3 if reply == {'v': 1, 'error': 'DENIED'} else 1)" "$2" "${3:-3}" "${4:-lisbon}"; }
+sys.exit(0 if reply.get('nonce') else 3 if reply == {'v': 1, 'error': 'DENIED'} else 1)" "$HERE" "$2" "${3:-3}" "${4:-lisbon}"; }
 tcpok(){ x "$1" python3 -I -c "
 import socket, sys
 try:
