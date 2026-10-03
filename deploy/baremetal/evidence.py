@@ -51,6 +51,7 @@ RECORDS = ("pin_import_key_sha256", "hsm_usb_path", "credential_tpm2_pcrs", "cre
            "credential_tpm2_pcr_key_pkfp", "system_rom_version", "ilo_firmware_version", "tpm_ek_certificate_present",
            "node_id", "unlock_peers")
 NODE_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")   # membership.py's form of a node ID
+UTC_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")   # [0-9], never \d: ASCII only
 MAX_PEERS = 16
 MAX_AGE = datetime.timedelta(hours=24)
 MAX_BYTES = 128 * 1024
@@ -119,6 +120,8 @@ def validate(doc, measured_names, now=None):
     for k in ("site", "host_serial"):
         require(isinstance(root[k], str) and re.fullmatch(r"[A-Za-z0-9._-]{1,64}", root[k]), "%s is not a plain name" % k)
     try:
+        if not (isinstance(root["captured_at"], str) and UTC_TIME.fullmatch(root["captured_at"])):
+            raise ValueError          # strptime alone takes "2026-1-3T1:2:3Z" and a year in any script's digits
         at = datetime.datetime.strptime(root["captured_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
     except (TypeError, ValueError):
         raise InvalidEvidence("captured_at must be UTC, YYYY-MM-DDTHH:MM:SSZ")
