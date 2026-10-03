@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ import (
 // verify those facts at unit-test speed; the sweep itself remains the
 // distinct, slow, and separately scheduled run.
 //
-// THE 41 + 11 = 52 POPULATION BREAKDOWN (53 since 2026-09-23: see :88 below).
+// THE 41 + 11 = 52 POPULATION BREAKDOWN (53 since 2026-09-23: see the pivClearVerified entry below).
 //
 // 41 both-direction survivors (the audit's population) plus 11 one-direction-
 // killed operands equals the 52 total leaves guardenum enumerates in lines
@@ -97,7 +98,7 @@ type survivorEntry struct {
 }
 
 // PIV_DRIVER_GO_OPERANDS is the operand population across piv_driver.go's
-// sweepScope (lines 43-238 when swept) — 52 leaves on the sites guardenum enumerates there, plus the :88 guard
+// sweepScope (lines 43-238 when swept) — 52 leaves on the sites guardenum enumerates there, plus the pivClearVerified guard
 // recorded on 2026-09-23 without a re-sweep (53). The 2026-09-06
 // sweep classified 41 of these as both-direction survivors and 11 as killed in
 // one direction; both kinds are listed below because the audit's 41 is a
@@ -122,26 +123,26 @@ type survivorEntry struct {
 var pivDriverGoOperands = []survivorEntry{
 	// piv_driver.go:(*PIVDriver).Open{err := ctx.Err()} — `if err := ctx.Err(); err != nil || driver == nil {`
 	{at: "piv_driver.go:(*PIVDriver).Open{err := ctx.Err()}", operand: 1, status: closedFalseDirectionOnly, closure: "TestOpenRefusesBeforeTouchingADriverThatIsNil", whyTrueOpen: "TRUE-direction test would need a non-nil driver, live ctx, pivCards returning cards, pivOpen returning a card whose Serial() matches the target — needs the Serial() seam", site: "driver == nil"},
-	{at: "piv_driver.go:(*PIVDriver).Open{err := ctx.Err()}", operand: 0, status: recordedMasked, closure: "ctx.Err() fires at :43 op0 on every path that reaches the loop, so :56 cannot be observed as the deciding operand", masked: "piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil}[0]", site: "err := ctx.Err()"},
+	{at: "piv_driver.go:(*PIVDriver).Open{err := ctx.Err()}", operand: 0, status: recordedMasked, closure: "ctx.Err() fires at piv_driver.go:(*PIVDriver).Open{err := ctx.Err()}[0] on every path that reaches the loop, so piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} cannot be observed as the deciding operand", masked: "piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil}[0]", site: "err := ctx.Err()"},
 
 	// piv_driver.go:(*PIVDriver).Open{target == ""} — `if target == "" {`
 	{at: "piv_driver.go:(*PIVDriver).Open{target == \"\"}", operand: 0, status: closedFalseDirectionOnly, closure: "TestOpenDoesNotEnumerateReadersForADeviceIDThatIsNotCommissioned", whyTrueOpen: "TRUE-direction test would assert Open succeeds for a commissioned deviceID; needs pivOpen to return a successful card whose Serial() matches — Serial() seam", site: "target == \"\""},
 
 	// piv_driver.go:(*PIVDriver).Open{pivCards() then err != nil} — `if err != nil {` (pivCards)
-	{at: "piv_driver.go:(*PIVDriver).Open{pivCards() then err != nil}", operand: 0, status: recordedMasked, closure: "pivCards returning an error and pivCards returning (nil, nil) both leave :79 to refuse, and the loop body never runs to disambiguate", masked: "piv_driver.go:(*PIVDriver).Open{selected == nil}[0]", site: "err != nil"},
+	{at: "piv_driver.go:(*PIVDriver).Open{pivCards() then err != nil}", operand: 0, status: recordedMasked, closure: "pivCards returning an error and pivCards returning (nil, nil) both leave piv_driver.go:(*PIVDriver).Open{selected == nil} to refuse, and the loop body never runs to disambiguate", masked: "piv_driver.go:(*PIVDriver).Open{selected == nil}[0]", site: "err != nil"},
 
 	// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil} — `if ctx.Err() != nil {` (loop-top guard)
 	{at: "piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil}", operand: 0, status: recordedMasked, closure: "pivOpen is synchronous in the seam fixture and cannot observe a context cancel that happens after the call enters", masked: "piv_driver.go:(*PIVDriver).Open{err := ctx.Err()}[0]", site: "ctx.Err() != nil"},
 
 	// piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil then selected != nil} — `if selected != nil {` (close prior on ctx.Err in loop)
-	{at: "piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil then selected != nil}", operand: 0, status: recordedMasked, closure: ":58 only fires when a previous iteration set `selected`, which requires pivOpen to return a successful card; the seam does not provide one", masked: "piv_driver.go:(*PIVDriver).Open{openErr != nil}[0], piv_driver.go:(*PIVDriver).Open{serialErr != nil}", site: "selected != nil"},
+	{at: "piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil then selected != nil}", operand: 0, status: recordedMasked, closure: "piv_driver.go:(*PIVDriver).Open{ctx.Err() != nil then selected != nil} only fires when a previous iteration set `selected`, which requires pivOpen to return a successful card; the seam does not provide one", masked: "piv_driver.go:(*PIVDriver).Open{openErr != nil}[0], piv_driver.go:(*PIVDriver).Open{serialErr != nil}", site: "selected != nil"},
 
-	// piv_driver.go:(*PIVDriver).Open{openErr != nil} — `if openErr != nil {` (the cited line points at the guard, not the assignment on :63)
+	// piv_driver.go:(*PIVDriver).Open{openErr != nil} — `if openErr != nil {` (the guard, not the pivOpen assignment above it)
 	{at: "piv_driver.go:(*PIVDriver).Open{openErr != nil}", operand: 0, status: closedFalseDirectionOnly, closure: "TestOpenContinuesPastACardThatFailsToOpen", whyTrueOpen: "TRUE-direction test would need pivOpen to return a successful card for the loop to reach selected != nil; needs the Serial() seam", site: "openErr != nil"},
 
 	// piv_driver.go:(*PIVDriver).Open{serialErr != nil} — `if serialErr != nil || strconv.FormatUint(uint64(serial), 10) != target {`
-	{at: "piv_driver.go:(*PIVDriver).Open{serialErr != nil}", operand: 0, status: recordedMasked, closure: "candidate.Serial() panics on a nil-handed card before returning — :68 op0 cannot be reached without a Serial() seam", masked: "the nil-handed card", site: "serialErr != nil || strconv.FormatUint(uint64(serial), 10) != target"},
-	{at: "piv_driver.go:(*PIVDriver).Open{serialErr != nil}", operand: 1, status: recordedMasked, closure: "same as :68 op0 — Serial() must return for :68 op1 to be observed", masked: "the nil-handed card", site: "serialErr != nil || strconv.FormatUint(uint64(serial), 10) != target"},
+	{at: "piv_driver.go:(*PIVDriver).Open{serialErr != nil}", operand: 0, status: recordedMasked, closure: "candidate.Serial() panics on a nil-handed card before returning — piv_driver.go:(*PIVDriver).Open{serialErr != nil}[0] cannot be reached without a Serial() seam", masked: "the nil-handed card", site: "serialErr != nil || strconv.FormatUint(uint64(serial), 10) != target"},
+	{at: "piv_driver.go:(*PIVDriver).Open{serialErr != nil}", operand: 1, status: recordedMasked, closure: "same as piv_driver.go:(*PIVDriver).Open{serialErr != nil}[0] — Serial() must return for piv_driver.go:(*PIVDriver).Open{serialErr != nil}[1] to be observed", masked: "the nil-handed card", site: "serialErr != nil || strconv.FormatUint(uint64(serial), 10) != target"},
 
 	// piv_driver.go:(*PIVDriver).Open{selected != nil#2} — `if selected != nil {` (duplicate serial)
 	{at: "piv_driver.go:(*PIVDriver).Open{selected != nil#2}", operand: 0, status: recordedMasked, closure: "two pivCards() results whose Serial() both match the target — physically impossible and not seam-reachable", masked: "physics", site: "if selected != nil"},
@@ -152,22 +153,22 @@ var pivDriverGoOperands = []survivorEntry{
 	// piv_driver.go:(*PIVDriver).Open{pivClearVerified(selected)} — `if err := pivClearVerified(selected); err != nil {` (added 2026-09-23 by
 	// regalia-kms#33, recorded without a re-sweep; the physical guard is
 	// TestPIVPhysicalSessionNeitherInheritsNorLeavesPINVerification)
-	{at: "piv_driver.go:(*PIVDriver).Open{pivClearVerified(selected)}", operand: 0, status: recordedMasked, closure: ":88 runs only after a card is selected, which needs pivOpen to return a card whose Serial() matches — the Serial() seam the package does not provide", masked: "piv_driver.go:(*PIVDriver).Open{selected == nil}[0]", site: "pivClearVerified(selected); err != nil"},
+	{at: "piv_driver.go:(*PIVDriver).Open{pivClearVerified(selected)}", operand: 0, status: recordedMasked, closure: "piv_driver.go:(*PIVDriver).Open{pivClearVerified(selected)} runs only after a card is selected, which needs pivOpen to return a card whose Serial() matches — the Serial() seam the package does not provide", masked: "piv_driver.go:(*PIVDriver).Open{selected == nil}[0]", site: "pivClearVerified(selected); err != nil"},
 
 	// piv_driver.go:(*PIVDriver).Ready{driver == nil || ctx.Err() != nil} — `if driver == nil || ctx.Err() != nil {` (Ready)
 	{at: "piv_driver.go:(*PIVDriver).Ready{driver == nil || ctx.Err() != nil}", operand: 0, status: closedFalseDirectionOnly, closure: "TestReadyRefusesBeforeTouchingADriverThatIsNil", whyTrueOpen: "TRUE-direction test would assert Ready=true on a non-nil driver with pivCards returning cards; the test only asserts Ready=false on a nil driver", site: "driver == nil"},
 	{at: "piv_driver.go:(*PIVDriver).Ready{driver == nil || ctx.Err() != nil}", operand: 1, status: closedFalseDirectionOnly, closure: "TestReadyRefusesACancelledContextEvenWhenCardsArePresent", whyTrueOpen: "TRUE-direction test would assert Ready=true on a live context with cards; the test only asserts Ready=false on a cancelled context", site: "ctx.Err() != nil"},
 
 	// piv_driver.go:(*PIVDriver).Ready{len(cards) > 0} — `return err == nil && len(cards) > 0` (Ready)
-	{at: "piv_driver.go:(*PIVDriver).Ready{len(cards) > 0}", operand: 0, status: closedFalseDirectionOnly, closure: "TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn/not_ready_when_pivCards_errors", whyTrueOpen: "the test subtest `ready_when_cards_are_present` does assert Ready=true on a healthy pivCards, which catches the FALSE-direction's over-refusal — but it does not isolate the :100 op0 operand from :100 op1, so the assertion is on the conjunction, not the operand", site: "err == nil"},
+	{at: "piv_driver.go:(*PIVDriver).Ready{len(cards) > 0}", operand: 0, status: closedFalseDirectionOnly, closure: "TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn/not_ready_when_pivCards_errors", whyTrueOpen: "the test subtest `ready_when_cards_are_present` does assert Ready=true on a healthy pivCards, which catches the FALSE-direction's over-refusal — but it does not isolate the piv_driver.go:(*PIVDriver).Ready{len(cards) > 0}[0] operand from piv_driver.go:(*PIVDriver).Ready{len(cards) > 0}[1], so the assertion is on the conjunction, not the operand", site: "err == nil"},
 	{at: "piv_driver.go:(*PIVDriver).Ready{len(cards) > 0}", operand: 1, status: closedFalseDirectionOnly, closure: "TestReadyReportsTruthfullyAcrossBothHalvesOfItsReturn/not_ready_when_no_cards_are_present", whyTrueOpen: "TRUE-direction test would assert Ready=true on (cards, nil); the seam returns (nil, nil) for this subtest, but that does not falsify the operand — it falsifies the conjunction", site: "len(cards) > 0"},
 
 	// piv_driver.go:(*pivSession).Identity{session.usable(ctx)} — Identity's usable check
 	{at: "piv_driver.go:(*pivSession).Identity{session.usable(ctx)}", operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/Identity", site: "session.usable(ctx); err != nil"},
 
 	// piv_driver.go:(*pivSession).Identity{!= session.serial} — Identity's serial check
-	{at: "piv_driver.go:(*pivSession).Identity{!= session.serial}", operand: 0, status: recordedMasked, closure: "card.Serial() panics on a nil-handed card before returning — :116 op0 is unreachable without a Serial() seam", masked: "the nil-handed card", site: "err != nil || strconv.FormatUint(uint64(serial), 10) != session.serial"},
-	{at: "piv_driver.go:(*pivSession).Identity{!= session.serial}", operand: 1, status: recordedMasked, closure: "same as :116 op0", masked: "the nil-handed card", site: "err != nil || strconv.FormatUint(uint64(serial), 10) != session.serial"},
+	{at: "piv_driver.go:(*pivSession).Identity{!= session.serial}", operand: 0, status: recordedMasked, closure: "card.Serial() panics on a nil-handed card before returning — piv_driver.go:(*pivSession).Identity{!= session.serial}[0] is unreachable without a Serial() seam", masked: "the nil-handed card", site: "err != nil || strconv.FormatUint(uint64(serial), 10) != session.serial"},
+	{at: "piv_driver.go:(*pivSession).Identity{!= session.serial}", operand: 1, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).Identity{!= session.serial}[0]", masked: "the nil-handed card", site: "err != nil || strconv.FormatUint(uint64(serial), 10) != session.serial"},
 
 	// piv_driver.go:(*pivSession).Policies{session.usable(ctx)} — Policies' usable check
 	{at: "piv_driver.go:(*pivSession).Policies{session.usable(ctx)}", operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/Policies", site: "session.usable(ctx); err != nil"},
@@ -185,35 +186,35 @@ var pivDriverGoOperands = []survivorEntry{
 	{at: "piv_driver.go:(*pivSession).PINRetries{readPINRetries then err != nil}", operand: 0, status: recordedMasked, closure: "Retries() panics on a nil-handed card before returning", masked: "the nil-handed card", site: "if err != nil {"},
 
 	// piv_driver.go:(*pivSession).Login{len(pin) < 6} — Login's usable+len chain
-	{at: "piv_driver.go:(*pivSession).Login{len(pin) < 6}", operand: 0, status: closedFalseDirectionOnly, closure: "TestLoginRefusesBeforeVerifyingOnASessionThatIsNotUsable", whyTrueOpen: "TRUE-direction test would assert Login succeeds on a usable session — needs a VerifyPIN seam; :149 op0 is the usable check and the seam fixture does not provide a session that is usable AND has VerifyPIN succeed", site: "session.usable(ctx); err != nil"},
+	{at: "piv_driver.go:(*pivSession).Login{len(pin) < 6}", operand: 0, status: closedFalseDirectionOnly, closure: "TestLoginRefusesBeforeVerifyingOnASessionThatIsNotUsable", whyTrueOpen: "TRUE-direction test would assert Login succeeds on a usable session — needs a VerifyPIN seam; piv_driver.go:(*pivSession).Login{len(pin) < 6}[0] is the usable check and the seam fixture does not provide a session that is usable AND has VerifyPIN succeed", site: "session.usable(ctx); err != nil"},
 	{at: "piv_driver.go:(*pivSession).Login{len(pin) < 6}", operand: 1, status: closedByTest, closure: "TestALoginPINBelowTheAcceptedLengthNeverReachesTheCard", site: "len(pin) < 6"},
-	{at: "piv_driver.go:(*pivSession).Login{len(pin) < 6}", operand: 2, status: recordedMasked, closure: "piv-go's encodePIN refuses a PIN longer than 8 bytes before any transmission, so :149 op2 cannot be the sole refuser", masked: "piv-go's encodePIN", site: "len(pin) > 64"},
+	{at: "piv_driver.go:(*pivSession).Login{len(pin) < 6}", operand: 2, status: recordedMasked, closure: "piv-go's encodePIN refuses a PIN longer than 8 bytes before any transmission, so piv_driver.go:(*pivSession).Login{len(pin) < 6}[2] cannot be the sole refuser", masked: "piv-go's encodePIN", site: "len(pin) > 64"},
 
 	// piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil} — Sign's privateKey error
-	{at: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}", operand: 0, status: recordedMasked, closure: "privateKey returns (nil, zero, ErrUnavailable) under any failure mode reachable in this process; Sign with key=nil falls through to :168 (signer, ok := key.(crypto.Signer) → ok=false), and :168 catches it without :164", masked: "piv_driver.go:(*pivSession).Sign{!ok}[0]", site: "if err != nil {"},
+	{at: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}", operand: 0, status: recordedMasked, closure: "privateKey returns (nil, zero, ErrUnavailable) under any failure mode reachable in this process; Sign with key=nil falls through to piv_driver.go:(*pivSession).Sign{!ok} (signer, ok := key.(crypto.Signer) → ok=false), and piv_driver.go:(*pivSession).Sign{!ok} catches it without piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}", masked: "piv_driver.go:(*pivSession).Sign{!ok}[0]", site: "if err != nil {"},
 
 	// piv_driver.go:(*pivSession).Sign{!ok} — Sign's !ok signer
-	{at: "piv_driver.go:(*pivSession).Sign{!ok}", operand: 0, status: recordedMasked, closure: ":168 fires only if key.(crypto.Signer) returns ok=false, and the only path that reaches it without :164 firing is when privateKey returned (nil, zero, nil) — which :164 alone does not produce", masked: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}[0]", site: "if !ok {"},
+	{at: "piv_driver.go:(*pivSession).Sign{!ok}", operand: 0, status: recordedMasked, closure: "piv_driver.go:(*pivSession).Sign{!ok} fires only if key.(crypto.Signer) returns ok=false, and the only path that reaches it without piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil} firing is when privateKey returned (nil, zero, nil) — which piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil} alone does not produce", masked: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}[0]", site: "if !ok {"},
 
 	// piv_driver.go:(*pivSession).Sign{!valid} — Sign's !valid + !algorithmMatches
-	{at: "piv_driver.go:(*pivSession).Sign{!valid}", operand: 0, status: recordedMasked, closure: "signingHash and algorithmMatches both run only after :164 and :168 have admitted — neither is reachable without a card that signs", masked: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}[0], piv_driver.go:(*pivSession).Sign{!ok}[0]", site: "!valid"},
-	{at: "piv_driver.go:(*pivSession).Sign{!valid}", operand: 1, status: recordedMasked, closure: "same as :172 op0", masked: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}[0], piv_driver.go:(*pivSession).Sign{!ok}[0]", site: "!algorithmMatches(info.Algorithm, algorithm)"},
+	{at: "piv_driver.go:(*pivSession).Sign{!valid}", operand: 0, status: recordedMasked, closure: "signingHash and algorithmMatches both run only after piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil} and piv_driver.go:(*pivSession).Sign{!ok} have admitted — neither is reachable without a card that signs", masked: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}[0], piv_driver.go:(*pivSession).Sign{!ok}[0]", site: "!valid"},
+	{at: "piv_driver.go:(*pivSession).Sign{!valid}", operand: 1, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).Sign{!valid}[0]", masked: "piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}[0], piv_driver.go:(*pivSession).Sign{!ok}[0]", site: "!algorithmMatches(info.Algorithm, algorithm)"},
 
 	// piv_driver.go:(*pivSession).Sign{len(value) == 0} — Sign's err + len(value)
 	{at: "piv_driver.go:(*pivSession).Sign{len(value) == 0}", operand: 0, status: recordedMasked, closure: "signer.Sign returns from the card; unreachable without a signing card", masked: "the card", site: "if err != nil || len(value) == 0 {"},
-	{at: "piv_driver.go:(*pivSession).Sign{len(value) == 0}", operand: 1, status: recordedMasked, closure: "same as :176 op0", masked: "the card", site: "if err != nil || len(value) == 0 {"},
+	{at: "piv_driver.go:(*pivSession).Sign{len(value) == 0}", operand: 1, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).Sign{len(value) == 0}[0]", masked: "the card", site: "if err != nil || len(value) == 0 {"},
 
 	// piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048} — Unwrap's err + algorithm + info.Algorithm
-	{at: "piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}", operand: 0, status: recordedMasked, closure: "same shape as :164 op0", masked: "piv_driver.go:(*pivSession).Unwrap{!ok}[0]", site: "if err != nil || algorithm != \"rsa2048\""},
+	{at: "piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}", operand: 0, status: recordedMasked, closure: "same shape as piv_driver.go:(*pivSession).Sign{session.privateKey then err != nil}[0]", masked: "piv_driver.go:(*pivSession).Unwrap{!ok}[0]", site: "if err != nil || algorithm != \"rsa2048\""},
 	{at: "piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}", operand: 1, status: recordedMasked, closure: "needs privateKey to succeed; unreachable without a card", masked: "the card", site: "info.Algorithm != piv.AlgorithmRSA2048"},
-	{at: "piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}", operand: 2, status: recordedMasked, closure: "same as :184 op1", masked: "the card", site: "info.Algorithm != piv.AlgorithmRSA2048"},
+	{at: "piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}", operand: 2, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}[1]", masked: "the card", site: "info.Algorithm != piv.AlgorithmRSA2048"},
 
 	// piv_driver.go:(*pivSession).Unwrap{!ok} — Unwrap's !ok decrypter
-	{at: "piv_driver.go:(*pivSession).Unwrap{!ok}", operand: 0, status: recordedMasked, closure: "same shape as :168 op0", masked: "piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}[0]", site: "if !ok {"},
+	{at: "piv_driver.go:(*pivSession).Unwrap{!ok}", operand: 0, status: recordedMasked, closure: "same shape as piv_driver.go:(*pivSession).Sign{!ok}[0]", masked: "piv_driver.go:(*pivSession).Unwrap{info.Algorithm != piv.AlgorithmRSA2048}[0]", site: "if !ok {"},
 
 	// piv_driver.go:(*pivSession).Unwrap{len(value) == 0} — Unwrap's err + len(value)
 	{at: "piv_driver.go:(*pivSession).Unwrap{len(value) == 0}", operand: 0, status: recordedMasked, closure: "decrypter.Decrypt returns from the card; unreachable without an unwrapping card", masked: "the card", site: "if err != nil || len(value) == 0 {"},
-	{at: "piv_driver.go:(*pivSession).Unwrap{len(value) == 0}", operand: 1, status: recordedMasked, closure: "same as :192 op0", masked: "the card", site: "if err != nil || len(value) == 0 {"},
+	{at: "piv_driver.go:(*pivSession).Unwrap{len(value) == 0}", operand: 1, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).Unwrap{len(value) == 0}[0]", masked: "the card", site: "if err != nil || len(value) == 0 {"},
 
 	// piv_driver.go:(*pivSession).PublicKey{session.usable(ctx)} — PublicKey's usable check
 	{at: "piv_driver.go:(*pivSession).PublicKey{session.usable(ctx)}", operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/PublicKey", site: "session.usable(ctx); err != nil"},
@@ -223,10 +224,10 @@ var pivDriverGoOperands = []survivorEntry{
 
 	// piv_driver.go:(*pivSession).PublicKey{info.PublicKey == nil} — PublicKey's err + info.PublicKey
 	{at: "piv_driver.go:(*pivSession).PublicKey{info.PublicKey == nil}", operand: 0, status: recordedMasked, closure: "KeyInfo() panics on a nil-handed card", masked: "the nil-handed card", site: "info.PublicKey == nil"},
-	{at: "piv_driver.go:(*pivSession).PublicKey{info.PublicKey == nil}", operand: 1, status: recordedMasked, closure: "same as :207 op0", masked: "the nil-handed card", site: "info.PublicKey == nil"},
+	{at: "piv_driver.go:(*pivSession).PublicKey{info.PublicKey == nil}", operand: 1, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).PublicKey{info.PublicKey == nil}[0]", masked: "the nil-handed card", site: "info.PublicKey == nil"},
 
 	// piv_driver.go:(*pivSession).PublicKey{x509.MarshalPKIXPublicKey then err != nil} — PublicKey's MarshalPKIX error
-	{at: "piv_driver.go:(*pivSession).PublicKey{x509.MarshalPKIXPublicKey then err != nil}", operand: 0, status: recordedMasked, closure: "MarshalPKIXPublicKey is only reached after :207 admits; same masking", masked: "the nil-handed card", site: "if err != nil {"},
+	{at: "piv_driver.go:(*pivSession).PublicKey{x509.MarshalPKIXPublicKey then err != nil}", operand: 0, status: recordedMasked, closure: "MarshalPKIXPublicKey is only reached after piv_driver.go:(*pivSession).PublicKey{info.PublicKey == nil} admits; same masking", masked: "the nil-handed card", site: "if err != nil {"},
 
 	// piv_driver.go:(*pivSession).privateKey{session.pin == ""} — privateKey's usable + pin check
 	{at: "piv_driver.go:(*pivSession).privateKey{session.pin == \"\"}", operand: 0, status: closedByTest, closure: "TestASessionThatIsNotUsableRefusesWithoutReachingTheCard/Sign", site: "session.usable(ctx); err != nil"},
@@ -237,9 +238,9 @@ var pivDriverGoOperands = []survivorEntry{
 
 	// piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever} — privateKey's err + TouchPolicy + PINPolicy + algorithmMatches
 	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 0, status: recordedMasked, closure: "KeyInfo() panics on a nil-handed card before returning", masked: "the nil-handed card", site: "info.TouchPolicy != piv.TouchPolicyNever"},
-	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 1, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyOnce"},
-	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 2, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyAlways"},
-	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 3, status: recordedMasked, closure: "same as :226 op0", masked: "the nil-handed card", site: "info.PINPolicy != piv.PINPolicyOnce"},
+	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 1, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}[0]", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyOnce"},
+	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 2, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}[0]", masked: "the nil-handed card", site: "PINPolicy != piv.PINPolicyAlways"},
+	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 3, status: recordedMasked, closure: "same as piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}[0]", masked: "the nil-handed card", site: "info.PINPolicy != piv.PINPolicyOnce"},
 	{at: "piv_driver.go:(*pivSession).privateKey{info.TouchPolicy != piv.TouchPolicyNever}", operand: 4, status: recordedMasked, closure: "the algorithm half is closed indirectly by TestAlgorithmMatchesRefusesACardAlgorithmThatIsNotTheOneRequested", masked: "the nil-handed card", site: "!algorithmMatches(info.Algorithm, algorithm)"},
 
 	// piv_driver.go:(*pivSession).privateKey{session.card.PrivateKey then err != nil} — privateKey's PrivateKey error
@@ -316,7 +317,8 @@ func TestPivotDriverSurvivorLedgerIsBalanced(t *testing.T) {
 }
 
 // sweepScope is the functions the 2026-09-06 sweep covered (lines 43-238 then). Close, usable,
-// parseSlot and the policy-name helpers are pinned by piv_session_boundary_test.go instead.
+// parseSlot, algorithmMatches and the policy-name helpers are pinned by
+// piv_session_boundary_test.go instead, and NewPIVDriver by sweep_uncovered_test.go.
 var sweepScope = map[string]bool{
 	"(*PIVDriver).Open": true, "(*PIVDriver).Ready": true, "(*pivSession).Identity": true,
 	"(*pivSession).Policies": true, "(*pivSession).PINRetries": true, "(*pivSession).Login": true,
@@ -383,6 +385,9 @@ func TestNoYubiKeyTestCitesPivDriverByLineNumber(t *testing.T) {
 	}
 }
 
+// bareLineReference is a ":N" line number in an entry's prose, the short form of a line citation.
+var bareLineReference = regexp.MustCompile(`(?:^|[^\w.)]):\d+\b`)
+
 func packageSources() sweeptext.Sources {
 	_, thisFile, _, _ := runtime.Caller(0)
 	return sweeptext.DirSources(filepath.Dir(thisFile))
@@ -403,6 +408,18 @@ func checkSurvivorsResolve(t *testing.T, sources sweeptext.Sources) {
 		}
 		if !strings.Contains(have, entry.site) {
 			t.Errorf("entry %d (%s) resolves to line %d, which drifted.\n  have: %q\n  want substring: %q", i, key, line, have, entry.site)
+		}
+		// The closure prose cites by function and anchor too: a bare ":N" there was never
+		// resolved, and ":56" had drifted to 57 before #292 converted them (regalia-kms-d9).
+		for _, field := range []string{entry.closure, entry.whyTrueOpen} {
+			if bare := bareLineReference.FindString(field); bare != "" {
+				t.Errorf("entry %d (%s) cites %q by line number in its prose: cite piv_driver.go:Func{anchor}", i, key, bare)
+			}
+			for _, cited := range sweeptext.CitationPattern.FindAllString(field, -1) {
+				if _, _, err := sweeptext.ResolveCitation(sources, cited); err != nil {
+					t.Errorf("entry %d (%s) cites %s: %v", i, key, cited, err)
+				}
+			}
 		}
 		for _, masking := range sweeptext.CitationPattern.FindAllString(entry.masked, -1) {
 			if _, _, err := sweeptext.ResolveCitation(sources, masking); err != nil {
