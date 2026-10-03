@@ -43,6 +43,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // maxCollectorEventBody mirrors the sink's own bound (Send refuses to marshal an event past
@@ -233,6 +234,7 @@ func (c *Collector) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/events", c.handleEvent)
 	mux.HandleFunc("GET /v1/stream-position", c.handlePosition)
+	mux.HandleFunc("POST /v1/alarms", c.handleReportedAlarm)
 	mux.HandleFunc("HEAD /v1/health/ready", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -371,6 +373,10 @@ func (c *Collector) handleEvent(writer http.ResponseWriter, request *http.Reques
 		LatencyMilliseconds: event.LatencyMilliseconds, RegistryDigest: event.RegistryDigest,
 		PolicyDigest: event.PolicyDigest, RBACDigest: event.RBACDigest,
 	}); err != nil {
+		c.reject(request, writer, http.StatusBadRequest, alarm.withReason("the event fails the audit contract's own field validation: "+err.Error()))
+		return
+	}
+	if err := validateDetail(event.Detail); err != nil {
 		c.reject(request, writer, http.StatusBadRequest, alarm.withReason("the event fails the audit contract's own field validation: "+err.Error()))
 		return
 	}
@@ -529,6 +535,60 @@ func (c *Collector) handlePosition(writer http.ResponseWriter, request *http.Req
 	writer.Header().Set("Content-Type", "application/json")
 	encoded, _ := json.Marshal(position)
 	_, _ = writer.Write(encoded)
+}
+
+// maxReportedAlarmBody bounds a client-reported alarm: a reason, a sequence and a hash.
+const maxReportedAlarmBody = 4 << 10
+
+// handleReportedAlarm records an alarm a client raises about its own stream: the trail shipper
+// (trail.go) found the file under what this collector already committed cut short or
+// rewritten. Commit-time checks cannot see the first: a file cut short is a prefix of the
+// committed copy, and replaying a prefix is the idempotent case. So the client says so, and the
+// alarm lands where the collector's own do, keyed by the same identity and site, before the 204.
+// It commits nothing to the stream and answers no question: a client can only add alarms.
+func (c *Collector) handleReportedAlarm(writer http.ResponseWriter, request *http.Request) {
+	identity, commonName, authenticated := peerIdentity(request)
+	if !authenticated {
+		c.reject(request, writer, http.StatusUnauthorized, collectorAlarm{
+			Identity: "unauthenticated",
+			Reason:   "no client certificate was presented: alarms are accepted only from an identified client",
+		})
+		return
+	}
+	site, err := requestSite(request)
+	if err != nil {
+		c.reject(request, writer, http.StatusBadRequest, collectorAlarm{
+			Identity: identity, CommonName: commonName, Site: request.Header.Get("X-Regalia-Site"),
+			Reason: "invalid site header: " + err.Error(),
+		})
+		return
+	}
+	var reported struct {
+		Sequence uint64 `json:"sequence"`
+		Hash     string `json:"hash"`
+		Reason   string `json:"reason"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(request.Body, maxReportedAlarmBody))
+	decoder.DisallowUnknownFields()
+	var trailing any
+	if err := decoder.Decode(&reported); err != nil || !errors.Is(decoder.Decode(&trailing), io.EOF) ||
+		reported.Reason == "" || len(reported.Reason) > 512 || strings.IndexFunc(reported.Reason, unicode.IsControl) >= 0 ||
+		(reported.Hash != "" && !auditHashPattern.MatchString(reported.Hash)) {
+		c.reject(request, writer, http.StatusBadRequest, collectorAlarm{
+			Identity: identity, CommonName: commonName, Site: site,
+			Reason: "a reported alarm that is not {sequence, hash, reason} within bounds",
+		})
+		return
+	}
+	alarm := collectorAlarm{
+		Timestamp: time.Now().UTC(), Identity: identity, CommonName: commonName, Site: site,
+		Sequence: reported.Sequence, EventHash: reported.Hash, Reason: "reported by the client: " + reported.Reason,
+	}
+	if err := c.appendAlarm(alarm); err != nil {
+		http.Error(writer, fmt.Sprintf("the alarm could not be recorded: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 // syncDir fsyncs a directory so newly created entries in it survive a crash. Data-only syncs

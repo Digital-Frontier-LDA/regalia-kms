@@ -6,7 +6,7 @@ package audit
 // re-measured on 363ce16 before anything was written here, and each row below names the
 // direction that survived.
 //
-// One of the seven is not here, because no test can reach it: audit.go:224[0] forced true only
+// One of the seven is not here, because no test can reach it: audit.go:225[0] forced true only
 // differs from the real guard on a stat error that is not "does not exist", and every such error
 // is refused one call earlier by readMark. That guarantee is pinned where it is enforced, in
 // TestAMarkWhoseFileCannotBeStattedIsRefusedByTheReadBeforeTheStat (§17, TESTING.md).
@@ -28,7 +28,7 @@ import (
 // VerifyIntegrity failed passes whichever message an operator is handed. The absent reading is
 // pinned in mark_required_test.go; this is the present one.
 //
-// Survived before this test: audit.go:301[0] forced true, which sends every case down the absent
+// Survived before this test: audit.go:302[0] forced true, which sends every case down the absent
 // arm and tells the operator to look for disk loss while an attacker's edited sidecar sits there.
 func TestAMarkBehindTheCollectorIsDiagnosedAsForgedRatherThanLost(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.jsonl")
@@ -166,7 +166,7 @@ func TestShipBackoffDoublesAndIsHeldAtItsMaximum(t *testing.T) {
 
 // §17: THE STAT CLASSIFICATION'S FIRST OPERAND CANNOT BE REACHED ON THE WRONG SIDE.
 //
-// audit.go:224[0], `case errors.Is(statErr, os.ErrNotExist):`, is false on the wrong side only for
+// audit.go:225[0], `case errors.Is(statErr, os.ErrNotExist):`, is false on the wrong side only for
 // a stat error that is not ENOENT, and it survives forced true because no such error arrives:
 // readMark read the same path one call earlier, and it refuses every read failure except
 // not-existing. Reaching the operand would need the path's stat class to change between those two
