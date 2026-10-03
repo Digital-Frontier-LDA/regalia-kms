@@ -1,0 +1,52 @@
+# The revocation authority (#199; deploy/baremetal/authority.py): signs the heartbeats that keep the nodes
+# authorizing, and publishes them with the membership chain on its service-tunnel address. It runs on the
+# authority host, not on a KMS node. Its own user, no capability; the TPM (the chain's anchor and the
+# heartbeat sequence counter) through the tss group; the revocation key in its state directory, 0600.
+# Revocations are requested with `authority revoke`, as root on this host (revoke_requesters: local-root):
+# nothing here takes one from the network. Its tunnel is made by `authority wg-apply` (root, CAP_NET_ADMIN).
+[Unit]
+Description=Regalia KMS: revocation authority (heartbeats and revocations)
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=regalia-authtime.service
+Wants=regalia-authtime.service
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/lib/regalia-kms
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.authority --config /etc/regalia/authority.json serve
+Restart=always
+RestartSec=5s
+User=regalia-authority
+Group=regalia-authority
+SupplementaryGroups=tss
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+ProtectSystem=strict
+StateDirectory=regalia-authority
+# 0700: the directory holds the revocation key (0600) and the store; the heartbeat is served over the tunnel
+StateDirectoryMode=0700
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

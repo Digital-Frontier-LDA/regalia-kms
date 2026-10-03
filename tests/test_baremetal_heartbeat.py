@@ -315,7 +315,7 @@ class Sequence(Case):
     def test_a_crash_between_the_disk_and_the_counter_is_finished_by_the_next_check(self):
         self.f.accept(beat(self.m1, 1), self.m1)
         real = self.counter.advance
-        self.counter.advance = lambda sequence: (_ for _ in ()).throw(OSError("power lost"))
+        self.counter.advance = lambda sequence, allowance=None: (_ for _ in ()).throw(OSError("power lost"))
         with self.assertRaises(OSError):
             self.f.accept(beat(self.m1, 2), self.m1)
         self.counter.advance = real
@@ -352,6 +352,35 @@ class Sequence(Case):
             self.assertEqual(f.read(), before)
         self.f.accept(beat(self.m1, 1001), self.m1)
         self.assertEqual(self.counter.value(), 1001)
+
+    def test_a_node_back_from_a_month_away_catches_up(self):
+        """#199: an authority signing every 900 s has moved 2880 sequences in 30 days. The bound grows by one
+        per MIN_INTERVAL_S since the last accepted heartbeat, so the node accepts, and the counter steps the
+        whole distance (what it would have stepped had it stayed online)."""
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(30 * 86400)
+        sequence = 1 + 30 * 86400 // 900
+        self.assertEqual(self.f.accept(beat(self.m1, sequence, issued=T0 + 30 * 86400), self.m1), hb.MAX_LIFETIME - 60)
+        self.assertEqual(self.counter.value(), sequence)
+
+    def test_a_sequence_that_runs_faster_than_time_is_still_an_anomaly(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        self.later(3600)                                   # one hour: 1000 + 6 allowed
+        self.refused("exceeds the bound 1006: anomaly", self.f.accept, beat(self.m1, 1 + 1007, issued=T0 + 3600), self.m1)
+        self.assertEqual(self.counter.value(), 1)
+        self.f.accept(beat(self.m1, 1 + 1006, issued=T0 + 3600), self.m1)
+        self.assertEqual(self.counter.value(), 1007)
+
+    def test_without_the_held_heartbeat_the_bound_is_the_fixed_one(self):
+        self.f.accept(beat(self.m1, 1, issued=T0), self.m1)
+        os.unlink(self.state)                              # the state is lost; the TPM counter is not
+        self.later(30 * 86400)
+        self.refused("exceeds the bound 1000: anomaly", self.f.accept, beat(self.m1, 2881, issued=T0 + 30 * 86400), self.m1)
+        self.assertEqual(self.counter.value(), 1)
+
+    def test_the_counter_alone_keeps_the_fixed_bound(self):
+        self.refused("exceeds the bound 1000: anomaly", self.counter.advance, 1001)
+        self.assertEqual(self.counter.advance(1500, allowance=1500), 1500)
 
     def test_a_tpm_failure_is_never_read_as_zero(self):
         self.f.accept(beat(self.m1, 3), self.m1)
@@ -510,7 +539,7 @@ class State(Case):
     def test_the_state_is_durable_before_the_counter_moves(self):
         order = []
         real_fsync, real_advance = os.fsync, self.counter.advance
-        self.counter.advance = lambda sequence: (order.append("counter"), real_advance(sequence))[1]
+        self.counter.advance = lambda sequence, allowance=None: (order.append("counter"), real_advance(sequence, allowance))[1]
         with unittest.mock.patch.object(hb.os, "fsync", side_effect=lambda fd: (order.append("dir" if os.path.isdir("/proc/self/fd/%d" % fd) else "file"), real_fsync(fd))[1]):
             self.f.accept(beat(self.m1, 1), self.m1)
         self.assertEqual(order, ["file", "dir", "counter"])

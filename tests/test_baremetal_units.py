@@ -114,3 +114,31 @@ class Units(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuthorityUnit(unittest.TestCase):
+    """regalia-authority.service, on the authority host (#199)."""
+
+    def test_its_own_user_no_capability_the_tpm_through_its_group(self):
+        service = unit("regalia-authority.service")["Service"]
+        self.assertEqual(service["ExecStart"], "/usr/bin/python3 -Es -m deploy.baremetal.authority --config /etc/regalia/authority.json serve")
+        self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
+                         ("regalia-authority", "", "", "yes"))
+        self.assertEqual((service["SupplementaryGroups"], service["DevicePolicy"], service["DeviceAllow"]), ("tss", "closed", "/dev/tpmrm0 rw"))
+        self.assertEqual((service["StateDirectory"], service["StateDirectoryMode"], service["UMask"]), ("regalia-authority", "0700", "0077"))
+        users = (UNITS / "regalia-authority.sysusers.conf").read_text()
+        self.assertIn("u regalia-authority - ", users)
+        self.assertNotIn("regalia-authority", (UNITS / "regalia.sysusers.conf").read_text())    # not created on the nodes
+
+    @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
+    def test_systemd_accepts_it_and_scores_it_well_exposed_at_most_a_little(self):
+        done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no", str(UNITS / "regalia-authority.service")],
+                              capture_output=True, text=True)
+        complaints = [line for line in done.stderr.splitlines() if "regalia-authority" in line and "chrony" not in line and "authtime" not in line]
+        self.assertEqual(complaints, [])
+        done = subprocess.run(["systemd-analyze", "security", "--offline=yes", "--no-pager", str(UNITS / "regalia-authority.service")],
+                              capture_output=True, text=True)
+        if done.returncode != 0 and "offline" in done.stderr:
+            self.skipTest("this systemd-analyze has no offline security scoring")
+        score = float(re.search(r"exposure level for \S+: (\d+\.\d+)", done.stdout).group(1))
+        self.assertLessEqual(score, 3.0)

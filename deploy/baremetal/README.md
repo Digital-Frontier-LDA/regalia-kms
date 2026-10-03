@@ -689,5 +689,37 @@ commits to, each peer's AK in the attestation state (`attest.Verifier`), the WG-
 (`/etc/regalia/wg-service.key`, 0600), the site configuration with `boot_mesh` and `service_mesh`, and
 `chrony.conf` as `authtime.conf()` renders it (the whole file).
 
-**NOT BUILT: the revocation authority (#199).** Nothing signs heartbeats yet: a cluster run with these
-units stops authorizing within the heartbeat lifetime, by design, until the authority exists.
+### The revocation authority (#199)
+
+`deploy/baremetal/authority.py`, run by `units/regalia-authority.service` on the authority host (not a KMS
+node), signs the heartbeats that keep the nodes authorizing and the manifests that revoke a node, and
+publishes both on its service-tunnel address. The nodes pull from it when their site configuration names
+it (`service_mesh.authority`).
+
+| Command | What it does |
+|---|---|
+| `init --chain F` | first start: defines the TPM anchor and the sequence counter, takes the root's chain |
+| `accept --chain F` | takes root-signed manifests from the ceremony (the Store verifies them) |
+| `serve` | publishes, and signs a heartbeat every `interval_s` |
+| `revoke --node N --state QUARANTINED\|REVOKED_STOLEN --reason R` | as root on this host: signs and commits the restrictive manifest, then a heartbeat for it at once |
+| `status` | epoch, sequence, last heartbeat, signer kind |
+| `wg-apply` | its `wg-svc`, every node a peer |
+
+- **Sequence:** a TPM NV counter of its own, advanced before each heartbeat is signed. A crash loses a
+  number and never reuses one, and a restored disk cannot move it back. No TPM, no authority.
+- **Time:** it signs only while `authtime` says the clock is authenticated.
+- **Interval:** at least `heartbeat.MIN_INTERVAL_S` (600 s) times the number of authorities, and at most a
+  quarter of the heartbeat's lifetime. A node accepts a sequence jump that grows by one per 600 s since
+  the last heartbeat it accepted, so a node back from a month's repair catches up, while a sequence
+  running faster than time is refused.
+- **A revocation** changes one node's state to QUARANTINED or REVOKED_STOLEN, nothing else. Membership's
+  rule for revocation-signed changes is checked by the Store before it is kept. Anything permissive is
+  the root's. If the process stops between the manifest and its heartbeat, the next start signs the
+  heartbeat first.
+- **The owner's decisions are settings in `/etc/regalia/authority.json`:**
+  - `signer.kind`: `file` now, a stopgap recorded on every trail line and in `status`; `pkcs11` once a
+    token is chosen (a Nitrokey, key generated on the token, ADR-0002 D19);
+  - `sequence_offset`/`sequence_stride`: several authorities;
+  - `interval_s`, `lifetime_s`;
+  - `revoke_requesters`: `local-root` only. Nothing takes a revocation request from the network.
+- **Not decided here:** where the authority runs (#199, with the fencing authority's A4).

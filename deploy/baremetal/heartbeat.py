@@ -57,6 +57,7 @@ clock that answers that question and refuses when the answer is no.
 import calendar
 import contextlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -81,6 +82,12 @@ STEP_BACK = 5              # an authenticated clock may be corrected backwards b
 # its elapsed time counts toward the floor. To be confirmed on the DL360s' TPMs.
 TPM_CLOCK_RATE = 0.85
 MAX_BYTES = 16 * 1024
+# The shortest interval an authority may sign heartbeats at (authority.py enforces it, times the number of
+# authorities sharing the sequence). A node accepts a sequence jump of Counter.MAX_JUMP plus one per
+# MIN_INTERVAL_S of issue time since the last heartbeat it accepted: a node back from a month's repair
+# catches up (the counter steps what it would have stepped online), while a sequence that runs faster
+# than real time is still an anomaly. Decided on #199.
+MIN_INTERVAL_S = 600
 
 
 def parse_time(text, label):
@@ -100,6 +107,23 @@ def max_lifetime(manifest):
     if manifest["schema"] == membership.SCHEMA:
         return MAX_LIFETIME
     return min(manifest["heartbeat_max_lifetime_s"], HARD_MAX_LIFETIME)
+
+
+def allowed_jump(heartbeat, held, base):
+    """How far `heartbeat`'s sequence may jump past the counter: `base` (Counter.MAX_JUMP), plus one per
+    MIN_INTERVAL_S between the issue time of `held` (the envelope last accepted, from the freshness state)
+    and this heartbeat's. Without a readable held envelope, or with an issue time not after it, just `base`:
+    the error is toward refusing. The new issue time is bounded by authenticated time (_live).
+    The held issue time comes from the freshness state ON DISK, which a restored disk can roll back. An
+    older held time only WIDENS the allowance, and the allowance is anomaly detection, not replay
+    protection: the TPM counter still requires a sequence above it, and the heartbeat is signed. A
+    rollback can loosen the bound; it never lets a replay through."""
+    try:
+        before = parse_time(held["heartbeat"]["issued_at"], "the held heartbeat's issued_at")
+    except (Refused, KeyError, TypeError):
+        return base
+    issued = parse_time(heartbeat["issued_at"], "issued_at")
+    return base + math.ceil((issued - before) / MIN_INTERVAL_S) if issued > before else base
 
 
 def validate(heartbeat):
@@ -150,11 +174,24 @@ class Counter(membership.HighWater):
 
     RECORD = False     # a sequence has no manifest to record: membership's record index is not defined here
 
-    def _advance(self, sequence):
+    def advance(self, sequence, allowance=None):
+        """Move the counter up to `sequence`, at most `allowance` (default MAX_JUMP) above where it is."""
+        with membership._exclusive(self.lock_path):
+            return self._advance(sequence, allowance)
+
+    def _advance(self, sequence, allowance=None):
         # under HighWater's lock, with the increments: two processes given the same sequence cannot both pass
         now = self.value()
+        base = self._base()
         require(sequence > now, "REPLAY: sequence %d is not above the TPM counter %d" % (sequence, now))
-        return super()._advance(sequence)
+        bound = self.MAX_JUMP if allowance is None else allowance
+        require(sequence - now <= bound, "sequence jump %d exceeds the bound %d: anomaly" % (sequence - now, bound))
+        while now < sequence:
+            require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+            nxt = self._epoch(base)
+            require(nxt == now + 1, "the NV counter did not advance by one (%d -> %d)" % (now, nxt))
+            now = nxt
+        return now
 
 
 class TpmClock:
@@ -268,12 +305,13 @@ class Freshness:
         now = self._now(state)
         left = self._live(heartbeat, now)
         held = self.counter.value()
+        allowance = allowed_jump(heartbeat, state["envelope"], self.counter.MAX_JUMP)
         require(heartbeat["sequence"] > held, "REPLAY: sequence %d is not above the TPM counter %d" % (heartbeat["sequence"], held))
-        require(heartbeat["sequence"] - held <= self.counter.MAX_JUMP, "sequence jump %d exceeds the bound %d: anomaly"
-                % (heartbeat["sequence"] - held, self.counter.MAX_JUMP))
+        require(heartbeat["sequence"] - held <= allowance, "sequence jump %d exceeds the bound %d: anomaly"
+                % (heartbeat["sequence"] - held, allowance))
         state["envelope"] = envelope
-        self._write(state)                          # disk first, durably
-        self.counter.advance(heartbeat["sequence"])  # then the counter
+        self._write(state)                                       # disk first, durably
+        self.counter.advance(heartbeat["sequence"], allowance)  # then the counter
         return left
 
     def check(self, manifest):
