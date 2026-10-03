@@ -120,6 +120,19 @@ class Admission(Case):
         reason = self.service.step()["reason"]
         self.assertEqual(reason, "bad???[31m" + "x" * 500)
 
+    def test_the_longest_document_fits_what_the_daemon_reads(self):
+        """internal/admission refuses a file above maxFileBytes (4096) as oversized, which would hide the reason:
+        the reason is cut at ADMISSION_REASON_LIMIT, and the document with every field at its largest fits."""
+        self.manifest_now = None
+        self.service.manifest = lambda: (_ for _ in ()).throw(m.Refused("y" * 10000))
+        self.assertEqual(len(self.service.step()["reason"]), admission.ADMISSION_REASON_LIMIT)
+        widest = {"schema": admission.SCHEMA, "node_id": "n" * 32, "session_id": "f" * 64, "boot_id": "b" * 36,
+                  "epoch": 2 ** 63 - 1, "manifest_digest": "d" * 64, "lease_issued_at": "9999-12-31T23:59:59Z",
+                  "requested_boottime_ms": 2 ** 63 - 1, "serve_until_boottime_ms": 2 ** 63 - 1,
+                  "reason": "\\" * admission.ADMISSION_REASON_LIMIT}            # every character escaped: the worst case
+        self.assertEqual(set(widest), set(self.service.step()))                     # the same fields the service writes
+        self.assertLessEqual(len(json.dumps(widest).encode()) + 1, 4096)
+
     def test_if_the_service_stops_the_file_runs_out_by_itself(self):
         document = self.service.step()
         self.later(lease.MAX_LIFETIME)                    # nobody writes again
