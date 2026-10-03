@@ -140,6 +140,8 @@ def quoted_blanked(lines):
     return "".join(out).split("\n")
 
 
+# CALL_START past command-word prefixes (builtin enable, command unset, env X=1 trap …): for the refused words
+REFUSED_START = CALL_START + r"(?:(?:builtin|command|exec|nice|nohup|time|timeout\s+\S+|env(?:\s+-\S+|\s+\w+=\S*)*)\s+(?:-\S+\s+)*)*"
 # CALL_START, with a "(" a command start only after a line start, a blank or an operator (a subshell), not
 # after a quote: the blanked view is not nesting-aware, and s="($SERIAL" inside "$(…)" is not a subshell.
 COMMAND_START = r"(?:^|[;&|]|(?:^|(?<=[\s;&|]))\(|(?<!\$)\{|\bthen\b|\bdo\b|\belse\b|\bif\b|\b!)\s*"
@@ -238,20 +240,20 @@ def script_problems(text, script=None):
             found.append((n, "an interpreter given code with -e"))
         if re.search(r"(?<![\w.-])[gm]?awk\b", line) and re.search(r"\bsystem\s*\(|\|\s*getline|print[^;}]*\|\s*\"", line):
             found.append((n, "awk running a command (system(), a pipe)"))
-        for m in re.finditer(CALL_START + r"trap\s+(\S+)", line):
+        for m in re.finditer(REFUSED_START + r"trap\s+(\S+)", line):
             arg = m.group(1)
             if not (re.match(r"'[^']*'", line[m.start(1):]) or re.fullmatch(r"[A-Za-z_][\w-]*", arg) or arg == "-"):
                 found.append((n, "trap with code that is not one single-quoted literal or a function's name"))
         # builtins switched off, functions removed, commands skipped (51's fourth read)
-        if re.search(CALL_START + r"enable\b", b):
+        if re.search(REFUSED_START + r"enable\b", b):
             found.append((n, "enable: it can switch a builtin (exit, return) off"))
-        for m in re.finditer(CALL_START + r"unset\b(.*)", line):
+        for m in re.finditer(REFUSED_START + r"unset\b(.*)", line):
             words = re.findall(r"[^\s;&|]+", re.split(r"[;&|]", m.group(1))[0])
             if "-f" in words or any(w.strip("\"'") in SHADOWED | {"die", "fail"} | set(LIB_GATE_NAMES + GATES) for w in words):
                 found.append((n, "unset of a function, or of die, fail, a gate or a builtin's name: a \"|| die\" would go on"))
         if re.search(r"\bshopt\s+-s\s+(?:\w+\s+)*extdebug\b", b) or re.search(r"\bset\s+-o\s+functrace\b|\bset\s+-\w*T", b):
             found.append((n, "extdebug or functrace: a DEBUG trap could skip the next command, a gate"))
-        if re.search(CALL_START + r"trap\b.*\b(?:DEBUG|RETURN|ERR)\b", line):
+        if re.search(REFUSED_START + r"trap\b.*\b(?:DEBUG|RETURN|ERR)\b", line):
             found.append((n, "a DEBUG, RETURN or ERR trap: it runs between commands, and can skip one"))
         # an interpreter's script chosen by a variable: only a path under the drill's own directories
         for m in re.finditer(r"(?<![\w.-])(?:python[\d.]*|perl|ruby|node)\s+(?:-\w+\s+)*(\"?\$[^\s;&|]*)", line):
@@ -266,17 +268,17 @@ def script_problems(text, script=None):
                 found.append((n, "%s set to something other than a fresh mktemp directory, the drill's own repository or a literal path" % m.group(1)))
         if re.search(r"(?<![\w.-])eval\b", b):
             found.append((n, "eval: what it runs is not read by this check"))
-        for m in re.finditer(CALL_START + r"(?:source|\.)\s+\S", line):
+        for m in re.finditer(REFUSED_START + r"(?:source|\.)\s+\S", line):
             if not ALLOWED_SOURCES.match(line[m.start() + len(m.group(0)) - len(m.group(0).lstrip()):].lstrip()) \
                     and not ALLOWED_SOURCES.search(line):
                 found.append((n, "sources a script not on the allow-list: what it runs is not read by this check"))
-        if re.search(CALL_START + r"alias\b", b) or re.search(r"\bshopt\s+-s\s+expand_aliases\b", b):
+        if re.search(REFUSED_START + r"alias\b", b) or re.search(r"\bshopt\s+-s\s+expand_aliases\b", b):
             found.append((n, "aliases: a gate's name could run something else"))
         if re.search(r"\b(if|while|until)\s+(!\s*)?(false|true|:)\s*;", b):
             found.append((n, "a constant condition: a gate under it may never run"))
         if re.search(r"\bset\s+(?:-\w*a\w*\b|-o\s+allexport\b)", b):
             found.append((n, "allexport: every variable set later, a PIN too, is exported"))
-        for m in re.finditer(r"(?:" + CALL_START + r"|\bsudo\s+(?:-\S+\s+)*)(export|declare|typeset|readonly|local|env)\b(.*)", line):
+        for m in re.finditer(r"(?:" + REFUSED_START + r"|\bsudo\s+(?:-\S+\s+)*)(export|declare|typeset|readonly|local|env)\b(.*)", line):
             words = re.findall(r"\"[^\"]*\"|'[^']*'|[^\s;&|]+", re.split(r"[;&|]", m.group(2))[0])
             flags = [w for w in words if w.startswith("-")]
             if m.group(1) in ("declare", "typeset", "readonly", "local") and not any("x" in f for f in flags):
@@ -729,6 +731,8 @@ class TheCheckItself(unittest.TestCase):
             'env OPENSC_CONF="$X" pkcs11-tool -L\n': "OPENSC_CONF with a value", 'export PATH="$W:$PATH"\n': "PATH with a value",
             # 51's fourth read
             "enable -n exit\n": "enable", "unset -f die\n": "unset of a function", "unset die\n": "unset of a function",
+            "builtin enable -n exit\n": "enable", "command enable -n exit\n": "enable", "command unset -f die\n": "unset of a function",
+            "builtin trap 'return 1' DEBUG\n": "DEBUG", "command alias die=true\n": "alias", "env -i PATH=/x export X=1\n": "export",
             "shopt -s extdebug\n": "extdebug", "trap 'return 1' DEBUG\n": "DEBUG", "trap cleanup ERR\n": "ERR",
             'python3 "$X"\n': "script chosen by a variable", 'python3 -Es "$W/../x.py"\n': "script chosen by a variable", 'python3 "$(dirname "$0")/../x.py"\n': "script chosen by a variable",
         }
