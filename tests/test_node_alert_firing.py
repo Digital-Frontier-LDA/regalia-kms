@@ -50,6 +50,27 @@ EXTRA = [
     ("RegaliaHeartbeatAboutToExpire", "a one-hour lifetime, 50 minutes left", 120,
      [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "3000+0x5"),
       ("regalia_heartbeat_lifetime_seconds", {}, "3600+0x5")], []),
+    # the held heartbeat's age, whatever its lifetime: a one-hour heartbeat is never two hours old; a 24-hour one, 2 h 10 min
+    # after it was issued, is (and is nowhere near half its life: the age alert is the earlier one there)
+    # the boundary at the production lifetime (6 h): over two hours, strictly (regalia-kms-d9 on #329)
+    ("RegaliaHeartbeatNotRenewed", "6 h lifetime, exactly 2 h old", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "14400+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")], []),
+    ("RegaliaHeartbeatNotRenewed", "6 h lifetime, one second under 2 h old", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "14401+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")], []),
+    ("RegaliaHeartbeatNotRenewed", "6 h lifetime, one second over 2 h old", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "14399+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")], [{}]),
+    ("RegaliaHeartbeatNotRenewed", "a one-hour lifetime, 10 minutes left", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "600+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "3600+0x5")], []),
+    ("RegaliaHeartbeatNotRenewed", "a 24-hour lifetime, issued 2 h 10 min ago", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "78600+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")], [{}]),
+    ("RegaliaHeartbeatRunningOut", "a 24-hour lifetime, issued 2 h 10 min ago: the age alert's case, not this one", 120,
+     [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "78600+0x5"),
+      ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")], []),
     # the authtime file missing on one node only: that node alone
     ("RegaliaAuthtimeMetricsMissing", "two nodes: only the one without the file", 420,
      [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10"),
@@ -68,6 +89,11 @@ SCENARIOS = {
                   ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")],
         "healthy": [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "50000+0x5"),
                     ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")], "at": 120},
+    "RegaliaHeartbeatNotRenewed": {          # the production lifetime (6 h, #69): over 2 h since it was issued
+        "fault": [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "14000+0x5"),
+                  ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")],
+        "healthy": [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "20700+0x5"),
+                    ("regalia_heartbeat_lifetime_seconds", {}, "21600+0x5")], "at": 120},
     "RegaliaHeartbeatAboutToExpire": {
         "fault": [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "20000+0x5"),
                   ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")],

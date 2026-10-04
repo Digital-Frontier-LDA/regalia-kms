@@ -921,8 +921,10 @@ the reason itself goes to the time trail.
   lifetime, or none usable; the node not serving for five minutes; a tampered audit trail; an expected file
   (`authtime.prom`, `heartbeat.prom`, `lease.prom`) absent for five minutes on a node that is scraped (`/run` is
   empty after a boot, so a writer that never wrote leaves no series for the other rules); node_exporter down.
-- **Warnings:** the heartbeat under half its lifetime (both heartbeat thresholds are relative to the heartbeat
-  held, whose lifetime a manifest sets); an audit trail behind for fifteen minutes, or never shipped; unlock
+- **Warnings:** the heartbeat held issued over two hours ago (its age, whatever its lifetime: at the production
+  lifetime of 6 h, renewed every 15 min, that is eight missed renewals, an hour before "under half" would say it,
+  #69); the heartbeat under half its lifetime (the half and quarter thresholds are relative to the heartbeat held,
+  whose lifetime a manifest sets); an audit trail behind for fifteen minutes, or never shipped; unlock
   refusals; a textfile that stopped moving (two minutes, five for a shipper's); a textfile node_exporter cannot
   read (`node_textfile_scrape_error`).
 - **Matching:** every rule comparing two series of a node matches on all their labels, never on `trail` alone.

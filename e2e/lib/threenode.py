@@ -759,7 +759,9 @@ class Cluster:
         mnt, mounted = n.dir / "mnt", False
         try:
             env = dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=str(creds))
-            argv = ["unshare", "--mount", "--propagation", "private", "sh", "-c", script, "sh",
+            # bash, not sh: dash (Ubuntu's sh) takes only single-digit descriptors in a redirection, and with two unlocks
+            # in threads the listener's can be 10 or more ("Bad fd number", regalia-kms-3e on #328)
+            argv = ["unshare", "--mount", "--propagation", "private", "bash", "-c", script, "bash",
                     "ip", "netns", "exec", n.ns, self.client, "-once", "-config", str(config),
                     "-tpm", "unix:" + str(n.tpm_sock), "-session-dir", str(n.run), "-wait", "1s", "-rounds", str(rounds)]
             try:
