@@ -65,6 +65,16 @@ class Quorum(unittest.TestCase):
                 self.refused("signed by a: 2 of", quorum(body(man), A, B), man)
                 self.assertEqual(hb.verify(quorum(body(man), A, C), man)["sequence"], 7)
 
+    def test_a_signature_that_does_not_count_must_still_verify(self):
+        """counting_parties verifies every signature before it decides whether it counts: a quarantined b's signature over
+        another body is refused although a and the owner meet the rule without it (the order a port could get wrong)."""
+        man = manifest4(1, "", nodes4(b="QUARANTINED"))
+        heartbeat = body(man, lifetime=3600)
+        envelope = quorum(heartbeat, A, O1)
+        envelope["signatures"].append(quorum(body(man, sequence=8), B)["signatures"][0])
+        self.refused("the heartbeat (signatures[2], b) signature does not verify", envelope, man)
+        self.assertEqual(hb.verify(quorum(heartbeat, A, O1, B), man), heartbeat)
+
     def test_a_node_the_rule_does_not_name_does_not_count(self):
         """meets() counts only the rule's parties: c is a node of the manifest, its signature verifies, and it is not one."""
         man = manifest4(1, "", nodes4(), heartbeat_signers={"threshold": 2, "parties": ["a", "b", "owner"]})
