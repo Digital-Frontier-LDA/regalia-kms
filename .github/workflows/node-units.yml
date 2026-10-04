@@ -20,6 +20,7 @@ on:
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
       - e2e/three-node-theft.py
+      - e2e/three-node-leases.py
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
@@ -40,6 +41,7 @@ on:
       - e2e/three-node-recovery.py
       - e2e/three-node-outage.py
       - e2e/three-node-theft.py
+      - e2e/three-node-leases.py
       - e2e/three-node-replace.py
       - cmd/regalia-unlock/**
       - e2e/lib/threenode.py
@@ -243,6 +245,36 @@ jobs:
             python3 -Es e2e/three-node-theft.py | tee "$RUNNER_TEMP/theft.log"
           grep -q '^three-node-theft: 16 passed, 0 failed$' "$RUNNER_TEMP/theft.log" || {
             echo "::error::the three-node theft test did not pass all 16 checks" >&2; exit 1; }
+
+  # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, through the
+  # real authority), and its retired hardware refused.
+
+  # #74 (Phase 14): runtime leases on three nodes and the real authority: renewal, failover to the other peer,
+  # the authority down, a partition, and a running node revoked (it stops serving by itself at its lease's end).
+  three-node-leases:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: The software TPM, tpm2-tools, WireGuard, cryptsetup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
+            python3-cryptography cryptsetup e2fsprogs nftables
+      - name: Build the pre-root client
+        run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
+      - name: Runtime leases, renewal and failover, the authority down, a running node revoked
+        run: |
+          set -o pipefail
+          REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
+            python3 -Es e2e/three-node-leases.py | tee "$RUNNER_TEMP/leases.log"
+          grep -q '^three-node-leases: 12 passed, 0 failed$' "$RUNNER_TEMP/leases.log" || {
+            echo "::error::the three-node lease test did not pass all 12 checks" >&2; exit 1; }
 
   # #76 (Phase 16): a node that failed for good replaced by a new host (one root-signed manifest, through the
   # real authority), and its retired hardware refused.
