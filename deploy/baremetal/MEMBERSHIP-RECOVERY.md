@@ -146,6 +146,10 @@ Such a revocation is restrictive and never root-signed, so it is in no signing r
 holds it. Without the collector (`no collector` typed, and so in the signed line's record), the operator's
 answer to "do you know of any later revocation" is the only guard left. A witness export that is old
 verifies too, and only lowers what the collector is said to have seen: fetch it during the operation.
+The collector's receipt signs no time, so nothing yet refuses an old one (#398 will bind it). The check
+that no second node answers asks over this node's own service tunnel: a node whose tunnel is down cannot
+tell a dead peer from an unreachable one, and it counts both as not answering. The owner's judgement and
+the witness cover that case, not the probe.
 The statement expires 15 minutes after the node issued the session, by the node's authenticated time, never
 by the laptop's clock. The statement cannot be replayed into another operation, boot, node or tip, and
 expires within 15 minutes.
