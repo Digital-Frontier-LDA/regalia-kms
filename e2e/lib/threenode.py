@@ -38,6 +38,7 @@ the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (
 Root only; it changes the machine (namespaces, interfaces, transient units), so its callers run only on a
 throwaway machine (a GitHub-hosted runner)."""
 import configparser
+import contextlib
 import grp
 import hashlib
 import json
