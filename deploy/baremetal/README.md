@@ -637,14 +637,15 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   swap-backed memory in the initrd. The volume key also lives, by design, in dm-crypt in the kernel and
   briefly in systemd-cryptsetup.
 
-  **A failed unlock reboots; it never offers a shell.** `uki.py build` also requires `rd.shell=0`,
-  `rd.emergency=reboot` and `systemd.default_device_timeout_sec=infinity` (systemd 254 and later), and
-  refuses an initrd fragment under `etc/cmdline.d` that says otherwise (#242). A boot whose unlock the
-  peers refuse, as they refuse a retired image's, would otherwise reach dracut's emergency shell, and a
-  shell in the initrd can extend PCR 11 by hand to the booted phase. The infinite device timeout keeps
-  the wait for `/dev/mapper/root` from reaching that emergency path while the recovery-key prompt is
-  up, however long the operator takes. The boot test proving both (no shell on a refused unlock; the
-  prompt still takes the recovery key after the old 90 s timeout) lands with #70's ask-password agent.
+  **A failed unlock reboots; it never offers a shell.** `uki.py build` also requires `rd.shell=0` and
+  `rd.emergency=reboot`, refuses dracut's older `rdshell` and `rdbreak`, and refuses an initrd fragment
+  under `etc/cmdline.d` that says otherwise (#242). A boot whose unlock the peers refuse, as they refuse
+  a retired image's, would otherwise reach dracut's emergency shell, and a shell in the initrd can
+  extend PCR 11 by hand to the booted phase. The root device's wait must not time out into that
+  emergency path while the recovery-key prompt is up; that timeout is set on the root's own entry
+  (#70), not as systemd's default device timeout, which the booted system would apply to every device.
+  The boot test proving both (no shell on a refused unlock; the prompt still takes the recovery key
+  after the old 90 s timeout) lands with #70's ask-password agent.
 
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a

@@ -106,10 +106,11 @@ MAX_IMAGE = 512 * 1024 * 1024
 #   rd.luks*, luks*   every form, rd.luks=0 included: the root volume is opened from the image's crypttab
 #                     through the unlock client's socket, and no command-line word may change how
 #   rd.break, rd.shell, systemd.debug_shell, init=, systemd.unit=, emergency, rescue, single
-#                     a shell or another target before the disk is judged
+#                     a shell or another target before the disk is judged (also dracut's older
+#                     spellings rdbreak and rdshell, which its getarg still reads)
 #   root=UUID=…, root=PARTUUID=…   names ONE host's disk, so the image would be per host (the root is the
 #                     mapping, root=/dev/mapper/root, and the partition is found by its label)
-CMDLINE_REFUSED = (r"(rd\.)?luks(\.[a-z0-9_.-]+)?(=.*)?", r"rd\.break(=.*)?", r"rd\.shell(=.*)?", r"(rd\.)?systemd\.debug[-_]shell(=.*)?",
+CMDLINE_REFUSED = (r"(rd\.)?luks(\.[a-z0-9_.-]+)?(=.*)?", r"rd\.?break(=.*)?", r"rd\.?shell(=.*)?", r"(rd\.)?systemd\.debug[-_]shell(=.*)?",
                    r"(rd)?init=.*", r"(rd\.)?systemd\.unit=.*", r"emergency", r"rescue", r"single", r"[sS1]", r"-b",
                    r"root=(UUID|PARTUUID|LABEL|PARTLABEL)=.*")
 # ... except the forms that turn a shell OFF, which a KMS host's image should carry (rd.shell=0).
@@ -134,11 +135,10 @@ CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off
 # rd.shell=0 and rd.emergency=reboot: a boot whose unlock fails (peers refuse the disk, as they do for a
 # retired image) reaches dracut's emergency path, which then reboots rather than offering a shell. A shell
 # in the initrd could extend PCR 11 by hand to the booted phase, the value that authorizes writes to the
-# TPM anchor (#242). systemd.default_device_timeout_sec=infinity (systemd 254 and later): the wait for
-# /dev/mapper/root never times out into that emergency path, so the recovery-key prompt stays up for as
-# long as the operator needs (#242, #70).
-CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1",
-                    "rd.shell=0", "rd.emergency=reboot", "systemd.default_device_timeout_sec=infinity")
+# TPM anchor (#242). The root device's own wait must not time out into that path while the recovery-key
+# prompt is up; that timeout is set on the root's entry alone (#70), never as systemd's default, which
+# the booted system would also apply to every other device.
+CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1", "rd.shell=0", "rd.emergency=reboot")
 
 
 def _cmdline_key(word):
