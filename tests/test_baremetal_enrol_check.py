@@ -116,6 +116,41 @@ class Check(unittest.TestCase):
         fourth["nodes"][0]["state"] = "QUARANTINED"
         self.refused("not enrolled", chain + [self.envelope(fourth, key=hbt.REVOKE, signer="revocation")])
 
+    def replacement_chain(self, retire="x", extra=None):
+        """epoch 1: x, b, c. epoch 2, root-signed: x RETIRED, this host (a) added; `extra` changes it further."""
+        first = self.manifest()
+        first["nodes"][0] = hbt.node("x", "ACTIVE", 7)
+        second = dict(copy.deepcopy(first), epoch=2, prev_digest=m.digest(first))
+        for entry in second["nodes"]:
+            if entry["node_id"] == retire:
+                entry["state"] = "RETIRED"
+        second["nodes"].insert(0, self.manifest()["nodes"][0])
+        if extra:
+            extra(second)
+        return [self.envelope(first), self.envelope(second)]
+
+    def test_a_replacement_is_enrolled_only_as_the_replacement_typed(self):
+        """#76: the manifest that first names this host retires x. Without --replace it is refused (never a plain
+        addition by accident); with --replace x it is checked by replacement's rules; another ID is refused."""
+        chain = self.replacement_chain()
+        check = lambda replace: enrol.check_manifest(self.d, chain, self.root, enrol.fingerprint(self.root), self.document, replace)  # noqa: E731
+        with self.assertRaisesRegex(enrol.Refused, "it is a replacement, enrolled only with `commit --replace x`"):
+            check(None)
+        self.assertEqual(check("x")["epoch"], 2)
+        with self.assertRaisesRegex(enrol.Refused, "does not replace b .it retires x.: not the replacement typed"):
+            check("b")
+
+    def test_a_replacement_that_changes_anything_else_is_refused(self):
+        def change_b(manifest):
+            manifest["nodes"][2]["wg_service_pub"] = "5d" * 32
+        chain = self.replacement_chain(extra=change_b)
+        with self.assertRaisesRegex(enrol.Refused, "the replacement of x by a is refused: a replacement does not change b"):
+            enrol.check_manifest(self.d, chain, self.root, enrol.fingerprint(self.root), self.document, "x")
+
+    def test_an_addition_or_a_founding_node_is_not_a_replacement(self):
+        with self.assertRaisesRegex(enrol.Refused, "a is named from epoch 1: it replaces nobody"):
+            enrol.check_manifest(self.d, self.envelope(self.manifest()), self.root, enrol.fingerprint(self.root), self.document, "x")
+
     def test_a_malformed_bundle_is_a_refusal(self):
         with open(self.d + "/bundle.json", "w") as f:
             json.dump({"schema": enrol.SCHEMA_BUNDLE, "node_id": "a"}, f)

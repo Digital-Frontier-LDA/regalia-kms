@@ -39,10 +39,27 @@ class Anchor(nt.Case):
         self.assertEqual(node.anchor().value(), 3)
         self.assertEqual(node.anchor().record(), (3, digest))
         self.assertEqual(node.store().load()["epoch"], 3)
-        self.assertEqual(node.freshness().counter.value(), 0)
+        counter = node.freshness().counter
+        self.assertNotEqual(counter._tpm("nvreadpublic", counter.index).returncode, 0, "the counter is the heartbeat step's")
         # again, as a resumed run: nothing changes
         self.assertEqual(self.anchor(chain), (3, digest))
         self.assertEqual(node.anchor().value(), 3)
+
+    def late_chain(self):
+        """epoch 1 without this node, epoch 2 (root-signed) adding it: a node joining a running network."""
+        me = self.cfg["node_id"]
+        first = hbt.manifest()
+        first["nodes"] = [n for n in first["nodes"] if n["node_id"] != me]
+        second = dict(copy.deepcopy(first), epoch=2, prev_digest=m.digest(first))
+        second["nodes"] = [hbt.node(me, "ACTIVE", 0)] + second["nodes"]
+        return [rt.sign(first), rt.sign(second)]
+
+    def test_no_node_gets_a_counter_from_the_anchor_step(self):
+        """#190, d9's read: whatever epoch first names it, its counter is defined by the first-heartbeat step."""
+        for chain in (self.late_chain(), ):
+            self.anchor(chain)
+            counter = self.node().freshness().counter
+            self.assertNotEqual(counter._tpm("nvreadpublic", counter.index).returncode, 0)
 
     def test_a_longer_chain_continues_a_shorter_enrolment(self):
         chain = self.chain(3)
