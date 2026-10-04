@@ -277,12 +277,68 @@ class Propose(Case):
         self.assertTrue(out.startswith("approve: UNSIGNED manifest for the root to sign (nothing here signs)\n{"))
         self.assertEqual(json.loads(out.split("\n", 1)[1]), proposal)
 
+    def states(self, epoch=2, **by_peer):
+        """--state arguments: states(a={"b": "image-2", "c": "image-2"}, ...), each peer's record of the others."""
+        argv = []
+        for peer, seen in by_peer.items():
+            argv += ["--state", "%s=%s" % (peer, self.write("state-%s-%d.json" % (peer, self.calls), {
+                "schema": attest.STATE_SCHEMA, "nonces": {},
+                "nodes": {n: {"measurement": {"label": label, "epoch": epoch}} for n, label in seen.items()}}))]
+        return argv
+
+    def everyone_on(self, label, epoch=2):
+        return self.states(epoch, **{p: {n: label for n in "abc" if n != p} for p in "abc"})
+
     def test_retire_and_emergency_proposals(self):
-        rc, result = self.as_json(*self.args(BOTH, NEXT, [self.m1, self.m2]))
+        self.calls = getattr(self, "calls", 0) + 1
+        rc, result = self.as_json(*self.args(BOTH, NEXT, [self.m1, self.m2]), *self.everyone_on("image-2"))
         self.assertEqual((rc, result["transition"], result["unsigned_manifest"]["epoch"]), (0, "retire", 3))
+        self.assertEqual((result["locked_out"], result["not_seen"]), ([], []))
         self.assertEqual(self.as_json(*self.args(CURRENT, NEXT))[0], 1)
-        rc, result = self.as_json(*self.args(CURRENT, NEXT, None, "--emergency"))
-        self.assertEqual((rc, result["transition"]), (0, "replace-without-overlap"))
+        rc, result = self.as_json(*self.args(CURRENT, NEXT, None, "--emergency"), *self.everyone_on("image-1", epoch=1),
+                                  "--locked-out", "a", "--locked-out", "b", "--locked-out", "c")
+        self.assertEqual((rc, result["transition"], result["locked_out"]), (0, "replace-without-overlap", ["a", "b", "c"]))
+        rc, out, _ = self.run_cli(*self.args(CURRENT, NEXT, None, "--emergency"), *self.everyone_on("image-1", epoch=1),
+                                  "--locked-out", "a", "--locked-out", "b", "--locked-out", "c")
+        self.assertEqual(rc, 0)
+        self.assertIn("\nLOCKS OUT a, b, c: once this is signed and delivered, each is refused its next unlock and lease", out)
+
+    def test_nothing_is_proposed_that_locks_out_a_node_still_running_the_set_that_goes(self):
+        """#75: a retire while c is still on CURRENT, or an abandon while a is already on NEXT, would lock that
+        node out for good once signed. propose refuses, names it and who saw it, and prints no manifest."""
+        two = [self.m1, self.m2]
+
+        def lagging():
+            return self.states(a={"b": "image-2", "c": "image-1"}, b={"a": "image-2", "c": "image-1"}, c={"a": "image-2", "b": "image-2"})
+
+        def a_moved():
+            return self.states(a={"b": "image-1", "c": "image-1"}, b={"a": "image-2", "c": "image-1"}, c={"a": "image-2", "b": "image-1"})
+        # each case builds its files when it runs: they share the chain's file name
+        for label, argv, reason in (
+                ("a retire with c on CURRENT", lambda: self.args(BOTH, NEXT, two) + lagging(),
+                 "NOT YET: this retire would lock out c (a last saw it on 'image-1'; b last saw it on 'image-1', not on image-2)"),
+                ("an abandon with a on NEXT", lambda: self.args(BOTH, CURRENT, two) + a_moved(), "NOT YET: this abandon would lock out a"),
+                ("a retire with no state at all", lambda: self.args(BOTH, NEXT, two),
+                 "the new document takes a set away (retire): give --state NODE=STATE.json for every node that may authorize"),
+                ("a retire with one state left out", lambda: self.args(BOTH, NEXT, two) + lagging()[2:], "the state of a is missing"),
+                ("--locked-out without --emergency", lambda: self.args(BOTH, NEXT, two) + lagging() + ["--locked-out", "c"],
+                 "NOT YET: this retire would lock out c"),
+                ("an emergency that does not name everyone", lambda: self.args(CURRENT, NEXT, None, "--emergency")
+                 + self.everyone_on("image-1", 1) + ["--locked-out", "a", "--locked-out", "b"], "this emergency locks out a ("),
+                ("an emergency naming a node it does not lock out", lambda: self.args(BOTH, NEXT, two, "--emergency") + lagging()
+                 + ["--locked-out", "c", "--locked-out", "b"], "--locked-out names b, which this document does not lock out"),
+                ("state given for an approval", lambda: self.args(CURRENT, BOTH) + self.everyone_on("image-1", 1),
+                 "--state and --locked-out are read only when the new document takes a set away")):
+            with self.subTest(label):
+                rc, out, err = self.run_cli(*argv())
+                self.assertEqual((rc, out), (1, ""))
+                self.assertIn(reason, err)
+
+    def test_an_emergency_retire_locks_out_only_the_nodes_it_names(self):
+        self.calls = getattr(self, "calls", 0) + 1
+        lagging = self.states(a={"b": "image-2", "c": "image-1"}, b={"a": "image-2", "c": "image-1"}, c={"a": "image-2", "b": "image-2"})
+        rc, result = self.as_json(*self.args(BOTH, NEXT, [self.m1, self.m2], "--emergency"), *lagging, "--locked-out", "c")
+        self.assertEqual((rc, result["transition"], result["locked_out"]), (0, "retire", ["c"]))
 
     def test_what_is_not_proposed(self):
         for label, argv, reason in (

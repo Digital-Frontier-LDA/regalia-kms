@@ -293,6 +293,18 @@ class Proposing(Case):
         self.refused("does not follow", tool.propose_from_rollout, self.current, {"unsigned_manifest": dict(candidate, epoch=3)})
         self.refused("not the output", tool.propose_from_rollout, self.current, candidate)
 
+    def test_a_proposal_that_takes_a_set_away_must_say_whom_it_locks_out(self):
+        """#75: rollout propose checks the peers' records before a retire, an abandon or an emergency, and says
+        what it found. An output without it was made by a rollout.py that did not look."""
+        candidate = self.proposal()
+        for kind in ("retire", "abandon", "replace-without-overlap"):
+            with self.subTest(kind):
+                self.refused("does not say which nodes it locks out", tool.propose_from_rollout, self.current,
+                             {"transition": kind, "unsigned_manifest": candidate})
+                self.assertEqual(tool.propose_from_rollout(self.current, {"transition": kind, "unsigned_manifest": candidate,
+                                                                          "locked_out": []}), candidate)
+        self.assertEqual(tool.propose_from_rollout(self.current, {"transition": "approve", "unsigned_manifest": candidate}), candidate)
+
     def test_the_diff_names_every_change(self):
         candidate = self.proposal(c="MAINTENANCE")
         candidate["policy_version"] = "p2"

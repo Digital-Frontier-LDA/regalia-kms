@@ -119,7 +119,7 @@ For each host, in order:
 
 | # | Step | Status |
 |---|---|---|
-| 5.1 | Check the step: `python3 -Es -m deploy.baremetal.rollout transition --old BOTH.json --new NEXT.json` must answer `retire`. `abandon` means the document drops the NEW image instead: the wrong half. `python3 -Es -m deploy.baremetal.rollout propose …` then prints manifest N+2, unsigned | **exists** |
+| 5.1 | Check the step: `python3 -Es -m deploy.baremetal.rollout transition --old BOTH.json --new NEXT.json` must answer `retire`. `abandon` means the document drops the NEW image instead: the wrong half. `python3 -Es -m deploy.baremetal.rollout propose … --state a=A.json --state b=B.json --state c=C.json` then prints manifest N+2, unsigned. It needs the same state files as step 4.1, and refuses (NOT YET, naming the host and the peer that saw it) while any host may still run the image that goes. The same holds for an `abandon` while a host is already on the new image. The manifest tool refuses a proposal that does not carry this check | **exists** |
 | 5.2 | Release manifest N+2 (signed in step 2.5, or sign it now); every host commits it | as 2.4 to 2.7 |
 | 5.3 | From now on a host booted into the old image gets no unlock and no lease. A lease issued just before runs out within five minutes | **exists**; shown on three software TPMs (`e2e/rolling-policy-swtpm.sh`) |
 | 5.4 | Remove the old UKI from each host | **manual** |
@@ -152,7 +152,7 @@ ceremony (a ceremony prerequisite).
 | A host does not come back, before step 5 | boot the current image from the boot menu; it is still accepted | **manual** |
 | A host does not come back and no peer will unlock it | open its disk with its recovery key at the console (PIN-CUSTODY.md, "The disk recovery key") | **exists** (`recovery-key.sh`) |
 | A host is down and must not hold the others up | a manifest that sets it QUARANTINED; the revocation key may sign it. The others then update without it | rule **exists**; signed with `deploy.baremetal.manifest sign --signer revocation` on the revocation key's token |
-| The CURRENT image is found compromised | the emergency path: one manifest whose document drops it on every host at once (`python3 -Es -m deploy.baremetal.rollout propose … --emergency`). Every host still running it is locked out until it boots the new image. Root key | writing the proposal **exists**; signing it does not |
+| The CURRENT image is found compromised | the emergency path: one manifest whose document drops it on every host at once (`python3 -Es -m deploy.baremetal.rollout propose … --emergency --state …`). Every host still running it is locked out until it boots the new image, and `propose` refuses unless each of them is named with `--locked-out NODE`: exactly those, no more and no fewer. The output names them. A host that cannot boot the new image is opened with its recovery key at the console. Root key | writing the proposal **exists**; signing it does not |
 | All three hosts are down | total-outage recovery: PIN-CUSTODY.md and the recovery keys | **manual** |
 
 ## What has been shown, and where

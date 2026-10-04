@@ -46,6 +46,13 @@ retire_ready(...)  asked by the root's operator, before signing the document tha
     whatever is signed, a peer still refuses an image its document does not list. Retiring early
     locks a lagging node out; it never lets a wrong image in.
 
+stranded(...)      asked by `propose`, before it prints any manifest whose document takes a set away
+    (a retire, an abandon, an emergency). The same witnesses and the same rule as retire_ready, for
+    every node that loses a set: last seen UP on a set the new document keeps, by every peer that has
+    seen it, and by at least one. Otherwise `propose` refuses (NOT YET). An emergency may lock nodes
+    out, but only those it names with --locked-out, exactly: the output says who, and how each comes
+    back (an approved image, or its recovery key at the console). Nobody is locked out unnamed.
+
 LIMITS, stated:
   * may_reboot is a local check on the node about to reboot, on that node's own word for what it
     runs and its own verifier's record of the others. An operator who reboots without asking is not
@@ -77,6 +84,7 @@ check and sign.
     python3 -Es -m deploy.baremetal.rollout epoch     --membership CHAIN.json --root-key HEX [--tpm-index 0x1500016 [--tcti TCTI]]
     python3 -Es -m deploy.baremetal.rollout propose   --membership CHAIN.json --root-key HEX --old OLD.json --new NEW.json
                                                   [--emergency] [--dropped NODE]... [--issued-at YYYY-MM-DDTHH:MM:SSZ]
+                                                  [--state NODE=STATE.json]... [--locked-out NODE]...
     python3 -Es -m deploy.baremetal.rollout may-reboot --membership CHAIN.json --root-key HEX --measurements DOC.json
                                                   --node-id ID --running LABEL --session-id HEX
                                                   --attest-state STATE.json --lease LEASE.json... [--now SECONDS]
@@ -225,11 +233,10 @@ def may_reboot(manifest, document, node_id, running, session_id, own_state, leas
     return {"target": target, "authorizers": authorizers, "seconds": min(left[n] for n in authorizers)}
 
 
-def retire_ready(manifest, document, states):
-    """Whether CURRENT may be retired. `states` maps a peer's node ID to its attest.py state (parsed).
-    Returns {node_id: [the peers that last saw it on its target]}, or raises Refused naming every node
-    that is not there, and who says so."""
-    measurements.bind(manifest, document)
+def _witnesses(manifest, states):
+    """The checks every peer state file must pass to count as a witness under `manifest` (retire_ready,
+    stranded): the state of every node that may authorize, and only theirs, each a verifier's state whose
+    records of the nodes of the rollout are readable and not from a later epoch. Raises Refused."""
     nodes = membership.validate(manifest)
     require(isinstance(states, dict) and states and all(isinstance(p, str) for p in states), "no verifier state was given")
     unknown = sorted(set(states) - set(nodes))
@@ -261,6 +268,14 @@ def retire_ready(manifest, document, states):
                     "%s's state has an unreadable measurement for %s: it cannot be counted, and it cannot be ignored" % (peer_id, node_id))
             require(last["epoch"] <= manifest["epoch"], "%s last verified %s under epoch %d, later than the manifest given "
                     "(epoch %d): use the current manifest and its document" % (peer_id, node_id, last["epoch"], manifest["epoch"]))
+
+
+def retire_ready(manifest, document, states):
+    """Whether CURRENT may be retired. `states` maps a peer's node ID to its attest.py state (parsed).
+    Returns {node_id: [the peers that last saw it on its target]}, or raises Refused naming every node
+    that is not there, and who says so."""
+    measurements.bind(manifest, document)
+    _witnesses(manifest, states)
     seen, behind = {}, []
     for node_id in attesting(manifest):
         target = measurements.target(document, node_id)
@@ -280,6 +295,48 @@ def retire_ready(manifest, document, states):
             "seen it" % "; ".join(behind))
     return seen
 
+
+DROPS = ("retire", "abandon", "replace-without-overlap")     # the transitions that take a set away from a node
+
+
+def stranded(manifest, old, new, states):
+    """The nodes the step from document `old` (the one `manifest` commits to) to `new` would lock out:
+    {node_id: why}. A node that loses a set must have been last seen UP on a set `new` keeps, by every
+    peer that has seen it under this epoch, and by at least one; otherwise it may still be running the
+    set that goes, and its peers would refuse its next unlock and lease. For a retire this is
+    retire_ready's rule (the kept set is the target); it applies the same way to an abandon (NEXT
+    dropped while a node runs it) and to an emergency. `states` are the peers' state files, checked
+    as retire_ready checks them. Nodes that leave the document, or are not unlocked and do not serve
+    under `manifest`, are not judged here (see unwatched)."""
+    measurements.bind(manifest, old)
+    _witnesses(manifest, states)
+    before, after = measurements.validate(old), measurements.validate(new)
+    behind = {}
+    for node_id in attesting(manifest):
+        if node_id not in before or node_id not in after:
+            continue
+        kept = {e["label"]: e for e in after[node_id]}
+        if not {e["label"] for e in before[node_id]} - set(kept):
+            continue
+        said = {peer: _last(states[peer], manifest, node_id) for peer in sorted(states) if peer != node_id}
+        said = {peer: last for peer, last in said.items() if last is not None}
+        wrong = ["%s last saw it on %r" % (peer, label) if label not in kept else "%s last saw it in the initrd of %r, not up" % (peer, label)
+                 for peer, (label, phase) in said.items() if label not in kept or not _up(kept[label], phase)]
+        if not said:
+            behind[node_id] = "no other node has verified it under epoch %d" % manifest["epoch"]
+        elif wrong:
+            behind[node_id] = "%s, not on %s" % ("; ".join(wrong), " or ".join(sorted(kept)))
+    return behind
+
+
+def unwatched(manifest, old, new):
+    """The nodes that lose a set but may neither be unlocked nor serve under `manifest` (QUARANTINED, say):
+    no peer re-attests them, so nothing shows what they run. Each will be refused if it comes back on
+    the set that goes."""
+    before, after = measurements.validate(old), measurements.validate(new)
+    watched = set(attesting(manifest))
+    return sorted(n for n in set(before) & set(after) if n not in watched
+                  and {e["label"] for e in before[n]} - {e["label"] for e in after[n]})
 
 # ---- the command ----
 
@@ -396,20 +453,58 @@ def _cmd_epoch(args):
         _tpm_text(anchored, args.tcti) if anchored else "\nNOT checked against this host's TPM epoch counter (no --tpm-index): a restored older file would read the same")
 
 
+def _states(items):
+    states = {}
+    for item in items:
+        node_id, sep, path = item.partition("=")
+        require(sep and node_id and path, "--state takes NODE=FILE, not %r" % item)
+        require(node_id not in states, "--state names %s twice" % node_id)
+        states[node_id] = _json(path, "--state %s" % node_id)
+    return states
+
+
 def _cmd_propose(args):
     current, anchored = _current(args)
     old, new = _document(args.old), _document(args.new)
     measurements.bind(current, old)
     kind = measurements.transition(old, new, emergency=args.emergency, dropped=args.dropped)
     require(kind != "unchanged", "the new document changes nothing: there is no manifest to propose")
+    states = _states(args.state)
+    checked = {}
+    if kind not in DROPS:
+        require(not states and not args.locked_out, "--state and --locked-out are read only when the new document takes a set "
+                "away (%s); this one is: %s" % (", ".join(DROPS), kind))
+    else:
+        # A node still running the set that goes would be refused at its next unlock and lease, for good: the
+        # root's signature cannot be taken back. So the peers' records say first that nobody runs it.
+        require(states, "the new document takes a set away (%s): give --state NODE=STATE.json for every node that may authorize, "
+                "so that no node still running it is locked out (rollout retire-ready reads the same files)" % kind)
+        behind = stranded(current, old, new, states)
+        why = "; ".join("%s (%s)" % (n, behind[n]) for n in sorted(behind))
+        require(not behind or args.emergency, "NOT YET: this %s would lock out %s. Wait until every node is seen up on a set the new "
+                "document keeps, or, if the set that goes must go now, propose it with --emergency and name each node it "
+                "locks out with --locked-out" % (kind, why))
+        named = set(args.locked_out)
+        require(not named - set(behind), "--locked-out names %s, which this document does not lock out"
+                % ", ".join(sorted(named - set(behind))))
+        require(not set(behind) - named, "this emergency locks out %s: name each with --locked-out, so that the operator who "
+                "signs it has said so" % why)
+        checked = {"locked_out": sorted(behind), "not_seen": unwatched(current, old, new)}
     issued = args.issued_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     proposal = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current),
                     policy_version=measurements.version(new), issued_at=issued)
     membership.validate(proposal)
     measurements.bind(proposal, new)
-    return {"transition": kind, "unsigned_manifest": proposal, "signs_over": "regalia-membership/v1\\0 + canonical JSON of unsigned_manifest",
-            "follows": _summary(current, anchored, args.tcti)}, \
-        "%(transition)s: UNSIGNED manifest for the root to sign (nothing here signs)\n" + json.dumps(proposal, indent=2, sort_keys=True)
+    text = "%(transition)s: UNSIGNED manifest for the root to sign (nothing here signs)\n" + json.dumps(proposal, indent=2, sort_keys=True)
+    if checked.get("locked_out"):
+        text += ("\nLOCKS OUT %s: once this is signed and delivered, each is refused its next unlock and lease until it boots an "
+                 "image the new document approves; one that cannot is opened with its recovery key at the console "
+                 "(KERNEL-UPDATE.md, \"If something goes wrong\")" % ", ".join(checked["locked_out"])).replace("%", "%%")
+    if checked.get("not_seen"):
+        text += ("\nNOT CHECKED: %s neither unlocks nor serves under this epoch, so no peer shows what it runs; it will be "
+                 "refused if it comes back on the set that goes" % ", ".join(checked["not_seen"])).replace("%", "%%")
+    return dict({"transition": kind, "unsigned_manifest": proposal, "signs_over": "regalia-membership/v1\\0 + canonical JSON of unsigned_manifest",
+                 "follows": _summary(current, anchored, args.tcti)}, **checked), text
 
 
 def _cmd_may_reboot(args):
@@ -427,12 +522,7 @@ def _cmd_may_reboot(args):
 
 def _cmd_retire_ready(args):
     manifest, anchored = _current(args)
-    states = {}
-    for item in args.state:
-        node_id, sep, path = item.partition("=")
-        require(sep and node_id and path, "--state takes NODE=FILE, not %r" % item)
-        require(node_id not in states, "--state names %s twice" % node_id)
-        states[node_id] = _json(path, "--state %s" % node_id)
+    states = _states(args.state)
     seen = retire_ready(manifest, _document(args.measurements), states)
     return dict({"ready": True, "seen_on_target_by": seen, "epoch": manifest["epoch"]}, **_tpm(anchored, args.tcti)), \
         "YES: every node was last seen on its target by every peer that has seen it (epoch %(epoch)d). The state files are " \
@@ -482,6 +572,10 @@ def main(argv=None):
     c.add_argument("--old", required=True, help="the document the current manifest commits to")
     c.add_argument("--new", required=True)
     c.add_argument("--issued-at", metavar="YYYY-MM-DDTHH:MM:SSZ")
+    c.add_argument("--state", action="append", default=[], metavar="NODE=STATE.json",
+                   help="a node's attestation verifier state, one per authorizing node: required when the document takes a set away")
+    c.add_argument("--locked-out", action="append", default=[], metavar="NODE",
+                   help="with --emergency: a node still running the set that goes, which this manifest locks out; repeat, name each")
     step(c)
     c.set_defaults(run=_cmd_propose)
     c = sub.add_parser("may-reboot", help="may this node reboot into its target image now?")

@@ -104,6 +104,12 @@ def propose_states(current, changes, issued_at):
 def propose_from_rollout(current, output):
     """rollout.py `propose --json`'s unsigned manifest, taken as it is, if it follows `current`."""
     require(isinstance(output, dict) and "unsigned_manifest" in output, "not the output of `rollout propose --json`")
+    # a proposal that takes a set away carries what `propose` found it locks out; one without it was made
+    # by a rollout.py that did not look, and nobody has said which node it strands
+    require(output.get("transition") not in ("retire", "abandon", "replace-without-overlap")
+            or isinstance(output.get("locked_out"), list),
+            "the proposal takes a set away (%s) but does not say which nodes it locks out: make it again with this "
+            "rollout.py's `propose --state ...`" % output.get("transition"))
     candidate = output["unsigned_manifest"]
     membership.validate(candidate)
     require(candidate["epoch"] == current["epoch"] + 1 and candidate["prev_digest"] == membership.digest(current),
