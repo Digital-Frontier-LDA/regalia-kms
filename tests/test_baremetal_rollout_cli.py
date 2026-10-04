@@ -293,7 +293,7 @@ class Propose(Case):
         self.calls = getattr(self, "calls", 0) + 1
         rc, result = self.as_json(*self.args(BOTH, NEXT, [self.m1, self.m2]), *self.everyone_on("image-2"))
         self.assertEqual((rc, result["transition"], result["unsigned_manifest"]["epoch"]), (0, "retire", 3))
-        self.assertEqual((result["locked_out"], result["not_seen"]), ([], []))
+        self.assertEqual((result["locked_out"], result["emergency"]), ([], False))
         self.assertEqual(self.as_json(*self.args(CURRENT, NEXT))[0], 1)
         rc, result = self.as_json(*self.args(CURRENT, NEXT, None, "--emergency"), *self.everyone_on("image-1", epoch=1),
                                   "--locked-out", "a", "--locked-out", "b", "--locked-out", "c")
@@ -324,7 +324,7 @@ class Propose(Case):
                 ("--locked-out without --emergency", lambda: self.args(BOTH, NEXT, two) + lagging() + ["--locked-out", "c"],
                  "NOT YET: this retire would lock out c"),
                 ("an emergency that does not name everyone", lambda: self.args(CURRENT, NEXT, None, "--emergency")
-                 + self.everyone_on("image-1", 1) + ["--locked-out", "a", "--locked-out", "b"], "this emergency locks out a ("),
+                 + self.everyone_on("image-1", 1) + ["--locked-out", "a", "--locked-out", "b"], "this replace-without-overlap locks out c ("),
                 ("an emergency naming a node it does not lock out", lambda: self.args(BOTH, NEXT, two, "--emergency") + lagging()
                  + ["--locked-out", "c", "--locked-out", "b"], "--locked-out names b, which this document does not lock out"),
                 ("state given for an approval", lambda: self.args(CURRENT, BOTH) + self.everyone_on("image-1", 1),
@@ -333,6 +333,19 @@ class Propose(Case):
                 rc, out, err = self.run_cli(*argv())
                 self.assertEqual((rc, out), (1, ""))
                 self.assertIn(reason, err)
+
+    def test_a_quarantined_node_that_loses_its_set_is_named_or_the_step_is_refused(self):
+        """No peer re-attests a QUARANTINED node, so nothing shows what it runs: reinstated on CURRENT after the
+        retire, it would be refused. It is locked out, so it is named; that needs no emergency."""
+        m1 = self.under(CURRENT, c="QUARANTINED")
+        m2 = self.under(BOTH, epoch=2, prev=m.digest(m1), c="QUARANTINED")
+        self.calls = getattr(self, "calls", 0) + 1
+        on_next = lambda: self.states(a={"b": "image-2"}, b={"a": "image-2"})
+        rc, out, err = self.run_cli(*self.args(BOTH, NEXT, [m1, m2]), *on_next())
+        self.assertEqual((rc, out), (1, ""))
+        self.assertIn("this retire locks out c (it may neither be unlocked nor serve under epoch 2", err)
+        rc, result = self.as_json(*self.args(BOTH, NEXT, [m1, m2]), *on_next(), "--locked-out", "c")
+        self.assertEqual((rc, result["transition"], result["locked_out"], result["emergency"]), (0, "retire", ["c"], False))
 
     def test_an_emergency_retire_locks_out_only_the_nodes_it_names(self):
         self.calls = getattr(self, "calls", 0) + 1

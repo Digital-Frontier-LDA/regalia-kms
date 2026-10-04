@@ -11,10 +11,11 @@ import unittest.mock
 
 from cryptography.hazmat.primitives import serialization
 
-from deploy.baremetal import authority, manifest as tool, membership as m
+from deploy.baremetal import attest, authority, manifest as tool, measurements, membership as m
 from tests.test_baremetal_authority import FakeToken
 from tests.test_baremetal_membership import REVOKE_PUB, manifest, three
 import tests.test_baremetal_revocation_keys as tk
+import tests.test_baremetal_rollout as rt
 
 SERIAL, LABEL = "DENK0404380", "membership-root"
 URI = "pkcs11:serial=%s;token=%s;id=%%51;type=private" % (SERIAL, LABEL)
@@ -47,11 +48,13 @@ class Case(unittest.TestCase):
     def proposal(self, **states):
         return tool.propose_states(self.current, states or {"c": "MAINTENANCE"}, "2026-10-03T12:00:00Z")
 
-    def sign(self, candidate=None, expected=1, role="root", confirm=None, out="e2.json", chain_out=None, open_signer=None, chain=None):
+    def sign(self, candidate=None, expected=1, role="root", confirm=None, out="e2.json", chain_out=None, open_signer=None, chain=None,
+             step=None):
         candidate = candidate or self.proposal()
         confirm = confirm or (lambda prompt: "%d %s" % (candidate["epoch"], m.digest(candidate)[:8]))
         return tool.sign(chain or self.chain, self.root, expected, candidate, role, open_signer or self.signer, confirm,
-                         os.path.join(self.d, out), self.state, chain_out and os.path.join(self.d, chain_out), say=self.said.append)
+                         os.path.join(self.d, out), self.state, chain_out and os.path.join(self.d, chain_out), say=self.said.append,
+                         step=step)
 
     def refused(self, reason, fn, *args, **kw):
         with self.assertRaises(m.Refused) as caught:
@@ -293,18 +296,6 @@ class Proposing(Case):
         self.refused("does not follow", tool.propose_from_rollout, self.current, {"unsigned_manifest": dict(candidate, epoch=3)})
         self.refused("not the output", tool.propose_from_rollout, self.current, candidate)
 
-    def test_a_proposal_that_takes_a_set_away_must_say_whom_it_locks_out(self):
-        """#75: rollout propose checks the peers' records before a retire, an abandon or an emergency, and says
-        what it found. An output without it was made by a rollout.py that did not look."""
-        candidate = self.proposal()
-        for kind in ("retire", "abandon", "replace-without-overlap"):
-            with self.subTest(kind):
-                self.refused("does not say which nodes it locks out", tool.propose_from_rollout, self.current,
-                             {"transition": kind, "unsigned_manifest": candidate})
-                self.assertEqual(tool.propose_from_rollout(self.current, {"transition": kind, "unsigned_manifest": candidate,
-                                                                          "locked_out": []}), candidate)
-        self.assertEqual(tool.propose_from_rollout(self.current, {"transition": "approve", "unsigned_manifest": candidate}), candidate)
-
     def test_the_diff_names_every_change(self):
         candidate = self.proposal(c="MAINTENANCE")
         candidate["policy_version"] = "p2"
@@ -314,6 +305,87 @@ class Proposing(Case):
                          'node c: state: "ACTIVE" -> "MAINTENANCE"', "issued_at"):
             self.assertTrue([line for line in lines if expected in line], expected)
 
+
+
+class MeasurementStep(Case):
+    """#75: a proposal that changes the measurements is judged by this tool from the documents and the peers'
+    state files, at propose and again at sign, never from the proposal's own word (the owner's rule: the
+    signing path checks for itself)."""
+    def setUp(self):
+        super().setUp()
+        self.under(rt.BOTH)
+
+    def under(self, doc, **states):
+        """Re-root the chain at a first manifest that commits to `doc` (node states as given)."""
+        first = dict(tk.v3(manifest(1, "", three(**states))), policy_version=measurements.version(doc))
+        self.chain = [{"manifest": first, "signature": {"signer": "root", "key": self.root["key"],
+                                                         "sig": tk.sign_p256(self.fake.key, m.DOMAIN + m.canonical(first))}}]
+        self.current = m.accept_chain(None, self.chain, self.root)
+
+    def to(self, doc):
+        return dict(self.current, epoch=2, prev_digest=m.digest(self.current), policy_version=measurements.version(doc),
+                    issued_at="2026-10-03T12:00:00Z")
+
+    @staticmethod
+    def states(**by_peer):
+        return {peer: {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {
+            n: {"measurement": {"label": label, "epoch": 1}} for n, label in seen.items()}} for peer, seen in by_peer.items()}
+
+    def everyone_on(self, label, peers="abc"):
+        return self.states(**{p: {n: label for n in "abc" if n != p} for p in peers})
+
+    def lagging(self):
+        return self.states(a={"b": "image-2", "c": "image-1"}, b={"a": "image-2", "c": "image-1"}, c={"a": "image-2", "b": "image-2"})
+
+    def step(self, old=rt.BOTH, new=rt.NEXT, states=None, emergency=False, locked_out=()):
+        return {"old": old, "new": new, "states": states if states is not None else self.everyone_on("image-2"),
+                "emergency": emergency, "locked_out": list(locked_out)}
+
+    def test_a_measurements_change_is_not_signed_without_the_documents(self):
+        self.refused("the proposal changes the measurements (policy_version", self.sign, self.to(rt.NEXT))
+        self.assertNotIn("sign", self.fake.calls)
+
+    def test_a_retire_is_signed_once_every_node_is_on_next(self):
+        self.sign(self.to(rt.NEXT), step=self.step())
+        self.assertIn("measurements: retire", self.said)
+
+    def test_a_retire_that_locks_out_a_node_still_on_current_is_refused_at_the_signing_tool(self):
+        self.refused("NOT YET: this retire would lock out c", self.sign, self.to(rt.NEXT), step=self.step(states=self.lagging()))
+        self.refused("this retire locks out c", self.sign, self.to(rt.NEXT), step=self.step(states=self.lagging(), emergency=True))
+        self.refused("the state of b is missing", self.sign, self.to(rt.NEXT), step=self.step(states=self.everyone_on("image-2", "ac")))
+        self.refused("is not the one the root approved", self.sign, self.to(rt.NEXT), step=self.step(old=rt.CURRENT))
+        self.refused("is not the one the root approved", self.sign, self.to(rt.NEXT), step=self.step(new=rt.CURRENT))
+        self.assertNotIn("sign", self.fake.calls)
+        self.sign(self.to(rt.NEXT), step=self.step(states=self.lagging(), emergency=True, locked_out=["c"]))
+        self.assertTrue(any("LOCKS OUT c" in line for line in self.said), self.said)
+
+    def test_a_node_that_neither_unlocks_nor_serves_must_be_named_and_needs_no_emergency(self):
+        self.under(rt.BOTH, c="QUARANTINED")
+        on_next = self.states(a={"b": "image-2"}, b={"a": "image-2"})
+        self.refused("this retire locks out c (it may neither be unlocked nor serve under epoch 1", self.sign, self.to(rt.NEXT),
+                     step=self.step(states=on_next))
+        self.sign(self.to(rt.NEXT), step=self.step(states=on_next, locked_out=["c"]))
+
+    def test_a_proposal_that_keeps_the_measurements_reads_no_documents(self):
+        self.refused("policy_version unchanged", self.sign, self.proposal(), step=self.step())
+
+    def test_rollout_s_output_is_recomputed_and_an_edited_one_is_refused(self):
+        candidate = self.to(rt.NEXT)
+        honest = {"transition": "retire", "unsigned_manifest": candidate, "emergency": False, "locked_out": []}
+        just_docs = {"old": rt.BOTH, "new": rt.NEXT, "states": self.everyone_on("image-2")}
+        self.assertEqual(tool.propose_from_rollout(self.current, honest, just_docs), candidate)
+        self.refused("give --old, --new and --state", tool.propose_from_rollout, self.current, honest)
+        self.refused("the proposal says 'approve', but the documents make it 'retire'", tool.propose_from_rollout, self.current,
+                     dict(honest, transition="approve"), just_docs)
+        self.refused("the proposal says it locks out None", tool.propose_from_rollout, self.current,
+                     {k: v for k, v in honest.items() if k != "locked_out"}, just_docs)
+        lag = dict(just_docs, states=self.lagging())
+        self.refused("NOT YET: this retire would lock out c", tool.propose_from_rollout, self.current, honest, lag)
+        # an emergency whose list was emptied, or that names one node too many
+        self.refused("this retire locks out c", tool.propose_from_rollout, self.current, dict(honest, emergency=True), lag)
+        self.refused("--locked-out names b, which this document does not lock out", tool.propose_from_rollout, self.current,
+                     dict(honest, emergency=True, locked_out=["b", "c"]), lag)
+        self.assertEqual(tool.propose_from_rollout(self.current, dict(honest, emergency=True, locked_out=["c"]), lag), candidate)
 
 class Command(Case):
     def run_main(self, *args):

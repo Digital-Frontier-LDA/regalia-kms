@@ -51,7 +51,10 @@ stranded(...)      asked by `propose`, before it prints any manifest whose docum
     every node that loses a set: last seen UP on a set the new document keeps, by every peer that has
     seen it, and by at least one. Otherwise `propose` refuses (NOT YET). An emergency may lock nodes
     out, but only those it names with --locked-out, exactly: the output says who, and how each comes
-    back (an approved image, or its recovery key at the console). Nobody is locked out unnamed.
+    back (an approved image, or its recovery key at the console). A node that loses a set but neither
+    unlocks nor serves (QUARANTINED, say) cannot be checked: it must be named too, emergency or not.
+    Nobody is locked out unnamed (check_lockout). manifest.py runs the same check again before it
+    signs, from the documents and the state files, not from this command's output.
 
 LIMITS, stated:
   * may_reboot is a local check on the node about to reboot, on that node's own word for what it
@@ -338,6 +341,39 @@ def unwatched(manifest, old, new):
     return sorted(n for n in set(before) & set(after) if n not in watched
                   and {e["label"] for e in before[n]} - {e["label"] for e in after[n]})
 
+
+def check_lockout(manifest, old, new, kind, states, emergency, locked_out):
+    """The rule for a step from document `old` (the one `manifest` commits to) to `new` of `kind`
+    (measurements.transition's answer): the sorted list of every node it locks out, or Refused. Nobody is
+    locked out unnamed. A step that takes no set away reads no state and locks out nobody (None). One that
+    does needs every authorizing peer's state; a node that unlocks or serves and may still run the set that
+    goes (stranded) refuses the step unless it is an emergency; and `locked_out` must name exactly the
+    nodes it locks out: those, and every node that loses a set but neither unlocks nor serves (unwatched:
+    no peer shows what it runs, and it is refused if it comes back on the set that goes). Naming only the
+    latter needs no emergency: nothing they run is being served. Both propose and the signing tool
+    (manifest.py) run this, each from the documents and the state files, never from a proposal's word."""
+    require(isinstance(locked_out, (list, tuple)) and all(isinstance(n, str) for n in locked_out), "the locked-out nodes are a list of node IDs")
+    if kind not in DROPS:
+        require(not states and not locked_out, "--state and --locked-out are read only when the new document takes a set "
+                "away (%s); this one is: %s" % (", ".join(DROPS), kind))
+        return None
+    # A node still running the set that goes would be refused at its next unlock and lease, for good: the
+    # root's signature cannot be taken back. So the peers' records say first that nobody runs it.
+    require(states, "the new document takes a set away (%s): give --state NODE=STATE.json for every node that may authorize, "
+            "so that no node still running it is locked out (rollout retire-ready reads the same files)" % kind)
+    behind = stranded(manifest, old, new, states)
+    require(not behind or emergency, "NOT YET: this %s would lock out %s. Wait until every node is seen up on a set the new "
+            "document keeps, or, if the set that goes must go now, make it an emergency (--emergency) and name each node it "
+            "locks out with --locked-out" % (kind, "; ".join("%s (%s)" % (n, behind[n]) for n in sorted(behind))))
+    everyone = dict(behind, **{n: "it may neither be unlocked nor serve under epoch %d: no peer shows what it runs, and it is "
+                                  "refused if it comes back on the set that goes" % manifest["epoch"] for n in unwatched(manifest, old, new)})
+    named = set(locked_out)
+    require(len(named) == len(locked_out), "--locked-out names a node twice")
+    require(not named - set(everyone), "--locked-out names %s, which this document does not lock out" % ", ".join(sorted(named - set(everyone))))
+    require(not set(everyone) - named, "this %s locks out %s: name each with --locked-out, so that whoever signs it has said so"
+            % (kind, "; ".join("%s (%s)" % (n, everyone[n]) for n in sorted(set(everyone) - named))))
+    return sorted(everyone)
+
 # ---- the command ----
 
 def _read(path, limit=membership.MAX_CHAIN_BYTES):
@@ -469,42 +505,20 @@ def _cmd_propose(args):
     measurements.bind(current, old)
     kind = measurements.transition(old, new, emergency=args.emergency, dropped=args.dropped)
     require(kind != "unchanged", "the new document changes nothing: there is no manifest to propose")
-    states = _states(args.state)
-    checked = {}
-    if kind not in DROPS:
-        require(not states and not args.locked_out, "--state and --locked-out are read only when the new document takes a set "
-                "away (%s); this one is: %s" % (", ".join(DROPS), kind))
-    else:
-        # A node still running the set that goes would be refused at its next unlock and lease, for good: the
-        # root's signature cannot be taken back. So the peers' records say first that nobody runs it.
-        require(states, "the new document takes a set away (%s): give --state NODE=STATE.json for every node that may authorize, "
-                "so that no node still running it is locked out (rollout retire-ready reads the same files)" % kind)
-        behind = stranded(current, old, new, states)
-        why = "; ".join("%s (%s)" % (n, behind[n]) for n in sorted(behind))
-        require(not behind or args.emergency, "NOT YET: this %s would lock out %s. Wait until every node is seen up on a set the new "
-                "document keeps, or, if the set that goes must go now, propose it with --emergency and name each node it "
-                "locks out with --locked-out" % (kind, why))
-        named = set(args.locked_out)
-        require(not named - set(behind), "--locked-out names %s, which this document does not lock out"
-                % ", ".join(sorted(named - set(behind))))
-        require(not set(behind) - named, "this emergency locks out %s: name each with --locked-out, so that the operator who "
-                "signs it has said so" % why)
-        checked = {"locked_out": sorted(behind), "not_seen": unwatched(current, old, new)}
+    locked = check_lockout(current, old, new, kind, _states(args.state), args.emergency, args.locked_out)
     issued = args.issued_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     proposal = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current),
                     policy_version=measurements.version(new), issued_at=issued)
     membership.validate(proposal)
     measurements.bind(proposal, new)
     text = "%(transition)s: UNSIGNED manifest for the root to sign (nothing here signs)\n" + json.dumps(proposal, indent=2, sort_keys=True)
-    if checked.get("locked_out"):
+    if locked:
         text += ("\nLOCKS OUT %s: once this is signed and delivered, each is refused its next unlock and lease until it boots an "
                  "image the new document approves; one that cannot is opened with its recovery key at the console "
-                 "(KERNEL-UPDATE.md, \"If something goes wrong\")" % ", ".join(checked["locked_out"])).replace("%", "%%")
-    if checked.get("not_seen"):
-        text += ("\nNOT CHECKED: %s neither unlocks nor serves under this epoch, so no peer shows what it runs; it will be "
-                 "refused if it comes back on the set that goes" % ", ".join(checked["not_seen"])).replace("%", "%%")
+                 "(KERNEL-UPDATE.md, \"If something goes wrong\")" % ", ".join(locked)).replace("%", "%%")
     return dict({"transition": kind, "unsigned_manifest": proposal, "signs_over": "regalia-membership/v1\\0 + canonical JSON of unsigned_manifest",
-                 "follows": _summary(current, anchored, args.tcti)}, **checked), text
+                 "follows": _summary(current, anchored, args.tcti), "emergency": args.emergency},
+                **({} if locked is None else {"locked_out": locked})), text
 
 
 def _cmd_may_reboot(args):
@@ -575,7 +589,8 @@ def main(argv=None):
     c.add_argument("--state", action="append", default=[], metavar="NODE=STATE.json",
                    help="a node's attestation verifier state, one per authorizing node: required when the document takes a set away")
     c.add_argument("--locked-out", action="append", default=[], metavar="NODE",
-                   help="with --emergency: a node still running the set that goes, which this manifest locks out; repeat, name each")
+                   help="a node this manifest locks out (one that may still run the set that goes, which needs --emergency, or one that "
+                   "neither unlocks nor serves); repeat, name each")
     step(c)
     c.set_defaults(run=_cmd_propose)
     c = sub.add_parser("may-reboot", help="may this node reboot into its target image now?")
