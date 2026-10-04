@@ -330,7 +330,9 @@ class Cluster:
     @contextlib.contextmanager
     def _as_booted(self, name):
         """This process as node `name`'s booted system for signkey: its system-phase PCR key and PCR signatures where its
-        units have them bound (/run/systemd), for a node's own step run here (node.define_policy reads the key)."""
+        units have them bound (/run/systemd), for a node's own step run here (node.define_policy reads the key).
+        NOT THREAD-SAFE: it swaps signkey's module paths for this whole process, so never use it while another thread
+        (the unlock threads of recovery steps 4 and 5) may touch signkey (3e's read)."""
         d = self.nodes[name].dir / "pcr"
         saved = signkey.PCR_PUBLIC_KEY_PATH, signkey.PCR_SIGNATURE_PATHS
         signkey.PCR_PUBLIC_KEY_PATH, signkey.PCR_SIGNATURE_PATHS = str(d / "tpm2-pcr-public-key.pem"), (str(d / "tpm2-pcr-signature.json"),)
@@ -673,7 +675,12 @@ class Cluster:
             return
         if not any(other != name and self.running(other) and membership.may(self.manifest, other, "authorize") for other in self.nodes):
             return
-        if not until(lambda: self.node(name).store().load()["epoch"] == self.manifest["epoch"], 180, 2):
+        def epoch():
+            try:
+                return self.node(name).store().load()["epoch"]
+            except membership.Refused:                # a read during its own restore: asked again (3e's read)
+                return None
+        if not until(lambda: epoch() == self.manifest["epoch"], 180, 2):
             raise RuntimeError("%s, started at epoch %d, did not take epoch %d by its sync" % (name, held, self.manifest["epoch"]))
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
