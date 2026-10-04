@@ -93,9 +93,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   `enrol entry` file from an edited copy. A mismatch is caught by that node's `enrol check`, but only
   after the root has signed, so the cost is redoing the genesis, not a silent acceptance. Until then the
   operator carries the files and reads the printed diff.
-- **Card attestation is checked by digest only** (#400). The consuming side checks the digests of the
-  cards' attestation certificates. "Attested" rests on the root's signature over the producer's own
-  verification. The certificates are kept on the ceremony disc for a manual re-check.
+- **Card attestation: not built** (#400). Nothing yet produces the YubiKeys' OpenPGP attestation
+  certificates (`ykman openpgp keys attest`). The card record's `attestation_sha256` values are
+  placeholders in the test vectors, so "attested" has no certificate behind it anywhere yet. When it is
+  built, the attestation will show the touch policy ("fixed"), the key source, the serial and the
+  fingerprint. OpenPGP has **no PIN-policy attestation**, so "PIN always" stays a recorded setting.
 - **The card record has no freshness check** (#403). Any record the pinned root has ever signed is
   accepted, so after a card replacement an older record would bring back the retired cards' keys. Until
   then the operator checks the printed session and time against the ceremony sheet. It must be closed
