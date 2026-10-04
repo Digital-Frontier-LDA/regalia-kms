@@ -1663,6 +1663,40 @@ class RealCheckout(unittest.TestCase):
             self.checkout.check_config()
         self.assertIn("sets core.pager, include.path, which a clone does not", str(caught.exception))
 
+    def test_neither_the_signer_s_global_config_nor_git_variables_reach_git(self):
+        """regalia-kms-24 on the limitations list: provenance read the signer's global and system configuration, and
+        took GIT_* from the environment. A filter defined there would run under `git status`; a GIT_DIR would read
+        another repository."""
+        marker = os.path.join(self.d, "..", os.path.basename(self.d) + ".global-ran")
+        self.addCleanup(lambda: os.path.exists(marker) and os.unlink(marker))
+        home = tempfile.mkdtemp()                                           # the signer's HOME: ~/.gitconfig and XDG's git/config
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, ".config", "git"))
+        for glob in (os.path.join(home, ".gitconfig"), os.path.join(home, ".config", "git", "config")):
+            with open(glob, "w") as f:
+                f.write("[filter \"g\"]\n\tclean = touch %s; cat\n" % marker)
+        with open(os.path.join(self.d, ".git", "info", "attributes"), "w") as f:
+            f.write("go.mod filter=g\ngo.sum filter=e\n")                 # one filter per path: the last named would win
+        other = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other, True)
+        subprocess.run(["git", "init", "-q", other], check=True, capture_output=True)
+        planted = {"HOME": home, "XDG_CONFIG_HOME": os.path.join(home, ".config"), "GIT_DIR": os.path.join(other, ".git"),
+                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "filter.e.clean", "GIT_CONFIG_VALUE_0": "touch %s; cat" % marker}
+        os.utime(os.path.join(self.d, "go.mod"), (1, 1))
+        bare = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        subprocess.run(["git", "-C", self.d, "-c", "safe.directory=*", "status", "--porcelain"], capture_output=True,
+                       env=dict(bare, HOME=home, XDG_CONFIG_HOME=os.path.join(home, ".config")))
+        self.assertTrue(os.path.exists(marker), "the premise: a filter in the signer's ~/.gitconfig runs under git status")
+        os.unlink(marker)
+        for name in ("go.mod", "go.sum"):                                    # both filters due again under status
+            os.utime(os.path.join(self.d, name), (2, 2))
+        head = subprocess.run(["git", "-C", self.d, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        with mock.patch.dict(os.environ, planted):
+            self.checkout.check_config()
+            self.assertTrue(self.checkout.clean())
+            self.assertEqual(self.checkout.head(), head)                         # this checkout's, not GIT_DIR's (which has none)
+        self.assertFalse(os.path.exists(marker), "a filter from the global configuration or GIT_CONFIG_* ran")
+
     def test_go_release_is_the_toolchain_line_else_the_go_line(self):
         def release(text):
             with open(os.path.join(self.d, "go.mod"), "w") as f:

@@ -1014,15 +1014,24 @@ CLONE_CONFIG = re.compile(r"core\.(repositoryformatversion|filemode|bare|logallr
 
 class Checkout:
     """The repository at `root` (default: the one this file is in), read with git as build-initrd.sh reads it: trusted
-    at exactly this path (safe.directory), no index lock taken, and no fsmonitor or hook of the tree's own run."""
+    at exactly this path (safe.directory), no index lock taken, and no fsmonitor or hook of the tree's own run. Git
+    reads neither the signer's global nor the system configuration, and no GIT_* variable of the caller's environment
+    reaches it (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT/KEY_n/VALUE_n would redirect it or add
+    configuration): only the checkout's own, which check_config holds to CLONE_CONFIG."""
 
     def __init__(self, root=REPO_ROOT, run=subprocess.run):
         self.root, self.run = root, run
 
+    @staticmethod
+    def _env():
+        env = {k: v for k, v in _clean_env().items() if not k.startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+        return env
+
     def _git(self, *argv):
         try:
             done = self.run(["git", "-c", "safe.directory=" + self.root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-                             "--no-optional-locks", "-C", self.root] + list(argv), capture_output=True, env=_clean_env())
+                             "--no-optional-locks", "-C", self.root] + list(argv), capture_output=True, env=self._env())
         except OSError as error:
             raise Refused("this checkout cannot be read with git (%s): sign from a clone at the build's commit" % error.strerror)
         require(done.returncode == 0, "%s is not a git checkout git can read: sign from a clone at the build's commit" % self.root)
