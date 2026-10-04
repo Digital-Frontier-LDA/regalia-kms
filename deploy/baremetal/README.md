@@ -387,6 +387,19 @@ commits to: the manifest's `policy_version` is a digest of the document (174 bit
 peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
 restored disk cannot roll back: the epoch is anchored in the TPM).
 
+**A node keeps documents by digest and judges each epoch by its own (#332).**
+- The documents sit side by side in `<state_dir>/measurements/<sha256>.json`, immutable.
+- Every reader goes through `measurements.held(store, manifest)`: the attestation verifier, a rolling
+  update's decisions, and the sync server's lease and enrolment answers. It takes the document the CURRENT
+  manifest commits to, and refuses with "epoch N commits to measurements vX, which this node does not hold".
+  There is no other file to fall back to.
+- The document travels with the epoch. A node that receives a manifest naming a document it lacks fetches
+  it from the same source (sync's `measurements` request) before committing. A node does not commit an epoch,
+  nor move its TPM anchor to it, without that epoch's document.
+- An operator brings a new document to one place only:
+  - the authority, `authority accept --chain FILE --documents DOC`; or
+  - one node, `python3 -Es -m deploy.baremetal.measurements install --doc DOC --config /etc/regalia/node.json`.
+
 Each node has one accepted set, or two while an update is under way.
 
 **One image, two PCR 11 values.** On a host that boots a unified kernel image, systemd extends PCR 11
@@ -414,8 +427,8 @@ An update is three documents:
    with the PCR-signing key (so the PIN and the disk unseal under it with no reseal), and write the
    CURRENT + NEXT document. `measurements.transition(old, new)` must say `approve`.
 2. **Approve.** The root's operator computes `measurements.version(document)` from the file in hand, at
-   signing time, and the root signs manifest N+1 with that as `policy_version`. Distribute the manifest
-   and the document to all three nodes.
+   signing time, and the root signs manifest N+1 with that as `policy_version`. Give the authority the
+   manifest and the document together (`accept --documents`); sync brings both to every node (#332).
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
@@ -784,7 +797,8 @@ removing only what it can prove it made.
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
   --secure-boot-cert --esp`). It checks all of them before writing: the image goes through `uki.verify`, and
   its PCR 11 must be accepted for this node. Then it writes, in order:
-  - `node.json`, the site configuration and the measurements under `/etc/regalia`;
+  - `node.json` and the site configuration under `/etc/regalia`, and the measurements document into the
+    node's store by digest (`<state_dir>/measurements/`, `regalia-sync`'s, #332);
   - the TPM anchor, the store and the heartbeat counter, as `regalia-sync`;
   - `regalia.unlock-local` and `regalia.wg-boot-key`, sealed to this TPM (PCR 7, and PCR 11 through the
     initrd key) into the ESP's `loader/credentials`. Their SHA-256 and size are journalled for PCR 12.
