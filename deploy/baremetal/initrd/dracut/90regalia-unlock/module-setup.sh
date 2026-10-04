@@ -4,9 +4,11 @@
 # What it puts in the initrd: the unlock client (a password agent, enabled beside systemd-cryptsetup) and
 # its unit, the unit that renders the boot configuration from the signed membership chain (the same
 # binary, -render; #66 B3), the boot mesh unit and its script, the three tools the script runs (ip, wg,
-# nft), the FAT driver the ESP is read with, and one crypttab line. The image is the same for every host:
-# what differs per host comes at boot from the ESP: the measured site document and the two TPM-sealed
-# credentials as system credentials through systemd-stub, and the signed membership chain, verified here.
+# nft), the FAT driver the ESP is read with, one crypttab line, and the membership root it trusts
+# (/usr/lib/regalia/root-key.json, a build input: deploy/baremetal/initrd/build-initrd.sh --root-key, #156).
+# The image is the same for every host: what differs per host comes at boot from the ESP: the measured
+# site document and the two TPM-sealed credentials as system credentials through systemd-stub, and the
+# signed membership chain, verified here.
 #
 # Not included by default: add it with `dracut --add regalia-unlock` (or add_dracutmodules+=).
 #
@@ -38,6 +40,10 @@ check() {
     # The module is two files: without its crypttab line the image would build and open nothing.
     if [ ! -s "${moddir:?}/crypttab" ]; then
         derror "regalia-unlock: $moddir/crypttab is missing: install the whole module directory"
+        return 1
+    fi
+    if [ ! -s "${dracutsysrootdir-}/usr/lib/regalia/root-key.json" ]; then
+        derror "regalia-unlock: /usr/lib/regalia/root-key.json is missing: the image would trust no membership root"
         return 1
     fi
     # The client and its unit come from the host separately. The client stays for the whole initrd phase
@@ -75,6 +81,7 @@ installkernel() {
 install() {
     inst_multiple regalia-unlock wg nft ip sed cat sleep
     inst_simple /usr/lib/regalia/wg-boot
+    inst_simple /usr/lib/regalia/root-key.json
     for unit in regalia-boot-render.service regalia-unlock.service regalia-wg-boot.service; do
         inst_simple "${systemdsystemunitdir:?}/$unit"
     done

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # build-initrd.sh — build the KMS host initrd REPRODUCIBLY, from pinned inputs (regalia-kms#248).
 #
-#   sudo deploy/baremetal/initrd/build-initrd.sh --snapshot 20261003T121500Z --out DIR [--go GO] [--epoch N] [--keyring FILE]
+#   sudo deploy/baremetal/initrd/build-initrd.sh --snapshot 20261003T121500Z --root-key ROOT-KEY.json --out DIR
+#                                               [--go GO] [--epoch N] [--keyring FILE]
 #
 # Every builder runs this itself, on its own machine, from its own clone of the repository at the agreed
 # commit, and never copies another builder's initrd, client or script: the image's build record carries the
@@ -18,6 +19,10 @@
 #   --snapshot TIME   one snapshot.debian.org timestamp: Debian 13's main suite, its updates and its
 #                     security suite, as they were at that time (so every builder gets the same versions)
 #   --epoch N         SOURCE_DATE_EPOCH, every timestamp in the image (default: the snapshot's time)
+#   --root-key FILE   the membership root the initrd trusts (#156), as the ceremony record gives it: canonical
+#                     JSON (membership.canonical), one key, or a list for a root rotation's overlap
+#                     (membership.root_entries). Refused when it is not already canonical: nothing rewrites it,
+#                     so the image's /usr/lib/regalia/root-key.json is the record's bytes
 #   PACKAGES below    the root tree dracut runs in: nothing else, so nothing else can reach the initrd
 #
 # THE ENVIRONMENT is not an input: the caller's locale, time zone, umask and variables never reach the
@@ -42,6 +47,7 @@ CALLER_GO="$(command -v go || true)"
 CALLER_GOPROXY="${GOPROXY:-}" CALLER_HTTPS_PROXY="${HTTPS_PROXY:-${https_proxy:-}}"
 export LC_ALL=C TZ=UTC PATH="/usr/sbin:/usr/bin:/sbin:/bin"
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+HERE="$REPO"          # the repository root: the module path deploy.baremetal is imported from
 cd "$REPO"
 SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
@@ -52,7 +58,7 @@ REPO_FILES=("$SCRIPT" deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh de
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
 die(){ echo "build-initrd: $*" >&2; exit 2; }
-SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING=""
+SNAPSHOT="" EPOCH="" OUT="" GO="$CALLER_GO" KEYRING="" ROOT_KEY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --snapshot) SNAPSHOT="${2:-}"; shift 2 ;;
@@ -60,7 +66,8 @@ while [ $# -gt 0 ]; do
     --out) OUT="${2:-}"; shift 2 ;;
     --go) GO="${2:-}"; shift 2 ;;
     --keyring) KEYRING="${2:-}"; shift 2 ;;
-    *) die "unknown argument $1 (--snapshot TIME --out DIR [--go GO] [--epoch N] [--keyring FILE])" ;;
+    --root-key) ROOT_KEY="${2:-}"; shift 2 ;;
+    *) die "unknown argument $1 (--snapshot TIME --root-key FILE --out DIR [--go GO] [--epoch N] [--keyring FILE])" ;;
   esac
 done
 [ "$(id -u)" = 0 ] || die "run as root (the root tree is built and chrooted into)"
@@ -70,6 +77,18 @@ SNAPSHOT_EPOCH="$(date -u -d "${SNAPSHOT:0:4}-${SNAPSHOT:4:2}-${SNAPSHOT:6:2}T${
 EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [[ "$EPOCH" =~ ^[0-9]{1,11}$ ]] || die "--epoch must be seconds since 1970"
 [ -n "$OUT" ] || die "--out DIR is required"
+[ -n "$ROOT_KEY" ] && [ -f "$ROOT_KEY" ] && [ -r "$ROOT_KEY" ] || die "--root-key FILE is required: the membership root the initrd trusts (#156)"
+# the root, as the client will read it (membership.LoadRoot): well-formed, and canonical as given
+env -i PATH="$PATH" LC_ALL=C TZ=UTC PYTHONPATH="$HERE" python3 -Ps - "$ROOT_KEY" <<'PY' || die "--root-key $ROOT_KEY is not a membership root in canonical form"
+import sys
+from deploy.baremetal import membership
+raw = open(sys.argv[1], "rb").read(65537)
+value = membership.load(raw, 65536)
+entries = membership.root_entries(value, "--root-key")
+if membership.canonical(value) != raw:
+    raise SystemExit("--root-key is not canonical JSON (sorted keys, no whitespace, no newline); nothing rewrites it")
+print("build-initrd: the membership root: " + ", ".join("%s %s" % (alg, key[:16]) for alg, key in entries))
+PY
 [ -n "$GO" ] && [ -x "$GO" ] || die "no go to launch the pinned toolchain with (put go on PATH, or --go FILE)"
 for t in mmdebstrap git python3 gpgv curl dpkg-deb; do command -v "$t" >/dev/null || die "$t is required"; done
 python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is required (the inventory and its check, deploy/baremetal/uki.py)"
@@ -128,6 +147,7 @@ env -i PATH="$PATH" LC_ALL=C TZ=UTC SOURCE_DATE_EPOCH="$EPOCH" mmdebstrap --vari
 
 install -D -m 0755 "$W/regalia-unlock" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
+install -D -m 0644 "$ROOT_KEY" "$ROOT/usr/lib/regalia/root-key.json"      # the module installs it (#156)
 install -m 0644 deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service \
   deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
@@ -193,6 +213,7 @@ for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
   echo "schema=$SCHEMA"; echo "commit=$COMMIT"; echo "go=$GO_VERSION"; echo "snapshot=$SNAPSHOT"; echo "source_date_epoch=$EPOCH"
   echo "suite=$SUITE"; echo "kernel=$KVER"; echo "dracut=$DRACUT_VERSION"; echo "packages_requested=$PACKAGES"
   echo "client_sha256=$(sha256sum < "$W/regalia-unlock" | cut -d' ' -f1)"
+  echo "root_key_sha256=$(sha256sum < "$ROOT_KEY" | cut -d' ' -f1)"
   for f in "${REPO_FILES[@]}"; do echo "file=$f $(sha256sum < "$f" | cut -d' ' -f1)"; done
   echo "packages_sha256=$(sha256sum < "$W/packages.txt" | cut -d' ' -f1)"
   echo "initrd_sha256=$(sha256sum < "$W/stage/initrd.img" | cut -d' ' -f1)"
