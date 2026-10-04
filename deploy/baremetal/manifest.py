@@ -72,7 +72,26 @@ operator copied onto the ceremony sheet (regalia-ceremony#119; the format `enrol
 fingerprint. The finished envelope must pass membership.accept(None, ...); the record line carries "genesis": true.
 
 A key in a file is not a signing backend here: the root signs on its token, or from the offline session's
-descriptor, and every step above runs either way."""
+descriptor, and every step above runs either way.
+
+CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
+  * The node entries `propose --genesis` takes are UNSIGNED files (#399). It checks their shape, the bench serials and
+    that no key is reused, but cannot tell an entry from the node from one edited on the way. Each node's `enrol check`
+    compares its entry field by field with its own bundle and refuses a mismatch, but only AFTER the root signed: a
+    tampered entry costs a redone genesis, not a silently accepted node. Until #399, the operator carries each entry
+    from the node's console and reads every field of the printed proposal.
+  * The owner's and the release card's keys come only from the card ceremony's record, verified under the pinned root
+    and required to be the newest the root signed on THIS laptop's signing record (cardrecord.py, #403): see its
+    limitations (attestation not yet captured, #400; the record is laptop-scoped and not hash-chained, #405, #406).
+  * Signing needs the laptop's state directory marked by the card ceremony (regalia-signing-state.json): this tool
+    never writes the marker, and until regalia-ceremony#111's writer lands, no real laptop can sign here. The marker
+    and log path is unit-tested only; nothing end to end runs `manifest sign` with a state directory before the
+    first-ceremony rehearsal (#297). A multi-key root pin (a rollover) is refused for signing: not modelled.
+  * The bench tokens refused are a hand-kept list (membership.BENCH_TOKENS): a new bench token must be added there.
+  * The genesis policy is GENESIS_POLICY's defaults plus two lifetime flags; the proposed D31 director party is not
+    modelled.
+  * Run only with software keys, software TPMs and CI: no ceremony has run, and nothing here has signed on the
+    production hardware yet (#297)."""
 import argparse
 import datetime
 import getpass

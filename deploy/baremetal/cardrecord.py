@@ -29,6 +29,22 @@ Returns {"owners": {serial: key}, "roles": {role: serial}, "release_key": key, "
 "of": M, "digest": ..., "supersedes": ...}.
 
 No node ever reads a card record: a node has no laptop signing record to judge it by.
+
+CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
+  * "attested" has no certificate behind it yet: no producer captures the OpenPGP attestation certificates (the
+    digests exist only in the test vectors), and this side checks them by digest form and distinctness only, not
+    chained to Yubico's root nor matched to the owner keys (#400, waiting on a real attestation from the bench).
+  * "Newest" is by THIS laptop's signing record, not by every use of the root: the root is a Shamir software key
+    (D28), and one reconstructed elsewhere with a fresh state directory signs a valid "sequence 1" (the card
+    ceremony's --first-card-record makes that visible, regalia-ceremony#111).
+  * The signing record is not hash-chained (plain fsync'd 0600 lines, as manifest signing's): a deleted line, a cut
+    tail or a state directory restored from an older backup is not seen here. The backstop is the ceremony sheet
+    (`card record N of M, digest ...`, printed by propose --genesis); #405 would anchor the newest digest in the
+    root-signed manifest. A lost state directory refuses every later genesis until #406's rebuild exists.
+  * The release key's OpenPGP fingerprint and the SSH signers' keys are checked for form and distinctness, not tied to
+    the cards (the producer reads them from the cards).
+  * The bench YubiKeys refused are a hand-kept list (membership.BENCH_YUBIKEYS).
+  * Verified against the producer's signed vectors and records made in tests; no ceremony has produced a real one yet.
 """
 import base64
 import hashlib

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""#76 (Phase 16): a node that failed for good is replaced, and its retired hardware is refused, on three nodes and
-the revocation authority (e2e/lib/threenode.py with authority=True: each node its real services in its own
-namespace against its own TPM, the authority its real `serve`).
+"""#76 (Phase 16): a node that failed for good is replaced, and its retired hardware is refused, on three nodes
+(e2e/lib/threenode.py, v4 since #199: each node its real services in its own namespace against its own TPM, the nodes
+signing their own heartbeats; no authority host).
 
     REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-replace.py
 
@@ -11,11 +11,11 @@ only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is 
 What main models (deploy/baremetal/replacement.py), end to end: ONE root-signed manifest enrolls the new node c2
 with new identities and keeps c as RETIRED, a tombstone whose identities are never enrolled again.
 
-  1  three nodes and the authority, every node leased
-  2  PoC 16.1-16.4: c fails for good; c2 (a new TPM, new WireGuard keys, a new HSM serial) replaces it in one
-     root-signed manifest (measurements.check_replacement), which the authority takes (`accept`) and publishes,
-     and a and b take from it by sync. The same replacement signed by the revocation key, or reusing c's EK, is
-     refused
+  1  three nodes, every node leased
+  2  PoC 16.1-16.4: c fails for good; c2 (a new TPM, new WireGuard keys and signing key, a new HSM serial) replaces
+     it in one root-signed manifest (measurements.check_replacement), given to a; b takes it from a by sync, and a
+     and b sign its heartbeat. The same replacement signed by the owner (a revocation quorum), or reusing c's EK,
+     is refused
   3  c2 enrolled through a and b (their real contribution stores and verifiers): with only a up it opens its
      volume through a's keyslot, then with only b up through b's; it holds a lease
   4  c2 provides bootstrap: b, with only c2 up, opens its volume through c2's keyslot
@@ -26,8 +26,8 @@ with new identities and keeps c as RETIRED, a tombstone whose identities are nev
      cover it (test_poc_16_5_the_old_hardware_is_refused_by_every_decision).
 
 Not here: restoring the service keys onto c2's HSM (the DKEK domain, #64); `enrol --replace` as the operator's
-command (#279, merged: the fixture enrolls c2 as it enrolls every node, and starts its heartbeat counter one below
-the sequence `authority status` reports, not at a heartbeat c2 verified as #279 does); the physical rehearsal.
+command (#279, merged: the fixture enrolls c2 as it enrolls every node, and starts its heartbeat counter at 0, so it
+takes the nodes' current heartbeat by sync, not at a heartbeat c2 verified as #279 does); the physical rehearsal.
 """
 import os
 import pathlib
@@ -72,13 +72,12 @@ def refused(fn, *args):
 def scenario(cluster):
     names = ["a", "b", "c"]
 
-    header("1  three nodes and the authority, every node leased")
+    header("1  three nodes, every node leased")
     cluster.build()
     for name in names:
         cluster.disk(name)
     for name in names:
         cluster.enrol(name)
-    cluster.start(AUTH)
     for name in names:
         cluster.start(name, SERVICES)
     for name in names:
@@ -89,23 +88,27 @@ def scenario(cluster):
     cluster.add_node("c2")
     current, current_document = cluster.manifest, cluster.document
     root = cluster.signed(current)["signature"]["key"]
-    # through the gate that decides (membership.accept_chain, as every Store and the authority's accept run it)
-    by_revocation, _ = cluster.replacement("c", "c2", same_policy=True)       # all a revocation may not change, but the nodes
-    said = refused(membership.accept_chain, None, cluster.chain + [cluster.signed(by_revocation, signer="revocation")], root)
-    ok(said is not None and "cannot add or remove nodes" in said,
-       "the same replacement signed by the revocation key is refused: only the root enrolls (%s)" % (said or "accepted")[:90])
+    # through the gate that decides (membership.accept_chain, as every Store runs it)
+    by_quorum, _ = cluster.replacement("c", "c2", same_policy=True)           # all a quorum may not change, but the nodes
+    said = refused(membership.accept_chain, None, cluster.chain + [{"manifest": by_quorum, "signatures": [cluster.owner_signature(by_quorum)]}], root)
+    # refused whichever rule it meets first (it names c2 in the signer rules, and adds a node): a quorum enrolls nobody
+    ok(said is not None and "a revocation quorum cannot" in said,
+       "the same replacement signed by the owner (a revocation quorum, #199) is refused: only the root enrolls (%s)" % (said or "accepted")[:90])
+    # (the same refusal for a two-node quorum, a's and b's signing keys: membership's own unit test,
+    # tests/test_baremetal_membership_v4.py, test_a_quorum_only_restricts_and_never_touches_the_signers, its "a node added" case, signed by a and b)
     reusing, _ = cluster.replacement("c", "c2", reuse=("c", ("ek_name",)))
     said = refused(membership.accept_chain, None, cluster.chain + [cluster.signed(reusing)], root)
     ok(said is not None and "ek_name of c2 is already used (ek_name of c)" in said,
        "root-signed, one giving c2 the retired c's EK is refused: the tombstone keeps it (%s)" % (said or "accepted")[:90])
     since = time.time()
-    cluster.replace("c", "c2")
-    published = until(lambda: membership.load((cluster.auth.state / "chain.json").read_bytes(), 1 << 20)[-1]["manifest"]["epoch"] == 2, 60, 2)
-    ok(published is True, "the authority took the replacement (accept) and published epoch 2")
-    took = until(lambda: all(any(e.get("event") == "sync-apply" and e.get("peer") == "@authority" and e.get("outcome") == "ALLOW"
-                                 and e.get("at", 0) >= since for e in cluster.trail(name)) and cluster.node(name).store().load()["epoch"] == 2
-                             for name in ("a", "b")), 120, 3)
-    ok(took is True, "a and b took epoch 2 from the authority by sync: c RETIRED, c2 ACTIVE")
+    cluster.replace("c", "c2")                       # #199: the root's envelope given to a, as advance() gives an epoch
+    took = until(lambda: all(cluster.node(name).store().load()["epoch"] == 2 for name in ("a", "b"))
+                 and any(e.get("event") == "sync-apply" and e.get("peer") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
+                         for e in cluster.trail("b")), 120, 3)
+    ok(took is True, "the root's replacement given to a, b took epoch 2 from a by sync: c RETIRED, c2 ACTIVE")
+    fresh = cluster.fresh(["a", "b"], 2, timeout=300)
+    ok(all(fresh.values()), "a and b sign epoch 2's heartbeat themselves (c2, not yet running, joins later) (%s)" % fresh,
+       cluster.beat_events(["a", "b"]))
 
     header("3  c2 enrolled through a and b, opens its volume through each, and is leased")
     for name in ("a", "b"):                           # the fixture writes their stores: their services stop meanwhile
@@ -188,7 +191,7 @@ def main():
         print("three-node-replace: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work, authority=True)
+    cluster = threenode.Cluster(work)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
@@ -196,7 +199,7 @@ def main():
         ok(False, "the scenario ran to its end", traceback.format_exc()[-1500:])
         for name in list(cluster.nodes):
             print("----- %s sync\n%s\n----- %s admission\n%s" % (name, cluster.journal(name, "sync"), name, cluster.journal(name, "admission")))
-        print("----- authority serve\n%s" % cluster.journal(AUTH, "serve"))
+        print("----- heartbeat events\n%s" % cluster.beat_events(list(cluster.nodes), last=8))
     finally:
         cluster.close()
         sh("rm", "-rf", "--", str(work), check=False)
