@@ -71,6 +71,9 @@ ATTRIBUTES = 0x00040032
 TOOL_ATTRIBUTES = "fixedtpm|fixedparent|sensitivedataorigin|sign"
 # how the PCR public key is loaded to check its signature (systemd's attributes for it): decrypt | sign | userWithAuth
 PCR_KEY_ATTRIBUTES, PCR_KEY_TOOL_ATTRIBUTES = 0x00060040, "decrypt|sign|userwithauth"
+# systemd-stub's copy of the running image's .pcrpkey: uki.py requires it to be the system-phase PCR key, and it is
+# measured into PCR 11. The one place the signing key, the anchor and the heartbeat counter (#242) take the key from.
+PCR_PUBLIC_KEY_PATH = "/run/systemd/tpm2-pcr-public-key.pem"
 PCR_SIGNATURE_PATHS = ("/run/systemd/tpm2-pcr-signature.json", "/etc/systemd/tpm2-pcr-signature.json", "/usr/lib/systemd/tpm2-pcr-signature.json")
 P256_ORDER = membership.P256_ORDER
 
