@@ -19,10 +19,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 ## Membership, heartbeats and recovery (deploy/baremetal)
 
-- **The authority host is being retired (#386).** Until #386 merges, `authority.py` and its units are
-  still in the tree, and MEMBERSHIP-RECOVERY.md still names "the authority's" chain for the
-  crash-window recovery. They are not part of the production design: heartbeats and revocations are
-  signed by 2 of {the three nodes, the owner} (#199).
+- **The root's permissive epochs reach the cluster by hand** (#386 retired the authority host).
+  An image approval, or a replacement, signed by the root on the offline laptop, is given to ONE
+  running node with `deliver` (root, at its console), and the others pull it. Nothing carries them
+  automatically. In the three-node scenarios, an owner-signed epoch is committed by the harness into
+  the seed's store with its services stopped (`advance(signer="owner")`). On a host, the owner's
+  revocation goes through `revoke.py import`, which the scenarios exercise separately
+  (`revoke_by_owner`).
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
@@ -136,4 +139,3 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 
 - rolling-threenode has an intermittent failure on its audit-stream check (fix: #393).
 - `audit_complete` can race trails that are still growing (#409), and fail on a count that differs by one.
-- The theft scenario's step-8 epoch check can pass vacuously until #381 lands `moved_by_sync`.
