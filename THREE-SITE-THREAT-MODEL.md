@@ -16,12 +16,16 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 - **A3.** A total outage (all three down) is restored by one manual recovery at one node, after which
   A1/A2 restore the rest.
 - **A4.** No single provider, datacenter, network path or device failure stops the cluster from
-  serving (one serving site at a time under fencing; the others are standby) **provided the fencing
-  authority is reachable from a surviving site.** Every site needs a short-lived lease, and recovery
-  does not grant one (FENCING.md), so the authority must sit in a failure domain independent of both
-  providers (its own host outside providers X and Y, with its state backed up off-host). If it is
-  lost, the surviving site stops serving at lease expiry until the authority is restored: an explicit
-  availability limit, not a gap.
+  serving (one serving site at a time under fencing; the others are standby). Every site needs a
+  short-lived activation lease, and recovery does not grant one (FENCING.md). **Decided (ADR-0002 D28 and #351, 2026-10-04), not
+  built:** the lease's issuer is **majority agreement**, not a separate authority host: an activation lease
+  needs two signatures from {node a, node b, node c, the owner}, two of the three servers being the normal
+  path and the owner's touch-required key the recovery path, so a total-outage recovery (one server
+  opened by hand plus the operator) can issue one, the owner alone cannot, and no lease may overlap
+  another site's. A partition minority cannot activate itself. Two compromised servers could, the same
+  bound D28 accepts for heartbeats. *Until it is built*, the issuer is `regalia-fence`, a single key
+  that must sit in a failure domain independent of both providers; if it is lost, the surviving site
+  stops serving at lease expiry.
 
 **Security.**
 - **S1.** In unattended bootstrap, no single location holds what unlocks a node's disk: the node's
@@ -86,10 +90,14 @@ baseline) remain authoritative. The secrets and their lifecycles are in
 
 **1. Freshness of restrictive membership updates under partition.** A newer manifest proves only
 *ordering*, not that no restrictive update happened since. Freshness therefore comes from a
-**heartbeat** the revocation authority signs: it carries the current manifest epoch, a monotonic
+**heartbeat**: it carries the current manifest epoch, a monotonic
 sequence number, an issue time and an **expiry** (at most 24 hours after issue under a v1 manifest; a
 v2 manifest states the bound, `heartbeat_max_lifetime_s`, root-signed, from one hour to seven days). A peer authorizes a
-bootstrap only while it holds an unexpired heartbeat for its manifest's epoch, and it checks:
+bootstrap only while it holds an unexpired heartbeat for its manifest's epoch. *Who signs it:* today the
+revocation authority's single key (`deploy/baremetal/authority.py`); **decided (ADR-0002 D28 and #351, 2026-10-04), not built
+(#199):** two signatures from {node a, node b, node c, the owner}, each node signing with a TPM key usable
+only under the approved image's PCR policy, the owner with any of the owner's YubiKey 5 approval keys, and
+no separate authority host. The peer checks:
 - the expiry against **authenticated time** (NTS-authenticated NTP, with the TPM clock as a monotonic
   floor between syncs). FENCING.md already requires authenticated time for the same reason: an
   attacker who controls the clock can make an old proof look current;
@@ -107,7 +115,8 @@ global", and only as strong as the peers' authenticated time.
 **3. Bootstrap eligibility versus service signing authority.** Different capabilities with different
 issuers. ACTIVE (or MAINTENANCE) membership makes a node *eligible to be unlocked*; ACTIVE makes a
 peer *eligible to authorize*; neither makes a node a signer. Serving needs the fencing authority's
-lease (FENCING.md: one independent signer, no overlapping sites); key use needs the HSM's own
+lease (FENCING.md: no overlapping sites; today one independent signer, decided to become two of {a, b, c,
+the owner}, #351, not built); key use needs the HSM's own
 authorization. Peer runtime leases (#74) must not become a second activation authority.
 
 ## Device profiles and their assurance

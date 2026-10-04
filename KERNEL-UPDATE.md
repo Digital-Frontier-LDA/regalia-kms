@@ -90,7 +90,7 @@ with the named tools; **NOT BUILT** = no way to do it yet.
 | 2.3 | Compute the document's version from the file in hand, at signing time: `python3 -Es -m deploy.baremetal.rollout version --measurements BOTH.json` | **exists** |
 | 2.4 | Write manifest N+1, unsigned: `python3 -Es -m deploy.baremetal.rollout propose --membership CHAIN.json --root-key HEX --old CURRENT.json --new BOTH.json`. It prints the current manifest with `epoch + 1`, `prev_digest`, and `policy_version` set to that version, and signs nothing | writing the proposal **exists**; signing it is step 2.6 |
 | 2.5 | In the same session, write and sign manifest N+2 for the NEXT-only document (step 5), and keep it back | as 2.4 |
-| 2.6 | Sign with the offline root key | `python3 -Es -m deploy.baremetal.manifest sign --expected-epoch N --signer root --key 'pkcs11:serial=…;token=…;id=…;type=private' --old CURRENT.json --new BOTH.json …`. A proposal that changes the measurements is not signed without the two documents: the tool judges the step itself and never takes the proposal's word for it (#75) signs on the root's Nitrokey (#156); `--chain-out` gives the chain the retiring manifest is proposed from. **NOT BUILT**: no ceremony generates the root key yet (option C on #156: P-256 on its own offline Nitrokey) |
+| 2.6 | Sign with the offline root key | `python3 -Es -m deploy.baremetal.manifest sign --expected-epoch N --signer root --key 'pkcs11:serial=…;token=…;id=…;type=private' --old CURRENT.json --new BOTH.json …`. A proposal that changes the measurements is not signed without the two documents: the tool judges the step itself and never takes the proposal's word for it (#75) signs on the root's Nitrokey (#156); `--chain-out` gives the chain the retiring manifest is proposed from. **NOT BUILT**: no ceremony generates the root key yet. **Decided (ADR-0002 D28, 2026-10-04):** the root is an Ed25519 software key in the offline Shamir set, reconstructed only in the offline signing laptop's RAM for the session and wiped after; `manifest sign` then takes it from the laptop's key tool (`offline-keys --exec`, through a file descriptor, never a path; not built) instead of a PKCS#11 token. The steps 1 to 7 and the typed confirmation stay |
 | 2.7 | Bring manifest N+1 and the document to all three hosts; each commits the manifest (its TPM epoch counter rises) and rebuilds its attestation policy from the document | commit **exists** (`membership.Store`), exchange between nodes **exists** (`convergence.py`); installing the document and reloading the policy on a running host is **NOT BUILT** |
 | 2.8 | Check that all three hold epoch N+1: on each host, `python3 -Es -m deploy.baremetal.rollout epoch --membership CHAIN.json --root-key HEX --tpm-index 0x…` (the TPM epoch counter is read, never advanced; a chain that is not the one the TPM recorded is refused; the TPM read is `--tcti`'s, default `device:/dev/tpmrm0`, the output names it, and a `TPM2TOOLS_TCTI` left in the shell is refused), and compare the three answers | **exists**, one host at a time; nothing collects the three |
 
@@ -170,6 +170,25 @@ ceremony (a ceremony prerequisite).
   falls back and is still unlocked; retirement is refused until every node is on the new image; after
   it, the old image gets no unlock and no lease; a peer's membership restored from before the
   retirement refuses to load.
+- **On three nodes with their real services, in CI** (`e2e/rolling-threenode.py`, #75's tier N; an image is
+  PCR 11, extended after a power cycle). It shows the whole sequence:
+  - CURRENT, then NEXT before it is approved: no key from either peer while the other two serve;
+  - CURRENT and NEXT approved in one epoch, which every node holds;
+  - `may_reboot`, asked as `update apply` asks it (as root in the node's namespace, on leases asked for at that
+    moment, the running set read from the TPM), says yes to one node and WAIT to the others;
+  - each node onto NEXT, unlocked by the real pre-root client through a peer and leased by the real admission
+    service, and vouching for the nodes still on CURRENT;
+  - a rollback to CURRENT under the same epoch, still unlocked;
+  - the retire judged from the peers' real attestation state: refused naming the node still on CURRENT, accepted
+    once every node is seen on NEXT;
+  - after the retire, CURRENT gets no key;
+  - during every reboot the two other nodes are given fresh leases.
+
+  Its limits: PCR 11 is one `tpm2_pcrextend` of the image's name, not systemd-stub measuring a real UKI; `update apply`
+  itself (BootNext, the trial boot, the reset) is not run, only the `may_reboot` question it asks; the epochs and
+  heartbeats come from the fixture, not the revocation authority. The fixture takes the document and its epoch
+  together by stopping every node's services across the change; a host has no such step yet (2.7). Tier Q, real UKIs
+  under OVMF with the firmware's BootNext, is #75's next step.
 - **On one software TPM** (`e2e/pcr-signed-policy-swtpm.sh`): a PIN sealed once opens under the new
   image with no reseal, and does not open without the host key.
 - **On no physical machine.** Nothing here has run on a DL360, a physical TPM, a real UKI or a real
