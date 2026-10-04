@@ -284,9 +284,10 @@ class OnQemu(tub.OnSwtpm):
                     if prompts and self.prompted_after is None:
                         self.prompted_after = time.monotonic() - started
                     elapsed = time.monotonic() - started
-                    if watch and watch(said, elapsed):
+                    text = said.decode(errors="replace") if watch or callable(recovery) else ""   # what boot() returns
+                    if watch and watch(text, elapsed):
                         self.watched.append(elapsed)
-                    typed = recovery and prompts > answered and (recovery is True or recovery(said, elapsed))
+                    typed = recovery and prompts > answered and (recovery is True or recovery(text, elapsed))
                     if typed:
                         answered = prompts
                         time.sleep(1)
@@ -611,6 +612,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
         no_shell(self, said)
+
 
 if __name__ == "__main__":
     unittest.main()
