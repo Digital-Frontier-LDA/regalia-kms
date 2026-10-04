@@ -22,6 +22,18 @@ Refused, by name, unless:
   * ownerauth_recipients and ssh_signers name exactly the owner cards, and no OpenPGP fingerprint twice;
   * every Ed25519 key in it (the two owner keys, the release key, the two SSH keys, the root) is distinct.
 Returns {"owners": {serial: key}, "roles": {role: serial}, "release_key": key, "session": ..., "at": ...}.
+
+CURRENT LIMITATIONS (stated, not hidden; the cross-cutting list is LIMITATIONS.md):
+  * "attested" rests on the root's signature over the producer's own check: the attestation certificates are checked
+    here by digest form and distinctness only, not chained to Yubico's root nor matched to the owner keys (#400). The
+    certificate files are on the ceremony disc for a re-check by hand.
+  * No freshness: `at` and `session` are returned and printed, not judged. Any record the pinned root ever signed is
+    accepted, so an OLDER card record (from before a card was replaced) would give its old keys (#403). The operator
+    checks the printed session and time against the ceremony sheet.
+  * The release key's OpenPGP fingerprint and the SSH signers' keys are checked for form and distinctness, not tied to
+    the cards (the producer reads them from the cards).
+  * The bench YubiKeys refused are a hand-kept list (membership.BENCH_YUBIKEYS).
+  * Verified against the producer's signed vectors and records made in tests; no ceremony has produced a real one yet.
 """
 import base64
 import hashlib
