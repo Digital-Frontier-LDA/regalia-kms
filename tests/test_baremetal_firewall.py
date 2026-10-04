@@ -390,6 +390,22 @@ class AuthorityHost(unittest.TestCase):
         with open(os.path.join(d, firewall.AUTHORITY_RULES)) as f:
             self.assertEqual(f.read(), self.text())
 
+    def test_what_apply_installs_is_what_the_boot_include_loads_and_nothing_half_written_is(self):
+        """48 on #341: loaded at boot by /etc/nftables.conf's include "/etc/nftables.d/*.nft" (README): the installed
+        name matches it, and the staged file, written in the same directory, never can."""
+        import fnmatch
+        self.assertTrue(fnmatch.fnmatch(firewall.AUTHORITY_RULES, "*.nft"))
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        seen = []
+
+        def run(argv, **kw):
+            seen.extend(n for n in os.listdir(d) if fnmatch.fnmatch(n, "*.nft"))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        firewall.apply_authority(self.text(), run, d)
+        self.assertEqual(seen, [])                      # while nft checks and loads it, the include would pick up nothing new
+        self.assertEqual(os.listdir(d), [firewall.AUTHORITY_RULES])
+
     @unittest.skipUnless(shutil.which("nft"), "nft not installed")
     def test_nft_accepts_the_syntax(self):
         r = subprocess.run(["nft", "-c", "-f", "-"], input=self.text(), capture_output=True, text=True)

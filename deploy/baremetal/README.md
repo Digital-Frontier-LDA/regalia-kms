@@ -335,7 +335,9 @@ python3 -Es deploy/baremetal/network_probe.py site.json --role client --source-i
 ```
 
 (`monitoring`, `admin`, `unauthorized` likewise). `e2e/baremetal-firewall-netns.sh` runs the whole
-matrix in network namespaces in CI. Never load the ruleset on a workstation: it is default-deny.
+matrix in network namespaces in CI (elsewhere it refuses unless `REGALIA_NETNS_HOST_OK=1` on a throwaway host;
+`e2e/authority-firewall-netns.sh` likewise, for the authority's host). Never load the ruleset on a workstation: it is
+default-deny.
 
 ## 4. TPM provisioning
 
@@ -997,7 +999,15 @@ it (`service_mesh.authority`).
   `admin_cidrs`, NTS-KE and NTP to the `time.nts` networks only, the declared `outbound`, nothing else. Rendering is
   refused unless `time.nts` names exactly `authority.json`'s `time_servers` (chrony and the firewall must name the
   same servers). It is checked with `nft -c`, loaded, and installed as `/etc/nftables.d/regalia-authority.nft`, and
-  run again by `regalia-authority-firewall.path` at every new chain.
+  run again by `regalia-authority-firewall.path` at every new chain. **At boot it is loaded as a node's is, before the
+  network is up:** in `/etc/nftables.conf` keep Debian's `flush ruleset` first, then `include "/etc/nftables.d/*.nft"`,
+  and `systemctl enable nftables.service` (Before=network-pre.target); order `regalia-authority.service` and
+  `regalia-authority-wg-apply.service` after it with the same drop-in a node's KMS takes (`Requires=nftables.service`,
+  `After=nftables.service`). So the host is never open between the network coming up and the unit's first run, and
+  if the chain cannot be verified at boot (the unit refuses), the table installed at the last good run stays loaded.
+  **Names:** no rule opens port 53. chrony resolves the `time.nts` names only through a resolver declared as an
+  `outbound` entry (e.g. `{"name": "dns", "cidr": ..., "proto": "udp", "port": 53}`), or with the names pinned in
+  `/etc/hosts`; a node's table has the same property.
 - **Metrics (#324):** node_exporter on the authority host as on a node: the same drop-in
   (`units/prometheus-node-exporter.service.d/regalia.conf`) and mTLS `web.yml`, scraped as job `regalia-authority`.
   Its one textfile is `authtime.prom` (`/run/regalia-metrics/authtime`, from `regalia-authority.tmpfiles.conf`).

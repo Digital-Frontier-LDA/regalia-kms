@@ -80,6 +80,10 @@ EXTRA = [
      [("up", AUTHORITY_HOST, "1+0x10"), ("node_textfile_mtime_seconds", dict(AUTHORITY_HOST, file=AUTHTIME), "0+60x10")], []),
     ("RegaliaLeaseMetricsMissing", "the authority's host has no lease.prom, and needs none", 420,
      [("up", AUTHORITY_HOST, "1+0x10"), ("node_textfile_mtime_seconds", dict(AUTHORITY_HOST, file=AUTHTIME), "0+60x10")], []),
+    ("RegaliaTimeNotAuthenticated", "the authority's host: its time is watched as a node's", 180,
+     [("regalia_time_authenticated", dict(AUTHORITY_HOST, cause="chrony_unreachable"), "0+0x10")], [dict(AUTHORITY_HOST, cause="chrony_unreachable")]),
+    ("RegaliaChronyLatched", "the authority's host: its chrony latch pages as a node's", 120,
+     [("regalia_chrony_latch_set", AUTHORITY_HOST, "1+0x5")], [AUTHORITY_HOST]),
     ("RegaliaNodeExporterDown", "the authority's host cannot be scraped", 300,
      [("up", AUTHORITY_HOST, "0+0x10")], [AUTHORITY_HOST]),
     # the authtime file missing on one node only: that node alone
