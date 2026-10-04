@@ -29,6 +29,10 @@ const (
 
 var anchorAttributes = map[string]uint32{"counter": 0x00060012, "base": 0x00062002, "slot": 0x00060002}
 
+// policyAttributes are the counter's and the slots' masks when they are written under a policy (POLICYWRITE,
+// #242 B): the node's approved-image policy, not the owner, writes them. The base never takes this mask.
+var policyAttributes = map[string]uint32{"counter": 0x0006001A, "slot": 0x0006000A}
+
 // Unusable is membership.Unusable: the TPM answered, and what it holds cannot serve as this node's anchor.
 // Distinct from a plain Refused (the TPM did not answer, or a read failed on an index that is as it should be).
 type Unusable struct{ Reason string }
@@ -42,11 +46,12 @@ func requireAnchor(condition bool, format string, args ...any) error {
 	return &Unusable{Reason: fmt.Sprintf(format, args...)}
 }
 
-// NV is what the reader needs of a TPM: the NV indices it lists, an index's public area, and its bytes
-// (read with the index's own authorization, as tpm2_nvread <index> -C <index> does).
+// NV is what the reader needs of a TPM: the NV indices it lists, an index's public area (its attributes,
+// its size and its authPolicy, empty when it has none), and its bytes (read with the index's own
+// authorization, as tpm2_nvread <index> -C <index> does).
 type NV interface {
 	Defined() (map[uint32]bool, error)
-	Public(index uint32) (attributes uint32, size int, err error)
+	Public(index uint32) (attributes uint32, size int, authPolicy []byte, err error)
 	Read(index uint32, size int) ([]byte, error)
 }
 
@@ -54,27 +59,28 @@ type highWater struct {
 	nv          NV
 	index, base uint32
 	slots       [2]uint32
+	policy      []byte // this node's approved-image policy; nil when it has none configured
 }
 
-func newHighWater(nv NV, index uint32) highWater {
-	return highWater{nv: nv, index: index, base: index + 1, slots: [2]uint32{index + 4, index + 5}}
+func newHighWater(nv NV, index uint32, policy []byte) highWater {
+	return highWater{nv: nv, index: index, base: index + 1, slots: [2]uint32{index + 4, index + 5}, policy: policy}
 }
 
 func name(index uint32) string { return fmt.Sprintf("0x%x", index) }
 
-func (h highWater) public(index uint32) (uint32, int, error) {
-	attributes, size, err := h.nv.Public(index)
+func (h highWater) public(index uint32) (uint32, int, []byte, error) {
+	attributes, size, authPolicy, err := h.nv.Public(index)
 	if err == nil {
-		return attributes, size, nil
+		return attributes, size, authPolicy, nil
 	}
 	defined, err := h.nv.Defined()
 	if err != nil {
-		return 0, 0, refuse("the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is unavailable (fail closed)")
+		return 0, 0, nil, refuse("the TPM does not answer (tpm2_getcap handles-nv-index failed): the high-water anchor is unavailable (fail closed)")
 	}
 	if !defined[index] {
-		return 0, 0, &Unusable{Reason: fmt.Sprintf("cannot read NV index %s: the high-water anchor is unavailable (fail closed): the index is not defined", name(index))}
+		return 0, 0, nil, &Unusable{Reason: fmt.Sprintf("cannot read NV index %s: the high-water anchor is unavailable (fail closed): the index is not defined", name(index))}
 	}
-	return 0, 0, refuse("cannot read NV index %s: the high-water anchor is unavailable (fail closed): the TPM lists it and did not give it", name(index))
+	return 0, 0, nil, refuse("cannot read NV index %s: the high-water anchor is unavailable (fail closed): the TPM lists it and did not give it", name(index))
 }
 
 func (h highWater) read8(index uint32) (uint64, error) {
@@ -85,11 +91,25 @@ func (h highWater) read8(index uint32) (uint64, error) {
 	return binary.BigEndian.Uint64(data), nil
 }
 
-func asDefined(index uint32, attributes uint32, kind string) error {
-	want := anchorAttributes[kind]
-	if err := requireAnchor(attributes&^nvState == want, "NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be "+
-		"written or read otherwise than this software defines", name(index), attributes&^nvState, want); err != nil {
-		return err
+// asDefined is HighWater._as_defined: the index's attributes are this anchor's, owner-written or, for the
+// counter and the slots, written under a policy that must be this node's approved-image policy (#242 B).
+func (h highWater) asDefined(index uint32, attributes uint32, authPolicy []byte, kind string) error {
+	mask := attributes &^ nvState
+	if written, ok := policyAttributes[kind]; ok && mask == written {
+		if h.policy == nil || !bytes.Equal(authPolicy, h.policy) {
+			held, configured := "(none)", "and this node has none configured"
+			if len(authPolicy) > 0 {
+				held = hex.EncodeToString(authPolicy)
+			}
+			if h.policy != nil {
+				configured = "not " + hex.EncodeToString(h.policy)
+			}
+			return &Unusable{Reason: fmt.Sprintf("the anchor's write policy is not this node's approved-image policy: NV index %s is written by policy %s, %s",
+				name(index), held, configured)}
+		}
+	} else if want := anchorAttributes[kind]; mask != want {
+		return &Unusable{Reason: fmt.Sprintf("NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be "+
+			"written or read otherwise than this software defines", name(index), mask, want)}
 	}
 	if kind == "base" {
 		return requireAnchor(attributes&nvWriteLocked != 0, "base index %s is not write-locked", name(index))
@@ -99,20 +119,20 @@ func asDefined(index uint32, attributes uint32, kind string) error {
 
 // baseValue is HighWater._base: both indices' attributes, then the base.
 func (h highWater) baseValue() (uint64, error) {
-	a, aSize, err := h.public(h.index)
+	a, aSize, aPolicy, err := h.public(h.index)
 	if err != nil {
 		return 0, err
 	}
 	if err := requireAnchor(a&ntMask == ntCounter && a&nvWritten != 0, "NV index %s is not a written counter", name(h.index)); err != nil {
 		return 0, err
 	}
-	if err := asDefined(h.index, a, "counter"); err != nil {
+	if err := h.asDefined(h.index, a, aPolicy, "counter"); err != nil {
 		return 0, err
 	}
 	if err := requireAnchor(aSize == 8, "NV index %s is %d bytes, not 8", name(h.index), aSize); err != nil {
 		return 0, err
 	}
-	b, bSize, err := h.public(h.base)
+	b, bSize, bPolicy, err := h.public(h.base)
 	if err != nil {
 		return 0, err
 	}
@@ -120,7 +140,7 @@ func (h highWater) baseValue() (uint64, error) {
 		"base index %s is not written and write-locked", name(h.base)); err != nil {
 		return 0, err
 	}
-	if err := asDefined(h.base, b, "base"); err != nil {
+	if err := h.asDefined(h.base, b, bPolicy, "base"); err != nil {
 		return 0, err
 	}
 	// another size is not this anchor's (Unusable, which a re-anchor repairs), not a TPM that failed (#336)
@@ -170,7 +190,7 @@ func (r record) less(o record) bool {
 
 // slot is HighWater._slot: the record a slot holds, nil when it holds none (never written, or a cut write).
 func (h highWater) slot(index uint32) (*record, error) {
-	a, size, err := h.public(index)
+	a, size, authPolicy, err := h.public(index)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +200,7 @@ func (h highWater) slot(index uint32) (*record, error) {
 	if err := requireAnchor(size == recordBytes, "record index %s is %d bytes, not %d", name(index), size, recordBytes); err != nil {
 		return nil, err
 	}
-	if err := asDefined(index, a, "slot"); err != nil {
+	if err := h.asDefined(index, a, authPolicy, "slot"); err != nil {
 		return nil, err
 	}
 	if a&nvWritten == 0 {
@@ -291,9 +311,11 @@ func ReadChain(envelopes []any, root any) ([]map[string]any, error) {
 // Anchored is Store.load without its writes, for a reader that may change nothing: the chain (from
 // ReadChain) must reach the TPM high-water, its manifest at the recorded epoch must be the one the TPM
 // recorded (the crash window, a record one epoch behind the counter, is accepted as verify(lock=False)
-// accepts it), and it may not run further ahead than advance() would go. Returns the high-water.
-func Anchored(nv NV, manifests []map[string]any) (uint64, error) {
-	h := newHighWater(nv, HighWaterIndex)
+// accepts it), and it may not run further ahead than advance() would go. `policy` is this node's
+// approved-image policy (nil: none configured), which a counter or slot written under a policy must
+// carry (#242 B). Returns the high-water.
+func Anchored(nv NV, manifests []map[string]any, policy []byte) (uint64, error) {
+	h := newHighWater(nv, HighWaterIndex, policy)
 	hw, err := h.value()
 	if err != nil {
 		return 0, err

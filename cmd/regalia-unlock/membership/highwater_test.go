@@ -30,12 +30,25 @@ func (f fakeNV) Defined() (map[uint32]bool, error) {
 	return defined, nil
 }
 
-func (f fakeNV) Public(index uint32) (uint32, int, error) {
+func (f fakeNV) Public(index uint32) (uint32, int, []byte, error) {
 	entry, ok := f.nv[index]
 	if f.broken || f.publicFails[index] || !ok {
-		return 0, 0, errors.New("the TPM said no")
+		return 0, 0, nil, errors.New("the TPM said no")
 	}
-	return uint32(entry["attributes"].(int64)), int(entry["size"].(int64)), nil
+	return uint32(entry["attributes"].(int64)), int(entry["size"].(int64)), policyOf(entry["policy"]), nil
+}
+
+// policyOf is a vector's policy: hex, or null for none ("" is a policy that is empty, not none).
+func policyOf(value any) []byte {
+	text, ok := value.(string)
+	if !ok {
+		return nil
+	}
+	policy, err := hex.DecodeString(text)
+	if err != nil {
+		panic(err)
+	}
+	return policy
 }
 
 func (f fakeNV) Read(index uint32, size int) ([]byte, error) {
@@ -110,7 +123,7 @@ func TestEveryAnchorIsReadAlike(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: the chain does not read: %v", name, err)
 		}
-		hw, err := Anchored(fakeOf(t, c["tpm"].(map[string]any)), manifests)
+		hw, err := Anchored(fakeOf(t, c["tpm"].(map[string]any)), manifests, policyOf(c["policy"]))
 		var unusable *Unusable
 		var refused *Refused
 		switch {
@@ -164,10 +177,10 @@ func TestAChainTooFarAheadIsAnAnomaly(t *testing.T) {
 		manifests = append(manifests, manifest)
 		prev = Digest(manifest)
 	}
-	if hw, err := Anchored(fakeOf(t, state), manifests[:maxJump]); err != nil || hw != 0 {
+	if hw, err := Anchored(fakeOf(t, state), manifests[:maxJump], nil); err != nil || hw != 0 {
 		t.Fatalf("a chain %d above the high-water: %d, %v", maxJump, hw, err)
 	}
-	_, err = Anchored(fakeOf(t, state), manifests)
+	_, err = Anchored(fakeOf(t, state), manifests, nil)
 	if err == nil || err.Error() != fmt.Sprintf("epoch jump %d exceeds the bound %d: anomaly", maxJump+1, maxJump) {
 		t.Fatalf("a chain %d above the high-water: %v", maxJump+1, err)
 	}
