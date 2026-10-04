@@ -66,6 +66,13 @@ def sh(*argv, check=True, **kw):
     return done
 
 
+def metrics_say(*wanted):
+    """Whether the shipper's metrics file holds every one of `wanted` (it writes it after the receipt
+    comes back, so later than the collector's stream grows: waited on, never read once)."""
+    held = METRICS.read_text() if METRICS.exists() else ""
+    return all(w in held for w in wanted)
+
+
 def until(what, seconds, interval=1.0):
     deadline, last = time.monotonic() + seconds, None
     while time.monotonic() < deadline:
@@ -167,9 +174,8 @@ def scenario(work, binaries):
     print("\n### 2  a line appended later ships on the next pass")
     append_as_writer(trail, 2, 3)
     ok(until(lambda: stream_lines(state) == 5, 75), "the stream holds 5 lines after the next pass", stream_lines(state))
-    metrics = METRICS.read_text() if METRICS.exists() else ""
-    ok('regalia_audit_trail_committed{trail="sync"} 5' in metrics and 'regalia_audit_trail_tampered{trail="sync"} 0' in metrics,
-       "the metrics say 5 committed, not tampered", metrics)
+    ok(until(lambda: metrics_say('regalia_audit_trail_committed{trail="sync"} 5', 'regalia_audit_trail_tampered{trail="sync"} 0'), 30),
+       "the metrics say 5 committed, not tampered", METRICS.read_text() if METRICS.exists() else "")
 
     print("\n### 2b  the client certificate rotated: a hand-over, and the stream goes on (#291)")
     # first the order error: the files swapped and the unit restarted BEFORE the hand-over (regalia-kms-51)
@@ -187,7 +193,8 @@ def scenario(work, binaries):
               "-server-ca", str(work / "ca.pem"), check=False)
     ok(done.returncode == 0, "regalia-audit-ship handover: the old key signs, the new certificate presents it", done.stdout + done.stderr)
     sh("systemctl", "restart", INSTANCE)
-    ok(until(lambda: stream_lines(state) == 6, 75) and 'regalia_audit_trail_tampered{trail="sync"} 0' in METRICS.read_text(),
+    ok(until(lambda: stream_lines(state) == 6, 75)
+       and until(lambda: metrics_say('regalia_audit_trail_committed{trail="sync"} 6', 'regalia_audit_trail_tampered{trail="sync"} 0'), 30),
        "under the new certificate the same stream goes on to 6 lines, not tampered", (stream_lines(state), journal(INSTANCE, 5)))
     refused = sh("curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--cert", str(work / "shipper.pem"), "--key", str(work / "shipper.key"),
                  "--cacert", str(work / "ca.pem"), "-H", "X-Regalia-Site: sitea.sync", "https://127.0.0.1:%d/v1/stream-position" % PORT, check=False)
@@ -206,7 +213,8 @@ def scenario(work, binaries):
     ours = [a for a in alarms if a.get("site") == "sitea.sync" and "reported by the client" in a.get("reason", "")]
     ok(len(ours) == 1 and "cut short" in ours[0]["reason"], "the collector's alarm log holds the shipper's alarm", alarms)
     ok(stream_lines(state) == 6, "the collector's stream still holds the 6 committed lines", stream_lines(state))
-    ok('regalia_audit_trail_tampered{trail="sync"} 1' in METRICS.read_text(), "the metrics say tampered")
+    ok(until(lambda: metrics_say('regalia_audit_trail_tampered{trail="sync"} 1'), 30), "the metrics say tampered",
+       METRICS.read_text() if METRICS.exists() else "")
 
     print("\n### 4  a manual start repeats the refusal")
     sh("systemctl", "start", INSTANCE, check=False)
