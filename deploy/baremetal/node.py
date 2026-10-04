@@ -442,6 +442,8 @@ class Sync:
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
         self.published = None
+        # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
+        self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
 
     def manifest(self):
         return self.store.load()
@@ -453,7 +455,8 @@ class Sync:
 
     def unlock_peer(self):
         return unlock.Peer(self.node.node_id, self.store, self.freshness, self.node.attester_for,
-                           unlock.Contributions(self.node.path("contributions.json")), self.signer, self.trail, run=self.node.run)
+                           unlock.Contributions(self.node.path("contributions.json")), self.signer, self.trail, run=self.node.run,
+                           refused=self.refusals)
 
     def caller(self, address):
         """unlock.serve's `caller`: the node a boot-tunnel address belongs to, by the manifest held NOW."""
@@ -485,7 +488,7 @@ class Sync:
         return changed
 
     def watch(self):
-        return heartbeat_watch.Watch(self.freshness, self.manifest, self.trail, metrics.path("sync"),      # #305: node_exporter's
+        return heartbeat_watch.Watch(self.freshness, self.manifest, self.trail, metrics.path("sync", "heartbeat.prom"),      # #305: node_exporter's
                                      self.node.path("heartbeat-watch.json"))
 
     def run(self, stop):
@@ -503,11 +506,13 @@ class Sync:
         for thread in threads:
             thread.start()
         watch = self.watch()
+        self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
                 self.pull_round()
                 with contextlib.suppress(Refused, OSError):
                     watch.step()
+                self.refusals.flush()
                 deadline = time.monotonic() + self.node.cfg["pull_interval"]
                 while not stop() and time.monotonic() < deadline:
                     time.sleep(1)
@@ -532,9 +537,7 @@ def bind_when_up(where, stop, family=socket.AF_INET, create=socket.create_server
 def authtime_service(cfg):
     """Takes the configuration only: it reads nothing else (not the site configuration, not a key), and
     its unit hides the rest of /etc and all of /var from it."""
-    return authtime.Service(os.path.join(cfg["run_dir"], "authtime.json"), cfg["time_servers"],
-                            record=Trail(trails.where(authtime.TRAIL), authtime.TRAIL),      # each transition, audited (#303)
-                            metrics=lambda samples: metrics.publish("authtime", samples))     # #305
+    return authtime.service(cfg["run_dir"], cfg["time_servers"])     # the one entry point, the authority host's too (#71)
 
 
 # ---- command line ----
