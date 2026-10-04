@@ -46,23 +46,57 @@ func TestPOCCRLInspection(t *testing.T) {
 	key := testSigner(t, "p256").(*ecdsa.PrivateKey)
 	issuer := pocIssuer(t, key)
 	now := time.Now()
-	for _, good := range []bool{true, false} {
-		crl := &x509.RevocationList{Number: big.NewInt(1), ThisUpdate: now, NextUpdate: now.Add(10 * time.Minute)}
-		if !good {
-			crl.NextUpdate = now.Add(2 * time.Hour)
-		}
-		encoded, err := x509.CreateRevocationList(rand.Reader, crl, issuer, key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		parsed, err := x509.ParseRevocationList(encoded)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = pocInspectCRL(parsed.RawTBSRevocationList, issuer, now)
-		if (err == nil) != good {
-			t.Fatal("CRL profile decision did not match")
-		}
+	for _, tc := range []struct {
+		name string
+		edit func(*x509.RevocationList)
+		ok   bool
+	}{
+		{"empty", func(*x509.RevocationList) {}, true},
+		{"long", func(c *x509.RevocationList) { c.NextUpdate = now.Add(2 * time.Hour) }, false},
+		{"unknown", func(c *x509.RevocationList) {
+			c.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{1, 2, 3, 4}, Value: []byte{5, 0}}}
+		}, false},
+		{"delta", func(c *x509.RevocationList) {
+			c.Number = big.NewInt(2)
+			c.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 27}, Critical: true, Value: []byte{2, 1, 1}}}
+		}, true},
+		{"delta-base-too-new", func(c *x509.RevocationList) {
+			c.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 27}, Critical: true, Value: []byte{2, 1, 1}}}
+		}, false},
+		{"delta-not-critical", func(c *x509.RevocationList) {
+			c.Number = big.NewInt(2)
+			c.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 27}, Value: []byte{2, 1, 1}}}
+		}, false},
+		{"delta-malformed", func(c *x509.RevocationList) {
+			c.Number = big.NewInt(2)
+			c.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 27}, Critical: true, Value: []byte{2, 1, 1, 0}}}
+		}, false},
+		{"entry", func(c *x509.RevocationList) {
+			c.RevokedCertificateEntries = []x509.RevocationListEntry{{SerialNumber: big.NewInt(3), RevocationTime: now}}
+		}, true},
+		{"duplicate-entry", func(c *x509.RevocationList) {
+			c.RevokedCertificateEntries = []x509.RevocationListEntry{{SerialNumber: big.NewInt(3), RevocationTime: now}, {SerialNumber: big.NewInt(3), RevocationTime: now}}
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			crl := &x509.RevocationList{Number: big.NewInt(1), ThisUpdate: now, NextUpdate: now.Add(10 * time.Minute)}
+			tc.edit(crl)
+			encoded, err := x509.CreateRevocationList(rand.Reader, crl, issuer, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := x509.ParseRevocationList(encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = pocInspectCRL(parsed.RawTBSRevocationList, issuer, now)
+			if (err == nil) != tc.ok {
+				t.Fatal("CRL profile decision did not match")
+			}
+			if _, err = pocInspectCRL(append(parsed.RawTBSRevocationList, 0), issuer, now); err == nil {
+				t.Fatal("CRL trailing DER accepted")
+			}
+		})
 	}
 }
 

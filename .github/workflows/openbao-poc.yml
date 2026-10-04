@@ -81,6 +81,7 @@ jobs:
           go vet ./...
           go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia-poc" ./cmd/openbao-plugin-kms-regalia-poc
           go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia" ./cmd/openbao-plugin-kms-regalia
+          go build -o "$RUNNER_TEMP/openbao-plugin-kms-regalia-pki-poc" ./cmd/openbao-plugin-kms-regalia-pki-poc
       - name: Scan the adapter module for reachable vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
       - name: Build the pinned earlier native plugin for upgrade and rollback

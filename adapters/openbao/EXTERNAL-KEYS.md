@@ -3,7 +3,9 @@
 The native binary serves `kms.KMS` independently of its seal Wrapper, using the
 official v2.4.0 plugin SDK. OpenBao owns namespaces, ACLs and mount grants;
 Regalia owns custody, exact service grants, replay state and its audit journal.
-This implements the Transit portion of #122; it does not support PKI issuers.
+This implements the Transit portion of #122. The normal provider does not
+support PKI issuers; a separate [software PKI/ACME experiment](PKI-E2E-POC.md)
+proves the upstream full-byte path without changing that refusal.
 
 Provider fields, all required: `address`, `server_name`, `ca_path`, `cert_path`,
 `key_path`, `environment`, `timeout`. The TLS and file checks match the native

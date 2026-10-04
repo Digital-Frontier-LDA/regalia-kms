@@ -2,8 +2,10 @@ package openbaopoc
 
 import (
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -96,6 +98,19 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 		t.Fatal("CA mapping usable without mount grant", status)
 	}
 	b.must(t, http.MethodPost, keyPath+"/grants/pki", map[string]any{})
+	b.must(t, http.MethodPost, "/v1/sys/mounts/ungranted", map[string]string{"type": "pki"})
+	status, _, err = b.call(http.MethodPost, "/v1/ungranted/keys/generate/kms", map[string]string{"external_key_ref": "pki:ca"})
+	if err != nil || status < 400 || len(backend.snapshot()) != 0 {
+		t.Fatal("PKI mapping leaked to another mount")
+	}
+	b.must(t, http.MethodPost, "/v1/sys/namespaces/isolated", map[string]any{})
+	isolated := b
+	isolated.namespace = "isolated"
+	isolated.must(t, http.MethodPost, "/v1/sys/mounts/pki", map[string]string{"type": "pki"})
+	status, _, err = isolated.call(http.MethodPost, "/v1/pki/keys/generate/kms", map[string]string{"external_key_ref": "pki:ca"})
+	if err != nil || status < 400 || len(backend.snapshot()) != 0 {
+		t.Fatal("PKI mapping leaked across namespace")
+	}
 	b.must(t, http.MethodPost, "/v1/pki/keys/generate/kms", map[string]string{"external_key_ref": "pki:ca", "key_name": "poc-ca"})
 	// The offline root private key is never mapped or imported. Only certificates
 	// are imported, matching the software token's independently pinned SPKI.
@@ -124,8 +139,52 @@ func TestOpenBao271PKIInspectedIssuanceAndCRL(t *testing.T) {
 		t.Fatal("revoked leaf absent from CRL")
 	}
 	pocACME(t, b, root, issuer, backend)
+	pocBaoRefusals(t, b, f, backend, role)
+	before := len(backend.snapshot())
+	b.must(t, http.MethodDelete, keyPath+"/grants/pki", nil)
+	status, _, err = b.call(http.MethodPost, "/v1/pki/issue/poc", map[string]string{"common_name": "web.svc.poc.invalid"})
+	if err != nil || status < 400 || len(backend.snapshot()) != before {
+		t.Fatal("revoked PKI mount grant still reached token")
+	}
 	b.assertValue(t)
 	p.stop(t)
 	assertBaoArtifactsClean(t, dir, filepath.Join(dir, "openbao-plugin-kms-regalia-poc"), b.token, share)
-	t.Log("Real OpenBao PKI: read-only CA mapping, exact mount grant, externally held intermediate, full-byte inspected leaf and CRL signatures, verified chain and revoked serial; software fixture only.")
+	t.Log("Real OpenBao PKI: read-only CA mapping, exact mount grant and revocation, externally held intermediate, full-byte inspected leaf and CRL signatures, verified chain/revoked serial, EAB-gated DNS-01 ACME issuance and renewal, HTTPS certificate rotation and unsafe issuance refusals; software fixture only.")
+}
+
+func pocBaoRefusals(t *testing.T, b baoAPI, f *signingFixture, backend *pocSoftwareCA, role map[string]any) {
+	t.Helper()
+	permissive := map[string]any{}
+	for name, value := range role {
+		permissive[name] = value
+	}
+	permissive["allow_any_name"], permissive["max_ttl"] = true, "30m"
+	b.must(t, http.MethodPost, "/v1/pki/roles/permissive", permissive)
+	for _, input := range []map[string]string{
+		{"common_name": "outside.invalid"},
+		{"common_name": "web.svc.poc.invalid", "ttl": "20m"},
+	} {
+		before, signs := len(backend.snapshot()), f.audit.successful("sign")
+		status, _, err := b.call(http.MethodPost, "/v1/pki/issue/permissive", input)
+		records := backend.snapshot()
+		if err != nil || status < 400 || len(records) <= before || f.audit.successful("sign") != signs {
+			t.Fatal("permissive OpenBao role bypassed inspected KMS profile", status)
+		}
+		for _, record := range records[before:] {
+			if record.Allowed || record.Kind != "refused" {
+				t.Fatal("unsafe issuance signed")
+			}
+		}
+	}
+	// OpenBao or the inspected KMS may refuse subordinate CA issuance first;
+	// the direct KMS refusal test separately proves the token-side CA boundary.
+	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "subca.svc.poc.invalid"}}, testSigner(t, "p256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signs := f.audit.successful("sign")
+	status, _, err := b.call(http.MethodPost, "/v1/pki/root/sign-intermediate", map[string]any{"csr": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csr})), "common_name": "subca.svc.poc.invalid", "ttl": "5m", "max_path_length": 0})
+	if err != nil || status < 400 || f.audit.successful("sign") != signs {
+		t.Fatal("intermediate issued under leaf-only CA profile")
+	}
 }

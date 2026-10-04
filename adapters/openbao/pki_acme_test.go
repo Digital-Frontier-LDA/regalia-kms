@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -156,6 +157,11 @@ func pocACME(t *testing.T, b baoAPI, root, issuer *x509.Certificate, backend *po
 	defer cancel()
 	if _, err := client.Register(ctx, &acme.Account{}, acme.AcceptTOS); err == nil {
 		t.Fatal("ACME accepted account without EAB")
+	} else {
+		var problem *acme.Error
+		if !errors.As(err, &problem) || !strings.HasSuffix(problem.ProblemType, ":externalAccountRequired") {
+			t.Fatal("ACME account refusal did not enforce EAB", err)
+		}
 	}
 	response := pocData(t, b.must(t, http.MethodPost, "/v1/pki/roles/poc/acme/new-eab", map[string]any{}))
 	secret, err := base64.RawURLEncoding.DecodeString(pocString(t, response, "key"))
@@ -167,6 +173,7 @@ func pocACME(t *testing.T, b baoAPI, root, issuer *x509.Certificate, backend *po
 	if _, err := client.Register(ctx, &acme.Account{ExternalAccountBinding: binding}, acme.AcceptTOS); err != nil {
 		t.Fatal("synthetic ACME registration failed", err)
 	}
+	pocUnprovenACME(t, client, backend)
 	first := pocACMEOrder(t, client, dns)
 	second := pocACMEOrder(t, client, dns)
 	leaf1 := pocLeaf(t, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: first.Certificate[0]})), root, issuer, backend)
@@ -180,6 +187,69 @@ func pocACME(t *testing.T, b baoAPI, root, issuer *x509.Certificate, backend *po
 	dns.mu.Unlock()
 	if queries == 0 {
 		t.Fatal("ACME did not perform DNS-01 verification")
+	}
+}
+
+func pocUnprovenACME(t *testing.T, client *acme.Client, backend *pocSoftwareCA) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	before := len(backend.snapshot())
+	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs("unproven.svc.poc.invalid"))
+	if err != nil || len(order.AuthzURLs) != 1 {
+		t.Fatal("unproven ACME order failed", err)
+	}
+	auth, err := client.GetAuthorization(ctx, order.AuthzURLs[0])
+	if err != nil {
+		t.Fatal("unproven ACME authorization failed", err)
+	}
+	var challenge *acme.Challenge
+	for _, candidate := range auth.Challenges {
+		if candidate.Type == "dns-01" {
+			challenge = candidate
+			break
+		}
+	}
+	if challenge == nil {
+		t.Fatal("unproven DNS-01 challenge unavailable")
+	}
+	// Do not publish its TXT token. A valid EAB alone cannot authorize issuance.
+	if _, err = client.Accept(ctx, challenge); err != nil {
+		t.Fatal("unproven challenge acceptance failed", err)
+	}
+	// OpenBao retries failed challenges before terminally invalidating them.
+	// Observe a real verification error, then prove the pending order cannot sign.
+	for {
+		checked, err := client.GetChallenge(ctx, challenge.URI)
+		if err != nil {
+			t.Fatal("unproven challenge polling failed", err)
+		}
+		if checked.Status == acme.StatusValid {
+			t.Fatal("unproven DNS challenge became valid")
+		}
+		if checked.Error != nil {
+			var problem *acme.Error
+			if !errors.As(checked.Error, &problem) || !strings.HasSuffix(problem.ProblemType, ":incorrectResponse") {
+				t.Fatal("unexpected DNS verification error", checked.Error)
+			}
+			break
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatal("no DNS verification failure before deadline")
+		case <-timer.C:
+		}
+	}
+	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "unproven.svc.poc.invalid"}, DNSNames: []string{"unproven.svc.poc.invalid"}}, testSigner(t, "p256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
+	var refused *acme.Error
+	if !errors.As(err, &refused) || !strings.HasSuffix(refused.ProblemType, ":orderNotReady") || len(backend.snapshot()) != before {
+		t.Fatal("unproven DNS ownership was not refused before KMS signing", err)
 	}
 }
 
