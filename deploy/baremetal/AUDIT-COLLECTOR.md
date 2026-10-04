@@ -7,8 +7,8 @@ already recorded: the collector holds a copy, chained, and refuses anything that
 
 This document is the contract that service must meet. `regalia-audit-ship conformance` checks a candidate against
 it (section 5), and CI checks this repository's own `regalia-audit-collector` against the same contract, as the
-reference implementation. The monitoring service has its companion document, `MONITORING.md`, with the same
-sections (#364).
+reference implementation. The monitoring service has its companion document, [MONITORING.md](MONITORING.md), with the
+same sections.
 
 ## 1. What the external service must provide
 
