@@ -595,8 +595,8 @@ class Cluster:
         """#76: `old` replaced by `new`, as an operator does it with the root. The candidate is checked as the root's
         operator checks it (measurements.check_replacement) and signed by the root; it is given to a running node (the
         seed) as advance() gives an epoch, and pulled by the other running node; neither `old` (the hardware that left keeps
-        the chain it had) nor `new` (not yet set up) is touched by that. Then every node's site configuration follows, and
-        the new node gets its anchor, the chain, the epoch's document and its two counters at 0: its first heartbeat comes
+        the chain it had) nor `new` (not yet set up) is touched by that. Every node's site configuration changes first (the
+        operator's site change: a node that takes the epoch must know where the new node is), and the new node gets its anchor, the chain, the epoch's document and its two counters at 0: its first heartbeat comes
         from the nodes by sync (#199). #279's `enrol --replace` instead defines the counter AT a heartbeat the node
         verifies (Freshness.accept_first). Returns the envelope."""
         candidate, document = self.replacement(old, new)

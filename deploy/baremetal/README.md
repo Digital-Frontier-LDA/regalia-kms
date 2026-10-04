@@ -450,9 +450,10 @@ An update is three documents:
    with the PCR-signing key (so the PIN and the disk unseal under it with no reseal), and write the
    CURRENT + NEXT document. `measurements.transition(old, new)` must say `approve`.
 2. **Approve.** The root's operator computes `measurements.version(document)` from the file in hand, at
-   signing time, and the root signs manifest N+1 with that as `policy_version`. Install the document on
-   one node with the manifest; sync brings both to every node (#332). (#199 retired `authority accept`, which
-   took both at once; a node-side command that commits a root-signed envelope is a follow-up.)
+   signing time, and the root signs manifest N+1 with that as `policy_version`. Give both to one node,
+   `sudo python3 -Es -m deploy.baremetal.deliver --config /etc/regalia/node.json --chain CHAIN.json --documents
+   DOC.json` (as regalia-sync it puts the document, commits the epoch through the node's Store and republishes the
+   chain); sync brings both to every other node (#332). (`deliver` replaces #199's retired `authority accept`.)
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
