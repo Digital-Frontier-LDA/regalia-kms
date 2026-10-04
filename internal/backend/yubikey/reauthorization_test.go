@@ -124,9 +124,15 @@ func (card *removableCard) Close() error {
 type leaseGate struct {
 	admitted    bool
 	requestedMs int64
+	unlisted    map[string]bool // serials the manifest does not list; nil: every serial is listed
+	serials     []string        // the serials asked about
 }
 
-func (gate *leaseGate) RequestedAfter(_ context.Context, boottimeMs int64) bool {
+func (gate *leaseGate) Admits(_ context.Context, serial string, boottimeMs int64) bool {
+	gate.serials = append(gate.serials, serial)
+	if serial == "" || gate.unlisted[serial] {
+		return false
+	}
 	return gate.admitted && gate.requestedMs > boottimeMs
 }
 
@@ -518,4 +524,25 @@ func TestWithoutReauthorizationAReturnedCardResumesAsBefore(t *testing.T) {
 	if card.identityRead != reads+1 {
 		t.Fatalf("with no admission gate the card was asked for its serial %d times in one request, want once", card.identityRead-reads)
 	}
+}
+
+// A YUBIKEY THE MANIFEST DOES NOT LIST IS NOT SERVED (regalia-kms#72, G1): the node's tokens are its
+// manifest entry's hsm_serials, its YubiKey as much as its HSM. Refused before the PIN, unhealthy, and
+// serving again once listed.
+func TestAYubiKeyTheManifestDoesNotListIsRefusedBeforeThePIN(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("listed, under a lease asked for since the daemon started")
+	w.gate.unlisted = map[string]bool{"12345678": true}
+	logins := w.card.loginCalls
+	if err := w.sign(); err == nil || w.card.loginCalls != logins {
+		t.Fatalf("a card the manifest does not list signed, or its PIN was presented: %v", err)
+	}
+	if w.healthy() {
+		t.Fatal("a card the manifest does not list reports healthy")
+	}
+	if got := w.gate.serials[len(w.gate.serials)-1]; got != "12345678" {
+		t.Fatalf("the gate was asked about %q, not the card's own serial", got)
+	}
+	w.gate.unlisted = nil
+	w.requireServing("listed again")
 }

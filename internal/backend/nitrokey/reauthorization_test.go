@@ -41,9 +41,15 @@ type leaseGate struct {
 	admitted    bool
 	requestedMs int64
 	asked       []int64
+	unlisted    map[string]bool // serials the manifest does not list; nil: every serial is listed
+	serials     []string        // the serials asked about
 }
 
-func (gate *leaseGate) RequestedAfter(_ context.Context, boottimeMs int64) bool {
+func (gate *leaseGate) Admits(_ context.Context, serial string, boottimeMs int64) bool {
+	gate.serials = append(gate.serials, serial)
+	if serial == "" || gate.unlisted[serial] {
+		return false
+	}
 	gate.asked = append(gate.asked, boottimeMs)
 	return gate.admitted && gate.requestedMs > boottimeMs
 }
@@ -637,7 +643,7 @@ func TestAnEmptyDeviceIDNeverTouchesTheBaseline(t *testing.T) {
 	w := newReauthWorld(t)
 	w.gate.requestedMs = 1_001
 	w.now = 5_000
-	if w.provider.reauthorized(context.Background(), "") {
+	if w.provider.reauthorized(context.Background(), "", "") {
 		t.Fatal("the empty device ID was served")
 	}
 	w.provider.tokenGone("")
@@ -650,12 +656,56 @@ func TestAnEmptyDeviceIDNeverTouchesTheBaseline(t *testing.T) {
 	}
 	late := newReauthWorld(t)
 	late.gate.requestedMs = 999 // a lease from BEFORE the process started
-	_ = late.provider.reauthorized(context.Background(), "")
+	_ = late.provider.reauthorized(context.Background(), "", "")
 	late.provider.tokenGone("")
 	if late.serves() {
 		t.Fatal("after the empty device ID was touched, a never-seen token served on a lease from before the start")
 	}
 	if !reflect.DeepEqual(late.waiting(), map[string]int64{"hsm-sitea": 1_000}) {
 		t.Fatalf("waiting = %v, want the process's start", late.waiting())
+	}
+}
+
+// A TOKEN THE MANIFEST DOES NOT LIST IS NOT SERVED (regalia-kms#72, G1). The root replacing a stolen or
+// retired HSM in the manifest takes the old one out of service at the next operation, with no change to
+// the daemon's configuration: every operation is refused before the PIN is fetched or presented, the
+// binding is unhealthy, and nothing is quarantined (listed again, it serves).
+func TestATokenTheManifestDoesNotListIsRefusedBeforeAnyPIN(t *testing.T) {
+	for _, operation := range []string{"public-key", "wrap", "unwrap", "sign"} {
+		t.Run(operation, func(t *testing.T) {
+			w := newReauthWorld(t)
+			w.gate.requestedMs = 1_001 // a lease asked for since the daemon started: only the listing is missing
+			w.gate.unlisted = map[string]bool{"serial-1": true}
+			if err := w.execute(operation); !errors.Is(err, ErrUnavailable) {
+				t.Fatalf("%s on a token the manifest does not list: %v", operation, err)
+			}
+			if w.pins.calls != 0 || w.driver.session.loginCalls != 0 {
+				t.Fatal("the PIN was fetched or presented for a token the manifest does not list")
+			}
+			if w.healthy() {
+				t.Fatal("a token the manifest does not list reports healthy")
+			}
+			if len(w.gate.serials) == 0 || w.gate.serials[len(w.gate.serials)-1] != "serial-1" {
+				t.Fatalf("the gate was asked about %v, not the token's own serial", w.gate.serials)
+			}
+			w.gate.unlisted = nil // listed again: it serves (unwrap, the fixture's operation that completes)
+			if !w.serves() {
+				t.Fatal("a token listed again does not serve: it was quarantined, not merely refused")
+			}
+		})
+	}
+}
+
+// Listed and serving, then de-listed: the next operation is refused.
+func TestATokenDeListedWhileServingStopsAtTheNextOperation(t *testing.T) {
+	w := newReauthWorld(t)
+	w.gate.requestedMs = 1_001
+	if !w.serves() {
+		t.Fatal("the fixture does not serve")
+	}
+	w.gate.unlisted = map[string]bool{"serial-1": true}
+	logins := w.driver.session.loginCalls
+	if w.serves() || w.driver.session.loginCalls != logins {
+		t.Fatal("a token de-listed while serving was served again, or its PIN presented")
 	}
 }
