@@ -131,6 +131,12 @@ OWNER = "owner"                                                  # the owner's p
 HEARTBEAT_FLOOR = NODE_RULE_FLOOR = 2                            # no single party keeps a cluster alive or revokes alone,
                                                                  # except the owner's own revocation rule (1 of owner)
 MAX_OWNER_KEYS, MAX_RULES, MAX_SIGNATURES = 8, 4, 16
+# the bench's tokens, never a production node's token nor a ceremony card (ADR-0002 D28.5, D30): the Nitrokeys of regalia's
+# tools/hsm-staging-registry.json and DENK0400664 (dead), and the staging YubiKeys (regalia-ceremony's BENCH_YUBIKEYS).
+# One list for every reader here; a YubiKey in each form a node's hsm_serials pins it (decimal, OpenPGP 0006%08d).
+BENCH_NITROKEYS = ("DENK0404144", "DENK0404380", "DENK0404547", "DENK0400664")
+BENCH_YUBIKEYS = ("36345471", "36344616", "35718625")
+BENCH_TOKENS = frozenset(BENCH_NITROKEYS + BENCH_YUBIKEYS + tuple("0006%08d" % int(s) for s in BENCH_YUBIKEYS))
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
 MAX_CHAIN_BYTES = 64 * 1024 * 1024

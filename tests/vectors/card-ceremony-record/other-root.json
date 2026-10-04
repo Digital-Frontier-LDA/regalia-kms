@@ -5,6 +5,10 @@
   "owner_keys": [
    {
     "alg": "ed25519",
+    "attestation_sha256": {
+     "dec": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "sig": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+    },
     "attested": true,
     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
     "role": "dev-main",
@@ -12,6 +16,10 @@
    },
    {
     "alg": "ed25519",
+    "attestation_sha256": {
+     "dec": "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2",
+     "sig": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+    },
     "attested": true,
     "key": "0b513ad9b4924015ca0902ed079044d3ac5dbec2306f06948c10da8eb6e39f2d",
     "role": "dev-backup",
@@ -60,5 +68,5 @@
   ],
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "c88a67f3dd5b8eeb93ea1acb478ceb38a4cb70d2cc6d01b9a9375b6b1580da3e52571028f9506ff480614af5d3d849ba0e594a7f4e448d0f0e7e1c3e05a1c607"
+ "signature": "190d0b1012560aece1ae502e55cc3fc1f2a729e8e2b8ef8fe0944a0ab49db086812b0efdb02a996e2e084f43ee948fba9e3a3aaa7526d27a0377956056976e01"
 }
