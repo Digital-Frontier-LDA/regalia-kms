@@ -18,7 +18,9 @@ echo "REGALIA-E2E-CMDLINE $(cat /proc/cmdline)" > /dev/console
 # the PCRs once booted: PCR 11 is the image's booted-phase value; PCR 12 should be what the stub left. Read only
 # once systemd-pcrphase.service has measured `ready` (#310: a read before it is the sysinit value, one phase
 # short). The unit orders it; this says what it saw, so a regression fails by name, not as a PCR mismatch.
-phase="$(systemctl show -p ActiveState,Result --value systemd-pcrphase.service 2>&1 | tr -s ' \n' ' ')"
+# One property per call: `show -p A,B --value` prints in systemd's own order (Result before ActiveState), not the
+# order asked (regalia-kms-d9, measured on Debian 13's systemd 257)
+phase="$(systemctl show -P ActiveState systemd-pcrphase.service 2>&1) $(systemctl show -P Result systemd-pcrphase.service 2>&1)"
 echo "REGALIA-E2E-PCRPHASE systemd-pcrphase.service=$phase" > /dev/console
 echo "REGALIA-E2E-PCRS 7=$(cat /sys/class/tpm/tpm0/pcr-sha256/7 2>&1) 11=$(cat /sys/class/tpm/tpm0/pcr-sha256/11 2>&1) 12=$(cat /sys/class/tpm/tpm0/pcr-sha256/12 2>&1)" > /dev/console
 # what the unlock client left for the running system, after switch-root (public values)

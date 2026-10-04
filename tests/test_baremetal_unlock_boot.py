@@ -43,12 +43,15 @@ run = tub.run
 def booted_pcrs(said):
     """The REGALIA-E2E-PCRS line's match, read only after systemd-pcrphase.service measured `ready` (#310): the
     guest says what it saw, and a read before `ready` (the sysinit value, one phase short of the record) fails
-    here by name, not later as a PCR 11 mismatch."""
+    here by name, not later as a PCR 11 mismatch. This proves ORDERING only: the unit runs systemd-pcrextend
+    --graceful, which exits successfully without a TPM, so "success" is not proof of the extend; the PCR 11
+    comparison that follows is."""
     shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
     if shown:
         phase = re.search(r"REGALIA-E2E-PCRPHASE systemd-pcrphase.service=(.*)", said)
-        assert phase and phase.group(1).split()[:2] == ["active", "success"], \
-            "the PCRs were read before systemd-pcrphase measured ready (#310): %s" % (phase.group(1) if phase else "no phase line")
+        if not (phase and phase.group(1).split() == ["active", "success"]):       # not `assert`: python -O would drop it
+            raise AssertionError("the PCRs were read before systemd-pcrphase measured ready (#310): %s"
+                                 % (phase.group(1).strip() if phase else "no phase line"))
     return shown
 
 
