@@ -289,9 +289,16 @@ class Cluster:
         self.pcr_values[name].add(value)
         d = self.nodes[name].dir / "pcr"
         d.mkdir(mode=0o755, exist_ok=True)
-        _replace(d / "tpm2-pcr-signature.json", json.dumps({"sha256": [self.pcr_sigs[v] for v in sorted(self.pcr_values[name])]}))
-        _replace(d / "tpm2-pcr-public-key.pem", self.pcr_pem.decode())
-        for f in d.iterdir():
+        # written IN PLACE, never renamed over: a running unit's BindReadOnlyPaths= holds the inode it was started with,
+        # so a replaced file would stay unseen by it (an image approved while the node runs, #75's rolling update)
+        for f, text in ((d / "tpm2-pcr-signature.json", json.dumps({"sha256": [self.pcr_sigs[v] for v in sorted(self.pcr_values[name])]})),
+                        (d / "tpm2-pcr-public-key.pem", self.pcr_pem.decode())):
+            with open(f, "r+" if f.exists() else "w") as out:
+                out.seek(0)
+                out.write(text)
+                out.truncate()
+                out.flush()
+                os.fsync(out.fileno())
             os.chmod(f, 0o644)
 
     def _owner_token(self):
@@ -313,7 +320,9 @@ class Cluster:
         self.owner_keys = [{"alg": "ed25519", "key": self.owner_signer(i).public()} for i in range(2)]
 
     def owner_signer(self, which=0):
-        """The owner's key `which` (0: the owner's, 1: the backup), as owner.py opens a YubiKey: by serial, Ed25519."""
+        """The owner's key `which` (0: the owner's, 1: the backup), as owner.py opens a YubiKey: by serial, Ed25519. Both
+        sit on ONE SoftHSM token here (key ids 01 and 02), where the real pair is two YubiKeys with two serials and the
+        same slot, chosen by --serial: a fixture's simplification, accepted on #369 (24, after 3e's read)."""
         from deploy.baremetal import authority
         return authority.Pkcs11Signer(SOFTHSM, self.owner_serial, "%02x" % (which + 1), None, pin=lambda: OWNER_PIN, alg="ed25519")
 
@@ -1057,34 +1066,45 @@ class Cluster:
         self._as_sync(name, self.OWNER_ACCEPT, {"cfg": cfg, "envelope": envelope})
         return envelope
 
-    def _beaten(self, manifest, timeout=300):
-        """#199: every running node that counts holds a heartbeat for the new epoch. With two of them running, their own
-        proposers sign it (beat.Proposer goes at once when it holds none for the epoch). With one, nobody can co-sign it
-        but the owner: the hand recovery, owner_beat."""
+    def _beaten(self, manifest, owner_recovery=False, timeout=300):
+        """#199: with two counting nodes running, each holds the heartbeat their own proposers sign for the new epoch
+        (beat.Proposer goes at once when it holds none for it). With one, nobody can co-sign it: the node stays without a
+        heartbeat for the epoch, as a host does until a human acts, and nothing is done here unless the scenario asked
+        for the hand recovery (`owner_recovery`: owner_beat for that node). Never implicit (regalia-kms-3e's read)."""
         from deploy.baremetal import beat
         counting = [n for n in beat.counting_nodes(manifest) if self.running(n)]
         if len(counting) >= 2:
             missing = [n for n, held in self.fresh(counting, manifest["epoch"], timeout).items() if not held]
             if missing:
-                raise RuntimeError("%s signed no heartbeat for epoch %d: %s" % (", ".join(missing), manifest["epoch"],
-                                   " | ".join(self.journal(n, "sync", 8)[-400:] for n in missing)))
-        else:
+                said = {n: [{k: e.get(k) for k in ("event", "outcome", "epoch", "sequence", "subject", "reason")}
+                            for e in self.trail(n) if str(e.get("event", "")).startswith(("beat", "sync-beat"))][-4:] for n in counting}
+                raise RuntimeError("%s signed no heartbeat for epoch %d; their last beat events: %s" % (", ".join(missing), manifest["epoch"],
+                                   json.dumps(said)[:3000]))
+        elif owner_recovery:
             for name in counting:
                 self.owner_beat(name)
 
     def fresh(self, names=None, epoch=None, timeout=300):
         """#199: wait until each node in `names` (default: every running node) holds a heartbeat for `epoch` (default: the
-        current manifest's) that the nodes signed. Returns {node: whether it does}."""
+        current manifest's) that the NODES signed: no owner among its signers (an owner's hand-recovery heartbeat is
+        owner_beat's, and says so). Returns {node: whether it does}."""
         epoch = self.manifest["epoch"] if epoch is None else epoch
         names = [n for n in self.nodes if self.running(n)] if names is None else list(names)
-        return {name: bool(until(lambda name=name: self.holds_heartbeat(name, epoch), timeout, 2)) for name in names}
+        return {name: bool(until(lambda name=name: self.holds_heartbeat(name, epoch) and membership.OWNER not in self.heartbeat_signers(name),
+                                 timeout, 2)) for name in names}
+
+    def heartbeat_signers(self, name):
+        """The parties that signed the heartbeat the node holds (its freshness state, read as root): [] for none, or for a
+        v1 heartbeat (one revocation key)."""
+        held = self.node(name).freshness().held()
+        return [s.get("party") for s in (held or {}).get("signatures", [])]
 
     def holds_heartbeat(self, name, epoch):
         """Whether the node holds a heartbeat for `epoch` (its freshness state, read as root)."""
         held = self.node(name).freshness().held()
         return bool(held) and held["heartbeat"]["epoch"] == epoch
 
-    def advance(self, seed, signer="root", document=None, **states):
+    def advance(self, seed, signer="root", document=None, owner_recovery=False, **states):
         """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key. The
         authority's publication, stood in for: `seed`, a running node, has its services stopped (a crash: the same
         boot), takes the epoch into its store with its heartbeat, and starts again. Nodes whose services are
@@ -1136,7 +1156,7 @@ class Cluster:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
         if self.v4:
-            self._beaten(manifest)
+            self._beaten(manifest, owner_recovery)
             return manifest, since
         for name in running:
             if until(lambda: self.holds_heartbeat(name, manifest["epoch"]), 30, 2):

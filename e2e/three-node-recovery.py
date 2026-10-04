@@ -22,7 +22,8 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
      nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
   6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
      first 6 in a minute answered, the 7th refused and recorded; c, beside it, answered
-  7  N: a QUARANTINED (by the owner's key, #199), then RETIRED (by the root), then b REVOKED_STOLEN. In each, a
+  7  N: a QUARANTINED (by the owner's key, #199), then RETIRED (by the root), then b REVOKED_STOLEN (c is then the only
+     node that counts: it holds no heartbeat for the epoch until the owner's hand recovery, owner.py beat). In each, a
      control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
      survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
      and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
@@ -254,6 +255,19 @@ def scenario(cluster):
         cluster.stop(victim)                            # down when it is revoked: it takes the epoch as a stopped node
         seed = survivors[0]
         manifest, since = cluster.advance(seed, signer=signer, **{victim: state})
+        counting = [s for s in survivors if s in cluster.manifest["heartbeat_signers"]["parties"] and cluster.running(s)
+                    and may(manifest, s, "authorize")]
+        if len(counting) == 1:
+            # #199: one node left that counts. Nobody can co-sign its heartbeat for the new epoch: it stays without one
+            # (fail closed) until the operator's hand recovery, owner.py beat, which the scenario now plays explicitly
+            alone = counting[0]
+            ok(not cluster.holds_heartbeat(alone, manifest["epoch"]),
+               "%s, the only node left that counts, holds no heartbeat for epoch %d: alone it signs nothing" % (alone, manifest["epoch"]))
+            envelope = cluster.owner_beat(alone)
+            lives = threenode.heartbeat.parse_time(envelope["heartbeat"]["expires_at"], "e") - threenode.heartbeat.parse_time(envelope["heartbeat"]["issued_at"], "i")
+            ok(cluster.holds_heartbeat(alone, manifest["epoch"]) and cluster.heartbeat_signers(alone) == [alone, "owner"] and lives <= 3600,
+               "the hand recovery (owner.py beat): %s and the owner's key sign a heartbeat for epoch %d that lives %d s (at most 1 h)"
+               % (alone, manifest["epoch"], lives), envelope["heartbeat"])
         pulled = [s for s in survivors if s != seed]
         ok(all(cluster.node(s).store().load()["epoch"] == manifest["epoch"] for s in survivors)
            and all(any(e.get("event") == "sync-apply" and e.get("peer") == seed and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
