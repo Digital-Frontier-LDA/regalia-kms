@@ -106,10 +106,11 @@ MAX_IMAGE = 512 * 1024 * 1024
 #   rd.luks*, luks*   every form, rd.luks=0 included: the root volume is opened from the image's crypttab
 #                     through the unlock client's socket, and no command-line word may change how
 #   rd.break, rd.shell, systemd.debug_shell, init=, systemd.unit=, emergency, rescue, single
-#                     a shell or another target before the disk is judged
+#                     a shell or another target before the disk is judged (also dracut's older
+#                     spellings rdbreak and rdshell, which its getarg still reads)
 #   root=UUID=…, root=PARTUUID=…   names ONE host's disk, so the image would be per host (the root is the
 #                     mapping, root=/dev/mapper/root, and the partition is found by its label)
-CMDLINE_REFUSED = (r"(rd\.)?luks(\.[a-z0-9_.-]+)?(=.*)?", r"rd\.break(=.*)?", r"rd\.shell(=.*)?", r"(rd\.)?systemd\.debug[-_]shell(=.*)?",
+CMDLINE_REFUSED = (r"(rd\.)?luks(\.[a-z0-9_.-]+)?(=.*)?", r"rd\.?break(=.*)?", r"rd\.?shell(=.*)?", r"(rd\.)?systemd\.debug[-_]shell(=.*)?",
                    r"(rd)?init=.*", r"(rd\.)?systemd\.unit=.*", r"emergency", r"rescue", r"single", r"[sS1]", r"-b",
                    r"root=(UUID|PARTUUID|LABEL|PARTLABEL)=.*")
 # ... except the forms that turn a shell OFF, which a KMS host's image should carry (rd.shell=0).
@@ -131,7 +132,13 @@ CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off
 # does not clear memory it frees. With these words nothing the client held survives the process in RAM
 # the booted system can reuse. The boot test checks the kernel actually enabled them (its boot log), since
 # a kernel built without the options ignores the words.
-CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1")
+# rd.shell=0 and rd.emergency=reboot: a boot whose unlock fails (peers refuse the disk, as they do for a
+# retired image) reaches dracut's emergency path, which then reboots rather than offering a shell. A shell
+# in the initrd could extend PCR 11 by hand to the booted phase, the value that authorizes writes to the
+# TPM anchor (#242). The root device's own wait must not time out into that path while the recovery-key
+# prompt is up; that timeout is set on the root's entry alone (#70), never as systemd's default, which
+# the booted system would also apply to every other device.
+CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1", "rd.shell=0", "rd.emergency=reboot")
 
 
 def _cmdline_key(word):
@@ -263,6 +270,11 @@ def cmdline_text(raw):
         raise Refused("the command line is not ASCII")
     require(text and re.fullmatch(r"[\x20-\x7e]+", text) is not None, "the command line must be one line of printable ASCII")
     words = text.split()
+    for word in words:
+        if re.fullmatch(CMDLINE_HARDENING, word):
+            continue
+        for pattern in CMDLINE_REFUSED:
+            require(re.fullmatch(pattern, word) is None, "the command line holds %r, which a KMS host's image does not carry" % word)
     for needed in CMDLINE_REQUIRED:
         require(needed in words, "the command line does not carry %s, which every KMS host's image must" % needed)
         # ... and nothing that says otherwise: the kernel and systemd take the LAST value of a repeated word,
@@ -271,11 +283,6 @@ def cmdline_text(raw):
         given = [w for w in words if _cmdline_key(w) == key]
         require(given == [needed], "the command line gives %s more than once or with another value or spelling (%s): it must say %s, once"
                 % (needed.split("=", 1)[0], " ".join(given), needed))
-    for word in words:
-        if re.fullmatch(CMDLINE_HARDENING, word):
-            continue
-        for pattern in CMDLINE_REFUSED:
-            require(re.fullmatch(pattern, word) is None, "the command line holds %r, which a KMS host's image does not carry" % word)
     return text
 
 
@@ -873,6 +880,9 @@ def review_initrd_data(data, run=subprocess.run, tools=TOOLS, inventory=None, cl
         body = _regular(files, fragment) or b""
         for word in " ".join(lines(body.decode("utf-8", "replace"))).split():
             if re.fullmatch(CMDLINE_HARDENING, word):
+                continue
+            if any(_cmdline_key(word) == _cmdline_key(needed) and word != needed for needed in CMDLINE_REQUIRED):
+                findings.append("%s holds %r: the initrd's command line must not change what the image's command line requires" % (fragment, word))
                 continue
             if any(re.fullmatch(p, word) for p in CMDLINE_REFUSED):
                 findings.append("%s holds %r: the initrd's command line must not say how the disk is opened" % (fragment, word))
