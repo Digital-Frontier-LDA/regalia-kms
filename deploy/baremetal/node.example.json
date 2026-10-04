@@ -14,5 +14,6 @@
   "measurements": "/etc/regalia/measurements.json",
   "pcrs": [7, 11],
   "time_servers": ["nts.netnod.se", "ptbtime1.ptb.de", "time.cloudflare.com"],
-  "pull_interval": 60
+  "pull_interval": 60,
+  "beat_interval_s": 900
 }

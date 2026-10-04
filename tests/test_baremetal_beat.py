@@ -97,6 +97,26 @@ class Cosign(Case):
         self.refused("a number is signed once", b.cosign, self.man, "a", third, self.proposal("a", third))
         self.assertEqual(len(b.signs), 1)
 
+    def test_two_signers_racing_for_one_number_sign_it_once(self):
+        """regalia-kms-1e's read: the counter's own lock decides, so two signatures at one number cannot both be made,
+        whichever thread gets there first (the proposer and a beat-sign request, in one sync process)."""
+        import threading
+        b, results, start = self.nodes["b"], [], threading.Barrier(2)
+
+        def sign(body):
+            start.wait()
+            try:
+                results.append(b.signer(body, self.man))
+            except m.Refused as refused:
+                results.append(refused)
+        threads = [threading.Thread(target=sign, args=(self.body(sequence=4, issued=self.now + i),)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sorted(type(r).__name__ for r in results), ["Refused", "dict"])
+        self.assertEqual((b.signing.value(), len(b.signs)), (4, 1))
+
     def test_only_what_it_would_itself_accept(self):
         b = self.nodes["b"]
         cases = [
@@ -222,6 +242,13 @@ class Proposing(Case):
         self.now += 60
         envelope = self.proposers["a"].step()
         self.assertEqual((envelope["heartbeat"]["epoch"], envelope["heartbeat"]["sequence"]), (2, 3))
+
+    def test_a_shorter_interval_scales_the_takeover_jitter_and_retry(self):
+        fast = beat.Proposer("b", lambda: self.man, self.nodes["b"].freshness, self.clock, self.nodes["b"].signer, self.asker("b"),
+                             self.events.append, interval=60, rand=lambda: 0.99)
+        self.assertEqual((fast.scaled(beat.TAKEOVER_S), fast.scaled(beat.JITTER_S), fast.scaled(beat.RETRY_FIRST_S)), (8, 2, 4))
+        self.assertEqual(fast.due(self.man, self.now), self.now + 8 + 1)          # rank 1, nothing held: one takeover, the jitter
+        self.assertEqual(self.proposers["b"].scaled(beat.TAKEOVER_S), 120)
 
     def test_the_owner_never_proposes_and_a_node_not_counted_never_does(self):
         man = manifest4(1, "", nodes4(c="RETIRED"))

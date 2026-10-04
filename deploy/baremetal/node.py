@@ -71,7 +71,7 @@ Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.node/v1"
 KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
-        "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval")
+        "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval", "beat_interval_s")
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 MAX_BYTES = 64 * 1024
 
@@ -119,6 +119,10 @@ def validate(doc):
     authtime.servers(doc["time_servers"])
     interval = doc["pull_interval"]
     require(isinstance(interval, int) and not isinstance(interval, bool) and 10 <= interval <= 3600, "pull_interval must be 10 to 3600 seconds")
+    # #199: how often the nodes sign a heartbeat (beat.Proposer); 900 in production (#69), shorter only in tests
+    beat_every = doc["beat_interval_s"]
+    require(isinstance(beat_every, int) and not isinstance(beat_every, bool) and 60 <= beat_every <= 3600,
+            "beat_interval_s must be 60 to 3600 seconds")
     return doc
 
 
@@ -571,7 +575,8 @@ class Sync:
 
             def __call__(self, body, manifest):
                 return sync_.beat_signer()(body, manifest)
-        return beat.Proposer(self.node.node_id, self.manifest, self.freshness, self.node.clock(), Lazy(), ask, self.trail)
+        return beat.Proposer(self.node.node_id, self.manifest, self.freshness, self.node.clock(), Lazy(), ask, self.trail,
+                             interval=self.node.cfg["beat_interval_s"])
 
     def unlock_peer(self):
         return unlock.Peer(self.node.node_id, self.store, self.freshness, self.node.attester_for,
@@ -626,14 +631,24 @@ class Sync:
         for thread in threads:
             thread.start()
         watch, proposer = self.watch(), self.proposer()
+        unable = None                           # the last refusal the proposer could not even start under
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
                 self.pull_round()
-                # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer)
-                with contextlib.suppress(Refused, OSError):
+                # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer).
+                # A refusal before any proposal (no authenticated time, not a UKI boot: no PCR key to sign under) is
+                # written once per cause, so a node that can never sign is not silent (regalia-kms-1e's read)
+                try:
                     if self.manifest()["schema"] == membership.SCHEMA_V4:
                         proposer.step()
+                except (Refused, OSError) as refused:
+                    if str(refused) != unable:
+                        unable = str(refused)
+                        with contextlib.suppress(Exception):
+                            self.trail({"event": "beat-propose", "outcome": "DENY", "reason": unable[:240]})
+                else:
+                    unable = None
                 with contextlib.suppress(Refused, OSError):
                     watch.step()
                 self.refusals.flush()
