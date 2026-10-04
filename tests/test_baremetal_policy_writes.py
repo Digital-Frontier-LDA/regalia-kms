@@ -198,6 +198,11 @@ class Enrolment(ea.Anchor):
         self.assertRegex(self.public(self.cfg["nv_epoch"]), r"value: 0x2006001A\b")
         # the node's services read it, with the policy they derive from the store and the image's key
         self.assertEqual((self.node().anchor().value(), self.node().anchor().record()), (3, (3, digest)))
+        # the signing counter (#199), defined at 0 under the same policy, and advanced by the node's own construction by policy
+        self.assertRegex(self.public(self.cfg["nv_signing"]), r"value: 0x2006001A\b")
+        from deploy.baremetal import node as node_module
+        signing = node_module.signing_counter(self.node().cfg)
+        self.assertEqual((signing.value(), signing.advance(1)), (0, 1))
 
     def test_another_image_s_key_defines_nothing(self):
         os.makedirs(self.d + "/other")
