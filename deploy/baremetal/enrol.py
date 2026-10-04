@@ -2,7 +2,9 @@
 manifest ceremony needs to name it (#190).
 
     sudo python3 -Es -m deploy.baremetal.enrol init --node-id a --system-pub SYSTEM-PCR-KEY.pem
-    python3 -Es -m deploy.baremetal.enrol entry --bundle bundle.json --system-pub SYSTEM-PCR-KEY.pem     (the root's side, no TPM)
+    python3 -Es -m deploy.baremetal.enrol challenge --bundle bundle.json --out CRED.bin --keep KEEP.json   (the root's side, no TPM)
+    sudo python3 -Es -m deploy.baremetal.enrol activate --credential CRED.bin                      (on the node: prints the answer)
+    python3 -Es -m deploy.baremetal.enrol entry --bundle bundle.json --system-pub SYSTEM-PCR-KEY.pem --keep KEEP.json --answer HEX
 
 WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied to node keys):
   * the EK and a restricted signing AK, persistent in the TPM (attest.node_init, 0x81010001/0x81010002);
@@ -326,23 +328,84 @@ def tokens(journal, module, run):
     return serials
 
 
+def recheck_signing_key(journal, directory, run):
+    """Before `commit` writes anything: the signing key this enrolment made is still the object at its handle (its Name
+    the journal recorded), and it is the one the bundle names. A key removed or replaced after `init` would otherwise
+    go into a v4 manifest this TPM cannot sign for. Nothing to check for an enrolment made before #199."""
+    if journal.state("signing_key") != "done":
+        return
+    facts = journal.get("signing_key")
+    require(signkey.HANDLE.lower() in persistent_handles(run) and _name_at(signkey.HANDLE, directory, run) == facts["signing_name"],
+            "the signing key this enrolment made is no longer at %s: nothing was written" % signkey.HANDLE)
+    require(_bundle(directory).get("signing_key") == facts["signing_key"], "bundle.json names another signing key than the one this "
+            "enrolment made: nothing was written")
+
+
 ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials")
+CHALLENGE_SCHEMA = "regalia.enrol-challenge/v1"
 
 
-def entry(bundle, system_pub, run=subprocess.run):
-    """The root's side, on its own machine and without a TPM: a node's identity fields as a v4 manifest entry carries
-    them, from its bundle, once everything in it that can be checked is. The EK and AK Names are recomputed from their
-    public areas, and the signing key is accepted only as signkey.verify_certification accepts it: certified by THIS
-    AK under THIS EK, with the attributes and the PolicyAuthorize of `system_pub` (the root's own copy of the
-    system-phase PCR key, never the node's word). The EK certificate is the ceremony's to verify, as before."""
+def _bundle_identity(bundle):
+    """The bundle's EK and AK public areas, with their Names recomputed and required to be the ones it states."""
     require(isinstance(bundle, dict) and bundle.get("schema") == SCHEMA_BUNDLE, "not an identity bundle")
-    for k in ("node_id", "ek_public", "ek_name", "ak_public", "ak_name", "wg_service_pub", "wg_boot_pub",
-              "signing_public", "signing_certify", "signing_sig"):
-        require(isinstance(bundle.get(k), str), "the bundle has no %s%s" % (k, ": it was made before #199" if k.startswith("signing") else ""))
+    for k in ("node_id", "ek_public", "ek_name", "ak_public", "ak_name"):
+        require(isinstance(bundle.get(k), str), "the bundle has no %s" % k)
     require(NODE_ID.fullmatch(bundle["node_id"]), "the bundle's node ID is not a node ID")
     ek_public, ak_public = bytes.fromhex(bundle["ek_public"]), bytes.fromhex(bundle["ak_public"])
     require(attest.name_of(attest.public_area(ek_public, "the EK public area")).hex() == bundle["ek_name"], "the bundle's EK Name is not its EK's")
     require(attest.ak_identity(ak_public)[0].hex() == bundle["ak_name"], "the bundle's AK Name is not its AK's")
+    return ek_public, ak_public
+
+
+def challenge(bundle, run=subprocess.run, rand=os.urandom):
+    """The root's side, no TPM: a credential to the bundle's EK and AK Name (TPM2_MakeCredential in software) and what to
+    KEEP to check the answer: only the SHA-256 of the secret, never the secret. Only the TPM that holds that EK and an
+    object of that AK Name under it can release the secret (enrol activate), which is what proves the AK is in the TPM
+    the EK names: the AK's certification of the signing key is worth nothing without it (a software "AK" could sign any
+    TPMS_ATTEST; CodeRabbit's finding on #358). This is an AK enrolment challenge, carrying nothing else, as
+    attest.make_credential's invariant requires. Returns (credential bytes, keep document)."""
+    ek_public, _ = _bundle_identity(bundle)
+    secret = bytearray(rand(32))
+    try:
+        credential = attest.make_credential(ek_public, bytes.fromhex(bundle["ak_name"]), bytes(secret), run)
+        keep = {"schema": CHALLENGE_SCHEMA, "node_id": bundle["node_id"], "ek_name": bundle["ek_name"], "ak_name": bundle["ak_name"],
+                "secret_sha256": hashlib.sha256(secret).hexdigest()}
+    finally:
+        secret[:] = bytes(len(secret))
+    return credential, keep
+
+
+def activate(credential, run=subprocess.run):
+    """On the node (root): the secret its TPM releases for `credential` under its persistent EK and AK (attest.node_activate),
+    as hex, for the operator to carry back to the root's machine."""
+    with tempfile.TemporaryDirectory(prefix="enrol-activate-") as d:
+        path, out = os.path.join(d, "credential"), os.path.join(d, "secret")
+        with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+            f.write(credential)
+        attest.node_activate(path, out, run=run)
+        with open(out, "rb") as f:
+            return f.read().hex()
+
+
+def entry(bundle, system_pub, keep, answer, run=subprocess.run):
+    """The root's side, on its own machine and without a TPM: a node's identity fields as a v4 manifest entry carries
+    them, from its bundle, once everything in it that can be checked is. The EK and AK Names are recomputed from their
+    public areas, and the signing key is accepted only as signkey.verify_certification accepts it: certified by THIS
+    AK under THIS EK, with the attributes and the PolicyAuthorize of `system_pub` (the root's own copy of the
+    system-phase PCR key, never the node's word). The EK certificate is the ceremony's to verify, as before.
+
+    `keep` and `answer` are the AK's proof (challenge, then activate on the node): the secret only the TPM holding this EK
+    and this AK could release. Without it the AK's certification proves nothing, and nothing is printed."""
+    for k in ("wg_service_pub", "wg_boot_pub", "signing_public", "signing_certify", "signing_sig"):
+        require(isinstance(bundle.get(k), str), "the bundle has no %s%s" % (k, ": it was made before #199" if k.startswith("signing") else ""))
+    _, ak_public = _bundle_identity(bundle)
+    require(isinstance(keep, dict) and keep.get("schema") == CHALLENGE_SCHEMA, "the kept challenge is not one `enrol challenge` wrote")
+    require((keep.get("node_id"), keep.get("ek_name"), keep.get("ak_name")) == (bundle["node_id"], bundle["ek_name"], bundle["ak_name"]),
+            "the kept challenge was made for another bundle")
+    require(isinstance(answer, str) and re.fullmatch(r"[0-9a-f]{64}", answer or "") is not None, "the answer is the 64 hex `enrol activate` printed")
+    import hmac
+    require(hmac.compare_digest(hashlib.sha256(bytes.fromhex(answer)).hexdigest(), keep.get("secret_sha256", "")),
+            "the answer is not the challenge's secret: the AK is not proven to be in the TPM this EK names")
     signing = signkey.verify_certification(bytes.fromhex(bundle["signing_public"]), bytes.fromhex(bundle["signing_certify"]),
                                            bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
     wg = {k: base64.b64decode(bundle[k], validate=True).hex() for k in ("wg_service_pub", "wg_boot_pub")}
@@ -1675,6 +1738,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     journal = Journal(directory, _bundle(directory)["node_id"])
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
+    recheck_signing_key(journal, directory, run)                    # and the signing key at its own (#199; CodeRabbit on #358)
     manifest = check_manifest(directory, chain, root_key, typed, document, replace)
     note = signing_note(directory, manifest)
     if note:
@@ -1728,9 +1792,17 @@ def main(argv=None):
     p.add_argument("--pkcs11-module", default=OPENSC_MODULE, help="the PKCS#11 module that reads the SmartCard-HSM's serial")
     p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
                    "only under PCR 11 policies it signed")
+    g = sub.add_parser("challenge", help="(the root's side, no TPM) a credential to the bundle's EK and AK, for `activate`")
+    g.add_argument("--bundle", required=True)
+    g.add_argument("--out", required=True, help="the credential, to carry to the node")
+    g.add_argument("--keep", required=True, help="what the root's machine keeps: the secret's SHA-256, never the secret")
+    a = sub.add_parser("activate", help="(on the node, root) the secret its TPM releases for the root's credential")
+    a.add_argument("--credential", required=True)
     e = sub.add_parser("entry", help="(the root's side, no TPM) check a bundle and print the node's v4 identity fields")
     e.add_argument("--bundle", required=True)
     e.add_argument("--system-pub", required=True, help="the root's own copy of the system-phase PCR key's public half (PEM)")
+    e.add_argument("--keep", required=True, help="the file `challenge` kept")
+    e.add_argument("--answer", required=True, help="the 64 hex `activate` printed on the node")
     c = sub.add_parser("check", help="check the root-signed manifest against this host, writing nothing")
     c.add_argument("--manifest", required=True, help="the root-signed epoch-1 envelope, or a JSON list of the "
                    "envelopes from epoch 1 to the one that first names this host")
@@ -1871,12 +1943,34 @@ def main(argv=None):
         if note:
             print(note)
         return 0
+    if args.command == "challenge":
+        try:
+            with open(args.bundle, "rb") as f:
+                credential, keep = challenge(membership.load(f.read(membership.MAX_BYTES + 1)))
+            for path, data in ((args.out, credential), (args.keep, json.dumps(keep, sort_keys=True).encode())):
+                with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
+                    f.write(data)
+        except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        print("WRITTEN: the credential %s (to the node: enrol activate) and the kept hash %s" % (args.out, args.keep))
+        return 0
+    if args.command == "activate":
+        try:
+            with open(args.credential, "rb") as f:
+                print("ANSWER %s" % activate(f.read(4096)))
+        except (Refused, attest.Refused, OSError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        return 0
     if args.command == "entry":
         try:
             with open(args.bundle, "rb") as f:
                 document = membership.load(f.read(membership.MAX_BYTES + 1))
+            with open(args.keep, "rb") as f:
+                keep = membership.load(f.read(4096))
             with open(args.system_pub, "rb") as f:
-                print(json.dumps(entry(document, f.read(65536)), indent=1, sort_keys=True))
+                print(json.dumps(entry(document, f.read(65536), keep, args.answer), indent=1, sort_keys=True))
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1

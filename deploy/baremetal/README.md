@@ -808,10 +808,16 @@ removing only what it can prove it made.
   usable only under PolicyAuthorize of the system-phase PCR key, `signkey.py`) with the AK's certification of
   it, the WG-SERVICE key (`/etc/regalia/wg-service.key`, 0600) and the WG-BOOT key, and writes the identity
   bundle (public values) for the manifest ceremony.
-- `entry --bundle B --system-pub PEM` is the root's side, on its own machine and without a TPM: it checks a
-  bundle (the EK and AK Names from their public areas; the signing key certified by that AK, with the
-  attributes and policy of the root's own system-phase key) and prints the node's identity fields as a v4
-  manifest entry carries them.
+- The root's side, on its own machine and without a TPM, in three steps:
+  - `challenge --bundle B --out CRED --keep KEEP` makes a credential to the bundle's EK and AK Name. KEEP holds only
+    the secret's SHA-256.
+  - `activate --credential CRED`, run as root on the node, prints the secret. Only the TPM that holds that EK and
+    that AK can release it, which proves the AK is the EK's. Without that proof, the AK's certification of the
+    signing key would prove nothing.
+  - `entry --bundle B --system-pub PEM --keep KEEP --answer HEX` checks the answer. It then checks the bundle: the
+    EK and AK Names from their public areas, and the signing key certified by that AK, with the attributes and
+    policy of the root's own system-phase key. Only then does it print the node's identity fields as a v4
+    manifest entry carries them.
 - `check` verifies a root-signed manifest chain against this host and writes nothing.
 - `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
