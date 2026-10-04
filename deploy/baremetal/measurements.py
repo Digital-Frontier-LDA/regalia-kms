@@ -93,7 +93,7 @@ import base64
 import hashlib
 import re
 
-from deploy.baremetal import attest, membership, replacement
+from deploy.baremetal import attest, membership, replacement, signkey
 
 Refused, require = membership.Refused, membership.require
 
@@ -156,6 +156,26 @@ def bind(manifest, document):
         if membership.CAPABILITIES[node["state"]] & {"request", "serve"}:
             require(node_id in sets, "the measurements have no entry for %s, which the manifest lets attest" % node_id)
     return {node_id: {"accepted": accepted} for node_id, accepted in sets.items()}
+
+
+def approved_image_policy(manifest, document, node_id, pem):
+    """The write policy of `node_id`'s TPM anchor and counters (#242), as 64 hex: PolicyAuthorize of the
+    system-phase PCR key `pem` (the running image's .pcrpkey, signkey.PCR_PUBLIC_KEY_PATH), computed by
+    signkey.policy, IF that key is one the root approved for this node: its fingerprint must be the
+    signing.system of one of the node's accepted sets in the document `manifest` commits to. A document that
+    is not the manifest's, a node with no such set, or a key no set names is a refusal: never a fallback."""
+    sets = bind(manifest, document)
+    require(isinstance(node_id, str) and node_id in sets, "the measurements have no entry for %r" % (node_id,))
+    approved = sorted({entry["signing"]["system"] for entry in sets[node_id]["accepted"] if "signing" in entry})
+    require(approved, "no accepted set of %s names a system-phase PCR key (signing.system): the anchor's write policy cannot be "
+            "established" % node_id)
+    try:
+        fingerprint = signkey.pcr_key_fingerprint(pem)
+    except ValueError:
+        raise Refused("the system-phase PCR key is not a PEM public key") from None
+    require(fingerprint in approved, "the running image's system-phase PCR key (%s) is not one the root approved for %s (%s)"
+            % (fingerprint, node_id, ", ".join(approved)))
+    return signkey.policy(pem).hex()
 
 
 def attest_policy(manifest, document, peer_id):

@@ -749,11 +749,14 @@ class HighWater:
 
     def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None, policy=None):
         """`policy`: the node's approved-image write policy, PolicyAuthorize(system-phase PCR key), as 64 hex
-        (the digest a policy-written index must hold as its authPolicy); None on a node that has none."""
+        (the digest a policy-written index must hold as its authPolicy), or a function that returns it (the
+        node's: measurements.approved_image_policy over its signed chain and the running image's key), called
+        only when a policy-written index is met and at most once. None on a node that has none. A function that
+        cannot establish the policy refuses (Refused): a TPM-side question is never answered by a guess."""
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
-        if policy is not None:
+        if policy is not None and not callable(policy):
             hex_field(policy, 64, "the approved-image write policy")
-        self.policy = policy
+        self._policy_source, self._policy = policy, (policy if not callable(policy) else None)
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
         self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
@@ -789,6 +792,15 @@ class HighWater:
 
     def _attributes(self, index):
         return self._public(index)[0]
+
+    @property
+    def policy(self):
+        """This node's approved-image write policy (64 hex), or None: resolved from a function at most once."""
+        if self._policy is None and callable(self._policy_source):
+            policy = self._policy_source()
+            hex_field(policy, 64, "the approved-image write policy")
+            self._policy = policy
+        return self._policy
 
     def _auth_policy(self, index):
         """An index's authPolicy as tpm2_nvreadpublic reports it (64 lowercase hex), or "" when it has none."""
@@ -926,10 +938,10 @@ class HighWater:
         by its own empty authorization, no authwrite or ppwrite, no locks that come and go."""
         want, mask = self.ATTRIBUTES[kind], attributes & ~self.STATE
         if mask == self.POLICY_ATTRIBUTES.get(kind):
-            held = self._auth_policy(index)
-            require_anchor(self.policy is not None and held == self.policy,
+            held, policy = self._auth_policy(index), self.policy
+            require_anchor(policy is not None and held == policy,
                            "the anchor's write policy is not this node's approved-image policy: NV index %s is written by policy %s, %s"
-                           % (index, held or "(none)", "and this node has none configured" if self.policy is None else "not " + self.policy))
+                           % (index, held or "(none)", "and this node has none configured" if policy is None else "not " + policy))
         else:
             require_anchor(mask == want, "NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be written or read "
                            "otherwise than this software defines" % (index, mask, want))

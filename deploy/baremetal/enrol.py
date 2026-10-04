@@ -995,8 +995,8 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
     with open(os.path.join(directory, "bundle.json"), "rb") as f:
         full = membership.load(f.read(membership.MAX_BYTES + 1))
     hw = node.anchor()
-    from deploy.baremetal import heartbeat
-    counter = heartbeat.Counter(node.cfg["nv_heartbeat"], node.tcti, run, lock_path=node.path("heartbeat-counter.lock"))
+    from deploy.baremetal.node import heartbeat_counter
+    counter = heartbeat_counter(node.cfg, run)      # the services' construction: its lock, and its policy (#242)
     paths = []
     for peer in peers:
         fact = journal.get("path:" + peer)
