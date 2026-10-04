@@ -1033,8 +1033,10 @@ class Cluster:
 
     def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, skip=(), **states):
         """A new epoch with nodes' states changed ({node: state}), signed by the root or (signer "owner", a restrictive
-        change) by the owner alone. `seed`, a running node, has its services stopped (a crash: the same
-        boot), takes the epoch into its store with its heartbeat, and starts again. Nodes whose services are
+        change) by the owner alone. A root-signed epoch reaches `seed`, a running node, as an operator gives it one:
+        `deploy.baremetal.deliver` run as root (the real command: it commits as regalia-sync through the node's Store and
+        republishes, the services running). An owner-signed one is committed into the seed's store with its services
+        stopped (a crash: the same boot), and they start again. Nodes whose services are
         stopped take it into their stores as they are (they would pull it when they come back). The other running
         nodes are left to pull it from the seed with their real sync (their trails say from whom); the counting nodes
         then sign the epoch's heartbeat themselves (_beaten). Returns (the new manifest, when the seed
@@ -1058,11 +1060,13 @@ class Cluster:
         others = [name for name in self.nodes if name != seed and self.running(name)]
         running = [name for name in others if membership.may(manifest, name, "authorize")]   # they pull it from the seed
         services = self.services[seed]
-        self.stop(seed, power=None)
+        delivered = signer == "root" and self.running(seed)
+        if not delivered:
+            self.stop(seed, power=None)
         if document is not None:
             self.document = document
         for name in self.nodes:
-            if name in others or name in skip:        # running: its store is its sync's (one that may not authorize is left be)
+            if name in others or name in skip or (delivered and name == seed):   # running: its store is its sync's
                 continue
             if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
                 self.node(name).documents().put(document)
@@ -1071,12 +1075,35 @@ class Cluster:
         self.chain.append(envelope)
         self.manifest = manifest
         since = time.time()
-        self.start(seed, services)
+        if delivered:
+            self.deliver(seed, [envelope], [document] if document is not None else [])
+        else:
+            self.start(seed, services)
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
         self._beaten(manifest, owner_recovery)
         return manifest, since
+
+    def deliver(self, name, envelopes, documents):
+        """`sudo python3 -Es -m deploy.baremetal.deliver --config … --chain … --documents …` for the running node `name`, as
+        an operator gives a node the root's epochs (#199: what `authority accept` did): root reads the files, the node's
+        regalia-sync commits them through its Store and republishes. Returns the command's output."""
+        d = self.work / "deliver"
+        d.mkdir(mode=0o700, exist_ok=True)
+        chain = d / ("chain-%d.json" % envelopes[-1]["manifest"]["epoch"])
+        chain.write_text(json.dumps(envelopes))
+        args = ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.deliver", "--config", str(self.nodes[name].cfg_path), "--chain", str(chain)]
+        if documents:
+            args.append("--documents")
+            for i, document in enumerate(documents):
+                path = d / ("document-%d-%d.json" % (envelopes[-1]["manifest"]["epoch"], i))
+                path.write_text(json.dumps(document))
+                args.append(str(path))
+        done = sh(*args, cwd=str(self.code), check=False)
+        if done.returncode != 0:
+            raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
+        return done.stdout
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout

@@ -27,6 +27,7 @@ Refused, require = membership.Refused, membership.require
 SYNC_USER = "regalia-sync"
 PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MAX_CHAIN_BYTES = membership.MAX_CHAIN_BYTES
+MAX_DOCUMENTS = 8                 # measurement documents in one delivery
 
 
 def deliver(node, envelopes, documents, trail):
@@ -76,7 +77,9 @@ def main(argv=None):
     try:
         if args.op == "_deliver":
             node = node_module.Node(node_module.load(args.config))
-            given = membership.load(sys.stdin.read(MAX_CHAIN_BYTES + 1).encode(), MAX_CHAIN_BYTES)
+            # the chain and the documents together: each passed its own limit when root read it (3e's read)
+            limit = MAX_CHAIN_BYTES + MAX_DOCUMENTS * measurements.MAX_BYTES + 65536
+            given = membership.load(sys.stdin.read(limit + 1).encode(), limit)
             trail = node_module.Trail(node.path("sync-audit.jsonl"), "sync")
             print(json.dumps({"epoch": deliver(node, given["envelopes"], given["documents"], trail)}))
             return 0
@@ -86,6 +89,7 @@ def main(argv=None):
         require(args.chain, "--chain is required")
         with open(args.chain, "rb") as f:
             envelopes = membership.load(f.read(MAX_CHAIN_BYTES + 1), MAX_CHAIN_BYTES)
+        require(len(args.documents) <= MAX_DOCUMENTS, "at most %d documents in one delivery" % MAX_DOCUMENTS)
         documents = []
         for path in args.documents:
             with open(path, "rb") as f:
