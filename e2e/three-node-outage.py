@@ -23,6 +23,7 @@ hand with its recovery key, then the other two by themselves, through that node.
      trigger) drops c from its tunnel, as the nodes' do
   5  its time no longer authenticated: the authority signs no heartbeat, and its trail says why (fail closed)
 """
+import base64
 import json
 import os
 import pathlib
@@ -125,7 +126,8 @@ def scenario(cluster):
 
     header("4  a revocation leaves the authority's own tunnel too")
     before = cluster.wg_peers(AUTH, "wg-svc")
-    keys = {name: cluster.keys[name]["service"][1] for name in names}
+    # as `wg show` prints them: base64 (the fixture holds them as the manifest does, in hex)
+    keys = {name: base64.b64encode(bytes.fromhex(cluster.keys[name]["service"][1])).decode() for name in names}
     said = cluster.revoke("c", "REVOKED_STOLEN", "e2e: the authority's tunnel follows the chain").stdout
     ok(until(lambda: cluster.wg_peers(AUTH, "wg-svc") == {keys["a"], keys["b"]}, 60, 2) is True and keys["c"] in before,
        "after `authority revoke` (epoch 2 published), its wg-apply path dropped c from wg-svc; a and b remain",
