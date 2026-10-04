@@ -22,7 +22,7 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
      nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
   6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
      first 6 in a minute answered, the 7th refused and recorded; c, beside it, answered
-  7  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN. In each, a
+  7  N: a QUARANTINED (by the owner's key, #199), then RETIRED (by the root), then b REVOKED_STOLEN. In each, a
      control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
      survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
      and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
@@ -239,7 +239,7 @@ def scenario(cluster):
     until(lambda: cluster.lease("b"), 150, 3)
 
     header("7  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
-    for victim, signer, state in (("a", "revocation", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "revocation", "REVOKED_STOLEN")):
+    for victim, signer, state in (("a", "owner", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "owner", "REVOKED_STOLEN")):
         before = cluster.manifest
         survivors = [n for n in names if n != victim and may(before, n, "authorize")]
         # the control: the setup works at this moment (tunnels, endpoints, the survivors' services); only the epoch changes

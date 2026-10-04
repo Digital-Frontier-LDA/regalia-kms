@@ -35,7 +35,7 @@ LIMITS (tier N; tier Q is #75's PR 4):
     measurement of a real UKI's sections and systemd-pcrphase's phases (unlock-boot-qemu does that).
   * `update apply` itself (BootNext, the trial boot, the reset fallback; #325, #326) is not run: only the may_reboot
     question it asks, as it asks it.
-  * The epochs and their heartbeats come from the fixture (advance), not from the revocation authority.
+  * The epochs come from the fixture (advance), signed by the root; their heartbeats from the nodes themselves (#199).
   * The local half is sealed to PCR 7, so no image touches it (as on a host, PIN-CUSTODY.md).
   * The document and its epoch are taken together because the fixture stops every node's services across the
     change (Cluster.accept). A host has no such step yet: delivering the document with the epoch that names it is

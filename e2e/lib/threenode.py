@@ -20,9 +20,12 @@ Stand-ins, each named where it is made, and each replaceable when the real piece
   * authenticated time: authtime.Service with a reading that says chrony is synchronised with two NTS
     sources. It writes the real status file the services read; `cluster.time[n] = False` makes it say
     not authenticated (#70 blackout 3b);
-  * heartbeats: signed by the test revocation key the chain names, written into each node's freshness
-    state, as the revocation authority's pull would deliver them (into a running node's under its sync
-    unit's own identity);
+  * heartbeats: under v4 (the default, #199) none from here: the nodes sign their own (beat.py) with their TPM
+    signing keys, each node's PCR 11 extended as a booted image's and signed by a fixture system-phase PCR key
+    (its tpm2-pcr-signature.json and the key bound at /run/systemd in its units), and the owner's two keys
+    (ADR-0002 D30) on a SoftHSM token, signed through Pkcs11Signer as the YubiKeys are; owner_beat() is the hand
+    recovery. With authority=True (v1): signed by the test revocation key the chain names, written into each
+    node's freshness state, as the revocation authority's pull would deliver them;
   * a new epoch (advance): the authority's publication, given to one seed node while its services are down;
     the running nodes pull it from there with their real sync;
   * the pre-root client's two systemd roles: the local half, unsealed by this fixture from the node's TPM,
@@ -203,7 +206,7 @@ class Cluster:
         if self.auth:
             self._authority()
         for n in self.nodes.values():
-            if not self.auth:                         # with the authority, its heartbeats are the only ones
+            if not self.auth and not self.v4:         # with the authority, or under v4 (the nodes', #199), none from here
                 self.beat(n.name, 1)
             # owned as the units' StateDirectory= would make them: the services are not root
             sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
@@ -456,7 +459,8 @@ class Cluster:
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
-                   time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10)
+                   time_servers=["nts1.e2e3.invalid", "nts2.e2e3.invalid"], pull_interval=10,
+                   beat_interval_s=heartbeat.MIN_INTERVAL_S)    # #199: the shortest the product allows (600 s)
         _replace(n.cfg_path, json.dumps(cfg))
 
     def node(self, name):
@@ -470,6 +474,8 @@ class Cluster:
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
         here.store().commit(self.chain[0])
         node.heartbeat_counter(here.cfg).define()
+        if self.v4:
+            node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
 
     # ---- the stand-ins ----
 
@@ -495,9 +501,10 @@ class Cluster:
 
     def beat(self, name, sequence, manifest=None):
         """A heartbeat signed by the test revocation key, delivered into the node's freshness state. Refused with the
-        real authority (authority=True): its heartbeats are then the only ones (regalia-kms-51)."""
-        if self.auth:
-            raise RuntimeError("with the authority, heartbeats come from its serve, never from the fixture")
+        real authority (authority=True): its heartbeats are then the only ones (regalia-kms-51); and under v4, where
+        the nodes sign their own (#199: fresh() waits for them)."""
+        if self.auth or self.v4:
+            raise RuntimeError("heartbeats come from the authority's serve or, under v4, from the nodes: never from the fixture")
         manifest = manifest or self.manifest
         self.node(name).freshness().accept(hbt.beat(manifest, sequence, issued=int(time.time())), manifest)
 
@@ -524,6 +531,11 @@ class Cluster:
         props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1"]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
+        if self.v4 and n is not self.auth:
+            # where a booted host's systemd-stub puts the image's PCR signatures and its system-phase key: the node's own
+            pcr = n.dir / "pcr"
+            props += ["BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
+                      "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
         return props
 
     AUTH_SERVICES = ("wg-apply", "serve")
@@ -542,7 +554,7 @@ class Cluster:
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
-        if name in self.pending and not self.running(name):   # the authority's heartbeat, which it pulls once it runs
+        if name in self.pending and not self.running(name) and not self.v4:   # the authority's heartbeat, which it pulls once it runs
             try:
                 self.beat(name, *self.pending.pop(name))
             except membership.Refused as refused:     # e.g. a node the epoch revoked: it runs without, and says so
@@ -1019,6 +1031,54 @@ class Cluster:
             "if not holds():\n    try:\n        f.accept(d['beat'], d['manifest'])\n"
             "    except membership.Refused:\n        if not holds():\n            raise\n")
 
+    def owner_signature(self, manifest, which=0):
+        """The owner's signature over a manifest (a restrictive change, which the owner alone may sign under v4)."""
+        signer = self.owner_signer(which)
+        return {"party": membership.OWNER, "key": signer.public(),
+                "sig": signer.sign(membership.DOMAIN + membership.canonical(manifest)).hex()}
+
+    OWNER_PROPOSE = ("import json, sys\nfrom deploy.baremetal import node, owner\nd = json.load(sys.stdin)\n"
+                     "n = node.Node(node.load(d['cfg']))\nt = node.Trail(n.path('sync-audit.jsonl'), 'sync')\n"
+                     "print(json.dumps(owner.propose(n, node.node_beat_signer(n), t)))\n")
+    OWNER_ACCEPT = ("import json, sys\nfrom deploy.baremetal import node, owner\nd = json.load(sys.stdin)\n"
+                    "n = node.Node(node.load(d['cfg']))\nt = node.Trail(n.path('sync-audit.jsonl'), 'sync')\n"
+                    "print(json.dumps({'left': int(owner.accept(n, d['envelope'], t))}))\n")
+
+    def owner_beat(self, name, which=0):
+        """#199's hand recovery (owner.py beat): `name` proposes and signs as its sync unit, the owner's key `which` co-signs
+        after the operator's confirmation (played here: the epoch and the digest's first eight hex digits, as typed), and
+        the node takes it as its sync unit. Returns the envelope."""
+        from deploy.baremetal import owner
+        cfg = str(self.nodes[name].cfg_path)
+        proposal = json.loads(self._as_sync(name, self.OWNER_PROPOSE, {"cfg": cfg}).strip().splitlines()[-1])
+        body = proposal["heartbeat"]
+        typed = "%d %s" % (body["epoch"], owner.shown(body)[1][:8])
+        envelope = owner.owner_sign(proposal, self.manifest, lambda: self.owner_signer(which), lambda text: typed, say=lambda text: None)
+        self._as_sync(name, self.OWNER_ACCEPT, {"cfg": cfg, "envelope": envelope})
+        return envelope
+
+    def _beaten(self, manifest, timeout=300):
+        """#199: every running node that counts holds a heartbeat for the new epoch. With two of them running, their own
+        proposers sign it (beat.Proposer goes at once when it holds none for the epoch). With one, nobody can co-sign it
+        but the owner: the hand recovery, owner_beat."""
+        from deploy.baremetal import beat
+        counting = [n for n in beat.counting_nodes(manifest) if self.running(n)]
+        if len(counting) >= 2:
+            missing = [n for n, held in self.fresh(counting, manifest["epoch"], timeout).items() if not held]
+            if missing:
+                raise RuntimeError("%s signed no heartbeat for epoch %d: %s" % (", ".join(missing), manifest["epoch"],
+                                   " | ".join(self.journal(n, "sync", 8)[-400:] for n in missing)))
+        else:
+            for name in counting:
+                self.owner_beat(name)
+
+    def fresh(self, names=None, epoch=None, timeout=300):
+        """#199: wait until each node in `names` (default: every running node) holds a heartbeat for `epoch` (default: the
+        current manifest's) that the nodes signed. Returns {node: whether it does}."""
+        epoch = self.manifest["epoch"] if epoch is None else epoch
+        names = [n for n in self.nodes if self.running(n)] if names is None else list(names)
+        return {name: bool(until(lambda name=name: self.holds_heartbeat(name, epoch), timeout, 2)) for name in names}
+
     def holds_heartbeat(self, name, epoch):
         """Whether the node holds a heartbeat for `epoch` (its freshness state, read as root)."""
         held = self.node(name).freshness().held()
@@ -1043,7 +1103,12 @@ class Cluster:
                         issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
         if document is not None:
             manifest["policy_version"] = measurements.version(document)
-        envelope = self.signed(manifest, signer=signer)
+        if self.v4 and signer in ("revocation", "owner"):
+            # #199: no revocation key under v4: a restrictive change is the owner's alone (or two nodes', revoke.py)
+            signer = "owner"
+            envelope = {"manifest": manifest, "signatures": [self.owner_signature(manifest)]}
+        else:
+            envelope = self.signed(manifest, signer=signer)
         others = [name for name in self.nodes if name != seed and self.running(name)]
         running = [name for name in others if membership.may(manifest, name, "authorize")]   # they pull it from the seed
         services = self.services[seed]
@@ -1056,7 +1121,9 @@ class Cluster:
             if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
                 self.node(name).documents().put(document)
             self.node(name).store().commit(envelope)
-            if self.time[name]:
+            if self.v4:
+                pass                                  # #199: its heartbeat for the epoch comes from the nodes once it runs
+            elif self.time[name]:
                 self.beat(name, manifest["epoch"] + 1, manifest)
             else:                                     # powered off: no authenticated time to judge a heartbeat by, yet
                 self.pending[name] = (manifest["epoch"] + 1, manifest)
@@ -1068,6 +1135,10 @@ class Cluster:
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+        if self.v4:
+            self._beaten(manifest)
+            return manifest, since
+        for name in running:
             if until(lambda: self.holds_heartbeat(name, manifest["epoch"]), 30, 2):
                 continue                              # sync brought it from the seed with the epoch: the real path
             self._as_sync(name, self.BEAT, {"cfg": str(self.nodes[name].cfg_path), "manifest": manifest,
