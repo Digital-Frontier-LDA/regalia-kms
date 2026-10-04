@@ -96,6 +96,10 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **Card attestation is checked by digest only** (#400). The consuming side checks the digests of the
   cards' attestation certificates. "Attested" rests on the root's signature over the producer's own
   verification. The certificates are kept on the ceremony disc for a manual re-check.
+- **The card record has no freshness check** (#403). Any record the pinned root has ever signed is
+  accepted, so after a card replacement an older record would bring back the retired cards' keys. Until
+  then the operator checks the printed session and time against the ceremony sheet. It must be closed
+  before any card is replaced.
 - **The bench-token lists are kept by hand** (`membership.BENCH_NITROKEYS`, `BENCH_PICOS`,
   `BENCH_YUBIKEYS`). A new bench token must be added there. A test keeps the drills' staging list equal
   to it, and nothing ties it to the operators' staging registry.
