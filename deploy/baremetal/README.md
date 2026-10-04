@@ -620,32 +620,37 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   systemd unsealed), `ip`, `wg`, `nft`, the network drivers, and one crypttab line, the same on every
   host: `root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0` (the root
   volume is the GPT partition labelled `regalia-root`). **The image holds nothing per host**, so one
-  image has one PCR 11 for every host. What differs per host and per manifest comes at boot as
-  **system credentials**, which systemd-stub passes from the ESP (`loader/credentials/<name>.cred`,
-  each measured into PCR 12):
-  | credential | what | sealed |
-  |---|---|---|
-  | `regalia.unlock-local` | the local half | to the TPM (`unlock.seal_local`) |
-  | `regalia.wg-boot-key` | the WG-BOOT private key | to the TPM |
-  | `regalia.unlock-config` | `unlock.boot_config` | no |
-  | `regalia.wg-boot-conf` | `bootnet.boot_wg_conf` | no |
-  | `regalia.boot-nft` | `bootnet.boot_ruleset` | no |
-  | `regalia.boot-env` | `BOOT_NIC_MAC` (the card, by its MAC address: its name can differ in the initrd), `BOOT_ADDRESS`, `BOOT_GATEWAY`, `BOOT_TUNNEL` (read as data; from the site config's `boot_mesh`: `nic_mac`, `prefix`, `gateway`) | no |
+  image has one PCR 11 for every host (it does pin one thing that is the same for every host of a
+  deployment: the membership root it trusts, `/usr/lib/regalia/root-key.json`, a build input,
+  `build-initrd.sh --root-key`, held byte for byte by the image's review, #156). What differs per host
+  comes at boot from the ESP (#66 B3):
+  | on the ESP | what | measured (PCR 12) | sealed |
+  |---|---|---|---|
+  | `loader/credentials/regalia.unlock-local.cred` | the local half | yes | to the TPM (`unlock.seal_local`) |
+  | `loader/credentials/regalia.wg-boot-key.cred` | the WG-BOOT private key | yes | to the TPM |
+  | `loader/credentials/regalia.site.cred` | the site document (`bootcreds.site_document`): host_ipv4, the root device, the site's `boot_mesh` (the card by its MAC address, its prefix, gateway and tunnel address, the peers' addresses) | yes | no |
+  | `EFI/regalia/membership.json` | the signed membership chain | **no** | no |
 
-  The four unsealed ones are rendered by **`deploy/baremetal/bootcreds.py`**: `render(manifest, site, device)`
-  is deterministic (a peer recomputes them, and the PCR 12 they give), and `esp_files(site, envelopes, root_key,
-  device, anchor)` is the one call enrolment and the update path make, for a chain it verifies itself, from the
-  root and against the host's TPM high-water anchor: a stale or forked chain, however well signed, renders
-  nothing (#66). B3 moves
-  the three derived from the manifest into the initrd, rendered there from the signed chain, so that a
-  membership change does not move PCR 12; esp_files' callers do not change.
+  **The membership chain is verified in the initrd, not measured.** `regalia-boot-render.service` runs
+  `regalia-unlock -render /run/regalia-boot`: it finds the ESP by the `LoaderDevicePartUUID` EFI variable,
+  mounts it read-only (nosuid, nodev, noexec, in the unit's own mount namespace), reads the chain and
+  unmounts it, verifies the chain from the root the image pins and against this TPM's high-water anchor (a
+  validly signed but stale or forked chain is refused), and renders the four files the boot mesh and the
+  client read: the boot configuration (`unlock.boot_config`), the WireGuard configuration, the ruleset and
+  boot.env, byte for byte what **`deploy/baremetal/bootcreds.py`**'s `render(manifest, site, device)` gives
+  (`cmd/regalia-unlock/bootcfg`, held to it by a shared vector). So **a membership change does not move PCR
+  12**: only a change to the site does. Any refusal ends the render with one line; the boot mesh and the
+  client do not start, no peer is asked, and the console's prompt takes the recovery key. `esp_files(site,
+  envelopes, root_key, device, anchor)` is the one call enrolment and the update path make: it verifies the
+  chain the same way, renders what the initrd will render (refusing, e.g., a host left with no peer), and
+  writes the site document and the chain, and removes the four files an earlier stage rendered onto the ESP.
 
   **Nothing in the initrd acts on a credential by name.** The image's command line (signed, in PCR 11)
   carries `systemd.import_credentials=no`: systemd imports no credential from any source, not the ESP,
   not SMBIOS type 11 or QEMU's fw_cfg (which nothing the peers attest measures), not the command line.
-  The stub still unpacks the ESP's files into the initrd at `/.extra/global_credentials/`, and the two
-  units read exactly their six by fixed paths there: the two sealed ones decrypted by systemd (a plain
-  one is refused), the four others as data. A missing file keeps its unit from starting, and the
+  The stub still unpacks the ESP's files into the initrd at `/.extra/global_credentials/`, and the
+  units read exactly their three by fixed paths there: the two sealed ones decrypted by systemd (a
+  plain one is refused), and the site document as data (the render's). A missing file keeps its unit from starting, and the
   console asks for the recovery key (within seconds in the boot test). Second layer, for an image built
   without that switch: the dracut module leaves out systemd-debug-generator (which makes units and
   drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles, sysctl, journald,
@@ -715,21 +720,24 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     recovery key for disk regalia-root (root)", and the key opens the volume; the running guest seals
     the two boot credentials to its own TPM, to PCR 7 and to the image's initrd-phase signature of PCR
     11; its PCR 11 is the build record's booted-phase value, and its PCR 12 is zero;
-  - unattended: systemd-stub passes the six credentials from the ESP, systemd unseals the two sealed
+  - unattended: systemd-stub passes the three credentials from the ESP, the render verifies the chain
+    against the guest TPM's anchor and renders the boot configuration, systemd unseals the two sealed
     ones in the initrd, the boot mesh comes up, a peer verifies the guest's quote of PCR 7, PCR 11
     (the record's initrd-phase value) and PCR 12, gives its half, and the root volume opens with
     nobody typing anything (about five seconds after the kernel started, in the runs so far); the
     booted PCR 12 is exactly what `deploy/baremetal/espcreds.py` computes from the ESP's files, and
     nothing moves it after the initrd; after switch-root the boot interface, its ruleset and its
     addresses are gone and the link is down;
+  - a forked chain (#66 B3): another epoch 1, validly signed by the root the image trusts, in place of
+    the one the TPM anchored: the render refuses it (CONFLICT), no peer is asked, and the console takes
+    the recovery key; PCR 12 is unchanged, so it is the anchor alone that refuses it;
   - a planted credential: one more file on the ESP (a unit drop-in for the unlock client, an extra
     unit, a tmpfiles line) changes PCR 12, and both peers refuse the quote, so the console asks;
   - no peer for 150 s, past the backoff's cap: the console, up from the start, still takes the
     recovery key, and nothing ended in a shell;
   - the peers back after 150 s: nobody types anything, and the host unlocks by itself.
   NOT shown: Secure Boot (OVMF runs with no enrolled keys, so nothing checks the image's signature
-  and PCR 7 says so), the membership-derived parts of the configuration verified in the initrd
-  instead of passed as credentials (B3 on #66), a network card that udev renames in the initrd (the
+  and PCR 7 says so), a network card that udev renames in the initrd (the
   guest's is `eth0`), and any physical machine.
 - **Reviewing an image.** What opens the root volume is decided inside the initrd, and the running host
   keeps no record of it: after switch-root the unit that opened the volume is no longer loaded (seen

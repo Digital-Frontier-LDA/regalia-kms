@@ -24,6 +24,9 @@
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key the client answered its request with, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
+#   boot 2e A FORKED CHAIN (#66 B3): another epoch 1, validly signed by the root the image trusts, on the ESP in
+#           place of the one the guest's TPM anchored: the initrd's render refuses it (CONFLICT), nothing is asked of
+#           a peer, and the console takes the recovery key.
 #   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
 #           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
 #           unattended, as boot 2.
@@ -108,7 +111,11 @@ SNAPSHOT="${REGALIA_BOOT_SNAPSHOT:-}"
 if [ -z "$SNAPSHOT" ] && [[ "${REGALIA_BOOT_MIRROR:-}" =~ snapshot\.debian\.org/archive/debian/([0-9]{8}T[0-9]{6}Z) ]]; then SNAPSHOT="${BASH_REMATCH[1]}"; fi
 [ -n "$SNAPSHOT" ] || { echo "unlock-boot-qemu: the initrd is built from a pinned archive snapshot: set REGALIA_BOOT_MIRROR to a snapshot.debian.org URL, or REGALIA_BOOT_SNAPSHOT"; exit 2; }
 [ -n "${KEYRING:-}" ] || KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"
-deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --out "$W/initrd-build" \
+# the membership root the initrd trusts (#156): the fixed TEST root whose chains tests/vectors/highwater-v1.json
+# holds, as its canonical file (the JSON string, no newline), as a ceremony record would give the real one
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
+  tests/vectors/highwater-v1.json "$W/root-key.json"
+deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --keyring "$KEYRING" --root-key "$W/root-key.json" --out "$W/initrd-build" \
   || { echo "unlock-boot-qemu: the initrd builder failed"; exit 2; }
 BIN="$W/initrd-build/regalia-unlock"          # the client the builder compiled: the initrd's, and the host's
 for fs in proc sys dev; do mount --bind "/$fs" "$ROOT/$fs"; MOUNTED+=("$ROOT/$fs"); done
@@ -120,7 +127,7 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
 # What a KMS host has installed: the client, the units, the script, the dracut module.
 install -D -m 0755 "$BIN" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
-install -m 0644 deploy/baremetal/initrd/regalia-unlock.service \
+install -m 0644 deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service \
   deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
@@ -190,9 +197,10 @@ git -C "$ROOT/tmp/uki/src" checkout --quiet --detach FETCH_HEAD
 [ "$(git -C "$ROOT/tmp/uki/src" rev-parse HEAD)" = "$(git -c safe.directory="$PWD" rev-parse HEAD)" ] || { echo "the guest's clone is not at HEAD"; exit 1; }
 cp -r "$W/keys" "$ROOT/tmp/uki/"
 cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
+cp "$W/root-key.json" "$ROOT/tmp/uki/root-key.json"                           # the membership root it trusts, an input (#156)
 printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
-IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json"
+IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json --root-key /tmp/uki/root-key.json"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
 KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/uki/keys/TEST-secure-boot.key --secure-boot-cert /tmp/uki/keys/TEST-secure-boot.crt"
 # #198: the review build records, run alone first, so that a refusal says what. The image is checked
@@ -200,7 +208,7 @@ KEYS="$KEYS --system-cert /tmp/uki/keys/TEST-system.crt --secure-boot-key /tmp/u
 # differ are printed (from `uki initrd-inventory --root /`, classed by the chroot's dpkg database), to read
 # before a pull request changes the inventory.
 cp "$BIN" "$ROOT/tmp/uki/regalia-unlock.compiled"
-if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled" >"$W/review.json" 2>&1; then
+if ! chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-review --initrd /boot/initrd.e2e --unlock-client /tmp/uki/regalia-unlock.compiled --root-key /tmp/uki/root-key.json" >"$W/review.json" 2>&1; then
   python3 -I -c 'import json,sys; [print(f) for f in json.load(open(sys.argv[1]))["findings"] if not f.startswith("inventory: ")]' "$W/review.json" 2>/dev/null \
     || cat "$W/review.json"
   chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd /boot/initrd.e2e --root /" > "$W/inventory.txt" 2>&1 || true
@@ -269,4 +277,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 13 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock)"
+echo "unlock-boot-qemu: 14 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock)"
