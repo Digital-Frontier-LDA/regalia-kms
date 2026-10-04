@@ -310,20 +310,23 @@ def token_serials(module, run=subprocess.run, usb_root="/sys/bus/usb/devices"):
       * each YubiKey's OpenPGP-applet PKCS#11 serial, as OpenSC's openpgp driver presents it: yubikey-openpgp. Measured
         2026-10-04 on YubiKey 35718625 (OpenSC 0.26, ykman 5.6.1): 000635718625, Yubico's manufacturer 0006 then the
         decimal serial, on two tokens (User PIN, User PIN (sig)). Each must be an attached YubiKey's, or it is refused.
-    A YubiKey attached with no ykman to read it is refused rather than left out."""
+    A YubiKey attached with no ykman to read it, or whose serial ykman cannot read, is refused rather than left out."""
     hsm = [slot["serial num"] for slot in _pkcs11_tokens(module, run) if CARDCONTACT in slot.get("token manufacturer", "")]
     require(len(hsm) == 1, "%d SmartCard-HSM tokens are attached; a node serves from exactly one (attach only its own)" % len(hsm))
+    attached = 0
+    for vendor in glob.glob(os.path.join(usb_root, "*", "idVendor")):
+        with open(vendor) as f:
+            attached += f.read().strip() == YUBICO_VENDOR
     yubikeys = []
     if shutil.which("ykman"):
         done = run(["ykman", "list", "--serials"], capture_output=True, text=True)
         require(done.returncode == 0, "ykman could not list the YubiKeys")
         yubikeys = [line.strip() for line in done.stdout.splitlines() if line.strip()]
     else:
-        attached = []
-        for vendor in glob.glob(os.path.join(usb_root, "*", "idVendor")):
-            with open(vendor) as f:
-                attached += [vendor] if f.read().strip() == YUBICO_VENDOR else []
         require(not attached, "a YubiKey is attached and ykman is not installed to read its serial: install yubikey-manager")
+    # a YubiKey whose serial is hidden from USB (serial-api-visible off) lists nothing: refused, never left out (ed)
+    require(len(yubikeys) == attached, "%d YubiKeys are attached and ykman read %d serials: a YubiKey's serial is not readable "
+            "over USB (serial-api-visible), and it is not left out" % (attached, len(yubikeys)))
     require(all(re.fullmatch(r"[0-9]{1,8}", s) for s in yubikeys), "ykman listed a serial that is not a YubiKey's: %s" % yubikeys)
     openpgp = []
     if yubikeys:
