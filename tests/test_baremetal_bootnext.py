@@ -277,6 +277,9 @@ class TheHostsOwnRecords(Case):
                     "31 22 8:1 / %s rw shared:7 - vfat /dev/sda1 rw,fmask=0077\n" % ((esp.replace(" ", "\\040"),) * 2))
         self.assertEqual(bootnext._mount(esp, info), (os.makedev(8, 1), "vfat"))
         self.refused("is not a mount point", bootnext._mount, self.d, info)
+        with open(info, "a") as f:
+            f.write("32 22 8:1 /EFI %s rw - vfat /dev/sda1 rw\n" % esp.replace(" ", "\\040"))      # d9: ESP/EFI bound here
+        self.refused("mounts /EFI of its file system, not the whole ESP", bootnext._mount, esp, info)
 
     def test_loader_device_part_uuid_is_read_as_systemd_stub_writes_it(self):
         name = os.path.join(self.d, "LoaderDevicePartUUID-" + bootnext.LOADER_VENDOR)

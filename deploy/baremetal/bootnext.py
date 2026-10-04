@@ -167,9 +167,13 @@ def _mount(path, mountinfo=MOUNTINFO):
         fields = before.split()
         if sep and len(fields) >= 5 and fields[4].replace("\\040", " ") == target:
             major, minor = (int(x) for x in fields[2].split(":"))
-            found = (os.makedev(major, minor), after.split()[0])       # the last mount at the point is the visible one
+            # the last mount at the point is the visible one; field 4 is the root of the mount within its file
+            # system: a subdirectory of the ESP bound here would resolve \EFI\… one level down
+            found = (os.makedev(major, minor), after.split()[0], fields[3])
     require(found is not None, "%s is not a mount point: the ESP must be mounted there" % path)
-    return found
+    require(found[2] == "/", "%s mounts %s of its file system, not the whole ESP: \\EFI\\… would not resolve as the firmware "
+            "resolves it" % (path, found[2]))
+    return found[:2]
 
 
 def _partition_device(guid, by_partuuid="/dev/disk/by-partuuid"):
