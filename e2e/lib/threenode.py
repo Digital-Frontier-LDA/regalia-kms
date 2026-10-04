@@ -1076,10 +1076,8 @@ class Cluster:
         if len(counting) >= 2:
             missing = [n for n, held in self.fresh(counting, manifest["epoch"], timeout).items() if not held]
             if missing:
-                said = {n: [{k: e.get(k) for k in ("event", "outcome", "epoch", "sequence", "subject", "reason")}
-                            for e in self.trail(n) if str(e.get("event", "")).startswith(("beat", "sync-beat"))][-4:] for n in counting}
                 raise RuntimeError("%s signed no heartbeat for epoch %d; their last beat events: %s" % (", ".join(missing), manifest["epoch"],
-                                   json.dumps(said)[:3000]))
+                                   json.dumps(self.beat_events(counting))[:3000]))
         elif owner_recovery:
             for name in counting:
                 self.owner_beat(name)
@@ -1092,6 +1090,13 @@ class Cluster:
         names = [n for n in self.nodes if self.running(n)] if names is None else list(names)
         return {name: bool(until(lambda name=name: self.holds_heartbeat(name, epoch) and membership.OWNER not in self.heartbeat_signers(name),
                                  timeout, 2)) for name in names}
+
+    def beat_events(self, names, last=4):
+        """{node: its last `last` heartbeat-signing events (beat-propose, the beat-sign answers it gave), from its sync trail}:
+        why a node holds no heartbeat, when it holds none."""
+        keep = ("event", "outcome", "epoch", "sequence", "subject", "reason")
+        return {n: [{k: e.get(k) for k in keep if k in e} for e in self.trail(n)
+                    if str(e.get("event", "")).startswith(("beat", "sync-beat", "owner-beat"))][-last:] for n in names}
 
     def heartbeat_signers(self, name):
         """The parties that signed the heartbeat the node holds (its freshness state, read as root): [] for none, or for a

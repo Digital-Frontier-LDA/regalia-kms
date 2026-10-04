@@ -124,6 +124,9 @@ def scenario(cluster):
         cluster.enrol(name)
     for name in names:
         cluster.start(name, SERVICES)
+    # #199: nobody writes a heartbeat here: the nodes sign the first one themselves (beat.Proposer, from bootstrap)
+    fresh = cluster.fresh(names, timeout=240)
+    ok(all(fresh.values()), "every node holds a heartbeat the nodes signed themselves, from bootstrap (%s)" % fresh, cluster.beat_events(names))
     for name in names:
         held = until(lambda: cluster.lease(name), 120, 2)
         ok(bool(held), "%s holds a runtime lease (epoch %s)" % (name, (held or {}).get("epoch")), cluster.journal(name, "admission")[-600:])
