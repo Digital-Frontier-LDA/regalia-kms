@@ -93,6 +93,24 @@ class Deliver(mst.Case):
         self.refused("holds epoch 1 already", deliver.deliver, self.n, [self.e1], [], self.events.append)
         self.refused("non-empty list", deliver.deliver, self.n, [], [], self.events.append)
 
+    def test_root_hands_over_with_an_argv_the_sync_half_parses(self):
+        """as_sync's own command line, given to main as the regalia-sync process gets it: it reaches the run-as check
+        (here refused, as root), never argparse's usage error (CI found `_deliver --config`, which only the order
+        `--config … _deliver` parses)."""
+        import pwd
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(argv)
+            return unittest.mock.Mock(returncode=0, stdout='{"epoch": 2}\n', stderr="")
+        self.assertEqual(deliver.as_sync("/etc/regalia/node.json", [self.e2["manifest"]], [], run=run), 2)
+        argv = seen[0][seen[0].index("deploy.baremetal.deliver") + 1:]
+        with unittest.mock.patch.object(deliver.os, "geteuid", return_value=0), \
+                unittest.mock.patch.object(pwd, "getpwnam", return_value=unittest.mock.Mock(pw_uid=990)), \
+                unittest.mock.patch("sys.stderr") as err:
+            self.assertEqual(deliver.main(argv), 1)
+        self.assertIn("runs as regalia-sync only", "".join(str(c) for c in err.write.call_args_list))
+
     def test_the_sync_half_never_runs_as_root(self):
         """Run as root, Store would leave membership.json root's and 0600, which regalia-sync could no longer read."""
         import pwd

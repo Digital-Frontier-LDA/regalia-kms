@@ -849,6 +849,22 @@ removing only what it can prove it made.
     EK and AK Names from their public areas, and the signing key certified by that AK, with the attributes and
     policy of the root's own system-phase key. Only then does it print the node's identity fields as a v4
     manifest entry carries them.
+- `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
+  --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
+  value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through
+  `age --decrypt`). The value comes on standard input only. It is checked against the record verified under the
+  pinned root BEFORE the TPM is touched (`deploy/baremetal/ownerauth.py`), and it is never written to disk. Every
+  owner-authorized TPM call then gets it through one channel: a sealed in-memory file descriptor, never the command
+  line (readable through /proc by root while the call runs). It sets the authorization from EMPTY only: a TPM whose owner authorization is already set is refused, never
+  overwritten. `--check` changes nothing and proves, in one call, that the TPM's value is this envelope's.
+  **Current limitations:**
+  - `commit`, `reanchor`, `recount` and `seal-hsm-pin.sh` do not yet take the value (#242 C2). On a TPM whose owner
+    authorization is set, their owner-authorized steps (defining the anchor and counters, deleting indices,
+    persisting a key) fail closed until C2 lands.
+  - `init` takes no owner authorization; it runs before `ownerauth`.
+  - Rotating a set value is not built.
+  - The owner authorization crosses the TPM bus in clear when used (password sessions): sniffable on a discrete TPM
+    by someone with physical access during enrolment, a re-anchor or a recount (#414).
 - `check` verifies a root-signed manifest chain against this host and writes nothing.
 - `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
@@ -1048,7 +1064,8 @@ site field `service_mesh.authority` are gone: a site file that still names one i
   unusable (#244).
 - **The hand recovery** when fewer than two nodes run: `python3 -Es -m deploy.baremetal.owner beat`, as root at
   the node's console. The node proposes and signs, the owner's YubiKey co-signs after the typed confirmation, and the
-  heartbeat lives at most the manifest's `owner_heartbeat_lifetime_s` (one hour).
+  heartbeat lives at most the manifest's `owner_heartbeat_lifetime_s` (one hour by the genesis default; a
+  manifest may set it from 300 s up to `heartbeat_max_lifetime_s`).
 - **Revocation and quarantine** (`revoke.py`) need one of the manifest's `revocation_signers` rules: two nodes,
   each from root at its own console (`propose`, then `cosign`, which shows the change and takes the typed epoch
   and digest before the TPM signs), or the owner alone, off the nodes (`export`, `owner.py sign-manifest` on the

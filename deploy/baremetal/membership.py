@@ -770,7 +770,7 @@ class HighWater:
     POLICY_ATTRIBUTES = {"counter": 0x0006001A, "slot": 0x0006000A}
 
     def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None, policy=None,
-                 image_key=None, signatures=None, define_policy=None):
+                 image_key=None, signatures=None, define_policy=None, owner_auth=None):
         """`policy`: the node's approved-image write policy, PolicyAuthorize(system-phase PCR key), as 64 hex
         (the digest a policy-written index must hold as its authPolicy), or a function that returns it (the
         node's: measurements.approved_image_policy over its signed chain and the running image's key), called
@@ -783,7 +783,11 @@ class HighWater:
         or a function that returns it) under which new counter and slot indices are defined in the policy-written
         layout; None defines them owner-written. Never implied by `policy`, which is what a reader expects: the
         node's services read and write the anchor and never define it. A definer's policy is also what it reads by,
-        unless `policy` is given."""
+        unless `policy` is given.
+        `owner_auth`: the TPM's owner authorization (ownerauth.Auth, from the node's envelope, or a function that returns
+        one), for the OWNER-authorized calls only: a definition, a redefinition, an owner-written index's write, an
+        nvundefine (#242 step C). None: the owner authorization is empty (a lab TPM). Resolved once, at its first use,
+        and passed through ownerauth's one channel (a pipe fd), never on the command line."""
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
         if policy is not None and not callable(policy):
             hex_field(policy, 64, "the approved-image write policy")
@@ -795,6 +799,7 @@ class HighWater:
         self._policy_source, self._policy = policy, (policy if not callable(policy) else None)
         self._image_key, self._signatures, self._define_policy = image_key, signatures, define_policy
         self._policy_asked = False
+        self._owner_auth = owner_auth
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
         self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
@@ -806,6 +811,13 @@ class HighWater:
         import os
         env = dict(os.environ, **self.env) if self.env else None
         return self.run(["tpm2_" + args[0], *args[1:]], capture_output=True, env=env, **kw)
+
+    def _owner(self, tool, index, *args, input=None):
+        """An OWNER-authorized call: `-C o` and the owner authorization through ownerauth's one channel (#242 C)."""
+        from deploy.baremetal import ownerauth         # here: ownerauth imports this module
+        self._owner_auth = ownerauth.resolve(self._owner_auth)     # a function is called once: its answer replaces it
+        with ownerauth.owner_call(self._owner_auth) as (argv, kw):
+            return self._tpm(tool, index, *argv, *args, input=input, **kw)
 
     def _defined(self):
         """The NV indices the TPM says it holds. Refused when the TPM does not answer: then nothing is known
@@ -858,8 +870,8 @@ class HighWater:
                 path = os.path.join(d, "policy")
                 with open(path, "wb") as f:
                     f.write(bytes.fromhex(policy))
-                return self._tpm("nvdefine", index, "-C", "o", "-s", str(size), "-a", self.POLICY_WORDS[kind], "-L", path)
-        return self._tpm("nvdefine", index, "-C", "o", "-s", str(size), "-a", self.OWNER_WORDS[kind])
+                return self._owner("nvdefine", index, "-s", str(size), "-a", self.POLICY_WORDS[kind], "-L", path)
+        return self._owner("nvdefine", index, "-s", str(size), "-a", self.OWNER_WORDS[kind])
 
     def _defining_policy(self):
         """The definer's policy (define_policy), resolved once: every index of one definition is laid down alike."""
@@ -873,7 +885,7 @@ class HighWater:
         session for this boot's approved image (signkey.policy_session: PolicyPCR of PCR 11, PolicyAuthorize with the
         system-phase key's signature), the key first required to be the one this node's policy names."""
         if owner or not self._attributes(index) & self.POLICYWRITE:
-            return self._tpm(tool, index, "-C", "o", *args, input=input)
+            return self._owner(tool, index, *args, input=input)
         from deploy.baremetal import signkey         # here: signkey imports this module
         require(callable(self._image_key), "NV index %s is written by policy and this anchor has no image key to open a policy "
                 "session with" % index)
@@ -924,17 +936,17 @@ class HighWater:
         written as (where the counter landed) - epoch, the counter raised first on a TPM where it lands below."""
         r = self._nvdefine(self.index, 8, "counter")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
-        require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+        require(self._owner("nvincrement", self.index).returncode == 0, "cannot increment the NV counter")
         landed = self._read8(self.index)
         while landed < epoch:                    # a TPM that never held a counter this high: the base cannot be negative
-            require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+            require(self._owner("nvincrement", self.index).returncode == 0, "cannot increment the NV counter")
             landed = self._read8(self.index)
         base = landed - epoch
         r = self._nvdefine(self.base_index, 8, "base")
         require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
-        r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
+        r = self._owner("nvwrite", self.base_index, "-i", "-", input=base.to_bytes(8, "big"))
         require(r.returncode == 0, "cannot write the base index")
-        require(self._tpm("nvwritelock", self.base_index, "-C", "o").returncode == 0, "cannot write-lock the base index")
+        require(self._owner("nvwritelock", self.base_index).returncode == 0, "cannot write-lock the base index")
         return base
 
     def redefine(self, epoch, manifest_digest):
@@ -972,14 +984,14 @@ class HighWater:
             rest.sort(key=lambda index: (int(index, 16) in defined, self._held(index) if int(index, 16) in defined else None or (-1, "")))
             for index in rest:
                 if int(index, 16) in defined:
-                    require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+                    require(self._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
                 r = self._nvdefine(index, self.RECORD_BYTES, "slot")
                 require(r.returncode == 0, "cannot define the record index %s" % index)
                 self._put(index, data, epoch, manifest_digest)
                 written.add(index)
             for index in (self.index, self.base_index):
                 if int(index, 16) in defined:
-                    require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+                    require(self._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
             base = self._define_counter(epoch)
             for index in self.record_indices:
                 if index not in written:
@@ -996,7 +1008,7 @@ class HighWater:
         return (held_epoch, held) if data == self.slot_bytes(held_epoch, held) else (-1, "")
 
     def _put(self, index, data, epoch, manifest_digest):
-        r = self._tpm("nvwrite", index, "-C", "o", "-i", "-", input=data)
+        r = self._owner("nvwrite", index, "-i", "-", input=data)
         require(r.returncode == 0, "cannot write the record index %s" % index)
         require(self._slot(index) == (epoch, manifest_digest), "the record index %s did not take the write" % index)
 
@@ -1154,7 +1166,7 @@ class HighWater:
         remains(), which must see what an index holds whatever else is wrong with it. Refused if neither reads."""
         r = self._tpm("nvread", index, "-C", index, "-s", str(size))
         if (r.returncode != 0 or len(r.stdout) != size) and attributes & self.OWNERREAD:
-            r = self._tpm("nvread", index, "-C", "o", "-s", str(size))
+            r = self._owner("nvread", index, "-s", str(size))
         require(r.returncode == 0 and len(r.stdout) == size, "cannot read %d bytes from NV index %s: what the anchor holds cannot "
                 "be known (fail closed)" % (size, index))
         return r.stdout

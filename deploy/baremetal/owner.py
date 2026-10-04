@@ -10,7 +10,8 @@ WHEN. After a total outage, one node is opened by hand with its recovery key. It
 other node is up to co-sign one, so it authorizes no unlock and the cluster stays down. The operator, at that node's
 console, makes this node and the owner the two signers a v4 heartbeat needs: the node's TPM signing key and one of
 the owner's approval YubiKeys (Ed25519, OpenPGP applet, through OpenSC with CKM_EDDSA). The heartbeat lives at most
-the manifest's owner_heartbeat_lifetime_s (1 h, heartbeat.verify's cap): long enough for the node to unlock the other
+the manifest's owner_heartbeat_lifetime_s (heartbeat.verify's cap; 1 h by the genesis default, which a manifest may set
+from 300 s up to heartbeat_max_lifetime_s): long enough for the node to unlock the other
 two, after which the nodes sign their own 6 h heartbeats again (beat.Proposer).
 
 HOW, three steps, as `enrol` splits its work between root and regalia-sync:

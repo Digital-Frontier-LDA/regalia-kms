@@ -167,7 +167,7 @@ def recount(counter, manifest, documents, typed, sink, floor_path):
             for index in counter._indices():
                 if int(index, 16) in defined:
                     began.append(index)
-                    require(counter._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
+                    require(counter._owner("nvundefine", index).returncode == 0, "cannot delete NV index %s" % index)
             began.append("define")
             counter._define_at(planned["floor"])           # under the same lock; no increment loop up to the floor
         value = counter.value()
