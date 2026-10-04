@@ -8,6 +8,7 @@ import os
 
 from deploy.baremetal import enrol, measurements
 from deploy.baremetal import heartbeat as hb
+from deploy.baremetal import node as node_module
 from deploy.baremetal import membership as m
 import tests.test_baremetal_heartbeat as hbt
 import tests.test_baremetal_node as nt
@@ -94,6 +95,25 @@ class Anchor(nt.Case):
         with self.assertRaisesRegex(enrol.Refused, "not an enrolment stopped before its first commit"):
             self.anchor(self.chain(2))
         self.assertEqual(node.anchor().value(), 2)
+
+    def test_the_signing_counter_is_defined_at_zero_and_taken_only_as_left(self):
+        """#199: enrolment defines the node's signing counter at 0; a resumed run takes it as it left it; a signing counter
+        someone else moved is refused before the first write."""
+        node = self.node()
+        self.anchor(self.chain(2))
+        signing = node_module.signing_counter(node.cfg, node.run)
+        self.assertEqual(signing.value(), 0)
+        self.assertEqual(self.anchor(self.chain(2))[0], 2)                       # resumed: left as it is
+        self.assertEqual(signing.value(), 0)
+        # another enrolment's TPM where the signing counter moved: refused, nothing written
+        self.setUp()
+        node = self.node()
+        moved = hb.Counter(node.cfg["nv_signing"], node.tcti, node.run, lock_path=node.path("other.lock"))
+        moved.define()
+        moved.advance(3)
+        with self.assertRaisesRegex(enrol.Refused, "the signing counter's indices"):
+            self.anchor(self.chain(1))
+        self.assertFalse(os.path.exists(node.path("membership.json")))
 
     def test_a_heartbeat_counter_already_moved_is_refused(self):
         node = self.node()

@@ -261,8 +261,10 @@ class Trail:
 def signing_counter(cfg, run=subprocess.run):
     """This node's signing counter (#199): the highest heartbeat sequence it has signed, as proposer or co-signer
     (beat.Signer). Its own index, never the heartbeat counter's: a node's co-signature must not make the heartbeat a
-    replay to itself."""
-    return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"))
+    replay to itself. Written by policy like the heartbeat counter (#242): the service advances it with no owner
+    authorization; enrolment defines it."""
+    return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"),
+                             policy=lambda: image_policy(cfg), image_key=lambda: image_key(cfg))
 
 
 def node_beat_signer(node, pem_path=None):
