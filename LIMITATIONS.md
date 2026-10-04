@@ -20,8 +20,9 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 ## Membership, heartbeats and recovery (deploy/baremetal)
 
 - **The authority host is being retired (#386).** Until #386 merges, `authority.py` and its units are
-  still in the tree. They are not part of the production design: heartbeats and revocations are signed
-  by 2 of {the three nodes, the owner} (#199).
+  still in the tree, and MEMBERSHIP-RECOVERY.md still names "the authority's" chain for the
+  crash-window recovery. They are not part of the production design: heartbeats and revocations are
+  signed by 2 of {the three nodes, the owner} (#199).
 - **Recovery with only one surviving peer: not built.** `recover` and `reanchor` need two peer chains
   today. With one peer left, a node cannot be recovered or re-anchored. The design is decided, with the
   owner co-signing as the second source behind `--one-source` (#387, PR #395). With **both** peers gone,
@@ -37,13 +38,23 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   never argv), enrolment, reanchor, recount and replacement fail closed on a host whose owner
   authorization is set. Enrolment does not yet refuse a TPM whose owner or lockout authorization is
   empty.
+- **Re-anchoring on a real host has three known faults, fixed in #391 (not merged):**
+  - Run as root, `reanchor` writes `membership.json` as root with mode 0600, so the node's `regalia-sync`
+    cannot read its own chain afterwards and the node cannot serve.
+  - **Security:** `membership._exclusive` opens its lock with `O_CREAT` and no `O_NOFOLLOW`. Root
+    running `reanchor`, or any Store or HighWater, in `regalia-sync`'s state directory can be made to
+    open or create any file read-write through a planted symlink.
+  - `reanchor`'s anchor lock (`/run/lock/regalia-highwater-<idx>.lock`) is not the services'
+    (`<state>/highwater.lock`), so the two do not serialize.
+- **No total-outage re-anchor rehearsal** (#391 adds it). The procedure in MEMBERSHIP-RECOVERY.md is not
+  yet the total-outage one, and its example names `/var/lib/regalia/membership.json`, while the store
+  is under `/var/lib/regalia-sync`.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
 - **Refusing a crashed node in the wrong boot phase: no end-to-end test** (#397). It is covered by unit
   tests only.
-- **Membership recovery commands are not tooled yet** (#387): the recovery doc names Python functions,
-  not commands.
+- **`recover` is a Python call, not a command** (#387). `reanchor` is a command.
 
 ## Tokens and the HSM gate (#72)
 
@@ -93,7 +104,11 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - The external audit collector and the monitoring service are **contracts only**
   ([`deploy/baremetal/AUDIT-COLLECTOR.md`](deploy/baremetal/AUDIT-COLLECTOR.md),
   [`deploy/baremetal/MONITORING.md`](deploy/baremetal/MONITORING.md)). The real service has not been
-  chosen or deployed. The conformance suite runs against the reference collector in CI.
+  chosen or deployed. The audit collector's conformance suite runs against the reference collector in
+  CI. **Monitoring has no conformance command** (MONITORING.md section 5: not built).
+- **Audit completeness is checked in some scenarios only.** `audit_complete` runs in the theft and
+  rolling scenarios. Recovery is #402, and outage, leases and replace are not covered. The time trail
+  and the update trail are never checked end to end in a three-node scenario.
 - **Collector receipts carry no signed time** (#398), so a stale receipt still verifies. This matters
   for the one-peer recovery witness (#387).
 
@@ -102,3 +117,8 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **No OpenBao plugin** ([`OPENBAO-COMPATIBILITY.md`](OPENBAO-COMPATIBILITY.md)).
 - **No release-signing tool for the card-held release key** (planned).
 - **No Kubernetes KMS provider** (planned).
+
+## Tests
+
+- rolling-threenode has an intermittent failure on its audit-stream check (fix: #393).
+- The theft scenario's step-8 epoch check can pass vacuously until #381 lands `moved_by_sync`.
