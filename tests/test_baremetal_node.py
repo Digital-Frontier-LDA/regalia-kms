@@ -222,6 +222,10 @@ class Publishing(Case):
         store.commit(self.e1)
         node.publish(store, n.path(node.PUBLISHED))
         before = open(n.path(node.PUBLISHED), "rb").read()
+        inode = os.stat(n.path(node.PUBLISHED)).st_ino
+        node.publish(store, n.path(node.PUBLISHED))                       # the same chain: the file is left as it is
+        self.assertEqual(os.stat(n.path(node.PUBLISHED)).st_ino, inode)
+        os.chmod(n.path(node.PUBLISHED), 0o600)                           # not as it must be: it is written again
         with unittest.mock.patch.object(node.os, "replace", side_effect=OSError("no rename")):
             with self.assertRaises(OSError):
                 node.publish(store, n.path(node.PUBLISHED))

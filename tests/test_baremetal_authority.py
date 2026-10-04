@@ -441,6 +441,37 @@ class TunnelApply(Case):
         self.refused("cannot be read", authority.held_chain, authority.validate(config(self.d)), self.tpm)
 
 
+    def test_a_publication_that_fails_loses_no_record_and_is_made_good(self):
+        """d9's read of #318: the SIGNED record of a committed revocation is written before the publication, and a
+        publication that fails is its own FAILED event, not the revocation's: the next one makes it good."""
+        real = node.publish
+        with unittest.mock.patch.object(authority.node, "publish", side_effect=OSError(28, "No space left on device")):
+            envelope, _ = self.a.revoke("c", "QUARANTINED", "disk full", "local-root")
+        self.assertEqual(self.a.store.load()["epoch"], 2)
+        kinds = [(e["event"], e["outcome"]) for e in self.events]
+        self.assertLess(kinds.index(("authority-revoke", "SIGNED")), kinds.index(("authority-publish", "FAILED")))
+        self.assertIn("No space left on device", [e for e in self.events if e["event"] == "authority-publish"][-1]["reason"])
+        self.assertTrue(self.a.wake.is_set())                            # serve publishes again at once
+        # meanwhile wg-apply fails closed: the published chain is behind the TPM anchor, never applied as current
+        self.refused("ROLLBACK", authority.held_chain, authority.validate(config(self.d)), self.tpm)
+        self.assertIs(node.publish, real)
+        self.a.publish()
+        self.assertEqual(authority.held_chain(authority.validate(config(self.d)), self.tpm)["epoch"], 2)
+
+    def test_the_chain_is_rewritten_only_when_it_changed(self):
+        """d9's read of #318: an unchanged chain is not rewritten (the path unit fires on a change, not every beat)."""
+        published = self.d + "/" + node.PUBLISHED
+        before = os.stat(published)
+        self.a.publish()
+        after = os.stat(published)
+        self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+        os.chmod(published, 0o600)                                       # not as it must be: written again
+        self.a.publish()
+        self.assertEqual(stat.S_IMODE(os.stat(published).st_mode), 0o644)
+        self.a.revoke("c", "QUARANTINED", "a change", "local-root")
+        self.assertNotEqual(os.stat(published).st_ino, after.st_ino)
+
+
 class TunnelKey(Case):
     """wg-key: the authority's WireGuard service key, root:<the service's group> 0640, made and rotated by the one
     command so that ownership holds (root's wg-apply reads it as its owner, serve through its group)."""
