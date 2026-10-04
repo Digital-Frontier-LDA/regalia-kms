@@ -157,9 +157,12 @@ class Cluster:
         for leftover in (n.tpm_sock, pathlib.Path(str(n.tpm_sock) + ".ctrl")):
             if leftover.exists():
                 leftover.unlink()
-        # the socket is the tss group's, 0660, as /dev/tpmrm0 is on a host: the services reach it through the group
-        server = "type=unixio,path=%s,mode=0660,gid=%d" % (n.tpm_sock, grp.getgrnam("tss").gr_gid)
-        done = sh("swtpm", "socket", "--tpm2", "--server", server, "--ctrl", "type=unixio,path=%s.ctrl" % n.tpm_sock,
+        # the socket is the tss group's, 0660, as /dev/tpmrm0 is on a host: the services reach it through the group.
+        # The control socket too: tpm2-tools' swtpm TCTI opens it (a host has none; only this stand-in needs it)
+        tss = grp.getgrnam("tss").gr_gid
+        server = "type=unixio,path=%s,mode=0660,gid=%d" % (n.tpm_sock, tss)
+        ctrl = "type=unixio,path=%s.ctrl,mode=0660,gid=%d" % (n.tpm_sock, tss)
+        done = sh("swtpm", "socket", "--tpm2", "--server", server, "--ctrl", ctrl,
                   "--tpmstate", "dir=%s" % (n.dir / "tpm"), "--flags", "not-need-init,startup-clear", "--daemon",
                   "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", "file=%s" % (n.dir / "tpm.log"), check=False)
         if done.returncode != 0 or not until(lambda: n.tpm_sock.exists(), 10, 0.2):
