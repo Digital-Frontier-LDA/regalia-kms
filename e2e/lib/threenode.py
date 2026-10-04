@@ -1183,7 +1183,8 @@ class Cluster:
     def deliver(self, name, envelopes, documents):
         """`sudo python3 -Es -m deploy.baremetal.deliver --config … --chain … --documents …` for the running node `name`, as
         an operator gives a node the root's epochs (#199: what `authority accept` did): root reads the files, the node's
-        regalia-sync commits them through its Store and republishes. Returns the command's output."""
+        regalia-sync commits them through its Store and republishes. Run here in a transient unit of root's, named
+        e2e3-<node>-deliver-<epoch>, that sees /run/systemd as the node's services see it. Returns the command's output."""
         d = self.work / "deliver"
         d.mkdir(mode=0o700, exist_ok=True)
         chain = d / ("chain-%d.json" % envelopes[-1]["manifest"]["epoch"])
@@ -1204,7 +1205,8 @@ class Cluster:
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
                  "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
-        done = sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", *[a for p in props for a in ("-p", p)], *args, check=False,
+        done = sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"]),
+                  *[a for p in props for a in ("-p", p)], *args, check=False,
                   stdin=subprocess.DEVNULL)
         if done.returncode != 0:
             raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
