@@ -15,10 +15,11 @@ Refused, by name, unless:
     signature verifies under that pinned key over RECORD_DOMAIN + canonical(record);
   * every field is as the producer writes it, none missing and none unknown, at every level (FIELDS);
   * owner_keys are exactly two, the roles dev-main and dev-backup, with distinct serials and keys, Ed25519, and each
-    attested on its card (D5);
+    attested on its card (D5), naming the SHA-256 of its SIG and DEC keys' attestation certificates, all four distinct;
   * the release key is Ed25519, imported, not attested, on two distinct cards, its key no owner key and its cards no
     owner card (D30.3);
-  * ownerauth_recipients and ssh_signers name exactly the owner cards;
+  * no card is a bench YubiKey (membership.BENCH_YUBIKEYS; D28.5, D30);
+  * ownerauth_recipients and ssh_signers name exactly the owner cards, and no OpenPGP fingerprint twice;
   * every Ed25519 key in it (the two owner keys, the release key, the two SSH keys, the root) is distinct.
 Returns {"owners": {serial: key}, "roles": {role: serial}, "release_key": key, "session": ..., "at": ...}.
 """
@@ -38,7 +39,8 @@ ROLES = ("dev-main", "dev-backup")
 FIELDS = {
     "record": ("schema", "event", "owner_keys", "ownerauth_recipients", "ssh_signers", "release_key", "session", "root_entry",
                "root_fingerprint", "tool", "at"),
-    "owner_key": ("role", "serial", "alg", "key", "attested"),
+    "owner_key": ("role", "serial", "alg", "key", "attested", "attestation_sha256"),
+    "attestation_sha256": ("sig", "dec"),
     "release_key": ("alg", "key", "fingerprint", "cards", "imported", "attested"),
     "ownerauth_recipient": ("serial", "primary", "subkey"),
     "ssh_signer": ("serial", "key"),
@@ -120,7 +122,7 @@ def verify(envelope, root):
     require(isinstance(record["tool"], str) and 0 < len(record["tool"]) <= 200, "tool is not a short name")
     require(isinstance(record["at"], str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", record["at"]) is not None,
             "at is not YYYY-MM-DDTHH:MM:SSZ")
-    owners, roles = {}, {}
+    owners, roles, certificates = {}, {}, []
     require(isinstance(record["owner_keys"], list) and len(record["owner_keys"]) == 2, "owner_keys is not exactly two keys (D30)")
     for i, entry in enumerate(record["owner_keys"]):
         where = "owner_keys[%d]" % i
@@ -130,9 +132,13 @@ def verify(envelope, root):
         require(serial not in owners, "%s: the card %s holds two owner keys" % (where, serial))
         require(entry["alg"] == "ed25519", "%s is not an Ed25519 key" % where)
         require(entry["attested"] is True, "%s: the key is not attested as made on its card (D5)" % where)
+        _exact(entry["attestation_sha256"], "attestation_sha256", where + ".attestation_sha256")
+        for f in ("sig", "dec"):
+            certificates.append(_key(entry["attestation_sha256"][f], "%s.attestation_sha256.%s (a certificate's SHA-256, 64 hex)" % (where, f)))
         owners[serial], roles[entry["role"]] = _key(entry["key"], where + ".key"), serial
     require(sorted(roles) == sorted(ROLES), "owner_keys lacks a role: %s" % ", ".join(sorted(set(ROLES) - set(roles))))
     require(len(set(owners.values())) == 2, "the two owner cards hold the same key")
+    require(len(set(certificates)) == len(certificates), "an attestation certificate is named twice: each key has its own")
     release = record["release_key"]
     _exact(release, "release_key", "release_key")
     require(release["alg"] == "ed25519", "release_key is not an Ed25519 key")
@@ -144,6 +150,8 @@ def verify(envelope, root):
     require(release["imported"] is True and release["attested"] is False, "release_key is not an imported (unattested) key, as the ceremony makes it")
     require(key not in owners.values(), "the release key is an owner key: the release card is never an owner key (D30.3)")
     require(not set(cards) & set(owners), "a release card is an owner card (D30.3): %s" % ", ".join(sorted(set(cards) & set(owners))))
+    bench = sorted(s for s in set(owners) | set(cards) if s in membership.BENCH_YUBIKEYS)
+    require(not bench, "a bench YubiKey is named (%s): the ceremony never uses a bench serial (D28.5, D30)" % ", ".join(bench))
     fingerprints = []                     # every OpenPGP key an ownerauth recipient names: one card's, never two cards'
     for kind, field in (("ownerauth_recipient", "ownerauth_recipients"), ("ssh_signer", "ssh_signers")):
         listed = record[field]

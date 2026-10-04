@@ -134,7 +134,9 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography
+          # softhsm2, opensc and python3-pykcs11: the owner's two keys under v4 (#199), signed through Pkcs11Signer
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography \
+            softhsm2 opensc python3-pykcs11
       - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
         run: |
           set -o pipefail
@@ -158,7 +160,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client
         run: CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock
       - name: Every directed recovery path, and the nodes that must not be restored
@@ -166,8 +168,8 @@ jobs:
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
-          grep -q '^three-node-recovery: 55 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
-            echo "::error::the three-node recovery test did not pass all 55 checks" >&2; exit 1; }
+          grep -q '^three-node-recovery: 58 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 58 checks" >&2; exit 1; }
 
   # #75 (Phase 15), tier N: a new image rolled through the three nodes while CURRENT and NEXT are both accepted
   # (an image is PCR 11, extended after a power cycle); may_reboot on live leases as update.py asks it; the retire
@@ -186,7 +188,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 \
-            python3-cryptography cryptsetup e2fsprogs
+            python3-cryptography cryptsetup e2fsprogs softhsm2 opensc python3-pykcs11   # the owner's keys (#199)
       - name: Build the pre-root client, and the audit trail shipper and collector (#340)
         run: |
           CGO_ENABLED=0 go build -trimpath -o "$RUNNER_TEMP/regalia-unlock" ./cmd/regalia-unlock

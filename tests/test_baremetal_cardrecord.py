@@ -33,8 +33,10 @@ class Case(unittest.TestCase):
         self.record = {
             "schema": cr.SCHEMA, "event": cr.EVENT, "session": "ab" * 16, "tool": "offline-keys.py test", "at": "2026-10-04T12:00:00Z",
             "root_entry": {"alg": "ed25519", "key": self.root}, "root_fingerprint": hashlib.sha256(bytes.fromhex(self.root)).hexdigest(),
-            "owner_keys": [{"role": "dev-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True},
-                           {"role": "dev-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True}],
+            "owner_keys": [{"role": "dev-main", "serial": "11111111", "alg": "ed25519", "key": self.main, "attested": True,
+                            "attestation_sha256": {"sig": "a1" * 32, "dec": "a2" * 32}},
+                           {"role": "dev-backup", "serial": "22222222", "alg": "ed25519", "key": self.backup, "attested": True,
+                            "attestation_sha256": {"sig": "b1" * 32, "dec": "b2" * 32}}],
             "ownerauth_recipients": [{"serial": "11111111", "primary": "A" * 40, "subkey": "B" * 40},
                                      {"serial": "22222222", "primary": "C" * 40, "subkey": "D" * 40}],
             "ssh_signers": [{"serial": "11111111", "key": ssh(keys[3])}, {"serial": "22222222", "key": ssh(keys[4])}],
@@ -95,6 +97,23 @@ class Content(Case):
         self.refused("the two owner cards hold the same key", self.changed(lambda r: r["owner_keys"][1].update(key=self.main)))
         self.refused("is not attested as made on its card", self.changed(lambda r: r["owner_keys"][0].update(attested=False)))
         self.refused("owner_keys[1].serial is not a card serial", self.changed(lambda r: r["owner_keys"][1].update(serial="0222")))
+
+    def test_each_owner_key_names_its_own_two_attestation_certificates(self):
+        """regalia-ceremony#121 after d9's read: the evidence behind "attested", re-checkable from the disc."""
+        self.refused("owner_keys[0].attestation_sha256 fields mismatch", self.changed(lambda r: r["owner_keys"][0]["attestation_sha256"].pop("dec")))
+        self.refused("owner_keys[1].attestation_sha256.sig (a certificate's SHA-256, 64 hex)",
+                     self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].update(sig="B1" * 32)))
+        self.refused("an attestation certificate is named twice: each key has its own",
+                     self.changed(lambda r: r["owner_keys"][1]["attestation_sha256"].update(dec="a1" * 32)))
+
+    def test_a_bench_yubikey_is_never_a_ceremony_card(self):
+        """D28.5, D30: regalia-ceremony refuses the bench serials; so does this reader, from membership's one list."""
+        for bench in m.BENCH_YUBIKEYS:
+            with self.subTest(owner=bench):
+                self.refused("a bench YubiKey is named (%s): the ceremony never uses a bench serial" % bench,
+                             self.changed(lambda r: [e.update(serial=bench) for e in r["ownerauth_recipients"] + r["ssh_signers"]
+                                                     + r["owner_keys"] if e["serial"] == "22222222"]))
+        self.refused("a bench YubiKey is named (35718625)", self.changed(lambda r: r["release_key"].update(cards=["33333333", "35718625"])))
 
     def test_the_release_key_is_never_an_owner_key_nor_on_an_owner_card(self):
         self.refused("the release key is an owner key", self.changed(lambda r: r["release_key"].update(key=self.backup)))

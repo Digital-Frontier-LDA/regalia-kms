@@ -145,8 +145,8 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def _highwater(index, tcti, policy=None):
-    return membership.HighWater(index, tcti=tcti, policy=policy)
+def _highwater(index, tcti, policy=None, define_policy=None):
+    return membership.HighWater(index, tcti=tcti, policy=policy, define_policy=define_policy)
 
 
 def node_policy(path, node_id):
@@ -161,6 +161,20 @@ def node_policy(path, node_id):
         cfg = node.load(path)
         require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
         return node.image_policy(cfg)
+    return policy
+
+
+def node_define_policy(path, node_id):
+    """What a re-anchor lays the new indices down under (#242): the node's policy when its signed measurements name a
+    system-phase key for it (node.define_policy), else None (owner-written). Without --node-config, owner-written: a
+    re-anchor with no node configuration is the one from before #242, and B3 refuses that layout."""
+    def policy():
+        if path is None:
+            return None
+        from deploy.baremetal import node
+        cfg = node.load(path)
+        require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
+        return node.define_policy(cfg)
     return policy
 
 
@@ -221,7 +235,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
         store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti,
-                                                                          policy=node_policy(args.node_config, args.node_id)))
+                                                                          policy=node_policy(args.node_config, args.node_id),
+                                                                          define_policy=node_define_policy(args.node_config, args.node_id)))
         now_at = reanchor(store, sources, args.node_id, typed, record)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "

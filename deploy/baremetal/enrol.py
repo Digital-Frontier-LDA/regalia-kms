@@ -948,8 +948,8 @@ def first_epoch(envelopes, root_key, node_id):
 def anchor_and_store(config_path, chain, run=subprocess.run):
     """Phase 2's trust anchors, run AS regalia-sync (the user that owns them from then on, #214): the
     membership epoch anchor (membership.HighWater: the counter, its base and the two record slots, #68),
-    the store committed with the whole chain, so the anchor stands at its last epoch N, and the heartbeat
-    counter. Returns (epoch, digest of the last manifest).
+    the store committed with the whole chain, so the anchor stands at its last epoch N, the heartbeat counter
+    checked, and the signing counter (#199) defined at 0. Returns (epoch, digest of the last manifest).
 
     RESUMED, it never takes over indices it cannot prove are this chain's: a store that exists must load
     (Store checks it against the anchor) and be a PREFIX of `chain`, and the rest is committed; indices
@@ -959,9 +959,21 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     with open(config_path, "rb") as f:
         cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
     n = node_module.Node(cfg, run)
-    hw, store = n.anchor(), n.store()
-    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"))
     envelopes = chain if isinstance(chain, list) else [chain]
+    # Enrolment DEFINES the anchor (#242): under the node's approved-image policy when the signed measurements the
+    # chain's last manifest commits to name a system-phase key for this node (node.define_policy; its measurements are
+    # in the store already, #332), from the chain it is given, since nothing is committed yet; and it reads and writes
+    # by that same policy. Owner-written when they name none.
+    tip = membership.accept_chain(None, envelopes, cfg["root_key"])
+    policy = lambda: node_module.define_policy(cfg, manifest=tip)
+    hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
+                              image_key=lambda: node_module.image_key(cfg, manifest=tip))
+    store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy)
+    # the signing counter (#199: the highest heartbeat sequence this node has signed): defined HERE, at 0, under the same
+    # policy as the anchor, since a node that has signed nothing starts there
+    signing = heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=n.path("signing-counter.lock"), define_policy=policy,
+                                image_key=lambda: node_module.image_key(cfg, manifest=tip))
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]
@@ -974,6 +986,11 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
             "does not take them over" % ", ".join(counter_present))
     # The heartbeat counter is NOT defined here: first_heartbeat defines it AT the network's current sequence (or at
     # 0, only at a network's bootstrap, by the operator's --bootstrap), whenever the node enrols (#190, d9's read).
+    # The signing counter is: at 0, a node new to signing. Taken over only as this step leaves it (both indices, at 0).
+    signing_present = defined(signing, (signing.index, signing.base_index))
+    require(not signing_present or (len(signing_present) == 2 and signing.value() == 0),
+            "the TPM already holds the signing counter's indices (%s), not as an enrolment leaves them (both, at 0): "
+            "enrolment does not take them over" % ", ".join(signing_present))
     already = 0
     if os.path.exists(store.path):
         store.load()                                   # refuses a store the TPM anchor does not vouch for
@@ -998,6 +1015,8 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     for index, envelope in enumerate(rest):
         # the chain's last epoch is the one the node is left at: its measurements are in the store already (#332)
         store.commit(envelope, final=index == len(rest) - 1)
+    if not signing_present:
+        signing.define()                              # at 0, under the anchor's policy; written by policy from then on
     manifest = store.load()
     return manifest["epoch"], membership.digest(manifest)
 

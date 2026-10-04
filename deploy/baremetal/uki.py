@@ -1033,7 +1033,102 @@ def _inventory_counts(path=None):
     return {origin: len(lines) for origin, lines in owned.items()}, len(over), sha256(raw)
 
 
-def check_initrd_build(inputs, client_sha256, inventory=None):
+# #266: the build record's PROVENANCE, checked against the checkout uki.py runs from (the signer's own clone at the agreed
+# commit), in build and in sign: the record's commit is that checkout's HEAD, the tree is clean, and the record names
+# exactly the files build-initrd.sh records (its REPO_FILES, read from that checkout's script), each with that checkout's
+# SHA-256. A record written by hand, or by a builder at another commit or with another script, is refused by name.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BUILDER = "deploy/baremetal/initrd/build-initrd.sh"
+# what `git clone`/`git init` + fetch, actions/checkout (gc.auto) and a developer write into a checkout's own config,
+# none naming a command: any other key there (a filter or textconv driver, core.pager/editor/sshCommand/worktree, an
+# include) is refused (Checkout.check_config)
+CLONE_CONFIG = re.compile(r"core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)"
+                          r"|extensions\.(objectformat|worktreeconfig)|user\.(name|email)|gc\.auto"
+                          r"|remote\.[^\0\n]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)"
+                          r"|branch\.[^\0\n]+\.(remote|merge|rebase|pushremote)")
+
+
+class Checkout:
+    """The repository at `root` (default: the one this file is in), read with git as build-initrd.sh reads it: trusted
+    at exactly this path (safe.directory), no index lock taken, and no fsmonitor or hook of the tree's own run."""
+
+    def __init__(self, root=REPO_ROOT, run=subprocess.run):
+        self.root, self.run = root, run
+
+    def _git(self, *argv):
+        try:
+            done = self.run(["git", "-c", "safe.directory=" + self.root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                             "--no-optional-locks", "-C", self.root] + list(argv), capture_output=True, env=_clean_env())
+        except OSError as error:
+            raise Refused("this checkout cannot be read with git (%s): sign from a clone at the build's commit" % error.strerror)
+        require(done.returncode == 0, "%s is not a git checkout git can read: sign from a clone at the build's commit" % self.root)
+        return done.stdout.decode("utf-8", "replace")
+
+    def check_config(self):
+        """Refused unless the checkout's own configuration (local and worktree, includes followed) holds only what a
+        clone writes (CLONE_CONFIG). Trusting the path (safe.directory) also trusts its .git/config, and `git status`
+        runs a clean filter that config defines (regalia-kms-d9's read): a checkout another user owns would run its
+        commands as the signer. A .gitattributes alone names no command; only a driver defined in config does."""
+        listed = self._git("config", "--list", "--includes", "--name-only", "--show-scope", "-z").split("\0")
+        foreign = sorted({name for scope, name in zip(listed[0::2], listed[1::2])
+                          if scope in ("local", "worktree") and CLONE_CONFIG.fullmatch(name) is None})
+        require(not foreign, "this checkout's git configuration sets %s, which a clone does not: sign from a fresh clone at the "
+                "build's commit" % ", ".join(foreign))
+
+    def go_release(self):
+        """The Go release build-initrd.sh builds the client with: go.mod's toolchain line, else its go line."""
+        text = read(os.path.join(self.root, "go.mod"), 1024 * 1024).decode("utf-8", "replace")
+        release = "\n".join(re.findall(r"^toolchain (go[0-9][0-9.]*)$", text, re.M)) or \
+            "\n".join("go" + v for v in re.findall(r"^go ([0-9][0-9.]*)$", text, re.M))
+        require(re.fullmatch(r"go1\.[0-9]+\.[0-9]+", release) is not None, "this checkout's go.mod names no exact Go release")
+        return release
+
+    def head(self):
+        head = self._git("rev-parse", "--verify", "HEAD").strip()
+        require(re.fullmatch(r"[0-9a-f]{40}", head) is not None, "this checkout's HEAD is not a commit")
+        return head
+
+    def clean(self):
+        return self._git("status", "--porcelain", "--untracked-files=all") == ""
+
+    def sha256(self, path):
+        full = os.path.join(self.root, path)
+        require(os.path.normpath(path) == path and not path.startswith(("/", "..")) and os.path.isfile(full) and not os.path.islink(full),
+                "%s is not a file of this checkout" % path)
+        return sha256(read(full))
+
+    def builder_files(self):
+        """The files build-initrd.sh records, from this checkout's own copy of it: its REPO_FILES array."""
+        text = read(os.path.join(self.root, BUILDER), 1024 * 1024).decode("utf-8", "replace")
+        found = re.search(r"^REPO_FILES=\((.*?)\)", text, re.M | re.S)
+        require(found is not None, "%s names no REPO_FILES" % BUILDER)
+        words = found.group(1).replace("\\\n", " ").split()
+        return sorted(BUILDER if w == '"$SCRIPT"' else w for w in words)
+
+
+def check_provenance(built, checkout):
+    """The build record's commit and repository files against `checkout` (Checkout): refused, naming what differs."""
+    checkout.check_config()                       # first: before any `git status`, nothing of the checkout's own runs
+    files = built["repository_files"]
+    require(isinstance(files, dict) and files, "the initrd's build record names no repository files: it was not written by build-initrd.sh")
+    expected = checkout.builder_files()
+    require(sorted(files) == expected, "the initrd's build record names other repository files than this checkout's %s records "
+            "(missing: %s; not recorded by it: %s)" % (BUILDER, ", ".join(sorted(set(expected) - set(files))) or "none",
+                                                        ", ".join(sorted(set(files) - set(expected))) or "none"))
+    for path in expected:
+        require(attest.is_hex(files[path], 64), "the initrd's build record's %s is not a SHA-256" % path)
+        mine = checkout.sha256(path)
+        require(mine == files[path], "the initrd was built with another %s than this checkout's (%s, not %s): nothing is built or signed"
+                % (path, files[path][:16], mine[:16]))
+    head = checkout.head()
+    require(built["commit"] == head, "the initrd was built from commit %s; this checkout is at %s: sign from a clone at the build's commit"
+            % (built["commit"], head))
+    require(checkout.clean(), "this checkout has changes or untracked files: sign from a clean clone at commit %s" % head)
+    release = checkout.go_release()
+    require(built["go"] == release, "the initrd's client was built with %s; this checkout's go.mod names %s" % (built["go"], release))
+
+
+def check_initrd_build(inputs, client_sha256, inventory=None, checkout=None):
     """The initrd's build record, read and held to the initrd and the client given; None when there is none
     (a library caller's test fixture: the build and sign commands require one)."""
     if not inputs.get("initrd_build"):
@@ -1049,6 +1144,10 @@ def check_initrd_build(inputs, client_sha256, inventory=None):
             "the initrd's build record names no archive snapshot")
     for field in ("client_sha256", "root_key_sha256", "initrd_sha256", "packages_sha256"):
         require(attest.is_hex(built[field], 64), "the initrd's build record has no %s" % field)
+    for field in ("source_date_epoch", "initrd_size", "initrd_entries"):
+        require(type(built[field]) is int and built[field] >= 0, "the initrd's build record's %s is not a count" % field)
+    require(isinstance(built["packages"], list) and all(isinstance(p, str) and p for p in built["packages"]),
+            "the initrd's build record's packages is not a list of names")
     require(built["initrd_sha256"] == sha256(read(inputs["initrd"])),
             "the initrd's build record is for another initrd (%s, not --initrd's %s)" % (built["initrd_sha256"], sha256(read(inputs["initrd"]))))
     require(client_sha256 is not None and built["client_sha256"] == client_sha256,
@@ -1081,6 +1180,7 @@ def check_initrd_build(inputs, client_sha256, inventory=None):
     if inputs.get("root_key"):
         require(built["root_key_sha256"] == sha256(read(inputs["root_key"], 65536)),
                 "the initrd's build record names another membership root (%s, not --root-key's)" % built["root_key_sha256"])
+    check_provenance(built, checkout or Checkout())                # #266: the record is this checkout's build
     return built
 
 
@@ -1636,6 +1736,8 @@ def main(argv=None):
     c = sub.add_parser("initrd-inventory", help="print an initrd's inventory (every entry, classed), to read in a pull request")
     c.add_argument("--initrd", required=True)
     c.add_argument("--root", help="the root of the machine that built it, whose dpkg database names each file's package")
+    sub.add_parser("provenance", help="this checkout's commit and the files build-initrd.sh records, with their SHA-256 (#266): "
+                   "what a build record made here must name")
     args = parser.parse_args(argv)
     try:
         if args.command == "initrd-review":
@@ -1646,6 +1748,11 @@ def main(argv=None):
             return 0 if review["passed"] else 1
         if args.command == "initrd-inventory":
             print("\n".join(initrd_inventory_lines(read(args.initrd), root=args.root)))
+            return 0
+        if args.command == "provenance":
+            checkout = Checkout()
+            print(json.dumps({"commit": checkout.head(), "clean": checkout.clean(),
+                              "repository_files": {path: checkout.sha256(path) for path in checkout.builder_files()}}, indent=1, sort_keys=True))
             return 0
         if args.command == "build":
             record = build(_inputs(args), args.uname, args.name, args.out, inventory=args.initrd_inventory, unlock_client=args.unlock_client)

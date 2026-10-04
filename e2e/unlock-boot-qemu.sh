@@ -99,7 +99,7 @@ else
   SOURCES=("deb [signed-by=$KEYRING] $MIRROR $SUITE main" "deb [signed-by=$KEYRING] $MIRROR $SUITE-updates main"
            "deb [signed-by=$KEYRING] ${REGALIA_BOOT_SECURITY_MIRROR:-http://deb.debian.org/debian-security} $SUITE-security main")
   mmdebstrap --variant=minbase "${APTOPT[@]}" \
-    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography \
+    --include=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography,git \
     "$SUITE" "$ROOT" "${SOURCES[@]}" >"$W/mmdebstrap.log" 2>&1 \
     || { tail -40 "$W/mmdebstrap.log"; echo "unlock-boot-qemu: mmdebstrap failed"; exit 2; }
   # the guest's own apt reads the same lines: the keyring at the same path inside it
@@ -189,7 +189,13 @@ for k in initrd system secure-boot; do
   openssl req -new -x509 -key "$W/keys/TEST-$k.key" -out "$W/keys/TEST-$k.crt" -subj "/CN=TEST $k key, not for production/" -days 30 2>/dev/null
 done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
-cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
+# #266: uki.py builds and signs only from a clean checkout at the commit the initrd was built from, and holds the
+# build record's files to it: the guest gets a clone of this checkout's HEAD (git in the guest root), never a copy
+git -C "$ROOT/tmp/uki/src" init --quiet
+git -c safe.directory="$PWD" -C "$ROOT/tmp/uki/src" fetch --quiet --depth=1 "$PWD" HEAD     # CI's checkout is shallow
+git -C "$ROOT/tmp/uki/src" checkout --quiet --detach FETCH_HEAD
+[ "$(git -C "$ROOT/tmp/uki/src" rev-parse HEAD)" = "$(git -c safe.directory="$PWD" rev-parse HEAD)" ] || { echo "the guest's clone is not at HEAD"; exit 1; }
+cp -r "$W/keys" "$ROOT/tmp/uki/"
 cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
 cp "$W/root-key.json" "$ROOT/tmp/uki/root-key.json"                           # the membership root it trusts, an input (#156)
 printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"

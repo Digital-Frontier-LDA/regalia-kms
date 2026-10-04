@@ -229,6 +229,36 @@ def unlock_initrd(change=None, drop=()):
     files.update(change or {})
     return newc([(n, mode, data) for n, (mode, data) in sorted(files.items()) if n not in drop])
 
+class FakeCheckout:
+    """The signer's checkout as uki.Checkout reads it (#266), for the fixtures: a commit, a clean tree, and the files
+    build-initrd.sh records with their SHA-256. Patched in for uki.Checkout by Case: no command can reach it."""
+    COMMIT = "ab" * 20
+    FILES = {uki.BUILDER: "11" * 32, "go.mod": "22" * 32, "deploy/baremetal/uki.py": "33" * 32}
+
+    def __init__(self, commit=COMMIT, files=None, clean=True, go="go1.26.6", config=()):
+        self.commit, self.files, self.is_clean = commit, dict(FakeCheckout.FILES if files is None else files), clean
+        self.go, self.config = go, config
+
+    def check_config(self):
+        m.require(not self.config, "this checkout's git configuration sets %s, which a clone does not" % ", ".join(self.config))
+
+    def go_release(self):
+        return self.go
+
+    def head(self):
+        return self.commit
+
+    def clean(self):
+        return self.is_clean
+
+    def sha256(self, path):
+        m.require(path in self.files, "%s is not a file of this checkout" % path)
+        return self.files[path]
+
+    def builder_files(self):
+        return sorted(self.files)
+
+
 class Case(unittest.TestCase):
     @staticmethod
     def key(name, kind):
@@ -237,6 +267,9 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
+        patcher = mock.patch.object(uki, "Checkout", FakeCheckout)        # #266: the fixtures' checkout
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tools = FakeTools()
         self.inputs = {}
         for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
@@ -259,8 +292,7 @@ class Case(unittest.TestCase):
             initrd_sha256 = uki.sha256(f.read())
         record = {"schema": uki.INITRD_BUILD_SCHEMA, "commit": "ab" * 20, "go": "go1.26.6", "snapshot": "20261003T121500Z",
                   "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "6.12.111+deb13-amd64", "dracut": "106-6",
-                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "root_key_sha256": uki.sha256(ROOT_KEY),
-                  "repository_files": {},
+                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "root_key_sha256": uki.sha256(ROOT_KEY), "repository_files": dict(FakeCheckout.FILES),
                   "packages_sha256": "cd" * 32, "packages": ["dracut=106-6"], "initrd_sha256": initrd_sha256,
                   "initrd_size": 1, "initrd_entries": 1,
                   # #246: what the builder verified against the archive, exactly the inventory's packages (none in the fixture's)
@@ -1552,3 +1584,156 @@ class OfflineKeys(Case):
         code, err, _ = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key-fd", str(fds["system"]),
                                     "--secure-boot-key-fd", str(fds["secure_boot"]))
         self.assertIn("--offline-session is 32 lowercase hex", err)
+
+
+class Provenance(Case):
+    """#266: the build record's commit and repository files, held to the signer's own checkout in build and sign. Each
+    case below is refused by one guard only, and by its own message."""
+
+    def built(self, **change):
+        return json.loads(uki.read(self.initrd_build("p.json", **change)))
+
+    def refused_by(self, reason, checkout=None, **change):
+        path = self.initrd_build("p-%d.json" % len(os.listdir(self.d)), **change)
+        self.refused(reason, uki.check_initrd_build, dict(self.inputs, initrd_build=path), uki.sha256(CLIENT), checkout=checkout or FakeCheckout())
+
+    def test_a_record_of_this_checkout_passes(self):
+        self.assertIsNotNone(uki.check_initrd_build(self.inputs, uki.sha256(CLIENT), checkout=FakeCheckout()))
+
+    def test_no_repository_files_is_refused(self):
+        self.refused_by("names no repository files: it was not written by build-initrd.sh", repository_files={})
+
+    def test_other_files_than_the_builder_records_are_refused(self):
+        fewer = {k: v for k, v in FakeCheckout.FILES.items() if k != "go.mod"}
+        self.refused_by("names other repository files than this checkout's deploy/baremetal/initrd/build-initrd.sh records "
+                        "(missing: go.mod; not recorded by it: none)", repository_files=fewer)
+        more = dict(FakeCheckout.FILES, **{"README.md": "44" * 32})
+        self.refused_by("(missing: none; not recorded by it: README.md)", repository_files=more)
+
+    def test_a_file_that_differs_from_this_checkout_is_named(self):
+        self.refused_by("the initrd was built with another go.mod than this checkout's (5555555555555555, not 2222222222222222)",
+                        repository_files=dict(FakeCheckout.FILES, **{"go.mod": "55" * 32}))
+
+    def test_a_digest_that_is_not_one_is_refused(self):
+        self.refused_by("the initrd's build record's go.mod is not a SHA-256", repository_files=dict(FakeCheckout.FILES, **{"go.mod": "x"}))
+
+    def test_another_commit_is_named(self):
+        self.refused_by("the initrd was built from commit %s; this checkout is at %s" % ("cd" * 20, FakeCheckout.COMMIT), commit="cd" * 20)
+
+    def test_a_dirty_checkout_signs_nothing(self):
+        self.refused_by("this checkout has changes or untracked files", checkout=FakeCheckout(clean=False))
+
+    def test_a_client_built_with_another_go_than_go_mod_names_is_refused(self):
+        """48's #300, carried here: build-initrd.sh builds with go.mod's release, so the record's go is that one."""
+        self.refused_by("the initrd's client was built with go1.26.6; this checkout's go.mod names go1.26.7", checkout=FakeCheckout(go="go1.26.7"))
+
+    def test_a_checkout_whose_config_names_a_command_is_refused(self):
+        self.refused_by("this checkout's git configuration sets filter.x.clean, which a clone does not", checkout=FakeCheckout(config=("filter.x.clean",)))
+
+    def test_the_counts_and_the_package_list_are_typed(self):
+        for field, value, reason in (("source_date_epoch", "1791029700", "source_date_epoch is not a count"),
+                                     ("initrd_size", True, "initrd_size is not a count"), ("initrd_entries", -1, "initrd_entries is not a count"),
+                                     ("packages", "dracut=106-6", "packages is not a list of names"), ("packages", [""], "packages is not a list of names")):
+            with self.subTest(field=field, value=value):
+                self.refused_by(reason, **{field: value})
+
+    def test_sign_checks_it_too(self):
+        record = self.build()                                     # built from this checkout
+        with mock.patch.object(uki, "Checkout", lambda: FakeCheckout(commit="cd" * 20)):     # the signer's is at another commit
+            self.refused("the initrd was built from commit %s; this checkout is at %s" % (FakeCheckout.COMMIT, "cd" * 20), self.sign, record=record)
+
+
+class RealCheckout(unittest.TestCase):
+    """uki.Checkout itself, on a real git repository made here."""
+
+    def setUp(self):
+        if not shutil.which("git"):
+            self.skipTest("needs git")
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        os.makedirs(os.path.join(self.d, "deploy/baremetal/initrd"))
+        with open(os.path.join(self.d, uki.BUILDER), "w") as f:
+            f.write('#!/bin/bash\nSCRIPT="deploy/baremetal/initrd/build-initrd.sh"\nREPO_FILES=("$SCRIPT" go.mod\n            go.sum)\n')
+        for name in ("go.mod", "go.sum"):
+            with open(os.path.join(self.d, name), "w") as f:
+                f.write(name + "\n")
+        git = lambda *a: subprocess.run(["git", "-C", self.d, "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True)  # noqa: E731
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-q", "-m", "fixture")
+        self.checkout = uki.Checkout(self.d)
+
+    def test_it_reads_the_head_the_builder_files_and_their_digests(self):
+        head = subprocess.run(["git", "-C", self.d, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(self.checkout.head(), head)
+        self.assertEqual(self.checkout.builder_files(), sorted([uki.BUILDER, "go.mod", "go.sum"]))
+        self.assertEqual(self.checkout.sha256("go.mod"), uki.sha256(b"go.mod\n"))
+        self.assertTrue(self.checkout.clean())
+
+    def test_an_untracked_or_changed_file_makes_it_dirty(self):
+        with open(os.path.join(self.d, "stray"), "w") as f:
+            f.write("x")
+        self.assertFalse(self.checkout.clean())
+        os.unlink(os.path.join(self.d, "stray"))
+        with open(os.path.join(self.d, "go.mod"), "a") as f:
+            f.write("changed\n")
+        self.assertFalse(self.checkout.clean())
+
+    def test_a_path_outside_or_through_a_link_is_not_a_file_of_it(self):
+        os.symlink("go.mod", os.path.join(self.d, "link"))
+        for path in ("../etc/passwd", "/etc/passwd", "link", "deploy/../go.mod"):
+            with self.subTest(path=path), self.assertRaises(m.Refused):
+                self.checkout.sha256(path)
+
+    def git_config(self, *argv):
+        subprocess.run(["git", "-C", self.d, "config", *argv], check=True, capture_output=True)
+
+    def test_a_clone_s_own_config_passes(self):
+        self.git_config("remote.origin.url", "https://example.invalid/r.git")
+        self.git_config("branch.feat/x.merge", "refs/heads/feat/x")
+        self.git_config("gc.auto", "0")                                     # actions/checkout's
+        self.checkout.check_config()
+
+    def test_a_planted_clean_filter_is_refused_before_git_status_can_run_it(self):
+        """regalia-kms-d9's read: `git status` runs a clean filter the checkout's config defines, as the signer."""
+        marker = os.path.join(self.d, "..", os.path.basename(self.d) + ".ran")
+        self.addCleanup(lambda: os.path.exists(marker) and os.unlink(marker))
+        self.git_config("filter.x.clean", "touch %s; cat" % marker)
+        with open(os.path.join(self.d, ".git", "info", "attributes"), "w") as f:
+            f.write("* filter=x\n")
+        os.utime(os.path.join(self.d, "go.mod"), (1, 1))                     # stat changed: status refreshes go.mod
+        self.checkout.clean()
+        self.assertTrue(os.path.exists(marker), "the premise: git status ran the checkout's filter")
+        os.unlink(marker)
+        os.utime(os.path.join(self.d, "go.sum"), (1, 1))
+        with self.assertRaises(m.Refused) as caught:
+            uki.check_provenance({"repository_files": {}}, self.checkout)
+        self.assertIn("this checkout's git configuration sets filter.x.clean, which a clone does not", str(caught.exception))
+        self.assertFalse(os.path.exists(marker))
+
+    def test_an_include_or_a_command_key_is_refused_and_named(self):
+        other = os.path.join(self.d, ".git", "more")
+        with open(other, "w") as f:
+            f.write("[core]\n\tpager = touch /nonexistent\n")
+        self.git_config("include.path", other)
+        with self.assertRaises(m.Refused) as caught:
+            self.checkout.check_config()
+        self.assertIn("sets core.pager, include.path, which a clone does not", str(caught.exception))
+
+    def test_go_release_is_the_toolchain_line_else_the_go_line(self):
+        def release(text):
+            with open(os.path.join(self.d, "go.mod"), "w") as f:
+                f.write(text)
+            return self.checkout.go_release()
+        self.assertEqual(release("module x\n\ngo 1.26.6\n"), "go1.26.6")
+        self.assertEqual(release("module x\n\ngo 1.26\n\ntoolchain go1.26.7\n"), "go1.26.7")
+        with self.assertRaises(m.Refused) as caught:
+            release("module x\n\ngo 1.26\n")
+        self.assertIn("this checkout's go.mod names no exact Go release", str(caught.exception))
+
+    def test_a_directory_that_is_not_a_checkout_is_refused(self):
+        outside = tempfile.mkdtemp()                              # not under the fixture's repository
+        self.addCleanup(shutil.rmtree, outside, True)
+        with self.assertRaises(m.Refused) as caught:
+            uki.Checkout(outside).head()
+        self.assertIn("is not a git checkout git can read", str(caught.exception))

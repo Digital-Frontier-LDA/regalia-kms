@@ -5,6 +5,10 @@
   "owner_keys": [
    {
     "alg": "ed25519",
+    "attestation_sha256": {
+     "dec": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
+     "sig": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
+    },
     "attested": true,
     "key": "66be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a",
     "role": "dev-main",
@@ -53,5 +57,5 @@
   ],
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "b51b9b27f06ae6c9f9a0a376184b8da803bb1b2bee21ef7861cffc1b681b7f975ba415350b8290c29f369aa0684cb0dd8131024bf9bde4ea4b05df57341bb70e"
+ "signature": "b7bc563fa0be1cf673ece3c727fc1134fb4879c9b1637b652b58d178d88fadc29f9de435a287b221702371f83ef9dd2d9499bb303f9f52c4b38e2c8a94d27a02"
 }

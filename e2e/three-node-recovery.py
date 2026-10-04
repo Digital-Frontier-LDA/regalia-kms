@@ -22,7 +22,8 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
      nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
   6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
      first 6 in a minute answered, the 7th refused and recorded; c, beside it, answered
-  7  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN. In each, a
+  7  N: a QUARANTINED (by the owner's key, #199), then RETIRED (by the root), then b REVOKED_STOLEN (c is then the only
+     node that counts: it holds no heartbeat for the epoch until the owner's hand recovery, owner.py beat). In each, a
      control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
      survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
      and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
@@ -123,13 +124,23 @@ def scenario(cluster):
         cluster.enrol(name)
     for name in names:
         cluster.start(name, SERVICES)
+    # #199: nobody writes a heartbeat here: the nodes sign the first one themselves (beat.Proposer, from bootstrap)
+    fresh = cluster.fresh(names, timeout=240)
+    ok(all(fresh.values()), "every node holds a heartbeat the nodes signed themselves, from bootstrap (%s)" % fresh, cluster.beat_events(names))
     for name in names:
         held = until(lambda: cluster.lease(name), 120, 2)
         ok(bool(held), "%s holds a runtime lease (epoch %s)" % (name, (held or {}).get("epoch")), cluster.journal(name, "admission")[-600:])
 
     header("1b  #75: update.py's live leases, the real call: a asks b and c for a lease for its boot, as root in its namespace")
-    got = json.loads(cluster.nodes["a"].in_ns("env", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-Es", "-c", LIVE_LEASES,
-                                               input=json.dumps({"cfg": str(cluster.nodes["a"].cfg_path)}), cwd=str(cluster.code)).stdout)
+    def live_leases():
+        return json.loads(cluster.nodes["a"].in_ns("env", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-Es", "-c", LIVE_LEASES,
+                                                    input=json.dumps({"cfg": str(cluster.nodes["a"].cfg_path)}), cwd=str(cluster.code)).stdout)
+    got = live_leases()
+    if got["refused"] and all("RATE:" in r for r in got["refused"].values()):
+        # a's own admission may have spent its lease requests at b during the bootstrap (6 a minute, sync.RATE): the
+        # limit doing its job, not this call's. Once the window has passed, the call is made again, once
+        time.sleep(61)
+        got = live_leases()
     ok(sorted(got["leases"]) == ["b", "c"] and not got["refused"], "a got a lease from b and from c, each asked once (%s)" % got.get("refused"), got)
     ok(all(v["node_id"] == "a" and v["issuer"] == p and v["this_session"] and v["left"] > 0 for p, v in got["leases"].items()),
        "each names a as subject, its peer as issuer, a's boot session, and verifies under a's manifest now", got)
@@ -239,7 +250,7 @@ def scenario(cluster):
     until(lambda: cluster.lease("b"), 150, 3)
 
     header("7  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
-    for victim, signer, state in (("a", "revocation", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "revocation", "REVOKED_STOLEN")):
+    for victim, signer, state in (("a", "owner", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "owner", "REVOKED_STOLEN")):
         before = cluster.manifest
         survivors = [n for n in names if n != victim and may(before, n, "authorize")]
         # the control: the setup works at this moment (tunnels, endpoints, the survivors' services); only the epoch changes
@@ -254,6 +265,24 @@ def scenario(cluster):
         cluster.stop(victim)                            # down when it is revoked: it takes the epoch as a stopped node
         seed = survivors[0]
         manifest, since = cluster.advance(seed, signer=signer, **{victim: state})
+        counting = [s for s in survivors if s in cluster.manifest["heartbeat_signers"]["parties"] and cluster.running(s)
+                    and may(manifest, s, "authorize")]
+        if len(counting) == 1:
+            # #199: one node left that counts. Nobody can co-sign its heartbeat for the new epoch: it stays without one
+            # (fail closed) until the operator's hand recovery, owner.py beat, which the scenario now plays explicitly
+            alone = counting[0]
+            # not vacuous (regalia-kms-3e): wait for its own try at the epoch, refused for want of a co-signer, then look
+            tried = until(lambda: [e for e in cluster.trail(alone) if e.get("event") == "beat-propose" and e.get("epoch") == manifest["epoch"]
+                                   and e.get("outcome") == "DENY" and "no other node counts" in e.get("reason", "") and e.get("at", 0) >= since],
+                          240, 3)
+            ok(bool(tried) and not cluster.holds_heartbeat(alone, manifest["epoch"]),
+               "%s, the only node left that counts, tried to sign epoch %d's heartbeat, found no co-signer, and holds none: alone it "
+               "signs nothing" % (alone, manifest["epoch"]), cluster.beat_events([alone]))
+            envelope = cluster.owner_beat(alone)
+            lives = threenode.heartbeat.parse_time(envelope["heartbeat"]["expires_at"], "e") - threenode.heartbeat.parse_time(envelope["heartbeat"]["issued_at"], "i")
+            ok(cluster.holds_heartbeat(alone, manifest["epoch"]) and cluster.heartbeat_signers(alone) == [alone, "owner"] and lives <= 3600,
+               "the hand recovery (owner.py beat): %s and the owner's key sign a heartbeat for epoch %d that lives %d s (at most 1 h)"
+               % (alone, manifest["epoch"], lives), envelope["heartbeat"])
         pulled = [s for s in survivors if s != seed]
         ok(all(cluster.node(s).store().load()["epoch"] == manifest["epoch"] for s in survivors)
            and all(any(e.get("event") == "sync-apply" and e.get("peer") == seed and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since

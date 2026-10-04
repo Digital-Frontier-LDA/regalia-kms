@@ -143,9 +143,9 @@ GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s
 OWNER_PARTY = membership.OWNER
 # what `enrol entry` prints for a node (#358, #371 and its ssh_host_pub): the v4 entry is these and state ACTIVE
 ENTRY_FIELDS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
-# the bench's Nitrokeys (regalia's tools/hsm-staging-registry.json, and DENK0400664, dead): never a production node's
-# token (ADR-0002 D28.5, D30). Genesis is where the root first vouches for a node's tokens, so they are refused here.
-BENCH_SERIALS = frozenset({"DENK0404144", "DENK0404380", "DENK0404547", "DENK0400664"})
+# the bench's tokens (membership.BENCH_TOKENS: its Nitrokeys and YubiKeys, in every form hsm_serials pins): never a
+# production node's (ADR-0002 D28.5, D30). Genesis is where the root first vouches for a node's tokens, so refused here.
+BENCH_SERIALS = membership.BENCH_TOKENS
 
 
 def _raw_ed25519(value, what):
