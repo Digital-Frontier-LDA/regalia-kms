@@ -12,6 +12,8 @@ envelope, so nothing a node would refuse is ever signed.
     python3 -Es -m deploy.baremetal.manifest propose --chain CHAIN.json --root-key ROOT (--from-rollout R.json | --set-state NODE=STATE ...)
                                                      [--issued-at YYYY-MM-DDTHH:MM:SSZ] --out PROPOSAL.json
                                                      [--old OLD.json --new NEW.json [--state NODE=STATE.json]...]
+    python3 -Es -m deploy.baremetal.manifest propose --genesis --root-key ROOT --card-record CARDS.json --measurements DOC.json
+                                                     --entry A.json --entry B.json --entry C.json --out EPOCH1.json
     python3 -Es -m deploy.baremetal.manifest diff    --chain CHAIN.json --root-key ROOT --proposal PROPOSAL.json
     python3 -Es -m deploy.baremetal.manifest sign    --chain CHAIN.json --root-key ROOT --expected-epoch N --proposal PROPOSAL.json
                                                      --signer root|revocation --key 'pkcs11:serial=…;token=…;id=%01;type=private'
@@ -82,7 +84,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import attest, keyfd, measurements, membership, p11uri, rollout
+from deploy.baremetal import attest, cardrecord, keyfd, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
 RECORD = "signing-record.jsonl"
@@ -153,26 +155,30 @@ def _raw_ed25519(value, what):
     return value
 
 
-def owner_keys_from(pairs):
-    """`--owner-key SERIAL=HEX`, given exactly twice: {serial: key}. The two owner cards' OpenPGP SIG keys (ADR-0002 D30),
-    distinct serials, distinct keys. TODO: read them from regalia-ceremony#111's card record once its path and fields
-    are defined (regalia-kms-51), instead of the command line."""
-    owners = {}
-    for pair in pairs:
-        serial, sep, key = pair.partition("=")
-        require(sep and re.fullmatch(r"[A-Za-z0-9._-]{1,32}", serial) is not None, "--owner-key takes SERIAL=HEX, not %r" % pair)
-        require(serial not in owners, "--owner-key names the card %s twice" % serial)
-        owners[serial] = _raw_ed25519(key, "--owner-key %s" % serial)
-    require(len(owners) == 2, "--owner-key is given exactly twice, once for each of the owner's two cards (D30), not %d times" % len(owners))
-    require(len(set(owners.values())) == 2, "the two owner cards have the same key: they are one card")
-    return owners
+def card_record_keys(envelope, root):
+    """The owner's two keys and the release card's, from the card ceremony's record (regalia-ceremony#111, ADR-0002 D30)
+    and nowhere else: verified by cardrecord.verify under the PINNED root first, so a key is never typed. The genesis
+    root is one Ed25519 key (D28); a pin naming anything else is refused here. Returns cardrecord.verify's result."""
+    entries = membership.root_entries(root)
+    require(len(entries) == 1 and entries[0][0] == "ed25519",
+            "the genesis root is one Ed25519 key (D28): a card record is verified under that key only, not %s"
+            % ", ".join(alg for alg, _ in entries))
+    return cardrecord.verify(envelope, entries[0][1])
 
 
 def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
     """Epoch 1 (v4), unsigned: every node from its `enrol entry` output (state ACTIVE), the measurements `document` it
     commits to, the owner's two keys, and GENESIS_POLICY (with `policy` overrides). Refused unless it is a manifest a
     node would accept from the root at genesis (validate, transition(None, ..., "root"), measurements.bind), and unless
-    the release card's key, the root's and every node's signing key are each other than the owner keys."""
+    the release card's key, the root's and every node's signing key are each other than the owner keys. `owners`
+    ({card serial: key}) and `release_key` come from the card record (card_record_keys); checked here again, as a
+    library caller may give them otherwise."""
+    require(isinstance(owners, dict) and len(owners) == 2, "the owner's keys are exactly two cards' (D30), not %r" % (owners,))
+    for serial, key in sorted(owners.items()):
+        _raw_ed25519(key, "the owner card %s's key" % serial)
+        require(isinstance(serial, str) and serial.upper() not in membership.BENCH_TOKENS,
+                "the owner card %s is a bench token: the ceremony never uses a bench serial (D28.5, D30)" % serial)
+    require(len(set(owners.values())) == 2, "the two owner cards have the same key: they are one card")
     require(isinstance(entries, list) and entries, "no node entry given (--entry, one per node, as `enrol entry` printed it)")
     nodes = []
     for i, entry in enumerate(entries):
@@ -186,8 +192,8 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
         require(not bench, "the entry of %s names a bench token (%s): never a production node's (D28.5)" % (entry["node_id"], ", ".join(bench)))
         nodes.append(dict(entry, state="ACTIVE"))
     nodes.sort(key=lambda n: n["node_id"])
-    release_key = _raw_ed25519(release_key, "--release-key")
-    require(release_key not in owners.values(), "--release-key is one of the owner keys: the release card is never an owner key")
+    release_key = _raw_ed25519(release_key, "the release key")
+    require(release_key not in owners.values(), "the release key is one of the owner keys: the release card is never an owner key")
     roots = {key for _, key in membership.root_entries(root)}
     for name, key in [("owner card %s" % s, k) for s, k in sorted(owners.items())] + [("release card", release_key)]:
         require(key not in roots, "the %s's key is the pinned root's" % name)
@@ -465,23 +471,30 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
 
 def _propose_genesis(args, root, confirm=None, say=print):
     """`propose --genesis`: epoch 1 written after the operator types the two owner cards' serials, as printed on the
-    cards, at the console (never on the command line), having read every field of it. Nothing is written otherwise."""
+    cards, at the console (never on the command line), having read every field of it. Nothing is written otherwise.
+    The owner's keys and the release card's come from the card ceremony's record (--card-record), verified under the
+    pinned root before anything else is read: never typed, so there is no second way to give them."""
     require(args.chain is None and not args.from_rollout and not args.set_state and not (args.old or args.new or args.state),
             "--genesis takes no --chain, --from-rollout, --set-state or measurements step: nothing comes before it")
-    require(args.measurements and args.release_key, "--genesis needs --measurements and --release-key")
+    require(args.measurements and args.card_record, "--genesis needs --measurements and --card-record")
+    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root)
+    owners, release_key = cards["owners"], cards["release_key"]
     entries = [read_json(path, membership.MAX_BYTES) for path in args.entry]
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
-    owners = owner_keys_from(args.owner_key)
     policy = {k: v for k, v in (("heartbeat_max_lifetime_s", args.heartbeat_max_lifetime_s),
                                 ("owner_heartbeat_lifetime_s", args.owner_heartbeat_lifetime_s)) if v is not None}
-    candidate = propose_genesis(entries, document, owners, args.release_key, root, args.issued_at or utc_now(), policy)
+    candidate = propose_genesis(entries, document, owners, release_key, root, args.issued_at or utc_now(), policy)
     require(not os.path.lexists(args.out), "%s exists: nothing is overwritten" % args.out)
     for line in diff({"nodes": []}, candidate):
         say("  " + line)
     say("measurements: %s (%s)" % (candidate["policy_version"], document["name"]))
+    say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
+    roles = {serial: role for role, serial in cards["roles"].items()}
     order = sorted(owners)
     for serial in order:
-        say("owner card %s: key %s, SHA-256 %s" % (serial, owners[serial], hashlib.sha256(bytes.fromhex(owners[serial])).hexdigest()))
+        say("owner card %s (%s): key %s, SHA-256 %s" % (serial, roles[serial], owners[serial],
+                                                        hashlib.sha256(bytes.fromhex(owners[serial])).hexdigest()))
+    say("release card key (not in the manifest; refused as an owner, root or node key): %s" % release_key)
     typed = (confirm or keyfd.tty_line)("type the two owner cards' serials, as printed ON THE CARDS, in the order above: ").split()
     require(typed == order, "the serials typed are not the owner cards above: nothing was written")
     _write_new(args.out, json.dumps(candidate, indent=2, sort_keys=True).encode() + b"\n")
@@ -560,9 +573,9 @@ def main(argv=None):
     c.add_argument("--genesis", action="store_true", help="the first ceremony: epoch 1 from the nodes' entries, the measurements and the owner's two keys")
     c.add_argument("--entry", action="append", default=[], metavar="ENTRY.json", help="--genesis: a node's `enrol entry` output; one per node")
     c.add_argument("--measurements", metavar="DOC.json", help="--genesis: the measurements document epoch 1 commits to")
-    c.add_argument("--owner-key", action="append", default=[], metavar="SERIAL=HEX",
-                   help="--genesis: an owner card's serial and its OpenPGP SIG key (raw Ed25519, 64 hex); exactly twice (D30)")
-    c.add_argument("--release-key", metavar="HEX", help="--genesis: the release card's key (raw Ed25519, 64 hex): refused as an owner key")
+    c.add_argument("--card-record", metavar="CARDS.json",
+                   help="--genesis: the card ceremony's record (regalia-ceremony#111, cards.record.json), signed by the pinned "
+                        "root: the owner's two keys and the release card's, from it and never typed")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
@@ -607,8 +620,8 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.entry or args.measurements or args.owner_key or args.release_key or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --owner-key, --release-key and the "
+            require(not (args.entry or args.measurements or args.card_record or args.heartbeat_max_lifetime_s
+                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --card-record and the "
                     "lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)
