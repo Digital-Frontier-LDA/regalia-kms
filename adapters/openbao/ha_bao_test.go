@@ -199,6 +199,7 @@ func TestOpenBao271NativeThreeNodeHA(t *testing.T) {
 	f := newKMSFixtureMode(t, true)
 	digest := hex.EncodeToString(sum[:])
 	var nodes []*baoHANode
+	var share string
 	for i := range 3 {
 		nodeDir := filepath.Join(dir, fmt.Sprintf("node-%d", i))
 		if err := os.Mkdir(nodeDir, 0o700); err != nil {
@@ -210,13 +211,21 @@ func TestOpenBao271NativeThreeNodeHA(t *testing.T) {
 		address := freeAddress(t)
 		n := &baoHANode{dir: nodeDir, config: baoConfig(t, nodeDir, address, freeAddress(t), digest, nativeFixtureConfig(f.pki.config))}
 		// A redirect must not disguise a failed node as another node's success.
-		n.api = baoAPI{base: "http://" + address, client: &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+		n.api = baoAPI{base: "http://" + address, client: &http.Client{Transport: &http.Transport{Proxy: nil}, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 		n.process = startBao(t, binary, n.config, n.dir)
 		n.api.wait(t, false, true, n.process)
 		nodes = append(nodes, n)
+		if i == 0 {
+			// Bootstrap once before starting followers' periodic seal checks on
+			// the shared single-slot software token. Initialization uses the
+			// lifecycle fixture's bound; fault checks keep their shorter limit.
+			started := time.Now()
+			share = n.api.initialize(t)
+			t.Logf("HA leader initialized once in %s", time.Since(started).Round(time.Millisecond))
+			n.api.seedSyntheticKV(t)
+		}
+		n.api.client.Timeout = 10 * time.Second
 	}
-	share := nodes[0].api.initialize(t)
-	nodes[0].api.seedSyntheticKV(t)
 	for _, n := range nodes[1:] {
 		n.api.must(t, http.MethodPost, "/v1/sys/storage/raft/join", map[string]any{"leader_api_addr": nodes[0].api.base})
 		n.api.token = nodes[0].api.token
