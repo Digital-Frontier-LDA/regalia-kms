@@ -207,7 +207,8 @@ class Publishing(Case):
             if isinstance(self.answer, Exception):
                 raise self.answer
             return self.answer
-        return authtime.Service(self.path, DECLARED, answer, wall=lambda: self.now, boottime=lambda: self.ticks, boot=lambda: BOOT)
+        return authtime.Service(self.path, DECLARED, answer, wall=lambda: self.now, boottime=lambda: self.ticks, boot=lambda: BOOT,
+                                leap=lambda: __file__)                     # a file that exists: the leap zone is not what these test
 
     def clock(self, **how):
         return authtime.clock(self.path, wall=lambda: self.now, boottime=lambda: self.ticks, boot=lambda: BOOT, owner=self.me, **how)
@@ -342,7 +343,7 @@ class Auditing(Publishing):
         self.answer_value = reading()
         events, record = self.recording()
         service = authtime.Service(self.path, DECLARED, self.reading_now, wall=lambda: self.now, boottime=lambda: self.ticks,
-                                   boot=lambda: BOOT, record=record)
+                                   boot=lambda: BOOT, record=record, leap=lambda: __file__)
         service.step()
         service.step()                                                   # no change: nothing more recorded
         self.answer_value = m.Refused("chrony could not be asked for tracking")
@@ -358,7 +359,7 @@ class Auditing(Publishing):
         self.answer_value = reading()
         _, record = self.recording(fail=True)
         service = authtime.Service(self.path, DECLARED, self.reading_now, wall=lambda: self.now, boottime=lambda: self.ticks,
-                                   boot=lambda: BOOT, record=record)
+                                   boot=lambda: BOOT, record=record, leap=lambda: __file__)
         document = service.step()
         self.assertEqual((document["authenticated"], document["reason"]),
                          (False, "the transition could not be recorded in the time trail (OSError)"))
@@ -382,3 +383,22 @@ class Auditing(Publishing):
         self.assertIn("exit-code", event["latch"])
         self.assertIn("exceeds the allowed maximum", event["chrony_said"])
         self.assertEqual(events, [event])
+
+
+class LeapZone(Publishing):
+    def test_a_host_without_the_leap_zone_is_not_vouched_for_and_says_why(self):
+        missing = os.path.join(self.d, "right", "UTC")
+        events = []
+        service = authtime.Service(self.path, DECLARED, lambda: reading(), wall=lambda: self.now, boottime=lambda: self.ticks,
+                                   boot=lambda: BOOT, record=events.append, leap=lambda: missing)
+        document = service.step()
+        self.assertEqual((document["authenticated"], document["reason"]),
+                         (False, "%s is missing: chronyd has no leap-second data (install tzdata-legacy)" % missing))
+        self.assertEqual(events[-1]["event"], "time-unauthenticated")
+        self.assertIn("tzdata-legacy", events[-1]["reason"])
+
+    def test_the_zone_is_looked_for_where_glibc_and_chronyd_look(self):
+        with unittest.mock.patch.dict(os.environ, {"TZDIR": "/opt/zones"}):
+            self.assertEqual(authtime.leap_zone(), "/opt/zones/right/UTC")
+        with unittest.mock.patch.dict(os.environ, {"TZDIR": ""}):
+            self.assertEqual(authtime.leap_zone(), "/usr/share/zoneinfo/right/UTC")

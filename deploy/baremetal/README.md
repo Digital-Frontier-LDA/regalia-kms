@@ -229,8 +229,10 @@ Commissioning has two halves:
   what no node can refuse is two declared servers agreeing on a wrong time at the first boot, which is why
   they must belong to independent operators. Mask the package's other ways of running chronyd at install:
   `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from the
-  `right/UTC` zone (`leapsectz`): **on Debian 13 install `tzdata-legacy`**, where `right/` now lives (without
-  it chronyd ignores the directive and takes leap seconds from its sources only; `leapseclist` with tzdata's
+  `right/UTC` zone (`leapsectz`): **on Debian 13 install `tzdata-legacy`**, where `right/` now lives (a host
+  without it is refused by `regalia-authtime`, which publishes "…/right/UTC is missing: chronyd has no
+  leap-second data (install tzdata-legacy)" and records it in the time trail, so the node goes unready
+  visibly instead of chronyd quietly ignoring the directive; `leapseclist` with tzdata's
   `leap-seconds.list` needs chrony 4.6, and the units are also run under 4.5), and the
   firewall
   opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for

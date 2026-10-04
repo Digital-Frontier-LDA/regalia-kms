@@ -101,6 +101,12 @@ SERVER = sitecfg.NTS_SERVER      # a host name, or an IPv4 address: the site con
 # right/ is in tzdata-legacy, which a node must install (README); chronyd logs "Using right/UTC timezone to obtain
 # leap second data" when it has it, and the distribution's AppArmor profile reads the zoneinfo tree.
 LEAP_ZONE = "right/UTC"
+
+
+def leap_zone():
+    """The zone file chronyd reads its leap seconds from, where glibc (and so chronyd) looks: $TZDIR, else
+    /usr/share/zoneinfo."""
+    return os.path.join(os.environ.get("TZDIR") or "/usr/share/zoneinfo", LEAP_ZONE)
 # THE LATCH (#303, regalia-kms-d9 and -24): chronyd that stopped abnormally (maxchange: two sources agreeing on a
 # jump; or any other unclean exit) is recorded here by the chrony drop-in's ExecStopPost, and its ExecStartPre
 # refuses to start chronyd while the file exists: a package upgrade's restart, a manual start and a reboot all
@@ -246,16 +252,20 @@ class Service:
     request in Vault, nothing is vouched for unrecorded."""
 
     def __init__(self, path, declared, reading=ask, wall=time.time, boottime=admission.boottime_ms, boot=admission.boot_id, minimum=MINIMUM,
-                 record=None):
+                 record=None, leap=leap_zone):
         self.path, self.reading, self.wall, self.boottime, self.boot, self.minimum = path, reading, wall, boottime, boot(), minimum
         self.declared = servers(declared)
         self.record, self.recorded = record, None          # the last verdict the trail holds (None: none yet)
+        self.leap = leap
 
     def step(self):
         """One check. Returns the document written. The boot clock is read BEFORE chrony is asked: the
         answer can only look older than it is."""
         checked, reason = self.boottime(), ""
         try:
+            # A host without the leap zone fails VISIBLY (regalia-kms-24): chronyd would only log that it ignores
+            # `leapsectz` and go on without leap data, so it is refused here, named, and recorded in the trail.
+            require(os.path.isfile(self.leap()), "%s is missing: chronyd has no leap-second data (install tzdata-legacy)" % self.leap())
             judge(self.reading(), self.wall(), self.declared, self.minimum)
         except Refused as refusal:
             reason = _printable(refusal, membership.REASON_LIMIT)
