@@ -6,7 +6,7 @@ one. The protocol is on #199 (comment of 2026-10-04, "Step 3, concrete protocol"
 PROPOSING (Proposer, in regalia-sync's loop). The nodes whose signature counts under the current manifest's
 heartbeat_signers, in ID order, take turns by rank: rank r proposes once
 
-    now >= issued_at(held) + BEAT_INTERVAL_S + r * TAKEOVER_S + jitter (0 to JITTER_S)
+    now >= issued_at(held) + interval + r * takeover + jitter (0 to the jitter bound)
 
 so the first node beats on time and the next takes over two minutes after a miss. A node that holds no heartbeat
 for the current epoch (bootstrap, or a revocation just taken) drops the interval and goes at once, by rank. The
@@ -14,7 +14,9 @@ body is for the current manifest, sequence max(held, this node's signing counter
 now, living the manifest's heartbeat_max_lifetime_s. The proposer signs it (Signer), asks the other counting nodes
 in order (beat-sign, sync.py) until one co-signs, and takes the envelope into its own Freshness; the peers pull it
 from there as they pull every heartbeat. Nobody co-signing costs the proposer one number; it tries again after
-RETRY_FIRST_S, doubling, at most every BEAT_INTERVAL_S: the nodes' jump allowance absorbs the numbers spent.
+the first retry delay, doubling, at most every interval: the nodes' jump allowance absorbs the numbers spent. The
+takeover, the jitter and the first retry are fixed fractions of the interval (node.json's beat_interval_s): 120 s,
+30 s and 60 s at the production 900 s, and proportionally less where a test beats faster.
 
 CO-SIGNING (cosign, behind sync.py's beat-sign). A node signs another's proposal only if: the caller the tunnel
 identified is the signature's party and counts; this node counts too; the body is for this node's current manifest
@@ -22,6 +24,10 @@ identified is the signature's party and counts; this node counts too; the body i
 the manifest allows; and its sequence is above this node's signing counter AND above the heartbeat counter its own
 Freshness holds, by no more than Freshness would accept (heartbeat.allowed_jump): a node never signs what it would
 itself refuse.
+NOT "THE NEXT" SEQUENCE, BY DESIGN (regalia-kms-1e's read): a proposal is co-signed when it is above both counters
+within allowed_jump, not only when it is held + 1. Numbers spent by proposals nobody co-signed must be skippable, and the
+bound (Counter.MAX_JUMP, 1000, plus one per MIN_INTERVAL_S) is never approached at the rate they are spent (at most a
+few in an outage's first minutes, then one per interval).
 
 SIGN ONCE (Signer). Every signature this node makes, its own proposal or a co-signature, is under a sequence
 first RESERVED on its own TPM NV counter (node.json's nv_signing, separate from the heartbeat counter: a node's
@@ -37,7 +43,7 @@ from deploy.baremetal import heartbeat, membership
 Refused, require = membership.Refused, membership.require
 
 BEAT_INTERVAL_S = 900          # #69: a heartbeat every 15 minutes, living 6 h (the manifest's bound)
-TAKEOVER_S = 120               # the next rank's delay after a missed beat
+TAKEOVER_S = 120               # the next rank's delay after a missed beat, at BEAT_INTERVAL_S (scaled with the interval)
 JITTER_S = 30
 ISSUE_SKEW_S = 300             # a proposal's issued_at against the co-signer's authenticated time
 RETRY_FIRST_S = 60
@@ -133,13 +139,17 @@ class Proposer:
         self.ask, self.trail, self.interval, self.rand = ask, trail, interval, rand
         self.failures, self.not_before, self.jitter = 0, 0, None
 
+    def scaled(self, seconds):
+        """`seconds` at the production interval, for this proposer's interval (at least 1)."""
+        return max(1, seconds * self.interval // BEAT_INTERVAL_S)
+
     def due(self, manifest, now):
         """When this node should propose next (seconds), or None if it never does under `manifest`."""
         order = counting_nodes(manifest)
         if self.node_id not in order:
             return None
         if self.jitter is None:
-            self.jitter = int(self.rand() * JITTER_S)
+            self.jitter = int(self.rand() * self.scaled(JITTER_S))
         rank = order.index(self.node_id)
         held = self.freshness.held()
         base = now - self.interval                      # nothing held for this epoch: go at once, by rank
@@ -149,7 +159,7 @@ class Proposer:
             body = None
         if body is not None:
             base = heartbeat.parse_time(body["issued_at"], "issued_at")
-        return max(base + self.interval + rank * TAKEOVER_S + self.jitter, self.not_before)
+        return max(base + self.interval + rank * self.scaled(TAKEOVER_S) + self.jitter, self.not_before)
 
     def step(self):
         """Propose if it is this node's turn. Returns the accepted envelope, or None."""
@@ -163,7 +173,7 @@ class Proposer:
             envelope = self.propose(manifest, now)
         except Refused as refused:
             self.failures += 1
-            self.not_before = now + min(RETRY_FIRST_S * 2 ** (self.failures - 1), self.interval)
+            self.not_before = now + min(self.scaled(RETRY_FIRST_S) * 2 ** (self.failures - 1), self.interval)
             self.trail({"event": "beat-propose", "outcome": "DENY", "epoch": manifest["epoch"], "reason": str(refused)[:240]})
             return None
         self.failures, self.not_before = 0, 0
