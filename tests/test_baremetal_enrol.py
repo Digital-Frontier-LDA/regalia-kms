@@ -62,8 +62,11 @@ class InitOnSwtpm(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        self.ssh = self.d + "/ssh_host_ed25519_key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", self.ssh], check=True)
+
     def init(self, run=subprocess.run, node_id="a", system_pub=None):
-        return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO())
+        return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO(), ssh_host_key=self.ssh + ".pub")
 
     def test_init_makes_the_keys_on_the_host_and_names_them_in_the_bundle(self):
         bundle = self.init()
@@ -71,6 +74,18 @@ class InitOnSwtpm(unittest.TestCase):
         self.assertEqual(bundle["hsm_serials"], TOKENS, "#363: the tokens' serials, read at init")
         keep, answer = self.proven(bundle)
         self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, answer)["hsm_serials"], TOKENS)
+        with open(self.ssh + ".pub") as f:
+            raw = base64.b64decode(f.read().split()[1])[-32:].hex()
+        self.assertEqual((bundle["ssh_host_pub"], enrol.entry(bundle, SYSTEM_PUB, keep, answer)["ssh_host_pub"]), (raw, raw),
+                         "the host's SSH key, read at init, as the manifest carries it")
+        with self.assertRaisesRegex(enrol.Refused, "it was made before #371"):
+            enrol.entry({k: v for k, v in bundle.items() if k != "ssh_host_pub"}, SYSTEM_PUB, keep, answer)
+        os.rename(self.ssh + ".pub", self.ssh + ".pub.kept")
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", self.d + "/other"], check=True)
+        os.rename(self.d + "/other.pub", self.ssh + ".pub")
+        with self.assertRaisesRegex(enrol.Refused, "this host's SSH host key \\([0-9a-f]{64}\\) is not the one this enrolment recorded"):
+            self.init()
+        os.replace(self.ssh + ".pub.kept", self.ssh + ".pub")
         with unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: ["DENK0599999", "35718625"]):
             with self.assertRaisesRegex(enrol.Refused, "not the ones this enrolment recorded"):
                 self.init()
@@ -600,6 +615,39 @@ class Tokens(unittest.TestCase):
             with self.assertRaisesRegex(enrol.Refused, "a YubiKey is attached and ykman is not installed"):
                 self.serials(self.run_with())
             self.assertEqual(self.serials(self.run_with(), 0), ["DENK0404144"])
+
+
+class SshHostKey(unittest.TestCase):
+    """#371: the manifest's ssh_host_pub, read from the host's own public key file."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def key_file(self, line):
+        path = os.path.join(self.d, "k.pub")
+        with open(path, "w") as f:
+            f.write(line)
+        return path
+
+    def blob(self, *parts):
+        return base64.b64encode(b"".join(len(p).to_bytes(4, "big") + p for p in parts)).decode()
+
+    def test_an_ed25519_key_is_read_as_64_hex(self):
+        self.assertEqual(enrol.ssh_host_pub(self.key_file("ssh-ed25519 %s root@a\n" % self.blob(b"ssh-ed25519", b"\x07" * 32))), "07" * 32)
+
+    def test_refusals(self):
+        with self.assertRaisesRegex(enrol.Refused, "is missing: this host has no Ed25519 SSH host key"):
+            enrol.ssh_host_pub(os.path.join(self.d, "absent.pub"))
+        for line, reason in (("ssh-rsa %s" % self.blob(b"ssh-rsa", b"\x01" * 32), "is not an ssh-ed25519 public key"),
+                             ("ssh-ed25519", "is not an ssh-ed25519 public key"),
+                             ("ssh-ed25519 !!!", "does not hold a base64 key"),
+                             ("ssh-ed25519 %s" % self.blob(b"ssh-rsa", b"\x01" * 32), "does not hold exactly one 32-byte Ed25519 key"),
+                             ("ssh-ed25519 %s" % self.blob(b"ssh-ed25519", b"\x01" * 31), "does not hold exactly one 32-byte Ed25519 key"),
+                             ("ssh-ed25519 %s" % self.blob(b"ssh-ed25519", b"\x01" * 32, b"x"), "does not hold exactly one 32-byte Ed25519 key"),
+                             ("ssh-ed25519 %s" % base64.b64encode(b"\x00\x00\x00\x40ssh").decode(), "does not hold exactly one 32-byte")):
+            with self.subTest(line=line), self.assertRaisesRegex(enrol.Refused, reason):
+                enrol.ssh_host_pub(self.key_file(line))
 
 
 class ChronyPath(unittest.TestCase):

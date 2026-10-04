@@ -28,7 +28,7 @@ class Check(unittest.TestCase):
         self.bundle = {"schema": enrol.SCHEMA_BUNDLE, "node_id": "a", "ek_public": "00", "ek_name": "000b" + "e1" * 32,
                        "ak_public": "00", "ak_name": "000b" + "e2" * 32, "ek_certificate": None,
                        "wg_service_pub": WG_SERVICE, "wg_boot_pub": WG_BOOT, "tpm_firmware_version": "0" * 16,
-                       "hsm_serials": ["DENK0500001", "35718625"]}
+                       "hsm_serials": ["DENK0500001", "35718625"], "ssh_host_pub": "5a" * 32}
         with open(self.d + "/bundle.json", "w") as f:
             json.dump(self.bundle, f)
         self.document = document()
@@ -86,6 +86,13 @@ class Check(unittest.TestCase):
             with open(self.d + "/bundle.json", "w") as f:
                 json.dump(dict(self.bundle, signing_key=point), f)
             if accepted:
+                self.refused("the manifest's ssh_host_pub for a is not this host's", self.envelope(man))     # v4 carries it (#371)
+                with open(self.d + "/bundle.json", "w") as f:
+                    json.dump({k: v for k, v in dict(self.bundle, signing_key=point).items() if k != "ssh_host_pub"}, f)
+                self.refused("this host's bundle has no ssh_host_pub: it was made before #371", self.envelope(man))
+                with open(self.d + "/bundle.json", "w") as f:
+                    json.dump(dict(self.bundle, signing_key=point), f)
+                man["nodes"][0].update(ssh_host_pub=self.bundle["ssh_host_pub"])
                 self.assertEqual(self.check(self.envelope(man)), man)
             else:
                 self.refused("the manifest's signing_key for a is not this host's", self.envelope(man))

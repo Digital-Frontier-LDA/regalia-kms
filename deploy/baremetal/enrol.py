@@ -14,7 +14,8 @@ WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied 
   * the WG-BOOT key, kept root 0600 in the enrolment directory until `commit` seals it to this TPM.
 It READS, and records in the bundle, the serial of every hardware token the node serves from (#363), in each form a
 backend pins it: its SmartCard-HSM's PKCS#11 serial, and its YubiKey's decimal serial (PIV) and OpenPGP-applet PKCS#11
-serial (yubikey-openpgp), for the manifest's hsm_serials.
+serial (yubikey-openpgp), for the manifest's hsm_serials. It reads the host's SSH host key the same way, from
+/etc/ssh/ssh_host_ed25519_key.pub, for ssh_host_pub (refused when missing or not Ed25519).
 The local unlock contribution is NOT made here: `commit` makes it and seals it in one step, so it is never
 on disk in the clear between the two phases. It then stays root 0600 in the enrolment directory (local.bin)
 only until the peers' LUKS paths are enrolled, which need it; its sealed copy opens only in the initrd.
@@ -358,6 +359,46 @@ def tokens(journal, module, run):
     return serials
 
 
+SSH_HOST_KEY = "/etc/ssh/ssh_host_ed25519_key.pub"
+
+
+def ssh_host_pub(path=SSH_HOST_KEY):
+    """This host's SSH host key, as the manifest's ssh_host_pub carries it (membership v2: the raw Ed25519 public key,
+    64 lowercase hex), read from the host's own public key file. Missing, or not ssh-ed25519, is refused."""
+    import struct
+    try:
+        with open(path) as f:
+            line = f.read(4096).strip()
+    except FileNotFoundError:
+        raise Refused("%s is missing: this host has no Ed25519 SSH host key (ssh-keygen -A makes one)" % path)
+    fields = line.split()
+    require(len(fields) >= 2 and fields[0] == "ssh-ed25519", "%s is not an ssh-ed25519 public key" % path)
+    try:
+        blob = base64.b64decode(fields[1], validate=True)
+    except ValueError:
+        raise Refused("%s does not hold a base64 key" % path)
+    parts, at = [], 0
+    while at < len(blob) and len(parts) < 3:
+        require(at + 4 <= len(blob), "%s holds a malformed key" % path)
+        (size,) = struct.unpack(">I", blob[at:at + 4])
+        parts.append(blob[at + 4:at + 4 + size])
+        at += 4 + size
+    require(at == len(blob) and len(parts) == 2 and parts[0] == b"ssh-ed25519" and len(parts[1]) == 32,
+            "%s does not hold exactly one 32-byte Ed25519 key" % path)
+    return parts[1].hex()
+
+
+def ssh_host(journal, path):
+    """The SSH host key, journalled as the tokens are: read at init, and the same key required at every later init."""
+    key = ssh_host_pub(path)
+    if journal.state("ssh_host") == "done":
+        require(journal.get("ssh_host")["ssh_host_pub"] == key, "this host's SSH host key (%s) is not the one this enrolment "
+                "recorded (%s)" % (key, journal.get("ssh_host")["ssh_host_pub"]))
+        return key
+    journal.done("ssh_host", ssh_host_pub=key)
+    return key
+
+
 def recheck_signing_key(journal, directory, run):
     """Before `commit` writes anything: the signing key this enrolment made is still the object at its handle (its Name
     the journal recorded), and it is the one the bundle names. A key removed or replaced after `init` would otherwise
@@ -371,7 +412,7 @@ def recheck_signing_key(journal, directory, run):
             "enrolment made: nothing was written")
 
 
-ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials")
+ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
 CHALLENGE_SCHEMA = "regalia.enrol-challenge/v1"
 
 
@@ -443,8 +484,10 @@ def entry(bundle, system_pub, keep, answer, run=subprocess.run):
     serials = bundle.get("hsm_serials")
     require(isinstance(serials, list) and serials and all(isinstance(x, str) and TOKEN_SERIAL.fullmatch(x) for x in serials)
             and len(set(serials)) == len(serials), "the bundle has no hsm_serials, or a malformed list: it was made before #363")
+    require(isinstance(bundle.get("ssh_host_pub"), str) and re.fullmatch(r"[0-9a-f]{64}", bundle["ssh_host_pub"]) is not None,
+            "the bundle has no ssh_host_pub (64 hex): it was made before #371")
     return dict(zip(ENTRY_KEYS, (bundle["node_id"], bundle["ek_name"], bundle["ak_name"], wg["wg_service_pub"], wg["wg_boot_pub"], signing,
-                                 list(serials))))
+                                 list(serials), bundle["ssh_host_pub"])))
 
 
 def _der_exact(raw, index):
@@ -651,7 +694,8 @@ def _safe_directory(directory):
 OPENSC_MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
 
 
-def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout, module=OPENSC_MODULE):
+def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout, module=OPENSC_MODULE,
+         ssh_host_key=SSH_HOST_KEY):
     """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names."""
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
     signkey.pcr_key_name(system_pub)                 # an RSA-2048 PEM, before anything is made
@@ -661,6 +705,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
     cert = ek_certificate(journal, directory, run)
     signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
     hsm_serials = tokens(journal, module, run)
+    ssh_key = ssh_host(journal, ssh_host_key)
     service = wg_key(journal, "wg_service", wg_service_key, run)
     boot = wg_key(journal, "wg_boot", os.path.join(directory, "wg-boot.key"), run)
     bundle = {"schema": SCHEMA_BUNDLE, "node_id": node_id,
@@ -670,7 +715,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
               "wg_service_pub": service, "wg_boot_pub": boot,
               "signing_public": signing["signing_public"], "signing_certify": signing["signing_certify"],
               "signing_sig": signing["signing_sig"], "signing_key": signing["signing_key"],
-              "hsm_serials": hsm_serials, "tpm_firmware_version": firmware_version(run)}
+              "hsm_serials": hsm_serials, "ssh_host_pub": ssh_key, "tpm_firmware_version": firmware_version(run)}
     _atomic_json(os.path.join(directory, "bundle.json"), bundle)
     os.chmod(os.path.join(directory, "bundle.json"), 0o644)
     print("ENROL INIT: node %s, identity bundle %s (public values only; take it to the manifest ceremony)"
@@ -761,6 +806,9 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     if "signing_key" in node:                        # v4 (#199): the key this host made and its AK certified
         require(isinstance(bundle.get("signing_key"), str), "this host's bundle has no signing key: it was made before #199")
         mine_all.append(("signing_key", {"alg": "ecdsa-p256", "key": bundle["signing_key"]}))
+    if "ssh_host_pub" in node:                       # v2 on: the host key init read from this host
+        require(isinstance(bundle.get("ssh_host_pub"), str), "this host's bundle has no ssh_host_pub: it was made before #371")
+        mine_all.append(("ssh_host_pub", bundle["ssh_host_pub"]))
     for field, mine in mine_all:
         require(node[field] == mine, "the manifest's %s for %s is not this host's: it was made from another bundle, or "
                 "for another host. Nothing was written" % (field, node_id))
