@@ -46,6 +46,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -250,23 +251,13 @@ class Cluster:
         return dict(base, label=image, pcrs=dict(base["pcrs"], **{"11": value}))
 
     def accept(self, seed, sets, name):
-        """A new document, {node: [image, ...]} (None: CURRENT), and the epoch that commits to it, taken by every node
-        IN ONE STEP: every node's services are stopped (a crash: the same boot), the document written and the epoch
-        committed to each store, then the services started again. No node judges anything between the two.
-        A node reads ONE measurements.json and binds it to the manifest it holds, so a document that reached a running
-        node before its epoch (or after) would refuse every attestation in between. Delivering the document with the
-        epoch that names it, by its digest, is regalia-kms-24's decision on #75, for the product (d9); until then this
-        fixture keeps the two together by stopping the services, and a host has the same window (KERNEL-UPDATE 2.7).
-        Returns what advance returns."""
+        """A new document, {node: [image, ...]} (None: CURRENT), and the epoch that commits to it. The seed takes both;
+        every other running node pulls the epoch from it and, with it, the document it commits to, before it commits
+        (#332). No service is stopped for it: a node holds documents side by side by digest and judges each epoch by
+        its own, so there is no moment at which one is judged by the other's. Returns what advance returns."""
         document = {"schema": measurements.SCHEMA, "name": name,
                     "nodes": {node: {"accepted": [self.image_set(node, image) for image in images]} for node, images in sets.items()}}
-        others = {node: self.services[node] for node in self.nodes if node != seed and self.running(node)}
-        for node in others:
-            self.stop(node, power=None)
-        result = self.advance(seed, document=document)
-        for node, services in others.items():
-            self.start(node, services)
-        return result
+        return self.advance(seed, document=document)
 
     def reset_count(self, name):
         """The TPM's resetCount (TPM2_ReadClock): one higher after each power cycle."""
@@ -341,7 +332,7 @@ class Cluster:
                                  "authority": {"key": self.keys[AUTH]["service"][1], "underlay": self.auth.underlay, "port": 51821}
                                  if self.auth else None}}
         _replace(n.dir / "etc" / "site.json", json.dumps(site))            # whole, never torn: running services read them
-        _replace(n.dir / "etc" / "measurements.json", json.dumps(self.document))
+        # no measurements.json: the document is in the node's store by digest, and later ones come by sync (#332)
         cfg = dict(example, node_id=n.name, site=str(n.dir / "etc" / "site.json"), root_key=hbt.pub(hbt.ROOT), tcti=n.tcti,
                    state_dir=str(n.state), admission_dir=str(n.admission), run_dir=str(n.run),
                    wg_service_key=str(n.dir / "etc" / "wg-service.key"), measurements=str(n.dir / "etc" / "measurements.json"),
@@ -356,6 +347,7 @@ class Cluster:
         here = self.node(n.name)
         anchor = here.anchor()
         anchor.define()
+        here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
         here.store().commit(self.chain[0])
         node.heartbeat_counter(here.cfg).define()
 
@@ -500,7 +492,9 @@ class Cluster:
         a = self.auth
         chain = a.dir / "etc" / "chain.json"
         chain.write_text(json.dumps(self.chain))
-        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain)))
+        document = a.dir / "etc" / "measurements-1.json"
+        document.write_text(json.dumps(self.document))
+        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain), "--documents", str(document)))
 
     def revoke(self, name, state, reason):
         """The authority revokes a node: `authority revoke`, as root on its host, asked of the running serve (once
@@ -564,8 +558,11 @@ class Cluster:
         a.cfg_path.write_text(json.dumps(cfg))
         accepted = a.dir / "etc" / ("accept-%d.json" % candidate["epoch"])
         accepted.write_text(json.dumps([envelope]))
+        # the document goes to the authority with the epoch, and from it to every node by sync (#332)
+        documented = a.dir / "etc" / ("measurements-%d.json" % candidate["epoch"])
+        documented.write_text(json.dumps(document))
         self.stop(AUTH, power=None)                   # accept runs between runs of serve (one writer)
-        self._run(a, "accept", oneshot=True, unit=self.unit(AUTH, "accept"), args=("--chain", str(accepted)))
+        self._run(a, "accept", oneshot=True, unit=self.unit(AUTH, "accept"), args=("--chain", str(accepted), "--documents", str(documented)))
         self.start(AUTH)
         self.chain.append(envelope)
         self.manifest, self.document = candidate, document
@@ -575,8 +572,9 @@ class Cluster:
         n = self.nodes[new]
         here = self.node(new)
         here.anchor().define()
-        for held in self.chain:
-            here.store().commit(held)
+        here.documents().put(document)               # the new node's own: the document of the epoch it starts at
+        for i, held in enumerate(self.chain):
+            here.store().commit(held, final=i == len(self.chain) - 1)
         if not until(lambda: (a.dir / "control" / "control.sock").exists(), 60, 1):
             raise RuntimeError("the authority's control socket did not appear")
         # one below the authority's current sequence: the heartbeat it holds now is then new to this node, which takes
@@ -759,9 +757,12 @@ class Cluster:
         """What the node's initrd does, less the boot: its WG-BOOT tunnel up in its namespace (bootnet's
         configuration, from the chain it holds), then the pre-root client (cmd/regalia-unlock, the real binary)
         with this fixture in systemd's two roles: the local half unsealed from the node's TPM and given as a
-        credential (LoadCredentialEncrypted=), the key socket passed (socket activation), and the volume opened
-        with the key that comes back (systemd-cryptsetup). Returns {rc, peer, marker, stderr}: `peer` the one
-        whose keyslot opened it, `marker` whether the filesystem reads back."""
+        credential (LoadCredentialEncrypted=), and systemd-cryptsetup asking for the volume's passphrase through
+        the ask-password protocol (#70: the client is a password agent), in an ask directory of the node's own.
+        The volume is opened with the answer (cryptsetup open -v), and the client, seeing it open, stands down.
+        `rounds` is the client's -attempts. Returns {rc, peer, marker, stderr}: `peer` the one whose keyslot
+        opened it, `marker` whether the filesystem reads back; rc "timeout" when it was still asking. rc 0 with
+        no peer is NOT an unlock: an earlier session of this boot was on record, and the client asked nobody."""
         n, loop, mapped = self.nodes[name], self.loops[name], "e2e3-" + name
         manifest = self.node(name).store().load()          # the chain the node holds: its initrd's credentials say the same
         site = sitecfg.load(str(n.dir / "etc" / "site.json"))
@@ -780,56 +781,63 @@ class Cluster:
         with open(os.open(str(creds / unlock.LOCAL_NAME), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400), "wb") as f:
             f.write(local)
         del local
-        path = str(n.dir / "key.sock")
-        if os.path.exists(path):
-            os.unlink(path)
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        listener.bind(path)
-        listener.listen(1)
-        asker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        asker.connect(path)                                        # systemd-cryptsetup, waiting for its key
-
-        fd = listener.fileno()
-        # In its own mount namespace, the other nodes' directories covered (as InaccessiblePaths= does for the
-        # units); the listener moved to descriptor 3 (sd_listen_fds) by the shell, no preexec_fn (two unlocks run
-        # from two threads in 10.5); LISTEN_PID the client's own: the shell's, which execs ip, which execs the client.
+        # systemd-cryptsetup's request, as it writes one: ask.1 naming its reply socket and the volume's Id
+        # in /tmp, and short: a UNIX socket path holds 108 bytes (not under the node's directory, whose paths are
+        # longer); askpass.Find takes only a socket root owns inside this directory, and the fixture runs as root
+        asks = pathlib.Path(tempfile.mkdtemp(prefix="ask-"))
+        request = "cryptsetup:" + loop
+        reply = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        reply.bind(str(asks / "sck.1"))
+        (asks / "ask.1").write_text("[Ask]\nPID=%d\nSocket=%s\nAcceptCached=0\nEcho=0\nNotAfter=0\nSilent=0\nId=%s\n"
+                                     % (os.getpid(), asks / "sck.1", request))
+        volume = "/dev/mapper/" + mapped                                # there once opened: then the client stands down
+        # In its own mount namespace, the other nodes' directories covered (as InaccessiblePaths= does for the units)
         blind = "".join("mount -t tmpfs -o ro,size=4k e2e3-blind %s; " % shlex.quote(str(o.dir)) for o in self.nodes.values() if o is not n)
-        script = blind + ("" if fd == 3 else "exec 3<&%d %d<&-; " % (fd, fd)) + 'LISTEN_PID=$$ exec "$@"'
+        script = blind + 'exec "$@"'
         result = {"rc": None, "peer": None, "marker": False, "stderr": ""}
         mnt, mounted = n.dir / "mnt", False
+        client = None
         try:
-            env = dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=str(creds))
-            # bash, not sh: dash (Ubuntu's sh) takes only single-digit descriptors in a redirection, and with two unlocks
-            # in threads the listener's can be 10 or more ("Bad fd number", regalia-kms-3e on #328)
+            env = dict(os.environ, CREDENTIALS_DIRECTORY=str(creds))
             argv = ["unshare", "--mount", "--propagation", "private", "bash", "-c", script, "bash",
-                    "ip", "netns", "exec", n.ns, self.client, "-once", "-config", str(config),
-                    "-tpm", "unix:" + str(n.tpm_sock), "-session-dir", str(n.run), "-wait", "1s", "-rounds", str(rounds)]
-            try:
-                done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, pass_fds=(fd,))
-                result["rc"], result["stderr"] = done.returncode, done.stderr[-1500:]
-            except subprocess.TimeoutExpired as late:            # still asking when the time ran out: no key
-                result["rc"], result["stderr"] = "timeout", (late.stderr or b"")[-1500:].decode(errors="replace")
-            listener.close()
-            asker.settimeout(5)
-            try:
-                key = asker.recv(4096)
-            except OSError as failure:                # a client that gave no key and closed with data unread: a reset
-                key, result["asker"] = b"", repr(failure)
+                    "ip", "netns", "exec", n.ns, self.client, "-config", str(config), "-tpm", "unix:" + str(n.tpm_sock),
+                    "-session-dir", str(n.run), "-ask-dir", str(asks), "-request", request, "-volume", volume, "-attempts", str(rounds)]
+            client = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
+            key, deadline = b"", time.monotonic() + timeout
+            reply.settimeout(0.2)
+            while time.monotonic() < deadline and client.poll() is None and not key:
+                try:
+                    datagram = reply.recv(4096)
+                except socket.timeout:
+                    continue
+                if datagram.startswith(b"+"):
+                    key = datagram[1:]
             if key:
                 opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=key, capture_output=True)
                 found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
+                (asks / "ask.1").unlink()                               # answered: systemd-cryptsetup removes its request
                 if opened.returncode == 0 and found:
                     result["peer"] = self.keyslot_peer(name, int(found.group(1)))
-                    sh("mount", "-o", "ro", "/dev/mapper/" + mapped, str(mnt))
+                    sh("mount", "-o", "ro", volume, str(mnt))
                     mounted = True
                     result["marker"] = (mnt / "marker").read_bytes() == MARKER
+            try:
+                _, err = client.communicate(timeout=max(5.0, deadline - time.monotonic()) if not key else 30)
+                result["rc"], result["stderr"] = client.returncode, err[-1500:]
+            except subprocess.TimeoutExpired:                         # still asking when the time ran out: no key
+                client.kill()
+                _, err = client.communicate()
+                result["rc"], result["stderr"] = "timeout", (err or "")[-1500:]
         finally:
+            if client is not None and client.poll() is None:
+                client.kill()
+                client.wait()
             if mounted:
                 sh("umount", str(mnt), check=False)
-            if os.path.exists("/dev/mapper/" + mapped):
+            if os.path.exists(volume):
                 sh("cryptsetup", "close", mapped, check=False)
-            asker.close()
-            listener.close()
+            reply.close()
+            shutil.rmtree(asks, True)
             shutil.rmtree(creds, True)
             n.in_ns("ip", "link", "del", "wg-boot", check=False)
         return result
@@ -900,8 +908,10 @@ class Cluster:
         stopped take it into their stores as they are (they would pull it when they come back). The other running
         nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
         the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
-        started again). With `document`, the epoch commits to that measurement document (its policy_version), and
-        every node's measurements.json is replaced by it just before the epoch is taken (#75)."""
+        started again). With `document`, the epoch commits to that measurement document (its policy_version). It goes
+        into the store of every node this step commits to (the seed, and the nodes that are stopped), as an operator's
+        `measurements install` does on one host; the running nodes fetch it from the seed by sync with the epoch,
+        and no node is ever judged by another epoch's document (#332)."""
         if self.auth:
             raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
         current = self.manifest
@@ -915,17 +925,13 @@ class Cluster:
         running = [name for name in others if membership.may(manifest, name, "authorize")]   # they pull it from the seed
         services = self.services[seed]
         self.stop(seed, power=None)
-        if document is not None:                        # after the seed stopped: see accept() for the window this leaves
-            for n in self.nodes.values():               # whole or not at all: a service reads it at every decision
-                target = n.dir / "etc" / "measurements.json"
-                staged = target.with_name(".measurements.json.new")
-                staged.write_text(json.dumps(document))
-                os.chmod(staged, os.stat(target).st_mode & 0o777)
-                os.replace(staged, target)
+        if document is not None:
             self.document = document
         for name in self.nodes:
             if name in others:                        # running: its store is its sync's (one that may not authorize is left be)
                 continue
+            if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
+                self.node(name).documents().put(document)
             self.node(name).store().commit(envelope)
             if self.time[name]:
                 self.beat(name, manifest["epoch"] + 1, manifest)

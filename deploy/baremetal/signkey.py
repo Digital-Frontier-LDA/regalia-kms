@@ -71,6 +71,9 @@ ATTRIBUTES = 0x00040032
 TOOL_ATTRIBUTES = "fixedtpm|fixedparent|sensitivedataorigin|sign"
 # how the PCR public key is loaded to check its signature (systemd's attributes for it): decrypt | sign | userWithAuth
 PCR_KEY_ATTRIBUTES, PCR_KEY_TOOL_ATTRIBUTES = 0x00060040, "decrypt|sign|userwithauth"
+# systemd-stub's copy of the running image's .pcrpkey: uki.py requires it to be the system-phase PCR key, and it is
+# measured into PCR 11. The one place the signing key, the anchor and the heartbeat counter (#242) take the key from.
+PCR_PUBLIC_KEY_PATH = "/run/systemd/tpm2-pcr-public-key.pem"
 PCR_SIGNATURE_PATHS = ("/run/systemd/tpm2-pcr-signature.json", "/etc/systemd/tpm2-pcr-signature.json", "/usr/lib/systemd/tpm2-pcr-signature.json")
 P256_ORDER = membership.P256_ORDER
 
@@ -86,6 +89,9 @@ def pcr_key_name(pem):
         raise Refused("the PCR key is not a PEM public key") from None
     require(isinstance(key, rsa.RSAPublicKey) and key.key_size == 2048, "the PCR key must be RSA-2048 (systemd seals only to RSA)")
     numbers = key.public_numbers()
+    # a TPM loads an RSA public key with exponent 65537 only (swtpm: TPM_RC_VALUE at LoadExternal for 3): refused here, at
+    # enrolment, not at the first signature (regalia-kms-95)
+    require(numbers.e == 65537, "the PCR key's exponent must be 65537 (it is %d): a TPM loads no other" % numbers.e)
     modulus = numbers.n.to_bytes(256, "big")
     area = struct.pack(">HHI", ALG_RSA, attest.ALG_SHA256, PCR_KEY_ATTRIBUTES) + struct.pack(">H", 0) + \
         struct.pack(">HHHI", attest.ALG_NULL, attest.ALG_NULL, 2048, numbers.e) + struct.pack(">H", len(modulus)) + modulus

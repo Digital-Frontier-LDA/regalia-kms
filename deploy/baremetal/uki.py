@@ -139,7 +139,14 @@ CMDLINE_HARDENING = r"(rd\.shell|(rd\.)?systemd\.debug[-_]shell)=(0|no|false|off
 # TPM anchor (#242). The root device's own wait must not time out into that path while the recovery-key
 # prompt is up; that timeout is set on the root's entry alone (#70), never as systemd's default, which
 # the booted system would also apply to every other device.
-CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1", "rd.shell=0", "rd.emergency=reboot")
+# rootflags=x-systemd.device-timeout=0: /sysroot's wait for /dev/mapper/root, the volume the console's
+# recovery key or the unlock client opens, is infinite (fstab-generator writes it from rootflags= as
+# JobRunningTimeoutSec=infinity on that device; 0 is infinity). Without it systemd's default 90 s would end
+# in emergency, and so in a reboot, under an operator still typing (#70). The partition's own wait is
+# crypttab's x-systemd.device-timeout=0. rootflags= is compared as ONE key: an image that needs other
+# root mount flags puts them in this same word, comma-separated.
+CMDLINE_REQUIRED = ("systemd.import_credentials=no", "init_on_free=1", "init_on_alloc=1", "rd.shell=0", "rd.emergency=reboot",
+                    "rootflags=x-systemd.device-timeout=0")
 
 
 def _cmdline_key(word):
@@ -257,6 +264,9 @@ def public_key(pem, what, run=subprocess.run, tools=TOOLS):
     bits = re.match(r"(RSA )?Public-Key: \((\d+) bit\)", text)
     require(bits is not None and "Modulus" in text, "%s is not an RSA public key: systemd seals only to RSA" % what)
     require(int(bits.group(2)) == KEY_BITS, "%s is RSA-%s; the keys are RSA-%d, the size every TPM 2.0 loads" % (what, bits.group(2), KEY_BITS))
+    # a TPM loads an RSA public key with exponent 65537 only: another passes every check here and fails at the first
+    # policy session (regalia-kms-95, #357); refused at build instead
+    require(re.search(r"^Exponent: 65537 \(0x10001\)$", text, re.M) is not None, "%s's exponent is not 65537: a TPM loads no other" % what)
     der = _run(run, [tools["openssl"], "rsa", "-pubin", "-RSAPublicKey_out", "-outform", "der"], "reading %s" % what, input=pem)
     return sha256(der), pem
 
@@ -323,19 +333,17 @@ INITRD_REVIEW = "regalia.initrd-review/v4"
 INITRD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "initrd")
 INVENTORY = os.path.join(INITRD_DIR, "initrd-inventory.txt")
 UNIT_DIR = "usr/lib/systemd/system"
-UNLOCK_UNITS = ("regalia-unlock-relay.service", "regalia-unlock-core.socket", "regalia-unlock.service", "regalia-wg-boot.service")
+UNLOCK_UNITS = ("regalia-unlock.service", "regalia-wg-boot.service")
 UNLOCK_SCRIPTS = {"usr/lib/regalia/wg-boot": "wg-boot"}
 UNLOCK_BINARIES = ("usr/bin/regalia-unlock",)
 # The client's line in the inventory says "the binary this commit compiles", not a hash: its source is what is
 # reviewed, and `build --unlock-client` (required) holds the image's client to the binary the build compiled.
 # sign and verify hold it to the hash the record states, which two builders compiled alike.
 COMPILED = "=compiled"
-UNLOCK_ENABLED = {"etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket": "/usr/lib/systemd/system/regalia-unlock-core.socket",
-                  "etc/systemd/system/cryptsetup.target.wants/regalia-unlock-relay.service": "/usr/lib/systemd/system/regalia-unlock-relay.service"}
-# the module's drop-ins (module-setup.sh writes exactly these bytes): the relay ordering for
-# systemd-cryptsetup, and the credential reset on every unit that takes credentials by name
-RELAY_DROPIN = (UNIT_DIR + "/systemd-cryptsetup@.service.d/50-regalia-relay.conf",
-                b"[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n")
+# the client, a password agent beside systemd-cryptsetup (#70): enabled under cryptsetup.target
+UNLOCK_ENABLED = {"etc/systemd/system/cryptsetup.target.wants/regalia-unlock.service": "/usr/lib/systemd/system/regalia-unlock.service"}
+# the module's drop-in (module-setup.sh writes exactly these bytes): the credential reset on every unit that
+# takes credentials by name
 RESET_DROPIN = ("99-regalia-no-credentials.conf", b"[Service]\nImportCredential=\nLoadCredential=\nLoadCredentialEncrypted=\n")
 # Where systemd 257 and udev read what they run, in the initrd (systemd.unit(5) "System Unit Search Path",
 # systemd.generator(7), systemd.environment-generator(7), udev(7), systemd-system.conf(5)). /lib is
@@ -730,7 +738,6 @@ def ours():
         with open(os.path.join(INITRD_DIR, name), "rb") as f:
             pinned[path] = ("file", sha256(f.read()))
     pinned.update({link: ("link", target) for link, target in UNLOCK_ENABLED.items()})
-    pinned[RELAY_DROPIN[0]] = ("file", sha256(RELAY_DROPIN[1]))
     return pinned
 
 

@@ -18,18 +18,18 @@
 #           (PoC 6.5: the manual path works with no peer and no credential). The running guest seals
 #           the local half and the WG-BOOT key to its own TPM (PCR 7, and PCR 11 through the image's
 #           initrd-phase signature), and reports its PCRs: PCR 11 must be the build record's.
-#   boot 1b AN UNDECRYPTABLE SEALED CREDENTIAL: the real client cannot start; the relay on the key socket
-#           gives nothing, and the console asks for the recovery key, promptly.
+#   boot 1b AN UNDECRYPTABLE SEALED CREDENTIAL: the client cannot start; the console, which asks from the
+#           start whatever the client does, takes the recovery key, promptly.
 #   boot 2  UNATTENDED. Nobody types anything. systemd unseals both credentials in the initrd, the boot
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
-#           the root volume with the key from the socket, the root filesystem comes up, and the boot
+#           the root volume with the key the client answered its request with, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
 #   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
 #           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
 #           unattended, as boot 2.
 #   boot 2d THE SAME IMAGE, RETIRED: the document lists the current image only. The TPM releases the local
 #           half all the same (its signed PCR 11 policy has no counter), both peers refuse the quote naming
-#           PCR 11, nothing is given, the disk stays locked and the console asks for the recovery key.
+#           PCR 11, nothing is given; the client keeps asking, and the recovery key typed at the console opens.
 #           Boot 2b then boots the current image again: retiring one image strands nothing.
 #   boot 2b A CREDENTIAL FROM SMBIOS (a unit drop-in, as the firmware could pass one): not acted on, since
 #           the image's command line stops systemd importing credentials; the unlock goes on.
@@ -38,8 +38,12 @@
 #   boot 7  A COMMAND LINE FROM SMBIOS (io.systemd.stub.kernel-cmdline-extra, switching credential import
 #           back on, and an extra unit): either the stub ignores it, or PCR 12 moves and the peers refuse;
 #           nothing planted runs.
-#   boot 8  NO PEER. The peers are unreachable: after its bounded rounds the client gives nothing, the
-#           console asks for the recovery key, and the key opens the volume.
+#   boot 8  NO PEER, FOR LONGER THAN ANY DEFAULT TIMEOUT (#70). The peers are unreachable; the client keeps
+#           asking, at the backoff's schedule and past its cap; after 150 s a wrong key only brings the
+#           prompt back (tries=0), and the recovery key still opens: neither systemd-cryptsetup nor the
+#           root's device wait gave up, and nothing ended in a shell. Boots 8 and 9 need KVM.
+#   boot 9  THE PEERS COME BACK (#70, a blackout). Unreachable for 150 s and past the backoff's cap, then
+#           back: nobody types anything, and the host unlocks by itself.
 #
 # The guest is built here from Debian's own packages (mmdebstrap). REGALIA_BOOT_ROOTFS names a directory
 # to use instead: the one variable to change when the appliance image of #61 exists.
@@ -117,7 +121,7 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
 install -D -m 0755 "$BIN" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
 install -m 0644 deploy/baremetal/initrd/regalia-unlock.service \
-  deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
+  deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
 # And what only the test adds, in the real root: the enrolment step and the report.
@@ -134,7 +138,7 @@ BUILT_KVER="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))
 [ "$BUILT_KVER" = "$KVER" ] || { echo "unlock-boot-qemu: the initrd was built for kernel $BUILT_KVER, the guest has $KVER"; exit 2; }
 cp "$W/initrd-build/initrd.img" "$ROOT/boot/initrd.e2e"
 chroot "$ROOT" lsinitrd /boot/initrd.e2e > "$W/lsinitrd.txt" 2>/dev/null || true
-for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'regalia-unlock-relay\.service$' 'regalia-unlock-core\.socket$' 'regalia-wg-boot\.service$' \
+for f in 'etc/crypttab$' 'usr/bin/regalia-unlock$' 'usr/lib/regalia/wg-boot$' 'regalia-unlock\.service$' 'cryptsetup\.target\.wants/regalia-unlock\.service' 'regalia-wg-boot\.service$' \
          'systemd-pcrphase-initrd\.service$' 'initrd\.target\.wants/systemd-pcrphase-initrd\.service' 'systemd-pcrextend$' \
          'bin/wg$' 'bin/nft$' 'bin/ip$' 'wireguard\.ko' 'nf_tables\.ko' 'nft_ct\.ko' 'virtio_net\.ko'; do
   grep -q "$f" "$W/lsinitrd.txt" || { echo "unlock-boot-qemu: the initrd lacks $f"; grep -c . "$W/lsinitrd.txt"; exit 2; }
@@ -180,7 +184,7 @@ done
 mkdir -p "$ROOT/tmp/uki/src" "$ROOT/tmp/uki/out"
 cp -r deploy "$ROOT/tmp/uki/src/"; cp -r "$W/keys" "$ROOT/tmp/uki/"
 cp "$W/initrd-build/initrd-build.json" "$ROOT/tmp/uki/initrd-build.json"      # the initrd's build record, an input (#248)
-printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot}" > "$ROOT/tmp/uki/cmdline"
+printf '%s\n' "${REGALIA_BOOT_CMDLINE:-root=/dev/mapper/root rw console=ttyS0,115200 net.ifnames=0 systemd.journald.forward_to_console=1 panic=30 loglevel=4 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0}" > "$ROOT/tmp/uki/cmdline"
 IN="--linux /boot/vmlinuz-$KVER --initrd /boot/initrd.e2e --cmdline /tmp/uki/cmdline --os-release /usr/lib/os-release --uname $KVER"
 IN="$IN --stub /usr/lib/systemd/boot/efi/linuxx64.efi.stub --pcrpkey /tmp/uki/keys/TEST-system.pub --initrd-build /tmp/uki/initrd-build.json"
 KEYS="--initrd-key /tmp/uki/keys/TEST-initrd.key --initrd-cert /tmp/uki/keys/TEST-initrd.crt --system-key /tmp/uki/keys/TEST-system.key"
@@ -249,7 +253,7 @@ losetup -d "$LOOP"; LOOP=""
 rm -rf "$ROOT"
 
 echo "### twelve boots"
-out="$(REGALIA_EXPECT_QEMU=1 REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
+out="$(REGALIA_EXPECT_QEMU=1 REGALIA_EXPECT_KVM="${REGALIA_EXPECT_KVM:-0}" REGALIA_BOOT_DIR="$W" REGALIA_OVMF="$OVMF" REGALIA_UNLOCK_BIN="$BIN" python3 -BEs -m unittest -v tests.test_baremetal_unlock_boot </dev/null 2>&1)" && rc=0 || rc=$?
 printf '%s\n' "$out"
 if [ "$rc" != 0 ]; then
   for log in "$W"/console-*.log; do [ -e "$log" ] && { echo "----- $(basename "$log") (last 80 lines)"; tail -80 "$log"; }; done
@@ -259,4 +263,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 12 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an older signed image approved and then retired (refused, the disk stays locked), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer and the recovery key)"
+echo "unlock-boot-qemu: 13 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock)"

@@ -225,9 +225,9 @@ class MoveToV4(Case):
         following = manifest4(3, m.digest(m4), m4["nodes"])
         following["nodes"][0] = dict(following["nodes"][0], state="QUARANTINED")
         self.refused("the signing revocation key is not named by the current manifest", m.accept, m4, sign(following, REVOKE, "revocation"), ROOT_PUB)
-        # nor can it sign a v1-v3 heartbeat that a v4 manifest would take
+        # nor can it sign a heartbeat: under v4 a single-key heartbeat is not one at all
         beat = hbt.beat(m4, 1, key=REVOKE)
-        self.refused("the signing key is not a revocation key named by the current manifest", hb.signed, beat, m4)
+        self.refused("envelope fields mismatch: missing=['signatures'] unknown=['signature']", hb.signed, beat, m4)
 
     def test_only_the_root_moves_to_v4(self):
         self.refused("only the root can change the schema (regalia.membership/v3 to regalia.membership/v4)",

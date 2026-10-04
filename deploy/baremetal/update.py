@@ -188,7 +188,8 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
     event = {"event": "update-apply", "node_id": host.node_id, "entry": entry}
     try:
         require(isinstance(deadline_minutes, int) and 5 <= deadline_minutes <= 120, "the deadline is 5 to 120 minutes")
-        manifest, document = host.manifest(), host.document()
+        manifest = host.manifest()
+        document = host.document(manifest)
         measurements.bind(manifest, document)
         node_id = host.node_id
         running = running_set(document, node_id, host.pcrs)
@@ -272,7 +273,8 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
 def promote(host, esp, typed, record, say=print):
     event = {"event": "update-promote", "node_id": host.node_id}
     try:
-        manifest, document = host.manifest(), host.document()
+        manifest = host.manifest()
+        document = host.document(manifest)
         measurements.bind(manifest, document)
         node_id = host.node_id
         running, target = running_set(document, node_id, host.pcrs), measurements.target(document, node_id)
@@ -306,7 +308,8 @@ def promote(host, esp, typed, record, say=print):
 def forget(host, entry, esp, typed, record, say=print):
     event = {"event": "update-forget", "node_id": host.node_id, "entry": entry}
     try:
-        manifest, document = host.manifest(), host.document()
+        manifest = host.manifest()
+        document = host.document(manifest)
         measurements.bind(manifest, document)
         node_id = host.node_id
         event.update({"epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest)})
@@ -335,7 +338,8 @@ def status(host, esp):
     """Read-only: BootCurrent, BootNext, BootOrder, and which approved set each entry's image measures (on the
     booted ESP), the set the host runs, its target, and whether it is PROMOTED (BootOrder's first entry is the
     target image: a reset boots it). Changes nothing and records nothing."""
-    manifest, document = host.manifest(), host.document()
+    manifest = host.manifest()
+    document = host.document(manifest)
     measurements.bind(manifest, document)
     node_id = host.node_id
     sets, target = measurements.validate(document)[node_id], measurements.target(document, node_id)
@@ -381,9 +385,10 @@ class Host:
     def manifest(self):
         return self.node.manifest()          # the published chain, verified from the root key and against the TPM anchor
 
-    def document(self):
-        with open(self.node.cfg["measurements"], "rb") as f:
-            return measurements.load(f.read(measurements.MAX_BYTES + 1))
+    def document(self, manifest):
+        """The measurement document `manifest` commits to, from this node's store by digest (#332): refused when it
+        is not held. Never another epoch's."""
+        return measurements.held(self.node.documents(), manifest)
 
     def pcrs(self, selection):
         with tempfile.TemporaryDirectory(prefix="regalia-update-pcrs-") as d:
