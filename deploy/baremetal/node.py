@@ -63,7 +63,7 @@ import threading
 import time
 
 from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
-                              measurements, membership, metrics, sitecfg, sync, unlock, wgsvc)
+                              measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
 
@@ -245,10 +245,42 @@ class Trail:
             trails.append(self.path, dict(event, at=int(time.time())), group=self.group)
 
 
+def image_policy(cfg, pem_path=None):
+    """This node's approved-image write policy (#242), from root-signed sources only: the chain in the state
+    directory (sync's store, else the chain it publishes for the other services), verified under the pinned
+    root; the measurements document its newest manifest commits to, from the node's store by digest
+    (measurements.held, #332: never the retired cfg["measurements"] file); and the running image's system-phase
+    PCR key (signkey.PCR_PUBLIC_KEY_PATH), which that document must approve for this node
+    (measurements.approved_image_policy). HighWater calls it only when it meets an index written by policy.
+    Anything missing is a refusal, never a fallback to an unsigned value.
+    The chain is NOT checked against the TPM here, and need not be: a restored older chain yields at most a key
+    the root once approved for this node, and the anchor's own verify refuses the rollback itself. This names
+    only the key the anchor's indices must have been defined under."""
+    envelopes = None
+    for name in ("membership.json", PUBLISHED):
+        try:
+            with open(os.path.join(cfg["state_dir"], name), "rb") as f:
+                envelopes = membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
+            break
+        except (FileNotFoundError, PermissionError):
+            continue
+    require(isinstance(envelopes, list) and envelopes, "this node's approved-image write policy cannot be established: no verified "
+            "chain in %s" % cfg["state_dir"])
+    try:
+        with open(pem_path or signkey.PCR_PUBLIC_KEY_PATH, "rb") as f:
+            pem = f.read(65536)
+    except OSError as error:
+        raise Refused("this node's approved-image write policy cannot be established: %s" % error) from None
+    manifest = membership.accept_chain(None, envelopes, cfg["root_key"])
+    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
+    return measurements.approved_image_policy(manifest, document, cfg["node_id"], pem)
+
+
 def heartbeat_counter(cfg, run=subprocess.run):
     """This node's heartbeat sequence counter, with the lock its users take: the one construction the
-    services and the recovery command (recount.py) share."""
-    return heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "heartbeat-counter.lock"))
+    services and the recovery command (recount.py) share. Written by policy like the anchor (#242)."""
+    return heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "heartbeat-counter.lock"),
+                             policy=lambda: image_policy(cfg))
 
 
 # ---- the node ----
@@ -281,8 +313,10 @@ class Node:
         return heartbeat.TpmClock(self.tcti, self.run)
 
     def anchor(self):
-        """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it)."""
-        return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=self.path("highwater.lock"))
+        """The membership epoch anchor: membership.HighWater on its own index (and the pair and slots after it),
+        with this node's approved-image write policy (image_policy) for an index written by policy (#242)."""
+        return membership.HighWater(self.cfg["nv_epoch"], self.tcti, self.run, lock_path=self.path("highwater.lock"),
+                                    policy=lambda: image_policy(self.cfg))
 
     def manifest(self, patience=2.0, step=0.25):
         """The current manifest, by the published chain, verified (the root services' view).
