@@ -103,6 +103,11 @@ RH_ENDORSEMENT = 0x4000000B
 AK_ATTRIBUTES = 0x00050072
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
 EK_HANDLE, AK_HANDLE = "0x81010001", "0x81010002"
+SIGNING_HANDLE = "0x81010003"           # the node's v4 signing key (signkey.py, #199)
+# The node's identity keys. Losing one strands the node (no unlock, no vote), so no tool evicts an object at one
+# of these handles unless its own journal proves it made that object (enrol.py, #234's rule), and
+# deploy/seal-hsm-pin.sh refuses the whole 0x810100xx block for its import key (tests/test_baremetal_signkey.py).
+RESERVED_HANDLES = (EK_HANDLE, AK_HANDLE, SIGNING_HANDLE)
 
 
 class Refused(Exception):
