@@ -85,7 +85,8 @@ class Case(ct.Case):
         self.contributions = {p: unlock.Contributions(os.path.join(self.d, p + "-contributions.json")) for p in ("b", "c")}
         self.attesters = {p: self.peers[p]["attester"] for p in ("b", "c")}
         self.served = {p: unlock.Peer(p, self.stores[p], self.peers[p]["freshness"], lambda manifest, p=p: self.attesters[p],
-                                      self.contributions[p], self.peers[p]["signer"], self.events.append, run=run) for p in ("b", "c")}
+                                      self.contributions[p], self.peers[p]["signer"], self.events.append, run=run,
+                                      hello_rate=(10000, 60)) for p in ("b", "c")}   # the rate is ListenerRate's subject, not theirs
         self.wire = []
         self.boots = 0
         self.session = self.boot()
@@ -1605,6 +1606,100 @@ class OnSwtpm(unittest.TestCase):
                 self.assertGreater(int(state("regalia-unlock-relay.service", "NRestarts") or 0), 0)          # tried again, without limit
                 print("the relay %s: systemd-cryptsetup found no key file after %.1fs, and would ask" % (how, took), file=sys.stderr)
         os.unlink(relay_failing)
+
+
+
+class ListenerRate(Case):
+    """The listener's per-node limit on hellos (#70, PoC 10.5): a node over it is answered "not now" and
+    costs the peer nothing; one that boots, at its client's cadence, never is; and nothing is kept."""
+
+    def setUp(self):
+        super().setUp()
+        self.tick = 1000.0                                    # monotonic seconds (the fixture's `now` is its wall clock)
+        self.served["b"] = unlock.Peer("b", self.stores["b"], self.peers["b"]["freshness"], lambda manifest: self.attesters["b"],
+                                       self.contributions["b"], self.peers["b"]["signer"], self.events.append, run=run,
+                                       clock=lambda: self.tick)
+
+    def hello(self, node="a"):
+        return self.served["b"].handle(json.dumps({"v": unlock.VERSION, "op": "hello", "node_id": node}).encode())
+
+    def rated(self):
+        return [e for e in self.events if e["event"] == "unlock-challenge" and e["outcome"] == "DENY" and e["reason"].startswith("RATE")]
+
+    def test_a_burst_then_one_every_six_seconds(self):
+        count, per = unlock.HELLO_RATE
+        for _ in range(count):
+            self.assertIn("nonce", self.hello())
+        self.assertEqual(self.hello(), {"v": unlock.VERSION, "error": "DENIED"})
+        self.assertEqual(len(self.rated()), 1)
+        self.assertIn("RATE: more than %d hello requests in %d s from a" % (count, per), self.rated()[0]["reason"])
+        for _ in range(20):                                   # a flood: answered the same, not recorded again
+            self.assertEqual(self.hello(), {"v": unlock.VERSION, "error": "DENIED"})
+        self.assertEqual(len(self.rated()), 1)
+        self.tick += per / count                               # one token back
+        self.assertIn("nonce", self.hello())
+        self.assertEqual(self.hello(), {"v": unlock.VERSION, "error": "DENIED"})
+        self.tick += per                                       # the reported window is over: the count of the quiet ones
+        self.assertIn("nonce", self.hello())
+        self.assertIn("RATE: 21 more hello requests from a were refused after that one", self.rated()[-1]["reason"])
+
+    def test_a_booting_client_is_never_refused(self):
+        """ed's client: one hello per peer per attempt, the backoff 2 s doubling to 60 s with -20% jitter at worst,
+        never reset within a boot. One long boot (two hours of asking), then a boot loop: every boot asks again
+        from 2 s, and boots are at least 60 s apart (a server's POST alone takes minutes). The bound: such a boot
+        asks at most 6 times in its 60 s, under the 10 a minute the bucket refills."""
+        def boot(start, length):
+            at, delay = start, 2.0
+            while at < start + length:
+                yield at
+                at += delay * 0.8
+                delay = min(delay * 2, 60.0)
+        times = list(boot(0.0, 7200.0)) + [t for loop in range(60) for t in boot(7200.0 + 60.0 * loop, 60.0)]
+        self.assertEqual(len(list(boot(0.0, 60.0))), 6)
+        for at in times:
+            self.tick = 1000.0 + at
+            self.assertIn("nonce", self.hello(), "refused at t=%.1f s: %s" % (at, self.events[-2:]))
+        self.assertEqual(self.rated(), [])
+
+    def test_nodes_are_counted_apart_and_only_the_manifests(self):
+        count, _ = unlock.HELLO_RATE
+        for _ in range(count + 1):
+            self.hello("a")
+        self.assertEqual(self.hello("a"), {"v": unlock.VERSION, "error": "DENIED"})
+        self.hello("c")                                       # c's own bucket: whatever c gets, it is not a's rate
+        self.assertFalse([e for e in self.rated() if e["subject"] == "c"])
+        for name in ("zz", "nobody", "a" * 40):              # nodes no manifest names make no bucket
+            self.assertEqual(self.hello(name)["error"], "DENIED")
+        self.assertEqual(sorted(caller for caller, _ in self.served["b"].rate.nodes), ["a", "c"])
+
+    def test_a_stalled_node_holds_its_own_places_only(self):
+        """Two connections of a's that say nothing: a third of a's is closed unanswered (recorded once), and c,
+        beside them, is answered at once; when the whole-request deadline passes, a's places are free again."""
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        owners = iter(["a", "a", "a", "a", "c", "a"])
+        hello_c = json.dumps({"v": unlock.VERSION, "op": "hello", "node_id": "c"}).encode()
+        with unittest.mock.patch.object(unlock, "IO_TIMEOUT", 3):
+            server = threading.Thread(target=unlock.serve, args=(self.served["b"], listener, 6),
+                                      kwargs={"caller": lambda address: next(owners)}, daemon=True)
+            server.start()
+            stalled = [socket.create_connection(listener.getsockname()) for _ in range(2)]
+            for conn in stalled:
+                self.addCleanup(conn.close)
+            for _ in range(2):                                # a's third and fourth: over its two places
+                with socket.create_connection(listener.getsockname()) as over:
+                    over.settimeout(5)
+                    self.assertEqual(over.recv(10), b"")
+            send = unlock.tcp_transport("127.0.0.1:%d" % listener.getsockname()[1])
+            started = time.monotonic()
+            self.assertIn(json.loads(send(hello_c)).get("error", "answered"), ("DENIED", "answered"))
+            self.assertLess(time.monotonic() - started, 2, "c waited behind a's stalled connections")
+            over = [e for e in self.events if e["event"] == "unlock-caller" and "connection limit" in e["reason"]]
+            self.assertEqual([(e["subject"], e["outcome"]) for e in over], [("a", "DENY")])
+            time.sleep(3.5)                                   # the stalled ones are cut at the deadline
+            self.assertIn("nonce", json.loads(send(json.dumps({"v": unlock.VERSION, "op": "hello", "node_id": "a"}).encode())))
+            server.join(10)
+        self.assertFalse(server.is_alive())
 
 
 if __name__ == "__main__":
