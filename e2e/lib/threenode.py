@@ -587,6 +587,26 @@ class Cluster:
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
         if self.audit and name in self.nodes:         # the node's trail shippers run with it, as regalia-audit-ship@ does
             self._ship_start(name)
+        if self.v4 and "sync" in services:
+            self._caught_up(name)
+
+    def _caught_up(self, name):
+        """v4: a node started behind the cluster's epoch takes the epochs it missed by its OWN sync from a running peer, as
+        a host does when it comes back (#332's path, each epoch with its document); nothing commits into a stopped node's
+        store from here (#242 B3: its anchor is written by its booted system's policy only). Waited for when the node may
+        authorize and a peer that may is running; a node the epoch revoked or quarantined is left as it is (its peers
+        refuse it, and the scenario says what it finds). A store that does not load (a rolled-back disk) is the
+        scenario's own: its sync recovers it, or not."""
+        try:
+            held = self.node(name).store().load()["epoch"]
+        except membership.Refused:
+            return
+        if held >= self.manifest["epoch"] or not membership.may(self.manifest, name, "authorize"):
+            return
+        if not any(other != name and self.running(other) and membership.may(self.manifest, other, "authorize") for other in self.nodes):
+            return
+        if not until(lambda: self.node(name).store().load()["epoch"] == self.manifest["epoch"], 180, 2):
+            raise RuntimeError("%s, started at epoch %d, did not take epoch %d by its sync" % (name, held, self.manifest["epoch"]))
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
@@ -761,7 +781,7 @@ class Cluster:
             if n.name != old:
                 self._configure(n)
         seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
-        self.advance(seed, candidate=candidate, document=document, skip=(old, new))
+        self.advance(seed, candidate=candidate, document=document)
         envelope = self.chain[-1]
         n = self.nodes[new]
         here = self.node(new)
@@ -1217,16 +1237,16 @@ class Cluster:
         held = self.node(name).freshness().held()
         return bool(held) and held["heartbeat"]["epoch"] == epoch
 
-    def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, skip=(), **states):
+    def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, **states):
         """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key. The
         authority's publication, stood in for: `seed`, a running node, has its services stopped (a crash: the same
-        boot), takes the epoch into its store with its heartbeat, and starts again. Nodes whose services are
-        stopped take it into their stores as they are (they would pull it when they come back). The other running
+        boot), takes the epoch into its store, and starts again. Nodes whose services are stopped are NOT written to:
+        they take the epochs they missed by their own sync when they start (start(), _caught_up). The other running
         nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
         the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
         started again). With `document`, the epoch commits to that measurement document (its policy_version). It goes
         into the store of every node this step commits to (the seed, and the nodes that are stopped), as an operator's
-        `measurements install` does on one host; the running nodes fetch it from the seed by sync with the epoch,
+        `measurements install` does on one host; every other node fetches it by sync with the epoch,
         and no node is ever judged by another epoch's document (#332)."""
         if self.auth:
             raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
@@ -1248,19 +1268,11 @@ class Cluster:
         self.stop(seed, power=None)
         if document is not None:
             self.document = document
-        for name in self.nodes:
-            if name in others or name in skip:        # running: its store is its sync's (one that may not authorize is left be)
-                continue
-            if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
-                self.node(name).documents().put(document)
-            self.node(name).store().commit(envelope)
-            if self.v4:
-                pass                                  # #199: its heartbeat for the epoch comes from the nodes once it runs
-            elif self.time[name]:
-                self.beat(name, manifest["epoch"] + 1, manifest)
-            else:                                     # powered off: no authenticated time to judge a heartbeat by, yet
-                self.pending[name] = (manifest["epoch"] + 1, manifest)
-            sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
+        # the seed only: every other node's store is its own sync's, running or not (a stopped one catches up at start)
+        if document is not None:                      # by digest, beside the documents it holds: nothing is replaced (#332)
+            self.node(seed).documents().put(document)
+        self.node(seed).store().commit(envelope)      # its heartbeat for the epoch comes from the nodes (#199)
+        sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[seed].state))
         self.chain.append(envelope)
         self.manifest = manifest
         since = time.time()
