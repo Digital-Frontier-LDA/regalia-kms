@@ -47,7 +47,7 @@ SCRIPT="deploy/baremetal/initrd/build-initrd.sh"
 SCHEMA="regalia.initrd-build/v1"
 SUITE=trixie
 PACKAGES="systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,libtss2-tcti-device0t64"
-REPO_FILES=("$SCRIPT" deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
+REPO_FILES=("$SCRIPT" deploy/baremetal/initrd/repo-git.sh deploy/baremetal/debverify.py e2e/lib/debian-keyring.sh deploy/baremetal/uki.py go.mod go.sum deploy/baremetal/initrd/wg-boot deploy/baremetal/initrd/regalia-unlock.service
             deploy/baremetal/initrd/regalia-wg-boot.service deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh
             deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab)
 die(){ echo "build-initrd: $*" >&2; exit 2; }
@@ -74,10 +74,12 @@ for t in mmdebstrap git python3 gpgv curl dpkg-deb; do command -v "$t" >/dev/nul
 python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is required (the inventory and its check, deploy/baremetal/uki.py)"
 [ -z "$KEYRING" ] || [ -r "$KEYRING" ] || die "--keyring $KEYRING cannot be read"
 
-# the commit, clean: what this builder compiles and installs is exactly what the commit holds
-# (run as root on a checkout another user owns: git is told to trust exactly this path, and reads without
-# taking the index lock, so nothing under .git becomes root's)
-repo_git(){ git -c safe.directory="$REPO" --no-optional-locks -C "$REPO" "$@"; }
+# the commit, clean: what this builder compiles and installs is exactly what the commit holds. The checkout is
+# read as its OWNER, never as root, and one whose own git configuration could run a command is refused first
+# (#382, repo-git.sh); git reads without taking the index lock, so nothing under .git becomes root's
+# shellcheck source=deploy/baremetal/initrd/repo-git.sh
+. "$REPO/deploy/baremetal/initrd/repo-git.sh"
+repo_git_check || die "the checkout is refused (above)"
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
 [ -z "$(repo_git status --porcelain --untracked-files=all)" ] \
   || die "the checkout has changes or untracked files: build from a clean clone at the agreed commit"
