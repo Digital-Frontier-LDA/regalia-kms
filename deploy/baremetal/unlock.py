@@ -372,11 +372,23 @@ class Peer:
     commits to, `signer(digest)` its lease.TpmSigner, `audit(event)` the audit sink (S6)."""
 
     def __init__(self, peer_id, store, freshness, attester_for, contributions, signer, audit, run=subprocess.run, clock=time.monotonic,
-                 hello_rate=HELLO_RATE):
+                 hello_rate=HELLO_RATE, refused=None):
         self.peer_id, self.store, self.freshness, self.attester_for = node_id(peer_id, "peer_id"), store, freshness, attester_for
         self.contributions, self.signer, self.audit, self.run = contributions, signer, audit, run
         # per requesting node, in memory: keyed only by nodes the manifest names (bounded by it)
         self.rate = sync.Buckets({"hello": hello_rate}, clock)
+        # refused(cause): counts each refusal made before any work ("rate", "connections"), for the node's metrics
+        # (#317, metrics.Counter). Every refusal counts, the quiet ones too, while the trail stays rate-limited.
+        self._refused = refused
+
+    def refusal(self, cause):
+        """Count one refusal; never raises (a broken metrics write must never stop the listener)."""
+        if self._refused is None:
+            return
+        try:
+            self._refused(cause)
+        except Exception:                 # noqa: BLE001 - as serve's audit(): the listener goes on
+            pass
 
     def handle(self, raw, caller=None):
         """One request (bytes) to one reply (a dict). A refusal tells the requester nothing but its kind.
@@ -435,8 +447,10 @@ class Peer:
         try:
             refused = self.rate.take(requester, "hello")
         except sync.Quiet:
+            self.refusal("rate")
             raise
         except Refused as refusal:
+            self.refusal("rate")
             self.audit(dict(event, reason=convergence._printable(refusal, membership.REASON_LIMIT)))
             raise
         if refused > 1:
@@ -696,6 +710,9 @@ def serve(peer, listener, count=None, caller=None, connections=MAX_CONNECTIONS, 
                     active.append(key)
             if not admitted:
                 conn.close()
+                refusal = getattr(peer, "refusal", None)
+                if refusal is not None:
+                    refusal("connections")          # counted every time; the trail line below once a minute
                 now = time.monotonic()
                 with lock:
                     due = key not in reported or now - reported[key] >= 60.0

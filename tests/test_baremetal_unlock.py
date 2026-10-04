@@ -1643,6 +1643,27 @@ class ListenerRate(Case):
         self.assertIn("nonce", self.hello())
         self.assertIn("RATE: 21 more hello requests from a were refused after that one", self.rated()[-1]["reason"])
 
+    def test_every_refusal_is_counted_for_the_metrics_the_quiet_ones_too(self):
+        """#317: regalia_unlock_refused_total counts each refusal (the trail records the first of a window)."""
+        counted = []
+        self.served["b"]._refused = counted.append
+        count, _ = unlock.HELLO_RATE
+        for _ in range(count):
+            self.hello()
+        for _ in range(21):                                   # one recorded, twenty quiet
+            self.assertEqual(self.hello(), {"v": unlock.VERSION, "error": "DENIED"})
+        self.assertEqual(counted, ["rate"] * 21)
+        self.assertEqual(len(self.rated()), 1)
+
+    def test_a_counter_that_raises_never_stops_the_listener(self):
+        def broken(cause):
+            raise OSError(28, "No space left on device")
+        self.served["b"]._refused = broken
+        count, _ = unlock.HELLO_RATE
+        for _ in range(count):
+            self.hello()
+        self.assertEqual(self.hello(), {"v": unlock.VERSION, "error": "DENIED"})   # refused as before, nothing raised
+
     def test_a_booting_client_is_never_refused(self):
         """ed's client: one hello per peer per attempt, the backoff 2 s doubling to 60 s with -20% jitter at worst,
         never reset within a boot. One long boot (two hours of asking), then a boot loop: every boot asks again
@@ -1677,6 +1698,8 @@ class ListenerRate(Case):
         beside them, is answered at once; when the whole-request deadline passes, a's places are free again."""
         listener = socket.create_server(("127.0.0.1", 0))
         self.addCleanup(listener.close)
+        counted = []
+        self.served["b"]._refused = counted.append            # #317: each connection over the limit is counted
         owners = iter(["a", "a", "a", "a", "c", "a"])
         hello_c = json.dumps({"v": unlock.VERSION, "op": "hello", "node_id": "c"}).encode()
         with unittest.mock.patch.object(unlock, "IO_TIMEOUT", 3):
@@ -1696,6 +1719,7 @@ class ListenerRate(Case):
             self.assertLess(time.monotonic() - started, 2, "c waited behind a's stalled connections")
             over = [e for e in self.events if e["event"] == "unlock-caller" and "connection limit" in e["reason"]]
             self.assertEqual([(e["subject"], e["outcome"]) for e in over], [("a", "DENY")])
+            self.assertEqual(counted, ["connections"] * 2)    # both counted; the trail line once
             time.sleep(3.5)                                   # the stalled ones are cut at the deadline
             self.assertIn("nonce", json.loads(send(json.dumps({"v": unlock.VERSION, "op": "hello", "node_id": "a"}).encode())))
             server.join(10)
