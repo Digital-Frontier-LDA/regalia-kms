@@ -984,6 +984,14 @@ class Cluster:
                 raise RuntimeError("audit=True needs REGALIA_AUDIT_BIN naming a directory with %s" % binary)
         d = self.audit_dir = self.work / "audit"
         d.mkdir(mode=0o711)
+        # the binaries as a host installs them: root's, 0755, where the shipper's user can reach them. Built under a
+        # runner's home (0750), regalia-audit-ship could not even execute its own binary (#355's CI: status 203/EXEC)
+        bin_dir = d / "bin"
+        bin_dir.mkdir(mode=0o755)
+        for binary in ("regalia-audit-ship", "regalia-audit-collector"):
+            shutil.copy(self.audit_bin / binary, bin_dir / binary)
+            os.chmod(bin_dir / binary, 0o755)
+        self.audit_bin = bin_dir
 
         def issue(name, extensions):
             sh("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", str(d / (name + ".key")),
