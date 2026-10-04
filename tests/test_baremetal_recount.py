@@ -217,6 +217,14 @@ class ConcurrentService(Case):
 
 class CommandLine(TheHostsTpmAndChain):
     def node_setup(self, sync="inactive"):
+        # a node holds the measurements its manifest commits to (#332): the recount defines its counter under the
+        # policy they name (#242), owner-written here, as these images are not signed UKIs
+        from deploy.baremetal import measurements
+        document = {"schema": measurements.SCHEMA, "name": "v1", "nodes": {
+            n["node_id"]: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32, "11": "a1" * 32}}]}
+            for n in self.m1["nodes"]}}
+        self.m1 = dict(self.m1, policy_version=measurements.version(document))
+        measurements.Documents(os.path.join(self.d, measurements.STORE_DIR)).put(document)
         tpm = hbt.FakeTpm()                                   # the indices as node.json spells them
         anchor = m.HighWater("0x01500016", lock_path=self.d + "/hw.lock", run=tpm)
         anchor.define()
@@ -227,7 +235,8 @@ class CommandLine(TheHostsTpmAndChain):
         tpm.nv.pop("0x01500018")                              # the counter's index gone: unusable
         with open(os.path.join(os.path.dirname(recount.__file__), "node.example.json")) as f:
             cfg = json.load(f)
-        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti=None, state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018")
+        cfg.update(root_key=hbt.pub(hbt.ROOT), tcti=None, state_dir=self.d, nv_epoch="0x01500016", nv_heartbeat="0x01500018",
+                   node_id=self.m1["nodes"][0]["node_id"])         # a node the manifest lists
         with open(self.d + "/node.json", "w") as f:
             json.dump(cfg, f)
         import subprocess

@@ -173,15 +173,21 @@ def bind(manifest, document):
     return {node_id: {"accepted": accepted} for node_id, accepted in sets.items()}
 
 
+def system_keys(manifest, document, node_id):
+    """The fingerprints (pkfp) of the system-phase PCR keys the document `manifest` commits to approves for `node_id`,
+    sorted: one per signed image among its accepted sets; empty when none of its images is a signed UKI."""
+    sets = bind(manifest, document)
+    require(isinstance(node_id, str) and node_id in sets, "the measurements have no entry for %r" % (node_id,))
+    return sorted({entry["signing"]["system"] for entry in sets[node_id]["accepted"] if "signing" in entry})
+
+
 def approved_image_policy(manifest, document, node_id, pem):
     """The write policy of `node_id`'s TPM anchor and counters (#242), as 64 hex: PolicyAuthorize of the
     system-phase PCR key `pem` (the running image's .pcrpkey, signkey.PCR_PUBLIC_KEY_PATH), computed by
     signkey.policy, IF that key is one the root approved for this node: its fingerprint must be the
     signing.system of one of the node's accepted sets in the document `manifest` commits to. A document that
     is not the manifest's, a node with no such set, or a key no set names is a refusal: never a fallback."""
-    sets = bind(manifest, document)
-    require(isinstance(node_id, str) and node_id in sets, "the measurements have no entry for %r" % (node_id,))
-    approved = sorted({entry["signing"]["system"] for entry in sets[node_id]["accepted"] if "signing" in entry})
+    approved = system_keys(manifest, document, node_id)
     require(approved, "no accepted set of %s names a system-phase PCR key (signing.system): the anchor's write policy cannot be "
             "established" % node_id)
     try:

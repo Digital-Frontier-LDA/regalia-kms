@@ -26,6 +26,7 @@ def _rsa_pem():
 
 
 SYSTEM_PUB, OTHER_PUB = _rsa_pem(), _rsa_pem()          # the system-phase PCR key the signing key is made for, and another
+TOKENS = ["DENK0500001", "35718625"]                    # a SmartCard-HSM's PKCS#11 serial and a YubiKey's
 
 
 class Crash(BaseException):
@@ -64,13 +65,40 @@ class InitOnSwtpm(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.dir, self.wg = self.d + "/enrol", self.d + "/etc/wg-service.key"
+        # the host's tokens, stood in for: a test never reaches a card on the machine that runs it
+        patcher = unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: list(TOKENS))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.ssh = self.d + "/ssh_host_ed25519_key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", self.ssh], check=True)
 
     def init(self, run=subprocess.run, node_id="a", system_pub=None):
-        return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO())
+        return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO(), ssh_host_key=self.ssh + ".pub")
 
     def test_init_makes_the_keys_on_the_host_and_names_them_in_the_bundle(self):
         bundle = self.init()
         self.assertEqual(bundle["schema"], enrol.SCHEMA_BUNDLE)
+        self.assertEqual(bundle["hsm_serials"], TOKENS, "#363: the tokens' serials, read at init")
+        keep, answer = self.proven(bundle)
+        self.assertEqual(enrol.entry(bundle, SYSTEM_PUB, keep, answer)["hsm_serials"], TOKENS)
+        with open(self.ssh + ".pub") as f:
+            raw = base64.b64decode(f.read().split()[1])[-32:].hex()
+        self.assertEqual((bundle["ssh_host_pub"], enrol.entry(bundle, SYSTEM_PUB, keep, answer)["ssh_host_pub"]), (raw, raw),
+                         "the host's SSH key, read at init, as the manifest carries it")
+        with self.assertRaisesRegex(enrol.Refused, "it was made before #371"):
+            enrol.entry({k: v for k, v in bundle.items() if k != "ssh_host_pub"}, SYSTEM_PUB, keep, answer)
+        os.rename(self.ssh + ".pub", self.ssh + ".pub.kept")
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", self.d + "/other"], check=True)
+        os.rename(self.d + "/other.pub", self.ssh + ".pub")
+        with self.assertRaisesRegex(enrol.Refused, "this host's SSH host key \\([0-9a-f]{64}\\) is not the one this enrolment recorded"):
+            self.init()
+        os.replace(self.ssh + ".pub.kept", self.ssh + ".pub")
+        with unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: ["DENK0599999", "35718625"]):
+            with self.assertRaisesRegex(enrol.Refused, "not the ones this enrolment recorded"):
+                self.init()
+        with self.assertRaisesRegex(enrol.Refused, "it was made before #363"):
+            enrol.entry({k: v for k, v in bundle.items() if k != "hsm_serials"}, SYSTEM_PUB, keep, answer)
         self.assertEqual(stat.S_IMODE(os.stat(self.dir).st_mode), 0o700)
         for path in (self.wg, self.dir + "/wg-boot.key"):
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600, path)
@@ -470,7 +498,7 @@ class InitOnSwtpm(unittest.TestCase):
         man["policy_version"] = measurements.version(document)
         man["nodes"][0].update(ek_name=bundle["ek_name"], ak_name=bundle["ak_name"],
                                wg_service_pub=base64.b64decode(bundle["wg_service_pub"]).hex(),
-                               wg_boot_pub=base64.b64decode(bundle["wg_boot_pub"]).hex())
+                               wg_boot_pub=base64.b64decode(bundle["wg_boot_pub"]).hex(), hsm_serials=bundle["hsm_serials"])
         root = hbt.pub(hbt.ROOT)
         example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
                    "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
@@ -505,6 +533,129 @@ class InitOnSwtpm(unittest.TestCase):
             self.assertEqual(enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
                                           as_sync=in_process, out=io.StringIO(), first_beat=first_beat), (1, digest))
 
+
+
+class Tokens(unittest.TestCase):
+    """#363 (#72 G1): the serials the daemon compares, read from the devices in every form a backend pins: the
+    SmartCard-HSM's PKCS#11 serial, the YubiKey's decimal serial (PIV) and its OpenPGP-applet PKCS#11 serial, never typed.
+    The listings are the bench's, 2026-10-04 (Nitrokey DENK0404144, YubiKey 35718625, OpenSC 0.26)."""
+
+    # OpenSC's default drivers: the YubiKey FIRST, as its PIV token (whose serial is not the YubiKey's), then the HSM
+    SLOTS = ("Available slots:\n"
+             "Slot 0 (0x4): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
+             "  token label        : PIV_II\n"
+             "  token manufacturer : piv_II\n"
+             "  serial num         : b9ab85b1d5d5846c\n"
+             "Slot 1 (0x8): Nitrokey Nitrokey HSM (DENK04041440000         ) 02 00\n"
+             "  token label        : regalia-staging\n"
+             "  token manufacturer : www.CardContact.de\n"
+             "  token model        : PKCS#15 emulated\n"
+             "  serial num         : DENK0404144\n"
+             "Slot 2 (0xc): Generic reader with no card 00 00\n"
+             "  (empty)\n")
+    # OpenSC told to use its openpgp driver only: the YubiKey's OpenPGP applet, two tokens under one serial
+    OPENPGP = ("Available slots:\n"
+               "Slot 0 (0x4): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
+               "  token label        : OpenPGP card (User PIN)\n"
+               "  token manufacturer : Yubico\n"
+               "  serial num         : 000635718625\n"
+               "Slot 1 (0x5): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
+               "  token label        : OpenPGP card (User PIN (sig))\n"
+               "  token manufacturer : Yubico\n"
+               "  serial num         : 000635718625\n")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def usb(self, yubikeys):
+        """A sysfs USB tree with this many Yubico devices and one Nitrokey (20a0)."""
+        root = tempfile.mkdtemp(dir=self.d)
+        for i, vendor in enumerate(["20a0"] + ["1050"] * yubikeys):
+            os.makedirs("%s/1-%d" % (root, i))
+            with open("%s/1-%d/idVendor" % (root, i), "w") as f:
+                f.write(vendor + "\n")
+        return root
+
+    def serials(self, run, yubikeys=1):
+        return enrol.token_serials("m.so", run, usb_root=self.usb(yubikeys))
+
+    def run_with(self, slots=SLOTS, ykman="35718625\n", openpgp=OPENPGP):
+        def run(argv, env=None, **kw):
+            if argv[0] == "pkcs11-tool":
+                if env and env.get("OPENSC_CONF"):
+                    with open(env["OPENSC_CONF"]) as f:
+                        self.assertEqual(f.read(), enrol.OPENPGP_ONLY)
+                    return subprocess.CompletedProcess(argv, 0, openpgp, "")
+                return subprocess.CompletedProcess(argv, 0, slots, "")
+            if argv[:2] == ["ykman", "list"]:
+                return subprocess.CompletedProcess(argv, 0, ykman, "")
+            raise AssertionError("no other tool reaches a card: %s" % argv)
+        return run
+
+    def test_the_hsm_and_the_yubikey_in_each_form(self):
+        with unittest.mock.patch.object(enrol.shutil, "which", lambda t: "/usr/bin/" + t):
+            self.assertEqual(self.serials(self.run_with()), ["DENK0404144", "35718625", "000635718625"])
+            self.assertEqual(self.serials(self.run_with(openpgp="Available slots:\n")), ["DENK0404144", "35718625"],
+                             "a YubiKey whose OpenPGP applet OpenSC does not present: its PIV form only")
+            self.assertEqual(self.serials(self.run_with(ykman="", openpgp=""), 0), ["DENK0404144"], "no YubiKey (Pico alone)")
+
+    def test_refusals(self):
+        with unittest.mock.patch.object(enrol.shutil, "which", lambda t: "/usr/bin/" + t):
+            two = self.SLOTS + self.SLOTS.replace("Slot 1", "Slot 3").replace("DENK0404144", "DENK0404380")
+            with self.assertRaisesRegex(enrol.Refused, "2 SmartCard-HSM tokens are attached"):
+                self.serials(self.run_with(slots=two))
+            with self.assertRaisesRegex(enrol.Refused, "0 SmartCard-HSM tokens"):
+                self.serials(self.run_with(slots="Available slots:\n"))
+            with self.assertRaisesRegex(enrol.Refused, "appears twice"):
+                self.serials(self.run_with(ykman="35718625\n35718625\n"), 2)
+            with self.assertRaisesRegex(enrol.Refused, "not a YubiKey's"):
+                self.serials(self.run_with(ykman="3571-8625\n"))
+            with self.assertRaisesRegex(enrol.Refused, "an OpenPGP card is attached that is not one of this host's YubiKeys \\(000699999999\\)"):
+                self.serials(self.run_with(openpgp=self.OPENPGP.replace("000635718625", "000699999999", 1)))
+            with self.assertRaisesRegex(enrol.Refused, "not one the manifest can list"):
+                self.serials(self.run_with(slots=self.SLOTS.replace("DENK0404144\n", "DENK-0404144\n")))
+            with self.assertRaisesRegex(enrol.Refused, "2 YubiKeys are attached and ykman read 1 serials: a YubiKey's serial is not readable"):
+                self.serials(self.run_with(), 2)
+            with self.assertRaisesRegex(enrol.Refused, "1 YubiKeys are attached and ykman read 0 serials"):
+                self.serials(self.run_with(ykman="", openpgp=""), 1)
+        with unittest.mock.patch.object(enrol.shutil, "which", lambda t: None):
+            with self.assertRaisesRegex(enrol.Refused, "a YubiKey is attached and ykman is not installed"):
+                self.serials(self.run_with())
+            self.assertEqual(self.serials(self.run_with(), 0), ["DENK0404144"])
+
+
+class SshHostKey(unittest.TestCase):
+    """#371: the manifest's ssh_host_pub, read from the host's own public key file."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def key_file(self, line):
+        path = os.path.join(self.d, "k.pub")
+        with open(path, "w") as f:
+            f.write(line)
+        return path
+
+    def blob(self, *parts):
+        return base64.b64encode(b"".join(len(p).to_bytes(4, "big") + p for p in parts)).decode()
+
+    def test_an_ed25519_key_is_read_as_64_hex(self):
+        self.assertEqual(enrol.ssh_host_pub(self.key_file("ssh-ed25519 %s root@a\n" % self.blob(b"ssh-ed25519", b"\x07" * 32))), "07" * 32)
+
+    def test_refusals(self):
+        with self.assertRaisesRegex(enrol.Refused, "is missing: this host has no Ed25519 SSH host key"):
+            enrol.ssh_host_pub(os.path.join(self.d, "absent.pub"))
+        for line, reason in (("ssh-rsa %s" % self.blob(b"ssh-rsa", b"\x01" * 32), "is not an ssh-ed25519 public key"),
+                             ("ssh-ed25519", "is not an ssh-ed25519 public key"),
+                             ("ssh-ed25519 !!!", "does not hold a base64 key"),
+                             ("ssh-ed25519 %s" % self.blob(b"ssh-rsa", b"\x01" * 32), "does not hold exactly one 32-byte Ed25519 key"),
+                             ("ssh-ed25519 %s" % self.blob(b"ssh-ed25519", b"\x01" * 31), "does not hold exactly one 32-byte Ed25519 key"),
+                             ("ssh-ed25519 %s" % self.blob(b"ssh-ed25519", b"\x01" * 32, b"x"), "does not hold exactly one 32-byte Ed25519 key"),
+                             ("ssh-ed25519 %s" % base64.b64encode(b"\x00\x00\x00\x40ssh").decode(), "does not hold exactly one 32-byte")):
+            with self.subTest(line=line), self.assertRaisesRegex(enrol.Refused, reason):
+                enrol.ssh_host_pub(self.key_file(line))
 
 
 class ChronyPath(unittest.TestCase):

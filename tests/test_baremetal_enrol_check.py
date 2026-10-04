@@ -27,7 +27,8 @@ class Check(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.bundle = {"schema": enrol.SCHEMA_BUNDLE, "node_id": "a", "ek_public": "00", "ek_name": "000b" + "e1" * 32,
                        "ak_public": "00", "ak_name": "000b" + "e2" * 32, "ek_certificate": None,
-                       "wg_service_pub": WG_SERVICE, "wg_boot_pub": WG_BOOT, "tpm_firmware_version": "0" * 16}
+                       "wg_service_pub": WG_SERVICE, "wg_boot_pub": WG_BOOT, "tpm_firmware_version": "0" * 16,
+                       "hsm_serials": ["DENK0500001", "35718625"], "ssh_host_pub": "5a" * 32}
         with open(self.d + "/bundle.json", "w") as f:
             json.dump(self.bundle, f)
         self.document = document()
@@ -38,7 +39,7 @@ class Check(unittest.TestCase):
         man["policy_version"] = measurements.version(self.document)
         a = man["nodes"][0]
         a.update(ek_name=self.bundle["ek_name"], ak_name=self.bundle["ak_name"],
-                 wg_service_pub=bytes(range(32)).hex(), wg_boot_pub=bytes(range(32, 64)).hex())
+                 wg_service_pub=bytes(range(32)).hex(), wg_boot_pub=bytes(range(32, 64)).hex(), hsm_serials=["35718625", "DENK0500001"])
         a.update(change_a)
         return man
 
@@ -56,6 +57,14 @@ class Check(unittest.TestCase):
             self.check(*args, **kw)
         self.assertIn(reason, str(caught.exception))
 
+    def test_the_manifest_lists_exactly_this_hosts_tokens(self):
+        """#363: the daemon serves only from tokens the manifest lists, so commit and check hold it to the ones init read."""
+        self.refused("are not this host's tokens", self.envelope(self.manifest(hsm_serials=["DENK0500001"])))
+        self.refused("are not this host's tokens", self.envelope(self.manifest(hsm_serials=["DENK0500001", "35718625", "DENK0599999"])))
+        with open(self.d + "/bundle.json", "w") as f:
+            json.dump({k: v for k, v in self.bundle.items() if k != "hsm_serials"}, f)
+        self.refused("it was made before #363", self.envelope(self.manifest()))
+
     def test_the_manifest_that_names_this_host_is_accepted(self):
         man = self.manifest()
         self.assertEqual(self.check(self.envelope(man)), man)
@@ -68,6 +77,7 @@ class Check(unittest.TestCase):
         identity is; a bundle made before #199 has none and is refused for a v4 manifest."""
         from tests import test_baremetal_membership_v4 as v4
         man = v4.manifest4(1, "", v4.nodes4(), policy_version=measurements.version(self.document))
+        man["nodes"][0].update(hsm_serials=self.bundle["hsm_serials"])
         man["nodes"][0].update(ek_name=self.bundle["ek_name"], ak_name=self.bundle["ak_name"],
                                wg_service_pub=bytes(range(32)).hex(), wg_boot_pub=bytes(range(32, 64)).hex())
         mine = man["nodes"][0]["signing_key"]["key"]
@@ -76,6 +86,13 @@ class Check(unittest.TestCase):
             with open(self.d + "/bundle.json", "w") as f:
                 json.dump(dict(self.bundle, signing_key=point), f)
             if accepted:
+                self.refused("the manifest's ssh_host_pub for a is not this host's", self.envelope(man))     # v4 carries it (#371)
+                with open(self.d + "/bundle.json", "w") as f:
+                    json.dump({k: v for k, v in dict(self.bundle, signing_key=point).items() if k != "ssh_host_pub"}, f)
+                self.refused("this host's bundle has no ssh_host_pub: it was made before #371", self.envelope(man))
+                with open(self.d + "/bundle.json", "w") as f:
+                    json.dump(dict(self.bundle, signing_key=point), f)
+                man["nodes"][0].update(ssh_host_pub=self.bundle["ssh_host_pub"])
                 self.assertEqual(self.check(self.envelope(man)), man)
             else:
                 self.refused("the manifest's signing_key for a is not this host's", self.envelope(man))
