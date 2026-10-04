@@ -130,10 +130,11 @@ def everyone_saw(cluster, subject, label, epoch):
 
 
 def served_while_down(cluster, name, since):
-    """Whether each of the two other nodes was given a FRESH lease after `since` (when `name` went down): issued by
-    a peer's sync (its trail), not one held from before that has not run out yet. The cluster serves on two."""
+    """Asked WHILE `name` is down (after its stop, before it asks for its disk): whether each of the two other nodes
+    has been given a FRESH lease since `since` by the third (their sync trails), never by `name`, and not one held
+    from before that has not run out yet. The cluster serves on two (regalia-kms-51)."""
     others = [o for o in cluster.nodes if o != name]
-    return bool(until(lambda: all(any(leased_by(cluster, p, o, since) for p in cluster.nodes if p != o) for o in others), 240, 5))
+    return bool(until(lambda: all(any(leased_by(cluster, p, o, since) for p in cluster.nodes if p not in (o, name)) for o in others), 240, 5))
 
 
 def reboot(cluster, name, image):
@@ -143,12 +144,13 @@ def reboot(cluster, name, image):
     since = time.time()
     cluster.stop(name)
     cluster.boot(name, image)
+    served = served_while_down(cluster, name, since)          # while it is down: it can have issued nothing since
     got = cluster.unlock(name, timeout=120, rounds=3)
     leased = False
     if opened(got):
         cluster.start(name, SERVICES)
         leased = bool(until(lambda: cluster.lease(name), 120, 2))
-    return {"got": got, "leased": leased, "served": served_while_down(cluster, name, since), "since": since}
+    return {"got": got, "leased": leased, "served": served, "since": since}
 
 
 def moved(cluster, name, image, what):
@@ -201,8 +203,8 @@ def scenario(cluster):
         held = cluster.node(name).store().load()
         ok(held["epoch"] == 2 and held["policy_version"] == measurements.version(doc_both),
            "%s holds epoch 2, committed to the document that accepts both (from its TPM-anchored store)" % name, held.get("epoch"))
-    for name in names:
-        until(lambda: cluster.lease(name), 120, 2)
+    ok(all(until(lambda: cluster.lease(name), 120, 2) for name in names), "every node holds a lease again after the epoch",
+       {name: bool(cluster.lease(name)) for name in names})
 
     header("4  one at a time: may_reboot asked on each node at once")
     verdicts = {name: decide(cluster, name) for name in names}
@@ -249,8 +251,8 @@ def scenario(cluster):
     ok(verdict == [], "the retire locks out nobody (rollout.check_lockout, the peers' real state files)", verdict)
     manifest, _ = cluster.accept(a, {n: [NEXT_IMAGE] for n in names}, "v3")
     ok(all(cluster.node(n).store().load()["epoch"] == 3 for n in names), "every node holds epoch 3, NEXT alone")
-    for name in names:
-        until(lambda: cluster.lease(name), 120, 2)
+    ok(all(until(lambda: cluster.lease(name), 120, 2) for name in names), "every node holds a lease again after the epoch",
+       {name: bool(cluster.lease(name)) for name in names})
     # not updates: a power cycle onto the retired image (a stale BootOrder, KERNEL-UPDATE 3.8), then onto NEXT again
     r = reboot(cluster, c, None)
     quoted = cluster.image_set(c)["pcrs"]["11"]
