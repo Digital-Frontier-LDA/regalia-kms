@@ -50,9 +50,9 @@ PLATFORM AND TPM, measured:
                             and --unlock-peer (this node, and exactly the peers that hold a path), each
                             path's local share sealed to the TPM alone under the binding RECORDED for the
                             PIN credentials (PCR 7, and the signed PCR 11 policy when the PINs have it).
-                            Its crypttab entry takes the key from the unlock client's socket
-                            (/run/regalia-unlock/key.sock), carries only options known to leave the
-                            unlock alone, and the kernel command line has no rd.luks.* setting. NOT
+                            Its crypttab entry names no key file (the unlock client answers the
+                            password request, #70), carries tries=0 and only options known to leave
+                            the unlock alone, and the kernel command line has no rd.luks.* setting. NOT
                             measured: the root volume is opened in the initrd, by the crypttab the
                             initrd was BUILT with; /etc/crypttab is what that was copied from, not
                             necessarily what it holds (an edit with no initrd rebuild is invisible here),
@@ -293,19 +293,20 @@ def token_keyslots(token, meta):
 
 
 PEER_TOKEN = "regalia-peer-unlock"      # deploy/baremetal/unlock.py: one token per peer path
-# The socket the unlock client gives the volume key on: the key-file field of the root volume's crypttab
-# entry (unlock.KEY_SOCKET, and the ListenStream of initrd/regalia-unlock.socket; a test holds the two equal).
-PEER_KEY_SOCKET = "/run/regalia-unlock/key.sock"
+# The key-file field of a peer-shaped volume's crypttab entry: none (crypttab's "none" or "-"). The unlock
+# client is a password agent (#70): it answers systemd-cryptsetup's request for the passphrase, beside the
+# console, and a key file would be read instead of asking.
+PEER_KEY_FILES = ("none", "-", "")      # "": the field left out, which crypttab takes as none
 # The crypttab options a peer-shaped volume may carry: the ones known to leave WHAT opens the volume, and
 # where its key goes, alone. An allowlist, because the other kind keeps growing: tpm2-device, fido2-device
 # and pkcs11-uri open it another way; header= makes systemd-cryptsetup read keyslots and tokens from a
 # detached header, not the one on the device that this probe judges; link-volume-key= (systemd 257) puts the
 # volume key in a kernel keyring; plain, tcrypt, bitlk, swap and tmp are not LUKS at all; try-empty-password
-# and noauto change whether and how it is opened. headless is left out on purpose too: with it, a boot with no
-# key from the socket gives up instead of asking at the console, and the console is where the recovery key
-# is typed after a total outage (#77).
+# and noauto change whether and how it is opened. headless is left out on purpose too: with it, nothing is
+# asked at the console, and the console is where the recovery key is typed after a total outage (#77).
+# x-systemd.device-timeout only sets how long the partition is waited for (0: for as long as it takes, #70).
 PEER_CRYPTTAB_OPTIONS = frozenset({
-    "luks", "x-initrd.attach", "discard", "tries", "timeout", "token-timeout",
+    "luks", "x-initrd.attach", "discard", "tries", "timeout", "token-timeout", "x-systemd.device-timeout",
     "no-read-workqueue", "no-write-workqueue", "same-cpu-crypt", "submit-from-crypt-cpus",
     "tpm2-measure-pcr", "tpm2-measure-bank"})      # the last two only measure the volume key into a PCR
 
@@ -372,8 +373,8 @@ def root_unlock(host, unlock_record=None, binding=None):
         # else: the crypttab entry names that socket as its key file and asks for no other way in.
         if any(t.get("type") == PEER_TOKEN for t in tokens.values()):
             if name not in entries:
-                return False, "%s (%s) carries %s tokens, but it is not listed in /etc/crypttab: nothing asks the unlock " \
-                    "client for its key at boot (key file %s)" % (name, dev, PEER_TOKEN, PEER_KEY_SOCKET)
+                return False, "%s (%s) carries %s tokens, but it is not listed in /etc/crypttab: nothing asks for its " \
+                    "passphrase at boot for the unlock client to answer" % (name, dev, PEER_TOKEN)
             other = sorted(o for o in opts if o not in PEER_CRYPTTAB_OPTIONS)
             if other:
                 return False, "%s (%s) carries %s tokens, but its crypttab entry has %s: not among the options known to leave " \
@@ -389,9 +390,14 @@ def root_unlock(host, unlock_record=None, binding=None):
             if on_cmdline:
                 return False, "%s (%s) carries %s tokens, but the kernel command line configures LUKS (%s): the initrd did " \
                     "not open it as /etc/crypttab says" % (name, dev, PEER_TOKEN, ", ".join(on_cmdline))
-            if key_files[name] != PEER_KEY_SOCKET:
-                return False, "%s (%s) carries %s tokens, but its crypttab key file is %r, not the unlock client's socket %s" % (
-                    name, dev, PEER_TOKEN, key_files[name] or "none", PEER_KEY_SOCKET)
+            if key_files[name] not in PEER_KEY_FILES:
+                return False, "%s (%s) carries %s tokens, but its crypttab entry names the key file %r: it would be read instead " \
+                    "of asking, and the unlock client answers only the request (key file: none)" % (name, dev, PEER_TOKEN, key_files[name])
+            # a mistyped recovery key must be asked again, never end the prompt (the default, 3, ends in emergency)
+            if opts.get("tries") != "0":
+                return False, "%s (%s) carries %s tokens, but its crypttab entry has tries=%s: a recovery key mistyped %s times would " \
+                    "end the prompt in emergency, and so in a reboot (tries=0)" % (name, dev, PEER_TOKEN, opts.get("tries", "3 (the default)"),
+                                                                                    opts.get("tries", "3"))
             ok, why = peer_paths(meta, "%s (%s)" % (name, dev), unlock_record, binding)
             if not ok:
                 return False, why

@@ -203,7 +203,7 @@ INITRD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 
 def unlock_initrd(change=None, drop=()):
     """An initrd that passes the review (#198): the module's crypttab, this repository's units and script, the
-    client, the two enable links, and links for merged /usr. `change`: {path: (mode, data)} to add or replace;
+    client, its enable link, and links for merged /usr. `change`: {path: (mode, data)} to add or replace;
     `drop`: paths to leave out. It carries the text "an initrd", which the stand-in tools look for."""
     def mine(*parts):
         with open(os.path.join(INITRD, *parts), "rb") as f:
@@ -218,7 +218,6 @@ def unlock_initrd(change=None, drop=()):
         files["usr/lib/systemd/system/" + unit] = (0o100644, mine(unit))
     for link, target in uki.UNLOCK_ENABLED.items():
         files[link] = (0o120777, target.encode())
-    files[uki.RELAY_DROPIN[0]] = (0o100644, uki.RELAY_DROPIN[1])
     files.update(change or {})
     return newc([(n, mode, data) for n, (mode, data) in sorted(files.items()) if n not in drop])
 
@@ -232,7 +231,7 @@ class Case(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tools = FakeTools()
         self.inputs = {}
-        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
+        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
                               ("os_release", b"ID=debian\n"), ("stub", b"a stub")):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
@@ -356,15 +355,15 @@ class Arithmetic(unittest.TestCase):
             self.assertIn("the image has no %s section" % missing, str(caught.exception))
 
     def test_the_command_line(self):
-        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
-                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot")
+        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
+                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")
         # the word every image must carry, and the record keeps the command line it was built with
         with self.assertRaises(m.Refused) as caught:
             uki.cmdline_text(b"root=/dev/mapper/root ro quiet\n")
         self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
         # (each case changes ONE word of a valid line, and the reason is asserted: a line can be refused for
         # several missing words, and a case must not pass for another word's reason)
-        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot"
+        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
         for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
             with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(full.replace("systemd.import_credentials=no", near).encode())
@@ -374,7 +373,7 @@ class Arithmetic(unittest.TestCase):
                       "systemd.import_credentials=no", "systemd.import-credentials=yes", "rd.systemd.import-credentials=yes",
                       "systemd.import-credentials=no", "SYSTEMD.import_credentials=yes"):
             with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot %s" % extra).encode())
+                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0 %s" % extra).encode())
             self.assertIn("gives systemd.import_credentials more than once or with another value or spelling", str(caught.exception))
 
         # the kernel zeroes pages it frees and hands out (#221): each word must be there, exactly, once
@@ -421,7 +420,7 @@ class Arithmetic(unittest.TestCase):
                      "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "rdshell", "rdshell=1", "rdbreak", "rdbreak=pre-mount", "init=/bin/sh", "rdinit=/bin/sh",
                      "systemd.unit=emergency.target", "rd.systemd.unit=rescue.target", "emergency", "rescue", "single", "S", "s", "1", "-b"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot" % word).encode())
+                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0" % word).encode())
             self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
 
 
@@ -434,7 +433,7 @@ class Build(Case):
         self.assertEqual(record["pcr11"], {phase: predicted(parts, path) for phase, path in uki.PHASE_PATHS.items()})
         self.assertNotEqual(record["pcr11"]["initrd"], record["pcr11"]["system"])
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
-        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot")            # the file's newline is not in the image
+        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")            # the file's newline is not in the image
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
         self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "stub"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
@@ -482,7 +481,7 @@ class Build(Case):
 
     def test_names_and_the_command_line_are_checked_before_anything_runs(self):
         for kw, reason in (({"name": "an image"}, "short plain name"), ({"name": "../x"}, "short plain name"), ({"uname": "6.12; rm"}, "--uname must be a kernel version"),
-                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n")}}, "holds 'rd.luks.uuid=1'")):
+                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n")}}, "holds 'rd.luks.uuid=1'")):
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
                 self.tools.calls.clear()
                 self.refused(reason, self.build, **kw)
@@ -922,7 +921,7 @@ class Records(Case):
         self.refused("the record is of an unsigned image", uki.load_record, json.dumps(record).encode(), signed=True)
 
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
-        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
+        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
                 "--initrd-build", self.initrd_build(), "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
@@ -1031,7 +1030,7 @@ class InitrdReview(Case):
 
     def test_the_module_s_initrd_passes_and_the_record_says_so(self):
         review = self.passes(unlock_initrd())
-        self.assertEqual(review["crypttab"], "root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach")
+        self.assertEqual(review["crypttab"], "root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0")
         self.assertEqual(sorted(review["units"]), sorted(uki.UNLOCK_UNITS))
         self.assertEqual(review["clients"], {"usr/bin/regalia-unlock": hashlib.sha256(b"\x7fELF regalia-unlock").hexdigest()})
         record = self.build()
@@ -1039,8 +1038,7 @@ class InitrdReview(Case):
         uki.load_record(m.canonical(record), signed=False)
         with open(os.path.join(INITRD, "dracut", "90regalia-unlock", "module-setup.sh")) as f:
             setup = f.read()
-        for content in (uki.RELAY_DROPIN[1], uki.RESET_DROPIN[1]):
-            self.assertIn("printf '%s'" % content.decode().replace("\n", "\\n"), setup)
+        self.assertIn("printf '%s'" % uki.RESET_DROPIN[1].decode().replace("\n", "\\n"), setup)
 
     def test_one_changed_byte_anywhere_is_refused_with_a_diff_naming_it(self):
         extra = {"usr/lib/dracut/hooks/pre-mount/10-x.sh": (0o100755, b"#!/bin/sh\ntrue\n"),
@@ -1124,10 +1122,11 @@ class InitrdReview(Case):
         self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"rd.emergency=reboot\n")}))
 
     def test_the_crypttab_holds_the_one_generic_line_and_nothing_else(self):
-        line = b"root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach\n"
+        line = b"root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0\n"
         for name, change, drop in (
                 ("an extra line", {"etc/crypttab": (0o100644, line + b"swap /dev/sda2 /dev/urandom swap\n")}, ()),
-                ("another key file", {"etc/crypttab": (0o100644, line.replace(b"/run/regalia-unlock/key.sock", b"/etc/root.key"))}, ()),
+                ("a key file", {"etc/crypttab": (0o100644, line.replace(b" none ", b" /etc/root.key "))}, ()),
+                ("tries left at the default", {"etc/crypttab": (0o100644, line.replace(b",tries=0", b""))}, ()),
                 ("the build machine's", {"etc/crypttab": (0o100644, b"sda3_crypt UUID=1234 none luks,discard\n")}, ()),
                 ("none at all", None, ("etc/crypttab",)),
                 ("a link out of the image", {"etc/crypttab": (0o120777, b"/sysroot/etc/crypttab")}, ())):
@@ -1150,10 +1149,10 @@ class InitrdReview(Case):
                         "etc/systemd/system/regalia-unlock.service: a copy of the unlock client's unit outside")
         self.refused_by(unlock_initrd(drop=("usr/bin/regalia-unlock",)), "usr/bin/regalia-unlock, the unlock client, is not in the image")
         self.refused_by(unlock_initrd({"usr/lib/regalia/wg-boot": (0o100755, b"#!/bin/sh\nexit 0\n")}), "usr/lib/regalia/wg-boot is not this repository's")
-        link = "etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket"
+        link = "etc/systemd/system/cryptsetup.target.wants/regalia-unlock.service"
         self.refused_by(unlock_initrd(drop=(link,)), link + " is not in the image")
-        self.refused_by(unlock_initrd({link: (0o120777, b"/usr/lib/systemd/system/evil.socket"), "usr/lib/systemd/system/evil.socket": (0o100644, b"")}),
-                        link + " is not this repository's (a link to /usr/lib/systemd/system/evil.socket)")
+        self.refused_by(unlock_initrd({link: (0o120777, b"/usr/lib/systemd/system/evil.service"), "usr/lib/systemd/system/evil.service": (0o100644, b"")}),
+                        link + " is not this repository's (a link to /usr/lib/systemd/system/evil.service)")
 
     def test_the_client_is_bound_to_the_binary_the_build_compiled_not_to_a_hash(self):
         # the inventory says "=compiled" for it; the review fails without the compiled binary, or with another
@@ -1185,13 +1184,16 @@ class InitrdReview(Case):
     def test_every_drop_in_of_the_unlock_path_must_be_the_module_s(self):
         hostile = (0o100644, b"[Service]\nExecStart=\nExecStart=/usr/bin/sh -c 'echo key'\n")
         for where in ("usr/lib/systemd/system/regalia-unlock.service.d/z.conf", "etc/systemd/system/regalia-unlock.service.d/z.conf",
-                      "etc/systemd/system/regalia-.service.d/z.conf", "etc/systemd/system/regalia-unlock-.service.d/z.conf",
+                      "etc/systemd/system/regalia-.service.d/z.conf",
                       "etc/systemd/system/systemd-cryptsetup@root.service.d/z.conf", "etc/systemd/system/systemd-cryptsetup@.service.d/z.conf",
                       "usr/lib/systemd/system/service.d/z.conf", "etc/systemd/system/socket.d/z.conf", "etc/systemd/system/cryptsetup.target.d/z.conf",
                       "etc/systemd/system/initrd-switch-root.target.d/z.conf", "etc/systemd/system.control/regalia-unlock.service.d/z.conf",
                       "run/systemd/transient/regalia-unlock.service.d/z.conf"):
             with self.subTest(where):
                 self.refused_by(unlock_initrd({where: hostile}), where + ": a drop-in of the unlock path that is not the module's")
+        # a dash prefix that names no unit of the unlock path applies to none (systemd: "regalia-unlock-.service.d"
+        # is for regalia-unlock-*.service, and since #70 there is none): not refused
+        self.passes(unlock_initrd({"etc/systemd/system/regalia-unlock-.service.d/z.conf": hostile}))
         # the module's credential reset: on any unit, the cryptsetup@ template (made at boot by the generator) included
         for unit in ("systemd-journald.service", "systemd-cryptsetup@.service"):
             reset = "usr/lib/systemd/system/%s.d/%s" % (unit, uki.RESET_DROPIN[0])

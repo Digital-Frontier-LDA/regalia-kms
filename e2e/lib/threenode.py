@@ -46,6 +46,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -759,9 +760,11 @@ class Cluster:
         """What the node's initrd does, less the boot: its WG-BOOT tunnel up in its namespace (bootnet's
         configuration, from the chain it holds), then the pre-root client (cmd/regalia-unlock, the real binary)
         with this fixture in systemd's two roles: the local half unsealed from the node's TPM and given as a
-        credential (LoadCredentialEncrypted=), the key socket passed (socket activation), and the volume opened
-        with the key that comes back (systemd-cryptsetup). Returns {rc, peer, marker, stderr}: `peer` the one
-        whose keyslot opened it, `marker` whether the filesystem reads back."""
+        credential (LoadCredentialEncrypted=), and systemd-cryptsetup asking for the volume's passphrase through
+        the ask-password protocol (#70: the client is a password agent), in an ask directory of the node's own.
+        The volume is opened with the answer (cryptsetup open -v), and the client, seeing it open, stands down.
+        `rounds` is the client's -attempts. Returns {rc, peer, marker, stderr}: `peer` the one whose keyslot
+        opened it, `marker` whether the filesystem reads back; rc "timeout" when it was still asking."""
         n, loop, mapped = self.nodes[name], self.loops[name], "e2e3-" + name
         manifest = self.node(name).store().load()          # the chain the node holds: its initrd's credentials say the same
         site = sitecfg.load(str(n.dir / "etc" / "site.json"))
@@ -780,56 +783,61 @@ class Cluster:
         with open(os.open(str(creds / unlock.LOCAL_NAME), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400), "wb") as f:
             f.write(local)
         del local
-        path = str(n.dir / "key.sock")
-        if os.path.exists(path):
-            os.unlink(path)
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        listener.bind(path)
-        listener.listen(1)
-        asker = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        asker.connect(path)                                        # systemd-cryptsetup, waiting for its key
-
-        fd = listener.fileno()
-        # In its own mount namespace, the other nodes' directories covered (as InaccessiblePaths= does for the
-        # units); the listener moved to descriptor 3 (sd_listen_fds) by the shell, no preexec_fn (two unlocks run
-        # from two threads in 10.5); LISTEN_PID the client's own: the shell's, which execs ip, which execs the client.
+        # systemd-cryptsetup's request, as it writes one: ask.1 naming its reply socket and the volume's Id
+        asks = pathlib.Path(tempfile.mkdtemp(prefix="ask-"))           # short: a UNIX socket path holds 108 bytes
+        request = "cryptsetup:" + loop
+        reply = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        reply.bind(str(asks / "sck.1"))
+        (asks / "ask.1").write_text("[Ask]\nPID=%d\nSocket=%s\nAcceptCached=0\nEcho=0\nNotAfter=0\nSilent=0\nId=%s\n"
+                                     % (os.getpid(), asks / "sck.1", request))
+        volume = "/dev/mapper/" + mapped                                # there once opened: then the client stands down
+        # In its own mount namespace, the other nodes' directories covered (as InaccessiblePaths= does for the units)
         blind = "".join("mount -t tmpfs -o ro,size=4k e2e3-blind %s; " % shlex.quote(str(o.dir)) for o in self.nodes.values() if o is not n)
-        script = blind + ("" if fd == 3 else "exec 3<&%d %d<&-; " % (fd, fd)) + 'LISTEN_PID=$$ exec "$@"'
+        script = blind + 'exec "$@"'
         result = {"rc": None, "peer": None, "marker": False, "stderr": ""}
         mnt, mounted = n.dir / "mnt", False
+        client = None
         try:
-            env = dict(os.environ, LISTEN_FDS="1", CREDENTIALS_DIRECTORY=str(creds))
-            # bash, not sh: dash (Ubuntu's sh) takes only single-digit descriptors in a redirection, and with two unlocks
-            # in threads the listener's can be 10 or more ("Bad fd number", regalia-kms-3e on #328)
+            env = dict(os.environ, CREDENTIALS_DIRECTORY=str(creds))
             argv = ["unshare", "--mount", "--propagation", "private", "bash", "-c", script, "bash",
-                    "ip", "netns", "exec", n.ns, self.client, "-once", "-config", str(config),
-                    "-tpm", "unix:" + str(n.tpm_sock), "-session-dir", str(n.run), "-wait", "1s", "-rounds", str(rounds)]
-            try:
-                done = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL, pass_fds=(fd,))
-                result["rc"], result["stderr"] = done.returncode, done.stderr[-1500:]
-            except subprocess.TimeoutExpired as late:            # still asking when the time ran out: no key
-                result["rc"], result["stderr"] = "timeout", (late.stderr or b"")[-1500:].decode(errors="replace")
-            listener.close()
-            asker.settimeout(5)
-            try:
-                key = asker.recv(4096)
-            except OSError as failure:                # a client that gave no key and closed with data unread: a reset
-                key, result["asker"] = b"", repr(failure)
+                    "ip", "netns", "exec", n.ns, self.client, "-config", str(config), "-tpm", "unix:" + str(n.tpm_sock),
+                    "-session-dir", str(n.run), "-ask-dir", str(asks), "-request", request, "-volume", volume, "-attempts", str(rounds)]
+            client = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, stdin=subprocess.DEVNULL)
+            key, until = b"", time.monotonic() + timeout
+            reply.settimeout(0.2)
+            while time.monotonic() < until and client.poll() is None and not key:
+                try:
+                    datagram = reply.recv(4096)
+                except socket.timeout:
+                    continue
+                if datagram.startswith(b"+"):
+                    key = datagram[1:]
             if key:
                 opened = subprocess.run(["cryptsetup", "open", "--key-file", "-", "-v", loop, mapped], input=key, capture_output=True)
                 found = re.search(rb"Key slot (\d+) unlocked", opened.stdout)
+                (asks / "ask.1").unlink()                               # answered: systemd-cryptsetup removes its request
                 if opened.returncode == 0 and found:
                     result["peer"] = self.keyslot_peer(name, int(found.group(1)))
-                    sh("mount", "-o", "ro", "/dev/mapper/" + mapped, str(mnt))
+                    sh("mount", "-o", "ro", volume, str(mnt))
                     mounted = True
                     result["marker"] = (mnt / "marker").read_bytes() == MARKER
+            try:
+                _, err = client.communicate(timeout=max(5.0, until - time.monotonic()) if not key else 30)
+                result["rc"], result["stderr"] = client.returncode, err[-1500:]
+            except subprocess.TimeoutExpired:                         # still asking when the time ran out: no key
+                client.kill()
+                _, err = client.communicate()
+                result["rc"], result["stderr"] = "timeout", (err or "")[-1500:]
         finally:
+            if client is not None and client.poll() is None:
+                client.kill()
+                client.wait()
             if mounted:
                 sh("umount", str(mnt), check=False)
-            if os.path.exists("/dev/mapper/" + mapped):
+            if os.path.exists(volume):
                 sh("cryptsetup", "close", mapped, check=False)
-            asker.close()
-            listener.close()
+            reply.close()
+            shutil.rmtree(asks, True)
             shutil.rmtree(creds, True)
             n.in_ns("ip", "link", "del", "wg-boot", check=False)
         return result
