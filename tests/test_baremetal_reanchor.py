@@ -9,6 +9,7 @@ import glob
 import io
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import tempfile
@@ -532,6 +533,30 @@ class Command(Case):
         self.assertEqual(os.stat(self.d + "/audit.jsonl").st_mode & 0o777, 0o640)           # #283: its shipper reads it through the group
         self.assertEqual(trails.verify(self.d + "/audit.jsonl")["chained"], 2)            # #278: a hash-chained trail
         self.assertEqual(trails.where("reanchor"), "/var/log/regalia/reanchor.jsonl")     # --audit-log's default
+
+    def test_a_node_config_that_cannot_give_the_policies_refuses_before_anything_changes(self):
+        """regalia-kms-48: --node-config was resolved lazily, inside the redefinition, so a config that could not be read
+        left the anchor INCOMPLETE. Now: refused up front, the TPM and the disk as they were, nothing begun."""
+        example = json.loads((pathlib.Path(__file__).resolve().parent.parent / "deploy" / "baremetal" / "node.example.json").read_text())
+        another = self.d + "/node-a.json"
+        with open(another, "w") as f:
+            json.dump(dict(example, node_id="a", state_dir=self.d + "/state-a"), f)
+        empty = self.d + "/node-b.json"                       # this node's, its state directory holding no chain
+        os.mkdir(self.d + "/state-b")
+        with open(empty, "w") as f:
+            json.dump(dict(example, node_id="b", state_dir=self.d + "/state-b"), f)
+        for config, reason in ((self.d + "/missing-node.json", "cannot be loaded"), (another, "--node-config is a's, not b's"),
+                               (empty, "no verified chain")):
+            with self.subTest(config=config):
+                self.lose_record()
+                before = self.state()
+                rc, asked = self.program("--node-config", config, peers=("a", "c"))
+                self.assertEqual((rc, asked), (1, []), self.said.getvalue())
+                self.assertIn("reanchor: NOT DONE, nothing was changed", self.said.getvalue())
+                self.assertIn(reason, self.said.getvalue())
+                self.assertEqual(self.state(), before)
+                log = self.audit() if os.path.exists(self.d + "/audit.jsonl") else []
+                self.assertNotIn("INCOMPLETE", [e.get("outcome") for e in log])
 
     def test_the_program_refuses_and_records_the_refusal(self):
         self.lose_record()

@@ -164,18 +164,24 @@ def node_policy(path, node_id):
     return policy
 
 
-def node_define_policy(path, node_id):
-    """What a re-anchor lays the new indices down under (#242): the node's policy when its signed measurements name a
-    system-phase key for it (node.define_policy), else None (owner-written). Without --node-config, owner-written: a
-    re-anchor with no node configuration is the one from before #242, and B3 refuses that layout."""
-    def policy():
-        if path is None:
-            return None
-        from deploy.baremetal import node
+def node_policies(path, node_id):
+    """(policy, define_policy) for main: with --node-config, the configuration is loaded, checked to be this node's,
+    and its define policy (node.define_policy) RESOLVED NOW, before the re-anchor begins: a config that cannot be read,
+    another node's, or a define policy that refuses is a refusal with nothing changed (regalia-kms-48), never a
+    re-anchor left INCOMPLETE halfway through its redefinition. When it names a policy, the same value is what the
+    anchor is read by (a definer reads by what it lays down). When it names none (a lab node's unsigned images: the
+    new indices owner-written), the reader's policy stays lazy (node_policy), as nothing after the deletion needs it.
+    Without --node-config: node_policy's lazy refusal for a policy-written index, and owner-written new indices."""
+    if path is None:
+        return node_policy(None, node_id), None
+    from deploy.baremetal import node                      # here: node imports the services, which a re-anchor does not need
+    try:
         cfg = node.load(path)
-        require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
-        return node.define_policy(cfg)
-    return policy
+    except (OSError, ValueError) as error:
+        raise Refused("--node-config %s cannot be loaded: %s" % (path, error)) from None
+    require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
+    define = node.define_policy(cfg)
+    return (node_policy(path, node_id) if define is None else define), define
 
 
 def main(argv=None, ask=None, highwater=_highwater, tty=None):
@@ -234,9 +240,10 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
-        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti,
-                                                                          policy=node_policy(args.node_config, args.node_id),
-                                                                          define_policy=node_define_policy(args.node_config, args.node_id)))
+        # before anything is changed: a node configuration that cannot give the policies refuses here (node_policies)
+        policy, define_policy = node_policies(args.node_config, args.node_id)
+        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policy,
+                                                                          define_policy=define_policy))
         now_at = reanchor(store, sources, args.node_id, typed, record)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
