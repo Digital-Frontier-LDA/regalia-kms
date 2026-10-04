@@ -811,6 +811,30 @@ class Cluster:
         except (OSError, ValueError, KeyError, TypeError):
             return None
 
+    # ---- a partition (#69, 9.4) ----
+
+    def partition(self, name, from_):
+        """`name` cut off from the members `from_` on the service mesh (wg-svc's underlay port, both ways): an nftables
+        table in `name`'s namespace ONLY, never on the host. heal() removes it. Deliberately not a full cut: the boot
+        mesh (wg-unlock, 51820) stays up, because the window #69 measures is a node that cannot learn the new epoch
+        yet can still be asked for a key (regalia-kms-3e)."""
+        hosts = ", ".join(self.member(m).underlay for m in from_)
+        rules = ("table inet e2e3cut {\n"
+                 " chain out { type filter hook output priority 0; policy accept; ip daddr { %s } udp dport 51821 drop; }\n"
+                 " chain in { type filter hook input priority 0; policy accept; ip saddr { %s } udp sport 51821 drop; }\n}\n") % (hosts, hosts)
+        self.member(name).in_ns("nft", "-f", "-", input=rules)
+
+    def heal(self, name):
+        self.member(name).in_ns("nft", "delete", "table", "inet", "e2e3cut", check=False)
+
+    def heartbeat_left(self, name):
+        """Seconds until the heartbeat the node holds expires (its freshness state, read as root), or None."""
+        import calendar
+        held = self.node(name).freshness().held()
+        if not held:
+            return None
+        return calendar.timegm(time.strptime(held["heartbeat"]["expires_at"], "%Y-%m-%dT%H:%M:%SZ")) - time.time()
+
     def wg_peers(self, name, interface):
         """The public keys `interface` in the node's namespace has as peers."""
         return set(self.member(name).in_ns("wg", "show", interface, "peers", check=False).stdout.split())
