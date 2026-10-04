@@ -109,8 +109,10 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.file }} has not been written for five minutes: that trail's shipper has stopped or is wedged."
+      # the revocation authority's host (job regalia-authority, #324) runs regalia-authority-authtime too: its time is
+      # watched as a node's (the authority signs only under authenticated time); it has no heartbeat or lease file
       - alert: RegaliaAuthtimeMetricsMissing
-        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?authtime\\.prom"}
+        expr: up{job=~"regalia-node|regalia-authority"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?authtime\\.prom"}
         for: 5m
         labels:
           severity: critical
@@ -137,9 +139,9 @@ groups:
         annotations:
           summary: "node_exporter on {{ $labels.instance }} could not read a textfile: its series are missing, and the rules above go blind for it."
       - alert: RegaliaNodeExporterDown
-        expr: up{job="regalia-node"} == 0
+        expr: up{job=~"regalia-node|regalia-authority"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: The node's metrics cannot be scraped; every rule here is blind for it.
+          summary: "{{ $labels.instance }}'s metrics cannot be scraped (a node, or the authority's host); every rule here is blind for it."

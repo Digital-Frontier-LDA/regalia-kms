@@ -35,13 +35,32 @@ IPv6 on every other interface stays dropped, in both directions.
 
 host_probe.py measures the loaded table (firewall_default_deny); network_probe.py checks the result
 from each zone. The rendered text is deterministic, so a reviewed copy can be compared byte for byte.
+
+THE REVOCATION AUTHORITY'S HOST (#324): `table inet regalia_authority`, from its own site file
+(sitecfg.validate_authority), authority.json and the membership chain it publishes:
+
+    python3 -Es -m deploy.baremetal.firewall --authority /etc/regalia/authority-site.json [--authority-config /etc/regalia/authority.json] [--apply]
+
+  input   loopback; established/related; WireGuard (UDP listen_port) from the nodes of the manifest only, at their
+          authority.json underlays (a node retired or marked stolen is not one); inside wg-svc, only new sync
+          requests and the rest of them, from the tunnel's prefix; node_exporter (9100) from monitoring_cidrs; SSH
+          and ping from admin_cidrs; nothing else (IPv6 only on wg-svc)
+  output  loopback; established/related; inside wg-svc, only this host's answers (the authority asks nobody);
+          WireGuard to the nodes of the manifest; each `outbound`; NTS-KE and NTP to the time.nts networks only
+  forward dropped
+Refused unless the site's NTS servers are authority.json's time_servers. --apply (root, units/regalia-authority-
+firewall.service, run again by its .path at every new chain) checks it with nft -c, loads it, and installs it as
+/etc/nftables.d/regalia-authority.nft. e2e/authority-firewall-netns.sh proves it by behaviour.
 """
 import argparse
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import sitecfg  # noqa: E402
+try:                                     # one module, so one InvalidSite, whichever way this file is loaded
+    from deploy.baremetal import sitecfg
+except ImportError:                      # run as a script from its directory (README): the package is not on the path
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import sitecfg  # noqa: E402
 
 TABLE = "regalia_kms"
 
@@ -133,16 +152,144 @@ table inet %(table)s {
        "service_in": service_in, "service_out": service_out, "service_udp_in": service_udp_in, "service_udp_out": service_udp_out}
 
 
+# ---- the revocation authority's host (#324) ----
+
+AUTHORITY_TABLE = "regalia_authority"
+AUTHORITY_INTERFACE = "wg-svc"             # wgsvc.INTERFACE: the authority's one tunnel (a test holds them equal)
+TERMINAL = ("RETIRED", "REVOKED_STOLEN")    # membership.TERMINAL: a node in either is no peer (a test holds them equal)
+
+
+def authority_peers(manifest, underlays):
+    """The nodes' underlay addresses the authority's WireGuard may talk to: every node of the signed manifest that is
+    not in a terminal state and has an underlay in authority.json, as wgsvc.conf makes them its peers. A node the
+    root retires or the revocation key marks stolen drops out of the table when it drops out of the tunnel."""
+    return sorted({underlays[n["node_id"]] for n in manifest["nodes"] if n["state"] not in TERMINAL and n["node_id"] in underlays},
+                  key=lambda a: tuple(int(x) for x in a.split(".")))
+
+
+def render_authority(site, cfg, manifest):
+    """The authority host's table, default-deny both ways, from its site file (sitecfg.validate_authority), its
+    authority.json (`cfg`, validated: listen_port, sync_port, underlays, time_servers) and the manifest it holds.
+    Refused (InvalidSite) if the site's NTS servers are not authority.json's time_servers: chrony's configuration
+    and these rules are rendered from the two, and must name the same servers (#303)."""
+    names = [server["name"] for server in site["time"]["nts"]]
+    sitecfg.require(sorted(names) == sorted(cfg["time_servers"]), "the site's NTS servers (%s) are not authority.json's time_servers "
+                    "(%s): chrony would use other servers than the firewall lets it reach" % (", ".join(sorted(names)), ", ".join(sorted(cfg["time_servers"]))))
+    host, wg, sync, prefix, iface = site["host_ipv4"], cfg["listen_port"], cfg["sync_port"], sitecfg.SERVICE_PREFIX, AUTHORITY_INTERFACE
+    peers = authority_peers(manifest, cfg["underlays"])
+    # the authority answers sync requests and makes none (sync.Server only): new requests in, its answers out
+    tunnel_in = (
+        "    iifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d tcp flags & (fin | syn | rst | ack) == syn ct state new accept comment \"service mesh: a new sync request, inside the tunnel\"\n"
+        "    iifname \"%s\" ip6 saddr %s ip6 daddr %s tcp dport %d ct state established accept comment \"service mesh: the rest of a sync request\"\n"
+        "    iifname \"%s\" drop comment \"service mesh: nothing else inside the tunnel\"\n" % (iface, prefix, prefix, sync, iface, prefix, prefix, sync, iface))
+    tunnel_out = (
+        "    oifname \"%s\" ip6 saddr %s ip6 daddr %s tcp sport %d ct state established accept comment \"service mesh: this host's answers\"\n"
+        "    oifname \"%s\" drop comment \"service mesh: nothing else leaves by the tunnel (the authority asks nobody)\"\n" % (iface, prefix, prefix, sync, iface))
+    wg_in = wg_out = ""
+    if peers:
+        wg_in = "    ip daddr %s udp dport %d ip saddr %s accept comment \"service mesh: WireGuard, from the nodes of the manifest\"\n" % (host, wg, _set(p + "/32" for p in peers))
+        wg_out = "    ip daddr %s udp dport %d accept comment \"service mesh: WireGuard, to the nodes of the manifest\"\n" % (_set(p + "/32" for p in peers), wg)
+    out_rules = "\n".join(
+        ["    ip daddr %s %s dport %d accept comment \"%s\"" % (o["cidr"], o["proto"], o["port"], o["name"]) for o in site["outbound"]] +
+        ["    ip daddr %s %s dport %d accept comment \"time: %s, %s\"" % (_set(server["cidrs"]), proto, port, server["name"],
+                                                                         "NTS-KE" if proto == "tcp" else "NTP")
+         for server in site["time"]["nts"] for proto, port in sitecfg.NTS_PORTS])
+    return """# Generated by deploy/baremetal/firewall.py --authority from the %(site)s authority site config and membership epoch %(epoch)d. Do not edit by hand.
+table inet %(table)s
+delete table inet %(table)s
+table inet %(table)s {
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iif "lo" accept
+%(tunnel_in)s    meta nfproto ipv6 drop
+    ct state invalid drop
+    ct state established,related accept
+%(wg_in)s    ip daddr %(host)s tcp dport %(metrics)d ip saddr %(monitors)s accept comment "node metrics: monitoring only (#305)"
+    ip daddr %(host)s tcp dport %(ssh)d ip saddr %(admins)s accept comment "ssh: admin only"
+    ip saddr %(admins)s icmp type echo-request accept comment "ping: admin only"
+    icmp type { destination-unreachable, time-exceeded } accept comment "path MTU discovery"
+  }
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+  }
+  chain output {
+    type filter hook output priority filter; policy drop;
+    oif "lo" accept
+%(tunnel_out)s    meta nfproto ipv6 drop
+    ct state invalid drop
+    ct state established,related accept
+%(wg_out)s%(out_rules)s
+    icmp type { destination-unreachable, time-exceeded } accept comment "path MTU discovery"
+  }
+}
+""" % {"site": site["site"], "epoch": manifest["epoch"], "table": AUTHORITY_TABLE, "host": host, "ssh": site["ssh_port"],
+       "metrics": sitecfg.NODE_EXPORTER_PORT, "monitors": _set(site["monitoring_cidrs"]), "admins": _set(site["admin_cidrs"]),
+       "tunnel_in": tunnel_in, "tunnel_out": tunnel_out, "wg_in": wg_in, "wg_out": wg_out, "out_rules": out_rules}
+
+
+NFT_DIR = "/etc/nftables.d"
+AUTHORITY_RULES = "regalia-authority.nft"
+
+
+def apply_authority(text, run, directory=NFT_DIR):
+    """Load `text` as the authority's table, as a node's is loaded (README): checked by nft -c, loaded by nft -f, then
+    installed for the next boot under its name, atomically. Nothing is loaded or installed if the check fails."""
+    import tempfile
+    fd, staged = tempfile.mkstemp(dir=directory, prefix=".regalia-authority.")      # not *.nft: never included half-written
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(staged, 0o644)
+        for argv, what in ((["nft", "-c", "-f", staged], "nft -c refused the rendered table"), (["nft", "-f", staged], "nft -f failed")):
+            done = run(argv, capture_output=True, text=True, timeout=30)
+            sitecfg.require(done.returncode == 0, "%s (exit %s): %s" % (what, done.returncode, (done.stderr or "").strip()[:300]))
+        os.replace(staged, os.path.join(directory, AUTHORITY_RULES))
+    finally:
+        if os.path.exists(staged):
+            os.unlink(staged)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("config", help="the site config JSON")
+    ap.add_argument("config", nargs="?", help="the site config JSON (a KMS node)")
+    ap.add_argument("--authority", metavar="AUTHORITY-SITE.json", help="render the revocation authority host's table from its site file, with "
+                    "--authority-config and the manifest the authority holds")
+    ap.add_argument("--authority-config", default="/etc/regalia/authority.json", metavar="authority.json")
+    ap.add_argument("--apply", action="store_true", help="with --authority: check, load and install it (root; the unit's)")
     args = ap.parse_args(argv)
+    if args.authority:
+        return _authority_main(args)
+    if args.config is None or args.apply:
+        ap.error("give a node's site config, or --authority (and --apply only with it)")
     try:
         cfg = sitecfg.load(args.config)
     except (OSError, sitecfg.InvalidSite) as error:
         print("REFUSED: %s" % error, file=sys.stderr)
         return 2
     sys.stdout.write(render(cfg))
+    return 0
+
+
+def _authority_main(args):
+    import subprocess
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from deploy.baremetal import authority, membership                      # noqa: E402 - only the authority's host needs them
+    try:
+        site = sitecfg.load_authority(args.authority)
+        with open(args.authority_config, "rb") as f:
+            cfg = authority.validate(membership.load(f.read(1 << 20), 1 << 20))
+        manifest = authority.held_chain(cfg, subprocess.run)      # the published chain, verified from the root and the TPM anchor
+        text = render_authority(site, cfg, manifest)
+        if args.apply:
+            apply_authority(text, subprocess.run)
+            print("loaded %s for epoch %d (%d node underlays)" % (AUTHORITY_TABLE, manifest["epoch"], len(authority_peers(manifest, cfg["underlays"]))))
+            return 0
+    except (OSError, sitecfg.InvalidSite, membership.Refused) as error:
+        print("REFUSED: %s" % error, file=sys.stderr)
+        return 2
+    sys.stdout.write(text)
     return 0
 
 

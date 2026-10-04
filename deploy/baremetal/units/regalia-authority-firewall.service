@@ -1,0 +1,65 @@
+# /etc/systemd/system/regalia-authority-firewall.service, on the revocation authority's host only (#324).
+# The host's nftables table, default-deny both ways (deploy/baremetal/firewall.py render_authority): rendered from
+# /etc/regalia/authority-site.json, authority.json and the chain the authority publishes (verified from the root
+# key and against the TPM anchor, as wg-apply reads it), checked with nft -c, loaded, and installed in
+# /etc/nftables.d for the next boot. Run again by regalia-authority-firewall.path whenever the chain changes, so a
+# node the root retires or the revocation key marks stolen leaves the table with the tunnel. regalia-authority-
+# wg-apply.service's unit in all but its command and the one directory it writes (tests/test_baremetal_units.py).
+[Unit]
+Description=Regalia KMS: the authority host's firewall, from its site file and the manifest
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=network-online.target
+Wants=network-online.target
+
+# Triggered by a file regalia-authority writes: a burst of triggers must not stop the path unit (every run
+# re-verifies the chain, so running again is harmless).
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip and tpm2_* are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.firewall --authority /etc/regalia/authority-site.json --authority-config /etc/regalia/authority.json --apply
+ReadWritePaths=/etc/nftables.d
+User=root
+# the TPM (the anchor the published chain is checked against) is the tss group's: root without
+# CAP_DAC_OVERRIDE is held to file modes like anyone
+SupplementaryGroups=tss
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+# it configures the network and sends nothing on it
+IPAddressDeny=any
+# a run that hangs (a TPM call that does not return) must not absorb every later trigger
+TimeoutStartSec=60
+# A failed run (a transient TPM error, the 60 s timeout, a published chain behind the TPM anchor) leaves the
+# tunnel DOWN; without a retry it would stay down until the chain next
+# changes. Every run re-verifies the chain, and a run that keeps failing keeps the tunnel down, so
+# retrying is safe. It never reaches `failed` while it retries: watch the journal or NRestarts, not
+# --failed.
+Restart=on-failure
+RestartSec=15s
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

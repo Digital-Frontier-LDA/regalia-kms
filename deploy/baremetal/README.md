@@ -986,8 +986,23 @@ it (`service_mesh.authority`).
   `run_dir` must be `/run/regalia` (validated: the unit's only writable directory, root's);
   `units/regalia-authority.tmpfiles.conf` and `regalia-authority.sysusers.conf` make its directories and groups.
   Without authenticated time the authority signs nothing (fail closed; each transition on the time trail, #303).
-  **Not yet on the authority host:** an egress firewall behind chrony's NTS-only sources (a node's comes from
-  `firewall.py`; there is no authority-host ruleset yet), and node_exporter scraping its metrics. Both are follow-ups.
+- **Firewall (#324):** the host's own site file, `/etc/regalia/authority-site.json`
+  (`regalia.authority-site/v1`, `authority-site.example.json`, validated with a node's checks for every field they
+  share: its address, `ssh_port`, `admin_cidrs`, `monitoring_cidrs`, `outbound` with the audit sink, and `time.nts`
+  with each server's networks; no KMS port, no mesh). `units/regalia-authority-firewall.service` (root, CAP_NET_ADMIN,
+  the authority's wg-apply sandbox) renders `table inet regalia_authority` with `firewall.py --authority`, default-deny
+  both ways: WireGuard from and to the nodes of the published chain only (each at its `authority.json` underlay; a
+  node retired or marked stolen leaves the table with the tunnel), inside `wg-svc` only sync requests in and their
+  answers out (the authority asks nobody), node_exporter (9100) from `monitoring_cidrs`, SSH and ping from
+  `admin_cidrs`, NTS-KE and NTP to the `time.nts` networks only, the declared `outbound`, nothing else. Rendering is
+  refused unless `time.nts` names exactly `authority.json`'s `time_servers` (chrony and the firewall must name the
+  same servers). It is checked with `nft -c`, loaded, and installed as `/etc/nftables.d/regalia-authority.nft`, and
+  run again by `regalia-authority-firewall.path` at every new chain.
+- **Metrics (#324):** node_exporter on the authority host as on a node: the same drop-in
+  (`units/prometheus-node-exporter.service.d/regalia.conf`) and mTLS `web.yml`, scraped as job `regalia-authority`.
+  Its one textfile is `authtime.prom` (`/run/regalia-metrics/authtime`, from `regalia-authority.tmpfiles.conf`).
+  The time, latch and textfile rules watch it as a node; `RegaliaAuthtimeMetricsMissing` and
+  `RegaliaNodeExporterDown` take both jobs; the heartbeat and lease file rules are a node's only.
 - **What root reads:** the store (`membership.json`) is the service user's alone, 0600. `serve` publishes the
   verified chain as `chain.json` (0644) after `init`, `accept` and every revocation's commit, at its start and at
   every beat; `wg-apply` reads that, verifying it from the root key and against the TPM anchor, as a node's

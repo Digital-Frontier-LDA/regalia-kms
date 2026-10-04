@@ -1,0 +1,15 @@
+{
+  "schema": "regalia.authority-site/v1",
+  "site": "authority",
+  "host_ipv4": "203.0.113.50",
+  "ssh_port": 22,
+  "monitoring_cidrs": ["203.0.113.128/32"],
+  "admin_cidrs": ["203.0.113.0/28"],
+  "outbound": [
+    {"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514}
+  ],
+  "time": {"nts": [
+    {"name": "nts.netnod.se", "cidrs": ["194.58.200.0/24"]},
+    {"name": "time.cloudflare.com", "cidrs": ["162.159.200.0/24"]}
+  ]}
+}

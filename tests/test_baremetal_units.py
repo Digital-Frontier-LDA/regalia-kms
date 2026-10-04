@@ -171,6 +171,20 @@ class Units(unittest.TestCase):
                          "/var/lib/%s/%s" % (unit("regalia-authority.service")["Service"]["StateDirectory"], node.PUBLISHED))
         self.assertEqual(unit("regalia-authority-wg-apply.path")["Path"]["Unit"], "regalia-authority-wg-apply.service")
 
+    def test_the_authority_host_s_firewall_is_rendered_as_its_tunnel_is_applied(self):
+        """#324: the authority host's firewall unit is its wg-apply unit (root, CAP_NET_ADMIN only, the same sandbox,
+        the TPM to verify the chain) in all but its command and the one directory it writes, and it is run again,
+        as wg-apply is, whenever the chain the authority publishes changes."""
+        wg, fw = unit("regalia-authority-wg-apply.service"), unit("regalia-authority-firewall.service")
+        differ = ("ExecStart", "ReadWritePaths")
+        self.assertEqual({k: v for k, v in fw["Service"].items() if k not in differ}, {k: v for k, v in wg["Service"].items() if k not in differ})
+        self.assertNotIn("ReadWritePaths", wg["Service"])
+        self.assertEqual(fw["Service"]["ReadWritePaths"], "/etc/nftables.d")
+        self.assertIn("-m deploy.baremetal.firewall --authority /etc/regalia/authority-site.json --authority-config /etc/regalia/authority.json --apply",
+                      fw["Service"]["ExecStart"])
+        self.assertEqual(unit("regalia-authority-firewall.path")["Path"]["PathChanged"], unit("regalia-authority-wg-apply.path")["Path"]["PathChanged"])
+        self.assertEqual(unit("regalia-authority-firewall.path")["Path"]["Unit"], "regalia-authority-firewall.service")
+
     def test_the_authority_host_s_authtime_is_a_node_s_from_its_own_configuration(self):
         """#71: the authority signs only under authenticated time, so its host runs regalia-authtime's unit in all
         but its command and configuration file, and makes the same directories (root's /run/regalia)."""
@@ -190,8 +204,9 @@ class Units(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_the_units_and_scores_them_well_exposed_at_most_a_little(self):
-        paths = [str(UNITS / (name + ".service")) for name in SERVICES + ("regalia-authority-wg-apply", "regalia-authority-authtime")] + \
-            [str(UNITS / "regalia-wg-apply.path"), str(UNITS / "regalia-authority-wg-apply.path")]
+        paths = [str(UNITS / (name + ".service")) for name in SERVICES + ("regalia-authority-wg-apply", "regalia-authority-authtime",
+                                                                          "regalia-authority-firewall")] + \
+            [str(UNITS / "regalia-wg-apply.path"), str(UNITS / "regalia-authority-wg-apply.path"), str(UNITS / "regalia-authority-firewall.path")]
         done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no"] + paths, capture_output=True, text=True)
         problems = [line for line in done.stderr.splitlines() if "chrony.service" not in line and "network-online" not in line and line.strip()]
         self.assertEqual(problems, [])

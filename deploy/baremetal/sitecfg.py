@@ -136,9 +136,19 @@ def validate(doc):
         for c in cfg["client_cidrs"] + cfg["monitoring_cidrs"]:
             require(not ipaddress.ip_network(a).overlaps(ipaddress.ip_network(c)),
                     "admin network %s overlaps the KMS-caller network %s: zones must be disjoint" % (a, c))
-    require(isinstance(doc["outbound"], list) and doc["outbound"], "outbound must list the audit sink at least")
-    names = set()
-    for i, o in enumerate(doc["outbound"]):
+    cfg["outbound"] = _outbound(doc["outbound"])
+    cfg["time"] = _time(doc["time"])
+    cfg["boot_mesh"] = _boot_mesh(doc["boot_mesh"], cfg)
+    cfg["service_mesh"] = _service_mesh(doc["service_mesh"], cfg)
+    return cfg
+
+
+def _outbound(outbound):
+    """The only destinations the host may reach: each a unique short name, one network, a protocol and a port; the
+    audit sink among them; never the time ports (rendered from `time` alone)."""
+    require(isinstance(outbound, list) and outbound, "outbound must list the audit sink at least")
+    names, out = set(), []
+    for i, o in enumerate(outbound):
         require(isinstance(o, dict) and set(o) == set(OUTBOUND_KEYS), "outbound[%d] needs exactly %s" % (i, list(OUTBOUND_KEYS)))
         require(isinstance(o["name"], str) and re.fullmatch(r"[a-z0-9-]{1,32}", o["name"]) and o["name"] not in names,
                 "outbound[%d].name must be a unique short name" % i)
@@ -146,13 +156,10 @@ def validate(doc):
         require(o["proto"] in ("tcp", "udp"), "outbound[%d].proto must be tcp or udp" % i)
         require((o["proto"], o["port"]) not in NTS_PORTS, "outbound[%d] opens %s/%s: time traffic is rendered from `time` "
                 "(NTS only, to its servers), never opened here: no plain-NTP fallback" % (i, o["proto"], o["port"]))
-        cfg["outbound"].append({"name": o["name"], "cidr": _networks([o["cidr"]], "outbound[%d].cidr" % i)[0],
-                                "proto": o["proto"], "port": _port(o["port"], "outbound[%d].port" % i)})
+        out.append({"name": o["name"], "cidr": _networks([o["cidr"]], "outbound[%d].cidr" % i)[0],
+                    "proto": o["proto"], "port": _port(o["port"], "outbound[%d].port" % i)})
     require("audit" in names, "outbound must include the 'audit' sink")
-    cfg["time"] = _time(doc["time"])
-    cfg["boot_mesh"] = _boot_mesh(doc["boot_mesh"], cfg)
-    cfg["service_mesh"] = _service_mesh(doc["service_mesh"], cfg)
-    return cfg
+    return out
 
 
 def _time(time_):
@@ -294,6 +301,47 @@ def _unique(pairs):
         require(k not in out, "duplicate field %r in the site config" % k)
         out[k] = v
     return out
+
+
+# ---- the revocation authority's host (#324) ----
+# The authority host serves no KMS port and is in no boot mesh: its own address, who may reach SSH and node_exporter,
+# where it may send (the audit sink), and its NTS servers. Its tunnel (where the nodes are, its WireGuard and sync
+# ports) is authority.json's, and WHICH nodes are peers is the signed manifest's (firewall.render_authority).
+AUTHORITY_SCHEMA = "regalia.authority-site/v1"
+AUTHORITY_KEYS = ("schema", "site", "host_ipv4", "ssh_port", "monitoring_cidrs", "admin_cidrs", "outbound", "time")
+
+
+def validate_authority(doc):
+    """The authority host's site file, with the node's own checks for every field they share."""
+    require(isinstance(doc, dict), "the authority site config must be a JSON object")
+    missing, unknown = set(AUTHORITY_KEYS) - set(doc), set(doc) - set(AUTHORITY_KEYS)
+    require(not missing and not unknown, "authority site fields mismatch: missing=%s unknown=%s" % (sorted(missing), sorted(unknown)))
+    require(doc["schema"] == AUTHORITY_SCHEMA, "schema must be %s" % AUTHORITY_SCHEMA)
+    require(isinstance(doc["site"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", doc["site"]), "site must be a short lowercase name")
+    try:
+        host = ipaddress.IPv4Address(doc["host_ipv4"])
+    except (TypeError, ValueError):
+        raise InvalidSite("host_ipv4 must be an IPv4 address")
+    require(not (host.is_unspecified or host.is_loopback or host.is_multicast), "host_ipv4 must be a host address")
+    ssh = _port(doc["ssh_port"], "ssh_port")
+    require(ssh != NODE_EXPORTER_PORT, "ssh_port must not be %d, node_exporter's (#305)" % NODE_EXPORTER_PORT)
+    cfg = {"schema": AUTHORITY_SCHEMA, "site": doc["site"], "host_ipv4": str(host), "ssh_port": ssh,
+           "monitoring_cidrs": _networks(doc["monitoring_cidrs"], "monitoring_cidrs"), "admin_cidrs": _networks(doc["admin_cidrs"], "admin_cidrs")}
+    for a in cfg["admin_cidrs"]:                  # the zones carry different permissions, as on a node
+        for c in cfg["monitoring_cidrs"]:
+            require(not ipaddress.ip_network(a).overlaps(ipaddress.ip_network(c)),
+                    "admin network %s overlaps the monitoring network %s: zones must be disjoint" % (a, c))
+    cfg["outbound"] = _outbound(doc["outbound"])
+    cfg["time"] = _time(doc["time"])
+    return cfg
+
+
+def load_authority(path):
+    with open(path, encoding="utf-8") as f:
+        try:
+            return validate_authority(json.load(f, object_pairs_hook=_unique))
+        except json.JSONDecodeError as error:
+            raise InvalidSite("not valid JSON: %s" % error)
 
 
 def load(path):

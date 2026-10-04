@@ -1,0 +1,11 @@
+# Re-run regalia-authority-firewall whenever the authority publishes a new chain (after init, accept, and every
+# revocation's commit): a revoked node leaves the authority host's firewall with the manifest that says so (#324).
+[Unit]
+Description=Regalia KMS: re-render the authority host's firewall when the membership chain changes
+
+[Path]
+PathChanged=/var/lib/regalia-authority/chain.json
+Unit=regalia-authority-firewall.service
+
+[Install]
+WantedBy=multi-user.target

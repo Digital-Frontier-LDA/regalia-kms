@@ -87,6 +87,14 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends nftables iproute2 wireguard-tools
           sudo bash e2e/baremetal-firewall-netns.sh
 
+      - name: The revocation authority host's firewall, by behaviour, in network namespaces (#324)
+        # Its default-deny table, loaded only inside a throwaway namespace: each opening from its zone, egress to the
+        # audit sink and NTS only, WireGuard to and from the manifest's nodes, and a stolen node refused once revoked.
+        run: |
+          sudo bash e2e/authority-firewall-netns.sh | tee "$RUNNER_TEMP/authority-firewall.log"
+          grep -q '^authority-firewall-netns: 37 passed, 0 failed$' "$RUNNER_TEMP/authority-firewall.log" || {
+            echo "::error::the authority firewall test did not pass all 37 checks" >&2; exit 1; }
+
       - name: python guards (deploy, custody manifest, alert rules, e2e wiring)
         # The Go suite does not cover the deployment tooling, the custody-manifest validator, the
         # alert rules or the documentation contracts — those are Python, and they gate the same

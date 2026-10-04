@@ -28,6 +28,7 @@ HEARTBEAT = "/run/regalia-metrics/sync/heartbeat.prom"
 LEASE = "/run/regalia-metrics/admission/lease.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
 NODE_A, NODE_B = {"instance": "a:9100", "job": "regalia-node"}, {"instance": "b:9100", "job": "regalia-node"}
+AUTHORITY_HOST = {"instance": "authority:9100", "job": "regalia-authority"}      # the revocation authority's host (#324)
 
 # Cases a single fault/healthy pair cannot show, each with exactly the alerts expected (labels beyond the rule's).
 EXTRA = [
@@ -71,6 +72,16 @@ EXTRA = [
     ("RegaliaHeartbeatRunningOut", "a 24-hour lifetime, issued 2 h 10 min ago: the age alert's case, not this one", 120,
      [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "78600+0x5"),
       ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")], []),
+    # #324, the authority's host: its authtime file is watched as a node's; it has no heartbeat or lease file, and is
+    # never paged for not having one; it being unscrapeable pages as a node's does
+    ("RegaliaAuthtimeMetricsMissing", "the authority's host without authtime.prom", 420,
+     [("up", AUTHORITY_HOST, "1+0x10")], [AUTHORITY_HOST]),
+    ("RegaliaHeartbeatMetricsMissing", "the authority's host has no heartbeat.prom, and needs none", 420,
+     [("up", AUTHORITY_HOST, "1+0x10"), ("node_textfile_mtime_seconds", dict(AUTHORITY_HOST, file=AUTHTIME), "0+60x10")], []),
+    ("RegaliaLeaseMetricsMissing", "the authority's host has no lease.prom, and needs none", 420,
+     [("up", AUTHORITY_HOST, "1+0x10"), ("node_textfile_mtime_seconds", dict(AUTHORITY_HOST, file=AUTHTIME), "0+60x10")], []),
+    ("RegaliaNodeExporterDown", "the authority's host cannot be scraped", 300,
+     [("up", AUTHORITY_HOST, "0+0x10")], [AUTHORITY_HOST]),
     # the authtime file missing on one node only: that node alone
     ("RegaliaAuthtimeMetricsMissing", "two nodes: only the one without the file", 420,
      [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10"),

@@ -3,9 +3,11 @@ nftables ruleset rendered from it. Behaviour is proven separately in network nam
 (e2e/baremetal-firewall-netns.sh); these pin the config contract and the rendered text."""
 import copy
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -283,6 +285,117 @@ class ServiceMesh(unittest.TestCase):
             self.skipTest("nft -c needs CAP_NET_ADMIN here")
         self.assertEqual(r.returncode, 0, r.stderr)
 
+
+
+AUTHORITY_EXAMPLE = EXAMPLE.with_name("authority-site.example.json")
+
+
+class AuthorityHost(unittest.TestCase):
+    """#324: the revocation authority's host, default-deny both ways, from its own site file, authority.json and the
+    signed manifest it holds."""
+    def setUp(self):
+        self.site = sitecfg.validate_authority(json.loads(AUTHORITY_EXAMPLE.read_text()))
+        self.cfg = {"listen_port": 51821, "sync_port": 7444, "time_servers": ["nts.netnod.se", "time.cloudflare.com"],
+                    "underlays": {"a": "192.0.2.10", "b": "192.0.2.20", "c": "192.0.2.30"}}
+        self.manifest = {"epoch": 4, "nodes": [{"node_id": "a", "state": "ACTIVE"}, {"node_id": "b", "state": "MAINTENANCE"},
+                                                {"node_id": "c", "state": "ACTIVE"}]}
+
+    def text(self, manifest=None):
+        return firewall.render_authority(self.site, self.cfg, manifest or self.manifest)
+
+    def test_the_site_file_is_checked_as_a_node_s_fields_are(self):
+        doc = json.loads(AUTHORITY_EXAMPLE.read_text())
+        for label, change, reason in (
+                ("a KMS port: the authority serves none", {"kms_port": 8443}, "unknown=['kms_port']"),
+                ("a mesh: its tunnel is authority.json's", {"service_mesh": None}, "unknown=['service_mesh']"),
+                ("no audit sink", {"outbound": [{"name": "dns", "cidr": "203.0.113.194/32", "proto": "udp", "port": 53}]}, "must include the 'audit' sink"),
+                ("plain NTP opened by hand", {"outbound": doc["outbound"] + [{"name": "ntp", "cidr": "0.0.0.0/0", "proto": "udp", "port": 123}]},
+                 "no plain-NTP fallback"),
+                ("ssh on node_exporter's port", {"ssh_port": 9100}, "must not be 9100"),
+                ("admin overlapping monitoring", {"admin_cidrs": ["203.0.113.128/25"]}, "zones must be disjoint"),
+                ("a wide NTS network", {"time": {"nts": [{"name": "nts.netnod.se", "cidrs": ["194.58.0.0/16"]},
+                                                          {"name": "time.cloudflare.com", "cidrs": ["162.159.200.0/24"]}]}}, "/24")):
+            with self.subTest(label):
+                with self.assertRaises(sitecfg.InvalidSite) as caught:
+                    sitecfg.validate_authority(dict(doc, **change))
+                self.assertIn(reason, str(caught.exception))
+
+    def test_default_deny_both_ways_and_each_opening_from_its_zone(self):
+        text = self.text()
+        for hook in ("input", "forward", "output"):
+            self.assertIn("type filter hook %s priority filter; policy drop;" % hook, text)
+        self.assertIn('ip daddr 203.0.113.50 tcp dport 9100 ip saddr { 203.0.113.128/32 } accept comment "node metrics: monitoring only (#305)"', text)
+        self.assertIn('ip daddr 203.0.113.50 tcp dport 22 ip saddr { 203.0.113.0/28 } accept comment "ssh: admin only"', text)
+        self.assertIn('ip daddr 203.0.113.192/32 tcp dport 6514 accept comment "audit"', text)
+        for name, net in (("nts.netnod.se", "194.58.200.0/24"), ("time.cloudflare.com", "162.159.200.0/24")):
+            self.assertIn('ip daddr { %s } tcp dport 4460 accept comment "time: %s, NTS-KE"' % (net, name), text)
+            self.assertIn('ip daddr { %s } udp dport 123 accept comment "time: %s, NTP"' % (net, name), text)
+        # WireGuard from and to the nodes; sync in; metrics; ssh; audit; 2 per NTS server: nothing else opens
+        self.assertEqual(text.count(" dport ") + text.count(" sport "), 2 + 2 + 1 + 1 + 1 + 4 + 1)
+        self.assertNotIn("kms", text.lower().replace("regalia-kms", ""))
+        self.assertEqual(text, self.text())                                    # deterministic
+
+    def test_the_tunnel_takes_sync_requests_and_sends_only_answers(self):
+        """sync.Server only: the authority asks nobody, so nothing starts a connection out of the tunnel."""
+        text = self.text()
+        self.assertIn('iifname "wg-svc" ip6 saddr fd72:6567:6c61::/48 ip6 daddr fd72:6567:6c61::/48 tcp dport 7444 tcp flags', text)
+        self.assertIn('oifname "wg-svc" ip6 saddr fd72:6567:6c61::/48 ip6 daddr fd72:6567:6c61::/48 tcp sport 7444 ct state established accept', text)
+        self.assertNotIn('oifname "wg-svc" ip6 saddr fd72:6567:6c61::/48 ip6 daddr fd72:6567:6c61::/48 tcp dport', text)
+        self.assertIn('oifname "wg-svc" drop', text)
+        self.assertIn('iifname "wg-svc" drop', text)
+
+    def test_the_nodes_are_the_manifest_s_and_a_stolen_one_drops_out(self):
+        text = self.text()
+        self.assertIn('ip daddr 203.0.113.50 udp dport 51821 ip saddr { 192.0.2.10/32, 192.0.2.20/32, 192.0.2.30/32 } accept', text)
+        self.assertIn('ip daddr { 192.0.2.10/32, 192.0.2.20/32, 192.0.2.30/32 } udp dport 51821 accept', text)
+        stolen = dict(self.manifest, epoch=5, nodes=[dict(n, state="REVOKED_STOLEN") if n["node_id"] == "b" else n for n in self.manifest["nodes"]])
+        text = self.text(stolen)
+        self.assertNotIn("192.0.2.20", text)
+        self.assertIn("membership epoch 5", text)
+        # a node of the manifest with no underlay here, and an underlay of a node the manifest does not name: neither opens
+        self.cfg["underlays"] = {"a": "192.0.2.10", "z": "192.0.2.99"}
+        self.assertNotIn("192.0.2.99", self.text())
+        self.assertNotIn("192.0.2.30", self.text())
+        # no node at all: no WireGuard rule (an empty set is not valid nft), the rest unchanged
+        self.cfg["underlays"] = {}
+        self.assertNotIn("udp dport 51821", self.text())
+
+    def test_chrony_and_the_firewall_must_name_the_same_servers(self):
+        self.cfg["time_servers"] = ["nts.netnod.se", "ptbtime1.ptb.de"]
+        with self.assertRaises(sitecfg.InvalidSite) as caught:
+            self.text()
+        self.assertIn("are not authority.json's time_servers", str(caught.exception))
+
+    def test_the_copies_of_shared_names_are_held_equal(self):
+        from deploy.baremetal import membership, wgsvc
+        self.assertEqual(firewall.TERMINAL, membership.TERMINAL)
+        self.assertEqual(firewall.AUTHORITY_INTERFACE, wgsvc.INTERFACE)
+
+    def test_apply_loads_only_what_nft_accepted_and_installs_it_whole(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        calls = []
+
+        def nft(code):
+            def run(argv, **kw):
+                calls.append(argv[:2])
+                return subprocess.CompletedProcess(argv, code if argv[1] == "-c" else 0, "", "syntax error" if code else "")
+            return run
+        with self.assertRaises(sitecfg.InvalidSite):
+            firewall.apply_authority(self.text(), nft(1), d)
+        self.assertEqual((calls, os.listdir(d)), ([["nft", "-c"]], []))
+        calls.clear()
+        firewall.apply_authority(self.text(), nft(0), d)
+        self.assertEqual((calls, os.listdir(d)), ([["nft", "-c"], ["nft", "-f"]], [firewall.AUTHORITY_RULES]))
+        with open(os.path.join(d, firewall.AUTHORITY_RULES)) as f:
+            self.assertEqual(f.read(), self.text())
+
+    @unittest.skipUnless(shutil.which("nft"), "nft not installed")
+    def test_nft_accepts_the_syntax(self):
+        r = subprocess.run(["nft", "-c", "-f", "-"], input=self.text(), capture_output=True, text=True)
+        if "Operation not permitted" in r.stderr:
+            self.skipTest("nft -c needs CAP_NET_ADMIN here")
+        self.assertEqual(r.returncode, 0, r.stderr)
 
 if __name__ == "__main__":
     unittest.main()
