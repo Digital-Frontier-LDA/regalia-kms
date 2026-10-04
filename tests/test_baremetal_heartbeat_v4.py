@@ -1,0 +1,85 @@
+"""Heartbeats under a v4 manifest (#199): signed by a quorum of the nodes and the owner, the owner's an emergency
+credential with a short life. The membership side (counting_parties, meets, the v4 fields) is #350's."""
+import unittest
+
+from deploy.baremetal import heartbeat as hb
+from deploy.baremetal import membership as m
+from tests.test_baremetal_membership_v4 import A, B, C, NODE_KEYS, O1, O2, OWNER_KEYS, STRANGER, manifest4, nodes4, p256_sig, pub
+
+T0 = 1790000000
+
+
+def stamp(seconds):
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
+
+
+def body(man, sequence=7, lifetime=3600, issued=T0):
+    return {"schema": hb.SCHEMA, "epoch": man["epoch"], "sequence": sequence, "issued_at": stamp(issued),
+            "expires_at": stamp(issued + lifetime), "manifest_digest": m.digest(man)}
+
+
+def quorum(heartbeat, *signers, high=False):
+    message = hb.DOMAIN + m.canonical(heartbeat)
+    return {"heartbeat": heartbeat, "signatures": [{"party": party, "key": pub(key), "sig": p256_sig(key, message, high)}
+                                                   for party, key in signers]}
+
+
+class Quorum(unittest.TestCase):
+    def setUp(self):
+        self.man = manifest4(1, "", nodes4())
+
+    def refused(self, reason, *args):
+        with self.assertRaises(m.Refused) as caught:
+            hb.verify(*args)
+        self.assertIn(reason, str(caught.exception))
+
+    def test_two_nodes_keep_it_fresh(self):
+        heartbeat = body(self.man, lifetime=21600)
+        self.assertEqual(hb.verify(quorum(heartbeat, A, B), self.man), heartbeat)
+        self.assertEqual(hb.signed_by(quorum(heartbeat, B, C), self.man)[3], {"b", "c"})
+
+    def test_a_node_and_the_owner_mixed_algorithms_for_an_hour_at_most(self):
+        """The total-outage recovery: the node opened by hand (TPM P-256) and the operator's approval key (Ed25519)."""
+        short = body(self.man, lifetime=3600)
+        self.assertEqual(hb.verify(quorum(short, A, O1), self.man), short)
+        self.refused("a heartbeat the owner signed lives at most 3600 s", quorum(body(self.man, lifetime=21600), A, O1), self.man)
+        # the owner's signature caps it whoever else signed: two nodes and the owner, six hours, refused
+        self.refused("a heartbeat the owner signed lives at most 3600 s", quorum(body(self.man, lifetime=21600), A, B, O1), self.man)
+
+    def test_one_party_alone_never(self):
+        for signers in ((A,), (O1,)):
+            with self.subTest(signers[0][0]):
+                self.refused("2 of a, b, c, owner are needed", quorum(body(self.man), *signers), self.man)
+
+    def test_the_owner_counts_once_whichever_of_its_keys(self):
+        self.refused("is named twice", quorum(body(self.man), O1, O2), self.man)
+
+    def test_a_quarantined_node_does_not_count(self):
+        man = manifest4(1, "", nodes4(b="QUARANTINED"))
+        self.refused("signed by a: 2 of", quorum(body(man), A, B), man)
+        self.assertEqual(hb.verify(quorum(body(man), A, C), man)["sequence"], 7)
+
+    def test_a_key_that_is_not_the_party_s_or_a_high_s_signature(self):
+        self.refused("the key is not a's signing_key", quorum(body(self.man), ("a", STRANGER), B), self.man)
+        self.refused("the key is not one of the current manifest's owner_keys", quorum(body(self.man), A, ("owner", STRANGER)), self.man)
+        self.refused("", quorum(body(self.man), A, B, high=True), self.man)
+
+    def test_the_single_key_form_is_not_a_v4_heartbeat(self):
+        heartbeat = body(self.man)
+        single = {"heartbeat": heartbeat, "signature": {"key": pub(NODE_KEYS["a"]),
+                                                          "sig": p256_sig(NODE_KEYS["a"], hb.DOMAIN + m.canonical(heartbeat))}}
+        self.refused("", single, self.man)
+
+    def test_a_signature_over_another_body_does_not_count(self):
+        heartbeat, other = body(self.man), body(self.man, sequence=8)
+        envelope = quorum(heartbeat, A)
+        envelope["signatures"].append(quorum(other, B)["signatures"][0])
+        self.refused("", envelope, self.man)
+
+    def test_the_owner_lifetime_never_loosens_the_manifest_bound(self):
+        self.refused("lives at most 21600 s", quorum(body(self.man, lifetime=21601), A, B), self.man)
+
+
+if __name__ == "__main__":
+    unittest.main()

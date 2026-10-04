@@ -785,7 +785,9 @@ def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bo
         trail(dict(event, sequence=0, outcome="ALLOW", reason="bootstrap: the counter starts at 0"))
         return 0, None
     sequence, source, envelope = max(found, key=lambda f: f[0])
-    event.update(sequence=sequence, issuer=envelope["signature"]["key"], source=source)
+    # who signed it: the revocation key (v1 to v3), or the quorum's parties (v4, #199)
+    issuer = envelope["signature"]["key"] if "signature" in envelope else ",".join(sorted(s.get("party", "?") for s in envelope.get("signatures", [])))
+    event.update(sequence=sequence, issuer=issuer, source=source)
     trail(dict(event, outcome="INCOMPLETE", reason="taking the first heartbeat"))
     try:
         left = freshness.accept_first(envelope, manifest)
