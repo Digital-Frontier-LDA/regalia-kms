@@ -22,7 +22,7 @@ NEXT = rt.document("v3", **{n: [dict(SET2)] for n in "abc"})
 class FakeHost:
     def __init__(self, case, manifest, document):
         self.case, self.node_id, self._manifest, self._document = case, "a", manifest, document
-        self.running, self.refusing, self.asked, self.rebooted, self.reboot_fails = SET1, {}, [], 0, None
+        self.running, self.refusing, self.asked, self.rebooted, self.reboot_fails, self.later = SET1, {}, [], 0, None, 0
         self.private_root = case.private
         self.firmware = FakeEfibootmgr()
         self.firmware.add("0002", "regalia-kms image-2", r"\EFI\Linux\image-2.efi")
@@ -50,7 +50,7 @@ class FakeHost:
         return {"schema": rt.attest.STATE_SCHEMA, "nodes": {}, "nonces": {}}
 
     def now(self):
-        return self.case.now
+        return self.case.now + self.later
 
     def lease_from(self, peer, manifest, session, state_path):
         # a root-only directory of apply's own, under the private root, not the admission service's
@@ -111,7 +111,7 @@ class Apply(Case):
         done = self.apply()
         self.assertEqual(done["state"]["next"], "0002")
         self.assertEqual((self.host.rebooted, self.host.firmware.current), (1, "0002"))
-        self.assertEqual([p for p, _ in self.host.asked], ["b", "c"])            # each peer asked once
+        self.assertEqual([p for p, _ in self.host.asked], ["b", "c", "b", "c"])  # each peer asked once before the phrase, once after
         self.assertEqual(os.listdir(self.private), [])                          # the leases went with their directory
         self.assertEqual([(e["outcome"], e.get("request")) for e in self.trail], [("REQUESTED", None), ("ALLOW", 1)])
         self.assertEqual((self.trail[0]["lease_issuers"], self.trail[0]["authorizers"], self.trail[0]["from"], self.trail[0]["to"]),
@@ -193,6 +193,43 @@ class Apply(Case):
         self.assertEqual((closed["outcome"], closed["request"], closed["bootnext_cleared"]), ("INCOMPLETE", seq, "0002"))
         self.assertIsNone(self.host.firmware.next)
         self.assertIsNone(update.close_cut(self.host, trail, record, say=lambda line: None))      # answered now
+
+    def test_leases_that_run_out_while_the_phrase_waits_stop_it(self):
+        """d9 on #326: the operator types the phrase ten minutes after the plan. The leases have run out."""
+        def slow(prompt):
+            self.host.later = 600
+            return "reboot a into image-2"
+        self.refused("the peers' leases no longer allow it after the confirmation", update.apply, self.host, "0002", self.esp, slow, self.record,
+                     say=lambda line: None)
+        self.assertEqual((self.bootnexts(), self.host.rebooted), ([], 0))
+        self.assertEqual([(e["outcome"], e.get("expired")) for e in self.trail], [("DENY", True)])
+        self.assertEqual([p for p, _ in self.host.asked], ["b", "c", "b", "c"])      # asked again after the phrase, once each
+
+    def failing_firmware(self, bootnext_rc=0):
+        """efibootmgr whose --delete-bootnext fails (EFI variables gone read-only), and optionally --bootnext too."""
+        fw, plain = self.host.firmware, FakeEfibootmgr.__call__
+
+        def call(argv, **kw):
+            if "--bootnext" in argv and bootnext_rc:
+                fw.next = argv[-1]                        # written, but reported as failed
+                return subprocess.CompletedProcess(argv, bootnext_rc, "", "write error")
+            if "--delete-bootnext" in argv:
+                return subprocess.CompletedProcess(argv, 5, "", "EFI variables are read-only")
+            return plain(fw, argv, **kw)
+        self.host.run = lambda argv, **kw: call(argv, **kw) if argv[:1] == [bootnext.EFIBOOTMGR] else subprocess.run(argv, **kw)
+
+    def test_a_bootnext_that_cannot_be_cleared_is_critical_and_says_what_to_do(self):
+        """24 on #326: BootNext armed, no reboot, and clearing it failed: recorded CRITICAL, raised, with the command."""
+        self.failing_firmware(bootnext_rc=5)
+        self.refused("CRITICAL: setting BootNext failed (efibootmgr --bootnext 0002 failed (exit 5): write error) AND BootNext could "
+                     "not be cleared", self.apply)
+        self.assertEqual([e["outcome"] for e in self.trail], ["REQUESTED", "CRITICAL", "FAILED"])
+        self.assertIn("efibootmgr --delete-bootnext", self.trail[1]["reason"])
+        self.trail.clear()
+        self.failing_firmware()
+        self.host.reboot_fails = "systemctl reboot failed (exit 1)"
+        self.refused("CRITICAL: the reboot did not happen (systemctl reboot failed (exit 1)) AND BootNext could not be cleared", self.apply)
+        self.assertEqual([e["outcome"] for e in self.trail], ["REQUESTED", "ALLOW", "CRITICAL"])
 
     def test_the_deadline_is_bounded(self):
         for minutes in (0, 4, 121):

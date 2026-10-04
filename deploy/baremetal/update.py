@@ -16,8 +16,10 @@ APPLY refuses unless all of this holds, from the host's own state, never from fi
   2  the set this host RUNS is read from its TPM: its PCRs, as booted, match exactly one set the document
      accepts for it (an image the manifest does not approve matches none);
   3  rollout.may_reboot says yes, on LIVE leases: this node asks each other node that may authorize for a
-     lease for this boot session NOW, once each (sync's per-caller limit is not approached: one nonce and
-     one lease request per peer). Those leases are evidence for this decision only: they are held in a
+     lease for this boot session NOW, once each, and again once each after the phrase is typed (so a slow
+     confirmation never arms BootNext on old evidence). That is two nonce and two lease requests per peer,
+     inside sync's per-caller limit (6 in 60 s) with the admission service's own renewals; a peer whose
+     bucket is full refuses, and apply then refuses too. Those leases are evidence for this decision only: they are held in a
      root-only directory of their own under /run, never the admission service's, and deleted when the
      command exits. A peer that refuses is reported, and not asked again;
   4  BootOrder starts with the entry this host booted (the fallback after the one trial boot), and the
@@ -27,7 +29,10 @@ Then it prints the plan and the deadline, asks for a typed phrase, records the r
 leases justified it) on the update trail, sets BootNext, records that, and reboots. ONCE BOOTNEXT IS ARMED,
 anything that stops the reboot (the trail write, a failed `systemctl reboot`) clears it again and reads that
 back: an armed BootNext never outlives the apply that set it. A run killed in between is closed by the next
-run of this tool (close_cut), which clears BootNext first.
+run of this tool (close_cut), which clears BootNext first. Until then a reset takes the trial boot: user space
+cannot close that window without a boot-time hook, and a power cut there is simply the trial boot, a moment
+after both peers vouched. The leases are judged again after the phrase is typed: a slow confirmation does not
+reboot on leases that have run out.
 
 THE DEADLINE. BootNext is used once. If the host has not come back up on the new image by the deadline
 printed (its peers have not unlocked it, or it hangs), the operator resets it through the iLO (Power:
@@ -52,7 +57,6 @@ or FAILED; a refusal or a phrase that does not match is a DENY with its reason; 
 written stops the command before anything changes.
 """
 import argparse
-import contextlib
 import datetime
 import json
 import os
@@ -138,6 +142,16 @@ def _denied(record, event, failure):
     _quietly(record, dict(event, outcome="DENY", reason=str(failure) or type(failure).__name__))
 
 
+def _armed(record, event, what, stuck):
+    """The worst state: BootNext may be armed, the host was not rebooted, and clearing it failed. Recorded
+    CRITICAL, and raised with what to do; the command exits non-zero."""
+    message = ("CRITICAL: %s AND BootNext could not be cleared (%s). BootNext may be armed: the next reset of this host would "
+               "trial-boot the new image with no fresh leases. Clear it now, by hand: `efibootmgr --delete-bootnext`, and check "
+               "`efibootmgr` shows no BootNext" % (what, stuck))
+    _quietly(record, dict(event, outcome="CRITICAL", reason=message))
+    raise Refused(message)
+
+
 def _change(record, event, act):
     """REQUESTED, `act()`, then ALLOW; FAILED (and the exception) if it raises. Returns (act's result, the request seq)."""
     seq = record(dict(event, outcome="REQUESTED"))
@@ -214,12 +228,29 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
         failure = Refused("not confirmed: nothing was changed")
         _denied(record, dict(event, aborted=True), failure)
         raise failure
+    # The leases vouch for this boot NOW, for a few minutes. Once the operator has answered, they are asked for
+    # again and may_reboot judges the fresh ones on the authenticated clock: a slow confirmation never arms
+    # BootNext on evidence from before it
+    try:
+        leases, refused = fresh_leases(host, manifest, authorizers(manifest, node_id), session)
+        event.update({"lease_issuers": sorted(leases), "no_lease": refused})
+        verdict = rollout.may_reboot(manifest, document, node_id, running["label"], session, host.own_state(), list(leases.values()),
+                                     host.now(), run=host.run)
+        event["authorizers"] = verdict["authorizers"]
+    except (Refused, attest.Refused, OSError, ValueError) as failure:
+        failure = Refused("the peers' leases no longer allow it after the confirmation (%s%s): nothing was changed; run apply again"
+                          % (failure, "".join("; %s gave no lease: %s" % (p, refused[p]) for p in sorted(refused))))
+        _denied(record, dict(event, expired=True), failure)
+        raise failure from None
+
     def arm():
         try:
             return bootnext.trial(entry, esp, target, host.run, **host.where)
-        except BaseException:
-            with contextlib.suppress(Refused, OSError):
+        except BaseException as failure:
+            try:
                 bootnext.clear_next(host.run)          # a write that did not read back may have left something armed
+            except (Refused, OSError) as stuck:
+                _armed(record, event, "setting BootNext failed (%s)" % failure, stuck)
             raise
     done, seq = _change(record, event, arm)
     # BootNext is armed. From here, anything that stops the reboot disarms it: an armed BootNext must never outlive
@@ -232,8 +263,7 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
         try:
             bootnext.clear_next(host.run)
         except (Refused, OSError) as stuck:
-            raise Refused("the reboot did not happen (%s) AND BootNext %s could not be cleared (%s): clear it by hand "
-                          "(efibootmgr --delete-bootnext) before anything resets this host" % (failure, entry, stuck)) from None
+            _armed(record, event, "the reboot did not happen (%s)" % (str(failure) or type(failure).__name__), stuck)
         _quietly(record, dict(event, request=seq, outcome="BOOTNEXT-CLEARED", reason=str(failure) or type(failure).__name__))
         raise Refused("the reboot did not happen (%s); BootNext is cleared, nothing is armed" % (str(failure) or type(failure).__name__)) from None
     return done
