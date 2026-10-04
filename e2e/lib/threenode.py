@@ -1361,15 +1361,16 @@ class Cluster:
             return json.loads(answer.read())
 
     def _receipt_problem(self, name, trail, lines, stream):
-        """What is wrong with the head of the node's stream as its receipt states it, or None: the signature (Ed25519 over
-        internal/audit.ReceiptPreimage, with the receipt key) and what it names, the collector's last event, the trail's last
-        line and the running line chain over every line, recomputed here; and the shipper's head file, naming as many lines
-        committed."""
+        """What is wrong at position len(lines) of the node's stream (the SNAPSHOT's end, audit_complete) as its receipt
+        states it, or None: the signature (Ed25519 over internal/audit.ReceiptPreimage, with the receipt key) and what it
+        names, the collector's event there, the snapshot's last line and the running line chain over the snapshot,
+        recomputed here; and the shipper's head file, naming at least that many lines committed (it goes on shipping)."""
         import ssl
         from cryptography.hazmat.primitives import serialization
         from cryptography.exceptions import InvalidSignature
+        n = len(lines)
         try:
-            got = self.receipt(name, trail, len(stream))
+            got = self.receipt(name, trail, n)
         except OSError as failure:
             return "no receipt for the head (%s)" % failure
         chain = "0" * 64
@@ -1383,42 +1384,61 @@ class Cluster:
             key.verify(bytes.fromhex(got.get("signature", "")), preimage)
         except (InvalidSignature, ValueError):
             return "the head receipt's signature does not verify under the receipt key"
-        want = (len(stream), stream[-1].get("hash"), hashlib.sha256(lines[-1]).hexdigest(), chain)
+        want = (n, stream[n - 1].get("hash"), hashlib.sha256(lines[-1]).hexdigest(), chain)
         if (got.get("sequence"), got.get("event_hash"), got.get("line_sha256"), got.get("line_chain")) != want:
-            return "the head receipt names %r, not the stream's head %r" % (got, want)
+            return "the receipt at %d names %r, not %r" % (n, got, want)
         try:
             head = json.loads((self.audit_dir / "heads" / ("%s-%s.head.json" % (name, trail))).read_text())
         except (OSError, ValueError) as failure:
             return "the shipper's head file cannot be read (%s)" % failure
-        if head.get("committed") != len(stream):
-            return "the shipper's head file says %r committed, the collector holds %d" % (head.get("committed"), len(stream))
+        if not isinstance(head.get("committed"), int) or not n <= head["committed"] <= len(stream):
+            return "the shipper's head file says %r committed: not between the snapshot's %d and the collector's %d" % (
+                head.get("committed"), n, len(stream))
         return None
 
     def audit_complete(self, timeout=180):
-        """{(node, trail): what is wrong} for every node trail (sync, admission) whose collector stream is not exactly the
-        trail. A trail must have been written (an empty trail is not complete), and its stream must hold every line, in
-        order: event i at sequence i+1, the first chained to genesis and each to the one before, each naming its line by
-        its SHA-256 (newline included), each DENY still a deny; and the stream's head must be what its signed receipt and
-        the shipper's head file say. Empty when complete. Waits up to `timeout` for the shippers' passes. A node stopped
-        by the scenario ships what its trail holds once it runs again: its shippers are started here."""
+        """{(node, trail): what is wrong} for every node trail (sync, admission) the collector does not hold, line for
+        line, UP TO A SNAPSHOT of the trail taken when this is called. The trails go on growing while it waits (the
+        services run): judged against the trail as re-read at each look, a line written after the shipper's last pass
+        failed it (regalia-kms#409, d9: 400 trail lines, 399 in the collector). So the snapshot, taken first, is the
+        point of judgement, and the collector must hold AT LEAST it:
+          - a trail must have been written (an empty one is not complete);
+          - the trail as it is now still begins with the snapshot (append-only);
+          - every event the collector holds (the snapshot's and any after it) is the trail's line at its position: event i
+            at sequence i+1, the first chained to genesis and each to the one before, naming its line by its SHA-256
+            (newline included), each DENY still a deny;
+          - at the snapshot's end, the signed receipt and the shipper's head file say so.
+        Empty when complete. Waits up to `timeout` for the shippers' passes. A node stopped by the scenario ships what its
+        trail holds once it runs again: its shippers are started here."""
         for name in self.nodes:
             self._ship_start(name)
+
+        def read(name, trail):
+            path = self._trail_path(name, trail)
+            return path.read_bytes().splitlines(keepends=True) if path.exists() else []
+        snapshot = {(name, trail): read(name, trail) for name in self.nodes for trail, _, _ in AUDIT_TRAILS}
 
         def problems(receipts=False):
             wrong = {}
             for name in self.nodes:
                 for trail, _, _ in AUDIT_TRAILS:
-                    path = self._trail_path(name, trail)
-                    lines = path.read_bytes().splitlines(keepends=True) if path.exists() else []
-                    stream = self.audit_stream(name, trail)
+                    lines = snapshot[(name, trail)]
                     if not lines:
                         wrong[(name, trail)] = "the trail was never written"
                         continue
-                    if len(stream) != len(lines):
+                    stream = self.audit_stream(name, trail)
+                    now = read(name, trail)
+                    if now[:len(lines)] != lines:
+                        wrong[(name, trail)] = "the trail no longer begins with the %d lines it held: it was rewritten" % len(lines)
+                        continue
+                    if len(stream) < len(lines):
                         said = self.journal(name, "ship-" + trail, 3).strip().replace("\n", " | ")
                         wrong[(name, trail)] = "%d trail lines, %d in the collector (its shipper: %s)" % (len(lines), len(stream), said[-300:])
                         continue
-                    for i, (line, event) in enumerate(zip(lines, stream)):
+                    if len(stream) > len(now):
+                        wrong[(name, trail)] = "the collector holds %d events, the trail only %d lines" % (len(stream), len(now))
+                        continue
+                    for i, (line, event) in enumerate(zip(now, stream)):
                         detail = event.get("detail") or {}
                         if event.get("sequence") != i + 1:
                             wrong[(name, trail)] = "event %d carries sequence %r" % (i, event.get("sequence"))
