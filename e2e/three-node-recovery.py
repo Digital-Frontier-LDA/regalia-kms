@@ -20,7 +20,9 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
   4  PoC 10.5: two returners ask one survivor at the same time: both get their key from it
   5  PoC 10.5, the session binding: b crashed (the same TPM boot) presents a second session and a gives it
      nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
-  6  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN. In each, a
+  6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
+     first 6 in a minute answered, the 7th refused and recorded; c, beside it, answered
+  7  N: a QUARANTINED (by the revocation key), then RETIRED (by the root), then b REVOKED_STOLEN. In each, a
      control first (a node that may still ask opens its volume: the setup works), then the epoch given to one
      survivor and taken by the others with their sync; the survivors' wg-unlock drops the node; it gets no key,
      and no lease, with the reason (a survivor's DENY naming its state, or it is off wg-svc)
@@ -191,7 +193,24 @@ def scenario(cluster):
        cluster.journal(crashed, "admission")[-600:])
     until(lambda: cluster.lease(rebooted), 120, 2)
 
-    header("6  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
+    header("6  PoC 10.5, the rate limits: sync's leases per node, and one node does not use up another's")
+    # b's own admission stopped (its asks would spend the same bucket), and a minute for the bucket to fill
+    sh("systemctl", "stop", cluster.unit("b", "admission"), check=False)
+    time.sleep(61)
+    count, per = 6, 60                                   # deploy/baremetal/sync.py RATE["lease"]
+    since = time.time()
+    answers = cluster.ask("b", "a", "lease-nonce", times=count + 1, node_id="b")
+    ok([a.get("ok") for a in answers] == [True] * count + [False]
+       and "RATE: more than %d lease requests in %d s from b" % (count, per) in answers[-1].get("refused", ""),
+       "a answered b's first %d lease requests in a minute and refused the next: %s" % (count, answers[-1].get("refused")), answers[-2:])
+    ok(any(e.get("event") == "sync-lease-nonce" and e.get("subject") == "b" and e.get("outcome") == "DENY" and "RATE" in e.get("reason", "")
+           and e.get("at", 0) >= since - 1 for e in cluster.trail("a")), "a's trail records the refusal")
+    answers = cluster.ask("c", "a", "lease-nonce", node_id="c")
+    ok(answers[0].get("ok") is True, "c, beside it, is answered: a lease nonce", answers)
+    cluster.start("b", ("admission",))
+    until(lambda: cluster.lease("b"), 150, 3)
+
+    header("7  N: a quarantined, then retired; b reported stolen: no key, no lease, and why")
     for victim, signer, state in (("a", "revocation", "QUARANTINED"), ("a", "root", "RETIRED"), ("b", "revocation", "REVOKED_STOLEN")):
         before = cluster.manifest
         survivors = [n for n in names if n != victim and may(before, n, "authorize")]
