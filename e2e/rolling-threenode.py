@@ -168,6 +168,18 @@ def moved(cluster, name, image, what):
     return r
 
 
+def moved_by_sync(cluster, name, since, epoch):
+    """The peer whose sync round moved `name` to `epoch`, from its collector stream since `since`; None if none did. A
+    sync-apply event is filed under the manifest held when its round BEGAN (sync.Client.pull), so the round that
+    moved the node is the last ALLOW filed under the epoch before, ahead of the node's first event under `epoch`."""
+    events = cluster.audit_has(name, "sync", since=since)
+    first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch), None)
+    if first is None:
+        return None
+    rounds = [e for e in events[:first] if e.get("event") == "sync-apply" and e.get("outcome") == "ALLOW" and e.get("epoch") == epoch - 1]
+    return rounds[-1].get("peer") if rounds else None
+
+
 def retire_check(cluster, manifest, both, nxt):
     try:
         return rollout.check_lockout(manifest, both, nxt, measurements.transition(both, nxt), states(cluster), False, [])
@@ -254,7 +266,7 @@ def scenario(cluster):
        {n: {p: seen(cluster, p, n) for p in names if p != n} for n in names})
     verdict = retire_check(cluster, manifest, doc_both, doc_next)
     ok(verdict == [], "the retire locks out nobody (rollout.check_lockout, the peers' real state files)", verdict)
-    manifest, _ = cluster.accept(a, {n: [NEXT_IMAGE] for n in names}, "v3")
+    manifest, retired = cluster.accept(a, {n: [NEXT_IMAGE] for n in names}, "v3")
     ok(all(cluster.node(n).store().load()["epoch"] == 3 for n in names), "every node holds epoch 3, NEXT alone")
     ok(all(until(lambda: cluster.lease(name), 120, 2) for name in names), "every node holds a lease again after the epoch",
        {name: bool(cluster.lease(name)) for name in names})
@@ -286,8 +298,8 @@ def scenario(cluster):
        "a's and b's refusals of c on the retired CURRENT, for its PCR 11 (step 8), are in their streams")
     ok(all(cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW") for s in (b, c)),
        "the leases a issued to b and c from %s (step 5) are in a's stream" % NEXT_IMAGE)
-    took = {n: bool(cluster.audit_has(n, "sync", event="sync-apply", outcome="ALLOW", epoch=lambda e: e == 3)) for n in (b, c)}
-    ok(all(took.values()), "b and c taking epoch 3, the retire, from a by sync are in their streams", took)
+    took = {n: moved_by_sync(cluster, n, retired, 3) for n in (b, c)}
+    ok(all(took.values()), "the sync round that moved b and c to epoch 3, the retire, is in each one's stream (from %s)" % took, took)
     serving = {n: bool(cluster.audit_has(n, "admission", event="admission-serving", outcome="ALLOW")) for n in names}
     ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
     back = cluster.audit_has(a, "admission", since=a_last["since"], event="admission-serving", outcome="ALLOW")
