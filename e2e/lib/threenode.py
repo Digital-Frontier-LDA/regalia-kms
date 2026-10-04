@@ -359,7 +359,7 @@ class Cluster:
             if service == "wg-apply":                 # and again at every new chain, as regalia-wg-apply.path runs it
                 self._run(n, "wg-apply", unit=self.unit(name, "wg-watch"),
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
-        self.services[name] = tuple(services)
+        self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
 
     def _run(self, n, service, oneshot=False, unit=None, extra=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
@@ -378,7 +378,19 @@ class Cluster:
         argv = ["systemd-run", "--unit", self.unit(name, "as-sync"), "--collect", "--wait", "--pipe", "--quiet"]
         for prop in self.properties(name, "sync"):
             argv += ["-p", prop]
-        sh(*(argv + ["/usr/bin/python3", "-Es", "-c", code]), input=json.dumps(data))
+        return sh(*(argv + ["/usr/bin/python3", "-Es", "-c", code]), input=json.dumps(data)).stdout
+
+    ASK = ("import json, sys\nfrom deploy.baremetal import membership, node, sync\nd = json.load(sys.stdin)\n"
+           "n = node.Node(node.load(d['cfg']))\nsend = n.sources(n.manifest())[d['peer']]\nout = []\n"
+           "for _ in range(d['times']):\n"
+           "    out.append(json.loads(send(membership.canonical(dict({'v': sync.VERSION, 'op': d['op']}, **d['fields'])))))\n"
+           "print(json.dumps(out))\n")
+
+    def ask(self, name, peer, op, times=1, **fields):
+        """`times` raw sync requests `op` from the node to `peer`, over its own service tunnel, as its sync unit
+        sends them (its identity, its namespace, its tunnel address): the peer's answers, in order."""
+        return json.loads(self._as_sync(name, self.ASK, {"cfg": str(self.nodes[name].cfg_path), "peer": peer, "op": op,
+                                                         "times": times, "fields": fields}))
 
     def stop(self, name, power="cycle"):
         """The node's services stopped. power="cycle" (an orderly power-off and on) or "cut" (power lost): its /run
