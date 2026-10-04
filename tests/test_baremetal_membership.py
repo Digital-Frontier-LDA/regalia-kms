@@ -216,12 +216,13 @@ class SchemaV2(unittest.TestCase):
         self.assertEqual(m.accept(self.m2, sign(self.next2(v2(three())), ROOT), ROOT_PUB)["schema"], m.SCHEMA_V2)
 
     def test_an_unknown_schema_is_refused(self):
-        for bad in ("regalia.membership/v4", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
+        every = "schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3 or regalia.membership/v4"
+        for bad in ("regalia.membership/v5", "regalia.membership/v0", "", None, 2, ["regalia.membership/v2"]):
             with self.subTest(schema=bad):
-                self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, dict(self.next2(v2(three())), schema=bad))
+                self.refused(every, self.m2, dict(self.next2(v2(three())), schema=bad))
         missing = self.next2(v2(three()))
         del missing["schema"]
-        self.refused("schema must be regalia.membership/v1 or regalia.membership/v2 or regalia.membership/v3", self.m2, missing)
+        self.refused(every, self.m2, missing)
         with self.assertRaisesRegex(m.Refused, "manifest must be an object"):
             m.validate([missing])
 
@@ -490,6 +491,43 @@ class HighWaterOnSwtpm(_Swtpm):
         self.assertEqual((self.hw.value(), self.hw.slots()), (0, [(0, "00" * 32)] * 2))
         # reading stays open: the record is not secret
         self.assertEqual(self.nv("nvread", "0x150001a", "-C", "0x150001a", "-s", "48").stdout, m.HighWater.slot_bytes(0, "00" * 32))
+
+    def authorize_policy(self, name):
+        """PolicyAuthorize(a new RSA key) by a trial session, as B2's enrolment will compute it: (path, hex)."""
+        key = os.path.join(self.d, name + ".pem")
+        subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", key], check=True, capture_output=True)
+        subprocess.run(["openssl", "pkey", "-in", key, "-pubout", "-out", key + ".pub"], check=True, capture_output=True)
+        with open(os.path.join(self.d, "zero.pol"), "wb") as f:
+            f.write(bytes(32))
+        self.nv("flushcontext", "-t")
+        self.assertEqual(self.nv("loadexternal", "-C", "o", "-G", "rsa", "-u", key + ".pub", "-c", self.d + "/key.ctx", "-n", self.d + "/key.name").returncode, 0)
+        self.nv("flushcontext", "-t")
+        self.nv("startauthsession", "-S", self.d + "/trial.ctx", check=True)
+        path = os.path.join(self.d, name + ".policy")
+        self.nv("policyauthorize", "-S", self.d + "/trial.ctx", "-L", path, "-n", self.d + "/key.name", "-i", self.d + "/zero.pol", check=True)
+        self.nv("flushcontext", self.d + "/trial.ctx", check=True)
+        with open(path, "rb") as f:
+            return path, f.read().hex()
+
+    def test_a_policy_written_slot_is_read_by_its_real_authorization_policy(self):
+        """#242 B1 on a real (software) TPM: the slots defined with policywrite and a real PolicyAuthorize
+        digest (what B2's definers will make) read as before for the node whose policy it is, and are Unusable
+        for a node with another. The authPolicy comes from tpm2_nvreadpublic's own output."""
+        digest = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
+        self.hw.anchor(3, digest)
+        path, policy = self.authorize_policy("system")
+        _, other = self.authorize_policy("other")
+        for index in self.hw.record_indices:
+            held = self.nv("nvread", index, "-C", index, "-s", "48").stdout
+            self.assertEqual(self.nv("nvundefine", index, "-C", "o").returncode, 0)
+            self.assertEqual(self.nv("nvdefine", index, "-C", "o", "-s", "48", "-a", "policywrite|ownerwrite|authread|ownerread", "-L", path).returncode, 0)
+            self.assertEqual(self.nv("nvwrite", index, "-C", "o", "-i", "-", input=held).returncode, 0)
+            self.assertRegex(self.nv("nvreadpublic", index).stdout.decode(), r"value: 0x2006000A\b")
+        mine = m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock", policy=policy)
+        self.assertEqual((mine.value(), mine.record(), mine.verify(digest), mine.unusable()), (3, (3, "03" * 32), 3, None))
+        for hw in (m.HighWater("0x1500016", tcti=self.tcti, lock_path=self.d + "/hw.lock", policy=other), self.hw):
+            self.assertIn("the anchor's write policy is not this node's approved-image policy: NV index 0x150001a is written by policy %s"
+                          % policy, hw.unusable())
 
     def test_every_read_works_whatever_the_owner_authorization_is(self):
         """#242: the anchor is read with each index's own authorization, never the owner's, so readers keep
@@ -848,7 +886,6 @@ class RecordWrites(unittest.TestCase):
                                   ("0x1500016", "nt=counter|ownerread|authread|authwrite"),
                                   ("0x1500016", "nt=counter|ownerread|authread"),             # neither write bit (51: a surviving mutant)
                                   ("0x150001a", "ownerread|ownerwrite|authread|authwrite"),
-                                  ("0x150001a", "ownerread|ownerwrite|authread|policywrite"),
                                   ("0x150001a", "ownerread|ownerwrite|authread|ppwrite"),
                                   ("0x150001a", "ownerwrite|authread"),                       # no ownerread: the owner could not read it
                                   ("0x150001b", "ownerread|authread|authwrite"),
@@ -870,6 +907,13 @@ class RecordWrites(unittest.TestCase):
                 self.assertRegex(hw.unusable(), "NV index %s does not have this anchor's attributes" % index)
                 with self.assertRaisesRegex(m.Unusable, "does not have this anchor's attributes"):
                     hw.record() if index not in ("0x1500016", "0x1500017") else hw.value()
+        # policywrite is the policy-written layout (#242), refused here for the policy it lacks (PolicyLayout has the rest)
+        self.tpm = FakeTpm()
+        hw = self.defined()
+        self.tpm(["tpm2_nvundefine", "0x150001a", "-C", "o"])
+        self.tpm(["tpm2_nvdefine", "0x150001a", "-C", "o", "-s", "48", "-a", "ownerread|ownerwrite|authread|policywrite"])
+        self.assertEqual(hw.unusable(), "the anchor's write policy is not this node's approved-image policy: NV index 0x150001a is written by "
+                         "policy (none), and this node has none configured")
         # what this code defines passes, and the attributes it asks for say so
         self.tpm = FakeTpm()
         hw = self.defined()
@@ -1003,6 +1047,85 @@ class RecordWrites(unittest.TestCase):
                           ("nvincrement", "0x1500016"), ("nvwrite", "0x150001a"), ("nvincrement", "0x1500016"), ("nvwrite", "0x150001b"),
                           ("nvincrement", "0x1500016"), ("nvwrite", "0x150001a")])
         self.assertEqual((hw.record(), hw.slots(), hw.pinned()), ((5, "05" * 32), [(5, "05" * 32), (4, "04" * 32)], True))
+
+
+POLICY, OTHER_POLICY = "a7" * 32, "b8" * 32
+
+
+class PolicyLayout(unittest.TestCase):
+    """#242 B1: the readers take an index of either layout. A policy-written index (policywrite, its authPolicy
+    the node's approved-image policy) reads as the owner-written one did; with any other authPolicy, or on a
+    node with no policy configured, it is Unusable, and a re-anchor repairs it. Nothing defines this layout yet
+    (B2): the anchor is moved to it here by hand, as B2's definers will lay it out."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.tpm = FakeTpm()
+        self.digest = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
+        first = m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm)
+        first.define()
+        first.anchor(3, self.digest)
+
+    def hw(self, policy=POLICY):
+        return m.HighWater("0x1500016", lock_path=self.d + "/hw.lock", run=self.tpm, policy=policy)
+
+    def by_policy(self, *indices, policy=POLICY):
+        for index in indices:
+            self.tpm.nv[index][0] |= FakeTpm.BITS["policywrite"]
+            self.tpm.policies[index] = policy
+
+    def test_a_policy_written_anchor_reads_as_the_owner_written_one(self):
+        before = (self.hw().value(), self.hw().record(), self.hw().verify(self.digest), self.hw().unusable())
+        self.by_policy("0x1500016", "0x150001a", "0x150001b")
+        self.assertEqual((self.hw().value(), self.hw().record(), self.hw().verify(self.digest), self.hw().unusable()), before)
+        self.assertEqual(self.hw().check(3), 3)
+        # index by index: one slot moved and the other not yet is still an anchor (a re-anchor in progress)
+        self.tpm.nv["0x150001b"][0] &= ~FakeTpm.BITS["policywrite"]
+        del self.tpm.policies["0x150001b"]
+        self.assertEqual((self.hw().value(), self.hw().unusable()), (3, None))
+
+    def test_another_policy_or_none_configured_is_unusable(self):
+        self.by_policy("0x1500016", "0x150001a", "0x150001b")
+        for name, hw, index, reason in (
+                ("another key's policy", self.hw(OTHER_POLICY), "0x1500016",
+                 "the anchor's write policy is not this node's approved-image policy: NV index 0x1500016 is written by policy %s, not %s"
+                 % (POLICY, OTHER_POLICY)),
+                ("a node with no policy", self.hw(None), "0x1500016",
+                 "the anchor's write policy is not this node's approved-image policy: NV index 0x1500016 is written by policy %s, "
+                 "and this node has none configured" % POLICY)):
+            with self.subTest(name):
+                with self.assertRaises(m.Unusable) as caught:
+                    hw.value()
+                self.assertEqual(str(caught.exception), reason)
+                self.assertIn("approved-image policy", hw.unusable())
+        # a slot whose policy is another's, with the counter right
+        self.tpm.policies["0x150001b"] = OTHER_POLICY
+        self.assertIn("NV index 0x150001b is written by policy %s" % OTHER_POLICY, self.hw().unusable())
+        # a policywrite index whose authPolicy is EMPTY: anyone's empty policy session could write it
+        self.tpm.policies["0x150001b"] = ""
+        self.assertIn("NV index 0x150001b is written by policy (none)", self.hw().unusable())
+
+    def test_the_base_is_never_policy_written(self):
+        self.by_policy("0x1500017")
+        with self.assertRaisesRegex(m.Unusable, r"NV index 0x1500017 does not have this anchor's attributes \(0x6200a, not 0x62002\)"):
+            self.hw().value()
+
+    def test_the_policy_is_64_hex(self):
+        for bad in ("A7" * 32, "a7" * 31, 7):
+            with self.subTest(policy=bad), self.assertRaisesRegex(m.Refused, "the approved-image write policy must be 64 lowercase hex"):
+                self.hw(bad)
+
+    def test_a_re_anchor_keeps_a_slot_of_this_node_s_policy_and_replaces_another_s(self):
+        self.by_policy("0x150001a", "0x150001b")
+        self.tpm.policies["0x150001b"] = OTHER_POLICY
+        hw = self.hw()
+        self.assertTrue(hw._is_slot("0x150001a"))
+        self.assertFalse(hw._is_slot("0x150001b"))
+        hw.redefine(4, self.digest(4))
+        self.assertEqual((hw.value(), hw.unusable(), hw.record()), (4, None, (4, self.digest(4))))
+        # the slot of another's policy was deleted and defined again, as this software defines one today
+        self.assertNotIn("0x150001b", self.tpm.policies)
 
 
 class TornWrites(unittest.TestCase):

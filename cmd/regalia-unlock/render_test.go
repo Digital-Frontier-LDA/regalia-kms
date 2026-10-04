@@ -35,14 +35,18 @@ func (f vectorNV) Defined() (map[uint32]bool, error) {
 	return out, nil
 }
 
-func (f vectorNV) Public(index uint32) (uint32, int, error) {
+func (f vectorNV) Public(index uint32) (uint32, int, []byte, error) {
 	e, ok := f.nv[index]
 	if f.broken || !ok {
-		return 0, 0, errors.New("the TPM said no")
+		return 0, 0, nil, errors.New("the TPM said no")
 	}
 	a, _ := e["attributes"].(json.Number).Int64()
 	s, _ := e["size"].(json.Number).Int64()
-	return uint32(a), int(s), nil
+	var policy []byte
+	if text, ok := e["policy"].(string); ok {
+		policy, _ = hex.DecodeString(text)
+	}
+	return uint32(a), int(s), policy, nil
 }
 
 func (f vectorNV) Read(index uint32, size int) ([]byte, error) {

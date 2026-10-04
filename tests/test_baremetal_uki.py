@@ -72,10 +72,12 @@ class FakeTools:
     """ukify, systemd-measure, sbsign and sbverify as uki.py calls them; OpenSSL is the real one."""
 
     def __init__(self):
-        self.calls, self.tamper, self.envs, self.on_ukify = [], {}, [], None
+        self.calls, self.tamper, self.envs, self.on_ukify, self.passed = [], {}, [], None, []
 
-    def __call__(self, argv, capture_output=True, input=None, env=None):
+    def __call__(self, argv, capture_output=True, input=None, env=None, pass_fds=()):
         self.calls.append(list(argv))
+        self.passed.append((os.path.basename(argv[0]), tuple(pass_fds)))
+        self.pass_fds = tuple(pass_fds)          # what the tool was handed: an offline key's descriptor (ADR-0002 D28)
         self.envs.append((os.path.basename(argv[0]), argv[1] if len(argv) > 1 else "", env))
         tool = os.path.basename(argv[0])
         if tool == "keyctl":
@@ -135,7 +137,8 @@ class FakeTools:
         policy = uki.policy_digest(value)
         key = self.tamper.get("sign-key", o["--private-key"][0])
         fingerprint, _ = uki.public_key(uki.read(self.tamper.get("sign-cert", o["--certificate"][0])), "a certificate")
-        signature = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=bytes.fromhex(policy), capture_output=True, check=True).stdout
+        signature = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=bytes.fromhex(policy), capture_output=True, check=True,
+                                   pass_fds=self.pass_fds).stdout
         document = json.loads(uki.read(o["--append"][0])) if "--append" in o else {"sha256": []}
         document["sha256"].append({"pcrs": self.tamper.get("sign-pcrs", [11]), "pkfp": fingerprint, "pol": policy, "sig": base64.b64encode(signature).decode()})
         return ok(json.dumps(document).encode())
@@ -1363,3 +1366,129 @@ def newc_owned(data, path, uid):
     """`data` (one newc archive) with `path`'s owner changed: the uid field of its header rewritten."""
     i = data.index(path.encode() + b"\0") - 110
     return data[:i + 22] + b"%08x" % uid + data[i + 30:]
+
+
+class OfflineKeys(Case):
+    """ADR-0002 D28: the three boot-image keys are software keys handed down by regalia-ceremony's offline-keys.py on
+    sealed memfds (--*-key-fd), never files. uki reads them only after every check, matches each to its certificate,
+    gives each tool its key as /dev/fd/N, and records the session (regalia-kms-d9 on #353)."""
+
+    SESSION = "fedcba9876543210fedcba9876543210"
+    ROLES = ("initrd", "system", "secure_boot")
+
+    def memfds(self, swap=None):
+        """Each role's key in a sealed memfd, as offline-keys.py passes them; `swap` {role: other role} hands a wrong one."""
+        from deploy.baremetal import keyfd
+        swap = swap or {}
+        return {role: keyfd.sealed_memfd(bytearray(uki.read(self.key(swap.get(role, role), "key")))) for role in self.ROLES}
+
+    def offline(self, record, fds, **kw):
+        return uki.sign(self.inputs, record, {role: (None, self.key(role, "crt")) for role in self.ROLES}, "fd", self.out, run=self.tools,
+                        second_record=kw.pop("second", json.loads(json.dumps(record))), report=lambda line: None,
+                        key_provenance=kw.pop("provenance", "offline-keys session " + self.SESSION), key_fds=fds, **kw)
+
+    @staticmethod
+    def closed(fd):
+        try:
+            os.fstat(fd)
+            return False
+        except OSError:
+            return True
+
+    def test_keys_by_descriptor_sign_the_same_image_and_the_record_names_the_session(self):
+        record, fds = self.build(), self.memfds()
+        signed = self.offline(record, fds)
+        self.assertEqual(signed["signed"]["key_provenance"], "offline-keys session " + self.SESSION)
+        measured = [(FakeTools.options(c[2:])["--private-key"][0], p) for c, (_, p) in zip(self.tools.calls, self.tools.passed)
+                    if c[:2] == [uki.TOOLS["measure"], "sign"]]
+        self.assertEqual([len(p) for _, p in measured], [1, 1])
+        self.assertTrue(all(path == "/dev/fd/%d" % p[0] for path, p in measured))           # each tool handed its own key
+        sb = [(c, p) for c, (_, p) in zip(self.tools.calls, self.tools.passed) if os.path.basename(c[0]) == "sbsign"]
+        self.assertEqual(sb[0][0][sb[0][0].index("--key") + 1], "/dev/fd/%d" % sb[0][1][0])
+        self.assertFalse([c for c in self.tools.calls if "--private-key-source" in " ".join(c) or "--engine" in c])
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+        with open(os.path.join(self.out, "image-7.signed.json"), "rb") as f:
+            self.assertEqual(uki.load_record(f.read(), signed=True), signed)
+        self.assertEqual(uki.verify(os.path.join(self.out, "image-7.efi"), signed, self.public(), self.key("secure_boot", "crt"), run=self.tools),
+                         record["pcr11"])
+
+    def test_a_refused_image_never_reads_the_keys(self):
+        """The two builders' records differ: refused, and the key descriptors are never read, only closed."""
+        record, fds = self.build(), self.memfds()
+        other = dict(json.loads(json.dumps(record)), name="image-8")
+
+        def never(fd, what):
+            raise AssertionError("a key was read for an image that is refused")
+        with mock.patch.object(uki.keyfd, "read", never):
+            self.refused("the two builders' records differ", self.offline, record, fds, second=other)
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+
+    def test_a_key_that_is_not_its_certificates_is_refused_before_any_tool_signs(self):
+        record, fds = self.build(), self.memfds(swap={"initrd": "system"})
+        self.refused("the initrd key is not the key of its certificate: nothing is signed", self.offline, record, fds)
+        self.assertFalse([c for c in self.tools.calls if c[:2] == [uki.TOOLS["measure"], "sign"] or os.path.basename(c[0]) == "sbsign"])
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+        record, fds = self.build(name="image-9"), self.memfds(swap={"secure_boot": "initrd"})
+        self.refused("the secure boot key is not the key of its certificate", self.offline, record, fds)
+        self.assertFalse([c for c in self.tools.calls if os.path.basename(c[0]) == "sbsign"])
+
+    def test_the_provenance_goes_with_descriptors_and_only_with_them(self):
+        record = self.build()
+        self.refused("carry the offline-keys session", self.offline, record, self.memfds(), provenance=None)
+        self.refused("carry the offline-keys session", uki.sign, self.inputs, record, self.signing_keys(), "file", self.out, run=self.tools,
+                     second_record=record, report=lambda line: None, key_provenance="offline-keys session " + self.SESSION)
+        self.refused("not an offline-keys session", self.offline, record, self.memfds(), provenance="offline-keys session ab")
+        self.refused("key descriptors are offline keys", uki.sign, self.inputs, record, self.signing_keys(), "file", self.out, run=self.tools,
+                     second_record=record, report=lambda line: None, key_fds=self.memfds())
+
+    def test_a_key_on_disk_is_refused_after_the_checks_and_before_anything_is_signed(self):
+        record, fds = self.build(), self.memfds()
+        os.close(fds["system"])
+        fds["system"] = os.open(self.key("system", "key"), os.O_RDONLY)
+        self.refused("a key is never read from a file on disk", self.offline, record, fds)
+        self.assertFalse([c for c in self.tools.calls if c[:2] == [uki.TOOLS["measure"], "sign"]])
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+
+    def test_a_signed_record_whose_provenance_is_not_a_session_is_refused(self):
+        record = dict(self.build(), signed={"image_sha256": "ab" * 32, "pcr_signatures": {p: {} for p in attest.PHASES},
+                                            "secure_boot_cert_sha256": "cd" * 32, "key_provenance": "a file"})
+        self.refused("not an offline-keys session", uki.load_record, m.canonical(record), signed=True)
+
+    def command(self, *keyargs):
+        """`uki sign` on the command line with `keyargs`; uki.sign itself is replaced by a recorder of what it is handed."""
+        if not hasattr(self, "built"):
+            self.built = self.write("rec.json", m.canonical(self.build()))
+        path = self.built
+        args = ["sign"] + [a for k in uki.INPUTS if k in self.inputs for a in ("--" + k.replace("_", "-"), self.inputs[k])]
+        args += ["--uname", "6.12.41+deb13-amd64", "--record", path, "--second-record", path, "--out", self.out]
+        for role in ("initrd", "system", "secure-boot"):
+            args += ["--%s-cert" % role, self.key(role.replace("-", "_"), "crt")]
+        seen = {}
+
+        def recorder(inputs, record, keys, source, out, **kw):
+            seen.update(source=source, provenance=kw.get("key_provenance"), keys={role: key for role, (key, _) in keys.items()},
+                        fds=dict(kw.get("key_fds") or {}))
+            return dict(record, signed={"image_sha256": "00" * 32})
+        err = io.StringIO()
+        with mock.patch.object(uki, "sign", recorder), mock.patch("sys.stderr", err), mock.patch("sys.stdout", io.StringIO()):
+            code = uki.main(args + list(keyargs))
+        return code, err.getvalue(), seen
+
+    def test_the_command_hands_sign_the_descriptors_unread(self):
+        fds = self.memfds()
+        code, err, seen = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key-fd", str(fds["system"]),
+                                       "--secure-boot-key-fd", str(fds["secure_boot"]), "--offline-session", self.SESSION)
+        self.assertEqual(code, 0, err)
+        self.assertEqual((seen["source"], seen["provenance"], seen["fds"]), ("fd", "offline-keys session " + self.SESSION, fds))
+        self.assertEqual(seen["keys"], {role: None for role in self.ROLES})
+        self.assertTrue(all(os.lseek(fd, 0, os.SEEK_CUR) == 0 for fd in fds.values()))     # untouched: sign() reads them
+
+    def test_the_command_refuses_a_mix_and_a_missing_session(self):
+        fds = self.memfds()
+        code, err, _ = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key", self.key("system", "key"),
+                                    "--secure-boot-key-fd", str(fds["secure_boot"]), "--offline-session", self.SESSION)
+        self.assertEqual(code, 1)
+        self.assertIn("all three by descriptor", err)
+        code, err, _ = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key-fd", str(fds["system"]),
+                                    "--secure-boot-key-fd", str(fds["secure_boot"]))
+        self.assertIn("--offline-session is 32 lowercase hex", err)
