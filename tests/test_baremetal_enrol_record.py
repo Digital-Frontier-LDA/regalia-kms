@@ -173,9 +173,12 @@ class Record(rt.Case):
                             bytes.fromhex(document["signature"]))
 
     def test_a_peer_ak_the_manifest_does_not_give_is_refused(self):
-        self.write()
-        document = self.document()
-        document["record"]["peers"][0]["ak_name"] = self.keys["x"].ak_name
+        """Signed by the node's own AK (a node that recorded a wrong peer AK), not merely edited afterwards, which
+        the quote alone refuses."""
+        record = self.write()
+        record["peers"][0]["ak_name"] = self.keys["x"].ak_name
+        signed = self.keys["a"].signer()(attest.record_qualifying(m.canonical(record)))
+        document = {"record": record, "quote": signed["quote"], "signature": signed["sig"]}
         with self.assertRaisesRegex(enrol.Refused, "the record's AK for peer 'b' is not the manifest's"):
             enrol.verify_record(document, [rt.sign(self.m1)], self.root)
 
