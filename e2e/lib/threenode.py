@@ -328,7 +328,10 @@ class Cluster:
             self.threads.append(thread)
 
     def beat(self, name, sequence, manifest=None):
-        """A heartbeat signed by the test revocation key, delivered into the node's freshness state."""
+        """A heartbeat signed by the test revocation key, delivered into the node's freshness state. Refused with the
+        real authority (authority=True): its heartbeats are then the only ones (regalia-kms-51)."""
+        if self.auth:
+            raise RuntimeError("with the authority, heartbeats come from its serve, never from the fixture")
         manifest = manifest or self.manifest
         self.node(name).freshness().accept(hbt.beat(manifest, sequence, issued=int(time.time())), manifest)
 
@@ -728,6 +731,8 @@ class Cluster:
         nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
         the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
         started again)."""
+        if self.auth:
+            raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
         manifest = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,

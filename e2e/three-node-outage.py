@@ -21,7 +21,8 @@ hand with its recovery key, then the other two by themselves, through that node.
      the total outage again, the authority first.
   4  the authority revokes c (REVOKED_STOLEN): its published chain changes, and its own wg-apply (the path unit's
      trigger) drops c from its tunnel, as the nodes' do
-  5  its time no longer authenticated: the authority signs no heartbeat, and its trail says why (fail closed)
+  5  its time no longer authenticated (its authtime.json says so): the authority signs no heartbeat, and its trail
+     says why (fail closed)
 """
 import base64
 import json
@@ -34,6 +35,7 @@ import time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "lib"))
 import threenode                                     # noqa: E402
 from threenode import AUTH, sh, until                # noqa: E402
+from deploy.baremetal import authtime                # noqa: E402
 
 passed, failed = 0, 0
 SERVICES = ("sync", "wg-apply", "admission")
@@ -135,7 +137,8 @@ def scenario(cluster):
 
     header("5  without authenticated time the authority signs nothing")
     cluster.time[AUTH] = False                       # chrony stops vouching (the stand-in's switch)
-    until(lambda: not json.loads((cluster.auth.run / "authtime.json").read_text())["authenticated"], 30, 1)
+    ok(until(lambda: not json.loads((cluster.auth.run / "authtime.json").read_text())["authenticated"], 30, 1) is True,
+       "the authority's authtime.json says not authenticated")
     since = time.time()
     # serve tries a beat at its start and then every interval_s (600 s): restarted, it tries now, as after a reboot
     sh("systemctl", "restart", cluster.unit(AUTH, "serve"))
@@ -157,6 +160,10 @@ def main():
         return 2
     present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES + (AUTH,)) if os.path.exists(p)]
     present += sh("systemctl", "list-units", "--all", "--plain", "--no-legend", threenode.UNIT_PREFIX + "*", check=False).stdout.split()[:1]
+    # the authority's time is the host's /run/regalia/authtime.json, which the fixture writes and removes by name: never
+    # over one this host's own regalia-authtime keeps (regalia-kms-51)
+    present += [p for p in (os.path.join(authtime.RUN_DIR, "authtime.json"),) if os.path.lexists(p)]
+    present += [authtime.RUN_DIR + " (not empty)"] if os.path.isdir(authtime.RUN_DIR) and os.listdir(authtime.RUN_DIR) else []
     if present:
         print("three-node-outage: refused: %s exists: another run's leftovers are still here" % ", ".join(present))
         return 2
