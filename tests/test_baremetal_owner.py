@@ -37,7 +37,7 @@ class FakeNode:
 
 
 class OwnerKey:
-    """A stand-in for authority.Pkcs11Signer(alg="ed25519"): public() needs no PIN; every sign() is counted."""
+    """A stand-in for p11sign.Pkcs11Signer(alg="ed25519"): public() needs no PIN; every sign() is counted."""
 
     def __init__(self, key):
         self.key, self.signed = key, []

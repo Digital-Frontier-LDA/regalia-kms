@@ -19,7 +19,7 @@ HOW, three steps, as `enrol` splits its work between root and regalia-sync:
   2. as root, at the console: the body is SHOWN (epoch, sequence, issue and expiry, lifetime) with the SHA-256 of what
      is signed, and the operator TYPES the epoch and the digest's first eight hex digits before the PIN is asked for
      (the YubiKey has no display: its touch proves a person is present, not what was signed; regalia-kms-24). The
-     token is chosen by serial (authority.Pkcs11Signer, in process: the PIN is in no argv and no child's environment,
+     token is chosen by serial (p11sign.Pkcs11Signer, in process: the PIN is in no argv and no child's environment,
      typed with no echo) and its key must be one of the current manifest's owner_keys, checked before the PIN;
   3. as regalia-sync: `_accept` takes {heartbeat, signatures: [node, owner]} into this node's Freshness, whose
      heartbeat.verify applies the quorum and the owner's cap. Peers pull it from here.
@@ -141,7 +141,7 @@ def confirmed(body, typed):
 
 def owner_sign(proposal, manifest, open_signer, confirm, say=print):
     """Step 2, as root: the owner's signature over the proposal's body, after the operator confirmed it. `open_signer()`
-    returns an authority.Pkcs11Signer with alg="ed25519" (its public key is read with no PIN); `confirm(text)` returns
+    returns a p11sign.Pkcs11Signer with alg="ed25519" (its public key is read with no PIN); `confirm(text)` returns
     the typed line. Refused, with nothing signed, if the key is not one of the manifest's owner_keys or the line does
     not match."""
     body = proposal["heartbeat"]
@@ -180,7 +180,7 @@ def beat_by_hand(config_path, open_signer, confirm, run=subprocess.run, say=prin
 
 
 def main(argv=None):
-    from deploy.baremetal import authority, node as node_module
+    from deploy.baremetal import node as node_module, p11sign
     parser = argparse.ArgumentParser(prog="owner", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="op", required=True)
     b = sub.add_parser("beat", help="(root, at the node's console) a heartbeat signed by this node and the owner")
@@ -229,7 +229,7 @@ def main(argv=None):
                     keyfd.zero(typed)
 
         def open_signer():
-            return authority.Pkcs11Signer(args.module, args.serial, args.key_id, None, opensc_conf=args.opensc_conf, key_label=args.key_label,
+            return p11sign.Pkcs11Signer(args.module, args.serial, args.key_id, None, opensc_conf=args.opensc_conf, key_label=args.key_label,
                                           only_token=True, pin=pin, alg="ed25519")
 
         def confirm(text):

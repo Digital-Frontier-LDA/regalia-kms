@@ -303,7 +303,7 @@ class Cluster:
 
     def _owner_token(self):
         """The owner's party (ADR-0002 D30: the owner YubiKey and its backup): two Ed25519 keys on a SoftHSM token, signed
-        through the real authority.Pkcs11Signer(alg="ed25519"), CKM_EDDSA, as the YubiKeys' OpenPGP applet is through OpenSC."""
+        through the real p11sign.Pkcs11Signer(alg="ed25519"), CKM_EDDSA, as the YubiKeys' OpenPGP applet is through OpenSC."""
         if SOFTHSM is None:
             raise RuntimeError("v4 needs SoftHSM (softhsm2), pkcs11-tool (opensc) and PyKCS11 (python3-pykcs11) for the owner's keys")
         d = self.work / "owner-hsm"
@@ -323,8 +323,8 @@ class Cluster:
         """The owner's key `which` (0: the owner's, 1: the backup), as owner.py opens a YubiKey: by serial, Ed25519. Both
         sit on ONE SoftHSM token here (key ids 01 and 02), where the real pair is two YubiKeys with two serials and the
         same slot, chosen by --serial: a fixture's simplification, accepted on #369 (24, after 3e's read)."""
-        from deploy.baremetal import authority
-        return authority.Pkcs11Signer(SOFTHSM, self.owner_serial, "%02x" % (which + 1), None, pin=lambda: OWNER_PIN, alg="ed25519")
+        from deploy.baremetal import p11sign
+        return p11sign.Pkcs11Signer(SOFTHSM, self.owner_serial, "%02x" % (which + 1), None, pin=lambda: OWNER_PIN, alg="ed25519")
 
     def power_cycle(self, name, orderly=True):
         """The node's TPM through a power loss: (orderly) TPM2_Shutdown(CLEAR) first, then the process stopped and
