@@ -19,6 +19,8 @@ hand with its recovery key, then the other two by themselves, through that node.
      X up, it takes a fresh heartbeat from the authority (a new boot of the authority's: its sequence goes on from
      its TPM counter); the other two open their volumes through X's keyslot, unattended; all three leased. Then
      the total outage again, the authority first.
+  4  the authority revokes c (REVOKED_STOLEN): its published chain changes, and its own wg-apply (the path unit's
+     trigger) drops c from its tunnel, as the nodes' do
 """
 import os
 import pathlib
@@ -110,6 +112,14 @@ def scenario(cluster):
                cluster.journal(name, "admission")[-600:])
         outage(cluster, names)
         cluster.start(AUTH)
+
+    header("4  a revocation leaves the authority's own tunnel too")
+    before = cluster.wg_peers(AUTH, "wg-svc")
+    keys = {name: cluster.keys[name]["service"][1] for name in names}
+    said = cluster.revoke("c", "REVOKED_STOLEN", "e2e: the authority's tunnel follows the chain").stdout
+    ok(until(lambda: cluster.wg_peers(AUTH, "wg-svc") == {keys["a"], keys["b"]}, 60, 2) is True and keys["c"] in before,
+       "after `authority revoke` (epoch 2 published), its wg-apply path dropped c from wg-svc; a and b remain",
+       {"before": sorted(before), "after": sorted(cluster.wg_peers(AUTH, "wg-svc")), "said": said[-300:]})
 
 
 def main():

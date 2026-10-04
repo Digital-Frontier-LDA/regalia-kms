@@ -147,7 +147,10 @@ class Cluster:
                 d.mkdir(parents=True)
             os.chmod(n.dir, 0o711)
             self._tpm(n)
-            self._wg_keys(n)
+            if n is not self.auth:                    # the authority's is made by its own `wg-key`
+                self._wg_keys(n)
+        if self.auth:
+            self._authority_config()
         self._identities_and_chain()
         for n in self.nodes.values():
             self._configure(n)
@@ -397,16 +400,18 @@ class Cluster:
             said = sh("journalctl", "-u", unit or self.unit(n.name, service), "-n", "30", "--no-pager", "-o", "cat", check=False).stdout
             raise RuntimeError("%s's %s failed (%d): %s | %s" % (n.name, service, done.returncode, done.stderr.strip()[-300:], said[-1500:]))
 
-    def _authority(self):
-        """The revocation authority's host: its users, its key (the test revocation key, a file signer), its
-        configuration, and its store and counters initialised from the chain (`init`, as its own user)."""
+    def _authority_config(self):
+        """The revocation authority's host, before the chain: its users, its signing key (the test revocation key,
+        a file signer), its configuration and directories, and its WireGuard key made by `authority wg-key` (as
+        root: root:regalia-authority 0640), whose public key the nodes' site configurations take."""
         from cryptography.hazmat.primitives import serialization
         a = self.auth
         sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia-authority.sysusers.conf"))
         etc = a.dir / "etc"
         key = etc / "revocation.pem"
         key.write_bytes(hbt.REVOKE.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
-        (etc / "chain.json").write_text(json.dumps(self.chain))
+        shutil.chown(key, "regalia-authority", "regalia-authority")
+        os.chmod(key, 0o600)
         a.cfg_path = etc / "authority.json"
         a.cfg_path.write_text(json.dumps({
             "schema": "regalia.authority/v1", "root_key": hbt.pub(hbt.ROOT), "tcti": a.tcti, "nv_epoch": "0x01500016",
@@ -414,13 +419,26 @@ class Cluster:
             "interval_s": 600, "lifetime_s": None, "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"],
             "wg_service_key": str(etc / "wg-service.key"), "underlays": {n.name: n.underlay for n in self.nodes.values()},
             "listen_port": 51821, "sync_port": 7444, "control_socket": str(a.run / "control.sock")}))
-        for path in (key, etc / "wg-service.key"):
-            shutil.chown(path, "regalia-authority", "regalia-authority")
-            os.chmod(path, 0o600)
         for d, mode in ((a.state, 0o751), (a.run, 0o700)):      # StateDirectoryMode= and RuntimeDirectoryMode= of its unit
             shutil.chown(d, "regalia-authority", "regalia-authority")
             os.chmod(d, mode)
-        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(etc / "chain.json")))
+        said = self.authority_command("wg-key").stdout
+        self.keys[AUTH] = {"service": (None, said.strip().rsplit(" ", 1)[-1])}
+
+    def authority_command(self, *argv):
+        """`authority.py` as root on its host (wg-key, revoke, status)."""
+        return sh("/usr/bin/python3", "-Es", "-m", "deploy.baremetal.authority", "--config", str(self.auth.cfg_path), *argv, cwd=str(self.code))
+
+    def _authority(self):
+        """Its store and counters initialised from the chain (`init`, as its own user)."""
+        a = self.auth
+        chain = a.dir / "etc" / "chain.json"
+        chain.write_text(json.dumps(self.chain))
+        self._run(a, "init", oneshot=True, unit=self.unit(AUTH, "init"), args=("--chain", str(chain)))
+
+    def revoke(self, name, state, reason):
+        """The authority revokes a node: `authority revoke`, as root on its host, asked of the running serve."""
+        return self.authority_command("revoke", "--node", name, "--state", state, "--reason", reason)
 
     def _start_authority(self):
         """The authority's host booted: its time checked again, its wg-svc applied, then `serve` (which signs a
@@ -432,6 +450,9 @@ class Cluster:
         shutil.chown(a.run, "regalia-authority", "regalia-authority")
         os.chmod(a.run, 0o700)
         self._run(a, "wg-apply", oneshot=True)
+        # and again at every chain it publishes, as regalia-authority-wg-apply.path runs it
+        self._run(a, "wg-apply", unit=self.unit(AUTH, "wg-watch"),
+                  extra=["--path-property=PathChanged=%s" % (a.state / node.PUBLISHED), "-p", "Type=oneshot"])
         self._run(a, "serve")
         self.services[AUTH] = self.AUTH_SERVICES
 

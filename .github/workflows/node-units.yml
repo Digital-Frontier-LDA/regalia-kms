@@ -183,5 +183,5 @@ jobs:
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
             python3 -Es e2e/three-node-outage.py | tee "$RUNNER_TEMP/outage.log"
-          grep -q '^three-node-outage: 31 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
-            echo "::error::the three-node outage test did not pass all 31 checks" >&2; exit 1; }
+          grep -q '^three-node-outage: 32 passed, 0 failed$' "$RUNNER_TEMP/outage.log" || {
+            echo "::error::the three-node outage test did not pass all 32 checks" >&2; exit 1; }
