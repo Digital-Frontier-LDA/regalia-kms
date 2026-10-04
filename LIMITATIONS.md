@@ -49,7 +49,7 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **No total-outage re-anchor rehearsal** (#391 adds it). The procedure in MEMBERSHIP-RECOVERY.md is not
   yet the total-outage one, and its example names `/var/lib/regalia/membership.json`, while the store
   is under `/var/lib/regalia-sync`.
-- **Nothing advances the ESP's chain after genesis (once #377 is merged).** The initrd refuses an ESP
+- **Nothing advances the ESP's chain after genesis** (#377 is merged; the fix is #410). The initrd refuses an ESP
   chain below the TPM anchor, and `regalia-sync` advances the anchor on every accepted manifest, so a
   node that accepts a second manifest would boot to the recovery prompt. The fix is to write the ESP
   first and advance the anchor after it, in a root oneshot ("ESP advance", #66). It must land before
