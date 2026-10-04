@@ -96,7 +96,7 @@ def phrase(node_id, planned):
     return "re-anchor %s at epoch %d %s" % (node_id, planned["epoch"], planned["manifest_digest"][:8])
 
 
-def reanchor(store, sources, node_id, typed, sink):
+def reanchor(store, sources, node_id, typed, sink, prepare=None):
     """Plan, record the request, check what the operator typed, re-anchor, record the outcome. Returns
     {"epoch", "manifest_digest"} of what the node now holds.
 
@@ -104,7 +104,9 @@ def reanchor(store, sources, node_id, typed, sink):
     and manifest BEFORE anything is asked or changed (if that cannot be written, nothing is done), then the
     outcome: ALLOW; DENY (refused, nothing changed); or INCOMPLETE (the anchor was being replaced and it
     did not finish: Incomplete is raised, and the command is run again). `typed` is a callable given the
-    plan and returning what the operator typed, so nothing is asked before the plan exists."""
+    plan and returning what the operator typed, so nothing is asked before the plan exists. `prepare(planned)`, if
+    given, runs once the plan exists and before anything is recorded as requested, asked or changed (the define policy
+    from the manifest being anchored, NodePolicies.prepare): a refusal there is a DENY with nothing changed."""
     def event(kind, planned, **more):
         return dict({"event": kind, "subject": convergence._printable(node_id), "peer": "operator",
                      "epoch": planned.get("epoch", 0), "manifest_digest": planned.get("manifest_digest", ""),
@@ -116,6 +118,12 @@ def reanchor(store, sources, node_id, typed, sink):
     except Refused as refusal:
         sink(event("reanchor", {}, outcome="DENY", reason=convergence._printable(refusal)))
         raise
+    if prepare is not None:
+        try:
+            prepare(planned)
+        except Refused as refusal:
+            sink(event("reanchor", planned, outcome="DENY", reason=convergence._printable(refusal)))
+            raise
     sink(event("reanchor-requested", planned))
     store.reanchor_began = False
     try:
@@ -164,24 +172,43 @@ def node_policy(path, node_id):
     return policy
 
 
-def node_policies(path, node_id):
-    """(policy, define_policy) for main: with --node-config, the configuration is loaded, checked to be this node's,
-    and its define policy (node.define_policy) RESOLVED NOW, before the re-anchor begins: a config that cannot be read,
-    another node's, or a define policy that refuses is a refusal with nothing changed (regalia-kms-48), never a
-    re-anchor left INCOMPLETE halfway through its redefinition. When it names a policy, the same value is what the
-    anchor is read by (a definer reads by what it lays down). When it names none (a lab node's unsigned images: the
-    new indices owner-written), the reader's policy stays lazy (node_policy), as nothing after the deletion needs it.
-    Without --node-config: node_policy's lazy refusal for a policy-written index, and owner-written new indices."""
-    if path is None:
-        return node_policy(None, node_id), None
-    from deploy.baremetal import node                      # here: node imports the services, which a re-anchor does not need
-    try:
-        cfg = node.load(path)
-    except (OSError, ValueError) as error:
-        raise Refused("--node-config %s cannot be loaded: %s" % (path, error)) from None
-    require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
-    define = node.define_policy(cfg)
-    return (node_policy(path, node_id) if define is None else define), define
+class NodePolicies:
+    """The policies a re-anchor reads and defines the anchor by (#242), from --node-config. The configuration is loaded
+    and checked to be this node's UP FRONT (a typo, an unreadable file, another node's: refused with nothing changed).
+    The define policy is resolved by `prepare`, which reanchor() calls once the plan exists and before anything is
+    asked or changed, from the MANIFEST BEING ANCHORED (node.define_policy(cfg, manifest=planned tip)), never from the
+    chain on disk: a node re-anchored because its state was lost has none, and an old chain on disk may commit to
+    another document (regalia-kms-48 on #416). Its measurements document must be held (measurements.held): refused
+    cleanly, with nothing changed, otherwise. Without --node-config: node_policy's lazy refusal for a policy-written
+    index, and owner-written new indices (as before #242)."""
+
+    def __init__(self, path, node_id):
+        self.path, self.node_id, self.cfg, self.defined, self.prepared = path, node_id, None, None, False
+        if path is not None:
+            from deploy.baremetal import node                  # here: node imports the services, which a re-anchor does not need
+            try:
+                self.cfg = node.load(path)
+            except (OSError, ValueError) as error:
+                raise Refused("--node-config %s cannot be loaded: %s" % (path, error)) from None
+            require(self.cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (self.cfg["node_id"], node_id))
+
+    def prepare(self, planned):
+        if self.cfg is not None:
+            from deploy.baremetal import node
+            self.defined = node.define_policy(self.cfg, manifest=planned["manifest"])
+        self.prepared = True
+
+    def define(self):
+        """HighWater's define_policy: what prepare resolved (None: owner-written new indices)."""
+        require(self.prepared, "the define policy is asked for before the re-anchor's plan: nothing is defined before it")
+        return self.defined
+
+    def reader(self):
+        """HighWater's policy: the planned one once resolved; before that (the plan reading the old anchor), the node's
+        image policy from the chain it holds, as node_policy does."""
+        if self.prepared and self.defined is not None:
+            return self.defined
+        return node_policy(self.path, self.node_id)()
 
 
 def main(argv=None, ask=None, highwater=_highwater, tty=None):
@@ -240,11 +267,12 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
-        # before anything is changed: a node configuration that cannot give the policies refuses here (node_policies)
-        policy, define_policy = node_policies(args.node_config, args.node_id)
-        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policy,
-                                                                          define_policy=define_policy))
-        now_at = reanchor(store, sources, args.node_id, typed, record)
+        # a node configuration that cannot be loaded, or another node's, refuses here; its define policy is resolved
+        # from the manifest being anchored, after the plan and before anything changes (NodePolicies.prepare)
+        policies = NodePolicies(args.node_config, args.node_id)
+        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti, policy=policies.reader,
+                                                                          define_policy=policies.define))
+        now_at = reanchor(store, sources, args.node_id, typed, record, prepare=policies.prepare)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
               "chains. Until it completes, this node's membership does not load." % failure, file=sys.stderr)
