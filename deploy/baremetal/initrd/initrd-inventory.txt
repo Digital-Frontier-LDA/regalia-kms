@@ -54,7 +54,6 @@ generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-mo
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-pivot.service /usr/lib/systemd/system/dracut-pre-pivot.service
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-trigger.service /usr/lib/systemd/system/dracut-pre-trigger.service
 generated dracut l 0777 0:0 etc/systemd/system/initrd.target.wants/dracut-pre-udev.service /usr/lib/systemd/system/dracut-pre-udev.service
-generated dracut d 0755 0:0 etc/systemd/system/sockets.target.wants -
 generated dracut f 0644 0:0 etc/udev/rules.d/11-dm.rules 7a42ae0582bec603f18aa490e21550088680481f15206213718a6b8b84f610bf
 generated dracut f 0644 0:0 etc/udev/rules.d/59-persistent-storage.rules b588882cd9d2b749ec2719aa9d22b5aa4e41d1b655706a8a1dc2945c857d30eb
 generated dracut f 0644 0:0 etc/udev/rules.d/61-persistent-storage.rules 6592192c2ad641cfdc475d31c9f56b23a76d458a95157c2343bbadd36c455775
