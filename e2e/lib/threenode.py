@@ -1376,7 +1376,11 @@ class Cluster:
     def audit_has(self, name, trail, since=0, **fields):
         """The node's trail lines that its COLLECTOR stream holds (line i taken from the trail only where it hashes to
         what event i names: what the collector committed is that line, nothing read from free text), whose fields include
-        `fields` (a value that is a callable is a predicate), at or after `since` (their "at")."""
+        `fields` (a value that is a callable is a predicate), at or after `since` (their "at").
+
+        A TRAIL'S "at" IS WHOLE SECONDS (node.Trail: int(now())), and `since` is usually a time.time(): a line written in
+        the same second as `since` was taken has an "at" BELOW it. So `since` is taken to its second: never a line
+        missed for that (rolling-threenode's step 9 failed so, now and then: regalia-kms-24, after #370)."""
         path = self._trail_path(name, trail)
         lines = path.read_bytes().splitlines(keepends=True) if path.exists() else []
         out = []
@@ -1387,7 +1391,7 @@ class Cluster:
                 value = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(value, dict) or value.get("at", 0) < since:
+            if not isinstance(value, dict) or value.get("at", 0) < int(since):
                 continue
             if all(v(value.get(k)) if callable(v) else value.get(k) == v for k, v in fields.items()):
                 out.append(value)

@@ -299,7 +299,9 @@ def scenario(cluster):
     ok(all(cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW") for s in (b, c)),
        "the leases a issued to b and c from %s (step 5) are in a's stream" % NEXT_IMAGE)
     took = {n: moved_by_sync(cluster, n, retired, 3) for n in (b, c)}
-    ok(all(took.values()), "the sync round that moved b and c to epoch 3, the retire, is in each one's stream (from %s)" % took, took)
+    ok(all(took.values()), "the sync round that moved b and c to epoch 3, the retire, is in each one's stream (from %s)" % took,
+       {n: [{k: e.get(k) for k in ("event", "epoch", "outcome", "peer", "at", "reason")} for e in cluster.audit_has(n, "sync", since=retired - 5)][:16]
+        for n, peer in took.items() if peer is None})
     serving = {n: bool(cluster.audit_has(n, "admission", event="admission-serving", outcome="ALLOW")) for n in names}
     ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
     back = cluster.audit_has(a, "admission", since=a_last["since"], event="admission-serving", outcome="ALLOW")
