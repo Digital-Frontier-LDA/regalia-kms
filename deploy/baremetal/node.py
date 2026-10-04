@@ -62,7 +62,7 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, heartbeat, heartbeat_watch, lease,
+from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
                               measurements, membership, metrics, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
@@ -450,8 +450,11 @@ class Sync:
 
     def server(self):
         manifest = self.manifest()
+        # the enrolment operations (#190): the same contribution store the unlock peer serves paths from
+        enrol = enrolpeer.Peer(unlock.Contributions(self.node.path("contributions.json")), enrolpeer.Wraps(self.node.path("enrol-wraps.json")),
+                               enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for(manifest), self.signer,
-                           wgsvc.key_at, self.trail)
+                           wgsvc.key_at, self.trail, enrol=enrol)
 
     def unlock_peer(self):
         return unlock.Peer(self.node.node_id, self.store, self.freshness, self.node.attester_for,
