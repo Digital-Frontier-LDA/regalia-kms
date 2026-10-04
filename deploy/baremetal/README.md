@@ -776,7 +776,7 @@ Five systemd units in `deploy/baremetal/units/`, all run from one configuration,
 | `regalia-authtime` | root | none, no network | asks chrony every 15 s whether time is authenticated; writes `/run/regalia/authtime.json` |
 | `regalia-wg-apply` (+ `.path`) | root | `CAP_NET_ADMIN` | makes `wg-svc` and `wg-unlock` what the current manifest says, reads them back, brings them up only then; re-run whenever the published chain changes |
 | `regalia-boot-session` | root | none, no network, no device; a oneshot | on a boot where the unlock client presented no session (recovery key), makes one and writes the pair in `/run/regalia` |
-| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else |
+| `regalia-admission` | `regalia-admission` (#191) | none; the TPM through `tss`; IPv6 to the tunnel prefix only | holds the runtime lease, asking peers over the tunnel; writes `/run/regalia/admission/admission.json`, its own directory and nothing else. Its trail (`admission_dir/audit.jsonl`, #340) holds each renewal (`admission-renew`: the issuing peer; a refusal whole the first time of its kind, then counted, one line a minute at most, so a node cut off writes tens of lines a day; attempts back off from 5 s to 60 s while they fail) and each change between serving and not (`admission-serving`, with the reason): it serves only once that change is recorded, and stops serving at once, recording after (a failed record is logged loudly and tried again) |
 | `regalia-sync` | `regalia-sync` | none; the TPM through `tss` | answers peers and booting nodes, pulls manifests and heartbeats, keeps the membership store, runs the heartbeat watch |
 
 - **One writer of the membership chain.** `regalia-sync` owns the store and publishes the verified chain
@@ -960,7 +960,10 @@ the reason itself goes to the time trail.
   server's certificate and key).
 - **Firewall:** `firewall.py` opens TCP 9100 from `monitoring_cidrs` only, the zone that already scrapes the
   KMS daemon's `/metrics`. The service mesh is not widened (decided on #305). The netns firewall e2e checks it
-  is reachable from the monitoring host and from no other zone.
+  is reachable from the monitoring zone and from no other.
+- **Who scrapes it: an external monitoring service the owner chooses** (#351). No Prometheus runs on the nodes;
+  that service scrapes node_exporter over this mutual TLS from its addresses, configured as `monitoring_cidrs`,
+  and loads the rules file below.
 
 **Alerts.**
 - **Rules file:** `deploy/monitoring/regalia-node.rules.yml`. Load it beside `regalia-kms.rules.yml`, and
@@ -980,6 +983,12 @@ the reason itself goes to the time trail.
   under `promtool test rules`. Each must fire, and stay silent when healthy.
 
 ### The revocation authority (#199)
+
+> **Decided (ADR-0002 D28 and #351, 2026-10-04), not built:** there is no authority host. Heartbeats need two signatures from {node a,
+> node b, node c, the owner} (each node with a TPM key usable only under the approved image's PCR policy;
+> the owner with any of the owner's YubiKey 5 approval keys), and revocation and quarantine need two of the
+> nodes, or the owner alone (#199, membership schema v4). What follows describes `authority.py` as it is
+> today, the single-signer process that the node quorum replaces.
 
 `deploy/baremetal/authority.py`, run by `units/regalia-authority.service` on the authority host (not a KMS
 node), signs the heartbeats that keep the nodes authorizing and the manifests that revoke a node, and
@@ -1015,8 +1024,7 @@ it (`service_mesh.authority`).
   `run_dir` must be `/run/regalia` (validated: the unit's only writable directory, root's);
   `units/regalia-authority.tmpfiles.conf` and `regalia-authority.sysusers.conf` make its directories and groups.
   Without authenticated time the authority signs nothing (fail closed; each transition on the time trail, #303).
-  **Not yet on the authority host:** an egress firewall behind chrony's NTS-only sources (a node's comes from
-  `firewall.py`; there is no authority-host ruleset yet), and node_exporter scraping its metrics. Both are follow-ups.
+  No firewall or metrics are built for the authority host: it goes away with #199 (#324 and #341 are on hold).
 - **What root reads:** the store (`membership.json`) is the service user's alone, 0600. `serve` publishes the
   verified chain as `chain.json` (0644) after `init`, `accept` and every revocation's commit, at its start and at
   every beat; `wg-apply` reads that, verifying it from the root key and against the TPM anchor, as a node's
@@ -1051,4 +1059,4 @@ it (`service_mesh.authority`).
     take over (#231);
   - `interval_s`, `lifetime_s`;
   - `revoke_requesters`: `local-root` only. Nothing takes a revocation request from the network.
-- **Not decided here:** where the authority runs (#199, with the fencing authority's A4).
+- **Where the authority runs: nowhere separate** (decided, ADR-0002 D28, #351): its job moves onto the nodes' quorum, as does the fencing authority's (A4).

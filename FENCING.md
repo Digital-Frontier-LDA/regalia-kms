@@ -1,5 +1,12 @@
 # Active/passive fencing contract
 
+> **Decided (ADR-0002 D28 and #351, 2026-10-04), not built:** there is no separate fencing host. An activation lease needs two
+> signatures from {node a, node b, node c, the owner}: two of the three servers is the normal path, the
+> owner's touch-required key the recovery path (so a total-outage recovery can issue one; the owner alone
+> cannot), and the rule against overlapping leases binds every signer. `regalia-fence`, described below,
+> is today's single-key issuer and folds into that node quorum. THREE-SITE-THREAT-MODEL.md A4 is restated
+> as majority agreement.
+
 Backend health is not failover authority. Each site needs a short-lived Ed25519-signed activation
 lease issued by an independently administered fencing authority. The canonical lease binds one
 site, a monotonically increasing epoch, an exact registry digest, and a validity window no longer
@@ -22,7 +29,7 @@ Production commissioning must test network partition, authority outage, clock sk
 old-disk restore, simultaneous promotion attempts, and loss of the active token. No test may accept
 two simultaneous successful hardware operations at different sites.
 
-## The authority: `regalia-fence`
+## The authority today: `regalia-fence` (to fold into the node quorum, #351)
 
 The contract above was written before anything implemented it. `internal/fencing` verified leases
 from the first commit and the daemon has consumed them since it was wired; nothing produced one, so

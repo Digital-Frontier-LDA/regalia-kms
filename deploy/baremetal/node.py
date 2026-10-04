@@ -410,11 +410,54 @@ def admission_file(run_dir):
     return os.path.join(run_dir, "admission", "admission.json")
 
 
+class QuietRefusals:
+    """The admission trail's renewal refusals, bounded (48 on #347): the FIRST refusal of each kind (a peer, and its
+    reason with the numbers and long hex taken out) is recorded whole; later ones of a kind already recorded are
+    counted, and the counts written as one line at most once a PERIOD; a success first writes what is still counted,
+    then itself, and makes the next failure news again. A node cut off from its peers then writes tens of lines a
+    day, not thousands, and the trail still says what happened and how often. `trail(event)` raises if it cannot
+    write: a refusal the trail did not take is the caller's to count again; a success it did not take is not used."""
+    PERIOD = 60
+
+    def __init__(self, trail, clock=time.monotonic):
+        self.trail, self.clock, self.seen, self.pending, self.since = trail, clock, set(), {}, None
+
+    @staticmethod
+    def kind(reason):
+        return re.sub(r"[0-9]+", "N", re.sub(r"[0-9a-fA-F]{8,}", "H", reason))[:160]
+
+    def deny(self, event):
+        key = (event["peer"], self.kind(event["reason"]))
+        if key not in self.seen:
+            self.trail(event)
+            self.seen.add(key)
+            return
+        self.pending[key] = self.pending.get(key, 0) + 1
+        self.since = self.clock() if self.since is None else self.since
+        self.flush(event)
+
+    def flush(self, template, now=False):
+        if not self.pending or (not now and self.clock() - self.since < self.PERIOD):
+            return
+        total = sum(self.pending.values())
+        parts = "; ".join("%s x%d: %s" % (peer or "no peer gave a lease", n, kind) for (peer, kind), n in sorted(self.pending.items()))
+        self.trail(dict(template, peer="", outcome="DENY", repeated=total,
+                        reason=convergence._printable("%d more refused renewal attempts, each of a kind already recorded: %s" % (total, parts),
+                                                      membership.REASON_LIMIT)))
+        self.pending, self.since = {}, None
+
+    def allow(self, event):
+        self.flush(event, now=True)
+        self.trail(event)
+        self.seen.clear()
+
+
 def admission_service(node, daemon_started=None, rand=os.urandom):
     """The lease holder and the admission file, asking peers in turn for a lease over the service tunnel."""
     session, public = boot_session(node.runtime, rand)
     holder = lease.Holder(node.node_id, session, node.clock(), node.tpm_clock(), node.held("lease.json"), run=node.run)
     trail = Trail(node.held("audit.jsonl"), "admission")
+    quiet = QuietRefusals(trail)
 
     class Manifest:
         load = staticmethod(node.manifest)
@@ -427,16 +470,26 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
         require(peers, "no peer to ask for a lease")
         order[:] = order[1:] + order[:1] if order and set(order) == set(peers) else peers
         failures = []
+        event = {"event": "admission-renew", "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest), "subject": node.node_id}
         for name in list(order):
             client = sync.Client(node.node_id, Manifest, None, sources, trail)
             try:
-                return client.renewer(name, node.quote(session, public))(request)
+                got = client.renewer(name, node.quote(session, public))(request)
             except Refused as refused:
                 failures.append("%s: %s" % (name, refused))
-        raise Refused("no peer gave a lease (%s)" % "; ".join(failures))
+                quiet.deny(dict(event, peer=name, outcome="DENY", reason=convergence._printable(refused, membership.REASON_LIMIT)))
+                continue
+            # each attempt on the node's own trail (#340): ALLOW names the peer that issued the lease. A record that
+            # cannot be written fails the attempt: a lease nobody recorded is not used.
+            quiet.allow(dict(event, peer=name, outcome="ALLOW", reason=""))
+            return got
+        reason = "no peer gave a lease (%d asked: %s)" % (len(failures), "; ".join(sorted(failures)))     # by peer: one kind, whatever the rotation
+        quiet.deny(dict(event, peer="", outcome="DENY", reason=convergence._printable(reason, membership.REASON_LIMIT)))
+        raise Refused(reason)
     return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
                              daemon_started=daemon_started or admission.unit_started(),
-                             metrics=lambda samples: metrics.publish("admission", samples))      # #305
+                             metrics=lambda samples: metrics.publish("admission", samples),      # #305
+                             record=trail)                                                     # #340: serving and not, on its trail
 
 
 class Sync:

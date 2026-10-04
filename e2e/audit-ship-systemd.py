@@ -20,6 +20,7 @@ REGALIA_SHIP_HOST_OK.
      it, the collector's alarm log holds the shipper's alarm, and the metrics say tampered;
   4  a manual start repeats the refusal: it never quietly resumes.
 """
+import configparser
 import grp
 import json
 import os
@@ -41,9 +42,12 @@ ETC = pathlib.Path("/etc/regalia/audit-ship")
 ENV = pathlib.Path("/etc/regalia/audit-ship.env")
 INSTALLED = pathlib.Path("/etc/systemd/system/regalia-audit-ship@.service")
 DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@sync.service.d")
+ADM_INSTANCE = "regalia-audit-ship@admission.service"
+ADM_DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@admission.service.d")
 UNITS = HERE.parent / "deploy" / "baremetal" / "units"
 METRICS = pathlib.Path("/run/regalia-metrics/audit-ship/sync.prom")      # node_exporter's textfile directory (#305)
 HEAD = pathlib.Path("/var/lib/regalia-audit-ship/sync.head.json")      # the unit's -head, for prune
+ADM_HEAD = HEAD.with_name("admission.head.json")
 PORT = 18443
 WORK = pathlib.Path("/var/lib/audit-ship-e2e")   # not under /tmp: the unit has PrivateTmp=yes and would not see it
 passed, failed = 0, 0
@@ -93,12 +97,13 @@ def journal(unit, lines=30):
     return sh("journalctl", "-u", unit, "-n", str(lines), "--no-pager", check=False).stdout
 
 
-def append_as_writer(path, n, start):
-    """trails.append, run as regalia-sync, the sync trail's writer: never the shipper."""
+def append_as_writer(path, n, start, writer="regalia-sync", trail="sync"):
+    """trails.append, run as the trail's writer (regalia-sync for sync, regalia-admission for admission): never the shipper."""
     script = ("import sys; sys.path.insert(0, sys.argv[1]); import trails\nfor i in range(int(sys.argv[3])): "
-              "trails.append(sys.argv[2], {'event': 'sync-pull', 'outcome': 'ALLOW', 'i': int(sys.argv[4]) + i}, group='regalia-audit-sync')")
-    # as regalia-sync.service runs it: its user, and the trail's reader group beside its own (#286)
-    sh("setpriv", "--reuid=regalia-sync", "--regid=regalia-sync", "--groups=regalia-audit-sync", "--", sys.executable, "-Es", "-c", script, str(WORK / "lib"), str(path), str(n), str(start))
+              "trails.append(sys.argv[2], {'event': sys.argv[5] + '-e2e', 'outcome': 'ALLOW', 'i': int(sys.argv[4]) + i}, group='regalia-audit-' + sys.argv[5])")
+    # as its service runs it: its user, and the trail's reader group beside its own (#286)
+    sh("setpriv", "--reuid=" + writer, "--regid=" + writer, "--groups=regalia-audit-" + trail, "--", sys.executable, "-Es", "-c", script,
+       str(WORK / "lib"), str(path), str(n), str(start), trail)
 
 
 def certificates(work):
@@ -117,8 +122,8 @@ def certificates(work):
     issue("shipper2", "extendedKeyUsage=clientAuth\n")                # the rotation's new certificate (#291)
 
 
-def stream_lines(state):
-    streams = list((state / "streams").glob("*/site-sitea.sync.jsonl"))
+def stream_lines(state, trail="sync"):
+    streams = list((state / "streams").glob("*/site-sitea.%s.jsonl" % trail))
     if len(streams) != 1:
         return 0
     return len(streams[0].read_text().splitlines())
@@ -172,6 +177,35 @@ def scenario(work, binaries):
     sh("systemctl", "daemon-reload")
     sh("systemctl", "start", INSTANCE)
     ok(until(lambda: stream_lines(state) == 3, 60), "the collector's stream holds the trail's 3 lines", stream_lines(state))
+
+    print("\n### 1b  the admission trail, in regalia-admission's StateDirectory as the unit makes it (#340, #345)")
+    # the mode the shipped unit gives the directory, read from it: the e2e holds the unit, not a copy of its number
+    units = configparser.ConfigParser(strict=False, interpolation=None)
+    units.read(UNITS / "regalia-admission.service")
+    shipped = int(units["Service"]["StateDirectoryMode"], 8)
+    adm_dir = work / "regalia-admission"
+    adm_dir.mkdir()
+    shutil.chown(adm_dir, "regalia-admission", "regalia-admission")
+    adm_trail = adm_dir / "audit.jsonl"
+    os.chmod(adm_dir, 0o755)
+    append_as_writer(adm_trail, 3, 0, writer="regalia-admission", trail="admission")
+    (ETC / "admission.env").write_text("TRAIL_PATH=%s\n" % adm_trail)
+    adm_instance, adm_dropin = ADM_INSTANCE, ADM_DROPIN
+    adm_dropin.mkdir()
+    shutil.copy(UNITS / "regalia-audit-ship@admission.service.d" / "reader.conf", adm_dropin / "reader.conf")
+    sh("systemctl", "daemon-reload")
+    os.chmod(adm_dir, 0o700)                                   # the directory as it was before #345: the shipper cannot pass it
+    sh("systemctl", "start", adm_instance)
+    time.sleep(8)
+    ok(stream_lines(state, "admission") == 0 and "permission denied" in journal(adm_instance),
+       "with regalia-admission's directory at 0700, the admission trail cannot be read: nothing ships", journal(adm_instance, 5))
+    sh("systemctl", "stop", adm_instance)
+    os.chmod(adm_dir, shipped)
+    sh("systemctl", "start", adm_instance)
+    ok(until(lambda: stream_lines(state, "admission") == 3, 60),
+       "at the unit's StateDirectoryMode (%s) the admission trail ships: the collector's stream holds its 3 lines" % oct(shipped),
+       (stream_lines(state, "admission"), journal(adm_instance, 5)))
+    sh("systemctl", "stop", adm_instance)
 
     print("\n### 2  a line appended later ships on the next pass")
     append_as_writer(trail, 2, 3)
@@ -249,7 +283,7 @@ def main():
         print("audit-ship-systemd: refused: this changes the machine (/usr/bin, a unit, /etc/regalia). It runs on a GitHub-hosted "
               "runner; on another throwaway host set REGALIA_SHIP_HOST_OK to its /etc/machine-id.")
         return 2
-    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, DROPIN, METRICS.parent, WORK) if p.exists()]
+    present = [str(p) for p in (BIN, ETC, ENV, INSTALLED, DROPIN, ADM_DROPIN, METRICS.parent, WORK) if p.exists()]
     if present:
         print("audit-ship-systemd: refused: %s exists: this looks like a host where the shipper is installed" % ", ".join(present))
         return 2
@@ -266,13 +300,14 @@ def main():
     try:
         return scenario(work, binaries)
     finally:
-        for unit in (INSTANCE, COLLECTOR_UNIT):
+        for unit in (INSTANCE, ADM_INSTANCE, COLLECTOR_UNIT):
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
-        for path in (DROPIN / "reader.conf", INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS, HEAD):
+        for path in (DROPIN / "reader.conf", ADM_DROPIN / "reader.conf", ETC / "admission.env", ADM_HEAD, METRICS.with_name("admission.prom"),
+                     INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS, HEAD):
             if path.exists():
                 path.unlink()
-        for directory in (DROPIN, ETC, METRICS.parent):
+        for directory in (DROPIN, ADM_DROPIN, ETC, METRICS.parent):
             if directory.exists():
                 directory.rmdir()
         sh("systemctl", "daemon-reload", check=False)
