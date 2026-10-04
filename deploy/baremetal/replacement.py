@@ -78,8 +78,8 @@ def may_unlock(manifest, peer_id, requester_id, session_id, evidence, attester, 
 
 def identities(node):
     """Every value that identifies a node's hardware: its TPM names, its WireGuard keys, its SSH host key
-    (schema v2), its HSM serials."""
-    return {node[k] for k in membership.identity_keys(node)} | {"hsm:" + s for s in node["hsm_serials"]}
+    (schema v2), its TPM signing key (v4, by its hex), its HSM serials."""
+    return {membership.identity_value(node, k) for k in membership.identity_keys(node)} | {"hsm:" + s for s in node["hsm_serials"]}
 
 
 def check_replacement(current, candidate, old_id, new_id):
@@ -114,5 +114,12 @@ def _check_replacement(current, candidate, old_id, new_id, policy_version_may_ch
                     "the retired entry of %s must keep its identities" % old_id)
         else:
             require(new[node_id] == node, "a replacement does not change %s" % node_id)
-    for k in ("revocation_keys",) if policy_version_may_change else ("policy_version", "revocation_keys"):
-        require(candidate[k] == current[k], "a replacement does not change %s" % k)
+    for k in membership.ROOT_FIELDS:
+        if k == "policy_version" and policy_version_may_change:
+            continue
+        if k in ("heartbeat_signers", "revocation_signers"):
+            # v4: the new node takes the old one's place in the signer rules, and nothing else there changes
+            require(candidate.get(k) == membership.rename_party(current.get(k), old_id, new_id),
+                    "a replacement names %s in place of %s in %s and changes nothing else there" % (new_id, old_id, k))
+        else:
+            require(candidate.get(k) == current.get(k), "a replacement does not change %s" % k)

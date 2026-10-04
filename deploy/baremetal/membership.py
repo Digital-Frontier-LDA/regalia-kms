@@ -7,8 +7,9 @@ node claims (THREE-SITE-THREAT-MODEL.md S2, ADR-0002 D23).
 
     envelope = {"manifest": {...}, "signature": {"signer": "root" | "revocation", "key": "<hex Ed25519 public key>",
                                                  "sig": "<hex Ed25519 signature>"}}
+             | {"manifest": {...}, "signatures": [{"party": "<node_id>" | "owner", "key": "<hex>", "sig": "<hex>"}, ...]}  (v4)
 
-    manifest = {"schema": "regalia.membership/v1" | "regalia.membership/v2" | "regalia.membership/v3", "epoch": <int >= 1>,
+    manifest = {"schema": "regalia.membership/v1" | ... | "regalia.membership/v4", "epoch": <int >= 1>,
                 "prev_digest": "<64 hex, or "" at epoch 1>",
                 "policy_version": "<text>", "issued_at": "YYYY-MM-DDTHH:MM:SSZ",
                 "heartbeat_max_lifetime_s": <int> (v2 only),
@@ -34,6 +35,30 @@ Schemas (#143). v2 is v1 plus two required fields.
     manifest can exceed). It is the window in which a partitioned peer still helps a node revoked
     elsewhere, so it is the root's to set, like the policy version: a revocation key cannot change it.
     There is no default: it is in the signed manifest, or the manifest is invalid.
+v3 is v2 with typed keys (below).
+
+Schema v4 (#199: the three nodes and the owner sign; there is no authority host and no revocation key).
+v3's fields without `revocation_keys`, and:
+  * a node field, `signing_key`: {"alg": "ecdsa-p256", "key": <130 hex>}, a key in the node's own TPM that
+    signs only in an approved image's booted phase (PolicyAuthorize of the system-phase PCR key, #242). An
+    identity like ssh_host_pub: unique across every node, every role and the owner's keys, set only by the
+    root, kept by a tombstone. Every node that is not RETIRED or REVOKED_STOLEN has one; a node retired
+    before v4 keeps the fields it had;
+  * `owner_keys`: one to eight typed keys, {"alg": "ed25519", "key": <64 hex>} (the approval YubiKeys'
+    OpenPGP applet, #126) or ecdsa-p256, together ONE party named "owner". The key's touch policy is
+    "always" (#156), so an owner signature comes from a present human, never a daemon: a setting of the
+    token, which no signature shows, and which the token's set-up checks;
+  * `owner_heartbeat_lifetime_s`: the longest life of a heartbeat the owner signed, with or without nodes
+    (an emergency credential): from 300 s to heartbeat_max_lifetime_s;
+  * `heartbeat_signers`: {"threshold", "parties"}, the parties node IDs or "owner";
+  * `revocation_signers`: one to four such rules, any one of which signs a restrictive change.
+  THE FLOORS ARE THE FORMAT'S: the heartbeat threshold is at least 2, a revocation rule that names a node
+  needs at least 2, and only a rule naming the owner alone may be 1; no threshold exceeds its parties.
+  A quorum-signed envelope is {"manifest", "signatures": [{"party", "key", "sig"}, ...]}: every signature
+  over the same DOMAIN + canonical(manifest), by the key the CURRENT manifest gives that party and verified
+  the way that key's entry says (P-256 low-S for a node, Ed25519 for the owner), all verifying, no party twice. A RETIRED, REVOKED_STOLEN or QUARANTINED node does not count. A quorum
+  may make only the changes a revocation key could (restrictive), and changes none of the signer fields.
+  The move to v4 is one root-signed step, after every verifier has learnt it; revocation_keys end there.
 Each manifest is
 validated under the schema it names, so a chain that starts at v1 and moves to v2 verifies from epoch 1.
 The schema only moves forward, and only in a ROOT-signed manifest: v1 may be followed by v1 or v2, v2
@@ -89,8 +114,17 @@ SCHEMA_V2 = "regalia.membership/v2"
 # initrd's Go accept() until it is ported) refuses the whole manifest rather than misreading a key: the
 # switch is one root-signed step, after every verifier that will see it has learnt v3.
 SCHEMA_V3 = "regalia.membership/v3"
-SCHEMAS = (SCHEMA, SCHEMA_V2, SCHEMA_V3)          # in order: a chain never goes back
+# v4 (#199: no authority host) drops the revocation keys. Heartbeats and restrictive changes are signed by a
+# QUORUM of parties the manifest names: each node by a key in its own TPM (signing_key), and the owner by any
+# one of the approval keys (owner_keys). See "Schema v4" in the docstring.
+SCHEMA_V4 = "regalia.membership/v4"
+SCHEMAS = (SCHEMA, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)          # in order: a chain never goes back
 HEARTBEAT_MIN_S, HEARTBEAT_HARD_MAX_S = 3600, 7 * 24 * 3600      # what a v2 manifest may set as heartbeat_max_lifetime_s
+OWNER_HEARTBEAT_MIN_S = 300                                      # the least a v4 manifest may set as owner_heartbeat_lifetime_s
+OWNER = "owner"                                                  # the owner's party name in a v4 signer rule (never a node_id)
+HEARTBEAT_FLOOR = NODE_RULE_FLOOR = 2                            # no single party keeps a cluster alive or revokes alone,
+                                                                 # except the owner's own revocation rule (1 of owner)
+MAX_OWNER_KEYS, MAX_RULES, MAX_SIGNATURES = 8, 4, 16
 DOMAIN = b"regalia-membership/v1\0"
 MAX_BYTES = 256 * 1024
 MAX_CHAIN_BYTES = 64 * 1024 * 1024
@@ -107,6 +141,13 @@ IDENTITY_KEYS = ("ek_name", "ak_name", "wg_boot_pub", "wg_service_pub")
 V2_MANIFEST_KEYS = MANIFEST_KEYS + ("heartbeat_max_lifetime_s",)
 V2_NODE_KEYS = NODE_KEYS + ("ssh_host_pub",)
 V2_IDENTITY_KEYS = IDENTITY_KEYS + ("ssh_host_pub",)
+SIGNER_FIELDS = ("owner_heartbeat_lifetime_s", "owner_keys", "heartbeat_signers", "revocation_signers")
+V4_MANIFEST_KEYS = tuple(k for k in V2_MANIFEST_KEYS if k != "revocation_keys") + SIGNER_FIELDS
+V4_NODE_KEYS = V2_NODE_KEYS + ("signing_key",)
+# What only the root may change: a quorum (or a v1-v3 revocation key) leaves every one as it was.
+ROOT_FIELDS = ("policy_version", "revocation_keys", "heartbeat_max_lifetime_s") + SIGNER_FIELDS
+# A node that is retired, revoked or quarantined is named in a signer rule but does not count.
+NOT_COUNTING = ("RETIRED", "REVOKED_STOLEN", "QUARANTINED")
 
 
 class Refused(Exception):
@@ -236,9 +277,30 @@ def root_entries(root, label="the root key"):
     return out
 
 
+SIGNING_KEY_ALGS, OWNER_KEY_ALGS = ("ecdsa-p256",), ("ed25519", "ecdsa-p256")
+
+
+def typed_key(entry, label, algs):
+    """(alg, key hex) of a TYPED entry ({"alg", "key"}) whose alg is one of `algs`. A v4 node's signing_key
+    is ecdsa-p256 (a TPM has no Ed25519); an owner key is ed25519 (the approval YubiKeys' OpenPGP applet,
+    #126) or ecdsa-p256. Never a bare string: the algorithm is always written beside the key."""
+    require(isinstance(entry, dict), "%s must be a typed key {\"alg\", \"key\"}" % label)
+    exact(entry, ("alg", "key"), label)
+    require(entry["alg"] in algs, "%s: alg must be one of %s" % (label, ", ".join(algs)))
+    if entry["alg"] != "ed25519":
+        return revocation_entry(entry, label)
+    hex_field(entry["key"], 64, "%s: an ed25519 key" % label)
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(entry["key"]))
+    except ValueError:
+        raise Refused("%s: not an Ed25519 public key" % label) from None
+    return "ed25519", entry["key"]
+
+
 def revocation_alg(manifest, key):
-    """The algorithm the manifest's revocation_keys give for `key` (its hex), or None if it names none."""
-    for entry in manifest["revocation_keys"]:
+    """The algorithm the manifest's revocation_keys give for `key` (its hex), or None if it names none. A v4
+    manifest has no revocation keys: nothing is signed by one under it."""
+    for entry in manifest.get("revocation_keys", ()):
         alg, hexkey = revocation_entry(entry)
         if hexkey == key:
             return alg
@@ -263,17 +325,107 @@ def verify_revocation(alg, key, message, sig, what):
 
 
 def identity_keys(node):
-    """The identity fields a validated node entry carries: v1's four, and ssh_host_pub in a v2 manifest."""
-    return V2_IDENTITY_KEYS if "ssh_host_pub" in node else IDENTITY_KEYS
+    """The identity fields a validated node entry carries: v1's four, ssh_host_pub from v2, and signing_key
+    from v4."""
+    return (V2_IDENTITY_KEYS if "ssh_host_pub" in node else IDENTITY_KEYS) + (("signing_key",) if "signing_key" in node else ())
+
+
+def identity_value(node, k):
+    """An identity as one comparable value: the field itself, or a typed key's hex (signing_key)."""
+    return node[k]["key"] if k == "signing_key" else node[k]
+
+
+def rename_party(rules, old_id, new_id):
+    """A v4 signer rule (or list of rules) with `old_id` named `new_id` instead: what a replacement may do to
+    them, and nothing else (replacement.py)."""
+    if rules is None:
+        return None
+    swap = lambda rule: dict(rule, parties=[new_id if p == old_id else p for p in rule["parties"]])
+    return [swap(r) for r in rules] if isinstance(rules, list) else swap(rules)
+
+
+def _signer_rules(manifest, by_id, seen):
+    """A v4 manifest's signer fields: the owner's keys, the owner's heartbeat bound, and the rules. The
+    floors are the format's, so no root-signed manifest can lower a threshold into danger."""
+    owners = manifest["owner_keys"]
+    require(isinstance(owners, list) and 1 <= len(owners) <= MAX_OWNER_KEYS, "owner_keys must be a list of one to %d keys" % MAX_OWNER_KEYS)
+    for i, entry in enumerate(owners):
+        key = typed_key(entry, "owner_keys[%d]" % i, OWNER_KEY_ALGS)[1]
+        require(key not in seen, "owner_keys[%d] is already used (%s)" % (i, seen.get(key)))
+        seen[key] = "owner_keys[%d]" % i
+    owner_life = manifest["owner_heartbeat_lifetime_s"]
+    require(isinstance(owner_life, int) and not isinstance(owner_life, bool)
+            and OWNER_HEARTBEAT_MIN_S <= owner_life <= manifest["heartbeat_max_lifetime_s"],
+            "owner_heartbeat_lifetime_s must be an integer from %d to heartbeat_max_lifetime_s" % OWNER_HEARTBEAT_MIN_S)
+
+    def rule(value, label, owner_alone):
+        exact(value, ("threshold", "parties"), label)
+        parties = value["parties"]
+        require(isinstance(parties, list) and parties and all(isinstance(p, str) for p in parties), "%s.parties must be a non-empty list of names" % label)
+        require(len(set(parties)) == len(parties), "%s.parties must be distinct" % label)
+        for p in parties:
+            require(p == OWNER or p in by_id, "%s names %r, which is neither a node of this manifest nor %s" % (label, p, OWNER))
+        t = value["threshold"]
+        require(isinstance(t, int) and not isinstance(t, bool), "%s.threshold must be an integer" % label)
+        least = 1 if owner_alone and parties == [OWNER] else (NODE_RULE_FLOOR if owner_alone else HEARTBEAT_FLOOR)
+        require(least <= t <= len(parties), "%s.threshold must be from %d to the number of its parties (%d)" % (label, least, len(parties)))
+
+    rule(manifest["heartbeat_signers"], "heartbeat_signers", owner_alone=False)
+    rules = manifest["revocation_signers"]
+    require(isinstance(rules, list) and 1 <= len(rules) <= MAX_RULES, "revocation_signers must be a list of one to %d rules" % MAX_RULES)
+    for i, r in enumerate(rules):
+        rule(r, "revocation_signers[%d]" % i, owner_alone=True)
+
+
+def counting_parties(current, message, signatures, what):
+    """The parties whose signatures over `message` count under the CURRENT v4 manifest. Every signature must
+    name a party of that manifest with the key it gives that party (a node's signing_key, or one of
+    owner_keys), and must verify the way that key's entry says (a quorum may mix algorithms: P-256 nodes,
+    an Ed25519 owner). A party named twice is refused, never counted once. A node that is
+    RETIRED, REVOKED_STOLEN or QUARANTINED does not count, though its signature must still verify.
+    The same rule for manifests (here) and heartbeats (heartbeat.py)."""
+    require(current is not None and current["schema"] == SCHEMA_V4,
+            "a %s signed by a quorum needs a current %s manifest naming its signers" % (what, SCHEMA_V4))
+    require(isinstance(signatures, list) and 1 <= len(signatures) <= MAX_SIGNATURES,
+            "signatures must be a list of one to %d signatures" % MAX_SIGNATURES)
+    nodes, owners = validate(current), {key: alg for alg, key in (typed_key(e, "owner_keys", OWNER_KEY_ALGS) for e in current["owner_keys"])}
+    named, counting = set(), set()
+    for i, sig in enumerate(signatures):
+        exact(sig, ("party", "key", "sig"), "signatures[%d]" % i)
+        party = sig["party"]
+        require(isinstance(party, str) and party not in named, "signatures[%d]: party %r is named twice or is not a name" % (i, party))
+        named.add(party)
+        require(isinstance(sig["key"], str) and re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{130}", sig["key"]) is not None,
+                "signatures[%d].key must be 64 or 130 lowercase hex" % i)
+        if party == OWNER:
+            require(sig["key"] in owners, "signatures[%d]: the key is not one of the current manifest's owner_keys" % i)
+            alg = owners[sig["key"]]                         # from the manifest's entry, never from the signature
+        else:
+            require(party in nodes and "signing_key" in nodes[party], "signatures[%d]: %r is not a node of the current manifest with a signing_key" % (i, party))
+            require(sig["key"] == nodes[party]["signing_key"]["key"], "signatures[%d]: the key is not %s's signing_key" % (i, party))
+            alg = nodes[party]["signing_key"]["alg"]
+        verify_revocation(alg, sig["key"], message, sig["sig"], "%s (signatures[%d], %s)" % (what, i, party))
+        if party == OWNER or nodes[party]["state"] not in NOT_COUNTING:
+            counting.add(party)
+    return counting
+
+
+def meets(rule, parties):
+    """Whether the counting `parties` meet one signer rule ({"threshold", "parties"})."""
+    return len(parties & set(rule["parties"])) >= rule["threshold"]
 
 
 def validate(manifest):
     """Schema and uniqueness. Returns the manifest's nodes by ID."""
     require(isinstance(manifest, dict), "manifest must be an object")
     require(manifest.get("schema") in SCHEMAS, "schema must be %s" % " or ".join(SCHEMAS))
-    second = manifest["schema"] in (SCHEMA_V2, SCHEMA_V3)        # v3 has v2's fields
-    exact(manifest, V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
-    node_keys = V2_NODE_KEYS if second else NODE_KEYS
+    fourth = manifest["schema"] == SCHEMA_V4
+    second = manifest["schema"] in (SCHEMA_V2, SCHEMA_V3, SCHEMA_V4)        # v3 and v4 have v2's fields
+    exact(manifest, V4_MANIFEST_KEYS if fourth else V2_MANIFEST_KEYS if second else MANIFEST_KEYS, "manifest")
+    node_keys = V4_NODE_KEYS if fourth else V2_NODE_KEYS if second else NODE_KEYS
+    # A tombstone keeps exactly the fields it had: one retired under an earlier schema may lack what later
+    # schemas added (ssh_host_pub from v2, signing_key from v4), and nothing is invented for it.
+    tombstone_shapes = (V4_NODE_KEYS, V2_NODE_KEYS, NODE_KEYS)[(V4_NODE_KEYS, V2_NODE_KEYS, NODE_KEYS).index(node_keys):]
     if second:
         life = manifest["heartbeat_max_lifetime_s"]
         require(isinstance(life, int) and HEARTBEAT_MIN_S <= life <= HEARTBEAT_HARD_MAX_S,
@@ -294,21 +446,23 @@ def validate(manifest):
         datetime.datetime.strptime(manifest["issued_at"], "%Y-%m-%dT%H:%M:%SZ")
     except (TypeError, ValueError):
         raise Refused("issued_at must be UTC, YYYY-MM-DDTHH:MM:SSZ")
-    keys = manifest["revocation_keys"]
-    require(isinstance(keys, list), "revocation_keys must be a list")
-    named = [revocation_entry(k, "revocation_keys[%d]" % i)[1] for i, k in enumerate(keys)]
-    require(len(set(named)) == len(named), "revocation_keys must be distinct")
-    require(manifest["schema"] == SCHEMA_V3 or all(isinstance(k, str) for k in keys),
-            "a typed revocation key ({\"alg\": ...}) needs schema %s" % SCHEMA_V3)
+    if not fourth:
+        keys = manifest["revocation_keys"]
+        require(isinstance(keys, list), "revocation_keys must be a list")
+        named = [revocation_entry(k, "revocation_keys[%d]" % i)[1] for i, k in enumerate(keys)]
+        require(len(set(named)) == len(named), "revocation_keys must be distinct")
+        require(manifest["schema"] == SCHEMA_V3 or all(isinstance(k, str) for k in keys),
+                "a typed revocation key ({\"alg\": ...}) needs schema %s" % SCHEMA_V3)
     nodes = manifest["nodes"]
     require(isinstance(nodes, list) and nodes, "nodes must be a non-empty list")
     by_id, seen = {}, {}
     for i, node in enumerate(nodes):
-        # the one entry that may lack ssh_host_pub under v2: a tombstone (the transition rules keep it as it was)
-        bare = isinstance(node, dict) and "ssh_host_pub" not in node and node.get("state") in TERMINAL
-        exact(node, NODE_KEYS if bare else node_keys, "nodes[%d]" % i)
+        # the entries that may lack later fields: tombstones (the transition rules keep them as they were)
+        shape = next((s for s in tombstone_shapes if isinstance(node, dict) and node.get("state") in TERMINAL and set(node) == set(s)), node_keys)
+        exact(node, shape, "nodes[%d]" % i)
         require(isinstance(node["node_id"], str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node["node_id"]),
                 "nodes[%d].node_id must be a short lowercase name" % i)
+        require(not fourth or node["node_id"] != OWNER, "nodes[%d]: %r is the owner's party name under %s, never a node_id" % (i, OWNER, SCHEMA_V4))
         require(node["node_id"] not in by_id, "duplicate node_id %r" % node["node_id"])
         require(isinstance(node["state"], str) and node["state"] in CAPABILITIES, "nodes[%d].state %r is not a known state" % (i, node["state"]))
         hex_field(node["ek_name"], 68, "nodes[%d].ek_name" % i)
@@ -317,24 +471,39 @@ def validate(manifest):
         hex_field(node["wg_service_pub"], 64, "nodes[%d].wg_service_pub" % i)
         if "ssh_host_pub" in node:
             hex_field(node["ssh_host_pub"], 64, "nodes[%d].ssh_host_pub" % i)
+        if "signing_key" in node:
+            typed_key(node["signing_key"], "nodes[%d].signing_key" % i, SIGNING_KEY_ALGS)
         require(isinstance(node["hsm_serials"], list) and all(isinstance(s, str) and re.fullmatch(r"[A-Za-z0-9]{1,32}", s)
                                                              for s in node["hsm_serials"]), "nodes[%d].hsm_serials" % i)
         # No identity may belong to two nodes: a substituted TPM, key or token would otherwise pass as another.
         # Compared by value across roles: one WireGuard key cannot be a boot key and a service key, on
         # one node or two, one TPM name cannot be an EK and an AK, and an SSH host key is no other key.
         for k in identity_keys(node):
-            require(node[k] not in seen, "%s of %s is already used (%s)" % (k, node["node_id"], seen.get(node[k])))
-            seen[node[k]] = "%s of %s" % (k, node["node_id"])
+            value = identity_value(node, k)
+            require(value not in seen, "%s of %s is already used (%s)" % (k, node["node_id"], seen.get(value)))
+            seen[value] = "%s of %s" % (k, node["node_id"])
         for s in node["hsm_serials"]:
             require(("hsm", s) not in seen, "HSM %s is listed twice" % s)
             seen[("hsm", s)] = node["node_id"]
         by_id[node["node_id"]] = node
+    if fourth:
+        _signer_rules(manifest, by_id, seen)
     return by_id
 
 
 def verify_envelope(envelope, root_key, current=None):
     """The manifest inside an envelope, if its signature is by the pinned root key or by a revocation key
-    named in the CURRENT manifest (never one named by the candidate itself). Returns (manifest, signer)."""
+    named in the CURRENT manifest (never one named by the candidate itself), or, under v4, by a quorum of the
+    parties the CURRENT manifest names: one of its revocation_signers rules met (counting_parties). Returns
+    (manifest, signer), the signer "root", "revocation" or "quorum"."""
+    if isinstance(envelope, dict) and "signatures" in envelope:
+        exact(envelope, ("manifest", "signatures"), "envelope")
+        manifest = envelope["manifest"]
+        validate(manifest)
+        parties = counting_parties(current, DOMAIN + canonical(manifest), envelope["signatures"], "manifest")
+        require(any(meets(rule, parties) for rule in current["revocation_signers"]),
+                "the manifest's signatures meet no revocation_signers rule of the current manifest (counting: %s)" % (", ".join(sorted(parties)) or "none"))
+        return manifest, "quorum"
     exact(envelope, ("manifest", "signature"), "envelope")
     sig = envelope["signature"]
     exact(sig, ("signer", "key", "sig"), "signature")
@@ -351,7 +520,8 @@ def verify_envelope(envelope, root_key, current=None):
         require(alg is not None, "the signing revocation key is not named by the current manifest")
     manifest = envelope["manifest"]
     validate(manifest)
-    require(alg == "ed25519" or manifest["schema"] == SCHEMA_V3, "a manifest signed by a typed (%s) key needs schema %s" % (alg, SCHEMA_V3))
+    require(alg == "ed25519" or manifest["schema"] in (SCHEMA_V3, SCHEMA_V4), "a manifest signed by a typed (%s) key needs schema %s"
+            % (alg, " or ".join((SCHEMA_V3, SCHEMA_V4))))
     try:
         verify_revocation(alg, sig["key"], DOMAIN + canonical(manifest), sig["sig"], "manifest")
     except Refused:
@@ -359,18 +529,20 @@ def verify_envelope(envelope, root_key, current=None):
     return manifest, sig["signer"]
 
 
-def _restrictive(current, candidate):
-    """A revocation-signed change: identities, policy and keys unchanged; capabilities only shrink.
-    (The schema too: accept() has already refused a schema change that the root did not sign.)"""
-    require(candidate["policy_version"] == current["policy_version"], "a revocation key cannot change the policy version")
-    require(candidate["revocation_keys"] == current["revocation_keys"], "a revocation key cannot change the revocation keys")
-    require(candidate.get("heartbeat_max_lifetime_s") == current.get("heartbeat_max_lifetime_s"),
-            "a revocation key cannot change heartbeat_max_lifetime_s")
+def _restrictive(current, candidate, signer="revocation"):
+    """A revocation-signed (v1-v3) or quorum-signed (v4) change: identities, policy, keys and signer rules
+    unchanged; capabilities only shrink. (The schema too: accept() has already refused a schema change that
+    the root did not sign.)"""
+    who = "a revocation key" if signer == "revocation" else "a revocation quorum"
+    names = {"policy_version": "the policy version", "revocation_keys": "the revocation keys"}
+    for k in ROOT_FIELDS:
+        require(candidate.get(k) == current.get(k), "%s cannot change %s" % (who, names.get(k, k)))
     old, new = validate(current), validate(candidate)
-    require(set(old) == set(new), "a revocation key cannot add or remove nodes")
+    require(set(old) == set(new), "%s cannot add or remove nodes" % who)
     for nid, node in new.items():
+        require(set(node) == set(old[nid]), "%s cannot add or drop fields of %s" % (who, nid))
         for k in identity_keys(node) + ("hsm_serials",):
-            require(node[k] == old[nid][k], "a revocation key cannot change %s of %s" % (k, nid))
+            require(node[k] == old[nid][k], "%s cannot change %s of %s" % (who, k, nid))
         require(CAPABILITIES[node["state"]] <= CAPABILITIES[old[nid]["state"]],
                 "%s: %s -> %s widens capabilities; only the root can do that" % (nid, old[nid]["state"], node["state"]))
 
@@ -421,10 +593,10 @@ def accept(current, envelope, root_key):
 
 
 def transition(current, candidate, signer):
-    """accept()'s rules for an already-verified candidate and its signer ("root" or "revocation"). The
-    manifest signer (manifest.py, #156) runs them BEFORE a signature exists, so nothing a node would refuse
-    is ever signed; accept() runs them after verifying one. One set of rules for both."""
-    require(signer in ("root", "revocation"), "signer must be root or revocation")
+    """accept()'s rules for an already-verified candidate and its signer ("root", "revocation" or "quorum").
+    The manifest signer (manifest.py, #156) runs them BEFORE a signature exists, so nothing a node would
+    refuse is ever signed; accept() runs them after verifying one. One set of rules for both."""
+    require(signer in ("root", "revocation", "quorum"), "signer must be root, revocation or quorum")
     validate(candidate)
     if current is None:
         require(signer == "root" and candidate["epoch"] == 1, "the first manifest must be the root-signed epoch 1")
@@ -440,9 +612,9 @@ def transition(current, candidate, signer):
         require(SCHEMAS.index(candidate["schema"]) > SCHEMAS.index(current["schema"]), "schema %s cannot follow %s: the schema "
                 "only moves forward" % (candidate["schema"], current["schema"]))
         require(signer == "root", "only the root can change the schema (%s to %s)" % (current["schema"], candidate["schema"]))
-    _tombstones(current, candidate)        # both signers: the one rule the root cannot override
-    if signer == "revocation":
-        _restrictive(current, candidate)
+    _tombstones(current, candidate)        # every signer: the one rule the root cannot override
+    if signer != "root":
+        _restrictive(current, candidate, signer)
     return candidate
 
 
