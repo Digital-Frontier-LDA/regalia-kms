@@ -16,8 +16,9 @@ comes on STANDARD INPUT as 64 lowercase hex and one newline (read_value), is che
 under the node's PINNED root (verify, check) BEFORE the TPM is touched, and lives only in the process that uses it.
 
 THE CHANNEL. tpm2-tools takes an authorization as `-P <auth>`; on argv it would be in /proc for every local user.
-Every owner call here passes `-P file:/dev/fd/N`, N an anonymous memory file (memfd: never on a disk, reachable only
-through the descriptor the call inherits) holding "hex:<64 hex>" (owner_call). A memfd, not a pipe: tpm2-tools seeks
+Every owner call here passes `-P file:/dev/fd/N`, N an anonymous memory file (memfd) holding "hex:<64 hex>"
+(owner_call): never on a disk nor on a command line; while the call runs it is readable through /proc/<pid>/fd by
+the same user or root (ptrace rules permitting), an accepted residual on a node where these tools run as root. A memfd, not a pipe: tpm2-tools seeks
 the file it reads an authorization from, and a pipe cannot seek. The hex form, because tpm2-tools cuts a raw value at
 its first 0x00 byte (#242, both probed on swtpm). `-C o` appears in
 this module only, and a test holds every other module to that (tests/test_baremetal_ownerauth.py).
@@ -27,6 +28,12 @@ an authorization. A production (v4) enrolment requires both set (#242; the locko
 tpm-lockout.sh).
 
 CURRENT LIMITATIONS (#242):
+  * the owner authorization crosses the TPM bus IN CLEAR when used: tpm2-tools sends `-P` as a password session, and
+    changeauth sends the new value as a command parameter. A discrete TPM on a header (the DL360 Gen9's) can be
+    sniffed by someone with physical access while it is used (enrolment, a re-anchor, a recount). An encrypted HMAC
+    session salted to the EK or SRK would close it; not built (#414);
+  * the value is a Python object (bytes, and the 64-hex text it was read from): it cannot be zeroed, and lives in the
+    process's memory until it exits, as the offline keys' do;
   * the break-glass envelope (.bg.age) is decrypted by the operator with age, and the value reaches these tools on
     standard input in the same form; nothing here reads either envelope file or checks its SHA-256 (the record's
     yk_sha256/bg_sha256 are for the ceremony's own proof);
@@ -248,13 +255,31 @@ def set_owner(auth, tcti=None, run=subprocess.run):
         done = run(["tpm2_changeauth", "-c", "o", "file:/dev/fd/%d" % fd], capture_output=True, env=_env(tcti), pass_fds=(fd,))
     finally:
         os.close(fd)
-    require(done.returncode == 0, "the TPM did not set the owner authorization")
-    require(holds(auth, tcti, run), "the TPM's owner authorization does not answer to the value just set: nothing more is done")
+    require(done.returncode == 0, "the TPM did not set the owner authorization: %s. It should be unchanged; `enrol "
+            "ownerauth --check` with this envelope tells" % _tail(done.stderr))
+    try:
+        proven, why = holds(auth, tcti, run), "it does not answer to it"
+    except Refused as refused:
+        proven, why = False, str(refused)
+    # no-stranding: the TPM said it changed the authorization, and the change cannot be proven
+    require(proven, "the TPM accepted the new owner authorization but the value just set could not be proven (%s): the "
+            "owner authorization may now be UNKNOWN. Re-run `enrol ownerauth --check` with this envelope; if that fails, "
+            "clear the owner hierarchy with the lockout authorization (tpm2_clear -c l, #57) or from the firmware's TPM "
+            "menu, and set it again" % why)
+
+
+AUTH_FAILURE = re.compile(r"\(0x0*9(?:a2|8e)\)", re.IGNORECASE)   # TPM_RC_BAD_AUTH / TPM_RC_AUTH_FAIL, session 1
+
+
+def _tail(stderr):
+    text = stderr.decode("utf-8", "replace") if isinstance(stderr, bytes) else (stderr or "")
+    return text.strip()[-300:] or "(no message)"
 
 
 def holds(auth, tcti=None, run=subprocess.run):
     """Whether the TPM's owner authorization is `auth`: ONE owner-authorized call that changes nothing (changeauth to
-    the same value). False when it is not (a hierarchy authorization is not subject to dictionary-attack lockout)."""
+    the same value). False ONLY when the TPM answers with an authorization failure (0x9a2, or 0x98e); anything else
+    (a busy TPM, a TCTI error, a missing tool) is a refusal, never read as "not this value" (regalia-kms-d9)."""
     require(isinstance(auth, Auth), "the owner authorization is not an ownerauth.Auth")
     fds = []
     try:
@@ -265,4 +290,8 @@ def holds(auth, tcti=None, run=subprocess.run):
     finally:
         for fd in fds:
             os.close(fd)
-    return done.returncode == 0
+    if done.returncode == 0:
+        return True
+    require(AUTH_FAILURE.search(_tail(done.stderr)) is not None,
+            "could not ask the TPM whether its owner authorization is this value: %s" % _tail(done.stderr))
+    return False

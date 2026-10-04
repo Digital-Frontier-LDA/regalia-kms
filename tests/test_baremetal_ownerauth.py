@@ -137,31 +137,87 @@ class TheChannel(unittest.TestCase):
         with self.assertRaises(OSError):
             os.fstat(fd)
 
-    def test_the_package_names_the_owner_only_through_it(self):
-        """24 (#242 C): no `-C o` but through ownerauth's channel, no authorization value on a command line, so a new
-        owner call cannot assume an empty owner authorization again unseen."""
-        found = []
-        for path in sorted((ROOT / "deploy" / "baremetal").glob("*.py")):
-            if path.name == "ownerauth.py":
-                continue
-            for n, line in enumerate(path.read_text().splitlines(), 1):
-                code = line.split("#", 1)[0]
-                if re.search(r'''["']-C["']\s*,\s*["']o["']''', code) and "loadexternal" not in code:
-                    found.append("%s:%d owner hierarchy outside ownerauth: %s" % (path.name, n, line.strip()))
-                if re.search(r'''["'](hex|str):''', code):
-                    found.append("%s:%d an authorization literal: %s" % (path.name, n, line.strip()))
-                flags = "Pp" if "changeauth" in code else "P"       # -p is changeauth's old value (and systemctl's property)
-                for arg in re.findall(r'''["']-[%s]["']\s*,\s*([^,)]+)''' % flags, code):
-                    if not arg.strip().startswith(('"session:', "'session:")):
-                        found.append("%s:%d an authorization not through the channel: %s" % (path.name, n, line.strip()))
+    def test_the_tree_names_the_owner_only_through_it(self):
+        """24 and regalia-kms-d9 (#242 C): no owner hierarchy but through ownerauth's channel, no authorization value on a
+        command line, in deploy/ (Python and shell) and cmd/ (Go), so a new owner call cannot assume an empty owner
+        authorization again unseen. KNOWN lists what may still: each entry must still match (none goes stale)."""
+        found, used = [], set()
+        for path in tree_files():
+            rel = str(path.relative_to(ROOT))
+            for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                for reason in forbidden(rel, line):
+                    known = next((k for k in KNOWN if rel == k[0] and k[1] in line), None)
+                    if known:
+                        used.add(known)
+                    else:
+                        found.append("%s:%d %s: %s" % (rel, n, reason, line.strip()))
         self.assertEqual(found, [])
+        self.assertEqual(sorted(set(KNOWN) - used), [], "a KNOWN entry no longer matches: remove it")
 
-    def test_the_grep_finds_what_it_is_for(self):
-        """The grep above, against the calls it forbids (it would pass on anything if its patterns were wrong)."""
-        for bad in ('run(["tpm2_nvdefine", "0x1", "-C", "o"])', "x = 'hex:' + v", 'tpm("nvread", i, "-P", value)'):
-            with self.subTest(bad=bad):
-                self.assertTrue(re.search(r'''["']-C["']\s*,\s*["']o["']''', bad) or re.search(r'''["'](hex|str):''', bad)
-                                or any(not a.strip().startswith('"session:') for a in re.findall(r'''["']-[Pp]["']\s*,\s*([^,)]+)''', bad)))
+    def test_the_patterns_find_what_they_are_for(self):
+        """forbidden() itself, on what it must catch and on what it must let be: the grep above uses the same function."""
+        caught = [
+            ("x.py", 'run(["tpm2_nvdefine", "0x1", "-C", "o"])'), ("x.py", 'tpm("evictcontrol", "-C", "owner", "-c", h)'),
+            ("x.py", 'tpm("evictcontrol", "-C", "0x40000001")'), ("x.py", '"tpm2_evictcontrol -C o -c x".split()'),
+            ("x.py", 'tpm("x", "--hierarchy=o")'), ("x.py", 'tpm("x", "-Co")'), ("x.py", "v = 'hex:' + value"),
+            ("x.py", 'tpm("nvread", i, "-P", value)'), ("x.py", 'run(["tpm2_changeauth", "-c", "o", new])'),
+            ("x.sh", "tpm2_evictcontrol -Q -C o -c k.ctx"), ("x.sh", 'tpm2_nvdefine 0x1 -P "$PASS"'),
+            ("x.go", "AuthHandle: tpm2.TPMRHOwner,"),
+        ]
+        for rel, line in caught:
+            with self.subTest(line=line):
+                self.assertTrue(forbidden(rel, line), line)
+        allowed = [
+            ("x.py", 'tpm("loadexternal", "-C", "o", "-G", "rsa")'), ("x.py", '"""the owner (`-C o`)"""'),
+            ("x.py", 'self._tpm(tool, index, "-P", "session:" + session)'), ("x.py", 'host.run(["systemctl", "show", s, "-p", "X"])'),
+            ("x.sh", "tpm2_changeauth -Q -c lockout file:-"), ("x.py", "# -C o in a comment"),
+        ]
+        for rel, line in allowed:
+            with self.subTest(allowed=line):
+                self.assertEqual(forbidden(rel, line), [], line)
+
+
+# What may still name the owner hierarchy, each with its reason (regalia-kms-d9: an explicit list, so none is forgotten)
+KNOWN = (
+    # stdlib-only and run as a standalone script (e2e/tpm-attest-swtpm.sh): the lab's CLI and the three-node fixture.
+    # Production enrolment persists its AK through enrol.identity, which takes the owner authorization
+    ("deploy/baremetal/attest.py", 'tpm2("evictcontrol", "-C", "o"'),
+    # #242 C2: seal-hsm-pin.sh takes the value from the envelope there
+    ("deploy/seal-hsm-pin.sh", "tpm2_evictcontrol -Q -C o"),
+    ("deploy/seal-hsm-pin.sh", "tpm2_createprimary -Q -C o"),
+)
+OWNER = re.compile(r"-C\s*o\b|-C[\"']?\s*,\s*[\"'](?:o|owner|0x40000001)[\"']|--hierarchy\b")
+CHANGEAUTH_OWNER = re.compile(r"changeauth.*-c[\"']?\s*,?\s*[\"']?(?:o|owner)\b")
+PY_AUTH_LITERAL = re.compile(r"[\"'](?:hex|str):")
+PY_AUTH_ARG = r"[\"']-[%s][\"']\s*,\s*([^,)]+)"
+SH_AUTH_ARG = re.compile(r"tpm2_\w+\b.*\s-P\s+(?![\"']?(?:session|file):)")
+
+
+def tree_files():
+    for pattern, under in (("*.py", "deploy"), ("*.sh", "deploy"), ("*.go", "cmd")):
+        for path in sorted((ROOT / under).rglob(pattern)):
+            if path.name == "ownerauth.py" or path.name.endswith("_test.go"):
+                continue
+            yield path
+
+
+def forbidden(rel, line):
+    """Why `line` of file `rel` names the owner hierarchy or an authorization other than through ownerauth's channel."""
+    code = line.split("//", 1)[0] if rel.endswith(".go") else line.split("#", 1)[0]
+    code = re.sub(r"`[^`]*`", "", code)
+    reasons = []
+    if (OWNER.search(code) and "loadexternal" not in code) or CHANGEAUTH_OWNER.search(code) or "TPMRHOwner" in code:
+        reasons.append("the owner hierarchy outside ownerauth")
+    if rel.endswith(".py"):
+        if PY_AUTH_LITERAL.search(code):
+            reasons.append("an authorization literal")
+        flags = "Pp" if "changeauth" in code else "P"       # -p is changeauth's old value (and systemctl's property)
+        args = re.findall(PY_AUTH_ARG % flags, code)
+        if any(not a.strip().startswith(("\"session:", "'session:")) for a in args):
+            reasons.append("an authorization not through the channel")
+    elif rel.endswith(".sh") and SH_AUTH_ARG.search(code):
+        reasons.append("an authorization on the command line")
+    return reasons
 
 
 class OwnerCallsGiveIt(unittest.TestCase):
@@ -245,6 +301,31 @@ class SetAndCheck(unittest.TestCase):
         with self.assertRaisesRegex(m.Refused, "is not a's"):
             self.run_step(node="a", stream=value("b"))
         self.assertIsNone(self.tpm.owner_auth)
+
+    def test_a_set_that_cannot_be_proven_says_the_state_and_the_way_out(self):
+        """regalia-kms-d9 (no stranding): the TPM accepted the new value but the proof failed."""
+        for answer in (b"ERROR: Esys_HierarchyChangeAuth(0x9A2) - tpm:session(1):authorization failure", b"ERROR: Could not load tcti"):
+            with self.subTest(answer=answer):
+                tpm = FakeTpm()
+
+                def run(argv, answer=answer, tpm=tpm, **kw):
+                    if argv[0] == "tpm2_changeauth" and "-p" in argv:        # the proof
+                        return subprocess.CompletedProcess(argv, 1, b"", answer)
+                    return tpm(argv, **kw)
+                with self.assertRaises(m.Refused) as caught:
+                    enrol.set_ownerauth("a", PIN, self.record, value("a"), run=run)
+                self.assertIn("the owner authorization may now be UNKNOWN. Re-run `enrol ownerauth --check` with this envelope; "
+                              "if that fails, clear the owner hierarchy with the lockout authorization (tpm2_clear -c l, #57)",
+                              str(caught.exception))
+
+    def test_only_an_authorization_failure_reads_as_not_this_value(self):
+        """regalia-kms-d9: a busy TPM or a TCTI error is a refusal, never "the wrong envelope"."""
+        auth = ownerauth.from_envelope(value("a"), RECORD, PIN, "a")
+        self.tpm.owner_auth = bytes.fromhex(VECTOR["values"]["b"][:64])
+        self.assertFalse(ownerauth.holds(auth, run=self.tpm))
+        self.tpm.broken = True
+        with self.assertRaisesRegex(m.Refused, "could not ask the TPM whether its owner authorization is this value: the TPM said no"):
+            ownerauth.holds(auth, run=self.tpm)
 
     def test_production_posture(self):
         with self.assertRaisesRegex(m.Refused, "the TPM's owner authorization is empty: a v4 node's is set from its envelope first"):

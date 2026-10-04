@@ -629,22 +629,19 @@ class Verifier:
 
 # ---- the node (tpm2-tools against the TPM named by TPM2TOOLS_TCTI) ----
 
-def tpm2(*args, run=subprocess.run, **kw):
-    done = run(["tpm2_" + args[0], *args[1:]], capture_output=True, text=True, **kw)
+def tpm2(*args, run=subprocess.run):
+    done = run(["tpm2_" + args[0], *args[1:]], capture_output=True, text=True)
     require(done.returncode == 0, "tpm2_%s failed: %s" % (args[0], done.stderr.strip()[-300:]))
 
 
-def node_init(out_dir, run=subprocess.run, owner_auth=None):
-    """Create the EK and a restricted ECDSA P-256 AK under it, both persistent; export their public areas.
-    `owner_auth`: the TPM's owner authorization (ownerauth.Auth) for the AK's evictcontrol; None when it is empty."""
-    from deploy.baremetal import ownerauth
+def node_init(out_dir, run=subprocess.run):
+    """Create the EK and a restricted ECDSA P-256 AK under it, both persistent; export their public areas."""
     ek, ak = os.path.join(out_dir, "ek.pub"), os.path.join(out_dir, "ak.pub")
     with tempfile.TemporaryDirectory(prefix="attest-") as d:
         ctx = os.path.join(d, "ak.ctx")
         tpm2("createek", "-c", EK_HANDLE, "-G", "rsa", "-u", ek, run=run)
         tpm2("createak", "-C", EK_HANDLE, "-c", ctx, "-G", "ecc", "-g", "sha256", "-s", "ecdsa", "-u", ak, run=run)
-        with ownerauth.owner_call(owner_auth) as (owner, kw):
-            tpm2("evictcontrol", *owner, "-c", ctx, AK_HANDLE, run=run, **kw)
+        tpm2("evictcontrol", "-C", "o", "-c", ctx, AK_HANDLE, run=run)
         # Production goes through the kernel resource manager (/dev/tpmrm0), which cleans up after each
         # connection; flushing every transient object (-t) there would break the TPM's other users. Only a
         # private simulator has no manager and keeps what each tool call loaded (deploy/seal-hsm-pin.sh).

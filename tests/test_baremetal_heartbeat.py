@@ -96,6 +96,9 @@ class FakeTpm:
         tool, index = argv[0][len("tpm2_"):], argv[1]
         ok = lambda out=b"": subprocess.CompletedProcess(argv, 0, out, b"")
         no = subprocess.CompletedProcess(argv, 1, b"", b"the TPM said no")
+        # what tpm2-tools prints for a wrong authorization (TPM_RC_BAD_AUTH, session 1), as on swtpm
+        bad_auth = subprocess.CompletedProcess(argv, 1, b"", b"ERROR: Esys_HierarchyChangeAuth(0x9A2) - tpm:session(1):"
+                                               b"authorization failure without DA implications")
         if self.broken:
             return no
         if tool == "getcap" and index == "properties-variable":
@@ -108,12 +111,14 @@ class FakeTpm:
                 if old is None:
                     return no
             new = self._from_fd(rest[0], kw) if len(rest) == 1 else None
-            if old != self._held() or new is None or not new.startswith(b"hex:") or len(new) != 68:
+            if new is None or not new.startswith(b"hex:") or len(new) != 68:
                 return no
+            if old != self._held():
+                return bad_auth
             self.owner_auth = bytes.fromhex(new[4:].decode())
             return ok()
         if "-C" in argv and argv[argv.index("-C") + 1] == "o" and tool != "loadexternal" and not self._owner_ok(argv, kw):
-            return no                                        # the owner authorization not given, or not the one held
+            return bad_auth                                  # the owner authorization not given, or not the one held
         if tool == "getcap":                                 # tpm2_getcap handles-nv-index: what the TPM says it holds
             return ok("".join("- %s\n" % name for name in sorted(self.nv)).encode()) if index == "handles-nv-index" else no
         if tool == "nvdefine":
