@@ -250,23 +250,13 @@ class Cluster:
         return dict(base, label=image, pcrs=dict(base["pcrs"], **{"11": value}))
 
     def accept(self, seed, sets, name):
-        """A new document, {node: [image, ...]} (None: CURRENT), and the epoch that commits to it, taken by every node
-        IN ONE STEP: every node's services are stopped (a crash: the same boot), the document written and the epoch
-        committed to each store, then the services started again. No node judges anything between the two.
-        A node reads ONE measurements.json and binds it to the manifest it holds, so a document that reached a running
-        node before its epoch (or after) would refuse every attestation in between. Delivering the document with the
-        epoch that names it, by its digest, is regalia-kms-24's decision on #75, for the product (d9); until then this
-        fixture keeps the two together by stopping the services, and a host has the same window (KERNEL-UPDATE 2.7).
-        Returns what advance returns."""
+        """A new document, {node: [image, ...]} (None: CURRENT), and the epoch that commits to it. The seed takes both;
+        every other running node pulls the epoch from it and, with it, the document it commits to, before it commits
+        (#332). No service is stopped for it: a node holds documents side by side by digest and judges each epoch by
+        its own, so there is no moment at which one is judged by the other's. Returns what advance returns."""
         document = {"schema": measurements.SCHEMA, "name": name,
                     "nodes": {node: {"accepted": [self.image_set(node, image) for image in images]} for node, images in sets.items()}}
-        others = {node: self.services[node] for node in self.nodes if node != seed and self.running(node)}
-        for node in others:
-            self.stop(node, power=None)
-        result = self.advance(seed, document=document)
-        for node, services in others.items():
-            self.start(node, services)
-        return result
+        return self.advance(seed, document=document)
 
     def reset_count(self, name):
         """The TPM's resetCount (TPM2_ReadClock): one higher after each power cycle."""
@@ -907,8 +897,10 @@ class Cluster:
         stopped take it into their stores as they are (they would pull it when they come back). The other running
         nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
         the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
-        started again). With `document`, the epoch commits to that measurement document (its policy_version), and
-        every node's measurements.json is replaced by it just before the epoch is taken (#75)."""
+        started again). With `document`, the epoch commits to that measurement document (its policy_version). It goes
+        into the store of every node this step commits to (the seed, and the nodes that are stopped), as an operator's
+        `measurements install` does on one host; the running nodes fetch it from the seed by sync with the epoch,
+        and no node is ever judged by another epoch's document (#332)."""
         if self.auth:
             raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
         current = self.manifest
@@ -922,17 +914,13 @@ class Cluster:
         running = [name for name in others if membership.may(manifest, name, "authorize")]   # they pull it from the seed
         services = self.services[seed]
         self.stop(seed, power=None)
-        if document is not None:                        # after the seed stopped: see accept() for the window this leaves
-            for n in self.nodes.values():               # whole or not at all: a service reads it at every decision
-                target = n.dir / "etc" / "measurements.json"
-                staged = target.with_name(".measurements.json.new")
-                staged.write_text(json.dumps(document))
-                os.chmod(staged, os.stat(target).st_mode & 0o777)
-                os.replace(staged, target)
+        if document is not None:
             self.document = document
         for name in self.nodes:
             if name in others:                        # running: its store is its sync's (one that may not authorize is left be)
                 continue
+            if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
+                self.node(name).documents().put(document)
             self.node(name).store().commit(envelope)
             if self.time[name]:
                 self.beat(name, manifest["epoch"] + 1, manifest)
