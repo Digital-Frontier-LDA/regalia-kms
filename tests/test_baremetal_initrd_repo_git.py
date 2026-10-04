@@ -117,6 +117,28 @@ class RepoGit(unittest.TestCase):
                                       env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": "/r", "TOP": top, "DOTGIT": dot_git})
                 self.assertEqual(done.stdout.strip(), want, done.stderr)
 
+    def test_a_root_read_needs_root_owned_unwritable_ancestors(self):
+        """#390: before git runs as root, every directory from / to the checkout, and .git, is root's and not group or
+        other writable, a sticky directory excepted. `stat` and `realpath` are stubbed (root-owned fixtures need sudo)."""
+        ok = {"/": "0 755", "/srv": "0 755", "/srv/r": "0 755", "/srv/r/.git": "0 755"}
+        cases = (("all root's, 755", {}, True),
+                 ("a user's parent", {"/srv": "1000 755"}, False),
+                 ("a group-writable top", {"/srv/r": "0 775"}, False),
+                 ("an other-writable .git", {"/srv/r/.git": "0 757"}, False),
+                 ("a sticky /srv, like /tmp", {"/srv": "0 1777"}, True),
+                 ("a user's .git", {"/srv/r/.git": "1000 755"}, False))
+        for name, change, safe in cases:
+            with self.subTest(name):
+                table = dict(ok, **change)
+                stubs = " ".join('"%s") echo "%s";;' % (k, v) for k, v in table.items())
+                script = ('. "$LIB"; realpath(){ echo /srv/r; }; stat(){ case "${@: -1}" in %s esac; }; '
+                          'repo_git_root_safe' % stubs)
+                done = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                      env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": "/srv/r"})
+                self.assertEqual(done.returncode == 0, safe, done.stderr)
+                if not safe:
+                    self.assertIn("(#390)", done.stderr)
+
     def test_the_allowlist_is_uki_pys(self):
         """The builder and the signer refuse the same configurations (#374's CLONE_CONFIG, once it lands)."""
         import re

@@ -35,9 +35,33 @@ repo_git_uid(){
   if [ "$(id -u)" = 0 ] && [ "$uid" != 0 ]; then echo "$uid"; else id -u; fi
 }
 
+repo_git_root_safe(){
+  # Before git runs AS ROOT (the top and .git both root's): no one but root can replace an entry on the way to
+  # .git/config (#390, regalia-kms-1e). Every directory from / down to the checkout's real path, and .git, is
+  # root's and not writable by group or others; a sticky directory (like /tmp) is allowed, since only its entry's
+  # owner can rename that entry, and the entry below it is then required to be root's. Returns 1, saying which.
+  local path dir info uid mode
+  path="$(realpath -e "$REPO")" || { echo "build-initrd: $REPO cannot be resolved" >&2; return 1; }
+  for dir in "$path/.git" "$path" $(d="$path"; while [ "$d" != / ]; do d="$(dirname "$d")"; echo "$d"; done); do
+    info="$(stat -c '%u %a' "$dir")" || return 1
+    uid="${info% *}" mode="${info#* }"
+    if [ "$uid" != 0 ]; then
+      echo "build-initrd: $dir is not root's (uid $uid): another user could replace what root's git reads (#390)" >&2; return 1
+    fi
+    # the low two octal digits: group and other; write is 2. A sticky directory (mode 1xxx) only lets an entry's
+    # owner rename it, and the entry below has just been required to be root's.
+    if (( (8#$mode & 8#022) != 0 )) && (( (8#$mode & 8#1000) == 0 )); then
+      echo "build-initrd: $dir is writable by group or others (mode $mode): another user could replace what root's git reads (#390)" >&2; return 1
+    fi
+  done
+}
+
 repo_git(){
   local uid gid
   uid="$(repo_git_owner %u)" gid="$(repo_git_owner %g)"
+  if [ "$(id -u)" = 0 ] && [ "$uid" = 0 ]; then
+    repo_git_root_safe || return 1
+  fi
   if [ "$(id -u)" = 0 ] && [ "$uid" != 0 ]; then
     # safe.directory: the working tree's top may still belong to someone else (its contents are compared, never run)
     setpriv --reuid="$uid" --regid="$gid" --clear-groups --no-new-privs -- \
