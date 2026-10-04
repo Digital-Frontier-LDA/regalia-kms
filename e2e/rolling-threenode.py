@@ -2,7 +2,8 @@
 """#75 (Phase 15), tier N: a new image rolled through three nodes while CURRENT and NEXT are both accepted, on
 three nodes (e2e/lib/threenode.py: each its real services in its own namespace, against its own TPM).
 
-    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/rolling-threenode.py
+    REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> REGALIA_AUDIT_BIN=<dir with built regalia-audit-ship, regalia-audit-collector> \
+        sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN,REGALIA_AUDIT_BIN python3 -Es e2e/rolling-threenode.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units), so it runs
 only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
@@ -26,6 +27,9 @@ set it runs read from its TPM (update.running_set). The retire is judged as `rol
   7  b's turn once b itself has seen a on NEXT: b onto NEXT; the retire still refused, naming c; then c onto NEXT
   8  the retire, once every node is seen on NEXT by every peer: accepted; the root signs NEXT alone; c, booted onto
      CURRENT again, gets no key from either peer; onto NEXT, it is unlocked and leased
+  9  #340: every line of every node's sync and admission trail is in the audit collector (a real collector and
+     each node's real shipper: Cluster(audit=True)), and the events the rollout turns on are in it by name: the
+     PCR 11 refusals, the leases a issued on NEXT, the epoch that retired CURRENT, each node's return to serving
 Every move to NEXT is an update: may_reboot first. A boot onto an image that is not approved (step 2), back onto
 CURRENT (step 6) or onto the retired image (step 8) is a power cycle, not an update. During every reboot the two
 other nodes must be given FRESH leases (their peers' trails), not merely hold old ones.
@@ -187,7 +191,7 @@ def scenario(cluster):
         ok(bool(until(lambda: cluster.lease(name), 120, 2)), "%s holds a runtime lease on CURRENT" % name, cluster.journal(name, "admission")[-600:])
 
     header("2  NEXT before the root approved it (a power cycle onto it, not an update): no key for a; b and c serve on")
-    r = reboot(cluster, a, NEXT_IMAGE)
+    r = refused_next = reboot(cluster, a, NEXT_IMAGE)
     quoted = cluster.image_set(a, NEXT_IMAGE)["pcrs"]["11"]
     ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, a, r["since"], quoted) for p in (b, c)),
        "a, booted onto %s under epoch 1, gets no key: both peers refuse it for its PCR 11 (their trails)" % NEXT_IMAGE,
@@ -215,7 +219,7 @@ def scenario(cluster):
         ok(not verdicts[name]["ok"] and "a updates first" in verdicts[name].get("reason", ""), "%s is told to wait: a goes first" % name, verdicts[name])
 
     header("5  a onto NEXT: unlocked, leased, seen on NEXT, and vouching for b and c")
-    r = moved(cluster, a, NEXT_IMAGE, "5")
+    r = on_next = moved(cluster, a, NEXT_IMAGE, "5")
     ok(bool(until(lambda: everyone_saw(cluster, a, NEXT_IMAGE, 2), 300, 5)), "both peers have verified a on %s under epoch 2" % NEXT_IMAGE,
        {p: seen(cluster, p, a) for p in (b, c)})
     ok(bool(until(lambda: leased_by(cluster, a, b, r["since"]) and leased_by(cluster, a, c, r["since"]), 420, 5)),
@@ -231,7 +235,7 @@ def scenario(cluster):
     doc_next = {"schema": measurements.SCHEMA, "name": "v3", "nodes": {n: {"accepted": [cluster.image_set(n, NEXT_IMAGE)]} for n in names}}
     verdict = retire_check(cluster, manifest, doc_both, doc_next)
     ok(isinstance(verdict, str) and "NOT YET" in verdict and "lock out a" in verdict, "the retire is refused, naming a", verdict)
-    moved(cluster, a, NEXT_IMAGE, "6, a again")
+    a_last = moved(cluster, a, NEXT_IMAGE, "6, a again")
 
     header("7  b once it has seen a on NEXT itself, then c")
     ok(bool(until(lambda: seen(cluster, b, a) == (NEXT_IMAGE, 2), 300, 5)), "b's own verifier has seen a on %s" % NEXT_IMAGE, seen(cluster, b, a))
@@ -255,7 +259,7 @@ def scenario(cluster):
     ok(all(until(lambda: cluster.lease(name), 120, 2) for name in names), "every node holds a lease again after the epoch",
        {name: bool(cluster.lease(name)) for name in names})
     # not updates: a power cycle onto the retired image (a stale BootOrder, KERNEL-UPDATE 3.8), then onto NEXT again
-    r = reboot(cluster, c, None)
+    r = refused_retired = reboot(cluster, c, None)
     quoted = cluster.image_set(c)["pcrs"]["11"]
     ok(not opened(r["got"]) and all(refused_for_pcr11(cluster, p, c, r["since"], quoted) for p in (a, b)),
        "c, booted onto the retired CURRENT, gets no key: both peers refuse it for its PCR 11 (their trails)",
@@ -264,6 +268,31 @@ def scenario(cluster):
     r = reboot(cluster, c, NEXT_IMAGE)
     ok(opened(r["got"]) and r["leased"], "c, onto %s, is unlocked through %s and leased" % (NEXT_IMAGE, r["got"].get("peer")), r["got"])
     ok(r["served"], "a and b were freshly leased while c was down")
+
+    header("9  #340: every line of every node's sync and admission trail is in the audit collector, for the node that recorded it")
+    wrong = cluster.audit_complete()
+    counts = {"%s.%s" % (n, t): len(cluster.audit_stream(n, t)) for n in names for t in ("sync", "admission")}
+    ok(wrong == {}, "every node's sync and admission trail is written and in the collector line for line: sequence from 1, chained from "
+       "genesis, each DENY a deny, and its head as the collector's signed receipt and the shipper's head file state it %s" % counts,
+       {"%s.%s" % k: v for k, v in wrong.items()})
+
+    def pcr11(value):
+        return lambda r: bool(r) and ("PCR 11 is %s" % value) in r
+    ok(all(cluster.audit_has(p, "sync", since=refused_next["since"], event="unlock", subject=a, outcome="DENY",
+                             reason=pcr11(cluster.image_set(a, NEXT_IMAGE)["pcrs"]["11"])) for p in (b, c)),
+       "b's and c's refusals of a on the unapproved %s, for its PCR 11 (step 2), are in their streams" % NEXT_IMAGE)
+    ok(all(cluster.audit_has(p, "sync", since=refused_retired["since"], event="unlock", subject=c, outcome="DENY",
+                             reason=pcr11(cluster.image_set(c)["pcrs"]["11"])) for p in (a, b)),
+       "a's and b's refusals of c on the retired CURRENT, for its PCR 11 (step 8), are in their streams")
+    ok(all(cluster.audit_has(a, "sync", since=on_next["since"], event="sync-lease", subject=s, outcome="ALLOW") for s in (b, c)),
+       "the leases a issued to b and c from %s (step 5) are in a's stream" % NEXT_IMAGE)
+    took = {n: bool(cluster.audit_has(n, "sync", event="sync-apply", outcome="ALLOW", epoch=lambda e: e == 3)) for n in (b, c)}
+    ok(all(took.values()), "b and c taking epoch 3, the retire, from a by sync are in their streams", took)
+    serving = {n: bool(cluster.audit_has(n, "admission", event="admission-serving", outcome="ALLOW")) for n in names}
+    ok(all(serving.values()), "each node's change to serving is in its own admission stream", serving)
+    back = cluster.audit_has(a, "admission", since=a_last["since"], event="admission-serving", outcome="ALLOW")
+    ok(bool(back), "a's return to serving after its last reboot (onto %s, step 6) is in a's admission stream" % NEXT_IMAGE,
+       cluster.audit_stream(a, "admission")[-3:])
 
 
 def main():
@@ -280,11 +309,13 @@ def main():
     if present:
         print("rolling-threenode: refused: %s exists: another run's leftovers are still here" % ", ".join(present))
         return 2
-    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK):
-        print("rolling-threenode: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
+    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK) or not all(
+            os.access(os.path.join(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"), b), os.X_OK) for b in ("regalia-audit-ship", "regalia-audit-collector")):
+        print("rolling-threenode: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock and REGALIA_AUDIT_BIN a directory "
+              "with the built regalia-audit-ship and regalia-audit-collector (#340)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work)
+    cluster = threenode.Cluster(work, audit=True)
     try:
         scenario(cluster)
     except Exception as failure:          # noqa: BLE001 - a step that could not run is a failure, said once
