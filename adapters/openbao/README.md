@@ -61,7 +61,11 @@ in [EXTERNAL-KEYS.md](EXTERNAL-KEYS.md). Versioned development packages and
 checksums are described in [PACKAGING.md](PACKAGING.md). The
 [hardware qualification procedure](HARDWARE-QUALIFICATION.md) requires an
 operator and witness. Physical custody, fencing, production HA, supported
-upgrades and migration from the experimental outer frames remain unqualified.
+released-version upgrades and migration from the experimental outer frames
+remain unqualified. The [development matrix](COMPATIBILITY-MATRIX.md) requires
+native Linux amd64 and arm64 checks. The [revision upgrade/rollback drill](UPGRADES.md)
+tests the earlier native-only plugin against the candidate, including g2 state,
+recovery authorization, normal snapshot restore and checksum refusal.
 
 The [three-node software HA drill](HA-QUALIFICATION.md) now exercises actual Raft
 voting membership, active-node SIGKILL, plugin respawn, standby forwarding and
@@ -142,7 +146,7 @@ qualification work.
 
 ## Run
 
-Use Linux and Go 1.26.6 or newer, and a checkout containing the sibling SOPS and root
+Use Linux and Go 1.26.6, and a checkout containing the sibling SOPS and root
 modules (the replacements in go.mod are intentionally local for this PoC).
 The HTTP fixtures import the daemon's Linux-specific admission code. The plugin
 entrypoints themselves do not import the admission or hardware implementations.
@@ -153,8 +157,11 @@ go test -race ./...
 go vet ./...
 
 # Requires the official 2.7.1 release binary, checked against its release checksum.
+# Prepare the pinned predecessor using UPGRADES.md before running all drills.
 OPENBAO_POC_BAO=/absolute/path/to/bao OPENBAO_POC_REQUIRE_E2E=1 \
-  go test -race -count=1 -run TestOpenBao271 -v -timeout 6m
+OPENBAO_POC_PREVIOUS_PLUGIN=/absolute/path/to/previous-plugin \
+OPENBAO_POC_PREVIOUS_SHA256=the_verified_predecessor_sha256 \
+  go test -race -count=1 -run TestOpenBao271 -v -timeout 8m
 ```
 
 The default tests skip the real-server drill if the executable is absent;
@@ -167,6 +174,8 @@ Raft storage and captured logs. It also exercises fresh-node snapshot restore,
 restored-node identity enforcement and rejection with different KMS key material.
 The frame-2/native generation, ambiguous-response crash, External Keys/Transit
 and three-node HA drills are also mandatory when the real-server executable is set.
+The revision upgrade/rollback drill additionally needs the pinned predecessor;
+when required E2E is enabled, missing predecessor configuration fails.
 All fixture identities/state are temporary.
 `OPENBAO_POC_KEEP_FAILURE=1` optionally retains **synthetic** private debug
 artifacts on failure; remove the reported directory after inspection.
@@ -180,7 +189,7 @@ Pinned release archive hashes:
 | openbao_2.7.1_darwin_arm64.tar.gz | `15625b5f69aee5bb4578b4e76e856a2141647342b0f8e5969a8875b44e0fbf91` |
 
 These were checked against the official v2.7.1 release's checksums.txt. CI pins
-the Linux archive and requires the real-server test; a unit-test pass alone is
+each Linux architecture's archive and requires the real-server tests; a unit-test pass alone is
 not compatibility evidence.
 
 Upstream contracts:

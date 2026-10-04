@@ -29,8 +29,9 @@ hash. Keep installed binaries and their directory protected against modification
 by the service caller. Synthetic configuration examples are in the root
 compatibility contract and [EXTERNAL-KEYS.md](EXTERNAL-KEYS.md).
 
-Both targets build; the real-server workflow exercises Linux amd64. Each deployed
-architecture needs its own qualification. No production environment, HA,
+Both targets build; the real-server workflow requires independent native Linux
+amd64 and arm64 checks in the [development matrix](COMPATIBILITY-MATRIX.md).
+Each deployed architecture still needs physical qualification. No production environment, HA,
 upgrade/migration, inspected PKI or physical recovery claim follows from a
 package. The development environment gate remains enabled. Promotion requires
 the [witnessed hardware record](HARDWARE-QUALIFICATION.md) and remaining #123
