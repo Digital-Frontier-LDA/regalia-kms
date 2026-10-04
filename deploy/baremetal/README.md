@@ -211,15 +211,26 @@ Commissioning has two halves:
   `pool`, no `sourcedir` (the distribution's default takes servers from DHCP that way), no `refclock`;
   the clock stepped only during the first three updates, and after them chronyd **exits** on an offset
   over a second, `maxchange 1 3 0`, which only two sources agreeing on a jump can cause: it stays down,
-  time stops being authenticated and the node stops serving until an operator looks. NOTHING RESTARTS
-  IT: chrony's unit has no `Restart=`, and `regalia-authtime` is ordered `After=` chrony, never `Wants=`
-  it (a fresh chronyd steps during its first updates, so a restart would take the jumped time; the
-  systemd e2e kills chronyd, restarts `regalia-authtime` and checks chronyd stays down). The signal is the
-  node going unready (the KMS readiness alert) and chrony's journal line "Adjustment of … seconds exceeds
-  the allowed maximum"; the operator checks the declared servers against an independent clock before
-  `systemctl start chrony`. A reboot starts chronyd as an operator would, and so does nothing a node can
-  refuse: two declared servers that agree on a wrong time are believed at boot, which is why they must
-  belong to independent operators), and the firewall
+  time stops being authenticated and the node stops serving until an operator looks. NOTHING STARTS IT
+  AGAIN BY ITSELF: a fresh chronyd steps during its first updates and would take the jumped time. So any
+  unclean stop of chronyd (that exit, a crash, a kill) leaves a LATCH, `/var/lib/regalia-time/chrony-latch`
+  (root's 0700 directory, made by `regalia.tmpfiles.conf`, never chrony's), written by the drop-in's
+  `ExecStopPost`, and its `ExecStartPre` refuses to start chronyd while it is there: the package upgrade's
+  restart, a manual start and a reboot all leave it stopped. `regalia-authtime` is ordered `After=`
+  chrony and never `Wants=` it. The signal: the node goes unready (the KMS readiness alert), the time trail
+  records `time-unauthenticated` with the reason (below), and chrony's journal says "Adjustment of … seconds
+  exceeds the allowed maximum". The operator compares the declared servers with an independent clock
+  (another site's, a GNSS receiver), runs `python3 -Es -m deploy.baremetal.node time-clear --reason TEXT`
+  as root (recorded in the time trail FIRST, with what the latch held and chrony's line), then
+  `systemctl start chrony`. The systemd e2e kills chronyd and checks: the latch is written; restarting
+  `regalia-authtime`, an upgrade-style restart and a boot-style start leave chronyd down; the clear is
+  recorded; then it starts. A backward jump is refused where expiries are judged anyway
+  (`heartbeat.authenticated_now`: the last reading plus the TPM time since, a floor kept across reboots);
+  what no node can refuse is two declared servers agreeing on a wrong time at the first boot, which is why
+  they must belong to independent operators. Mask the package's other ways of running chronyd at install:
+  `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from tzdata's
+  `leap-seconds.list` (`leapseclist`; Debian 13 ships `right/UTC` only in tzdata-legacy), and the
+  firewall
   opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
   either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`
   (installed in `/etc/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
@@ -231,7 +242,10 @@ Commissioning has two halves:
   firewall and refused by authtime, so declare every network an operator uses. A host whose RTC is far off never authenticates, because
   NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
   service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
-  services believe it for 60 s.
+  services believe it for 60 s. Each change of that answer (and the first after the service starts) is
+  appended to the **time trail** (`/var/log/regalia-time/time.jsonl`, `trails.py`, shipped by
+  `regalia-audit-ship@time`) before it is published, as `time-authenticated` or `time-unauthenticated`
+  with the reason; a transition that cannot be recorded is published as not authenticated.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
   node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
   intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123

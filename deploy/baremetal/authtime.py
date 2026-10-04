@@ -96,6 +96,18 @@ MAX_STALE = 60         # seconds a status file is believed, on the boot clock
 INTERVAL = 15          # seconds between two checks by the root service
 ACCEPTABLE = ("*", "+", "-")   # selected, combined, and agreeing but not combined
 SERVER = sitecfg.NTS_SERVER      # a host name, or an IPv4 address: the site config's rule
+# tzdata's list (Debian 13 ships right/UTC only in tzdata-legacy, which the nodes do not install): chronyd logs
+# "Using leap second list" when it loads it, and the distribution's AppArmor profile reads the zoneinfo tree
+LEAP_SECONDS = "/usr/share/zoneinfo/leap-seconds.list"
+# THE LATCH (#303, regalia-kms-d9 and -24): chronyd that stopped abnormally (maxchange: two sources agreeing on a
+# jump; or any other unclean exit) is recorded here by the chrony drop-in's ExecStopPost, and its ExecStartPre
+# refuses to start chronyd while the file exists: a package upgrade's restart, a manual start and a reboot all
+# leave it stopped, because a fresh chronyd steps to whatever two sources agree on. Root's 0700 directory, made
+# by regalia.tmpfiles.conf, never chrony's own (chronyd parses the network as _chrony and must not be able to
+# remove it). Only `regalia-node time-clear --reason TEXT` removes it, recorded in the time trail first.
+LATCH_DIR = "/var/lib/regalia-time"
+LATCH = LATCH_DIR + "/chrony-latch"
+TRAIL = "time"                   # trails.TRAILS: the time trail (transitions, and each clear of the latch)
 
 
 def _printable(text, limit=membership.NAME_LIMIT):
@@ -199,7 +211,7 @@ def conf(names):
             + "".join("server %s nts iburst\n" % name for name in servers(names))
             + "authselectmode require\nminsources %d\n" % MINIMUM
             + "makestep 1 3\nmaxchange 1 3 0\n"
-            + "ntsdumpdir /var/lib/chrony\ndriftfile /var/lib/chrony/chrony.drift\nleapsectz right/UTC\nrtcsync\ncmdport 0\n")
+            + "ntsdumpdir /var/lib/chrony\ndriftfile /var/lib/chrony/chrony.drift\nleapseclist %s\nrtcsync\ncmdport 0\n" % LEAP_SECONDS)
 
 
 # ---- the one fact, for the services that are not root ----
@@ -222,11 +234,20 @@ def write(path, document):
 
 
 class Service:
-    """The root side: ask chrony, judge, write. `reading()` returns a reading or raises Refused."""
+    """The root side: ask chrony, judge, write. `reading()` returns a reading or raises Refused.
 
-    def __init__(self, path, declared, reading=ask, wall=time.time, boottime=admission.boottime_ms, boot=admission.boot_id, minimum=MINIMUM):
+    EVERY TRANSITION IS AUDITED (#303, regalia-kms-24): the first verdict after the service starts, and each
+    change between authenticated and not, is appended to the time trail (`record`, trails.append) BEFORE it
+    is published, as "time-authenticated" or "time-unauthenticated" with the reason, so a node that stops
+    serving because its clock is not vouched for says so at the collector, before node metrics exist. A
+    transition that cannot be recorded is not published as authenticated: as an audit failure blocks a
+    request in Vault, nothing is vouched for unrecorded."""
+
+    def __init__(self, path, declared, reading=ask, wall=time.time, boottime=admission.boottime_ms, boot=admission.boot_id, minimum=MINIMUM,
+                 record=None):
         self.path, self.reading, self.wall, self.boottime, self.boot, self.minimum = path, reading, wall, boottime, boot(), minimum
         self.declared = servers(declared)
+        self.record, self.recorded = record, None          # the last verdict the trail holds (None: none yet)
 
     def step(self):
         """One check. Returns the document written. The boot clock is read BEFORE chrony is asked: the
@@ -238,7 +259,16 @@ class Service:
             reason = _printable(refusal, membership.REASON_LIMIT)
         except Exception as failure:      # noqa: BLE001 - whatever went wrong, the clock was not shown to be right
             reason = "the check failed (%s)" % type(failure).__name__
-        document = {"schema": SCHEMA, "boot_id": self.boot, "checked_boottime_ms": checked, "authenticated": reason == "", "reason": reason}
+        authenticated = reason == ""
+        if self.record is not None and authenticated != self.recorded:
+            event = {"event": "time-authenticated" if authenticated else "time-unauthenticated", "reason": reason,
+                     "boot_id": self.boot}
+            try:
+                self.record(event)
+                self.recorded = authenticated
+            except Exception as failure:      # noqa: BLE001 - unrecorded, it is not vouched for
+                authenticated, reason = False, "the transition could not be recorded in the time trail (%s)" % type(failure).__name__
+        document = {"schema": SCHEMA, "boot_id": self.boot, "checked_boottime_ms": checked, "authenticated": authenticated, "reason": reason}
         try:
             write(self.path, document)
         except BaseException:
@@ -296,3 +326,35 @@ def clock(path, wall=time.time, **how):
             return wall(), False
         return wall(), True
     return now
+
+
+# ---- the latch, cleared by an operator only ----
+
+def clear_latch(reason, record, latch=LATCH, operator=None, journal=None):
+    """Remove the latch that keeps chronyd stopped, after recording who cleared it, why, what the latch held and
+    what chrony last said about an adjustment it refused (`journal()`): recorded FIRST, so a clear that cannot
+    be recorded does not happen. Returns the event. The operator compares the declared servers with an
+    independent clock before this; chronyd is then started by hand (`systemctl start chrony`)."""
+    require(isinstance(reason, str) and 8 <= len(reason.strip()) <= 1000, "say why the latch may be cleared (--reason, 8 to 1000 characters)")
+    try:
+        with open(latch, "rb") as f:
+            held = f.read(4097)
+    except FileNotFoundError:
+        raise Refused("no latch at %s: chronyd is not held" % latch) from None
+    event = {"event": "time-latch-cleared", "reason": _printable(reason.strip(), membership.REASON_LIMIT),
+             "operator": _printable(operator or os.environ.get("SUDO_USER") or os.environ.get("LOGNAME") or "uid %d" % os.getuid()),
+             "latch": _printable(held.decode("utf-8", "replace").strip(), membership.REASON_LIMIT),
+             "chrony_said": _printable((journal or _last_refused_adjustment)(), membership.REASON_LIMIT)}
+    record(event)
+    os.unlink(latch)
+    return event
+
+
+def _last_refused_adjustment(run=subprocess.run):
+    """chrony's own line for the last adjustment it refused (maxchange), from the journal, or what was found."""
+    try:
+        done = run(["journalctl", "-u", "chrony.service", "-g", "exceeds the allowed maximum", "-n", "1", "-o", "cat", "--no-pager"],
+                   capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as failure:
+        return "the journal could not be read (%s)" % type(failure).__name__
+    return done.stdout.strip() or "no refused adjustment in chrony's journal"

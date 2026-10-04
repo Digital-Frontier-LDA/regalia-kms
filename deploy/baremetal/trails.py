@@ -68,6 +68,9 @@ TRAILS = {
     "sync": ("state_dir/sync-audit.jsonl", "regalia-sync.service (user regalia-sync), node", "sync", "regalia-audit-sync"),
     "admission": ("admission_dir/audit.jsonl", "regalia-admission.service, node", "admission", "regalia-audit-admission"),
     "enrol": (TOOL_DIR + "/enrol.jsonl", "regalia-node enrol, root, by hand, node", "enrol", TOOL_GROUP),
+    # #303: regalia-authtime's transitions (authenticated or not, and why) and each clear of the chrony latch;
+    # both writers are root, the directory is root:regalia-audit-time 0750 (regalia.tmpfiles.conf)
+    "time": ("/var/log/regalia-time/time.jsonl", "regalia-authtime.service and regalia-node time-clear, root, node", "time", "regalia-audit-time"),
     "authority": ("state_dir/audit.jsonl", "regalia-authority.service (user regalia-authority)", "authority", "regalia-audit-authority"),
     "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor", TOOL_GROUP),
     "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount", TOOL_GROUP),
