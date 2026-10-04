@@ -16,13 +16,17 @@ PCR 11, and the key does not sign. A new image signed by the same key needs no n
 PolicyAuthorize over a PCR value). userWithAuth is CLEAR, so the policy is the only way to use it; its
 authValue is empty and gives the admin role only (adminWithPolicy clear), which Certify needs and which can
 neither duplicate the key (fixedParent) nor loosen its use. Made in the TPM (sensitiveDataOrigin), never leaves
-it (fixedTPM), sign only (no decrypt, not restricted: it signs a digest it is given).
+it (fixedTPM), sign only (no decrypt, not restricted: it signs a digest it is given). Like #242's anchor policy, the
+signed PolicyPCR cannot name a command, so in an approved booted phase the key could also be the signing key of a
+Certify, Quote or GetTime; those outputs begin with TPM_GENERATED, and every verifier here hashes a DOMAIN-prefixed
+message, so none can pass for a heartbeat's or a manifest's signature.
 
     attributes  fixedTPM | fixedParent | sensitiveDataOrigin | sign            (0x00040032, and nothing else)
     scheme      ECDSA with SHA-256, NIST P-256, in the key itself
     authPolicy  H(H(0^32 || TPM_CC_PolicyAuthorize || Name(PCR key)) || "")   (empty policyRef)
     parent      the owner hierarchy's ECC P-256 storage primary (tpm2_createprimary's default template)
-    handle      0x81010003, beside the EK (0x81010001) and AK (0x81010002)
+    handle      0x81010003, beside the EK (0x81010001) and AK (0x81010002): attest.RESERVED_HANDLES, which no tool
+                evicts unless its journal proves the object its own
 
 The PCR key's Name is computed here as tpm2_loadexternal loads it (an RSA-2048 public: decrypt | sign |
 userWithAuth, SHA-256 Name, no scheme, no symmetric, the exponent written out), so the policy is checkable without
@@ -57,7 +61,7 @@ from deploy.baremetal import attest, membership, uki
 
 Refused, require = membership.Refused, membership.require
 
-HANDLE = "0x81010003"
+HANDLE = attest.SIGNING_HANDLE
 ALG_RSA = 0x0001
 CC_POLICY_AUTHORIZE = 0x0000016A
 ST_ATTEST_CERTIFY = 0x8017

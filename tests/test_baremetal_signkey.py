@@ -68,6 +68,28 @@ class WithoutTpm(unittest.TestCase):
         self.assertEqual(signkey.low_s(encode_dss_signature(5, 7)), (5).to_bytes(32, "big").hex() + (7).to_bytes(32, "big").hex())
 
 
+SEAL = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "seal-hsm-pin.sh")
+
+
+def seal(*args, env=None):
+    done = subprocess.run(["bash", SEAL, *args], capture_output=True, text=True, env=env)
+    return done.returncode, done.stderr
+
+
+class ReservedHandles(unittest.TestCase):
+    def test_the_pin_tool_refuses_every_node_identity_handle(self):
+        """attest.RESERVED_HANDLES is the one list; the PIN tool's refusal of 0x810100xx must cover all of it, in any case,
+        before it needs root or a TPM: with --replace-import-key it would otherwise evict the key there."""
+        self.assertIn(signkey.HANDLE, attest.RESERVED_HANDLES)
+        for handle in attest.RESERVED_HANDLES + tuple(h.upper().replace("0X", "0x") for h in attest.RESERVED_HANDLES):
+            with self.subTest(handle):
+                rc, err = seal("--init-import-key", "--replace-import-key", "--import-handle", handle)
+                self.assertNotEqual(rc, 0)
+                self.assertIn("the node's identity keys", err)
+        rc, err = seal("--init-import-key", "--replace-import-key", "--import-handle", "0x81000101")
+        self.assertNotIn("the node's identity keys", err)         # the default is not refused for this
+
+
 class OnSwtpm(unittest.TestCase):
     def setUp(self):
         if not all(shutil.which(t) for t in ("swtpm", "tpm2_createprimary", "tpm2_policyauthorize", "openssl")):
@@ -149,6 +171,13 @@ class OnSwtpm(unittest.TestCase):
             f.write(hashlib.sha256(b"x").digest())
         done = subprocess.run(["tpm2_sign", "-c", signkey.HANDLE, "-g", "sha256", "-d", "-o", os.path.join(self.d, "sig"), digest], capture_output=True)
         self.assertNotEqual(done.returncode, 0, "a password session signed with the key: userWithAuth is set")
+
+    def test_the_pin_tool_leaves_the_signing_key_alone(self):
+        blob = signkey.create(self.pem)
+        rc, err = seal("--init-import-key", "--replace-import-key", "--import-handle", signkey.HANDLE, env=dict(os.environ))
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the node's identity keys", err)
+        self.assertEqual(signkey.public(), blob)
 
     def test_made_once(self):
         recorded = []
