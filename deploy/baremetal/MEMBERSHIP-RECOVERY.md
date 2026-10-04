@@ -37,7 +37,8 @@ believes the chain it was given, exactly as a newly enrolled node does. So:
 
 - it is a command an operator runs on the host, never something a service or a peer can trigger;
 - it needs whole chains from **the revocation authority and at least one other node**, agreeing at every
-  epoch they share. Two peers alone are refused, the authority alone is refused, the node being
+  epoch they share (the code today; with no authority host, decided in ADR-0002 D28, the sources a re-anchor
+  trusts are #199's to set, not built). Two peers alone are refused, the authority alone is refused, the node being
   re-anchored is not accepted as its own peer, and **the chain anchored is the authority's**: a peer
   that is ahead of the authority is refused, because its newest epochs would rest on that peer alone;
 - it refuses when the anchor is usable (that case is `recover`'s, under the anchor as it is), and when
