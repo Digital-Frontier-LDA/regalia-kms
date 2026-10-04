@@ -73,8 +73,8 @@ LIMITS, stated:
     fresh leases. `own_state` must be the state file of the verifier this node issues leases with;
     it is an argument, and nothing here can check that it is.
   * Nothing here reboots, installs an image or signs a manifest, and nothing is wired into a
-    service yet. Boot counting and the automatic fallback to CURRENT are systemd-boot's, on the real
-    hosts.
+    service yet. The reboot is update.py's (`apply`: the firmware's BootNext, after may_reboot on
+    live leases); the fallback to CURRENT is BootOrder, after a reset (KERNEL-UPDATE.md, step 3).
 
 THE COMMAND (KERNEL-UPDATE.md is the procedure it serves). Every subcommand READS: files, and with
 --tpm-index this host's TPM anchor (the epoch counter and the record of the manifest it anchors). None

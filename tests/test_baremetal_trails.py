@@ -235,7 +235,7 @@ class Registry(Case):
         self.refused("no trail is called", trails.where, "nope")
         streams = [stream for _, _, stream, _ in trails.TRAILS.values()]
         self.assertEqual(len(streams), len(set(streams)))
-        for name in ("enrol", "reanchor", "recount", "recovery-key", "recovery-reconcile"):
+        for name in ("enrol", "reanchor", "recount", "recovery-key", "recovery-reconcile", "update"):
             self.assertEqual(trails.where(name), "/var/log/regalia/%s.jsonl" % name)
 
     def test_the_node_s_trails_are_where_the_services_write_them(self):
