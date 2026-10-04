@@ -6,7 +6,8 @@ laptop and reach the cluster here, on ONE node: the others pull them from it, as
     sudo python3 -Es -m deploy.baremetal.deliver --config /etc/regalia/node.json --chain CHAIN.json [--documents DOC.json ...]
 
 CHAIN.json is a JSON list of signed envelopes (the root's, or a quorum's) from any epoch; those this node holds already
-are passed over, and the rest are committed in order. Each --documents file is a measurement document an epoch of the
+are verified again (and must be the same manifests: else CONFLICT, an incident), and the rest are committed in
+order, as a sync commits a peer's (convergence.catch_up). Each --documents file is a measurement document an epoch of the
 chain commits to (#332: an epoch is committed only with its document held). Nothing here judges a signature or a
 transition: membership.Store.commit does, as for every epoch from a peer, so a delivery can do nothing a sync could not.
 
@@ -31,27 +32,33 @@ MAX_DOCUMENTS = 8                 # measurement documents in one delivery
 
 
 def deliver(node, envelopes, documents, trail):
-    """As regalia-sync: `documents` put by digest, then every envelope above this node's epoch committed in order (the
-    last one judged by its document, `final`), then the chain republished. Returns the epoch the node is at."""
-    from deploy.baremetal import node as node_module
+    """As regalia-sync: `documents` put by digest, then the envelopes applied as a sync applies a peer's
+    (convergence.catch_up: in order; an epoch this node holds is verified again and must be the same manifest, else
+    CONFLICT; the highest new epoch is judged by its measurements document, #332), then the chain republished. A
+    refusal part-way leaves the node at the last good epoch, which is published and recorded. Returns the epoch the
+    node is at."""
+    from deploy.baremetal import convergence, node as node_module
     require(isinstance(envelopes, list) and envelopes and all(isinstance(e, dict) and isinstance(e.get("manifest"), dict) for e in envelopes),
             "the chain is a non-empty list of signed envelopes")
     store, held = node.store(), node.documents()
     start = store.load()["epoch"]
-    event = {"event": "deliver", "epoch": start}
+    reached, refusal = start, None
     try:
         for document in documents:
             held.put(document)
-        todo = [e for e in envelopes if e["manifest"].get("epoch", 0) > start]
-        require(todo, "this node holds epoch %d already: nothing in the chain is newer" % start)
-        for i, envelope in enumerate(todo):
-            store.commit(envelope, final=i == len(todo) - 1)
-    except Refused as refusal:
-        trail(dict(event, outcome="DENY", reason=str(refusal)[:240]))
-        raise
-    node_module.publish(store, node.path(node_module.PUBLISHED))
+        require(any(isinstance(e["manifest"].get("epoch"), int) and e["manifest"]["epoch"] > start for e in envelopes),
+                "this node holds epoch %d already: nothing in the chain is newer" % start)
+        convergence.catch_up(store, envelopes)
+    except Refused as refused:
+        refusal = refused
+    reached = store.load()["epoch"]
+    if reached > start:                                 # what was committed is published, whatever came after it
+        node_module.publish(store, node.path(node_module.PUBLISHED))
+    if refusal is not None:
+        trail({"event": "deliver", "outcome": "DENY", "epoch": reached, "reason": ("from epoch %d: %s" % (start, refusal))[:240]})
+        raise refusal
     now = store.load()
-    trail(dict(event, outcome="ALLOW", epoch=now["epoch"], digest=membership.digest(now), reason="from epoch %d" % start))
+    trail({"event": "deliver", "outcome": "ALLOW", "epoch": now["epoch"], "digest": membership.digest(now), "reason": "from epoch %d" % start})
     return now["epoch"]
 
 
@@ -76,6 +83,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.op == "_deliver":
+            # only as regalia-sync: run as root, Store would leave membership.json root's and 0600, unreadable by the
+            # service it belongs to (regalia-kms-51's read). `as_sync` is how root gets here
+            import pwd
+            require(os.geteuid() == pwd.getpwnam(SYNC_USER).pw_uid, "_deliver runs as %s only (deliver hands over to it with runuser)" % SYNC_USER)
             node = node_module.Node(node_module.load(args.config))
             # the chain and the documents together: each passed its own limit when root read it (3e's read)
             limit = MAX_CHAIN_BYTES + MAX_DOCUMENTS * measurements.MAX_BYTES + 65536
