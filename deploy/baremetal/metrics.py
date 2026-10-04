@@ -48,11 +48,12 @@ TIME_CAUSE_VALUES = ("ok", "no_leap_zone", "unrecorded", "chrony_unreachable", "
                      "too_few_sources", "other")
 UNLOCK_CAUSES = ("rate", "connections")     # regalia-kms-48's #70 PR 3: refusals before any work is done
 
-# writer: (its directory under RUN_DIR, its file)
+# writer: (its directory under RUN_DIR, its files; None: one per trail)
 WRITERS = {
-    "authtime": ("authtime", "authtime.prom"),
-    "sync": ("sync", "heartbeat.prom"),
-    "admission": ("admission", "lease.prom"),      # not admission.prom: a trail is called admission (its shipper's file)
+    "authtime": ("authtime", ("authtime.prom",)),
+    # the heartbeat watch's, and the unlock listener's refusal counter (#317)
+    "sync": ("sync", ("heartbeat.prom", "unlock.prom")),
+    "admission": ("admission", ("lease.prom",)),      # not admission.prom: a trail is called admission (its shipper's file)
     "audit-ship": ("audit-ship", None),     # one file per trail: <trail>.prom (cmd/regalia-audit-ship -metrics)
 }
 
@@ -131,8 +132,47 @@ def render(writer, samples):
 
 
 def path(writer, name=None, run_dir=RUN_DIR):
-    directory, filename = WRITERS[writer]
-    return os.path.join(run_dir, directory, filename or name)
+    """The file `name` of `writer` (the only one, when it has one), in its directory."""
+    directory, files = WRITERS[writer]
+    if name is None:
+        if not files or len(files) != 1:
+            raise Refused("%s writes several files: name one" % writer)
+        name = files[0]
+    elif files is not None and name not in files:
+        raise Refused("%s writes no file called %s" % (writer, name))
+    return os.path.join(run_dir, directory, name)
+
+
+class Counter:
+    """A counter by cause (the unlock listener's refusals, #317). Counting is an increment under a lock and
+    nothing else: a refusal flood must not become a disk-write flood on the refusing thread (the accept loop,
+    for "connections"; regalia-kms-48). flush() publishes it whole, at start and on the owner's round, and
+    never raises; one lock spans the snapshot and the write, so two flushes cannot publish out of order and
+    make the counter go backwards (which Prometheus would read as a reset)."""
+
+    def __init__(self, writer, name, file, causes, publish=None):
+        import threading
+        self.writer, self.name, self.file = writer, name, file
+        self.counts, self.lock, self.publishing = {cause: 0 for cause in causes}, threading.Lock(), threading.Lock()
+        self.publish = publish or (lambda samples: globals()["publish"](writer, samples, path(writer, file)))
+
+    def samples(self):
+        return [(self.name, {"cause": cause}, count) for cause, count in sorted(self.counts.items())]
+
+    def flush(self):
+        with self.publishing:
+            with self.lock:
+                samples = self.samples()
+            try:
+                self.publish(samples)
+            except Exception:             # noqa: BLE001 - metrics never stop what counts
+                pass
+
+    def __call__(self, cause):
+        """One refusal of `cause`: counted, not written (flush() writes, from the owner's round)."""
+        with self.lock:
+            if cause in self.counts:
+                self.counts[cause] += 1
 
 
 def write(target, text):
