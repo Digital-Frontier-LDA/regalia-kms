@@ -425,13 +425,20 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
         for name in list(order):
             client = sync.Client(node.node_id, Manifest, None, sources, trail)
             try:
-                return client.renewer(name, node.quote(session, public))(request)
+                # each attempt on the node's own trail (#340): ALLOW names the peer that issued the lease, DENY its refusal.
+                # A record that cannot be written fails the attempt: a lease nobody recorded is not used.
+                return convergence.audited(trail, "admission-renew", manifest, node.node_id, name,
+                                           lambda: client.renewer(name, node.quote(session, public))(request))
             except Refused as refused:
                 failures.append("%s: %s" % (name, refused))
-        raise Refused("no peer gave a lease (%s)" % "; ".join(failures))
+        reason = "no peer gave a lease (%s)" % "; ".join(failures)
+        trail({"event": "admission-renew", "epoch": manifest["epoch"], "manifest_digest": membership.digest(manifest),
+               "subject": node.node_id, "peer": "", "outcome": "DENY", "reason": convergence._printable(reason, membership.REASON_LIMIT)})
+        raise Refused(reason)
     return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
                              daemon_started=daemon_started or admission.unit_started(),
-                             metrics=lambda samples: metrics.publish("admission", samples))      # #305
+                             metrics=lambda samples: metrics.publish("admission", samples),      # #305
+                             record=trail)                                                     # #340: serving and not, on its trail
 
 
 class Sync:

@@ -57,6 +57,70 @@ class Metrics(Case):
             metrics.render("admission", samples)
 
 
+class Recorded(Case):
+    """#340: each change between serving and not serving is on the node's admission trail, once, with its reason; TO
+    serving only once recorded, TO not serving at once (recorded after; a failed record is loud and tried again)."""
+
+    def recording(self, fail=lambda event: False):
+        self.trail, self.warned = [], []
+
+        def record(event):
+            if fail(event):
+                raise OSError("the trail is not writable")
+            self.trail.append(event)
+        return admission.Service(self.holder, lambda: self.manifest_now, self.renew, self.path, boottime=lambda: self.ticks,
+                                 boot=lambda: BOOT, record=record, warn=self.warned.append)
+
+    def test_each_change_is_recorded_once_with_its_reason(self):
+        service = self.recording()
+        service.step()
+        service.step()                                                      # no change: nothing more
+        self.assertEqual([(e["event"], e["outcome"], e["peer"], e["subject"], e["epoch"]) for e in self.trail],
+                         [("admission-serving", "ALLOW", "b", "a", 1)])
+        self.peer_up = False
+        self.later(lease.MAX_LIFETIME - admission.MARGIN)                   # into the margin: it stops
+        self.assertEqual(service.step()["serve_until_boottime_ms"], 0)
+        service.step()
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])
+        self.assertIn("renewal failed: peer b is unreachable", self.trail[-1]["reason"])
+        self.peer_up = True
+        self.assertGreater(service.step()["serve_until_boottime_ms"], 0)    # back: recorded again
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY", "ALLOW"])
+
+    def test_it_serves_only_once_the_change_is_recorded(self):
+        """24's rule on #340: going TO serving requires the record."""
+        broken = [True]
+        service = self.recording(fail=lambda event: broken[0])
+        document = service.step()
+        self.assertEqual(document["serve_until_boottime_ms"], 0)
+        self.assertIn("the change to serving could not be recorded on the admission trail: the trail is not writable", document["reason"])
+        self.assertEqual(self.on_disk(), document)
+        broken[0] = False
+        self.assertGreater(service.step()["serve_until_boottime_ms"], 0)
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW"])
+
+    def test_it_stops_serving_even_when_that_cannot_be_recorded_and_says_so(self):
+        """And going TO not serving never waits on the trail: it stops, then records; a failed record is loud and tried
+        again at the next round, never a reason to keep serving."""
+        broken = [False]
+        service = self.recording(fail=lambda event: broken[0] and event["outcome"] == "DENY")
+        service.step()
+        self.peer_up, broken[0] = False, True
+        self.later(lease.MAX_LIFETIME - admission.MARGIN)
+        document = service.step()
+        self.assertEqual((document["serve_until_boottime_ms"], self.on_disk()["serve_until_boottime_ms"]), (0, 0))
+        self.assertEqual(len(self.warned), 1)
+        self.assertIn("AUDIT: this node stopped serving", self.warned[0])
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW"])     # not taken yet
+        service.step()
+        self.assertEqual(len(self.warned), 2)                               # tried again, loud again
+        broken[0] = False
+        service.step()
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])
+        service.step()
+        self.assertEqual([e["outcome"] for e in self.trail], ["ALLOW", "DENY"])     # recorded once
+
+
 class Admission(Case):
     def test_a_node_with_a_lease_is_admitted_until_its_expiry_less_the_margin(self):
         asked_at = self.ticks
@@ -385,3 +449,62 @@ class DaemonStart(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Renewals(unittest.TestCase):
+    """#340: node.admission_service records each renewal attempt on the node's own trail: ALLOW names the issuing peer,
+    DENY carries its refusal, and a last DENY when no peer gave a lease. A lease whose record fails is not used."""
+
+    def service(self, answers, broken=False):
+        from deploy.baremetal import node, sync
+        self.trail = []
+
+        class Trail:
+            def __init__(inner, path, trail):
+                pass
+
+            def __call__(inner, event):
+                if broken and event.get("outcome") == "ALLOW":
+                    raise OSError("the trail is not writable")
+                self.trail.append(event)
+
+        class Client:
+            def __init__(inner, node_id, manifest, freshness, sources, sink):
+                pass
+
+            def renewer(inner, name, quote):
+                def renew(request):
+                    if isinstance(answers[name], Exception):
+                        raise answers[name]
+                    return answers[name]
+                return renew
+        manifest = {"epoch": 3, "nodes": []}
+        fake = unittest.mock.Mock(node_id="a", runtime="/run/regalia", run=None)
+        fake.manifest.return_value = manifest
+        fake.sources.return_value = {"b": None, "c": None}
+        for patcher in (mock.patch.object(node, "boot_session", return_value=("ab" * 32, b"pub")), mock.patch.object(node, "Trail", Trail),
+                        mock.patch.object(sync, "Client", Client), mock.patch.object(node.membership, "digest", return_value="d" * 64),
+                        mock.patch.object(node.lease, "Holder")):
+            patcher.start()                           # for the test's whole length: renew() runs after the service is built
+            self.addCleanup(patcher.stop)
+        return node.admission_service(fake, daemon_started=lambda: None)
+
+    def test_a_refusal_then_an_answer(self):
+        service = self.service({"b": m.Refused("b: a is REVOKED_STOLEN under epoch 3"), "c": {"lease": "envelope"}})
+        self.assertEqual(service.renew({"nonce": "n"}), {"lease": "envelope"})
+        self.assertEqual([(e["event"], e["peer"], e["outcome"]) for e in self.trail], [("admission-renew", "b", "DENY"), ("admission-renew", "c", "ALLOW")])
+        self.assertIn("REVOKED_STOLEN", self.trail[0]["reason"])
+        self.assertEqual((self.trail[1]["subject"], self.trail[1]["epoch"]), ("a", 3))
+
+    def test_no_peer_gave_a_lease(self):
+        service = self.service({"b": m.Refused("b refused"), "c": m.Refused("c did not answer")})
+        with self.assertRaises(m.Refused):
+            service.renew({"nonce": "n"})
+        self.assertEqual([(e["peer"], e["outcome"]) for e in self.trail], [("b", "DENY"), ("c", "DENY"), ("", "DENY")])
+        self.assertIn("no peer gave a lease (b: b refused; c: c did not answer)", self.trail[-1]["reason"])
+
+    def test_a_lease_whose_record_fails_is_not_used(self):
+        service = self.service({"b": {"lease": "envelope"}, "c": {"lease": "envelope"}}, broken=True)
+        with self.assertRaises(OSError):
+            service.renew({"nonce": "n"})
+

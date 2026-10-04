@@ -75,7 +75,9 @@ MARGIN = 10                # seconds held back from the lease's expiry: the daem
 NEVER = "1970-01-01T00:00:00Z"
 # The daemon reads this file with a limit of 4096 bytes (internal/admission/admission.go, maxFileBytes) and
 # refuses a larger one as "oversized", which would hide the reason. So the reason here is bounded well below
-# that; the full text of a refusal goes to the audit trail (convergence.audited), not to this file.
+# that. The full text goes to the node's admission trail (admission_dir/audit.jsonl): each renewal attempt and its
+# answer (node.admission_service, "admission-renew"), and each change between serving and not serving with its reason
+# ("admission-serving", Service below).
 ADMISSION_REASON_LIMIT = 1024
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
@@ -147,9 +149,16 @@ class Service:
     """One node's holder loop. `holder` is its lease.Holder; `manifest()` returns its current manifest (its
     membership.Store.load); `renew(request)` asks a peer and returns the lease envelope, or raises."""
 
-    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id, daemon_started=None, metrics=None):
+    def __init__(self, holder, manifest, renew, path, boottime=boottime_ms, boot=boot_id, daemon_started=None, metrics=None,
+                 record=None, warn=None):
         self.holder, self.manifest, self.renew, self.path, self.boottime = holder, manifest, renew, path, boottime
         self.metrics = metrics                    # #305: metrics(samples) after every round (metrics.publish)
+        # #340: record(event) appends to the node's admission trail, raising if it cannot. Each change between serving
+        # and not serving is recorded once, with its reason: TO serving only once recorded (else it stays not serving);
+        # TO not serving at once, recorded after (a failed record is loud and tried again next round, never a reason
+        # to keep serving). recorded is the state the trail last holds (None: nothing yet this run).
+        self.record, self.recorded = record, None
+        self.warn = warn or (lambda text: print(text, file=sys.stderr, flush=True))
         self.daemon_started = daemon_started      # () -> the daemon's start on the boot clock (ms), or None
         self.boot = boot()
         self.requests_path = path + ".requests"   # nonce -> when it was asked for; survives a restart of this service
@@ -181,6 +190,13 @@ class Service:
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
                 "serve_until_boottime_ms": serve_until, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
+
+    def _transition(self, manifest, envelope, serving, reason):
+        held = envelope["lease"] if envelope else None
+        return {"event": "admission-serving", "epoch": manifest["epoch"] if manifest else 0,
+                "manifest_digest": membership.digest(manifest) if manifest else "", "subject": self.holder.node_id,
+                "peer": held["issuer"] if held and serving else "", "outcome": "ALLOW" if serving else "DENY",
+                "reason": _printable(reason, membership.REASON_LIMIT)}
 
     def _daemon_waits(self):
         """Whether the daemon started after the held lease was asked for: it will not serve on that lease,
@@ -217,8 +233,23 @@ class Service:
             serve_until, reason = before + (left - MARGIN) * 1000, ""
         except Refused as refusal:   # serve_until is still 0: it is set only by a check that passed
             reason = (reason + "; " if reason else "") + str(refusal)
+        serving = bool(serve_until)
+        if serving and self.recorded is not True and self.record is not None:
+            try:                                  # TO serving: on the trail first, or not at all
+                self.record(self._transition(manifest, envelope, True, ""))
+                self.recorded = True
+            except Exception as failure:          # noqa: BLE001 - any failure to record keeps the node not serving
+                serving, serve_until = False, 0
+                reason = "the change to serving could not be recorded on the admission trail: %s" % (str(failure) or type(failure).__name__)
         document = self._document(manifest, envelope, serve_until, reason)
         write(self.path, document)
+        if not serving and self.recorded is not False and self.record is not None:
+            try:                                  # TO not serving: already done (the file above); recorded after
+                self.record(self._transition(manifest, envelope, False, reason))
+                self.recorded = False
+            except Exception as failure:          # noqa: BLE001 - loud, and tried again next round; the node has stopped
+                self.warn("regalia-admission: AUDIT: this node stopped serving (%s) and the admission trail did not take it: %s"
+                          % (reason, str(failure) or type(failure).__name__))
         if self.metrics is not None:
             self.metrics([("regalia_admission_serving", {}, 1 if serve_until else 0),
                           ("regalia_admission_lease_seconds_left", {}, max(0, int(left)) if serve_until else 0)])
