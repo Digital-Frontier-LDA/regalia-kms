@@ -184,6 +184,17 @@ Commissioning has two halves:
   must be that user's or root's, with no group or other write, and nothing above them may let anyone
   else swap them; the boot session (`/run/regalia/boot-session`) must be root's, in root's
   `/run/regalia` (0755).
+  **The tokens are the manifest's (#72).** The admission file also carries this node's `hsm_serials` from
+  the manifest the lease was checked under. Where runtime admission is required (every production
+  configuration, above), the daemon serves a key from a token only if that token's serial is listed. It
+  checks this on every operation, after the token has proved its identity and before any PIN. So
+  `hsm_serials` lists **every** hardware token the node serves from, its YubiKey as much as its HSM, at most
+  16 of them. Each serial is recorded **exactly as the token reports it** (the PKCS#11 token serial
+  number, or the YubiKey's decimal serial), read from the card at enrolment and never typed from a label.
+  The match is exact and case-sensitive, so a padded or mistyped serial fails closed without a word: that
+  token is simply never served. A root-signed manifest that drops a stolen or retired token's serial
+  takes it out of service at the lease service's next step, with no change to the daemon's
+  configuration.
   `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease

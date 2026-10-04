@@ -646,6 +646,8 @@ class OnSwtpm(unittest.TestCase):
     """Two software TPMs: node a re-attests to peer b (attest.py), b signs the lease with its own TPM, a
     holds it; a is revoked; a reboots. Where the tools are provisioned (REGALIA_EXPECT_SWTPM=1) a missing
     one is a failure, not a skip."""
+    # a node's hsm_serials when a caller names its own tokens (e2e/runtime-admission.py lists its SoftHSM token's: #72 G1)
+    hsm_serials = {}
 
     def setUp(self):
         if not all(shutil.which(t) for t in ("swtpm", "tpm2_createak", "tpm2_quote", "tpm2_nvdefine", "openssl")):
@@ -669,7 +671,7 @@ class OnSwtpm(unittest.TestCase):
             "revocation_keys": [hbt.pub(hbt.REVOKE)],
             "nodes": [{"node_id": n, "state": states.get(n, "ACTIVE"), "ek_name": names[n]["ek"], "ak_name": names[n]["ak"],
                        "wg_boot_pub": ("%02x" % (0x70 + i)) * 32, "wg_service_pub": ("%02x" % (0xa0 + i)) * 32,
-                       "hsm_serials": ["DENK04041%02d" % i]} for i, n in enumerate(("a", "b"))]}
+                       "hsm_serials": self.hsm_serials.get(n, ["DENK04041%02d" % i])} for i, n in enumerate(("a", "b"))]}
         self.m1 = self.manifest()
         # peer b: its heartbeat counter and clock on its own TPM, and its attestation verifier for a (intake + enrollment)
         counter = hb.Counter("0x1500018", tcti=self.tcti["b"], lock_path=self.d + "/lock")

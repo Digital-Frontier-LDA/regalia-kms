@@ -13,10 +13,11 @@ so it can replace this file and nothing else there. The daemon accepts the file 
 from that user (runtime_admission_owner) or root, with no group or other write, and nothing above it that
 anyone else could swap; and it accepts the boot session beside it only from root.
 
-    {"schema": "regalia.admission/v1",
+    {"schema": "regalia.admission/v2",
      "node_id": ..., "session_id": "<64 hex: this boot's attested session>",
      "boot_id": "<the kernel's boot ID>",
      "epoch": <the manifest epoch the check was made under>, "manifest_digest": "<64 hex>",
+     "hsm_serials": "<this node's hsm_serials in that manifest, space-separated; "" when none>",
      "lease_issued_at": "YYYY-MM-DDTHH:MM:SSZ",
      "requested_boottime_ms": <when this node asked for the lease it holds>,
      "serve_until_boottime_ms": <the daemon may serve while its CLOCK_BOOTTIME is below this; 0 = no>,
@@ -35,6 +36,12 @@ still gives it, and no more.
 
 IF THIS SERVICE STOPS, the last file stands, and it runs out by itself at the lease's expiry less the
 margin: the daemon stops with no one telling it to.
+
+THE TOKENS ARE THE MANIFEST'S (#72, G1). hsm_serials is this node's entry in the manifest the check was made
+under: the serial of every hardware token it holds (its HSM and its YubiKey alike). The daemon serves a key from a
+token only if that token's serial is listed, checked before the PIN: the root replacing a stolen or retired token
+in the manifest takes the old one out of service at the next step, with no change to the daemon's configuration.
+One string, not a list, so the daemon's reader stays one flat object (a serial is [A-Za-z0-9]{1,32}: no space).
 
 requested_boottime_ms is when the node made the request that the held lease answers. A lease is issued
 after it was asked for, so "asked for after the HSM returned" shows a peer vouched after the HSM
@@ -68,8 +75,8 @@ from deploy.baremetal import lease, membership
 
 Refused, require = membership.Refused, membership.require
 
-SCHEMA = "regalia.admission/v1"
-FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "lease_issued_at",
+SCHEMA = "regalia.admission/v2"
+FIELDS = ("schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
           "requested_boottime_ms", "serve_until_boottime_ms", "reason")
 MARGIN = 10                # seconds held back from the lease's expiry: the daemon stops before a verifier would refuse
 NEVER = "1970-01-01T00:00:00Z"
@@ -82,6 +89,7 @@ ADMISSION_REASON_LIMIT = 1024
 RETRY_FIRST, RETRY_MAX = 5, 60     # seconds between renewal attempts while they fail: 5, 10, 20, 40, 60, 60, ...
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
+MAX_SERIALS = 16           # tokens one node may hold that the daemon will serve from (its reader's bound too)
 
 
 def boottime_ms():
@@ -191,9 +199,24 @@ class Service:
         return {"schema": SCHEMA, "node_id": self.holder.node_id, "session_id": self.holder.session_id, "boot_id": self.boot,
                 "epoch": manifest["epoch"] if manifest else 0,
                 "manifest_digest": membership.digest(manifest) if manifest else "00" * 32,
+                "hsm_serials": self._serials(manifest),
                 "lease_issued_at": held["issued_at"] if held and serve_until else NEVER,
                 "requested_boottime_ms": self._requests().get(held["nonce"], 0) if held and serve_until else 0,
                 "serve_until_boottime_ms": serve_until, "reason": _printable(reason, ADMISSION_REASON_LIMIT)}
+
+    def _node(self, manifest):
+        """This node's entry in `manifest`, or None (no manifest, one that does not validate: holder.check refuses
+        that one, or a manifest that does not name the node)."""
+        try:
+            return membership.validate(manifest).get(self.holder.node_id) if manifest else None
+        except Refused:
+            return None
+
+    def _serials(self, manifest):
+        """This node's hsm_serials in `manifest`, space-separated: "" when it has no entry, or past MAX_SERIALS (step()
+        then refuses to serve)."""
+        node = self._node(manifest)
+        return " ".join(node["hsm_serials"]) if node and len(node["hsm_serials"]) <= MAX_SERIALS else ""
 
     def _transition(self, manifest, envelope, serving, reason):
         held = envelope["lease"] if envelope else None
@@ -217,6 +240,9 @@ class Service:
         try:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
+            node = self._node(manifest)
+            require(node is None or len(node["hsm_serials"]) <= MAX_SERIALS, "this node lists %d hardware tokens in the manifest; "
+                    "the daemon serves from at most %d" % (len(node["hsm_serials"]) if node else 0, MAX_SERIALS))
             waits = self._daemon_waits()
             if (waits or self.holder.due(manifest)) and self.boottime() >= self.retry_at:
                 request = self.holder.request()
