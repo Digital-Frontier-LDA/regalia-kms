@@ -242,6 +242,16 @@ snapshot of the Debian archive, its updates and its security suite (`REGALIA_BOO
 3. Write the inventory with `python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd INITRD --root /`.
 4. Read the diff: the `generated` lines first, then the packages whose versions moved.
 
+Each builder then checks the COMMITTED inventory, the one read in step 4. Its own initrd's inventory must equal
+that inventory line for line, class and origin included. Every `package` line is checked against its `.deb`
+along Debian's signed chain (`deploy/baremetal/debverify.py`, #246). That chain is trusted only through the pinned
+keyring (`KEYRING_SHA256`) and a good signature by a pinned trixie key (`SIGNERS`). A `generated dracut-over:`
+line is accepted only for a path on `uki.DRACUT_OVER`, the pinned list of the paths dracut writes over, each
+with the dracut line that writes it. A link must point where the list says; a file must be the dracut-core file
+the list names. A dracut update that writes over another package path fails the build until that list grows in
+a reviewed change; it is never reclassed by itself. Moving the snapshot to a new Debian release, or to a
+new archive key, moves `KEYRING_SHA256`, `SIGNERS` and `e2e/lib/debian-keyring.sh` in the same pull request.
+
 A pinned snapshot also freezes security fixes, so how stale it may get has a limit. **The date must be moved
 whenever a Debian security advisory (DSA, or a point release's security update) touches a package that the
 inventory names**, and in any case before an image is signed for production. The client binary is not pinned by

@@ -637,6 +637,16 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   swap-backed memory in the initrd. The volume key also lives, by design, in dm-crypt in the kernel and
   briefly in systemd-cryptsetup.
 
+  **A failed unlock reboots; it never offers a shell.** `uki.py build` also requires `rd.shell=0` and
+  `rd.emergency=reboot`, refuses dracut's older `rdshell` and `rdbreak`, and refuses an initrd fragment
+  under `etc/cmdline.d` that says otherwise (#242). A boot whose unlock the peers refuse, as they refuse
+  a retired image's, would otherwise reach dracut's emergency shell, and a shell in the initrd can
+  extend PCR 11 by hand to the booted phase. The root device's wait must not time out into that
+  emergency path while the recovery-key prompt is up; that timeout is set on the root's own entry
+  (#70), not as systemd's default device timeout, which the booted system would apply to every device.
+  The boot test proving both (no shell on a refused unlock; the prompt still takes the recovery key
+  after the old 90 s timeout) lands with #70's ask-password agent.
+
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
   drop-in (`systemd.extra-unit.*`, `systemd.unit-dropin.*`), tmpfiles, sysctl and fstab lines. Sealed to
@@ -795,11 +805,16 @@ removing only what it can prove it made.
   No directory on the way is followed through a link or is writable by others, and no file is replaced.
   The initrd key is taken only from the root's chain: the approved set must name the image's signing
   keys (`"signing"`, #267), so a re-signed copy of an approved image is refused.
+- `commit --replace OLD_ID` (#76): a host that replaces a node is enrolled only as the replacement typed.
+  The manifest that first names it must retire `OLD_ID` and change nothing else (replacement's rules);
+  without `--replace`, such a manifest is refused, and so is any other ID.
+- The heartbeat counter starts at a heartbeat this node verifies from a peer or the authority
+  (`Freshness.accept_first`), never at 0 on a running network. `--bootstrap` allows 0 only at epoch 1, when
+  no reachable source holds a heartbeat. An existing counter is checked against the network.
 - **What stays on disk in the clear, and for how long.**
   - The WG-BOOT private key stays only until its sealed copy is on the ESP.
-  - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until the peers'
-    LUKS paths are enrolled. That step is not built yet, so today it stays indefinitely: **the paths step
-    must land before any production enrolment.**
+  - The local unlock contribution (`/var/lib/regalia-enrol/local.bin`, root 0600) stays until
+    `enrol paths` has a path from every peer.
   - Both live on the root volume, which at enrolment is open with the recovery key: encrypted at rest,
     readable by root while the host runs. Host backups must exclude `/var/lib/regalia-enrol`.
   - Removal is a plain unlink. Overwriting first buys nothing on ext4 over an SSD with TRIM.
@@ -807,11 +822,25 @@ removing only what it can prove it made.
   sealed file is published by checking the target is absent and renaming onto it; that check assumes no
   other writer.
 
+- `paths` (after `commit`, root, at the console; run again until it finishes):
+  - the AKs go both ways, as `regalia-sync`, over the service tunnel. Each AK is checked against the
+    manifest's `ak_name`, and the peer's TPM activates the credential;
+  - then this node's LUKS path from every peer that may authorize. The node quotes over its boot session,
+    and the quote binds a one-time enrolment key. The peer re-wraps the same secret on a rerun, and gives
+    at most 3 wraps per boot session;
+  - the recovery key is typed at the console: read from the controlling terminal with echo off, refused
+    when standard input is not a terminal (never a pipe, a script, argv or the environment), and zeroed in
+    its buffer once used (Python may hold copies it made; that much it cannot promise);
+  - each path is journalled;
+  - `local.bin` is removed only after every peer's path is journalled AND the LUKS header, read again,
+    holds a live token from each (its keyslot present, over the local half this enrolment sealed). A path
+    the journal holds but the header lost is asked for again. A peer that is down is named, and `local.bin`
+    stays until a rerun completes. It is overwritten with zeros, synced and then unlinked; on an SSD the
+    overwrite is best effort, and the root volume's encryption is what protects the freed blocks.
+  The peers answer through `sync`'s enrolment operations (`enrolpeer.py`).
+
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):
-- each peer's AK in the attestation state (`attest.Verifier`);
-- the LUKS paths with the peers' contributions (`unlock.enrol_path`);
-- the enrolment record signed by the AK's quote;
-- `commit --replace` (#76).
+- the enrolment record signed by the AK's quote.
 
 ### Shipping the audit trails (#278)
 
