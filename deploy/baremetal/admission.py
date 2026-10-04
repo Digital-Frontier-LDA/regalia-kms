@@ -79,6 +79,7 @@ NEVER = "1970-01-01T00:00:00Z"
 # answer (node.admission_service, "admission-renew"), and each change between serving and not serving with its reason
 # ("admission-serving", Service below).
 ADMISSION_REASON_LIMIT = 1024
+RETRY_FIRST, RETRY_MAX = 5, 60     # seconds between renewal attempts while they fail: 5, 10, 20, 40, 60, 60, ...
 BOOT_ID_PATH = "/proc/sys/kernel/random/boot_id"
 MAX_REQUESTS = 16
 
@@ -158,6 +159,9 @@ class Service:
         # TO not serving at once, recorded after (a failed record is loud and tried again next round, never a reason
         # to keep serving). recorded is the state the trail last holds (None: nothing yet this run).
         self.record, self.recorded = record, None
+        # while renewals fail, they back off: RETRY_FIRST doubling to RETRY_MAX (on the boot clock), back to none on a
+        # success (48 on #347): a node cut off from its peers neither floods them (their 6/60 s lease buckets) nor its trail
+        self.retry_at, self.retry_wait = 0, 0
         self.warn = warn or (lambda text: print(text, file=sys.stderr, flush=True))
         self.daemon_started = daemon_started      # () -> the daemon's start on the boot clock (ms), or None
         self.boot = boot()
@@ -214,7 +218,7 @@ class Service:
             manifest = self.manifest()
             require(manifest is not None, "this node holds no manifest")
             waits = self._daemon_waits()
-            if waits or self.holder.due(manifest):
+            if (waits or self.holder.due(manifest)) and self.boottime() >= self.retry_at:
                 request = self.holder.request()
                 self._remember(request["nonce"], self.boottime())
                 try:
@@ -224,8 +228,11 @@ class Service:
                     # writes "not admitted" where the tokens alone were waiting: no key was being served
                     # either way, and the next round's scheduled renewal takes the longer lease.
                     self.holder.install(self.renew(request), manifest, prefer=waits)
+                    self.retry_at, self.retry_wait = 0, 0
                 except Exception as failure:      # a peer is down, or refused: what the node still holds decides
                     reason = "renewal failed: %s" % failure
+                    self.retry_wait = min(max(self.retry_wait * 2, RETRY_FIRST), RETRY_MAX)
+                    self.retry_at = self.boottime() + self.retry_wait * 1000
             before = self.boottime()              # read BEFORE the check: the bound can only come out earlier
             left = self.holder.check(manifest)
             envelope = self.holder.held()
