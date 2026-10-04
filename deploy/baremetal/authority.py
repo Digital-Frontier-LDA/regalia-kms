@@ -592,10 +592,11 @@ class Authority:
                                                              "sig": self.signer.sign(membership.DOMAIN + membership.canonical(candidate)).hex()}}
             self.store.commit(envelope)                                         # membership's revocation rule, anchored in the TPM
             try:                                                                # from here the revocation is committed, whatever fails
-                self.publish()                                                  # the tunnel drops the node with it (wg-apply.path)
+                # the record of what was signed first: nothing after it (the publication, the heartbeat) can lose it
                 self.trail({"event": "authority-revoke", "outcome": "SIGNED", "epoch": candidate["epoch"], "node": node_id, "state": state,
                             "digest": membership.digest(candidate), "key": self.signer.public(), "signer": self.signer.kind,
                             "requester": requester, "reason": reason})
+                self.publish_or_record()                                        # the tunnel drops the node with it (wg-apply.path)
                 return envelope, self.beat("revocation of %s" % node_id)       # the pending old-epoch bytes are dropped there
             except Exception as failure:      # noqa: BLE001 - committed is committed, whatever the heartbeat did
                 self.wake.set()                                         # serve retries at once, not an interval later
@@ -619,9 +620,19 @@ class Authority:
 
     def publish(self):
         """The verified chain where root's wg-apply reads it (chain.json, 0644, as a node's regalia-sync publishes
-        it): the store itself is this user's alone. Rewritten after every commit, at serve's start, and at
-        every beat, so a publication that failed is made good."""
+        it): the store itself is this user's alone. Published after every commit, at serve's start, and at
+        every beat, so a publication that failed is made good; the file is rewritten only when the chain
+        changed (node.publish), so regalia-authority-wg-apply.path fires on a real change only."""
         return node.publish(self.store, self.path(node.PUBLISHED))
+
+    def publish_or_record(self):
+        """publish(), and a failure recorded as its own event instead of raised: the commit stands, the next beat
+        (serve is woken) or start publishes again."""
+        try:
+            self.publish()
+        except Exception as failure:      # noqa: BLE001 - recorded; retried at the next beat
+            self.wake.set()
+            self.trail({"event": "authority-publish", "outcome": "FAILED", "reason": "%s: %s" % (type(failure).__name__, str(failure)[:220])})
 
     def status(self):
         manifest, held = self.store.load(), self.held()
@@ -697,7 +708,7 @@ class Authority:
         own = wgsvc.address(self.signer_tunnel_key())
         listener = node.bind_when_up((own, self.cfg["sync_port"]), stop, family=socket.AF_INET6)
         listener.settimeout(1)
-        self.publish()                                # a host upgraded from before chain.json, or a publication that failed
+        self.publish_or_record()                      # a host upgraded from before chain.json, or a publication that failed
         server = sync.Server(convergence.AUTHORITY, self.store, self, None, None, wgsvc.key_at, self.trail)
         threading.Thread(target=sync.serve, args=(server, listener, stop), daemon=True).start()
         self.control_listener(stop)
@@ -714,7 +725,7 @@ class Authority:
                 due = 0.0
             if clock() >= due:
                 try:
-                    self.publish()
+                    self.publish_or_record()                  # never in the way of a heartbeat
                     self.catch_up() or self.beat()
                     due, failures = clock() + self.cfg["interval_s"], 0
                 except Exception as failure:      # noqa: BLE001 - a beat that fails is retried, never the end of serve
