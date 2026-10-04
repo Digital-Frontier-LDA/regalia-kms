@@ -264,8 +264,13 @@ def scenario(cluster):
             # #199: one node left that counts. Nobody can co-sign its heartbeat for the new epoch: it stays without one
             # (fail closed) until the operator's hand recovery, owner.py beat, which the scenario now plays explicitly
             alone = counting[0]
-            ok(not cluster.holds_heartbeat(alone, manifest["epoch"]),
-               "%s, the only node left that counts, holds no heartbeat for epoch %d: alone it signs nothing" % (alone, manifest["epoch"]))
+            # not vacuous (regalia-kms-3e): wait for its own try at the epoch, refused for want of a co-signer, then look
+            tried = until(lambda: [e for e in cluster.trail(alone) if e.get("event") == "beat-propose" and e.get("epoch") == manifest["epoch"]
+                                   and e.get("outcome") == "DENY" and "no other node counts" in e.get("reason", "") and e.get("at", 0) >= since],
+                          240, 3)
+            ok(bool(tried) and not cluster.holds_heartbeat(alone, manifest["epoch"]),
+               "%s, the only node left that counts, tried to sign epoch %d's heartbeat, found no co-signer, and holds none: alone it "
+               "signs nothing" % (alone, manifest["epoch"]), cluster.beat_events([alone]))
             envelope = cluster.owner_beat(alone)
             lives = threenode.heartbeat.parse_time(envelope["heartbeat"]["expires_at"], "e") - threenode.heartbeat.parse_time(envelope["heartbeat"]["issued_at"], "i")
             ok(cluster.holds_heartbeat(alone, manifest["epoch"]) and cluster.heartbeat_signers(alone) == [alone, "owner"] and lives <= 3600,
