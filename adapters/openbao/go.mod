@@ -5,6 +5,7 @@ go 1.26.6
 require (
 	github.com/Digital-Frontier-LDA/regalia-kms/adapters/sops v0.0.0
 	github.com/openbao/go-kms-wrapping/v2 v2.9.0
+	golang.org/x/crypto v0.56.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -29,7 +30,7 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/openbao/go-kms-wrapping/plugin/v2 v2.4.0
 	github.com/ryanuber/go-glob v1.0.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.58.0
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
