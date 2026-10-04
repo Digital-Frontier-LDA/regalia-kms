@@ -89,7 +89,7 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$PREVIOUS_COMMIT"
           mkdir -m 700 "$RUNNER_TEMP/openbao-native-baseline"
-          git archive "$PREVIOUS_COMMIT" | tar --extract --directory "$RUNNER_TEMP/openbao-native-baseline"
+          git -C "$GITHUB_WORKSPACE" archive "$PREVIOUS_COMMIT" | tar --extract --directory "$RUNNER_TEMP/openbao-native-baseline"
           cd "$RUNNER_TEMP/openbao-native-baseline/adapters/openbao"
           go build -mod=readonly -trimpath -buildvcs=false \
             -o "$RUNNER_TEMP/openbao-native-baseline-plugin" ./cmd/openbao-plugin-kms-regalia
