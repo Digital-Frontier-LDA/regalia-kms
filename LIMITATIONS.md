@@ -49,11 +49,22 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 - **No total-outage re-anchor rehearsal** (#391 adds it). The procedure in MEMBERSHIP-RECOVERY.md is not
   yet the total-outage one, and its example names `/var/lib/regalia/membership.json`, while the store
   is under `/var/lib/regalia-sync`.
-- **Nothing advances the ESP's chain after genesis** (#377 is merged; the fix is #410). The initrd refuses an ESP
-  chain below the TPM anchor, and `regalia-sync` advances the anchor on every accepted manifest, so a
-  node that accepts a second manifest would boot to the recovery prompt. The fix is to write the ESP
-  first and advance the anchor after it, in a root oneshot ("ESP advance", #66). It must land before
-  any node takes a second manifest.
+- **The ESP advance (#410, #66): what it does not cover.** `regalia-sync` no longer moves the TPM anchor;
+  the root oneshot `regalia-esp-advance` writes the published chain to the ESP, then anchors it.
+  - **Not measured** on a host: shown by unit tests, a real-systemd e2e on a plain `/efi` directory, the
+    three-node fixture (an ESP directory per node) and QEMU boots 10-12, whose ESP the test writes.
+  - Only the chain is written. A site change (the measured `regalia.site.cred`) still needs enrolment.
+  - Until a run succeeds the node acts on a chain ahead of its anchor, and rollback protection stands at
+    the anchor's epoch. `RegaliaMembershipAnchorBehind` and `RegaliaEspAdvanceFailing` warn after 15 min;
+    an operator fixes the ESP and restarts the unit (deploy/baremetal/README.md §7). Nothing repairs it alone.
+  - **Accepted:** a compromised `regalia-sync` that stops publishing is not caught by these alerts (the
+    advance never runs). That is the withholding a compromised sync could always do. A fleet-level rule
+    comparing the three nodes' epochs is **not built**.
+  - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
+  - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
+    (see #391): run those by hand only with the node's units stopped.
+  - Enrolment still anchors epoch 1 before it writes the ESP; safe only because the host has not booted
+    from that ESP yet.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
