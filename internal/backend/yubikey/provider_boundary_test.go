@@ -748,3 +748,5 @@ func TestReadyRefusesAProviderWithAPINSourceAndNoDriver(t *testing.T) {
 		t.Fatal("a provider with a PIN source and no driver reported ready")
 	}
 }
+
+func (s *boundarySession) Reader() string { return testReader }

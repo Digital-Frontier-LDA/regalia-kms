@@ -124,9 +124,15 @@ func (card *removableCard) Close() error {
 type leaseGate struct {
 	admitted    bool
 	requestedMs int64
+	unlisted    map[string]bool // serials the manifest does not list; nil: every serial is listed
+	serials     []string        // the serials asked about
 }
 
-func (gate *leaseGate) RequestedAfter(_ context.Context, boottimeMs int64) bool {
+func (gate *leaseGate) Admits(_ context.Context, serial string, boottimeMs int64) bool {
+	gate.serials = append(gate.serials, serial)
+	if serial == "" || gate.unlisted[serial] {
+		return false
+	}
 	return gate.admitted && gate.requestedMs > boottimeMs
 }
 
@@ -136,6 +142,7 @@ type reauthWorld struct {
 	gate     *leaseGate
 	now      int64
 	provider *Provider
+	readers  readerGenerations
 }
 
 // newReauthWorld is a daemon started at boot-clock 1000 on a node whose lease was asked for at
@@ -151,8 +158,39 @@ func newReauthWorld(t *testing.T) *reauthWorld {
 	if err := provider.RequireReauthorization(w.gate, func() (int64, error) { return w.now, nil }, w.now); err != nil {
 		t.Fatal(err)
 	}
+	w.readers = readerGenerations{testReader: 1} // the PC/SC watcher (G2): the card's reader, watched
+	provider.WatchReaders(w.readers)
 	w.provider = provider
 	return w
+}
+
+// readerGenerations stands for the PC/SC watcher (internal/backend/pcscwatch).
+type readerGenerations map[string]uint64
+
+func (readers readerGenerations) Generation(name string) (uint64, bool) {
+	generation, ok := readers[name]
+	return generation, ok
+}
+
+// A CARD PULLED AND PUT BACK BETWEEN TWO OPERATIONS WAITS FOR A FRESH LEASE (regalia-kms#72, G2), and a
+// card whose reader is not watched is refused before the PIN.
+func TestACardAwayBetweenTwoOperationsWaitsForAFreshLease(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("watched, under a lease asked for since the daemon started")
+	w.readers[testReader], w.now = 4, 2_000 // pulled and back between two operations
+	w.requireWaiting("its reader moved", 2_000)
+	w.gate.requestedMs = 2_001
+	w.requireServing("under a lease asked for after it")
+	delete(w.readers, testReader) // pcscd lost
+	logins := w.card.loginCalls
+	if err := w.sign(); err == nil || w.card.loginCalls != logins || w.healthy() {
+		t.Fatalf("a card whose reader is not watched signed, presented its PIN or reported healthy: %v", err)
+	}
+	unwatched := newReauthWorld(t)
+	unwatched.provider.WatchReaders(nil)
+	if err := unwatched.sign(); err == nil {
+		t.Fatal("a card was served with no watcher")
+	}
 }
 
 func (w *reauthWorld) sign() error {
@@ -518,4 +556,25 @@ func TestWithoutReauthorizationAReturnedCardResumesAsBefore(t *testing.T) {
 	if card.identityRead != reads+1 {
 		t.Fatalf("with no admission gate the card was asked for its serial %d times in one request, want once", card.identityRead-reads)
 	}
+}
+
+// A YUBIKEY THE MANIFEST DOES NOT LIST IS NOT SERVED (regalia-kms#72, G1): the node's tokens are its
+// manifest entry's hsm_serials, its YubiKey as much as its HSM. Refused before the PIN, unhealthy, and
+// serving again once listed.
+func TestAYubiKeyTheManifestDoesNotListIsRefusedBeforeThePIN(t *testing.T) {
+	w := newReauthWorld(t)
+	w.requireServing("listed, under a lease asked for since the daemon started")
+	w.gate.unlisted = map[string]bool{"12345678": true}
+	logins := w.card.loginCalls
+	if err := w.sign(); err == nil || w.card.loginCalls != logins {
+		t.Fatalf("a card the manifest does not list signed, or its PIN was presented: %v", err)
+	}
+	if w.healthy() {
+		t.Fatal("a card the manifest does not list reports healthy")
+	}
+	if got := w.gate.serials[len(w.gate.serials)-1]; got != "12345678" {
+		t.Fatalf("the gate was asked about %q, not the card's own serial", got)
+	}
+	w.gate.unlisted = nil
+	w.requireServing("listed again")
 }

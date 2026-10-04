@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/admission"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/pcscwatch"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/registry"
 )
 
@@ -70,6 +71,10 @@ func TestPIVPhysicalRemovedCardWaitsForALeaseAskedForAfterItsReturn(t *testing.T
 	if err := provider.RequireReauthorization(gate, admission.Boottime, now()); err != nil {
 		t.Fatal(err)
 	}
+	// the real PC/SC watcher, as the daemon gives it (regalia-kms#72, G2): a pull is seen as it happens
+	watchCtx, stopWatching := context.WithCancel(context.Background())
+	defer stopWatching()
+	provider.WatchReaders(pcscwatch.Start(watchCtx, pcscwatch.System(), func(err error) { t.Logf("reader watcher: %v", err) }))
 	ctx := context.Background()
 	route := registry.Route{Algorithm: "ed25519", Binding: registry.Binding{
 		Backend: "yubikey-piv", DeviceID: "primary", DeviceSerial: serial, ObjectID: slot, State: "active", PINPolicy: "once", TouchPolicy: "never",

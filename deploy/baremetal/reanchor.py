@@ -145,8 +145,23 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def _highwater(index, tcti):
-    return membership.HighWater(index, tcti=tcti)
+def _highwater(index, tcti, policy=None):
+    return membership.HighWater(index, tcti=tcti, policy=policy)
+
+
+def node_policy(path, node_id):
+    """The approved-image write policy (#242) a policy-written anchor index is read with: from this node's own
+    configuration (node.image_policy: its signed chain, the measurements document the chain commits to, and the
+    running image's PCR key), resolved only if an index is written by policy. Without --node-config that is a
+    refusal that says what to give, not an Unusable anchor: re-anchoring an anchor that is fine would be wrong."""
+    def policy():
+        require(path is not None, "this node's anchor is written by its approved-image policy (#242): give --node-config, this "
+                "node's node.json, so that the policy can be established")
+        from deploy.baremetal import node                  # here: node imports the services, which a re-anchor does not need
+        cfg = node.load(path)
+        require(cfg["node_id"] == node_id, "--node-config is %s's, not %s's" % (cfg["node_id"], node_id))
+        return node.image_policy(cfg)
+    return policy
 
 
 def main(argv=None, ask=None, highwater=_highwater, tty=None):
@@ -162,6 +177,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     ap.add_argument("--audit-log", default=trails.where("reanchor"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
+    ap.add_argument("--node-config", help="this node's node.json: needed when its anchor is written by its approved-image policy (#242)")
     args = ap.parse_args(argv)
     # The TPM is named on the command line or is the default, never taken from the environment: a
     # TPM2TOOLS_TCTI left over in the shell would re-anchor ANOTHER TPM, which would truthfully say that the
@@ -204,7 +220,8 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
-        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti))
+        store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti,
+                                                                          policy=node_policy(args.node_config, args.node_id)))
         now_at = reanchor(store, sources, args.node_id, typed, record)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "

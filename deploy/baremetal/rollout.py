@@ -424,7 +424,7 @@ def _current(args):
     # READ the anchor; never advance or repair it. membership.Store.load anchors a verified newer chain
     # and completes a record a crash left behind, and that is the node's own service's to do, not an
     # operator's check.
-    anchor = membership.HighWater(args.tpm_index, tcti=args.tcti)
+    anchor = membership.HighWater(args.tpm_index, tcti=args.tcti, policy=_node_policy(getattr(args, "node_config", None)))
     high_water = anchor.value()
     require(manifest["epoch"] >= high_water, "ROLLBACK: %s is at epoch %d but this host's TPM high-water is %d: the file is older "
             "than what this host has accepted; fetch the chain from a peer" % (args.membership, manifest["epoch"], high_water))
@@ -445,6 +445,18 @@ def _current(args):
             "service was interrupted while accepting it): restart the node's service, which completes the record when it "
             "loads its membership" % (high_water - 1, high_water))
     return manifest, True
+
+
+def _node_policy(path):
+    """The approved-image write policy (#242) a policy-written anchor index is read with, from this node's own
+    configuration (node.image_policy), resolved only if an index is written by policy. Without --node-config,
+    such an index is a refusal that says what to give."""
+    def policy():
+        require(path is not None, "this host's anchor is written by its approved-image policy (#242): give --node-config, this "
+                "node's node.json, so that the policy can be established")
+        from deploy.baremetal import node                  # here: node imports the services, which this check does not need
+        return node.image_policy(node.load(path))
+    return policy
 
 
 def _tpm(anchored, tcti):
@@ -565,6 +577,8 @@ def main(argv=None):
         c.add_argument("--tpm-index", metavar="0x…", help="also check the chain against this host's TPM epoch counter at this NV index")
         c.add_argument("--tcti", metavar="TCTI",
                        help="the TPM --tpm-index reads (default %s); TPM2TOOLS_TCTI in the environment is refused" % DEFAULT_TCTI)
+        c.add_argument("--node-config", metavar="NODE.json",
+                       help="this node's node.json: needed with --tpm-index when the anchor is written by its approved-image policy (#242)")
 
     def step(c):
         c.add_argument("--emergency", action="store_true", help="allow a compromised image to be dropped with no overlap")

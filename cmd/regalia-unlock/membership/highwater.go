@@ -59,11 +59,34 @@ type highWater struct {
 	nv          NV
 	index, base uint32
 	slots       [2]uint32
-	policy      []byte // this node's approved-image policy; nil when it has none configured
+	policy      *lazyPolicy
 }
 
-func newHighWater(nv NV, index uint32, policy []byte) highWater {
-	return highWater{nv: nv, index: index, base: index + 1, slots: [2]uint32{index + 4, index + 5}, policy: policy}
+// lazyPolicy is this node's approved-image write policy, asked for only when a policy-written index is met
+// and at most once (HighWater.policy): nil source when the node has none configured.
+type lazyPolicy struct {
+	source func() ([]byte, error)
+	asked  bool
+	value  []byte
+	err    error
+}
+
+func (p *lazyPolicy) get() ([]byte, error) {
+	if p.source == nil {
+		return nil, nil
+	}
+	if !p.asked {
+		p.asked = true
+		p.value, p.err = p.source()
+		if p.err == nil && len(p.value) != sha256.Size {
+			p.value, p.err = nil, refuse("the approved-image write policy must be 64 lowercase hex")
+		}
+	}
+	return p.value, p.err
+}
+
+func newHighWater(nv NV, index uint32, policy func() ([]byte, error)) highWater {
+	return highWater{nv: nv, index: index, base: index + 1, slots: [2]uint32{index + 4, index + 5}, policy: &lazyPolicy{source: policy}}
 }
 
 func name(index uint32) string { return fmt.Sprintf("0x%x", index) }
@@ -96,13 +119,17 @@ func (h highWater) read8(index uint32) (uint64, error) {
 func (h highWater) asDefined(index uint32, attributes uint32, authPolicy []byte, kind string) error {
 	mask := attributes &^ nvState
 	if written, ok := policyAttributes[kind]; ok && mask == written {
-		if h.policy == nil || !bytes.Equal(authPolicy, h.policy) {
+		policy, err := h.policy.get() // a policy that cannot be established refuses: never a guess, never Unusable
+		if err != nil {
+			return err
+		}
+		if policy == nil || !bytes.Equal(authPolicy, policy) {
 			held, configured := "(none)", "and this node has none configured"
 			if len(authPolicy) > 0 {
 				held = hex.EncodeToString(authPolicy)
 			}
-			if h.policy != nil {
-				configured = "not " + hex.EncodeToString(h.policy)
+			if policy != nil {
+				configured = "not " + hex.EncodeToString(policy)
 			}
 			return &Unusable{Reason: fmt.Sprintf("the anchor's write policy is not this node's approved-image policy: NV index %s is written by policy %s, %s",
 				name(index), held, configured)}
@@ -311,10 +338,11 @@ func ReadChain(envelopes []any, root any) ([]map[string]any, error) {
 // Anchored is Store.load without its writes, for a reader that may change nothing: the chain (from
 // ReadChain) must reach the TPM high-water, its manifest at the recorded epoch must be the one the TPM
 // recorded (the crash window, a record one epoch behind the counter, is accepted as verify(lock=False)
-// accepts it), and it may not run further ahead than advance() would go. `policy` is this node's
-// approved-image policy (nil: none configured), which a counter or slot written under a policy must
-// carry (#242 B). Returns the high-water.
-func Anchored(nv NV, manifests []map[string]any, policy []byte) (uint64, error) {
+// accepts it), and it may not run further ahead than advance() would go. `policy` gives this node's
+// approved-image write policy (nil: none configured), which a counter or slot written under a policy must
+// carry (#242 B); it is called only when such an index is met, at most once, and its error refuses the
+// read. Returns the high-water.
+func Anchored(nv NV, manifests []map[string]any, policy func() ([]byte, error)) (uint64, error) {
 	h := newHighWater(nv, HighWaterIndex, policy)
 	hw, err := h.value()
 	if err != nil {

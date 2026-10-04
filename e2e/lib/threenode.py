@@ -52,6 +52,17 @@ import threading
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+# regalia-admission's StateDirectoryMode, read from the shipped unit: the fixture's directory is what a host's is, so
+# whether its trail's shipper can pass it is the unit's to decide (#340, #345)
+def _state_directory_mode(unit):
+    for line in (ROOT / "deploy" / "baremetal" / "units" / unit).read_text().splitlines():
+        if line.startswith("StateDirectoryMode="):
+            return int(line.split("=", 1)[1], 8)
+    raise RuntimeError("%s declares no StateDirectoryMode" % unit)
+
+
+ADMISSION_DIR_MODE = _state_directory_mode("regalia-admission.service")
+
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -63,6 +74,9 @@ RECOVERY = b"cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuu
 MARKER = b"regalia-kms root volume marker"
 SWITCH = "e2e3-sw"
 UNIT_PREFIX = "e2e3-"
+AUDIT_TRAILS = (("sync", "state", "sync-audit.jsonl"), ("admission", "admission", "audit.jsonl"))   # each node's own (#340)
+COLLECTOR_UNIT = UNIT_PREFIX + "audit-collector"
+COLLECTOR_PORT = 18443
 
 
 def sh(*argv, check=True, **kw):
@@ -115,8 +129,12 @@ AUTH = "auth"                                     # the revocation authority's m
 
 
 class Cluster:
-    def __init__(self, work, names=NAMES, authority=False):
+    def __init__(self, work, names=NAMES, authority=False, audit=False):
         self.work = pathlib.Path(work)
+        # the real audit trail shippers and collector (#340): each node's own trails shipped as a host ships them,
+        # so a scenario can hold every event it caused to the collector's chained stream (audit_complete)
+        self.audit = audit
+        self.audit_bin = pathlib.Path(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"))
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
         # the revocation authority, when asked for: its own namespace, TPM, clock and WireGuard key, and its real
         # `serve` signing the heartbeats (then nothing here writes one)
@@ -178,7 +196,9 @@ class Cluster:
             sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
             os.chmod(n.state, 0o755)
             sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
-            os.chmod(n.admission, 0o700)
+            os.chmod(n.admission, ADMISSION_DIR_MODE)
+        if self.audit:
+            self._audit_start()
 
     def _network(self):
         sh("ip", "netns", "add", SWITCH)
@@ -438,6 +458,8 @@ class Cluster:
                 self._run(n, "wg-apply", unit=self.unit(name, "wg-watch"),
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
+        if self.audit and name in self.nodes:         # the node's trail shippers run with it, as regalia-audit-ship@ does
+            self._ship_start(name)
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
@@ -585,7 +607,7 @@ class Cluster:
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
-        os.chmod(n.admission, 0o700)
+        os.chmod(n.admission, ADMISSION_DIR_MODE)            # as the shipped unit makes it (#345)
         return envelope
 
     def _start_authority(self):
@@ -636,7 +658,8 @@ class Cluster:
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.member(name)
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")]:
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")] + \
+                [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         self.services[name] = ()
@@ -961,10 +984,226 @@ class Cluster:
             return []
         return [json.loads(line) for line in path.read_text().splitlines() if line.startswith("{")]
 
+    # ---- audit completeness (#340) ----
+
+    def _audit_start(self):
+        """A one-run CA, the real collector on the host's loopback (mutual TLS), and the shippers' client identity,
+        readable by regalia-audit-ship only (its user, from the shipped sysusers file)."""
+        sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia-audit-ship.sysusers.conf"))
+        for binary in ("regalia-audit-ship", "regalia-audit-collector"):
+            if not os.access(self.audit_bin / binary, os.X_OK):
+                raise RuntimeError("audit=True needs REGALIA_AUDIT_BIN naming a directory with %s" % binary)
+        d = self.audit_dir = self.work / "audit"
+        d.mkdir(mode=0o711)
+        # the binaries as a host installs them: root's, 0755, where the shipper's user can reach them. Built under a
+        # runner's home (0750), regalia-audit-ship could not even execute its own binary (#355's CI: status 203/EXEC)
+        bin_dir = d / "bin"
+        bin_dir.mkdir(mode=0o755)
+        for binary in ("regalia-audit-ship", "regalia-audit-collector"):
+            shutil.copy(self.audit_bin / binary, bin_dir / binary)
+            os.chmod(bin_dir / binary, 0o755)
+        self.audit_bin = bin_dir
+
+        def issue(name, extensions):
+            sh("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", str(d / (name + ".key")),
+               "-out", str(d / (name + ".csr")), "-subj", "/CN=" + name)
+            (d / (name + ".ext")).write_text(extensions)
+            sh("openssl", "x509", "-req", "-in", str(d / (name + ".csr")), "-CA", str(d / "ca.pem"), "-CAkey", str(d / "ca.key"),
+               "-CAcreateserial", "-days", "1", "-out", str(d / (name + ".pem")), "-extfile", str(d / (name + ".ext")))
+        sh("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", str(d / "ca.key"),
+           "-out", str(d / "ca.pem"), "-subj", "/CN=e2e3-audit-ca", "-days", "1",
+           "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
+        issue("collector", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
+        issue("shipper", "extendedKeyUsage=clientAuth\n")
+        ship = d / "ship"                             # as /etc/regalia/audit-ship: root's, its key the shipper's group's
+        ship.mkdir(mode=0o750)
+        shutil.chown(ship, "root", "regalia-audit-ship")
+        for source, target, mode in (("shipper.pem", "client.crt", 0o644), ("shipper.key", "client.key", 0o640), ("ca.pem", "collector-ca.pem", 0o644)):
+            shutil.copy(d / source, ship / target)
+            shutil.chown(ship / target, "root", "regalia-audit-ship")
+            os.chmod(ship / target, mode)
+        heads = d / "heads"                           # as its StateDirectory: the shipper's own
+        heads.mkdir(mode=0o700)
+        shutil.chown(heads, "regalia-audit-ship", "regalia-audit-ship")
+        # the receipt key, as the collector holds it on a host (PKCS#8 Ed25519, 0600): receipts are signed, as on a real
+        # collector, and audit_complete checks each stream's head receipt against it (regalia-kms-48 on #355)
+        sh("openssl", "genpkey", "-algorithm", "ed25519", "-out", str(d / "receipt.key"))
+        os.chmod(d / "receipt.key", 0o600)
+        sh("openssl", "pkey", "-in", str(d / "receipt.key"), "-pubout", "-out", str(d / "receipt.pub"))
+        self.collector_state = d / "collector"
+        sh("systemd-run", "--unit", COLLECTOR_UNIT, "--collect", str(self.audit_bin / "regalia-audit-collector"), "-state", str(self.collector_state),
+           "-listen", "127.0.0.1:%d" % COLLECTOR_PORT, "-tls-cert", str(d / "collector.pem"), "-tls-key", str(d / "collector.key"),
+           "-client-ca", str(d / "ca.pem"), "-receipt-key", str(d / "receipt.key"))
+        if not until(lambda: sh("systemctl", "is-active", COLLECTOR_UNIT, check=False).stdout.strip() == "active", 20, 0.5):
+            raise RuntimeError("the audit collector did not start")
+
+    def _trail_path(self, name, trail):
+        n = self.nodes[name]
+        return {"sync": n.state / "sync-audit.jsonl", "admission": n.admission / "audit.jsonl"}[trail]
+
+    def _trail_groups(self, name):
+        """Each of the node's trails (and its rotated archives) back in its reader group, 0640, as its writer keeps it on a
+        host (trails.py, #286). This fixture's `chown -R <service>:<service>` of a node's directories, made where a unit's
+        StateDirectory= would make the owner, also resets the GROUP, which no host does: the shipper, in the trail's
+        reader group only, could then read nothing (the first CI run of #355 shipped no line at all)."""
+        for trail, _, _ in AUDIT_TRAILS:
+            path = self._trail_path(name, trail)
+            for f in [path] + sorted(path.parent.glob(path.name + ".*")):
+                if f.is_file() and not f.is_symlink():
+                    shutil.chown(f, group="regalia-audit-" + trail)
+                    os.chmod(f, 0o640)
+
+    def _ship_start(self, name):
+        """regalia-audit-ship for each of the node's own trails, with regalia-audit-ship@<trail>'s identity: its own user, the
+        trail's reader group and nothing else (the shipped drop-ins, #286), no capability, a read-only system but for its
+        head files; one stream per node, e2e3-<node>.<trail>. (Not its whole sandbox, nor its metrics file:
+        e2e/audit-ship-systemd.py runs the shipped unit itself.)"""
+        d = self.audit_dir
+        self._trail_groups(name)
+        for trail, _, _ in AUDIT_TRAILS:
+            unit = self.unit(name, "ship-" + trail)
+            if sh("systemctl", "is-active", unit, check=False).stdout.strip() == "active":
+                continue
+            sh("systemctl", "reset-failed", unit, check=False)
+            sh("systemd-run", "--unit", unit, "--collect", "-p", "User=regalia-audit-ship", "-p", "SupplementaryGroups=regalia-audit-" + trail,
+               "-p", "CapabilityBoundingSet=", "-p", "NoNewPrivileges=yes", "-p", "ProtectSystem=strict",
+               "-p", "ReadWritePaths=%s" % (d / "heads"),
+               str(self.audit_bin / "regalia-audit-ship"), "-trail", trail, "-path", str(self._trail_path(name, trail)),
+               "-collector", "https://127.0.0.1:%d" % COLLECTOR_PORT, "-site", "e2e3-" + name,
+               "-tls-cert", str(d / "ship" / "client.crt"), "-tls-key", str(d / "ship" / "client.key"),
+               "-server-ca", str(d / "ship" / "collector-ca.pem"), "-head", str(d / "heads" / ("%s-%s.head.json" % (name, trail))),
+               "-interval", "1s")
+
+    def audit_stream(self, name, trail):
+        """The collector's committed events for the node's trail (its stream e2e3-<node>.<trail>), in order."""
+        found = list((self.collector_state / "streams").glob("*/site-e2e3-%s.%s.jsonl" % (name, trail)))
+        if len(found) != 1:
+            return []
+        return [json.loads(line) for line in found[0].read_text().splitlines() if line.strip()]
+
+    GENESIS = "sha256:" + "0" * 64            # internal/audit: the previous hash of a stream's first event
+
+    def receipt(self, name, trail, sequence):
+        """The collector's signed receipt for position `sequence` of the node's stream, asked as its shipper asks: over
+        mutual TLS with the shipper's certificate, for its own stream (X-Regalia-Site)."""
+        import ssl
+        import urllib.request
+        d = self.audit_dir
+        context = ssl.create_default_context(cafile=str(d / "ca.pem"))
+        context.load_cert_chain(str(d / "shipper.pem"), str(d / "shipper.key"))
+        request = urllib.request.Request("https://127.0.0.1:%d/v1/receipt?sequence=%d" % (COLLECTOR_PORT, sequence),
+                                         headers={"X-Regalia-Site": "e2e3-%s.%s" % (name, trail)})
+        with urllib.request.urlopen(request, context=context, timeout=10) as answer:
+            return json.loads(answer.read())
+
+    def _receipt_problem(self, name, trail, lines, stream):
+        """What is wrong with the head of the node's stream as its receipt states it, or None: the signature (Ed25519 over
+        internal/audit.ReceiptPreimage, with the receipt key) and what it names, the collector's last event, the trail's last
+        line and the running line chain over every line, recomputed here; and the shipper's head file, naming as many lines
+        committed."""
+        import ssl
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.exceptions import InvalidSignature
+        try:
+            got = self.receipt(name, trail, len(stream))
+        except OSError as failure:
+            return "no receipt for the head (%s)" % failure
+        chain = "0" * 64
+        for line in lines:
+            chain = hashlib.sha256(bytes.fromhex(chain) + hashlib.sha256(line).digest()).hexdigest()
+        identity = hashlib.sha256(ssl.PEM_cert_to_DER_cert((self.audit_dir / "shipper.pem").read_text())).hexdigest()
+        preimage = "\n".join(["regalia.collector.receipt/v1", identity, "e2e3-%s.%s" % (name, trail), str(got.get("sequence")),
+                              got.get("event_hash", ""), got.get("line_sha256", ""), got.get("line_chain", "")]).encode()
+        key = serialization.load_pem_public_key((self.audit_dir / "receipt.pub").read_bytes())
+        try:
+            key.verify(bytes.fromhex(got.get("signature", "")), preimage)
+        except (InvalidSignature, ValueError):
+            return "the head receipt's signature does not verify under the receipt key"
+        want = (len(stream), stream[-1].get("hash"), hashlib.sha256(lines[-1]).hexdigest(), chain)
+        if (got.get("sequence"), got.get("event_hash"), got.get("line_sha256"), got.get("line_chain")) != want:
+            return "the head receipt names %r, not the stream's head %r" % (got, want)
+        try:
+            head = json.loads((self.audit_dir / "heads" / ("%s-%s.head.json" % (name, trail))).read_text())
+        except (OSError, ValueError) as failure:
+            return "the shipper's head file cannot be read (%s)" % failure
+        if head.get("committed") != len(stream):
+            return "the shipper's head file says %r committed, the collector holds %d" % (head.get("committed"), len(stream))
+        return None
+
+    def audit_complete(self, timeout=180):
+        """{(node, trail): what is wrong} for every node trail (sync, admission) whose collector stream is not exactly the
+        trail. A trail must have been written (an empty trail is not complete), and its stream must hold every line, in
+        order: event i at sequence i+1, the first chained to genesis and each to the one before, each naming its line by
+        its SHA-256 (newline included), each DENY still a deny; and the stream's head must be what its signed receipt and
+        the shipper's head file say. Empty when complete. Waits up to `timeout` for the shippers' passes. A node stopped
+        by the scenario ships what its trail holds once it runs again: its shippers are started here."""
+        for name in self.nodes:
+            self._ship_start(name)
+
+        def problems(receipts=False):
+            wrong = {}
+            for name in self.nodes:
+                for trail, _, _ in AUDIT_TRAILS:
+                    path = self._trail_path(name, trail)
+                    lines = path.read_bytes().splitlines(keepends=True) if path.exists() else []
+                    stream = self.audit_stream(name, trail)
+                    if not lines:
+                        wrong[(name, trail)] = "the trail was never written"
+                        continue
+                    if len(stream) != len(lines):
+                        said = self.journal(name, "ship-" + trail, 3).strip().replace("\n", " | ")
+                        wrong[(name, trail)] = "%d trail lines, %d in the collector (its shipper: %s)" % (len(lines), len(stream), said[-300:])
+                        continue
+                    for i, (line, event) in enumerate(zip(lines, stream)):
+                        detail = event.get("detail") or {}
+                        if event.get("sequence") != i + 1:
+                            wrong[(name, trail)] = "event %d carries sequence %r" % (i, event.get("sequence"))
+                        elif event.get("previous_hash") != (stream[i - 1].get("hash") if i else self.GENESIS):
+                            wrong[(name, trail)] = "event %d does not chain to %s" % (i, "the one before" if i else "genesis")
+                        elif detail.get("line_sha256") != hashlib.sha256(line).hexdigest():
+                            wrong[(name, trail)] = "line %d: the collector holds another line" % i
+                        elif json.loads(line).get("outcome") == "DENY" and event.get("decision") != "deny":
+                            wrong[(name, trail)] = "line %d is a DENY the collector holds as %r" % (i, event.get("decision"))
+                        else:
+                            continue
+                        break
+                    else:
+                        if receipts:
+                            problem = self._receipt_problem(name, trail, lines, stream)
+                            if problem:
+                                wrong[(name, trail)] = problem
+            return wrong
+        until(lambda: not problems(), timeout, 2)
+        until(lambda: not problems(receipts=True), 30, 2)      # the shipper's head file follows its next pass
+        return problems(receipts=True)
+
+    def audit_has(self, name, trail, since=0, **fields):
+        """The node's trail lines that its COLLECTOR stream holds (line i taken from the trail only where it hashes to
+        what event i names: what the collector committed is that line, nothing read from free text), whose fields include
+        `fields` (a value that is a callable is a predicate), at or after `since` (their "at")."""
+        path = self._trail_path(name, trail)
+        lines = path.read_bytes().splitlines(keepends=True) if path.exists() else []
+        out = []
+        for line, event in zip(lines, self.audit_stream(name, trail)):
+            if (event.get("detail") or {}).get("line_sha256") != hashlib.sha256(line).hexdigest():
+                break                                  # from here on the collector holds another line: nothing is taken
+            try:
+                value = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(value, dict) or value.get("at", 0) < since:
+                continue
+            if all(v(value.get(k)) if callable(v) else value.get(k) == v for k, v in fields.items()):
+                out.append(value)
+        return out
+
     def close(self):
         self.stop_threads = True
         for n in self.members():
             self.stop(n.name, power=None)
+        if self.audit:
+            sh("systemctl", "stop", COLLECTOR_UNIT, check=False)
+            sh("systemctl", "reset-failed", COLLECTOR_UNIT, check=False)
         for n in self.members():
             try:
                 pid = int((n.dir / "tpm.pid").read_text())

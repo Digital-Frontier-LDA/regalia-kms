@@ -238,7 +238,9 @@ def main(argv=None, ask=None, run=None):
         state = cfg["state_dir"]
         missing = [path for path in args.heartbeat if not os.path.exists(path)]
         require(not missing, "--heartbeat %s does not exist" % ", ".join(missing))
-        anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=os.path.join(state, "highwater.lock"))
+        # a node's anchor may be written by policy (#242): read it with the node's approved-image policy
+        anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=os.path.join(state, "highwater.lock"),
+                                      policy=(lambda: node.image_policy(cfg)) if "nv_heartbeat" in cfg else None)
         chain = _read_json(os.path.join(state, "membership.json"), membership.MAX_CHAIN_BYTES)
         require(isinstance(chain, list) and chain, "the host holds no membership chain")
         manifest = current(chain, cfg["root_key"], anchor)
