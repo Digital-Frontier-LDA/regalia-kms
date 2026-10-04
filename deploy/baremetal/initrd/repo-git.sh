@@ -76,7 +76,7 @@ repo_git_root_safe(){
 # the filesystem questions repo_git_root_safe asks, one function each (a test stubs them: root-owned fixtures need sudo)
 _rg_owner_mode(){ stat -c '%u %a' "$1"; }
 _rg_is_real_dir(){ [ -d "$1" ] && [ ! -L "$1" ]; }
-_rg_loose_inside(){ find "$1" -maxdepth 2 \( ! -user 0 -o -perm /022 \) -print -quit 2>/dev/null; }
+_rg_loose_inside(){ find "$1" -maxdepth 2 \( ! -user 0 -o -perm /022 \) -print -quit 2>/dev/null || echo "$1 (find failed)"; }   # fails closed
 
 repo_git(){
   local uid gid
