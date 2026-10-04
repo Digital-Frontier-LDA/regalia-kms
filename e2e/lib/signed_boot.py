@@ -108,6 +108,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     os.makedirs(args.directory, exist_ok=True)
     if args.key:
+        if not args.key.endswith(".pem") or not os.path.exists(args.key[:-len(".pem")] + ".pub.pem"):
+            parser.error("--key must name FILE.pem, with its public half beside it as FILE.pub.pem")
         private, public = args.key, args.key[:-len(".pem")] + ".pub.pem"
     else:
         private, public = key(args.directory)

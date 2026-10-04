@@ -93,6 +93,13 @@ class SignedBoot(unittest.TestCase):
                          (uki.pcr11(sb.image(), sb.SYSTEM), uki.policy_digest(said["pcr11"]), sb.fingerprint(self.public), said["pol"]))
         self.assertEqual(sb.pcr11(self.env), said["pcr11"])
         self.assertFalse(os.path.exists(self.d + "/node/pcr-key.pem"))        # --key: no new key
+        # a key that is not FILE.pem beside FILE.pub.pem is refused, never paired with a wrong public half
+        os.rename(self.private, self.d + "/keys/pcr-key")
+        for given in (self.d + "/keys/pcr-key", self.d + "/keys/absent.pem"):
+            with self.subTest(key=given):
+                done = subprocess.run([sys.executable, "-B", sb.__file__, self.d + "/bad", "--key", given, "--no-boot"], env=self.env, capture_output=True)
+                self.assertEqual(done.returncode, 2)
+                self.assertIn(b"--key must name FILE.pem", done.stderr)
         # --no-boot signs another image and leaves PCR 11 as it is
         subprocess.run([sys.executable, "-B", sb.__file__, self.d + "/other", "--image", "retired", "--no-boot"], env=self.env,
                        capture_output=True, check=True)
