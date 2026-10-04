@@ -58,7 +58,7 @@ cat > "$T/site.json" <<EOF
  "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["${IP[ntp]}/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]}}
 EOF
 render(){   # the table for a node in state $1 (the published manifest's), as regalia-authority-firewall renders it
-  (cd "$HERE" && python3 -Es -c "
+  (PYTHONPATH="$HERE" python3 -Ps -c "
 import json, sys
 from deploy.baremetal import firewall, sitecfg
 site = sitecfg.load_authority('$T/site.json')
