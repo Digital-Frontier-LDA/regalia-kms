@@ -102,6 +102,9 @@ while [ $# -gt 0 ]; do case "$1" in
   --tpm2-signature) need "$@"; SIGNATURE="$2"; shift 2;;
   -h|--help) sed -n '2,/^set -uo pipefail$/{/^set -uo pipefail$/!p}' "$0"; exit 0;; *) fail "unknown argument '$1' (see --help)";; esac; done
 [[ "$IMPORT_HANDLE" =~ ^0x81[0-9a-fA-F]{6}$ ]] || fail "--import-handle must be a persistent handle, 0x81xxxxxx"
+# 0x810100xx holds the node's identity keys (deploy/baremetal/attest.py RESERVED_HANDLES: the EK, the AK and the
+# #199 signing key): with --replace-import-key a typo there would evict one and strand the node. Never there.
+case "${IMPORT_HANDLE,,}" in 0x810100??) fail "--import-handle $IMPORT_HANDLE is in 0x810100xx, the node's identity keys (EK 0x81010001, AK 0x81010002, signing key 0x81010003): the PIN tool never makes, replaces or removes a key there";; esac
 
 # ---- commissioning: the TPM-resident import key ---------------------------------------------------
 if [ "$INIT_IMPORT" = 1 ]; then
