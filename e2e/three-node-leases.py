@@ -70,19 +70,21 @@ def renewed(cluster, name, after, by=None):
     return serving and issued and issued != after and issued > after and (by is None or issuer == by) and (issued, issuer)
 
 
-def watch_serving(cluster, name, seconds):
-    """Whether the node served at every 2 s sample over `seconds` (and the samples where it did not)."""
-    gaps, end = [], time.time() + seconds
-    while time.time() < end:
-        if not cluster.lease(name):
-            gaps.append(round(time.time()))
-        time.sleep(2)
-    return not gaps, gaps
+def lease_expiry(cluster, name):
+    """The expiry (unix seconds) of the lease the node's admission holds now, from its lease state, or None."""
+    import calendar
+    try:
+        state = json.loads((cluster.nodes[name].admission / "lease.json").read_text())
+        return calendar.timegm(time.strptime(state["envelope"]["lease"]["expires_at"], "%Y-%m-%dT%H:%M:%SZ"))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def scenario(cluster):
     names = ["a", "b", "c"]
-    renewal = lease.MAX_LIFETIME / 3 + 30            # a renewal is due at a third of the lifetime used
+    # the holder asks again once a third of its lease's life is used (lease.Holder.due), so one renewal comes within a
+    # third of MAX_LIFETIME; the slack covers a round that has to go to its second peer
+    renewal = lease.MAX_LIFETIME / 3 + 30
 
     header("1  three nodes and the authority, every node leased")
     cluster.build()
@@ -108,10 +110,16 @@ def scenario(cluster):
     current, issuer, _ = held(cluster, "a")
     other = next(n for n in ("b", "c") if n != issuer)
     cluster.stop(issuer, power=None)
-    got = until(lambda: renewed(cluster, "a", current, by=other), renewal + 90, 3)
+    # one loop, the whole window that matters: from the issuer's crash until the other peer's lease is in, a sampled
+    # every 2 s (regalia-kms-3e)
+    gaps, got, end = [], None, time.time() + renewal + 90
+    while time.time() < end and not got:
+        if not cluster.lease("a"):
+            gaps.append(round(time.time()))
+        got = renewed(cluster, "a", current, by=other)
+        time.sleep(2)
     ok(bool(got), "with %s down, a's next lease is %s's (%s)" % (issuer, other, got and got[0]), held(cluster, "a"))
-    steady, gaps = watch_serving(cluster, "a", 20)
-    ok(steady and bool(cluster.lease("a")), "and a served throughout: its admission never lapsed", gaps)
+    ok(not gaps, "and a served at every sample from %s's crash until %s's lease came" % (issuer, other), gaps)
     cluster.start(issuer, SERVICES)
     until(lambda: cluster.lease(issuer), 150, 3)
 
@@ -125,9 +133,13 @@ def scenario(cluster):
 
     header("5  a cut off from b: it renews through c")
     cluster.partition("a", ["b"])
+    # the holder starts each round at the next peer in turn (node.admission_service), so over two rounds a asks b
+    # first at least once; both leases coming from c shows that ask failed and c answered (regalia-kms-3e)
     current, _, _ = held(cluster, "a")
-    got = until(lambda: renewed(cluster, "a", current, by="c"), renewal + 90, 3)
-    ok(bool(got), "a, cut off from b, renewed through c (%s)" % (got and got[0]), held(cluster, "a"))
+    first = until(lambda: renewed(cluster, "a", current, by="c"), renewal + 90, 3)
+    second = first and until(lambda: renewed(cluster, "a", first[0], by="c"), renewal + 90, 3)
+    ok(bool(first) and bool(second), "a, cut off from b, renewed twice, both times by c (%s, %s): the round that began at b fell to c"
+       % (first and first[0], second and second[0]), held(cluster, "a"))
     cluster.heal("a")
 
     header("6  14.3: running a revoked; nobody renews it, and it stops serving by itself")
@@ -142,12 +154,23 @@ def scenario(cluster):
     named = until(lambda: [e.get("reason") for e in cluster.trail("b") if e.get("event", "").startswith("sync") and e.get("outcome") == "DENY"
                            and "a is REVOKED_STOLEN under epoch 2" in e.get("reason", "") and e.get("at", 0) >= revoked_at], 150, 3)
     ok(bool(named), "through a tunnel forced open on b, b's sync refuses a's requests by name", named)
-    stopped = until(lambda: not cluster.lease("a"), lease.MAX_LIFETIME + admission.MARGIN + 60, 2)
-    took = time.time() - revoked_at
-    ok(stopped is True and took <= lease.MAX_LIFETIME + 60,
-       "a's admission stopped serving by itself %.0f s after the revocation (its lease's end; the bound is %d s)" % (took, lease.MAX_LIFETIME),
-       held(cluster, "a"))
-    print("  MEASURED: running a revoked -> it stops serving: %.0f s (lease.MAX_LIFETIME %d s)" % (took, lease.MAX_LIFETIME))
+    expiry = [lease_expiry(cluster, "a")]
+
+    def stopped():                                    # the expiry of the last lease a held, read while it still served
+        if cluster.lease("a"):
+            expiry[0] = lease_expiry(cluster, "a") or expiry[0]
+            return False
+        return True
+    done = until(stopped, lease.MAX_LIFETIME + admission.MARGIN + 60, 2)
+    stop_at = time.time()
+    took = stop_at - revoked_at
+    due = (expiry[0] - admission.MARGIN) if expiry[0] else None
+    ok(done is True and due is not None and expiry[0] - revoked_at <= lease.MAX_LIFETIME and abs(stop_at - due) <= 10,
+       "a's admission stopped serving by itself %.0f s after the revocation: at its last lease's end less the %d s margin "
+       "(expected %.0f s; that lease had at most %d s left)" % (took, admission.MARGIN, (due or 0) - revoked_at, lease.MAX_LIFETIME),
+       {"stop_minus_due": round(stop_at - due, 1) if due else None, "held": held(cluster, "a")})
+    print("  MEASURED: running a revoked -> it stops serving: %.0f s (its last lease's end less the margin; MAX_LIFETIME %d s)"
+          % (took, lease.MAX_LIFETIME))
     ok(not any(e.get("event") == "sync-lease" and e.get("subject") == "a" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= revoked_at
                for p in ("b", "c") for e in cluster.trail(p)), "and nobody issued a a lease after the revocation")
 
