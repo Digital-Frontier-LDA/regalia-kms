@@ -23,6 +23,7 @@ trial(entry, esp, accepted, run)
                       THE way a trial boot is set: the entry's image is read from the booted ESP and must
                       measure the accepted set (NEXT) before BootNext := entry is written, then read back;
                       nothing writes BootNext otherwise
+clear_next(run)       delete BootNext, then read back (an apply that set it and did not reboot)
 promote(entry, run)   BootOrder := entry first, the rest in their order, then read back
 remove(entry, run)    delete an entry that is not the one booted, nor first in BootOrder, nor BootNext
 image(esp, entry)     the file an entry boots, on the ESP this host booted from: the entry's GPT partition
@@ -134,6 +135,19 @@ def promote(entry, run=subprocess.run):
         _efibootmgr(run, "--bootorder", ",".join(order))
     after = state(run)
     require(after["order"][:1] == [entry], "BootOrder reads %s after putting %s first" % (",".join(after["order"]), entry))
+    return after
+
+
+def clear_next(run=subprocess.run):
+    """Delete BootNext, whatever it names, then read back: a trial boot armed by an apply that did not reboot
+    (its trail write or the reboot failed, or it was killed) must never be left for a later reset to take,
+    with no fresh leases and nobody watching. Returns the state; a BootNext already unset is left so."""
+    before = state(run)
+    if before["next"] is None:
+        return before
+    _efibootmgr(run, "--delete-bootnext")
+    after = state(run)
+    require(after["next"] is None, "BootNext still reads %s after deleting it" % after["next"])
     return after
 
 

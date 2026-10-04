@@ -154,5 +154,5 @@ jobs:
           set -o pipefail
           REGALIA_UNLOCK_BIN="$RUNNER_TEMP/regalia-unlock" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN \
             python3 -Es e2e/three-node-recovery.py | tee "$RUNNER_TEMP/recovery.log"
-          grep -q '^three-node-recovery: 52 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
-            echo "::error::the three-node recovery test did not pass all 52 checks" >&2; exit 1; }
+          grep -q '^three-node-recovery: 55 passed, 0 failed$' "$RUNNER_TEMP/recovery.log" || {
+            echo "::error::the three-node recovery test did not pass all 55 checks" >&2; exit 1; }
