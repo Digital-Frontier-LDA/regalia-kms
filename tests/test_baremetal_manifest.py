@@ -871,7 +871,8 @@ class ProposeGenesis(unittest.TestCase):
                                      {"serial": self.BACKUP, "primary": "C" * 40, "subkey": "D" * 40}],
             "ssh_signers": [{"serial": s, "key": ssh(Ed25519PrivateKey.generate())} for s in (self.MAIN, self.BACKUP)],
             "release_key": {"alg": "ed25519", "key": self.release, "fingerprint": "E" * 40, "cards": ["40000003", "40000004"],
-                            "imported": True, "attested": False}}
+                            "imported": True, "attested": False},
+            "sequence": 1, "supersedes": ""}
         record = copy.deepcopy(record)
         if change:
             change(record)
@@ -943,7 +944,25 @@ class ProposeGenesis(unittest.TestCase):
         self.refused("owner_heartbeat_lifetime_s must be an integer from 300", self.propose, policy={"owner_heartbeat_lifetime_s": 100})
         self.assertEqual(self.propose(policy={"heartbeat_max_lifetime_s": 7200})["heartbeat_max_lifetime_s"], 7200)
 
-    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True):
+    def state(self, *records):
+        """The ceremony laptop's state directory (#403): the marker naming the pinned root, and a signing record holding a
+        manifest line and one card-record line per record given, in order."""
+        from deploy.baremetal import cardrecord
+        state = os.path.join(self.d, "state")
+        os.makedirs(state, mode=0o700, exist_ok=True)
+        with open(os.path.join(state, cardrecord.SIGNING_STATE), "w") as f:
+            json.dump({"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": self.root}, f)
+        with open(os.path.join(state, cardrecord.SIGNING_RECORD), "w") as f:
+            f.write(json.dumps({"kind": "manifest", "epoch": 7, "digest": "ab" * 32, "signer": "root"}) + "\n")
+            for envelope in records:
+                f.write(json.dumps({"kind": "card-record", "sequence": envelope["record"]["sequence"],
+                                    "digest": cardrecord.digest(envelope["record"]), "key": self.root, "at": "2026-10-04T11:00:01Z"}) + "\n")
+        for name in (cardrecord.SIGNING_STATE, cardrecord.SIGNING_RECORD):
+            os.chmod(os.path.join(state, name), 0o600)
+        return state
+
+    def run_cli(self, *extra, typed="40000001 40000002", record=None, root=None, with_record=True, logged=None, with_state=True):
+        record = record or self.card_record()
         paths = {}
         for e in self.entries:
             paths[e["node_id"]] = os.path.join(self.d, "entry-%s.json" % e["node_id"])
@@ -954,10 +973,11 @@ class ProposeGenesis(unittest.TestCase):
             json.dump(self.document, f)
         cards = os.path.join(self.d, "cards.record.json")
         with open(cards, "w") as f:
-            json.dump(record or self.card_record(), f)
+            json.dump(record, f)
         out = os.path.join(self.d, "e1.json")
         args = ["propose", "--genesis", "--root-key", root or self.root, "--measurements", doc, "--out", out,
-                "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else [])
+                "--issued-at", "2026-10-04T12:00:00Z"] + (["--card-record", cards] if with_record else []) \
+            + (["--state-dir", self.state(*(logged or [record]))] if with_state else [])
         for p in paths.values():
             args += ["--entry", p]
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -975,6 +995,8 @@ class ProposeGenesis(unittest.TestCase):
         self.assertEqual(code, 0, err)
         for shown in ("owner card 40000001 (dev-main): key " + self.owner_a, "owner card 40000002 (dev-backup): key " + self.owner_b,
                       "card record: session " + "cd" * 16 + ", made 2026-10-04T11:00:00Z, signed by the pinned root",
+                      "card record 1 of 1 (the newest on this laptop's signing record), digest ",
+                      "supersedes nothing (the first): check both against the ceremony sheet",
                       "release card key (not in the manifest", "heartbeat_max_lifetime_s", "revocation_signers", "node c: ADDED"):
             self.assertIn(shown, out)
         written = json.load(open(path))
@@ -986,7 +1008,7 @@ class ProposeGenesis(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         code, _, err, path = self.run_cli(with_record=False)
         self.assertEqual(code, 2)
-        self.assertIn("--genesis needs --measurements and --card-record", err)
+        self.assertIn("--genesis needs --measurements, --card-record and --state-dir", err)
         code, _, err, path = self.run_cli(record=self.card_record(signer=Ed25519PrivateKey.generate()))
         self.assertIn("the card record names another root than the pinned one", err)
         self.assertFalse(os.path.exists(path))
@@ -1011,7 +1033,26 @@ class ProposeGenesis(unittest.TestCase):
             self.assertEqual(tool.main(["propose", "--root-key", self.root, "--chain", os.path.join(self.d, "none.json"),
                                         "--card-record", os.path.join(self.d, "x.json"), "--set-state", "c=MAINTENANCE",
                                         "--out", os.path.join(self.d, "x")]), 2)
-        self.assertIn("--entry, --measurements, --card-record and the lifetimes are for --genesis only", stderr.getvalue())
+        self.assertIn("--entry, --measurements, --card-record, --state-dir and the lifetimes are for --genesis only", stderr.getvalue())
+
+    def test_only_the_newest_card_record_on_the_laptop_s_signing_record(self):
+        """#403: an older record, still validly signed, is refused once a newer one is on the laptop's signing record; and
+        without the laptop's state directory nothing is judged."""
+        first = self.card_record()
+        second = self.card_record(change=lambda r: r.update(sequence=2, supersedes=tool.cardrecord.digest(first["record"]),
+                                                            at="2026-10-05T11:00:00Z"))
+        code, _, err, path = self.run_cli(record=first, logged=[first, second])
+        self.assertEqual(code, 2, err)
+        self.assertIn("this card record (sequence 1) is not the newest the root signed (sequence 2", err)
+        self.assertFalse(os.path.exists(path))
+        code, out, err, path = self.run_cli(record=second, logged=[first, second])
+        self.assertEqual(code, 0, err)
+        self.assertIn("card record 2 of 2 (the newest on this laptop's signing record)", out)
+        self.assertIn("supersedes %s" % tool.cardrecord.digest(first["record"]), out)
+        os.unlink(path)
+        code, _, err, path = self.run_cli(with_state=False)
+        self.assertIn("--genesis needs --measurements, --card-record and --state-dir", err)
+        self.assertFalse(os.path.exists(path))
 
     def test_genesis_takes_no_chain_and_the_other_proposals_still_need_one(self):
         chain = os.path.join(self.d, "c.json")

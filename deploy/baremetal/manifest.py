@@ -155,15 +155,16 @@ def _raw_ed25519(value, what):
     return value
 
 
-def card_record_keys(envelope, root):
+def card_record_keys(envelope, root, signing_state):
     """The owner's two keys and the release card's, from the card ceremony's record (regalia-ceremony#111, ADR-0002 D30)
-    and nowhere else: verified by cardrecord.verify under the PINNED root first, so a key is never typed. The genesis
-    root is one Ed25519 key (D28); a pin naming anything else is refused here. Returns cardrecord.verify's result."""
+    and nowhere else: verified by cardrecord.verify under the PINNED root first, so a key is never typed, and only if it
+    is the NEWEST card record the root signed by the laptop's signing record in `signing_state` (--state-dir, #403). The
+    genesis root is one Ed25519 key (D28); a pin naming anything else is refused here. Returns cardrecord.verify's result."""
     entries = membership.root_entries(root)
     require(len(entries) == 1 and entries[0][0] == "ed25519",
             "the genesis root is one Ed25519 key (D28): a card record is verified under that key only, not %s"
             % ", ".join(alg for alg, _ in entries))
-    return cardrecord.verify(envelope, entries[0][1])
+    return cardrecord.verify(envelope, entries[0][1], cardrecord.read_signing_state(signing_state, entries[0][1]))
 
 
 def propose_genesis(entries, document, owners, release_key, root, issued_at, policy=None):
@@ -444,7 +445,8 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     except Exception as failure:          # noqa: BLE001 - recorded as the reason; raised again below
         reason, failed = str(failure) or type(failure).__name__, failure
     try:
-        line = {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
+        # "kind": the laptop's one ordered record of the root's uses also holds the card ceremony's card-record lines (#403)
+        line = {"kind": "manifest", "epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
                 "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
                 "verified": verified, "reason": reason, "at": int(time.time())}
         if getattr(signer, "provenance", None):
@@ -476,8 +478,9 @@ def _propose_genesis(args, root, confirm=None, say=print):
     pinned root before anything else is read: never typed, so there is no second way to give them."""
     require(args.chain is None and not args.from_rollout and not args.set_state and not (args.old or args.new or args.state),
             "--genesis takes no --chain, --from-rollout, --set-state or measurements step: nothing comes before it")
-    require(args.measurements and args.card_record, "--genesis needs --measurements and --card-record")
-    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root)
+    require(args.measurements and args.card_record and args.state_dir,
+            "--genesis needs --measurements, --card-record and --state-dir (the laptop's root signing record, #403)")
+    cards = card_record_keys(read_json(args.card_record, membership.MAX_BYTES), root, args.state_dir)
     owners, release_key = cards["owners"], cards["release_key"]
     entries = [read_json(path, membership.MAX_BYTES) for path in args.entry]
     document = measurements.load(_raw(args.measurements, measurements.MAX_BYTES))
@@ -489,6 +492,8 @@ def _propose_genesis(args, root, confirm=None, say=print):
         say("  " + line)
     say("measurements: %s (%s)" % (candidate["policy_version"], document["name"]))
     say("card record: session %s, made %s, signed by the pinned root" % (cards["session"], cards["at"]))
+    say("card record %d of %d (the newest on this laptop's signing record), digest %s, supersedes %s: check both against "
+        "the ceremony sheet" % (cards["sequence"], cards["of"], cards["digest"], cards["supersedes"] or "nothing (the first)"))
     roles = {serial: role for role, serial in cards["roles"].items()}
     order = sorted(owners)
     for serial in order:
@@ -576,6 +581,8 @@ def main(argv=None):
     c.add_argument("--card-record", metavar="CARDS.json",
                    help="--genesis: the card ceremony's record (regalia-ceremony#111, cards.record.json), signed by the pinned "
                         "root: the owner's two keys and the release card's, from it and never typed")
+    c.add_argument("--state-dir", metavar="DIR", help="--genesis: the ceremony laptop's state directory (its root signing record "
+                   "and regalia-signing-state.json): the card record must be the newest the root signed (#403)")
     c.add_argument("--heartbeat-max-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["heartbeat_max_lifetime_s"])
     c.add_argument("--owner-heartbeat-lifetime-s", type=int, help="--genesis: override the default %d" % GENESIS_POLICY["owner_heartbeat_lifetime_s"])
     c.add_argument("--from-rollout", metavar="R.json", help="the output of `rollout propose --json`")
@@ -620,8 +627,8 @@ def main(argv=None):
             return _propose_genesis(args, root)
         if args.command == "propose":
             require(args.chain is not None, "give --chain (or --genesis)")
-            require(not (args.entry or args.measurements or args.card_record or args.heartbeat_max_lifetime_s
-                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --card-record and the "
+            require(not (args.entry or args.measurements or args.card_record or args.state_dir or args.heartbeat_max_lifetime_s
+                         or args.owner_heartbeat_lifetime_s), "--entry, --measurements, --card-record, --state-dir and the "
                     "lifetimes are for --genesis only")
         if args.command == "sign" and args.genesis:
             # the first ceremony: no chain at all, the offline root only (see GENESIS above)

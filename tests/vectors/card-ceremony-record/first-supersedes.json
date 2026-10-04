@@ -51,9 +51,9 @@
   },
   "root_entry": {
    "alg": "ed25519",
-   "key": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394"
+   "key": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c"
   },
-  "root_fingerprint": "6a3803d5f059902a1c6dafbc9ba4729212f7caac08634cc3ae76b27529f03827",
+  "root_fingerprint": "34750f98bd59fcfc946da45aaabe933be154a4b5094e1c4abf42866505f3c97e",
   "schema": "regalia.card-ceremony-record/v1",
   "sequence": 1,
   "session": "0123456789abcdef0123456789abcdef",
@@ -67,8 +67,8 @@
     "serial": "40000002"
    }
   ],
-  "supersedes": "",
+  "supersedes": "7b0e5616ebb831800e7801234f1a6b1468188cfa9e12a44b1b45f693a4f6067b",
   "tool": "card-ceremony-vectors/1"
  },
- "signature": "c394ddb901931e59408fc08f92ff4e144ab526aad92f3f8bf043a3a41a82b7b7888c7b523dd6371a7bbeb59a21142637d7dea6274347a3359e11322566e72300"
+ "signature": "1c69bcdbe8d23c05ceda49c2b6ebcab7e8e2fabd5d34337998f2bbd67b6667931b2f122dae4ad2db3402ac088a1f27e6b67d1f48a0dc0fb7fcc81b662e8f7c0e"
 }
