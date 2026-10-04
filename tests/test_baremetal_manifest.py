@@ -547,3 +547,275 @@ class OnSoftHsm(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OfflineRoot(unittest.TestCase):
+    """ADR-0002 D28: the root is an Ed25519 software key, reconstructed by regalia-ceremony's offline-keys.py and
+    handed down on a sealed memfd (`--key-fd`), never a file on disk. Every step of `sign` runs as for a token."""
+
+    SESSION = "0123456789abcdef0123456789abcdef"
+
+    def setUp(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.state = os.path.join(self.d, "state")
+        os.mkdir(self.state, 0o700)
+        self.key = Ed25519PrivateKey.generate()
+        self.root = self.raw(self.key).hex()
+        first = manifest(1, "", three())
+        self.chain = [{"manifest": first, "signature": {"signer": "root", "key": self.root,
+                                                         "sig": self.key.sign(m.DOMAIN + m.canonical(first)).hex()}}]
+        self.current = m.accept_chain(None, self.chain, self.root)
+        self.paths = {name: os.path.join(self.d, name) for name in ("chain.json", "p.json", "e2.json")}
+        with open(self.paths["chain.json"], "w") as f:
+            json.dump(self.chain, f)
+        self.candidate = tool.propose_states(self.current, {"c": "MAINTENANCE"}, "2026-10-04T12:00:00Z")
+        with open(self.paths["p.json"], "w") as f:
+            json.dump(self.candidate, f)
+        self.typed = "%d %s" % (self.candidate["epoch"], m.digest(self.candidate)[:8])
+
+    @staticmethod
+    def raw(key):
+        return key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+
+    @staticmethod
+    def pem(key):
+        return bytearray(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+
+    def memfd(self, key=None):
+        """The key as offline-keys.py passes it: a sealed memfd."""
+        from deploy.baremetal import keyfd
+        return keyfd.sealed_memfd(self.pem(key or self.key))
+
+    def run_sign(self, *extra, fd=None, typed=None, signer="root"):
+        fd = self.memfd() if fd is None else fd
+        args = ["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", "1",
+                "--proposal", self.paths["p.json"], "--signer", signer, "--state-dir", self.state, "--out", self.paths["e2.json"],
+                "--key-fd", str(fd), "--offline-session", self.SESSION] + list(extra)
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch("sys.stdout", out), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(tool.keyfd, "tty_line", lambda prompt: self.typed if typed is None else typed):
+            code = tool.main(args)
+        return code, err.getvalue()
+
+    def record(self):
+        path = os.path.join(self.state, tool.RECORD)
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def test_a_valid_session_signs_and_the_record_names_it(self):
+        code, err = self.run_sign()
+        self.assertEqual(code, 0, err)
+        with open(self.paths["e2.json"]) as f:
+            envelope = json.load(f)
+        self.assertEqual(m.accept(self.current, envelope, self.root)["epoch"], 2)
+        line = self.record()[-1]
+        self.assertEqual((line["provenance"], line["verified"], line["key"]), ("offline-keys session " + self.SESSION, True, self.root))
+        self.assertEqual(line["pin_source"], "none (offline key)")
+        self.assertNotIn("PRIVATE", json.dumps(line))
+
+    def test_a_key_that_is_not_the_pinned_root_is_refused_before_anything_is_signed(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        code, err = self.run_sign(fd=self.memfd(Ed25519PrivateKey.generate()))
+        self.assertEqual(code, 2)
+        self.assertIn("is not the pinned root", err)
+        self.assertFalse(os.path.exists(self.paths["e2.json"]))
+        self.assertEqual(self.record(), [])                         # nothing was signed, so nothing to record
+
+    def test_a_key_on_disk_is_refused(self):
+        path = os.path.join(self.d, "root.pem")
+        with open(path, "wb") as f:
+            f.write(self.pem(self.key))
+        fd = os.open(path, os.O_RDONLY)
+        code, err = self.run_sign(fd=fd)
+        self.assertEqual(code, 2)
+        self.assertIn("a key is never read from a file on disk", err)
+        self.assertFalse(os.path.exists(self.paths["e2.json"]))
+        with self.assertRaises(OSError):
+            os.fstat(fd)                                             # closed all the same
+        with self.assertRaises(SystemExit), unittest.mock.patch("sys.stderr", io.StringIO()):
+            tool.main(["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", "1",
+                       "--proposal", self.paths["p.json"], "--signer", "root", "--state-dir", self.state, "--out", self.paths["e2.json"],
+                       "--key-fd", path, "--offline-session", self.SESSION])          # a path is not a descriptor
+
+    def test_an_unsealed_memfd_is_refused_and_a_pipe_is_taken(self):
+        fd = os.memfd_create("k", os.MFD_CLOEXEC)
+        os.write(fd, self.pem(self.key))
+        os.lseek(fd, 0, os.SEEK_SET)
+        code, err = self.run_sign(fd=fd)
+        self.assertEqual(code, 2)
+        self.assertIn("not sealed against writing", err)
+        r, w = os.pipe()
+        os.write(w, self.pem(self.key))
+        os.close(w)
+        code, err = self.run_sign(fd=r)
+        self.assertEqual(code, 0, err)
+
+    def test_the_buffer_is_zeroed_once_the_key_is_loaded(self):
+        seen = []
+        real = tool.keyfd.read
+
+        def kept(fd, what):
+            seen.append(real(fd, what))
+            return seen[-1]
+        with unittest.mock.patch.object(tool.keyfd, "read", kept):
+            code, err = self.run_sign()
+        self.assertEqual(code, 0, err)
+        self.assertTrue(seen and not any(seen[0]), "the key's buffer still holds the key")
+
+    def test_every_other_step_still_runs(self):
+        code, err = self.run_sign(typed="2 00000000")
+        self.assertEqual(code, 2)
+        self.assertIn("the confirmation does not match: nothing was signed", err)
+        self.assertEqual(self.record(), [])
+        code, err = self.run_sign("--expected-epoch", "2")[0], None
+        self.assertEqual(code, 2)                                    # the chain ends at 1, not the epoch the operator said
+
+    def test_the_offline_path_takes_nothing_of_a_token_and_only_the_root(self):
+        for extra, reason in ((("--module", "/usr/lib/opensc-pkcs11.so"), "is not given with --key, --module"),
+                              (("--key", URI), "is not given with --key, --module")):
+            with self.subTest(reason):
+                code, err = self.run_sign(*extra)
+                self.assertEqual(code, 2)
+                self.assertIn(reason, err)
+        code, err = self.run_sign(signer="revocation")
+        self.assertIn("a revocation key signs on its token", err)
+        args = ["sign", "--chain", self.paths["chain.json"], "--root-key", self.root, "--expected-epoch", "1", "--proposal", self.paths["p.json"],
+                "--signer", "root", "--state-dir", self.state, "--out", self.paths["e2.json"], "--key-fd", str(self.memfd())]
+        for session, reason in ((None, "--offline-session is 32 lowercase hex"), ("ABC", "--offline-session is 32 lowercase hex")):
+            err = io.StringIO()
+            with unittest.mock.patch("sys.stderr", err):
+                self.assertEqual(tool.main(args + ([] if session is None else ["--offline-session", session])), 2)
+            self.assertIn(reason, err.getvalue())
+
+    def test_the_confirmation_needs_a_terminal(self):
+        from deploy.baremetal import keyfd
+        import errno
+
+        def no_tty(path, flags, *a):
+            raise OSError(errno.ENXIO, "No such device or address")
+        with unittest.mock.patch.object(keyfd.os, "open", no_tty):
+            with self.assertRaises(m.Refused) as caught:
+                keyfd.tty_line("type: ")
+        self.assertIn("no controlling terminal", str(caught.exception))
+
+
+class Genesis(unittest.TestCase):
+    """The first ceremony (`sign --genesis`, ADR-0002 D28): epoch 1 signed by the offline root with no chain before it.
+    At this one moment the pin vouches for itself, so the operator types the root key's full SHA-256 fingerprint from
+    the ceremony record (regalia-kms-24, regalia-kms-51)."""
+
+    SESSION = "00112233445566778899aabbccddeeff"
+
+    def setUp(self):
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from tests.test_baremetal_membership_v4 import manifest4, nodes4
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.state = os.path.join(self.d, "state")
+        os.mkdir(self.state, 0o700)
+        self.key = Ed25519PrivateKey.generate()
+        self.root = OfflineRoot.raw(self.key).hex()
+        self.fingerprint = hashlib.sha256(bytes.fromhex(self.root)).hexdigest()
+        self.manifest4, self.nodes4 = manifest4, nodes4
+        self.first = manifest4(1, "", nodes4())
+        self.paths = {n: os.path.join(self.d, n) for n in ("p.json", "e1.json", "chain.json")}
+        self.write(self.first)
+
+    def write(self, proposal):
+        with open(self.paths["p.json"], "w") as f:
+            json.dump(proposal, f)
+
+    def run_genesis(self, *extra, key=None, typed=None, fd=None):
+        from deploy.baremetal import keyfd
+        fd = keyfd.sealed_memfd(OfflineRoot.pem(key or self.key)) if fd is None else fd
+        answers = list(typed if typed is not None else [self.fingerprint, "1 %s" % m.digest(self.first)[:8]])
+        asked = []
+        args = ["sign", "--genesis", "--root-key", self.root, "--proposal", self.paths["p.json"], "--signer", "root",
+                "--key-fd", str(fd), "--offline-session", self.SESSION, "--state-dir", self.state, "--out", self.paths["e1.json"]] + list(extra)
+        out, err = io.StringIO(), io.StringIO()
+
+        def tty(prompt):
+            asked.append(prompt)
+            return answers.pop(0) if answers else ""
+        with unittest.mock.patch("sys.stdout", out), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(tool.keyfd, "tty_line", tty):
+            code = tool.main(args)
+        self.asked, self.out = asked, out.getvalue()
+        return code, err.getvalue()
+
+    def record(self):
+        path = os.path.join(self.state, tool.RECORD)
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def test_the_offline_root_signs_epoch_1_after_the_fingerprint_and_the_digest_are_typed(self):
+        code, err = self.run_genesis("--chain-out", self.paths["chain.json"])
+        self.assertEqual(code, 0, err)
+        with open(self.paths["chain.json"]) as f:
+            chain = json.load(f)
+        self.assertEqual(m.accept_chain(None, chain, self.root)["epoch"], 1)
+        self.assertIn("ROOT-FINGERPRINT", self.asked[0])                        # the ceremony sheet's line, by its name
+        self.assertNotIn(self.fingerprint, self.out + "".join(self.asked))       # read from the ceremony record, never shown
+        line = self.record()[-1]
+        self.assertEqual((line["genesis"], line["verified"], line["provenance"]), (True, True, "offline-keys session " + self.SESSION))
+
+    def test_a_wrong_or_short_fingerprint_signs_nothing(self):
+        for typed in (["0" * 64, "1 %s" % m.digest(self.first)[:8]], [self.fingerprint[:8], "1 %s" % m.digest(self.first)[:8]]):
+            with self.subTest(typed[0][:8]):
+                code, err = self.run_genesis(typed=typed)
+                self.assertEqual(code, 2)
+                self.assertIn("the fingerprint typed is not this key's: nothing was signed", err)
+        self.assertFalse(os.path.exists(self.paths["e1.json"]))
+        self.assertEqual(self.record(), [])
+
+    def test_a_key_that_is_not_the_pin_is_refused_before_anything_is_typed(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        code, err = self.run_genesis(key=Ed25519PrivateKey.generate())
+        self.assertEqual(code, 2)
+        self.assertIn("is not the pinned root", err)
+        self.assertEqual((self.asked, self.record()), ([], []))
+
+    def test_only_a_fresh_epoch_1_v4_manifest_is_a_genesis(self):
+        """Refused by THIS rule, by its message: a well-formed v3 epoch 1, and a well-formed v4 epoch 2."""
+        from tests.test_baremetal_membership_v4 import manifest3
+        v3 = manifest3(1, "", [{k: v for k, v in n.items() if k != "signing_key"} for n in self.nodes4()])
+        m.validate(v3)                                                    # a well-formed manifest: only the schema is wrong
+        later = self.manifest4(2, "cd" * 32, self.nodes4())
+        m.validate(later)                                                 # a well-formed epoch 2: only "fresh" is wrong
+        for proposal in (v3, later):
+            with self.subTest(schema=proposal["schema"], epoch=proposal["epoch"]):
+                self.write(proposal)
+                code, err = self.run_genesis()
+                self.assertEqual(code, 2, err)
+                self.assertIn("the genesis is a fresh epoch-1 %s manifest with no prev_digest" % m.SCHEMA_V4, err)
+        # an epoch 1 naming a previous manifest is not even well-formed: validate's own rule refuses it first
+        self.write(self.manifest4(1, "ab" * 32, self.nodes4()))
+        self.assertIn("epoch 1 has no previous manifest", self.run_genesis()[1])
+        self.assertEqual(self.record(), [])
+
+    def test_genesis_takes_no_chain_no_expected_epoch_and_no_token(self):
+        chain = os.path.join(self.d, "c.json")
+        with open(chain, "w") as f:
+            json.dump([], f)
+        for extra, reason in ((("--chain", chain), "--genesis takes no --chain"), (("--expected-epoch", "0"), "--genesis takes no --chain"),
+                              (("--module", "/usr/lib/opensc-pkcs11.so"), "--key-fd and --offline-session only"),
+                              (("--old", chain), "--genesis takes no measurements step")):
+            with self.subTest(reason):
+                code, err = self.run_genesis(*extra)
+                self.assertEqual(code, 2)
+                self.assertIn(reason, err)
+
+    def test_without_genesis_a_chain_is_still_required(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            self.assertEqual(tool.main(["sign", "--root-key", self.root, "--proposal", self.paths["p.json"], "--signer", "root",
+                                        "--key-fd", "3", "--offline-session", self.SESSION, "--state-dir", self.state,
+                                        "--out", self.paths["e1.json"]]), 2)
+        self.assertIn("give --chain and --expected-epoch (or --genesis)", err.getvalue())

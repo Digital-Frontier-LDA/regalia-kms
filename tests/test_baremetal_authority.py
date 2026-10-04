@@ -10,10 +10,18 @@ import unittest.mock
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from deploy.baremetal import authority, heartbeat as hb, membership as m, node
+from deploy.baremetal import authority, heartbeat as hb, measurements, membership as m, node
 import tests.test_baremetal_heartbeat as hbt
 
 T0 = hbt.T0
+# the measurements the test chains commit to (#332): the authority holds the document of every epoch it commits
+DOC = {"schema": measurements.SCHEMA, "name": "authority-tests",
+       "nodes": {n: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}]} for n in "abc"}}
+
+
+def committing(man):
+    """`man`, committing to DOC."""
+    return dict(man, policy_version=measurements.version(DOC))
 
 
 def config(d, **override):
@@ -40,14 +48,14 @@ class Case(unittest.TestCase):
         self.events = []
         self.a = self.authority()
         self.m1 = self.manifest()
-        self.a.init([m_sign(self.m1)])
+        self.a.init([m_sign(self.m1)], [DOC])
 
     def authority(self, **override):
         return authority.Authority(authority.validate(config(self.d, **override)), clock=lambda: (self.now, self.authenticated),
                                    run=self.tpm, trail=self.events.append)
 
     def manifest(self):
-        man = hbt.manifest()
+        man = committing(hbt.manifest())
         man["revocation_keys"] = [self.a.signer.public()]
         return man
 
@@ -575,8 +583,8 @@ class Pkcs11(unittest.TestCase):
         tpm, events = hbt.FakeTpm(), []
         a = authority.Authority(authority.validate(config(d)), signer=signer, clock=lambda: (T0, True), run=tpm, trail=events.append)
         import tests.test_baremetal_revocation_keys as tk
-        man = tk.v3(hbt.manifest(keys=[{"alg": "ecdsa-p256", "key": signer.public()}]))
-        a.init([m_sign(man)])
+        man = committing(tk.v3(hbt.manifest(keys=[{"alg": "ecdsa-p256", "key": signer.public()}])))
+        a.init([m_sign(man)], [DOC])
         envelope = a.beat()
         self.assertEqual(hb.verify(envelope, man)["sequence"], 1)
         self.assertEqual(events[-1]["signer"], "pkcs11")
@@ -984,3 +992,17 @@ class CommandLine(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Documents(Case):
+    """#332: the authority is a sync source, so it holds the measurements of every epoch it commits."""
+
+    def test_an_epoch_whose_document_was_not_given_is_not_accepted(self):
+        other = dict(DOC, name="authority-tests-2")
+        m2 = dict(self.a.store.load(), epoch=2, prev_digest=m.digest(self.a.store.load()), issued_at="2026-10-05T00:00:00Z",
+                  policy_version=measurements.version(other))
+        self.refused("epoch 2 commits to measurements %s, which this node does not hold" % measurements.version(other),
+                     self.a.accept, [m_sign(m2)])
+        self.assertEqual(self.a.store.load()["epoch"], 1)
+        self.assertEqual(self.a.accept([m_sign(m2)], [other]), 2)
+        self.assertEqual(self.a.documents.get(measurements.version(other)), other)

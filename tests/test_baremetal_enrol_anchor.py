@@ -6,11 +6,20 @@ import copy
 import json
 import os
 
-from deploy.baremetal import enrol
+from deploy.baremetal import enrol, measurements
 from deploy.baremetal import membership as m
 import tests.test_baremetal_heartbeat as hbt
 import tests.test_baremetal_node as nt
 import tests.test_baremetal_replacement as rt
+
+# the measurements the chain commits to: in the node's store before the anchor step (commit puts it there, #332)
+DOC = {"schema": measurements.SCHEMA, "name": "anchor-tests",
+       "nodes": {n: {"accepted": [{"label": "image-1", "tpm_firmware_version": "0" * 16, "pcrs": {"7": "00" * 32}}]} for n in "abc"}}
+P1 = measurements.version(DOC)
+
+
+def committing(man):
+    return dict(man, policy_version=P1)
 
 
 class Anchor(nt.Case):
@@ -19,11 +28,12 @@ class Anchor(nt.Case):
         self.path = self.d + "/etc/node.json"
         with open(self.path, "w") as f:
             json.dump(self.cfg, f)
+        enrol.store_documents(self.cfg["state_dir"], DOC, chown=False)
 
     def chain(self, n):
         envs, prev = [], None
         for epoch in range(1, n + 1):
-            man = hbt.manifest(epoch, m.digest(prev) if prev else "")
+            man = committing(hbt.manifest(epoch, m.digest(prev) if prev else ""))
             envs.append(rt.sign(man))
             prev = man
         return envs
@@ -48,7 +58,7 @@ class Anchor(nt.Case):
     def late_chain(self):
         """epoch 1 without this node, epoch 2 (root-signed) adding it: a node joining a running network."""
         me = self.cfg["node_id"]
-        first = hbt.manifest()
+        first = committing(hbt.manifest())
         first["nodes"] = [n for n in first["nodes"] if n["node_id"] != me]
         second = dict(copy.deepcopy(first), epoch=2, prev_digest=m.digest(first))
         second["nodes"] = [hbt.node(me, "ACTIVE", 0)] + second["nodes"]
@@ -72,7 +82,7 @@ class Anchor(nt.Case):
         other["policy_version"] = "p2"
         with self.assertRaisesRegex(enrol.Refused, "not the beginning of this one"):
             self.anchor([rt.sign(other)])
-        self.assertEqual(self.node().store().load()["policy_version"], "p1")
+        self.assertEqual(self.node().store().load()["policy_version"], P1)
 
     def test_indices_without_a_store_are_taken_only_as_define_leaves_them(self):
         node = self.node()
@@ -100,3 +110,18 @@ class Anchor(nt.Case):
 if __name__ == "__main__":
     import unittest
     unittest.main()
+
+
+class Documents(Anchor):
+    def test_the_anchor_step_needs_the_last_epochs_measurements_and_moves_nothing_without_them(self):
+        """#332: the chain's last epoch commits to a document the store does not hold: refused before the store is
+        written or the anchor moves past what it stood at."""
+        chain = self.chain(2)
+        other = dict(DOC, name="anchor-tests-2")
+        last = dict(chain[1]["manifest"], policy_version=measurements.version(other))
+        chain = [chain[0], rt.sign(last)]
+        with self.assertRaisesRegex(m.Refused, "epoch 2 commits to measurements %s, which this node does not hold" % measurements.version(other)):
+            self.anchor(chain)
+        self.assertEqual(self.node().anchor().value(), 1)               # epoch 1 passed through; 2 is not anchored
+        enrol.store_documents(self.cfg["state_dir"], other, chown=False)
+        self.assertEqual(self.anchor(chain)[0], 2)

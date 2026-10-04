@@ -72,10 +72,12 @@ class FakeTools:
     """ukify, systemd-measure, sbsign and sbverify as uki.py calls them; OpenSSL is the real one."""
 
     def __init__(self):
-        self.calls, self.tamper, self.envs, self.on_ukify = [], {}, [], None
+        self.calls, self.tamper, self.envs, self.on_ukify, self.passed = [], {}, [], None, []
 
-    def __call__(self, argv, capture_output=True, input=None, env=None):
+    def __call__(self, argv, capture_output=True, input=None, env=None, pass_fds=()):
         self.calls.append(list(argv))
+        self.passed.append((os.path.basename(argv[0]), tuple(pass_fds)))
+        self.pass_fds = tuple(pass_fds)          # what the tool was handed: an offline key's descriptor (ADR-0002 D28)
         self.envs.append((os.path.basename(argv[0]), argv[1] if len(argv) > 1 else "", env))
         tool = os.path.basename(argv[0])
         if tool == "keyctl":
@@ -135,7 +137,8 @@ class FakeTools:
         policy = uki.policy_digest(value)
         key = self.tamper.get("sign-key", o["--private-key"][0])
         fingerprint, _ = uki.public_key(uki.read(self.tamper.get("sign-cert", o["--certificate"][0])), "a certificate")
-        signature = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=bytes.fromhex(policy), capture_output=True, check=True).stdout
+        signature = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=bytes.fromhex(policy), capture_output=True, check=True,
+                                   pass_fds=self.pass_fds).stdout
         document = json.loads(uki.read(o["--append"][0])) if "--append" in o else {"sha256": []}
         document["sha256"].append({"pcrs": self.tamper.get("sign-pcrs", [11]), "pkfp": fingerprint, "pol": policy, "sig": base64.b64encode(signature).decode()})
         return ok(json.dumps(document).encode())
@@ -203,7 +206,7 @@ INITRD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))
 
 def unlock_initrd(change=None, drop=()):
     """An initrd that passes the review (#198): the module's crypttab, this repository's units and script, the
-    client, the two enable links, and links for merged /usr. `change`: {path: (mode, data)} to add or replace;
+    client, its enable link, and links for merged /usr. `change`: {path: (mode, data)} to add or replace;
     `drop`: paths to leave out. It carries the text "an initrd", which the stand-in tools look for."""
     def mine(*parts):
         with open(os.path.join(INITRD, *parts), "rb") as f:
@@ -218,7 +221,6 @@ def unlock_initrd(change=None, drop=()):
         files["usr/lib/systemd/system/" + unit] = (0o100644, mine(unit))
     for link, target in uki.UNLOCK_ENABLED.items():
         files[link] = (0o120777, target.encode())
-    files[uki.RELAY_DROPIN[0]] = (0o100644, uki.RELAY_DROPIN[1])
     files.update(change or {})
     return newc([(n, mode, data) for n, (mode, data) in sorted(files.items()) if n not in drop])
 
@@ -232,7 +234,7 @@ class Case(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, True)
         self.tools = FakeTools()
         self.inputs = {}
-        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
+        for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
                               ("os_release", b"ID=debian\n"), ("stub", b"a stub")):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
@@ -356,15 +358,15 @@ class Arithmetic(unittest.TestCase):
             self.assertIn("the image has no %s section" % missing, str(caught.exception))
 
     def test_the_command_line(self):
-        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
-                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot")
+        self.assertEqual(uki.cmdline_text(b"root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
+                         "root=/dev/mapper/root ro quiet console=ttyS0,115200 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")
         # the word every image must carry, and the record keeps the command line it was built with
         with self.assertRaises(m.Refused) as caught:
             uki.cmdline_text(b"root=/dev/mapper/root ro quiet\n")
         self.assertIn("does not carry systemd.import_credentials=no", str(caught.exception))
         # (each case changes ONE word of a valid line, and the reason is asserted: a line can be refused for
         # several missing words, and a case must not pass for another word's reason)
-        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot"
+        full = "root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0"
         for near in ("systemd.import_credentials=0", "systemd.import_credentials=yes", "import_credentials=no"):
             with self.subTest(near=near), self.assertRaises(m.Refused) as caught:
                 uki.cmdline_text(full.replace("systemd.import_credentials=no", near).encode())
@@ -374,7 +376,7 @@ class Arithmetic(unittest.TestCase):
                       "systemd.import_credentials=no", "systemd.import-credentials=yes", "rd.systemd.import-credentials=yes",
                       "systemd.import-credentials=no", "SYSTEMD.import_credentials=yes"):
             with self.subTest(extra=extra), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot %s" % extra).encode())
+                uki.cmdline_text(("root=/dev/mapper/root ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0 %s" % extra).encode())
             self.assertIn("gives systemd.import_credentials more than once or with another value or spelling", str(caught.exception))
 
         # the kernel zeroes pages it frees and hands out (#221): each word must be there, exactly, once
@@ -421,7 +423,7 @@ class Arithmetic(unittest.TestCase):
                      "systemd.debug_shell", "systemd.debug-shell=1", "rd.systemd.debug_shell", "rdshell", "rdshell=1", "rdbreak", "rdbreak=pre-mount", "init=/bin/sh", "rdinit=/bin/sh",
                      "systemd.unit=emergency.target", "rd.systemd.unit=rescue.target", "emergency", "rescue", "single", "S", "s", "1", "-b"):
             with self.subTest(word=word), self.assertRaises(m.Refused) as caught:
-                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot" % word).encode())
+                uki.cmdline_text(("root=/dev/mapper/root %s ro systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0" % word).encode())
             self.assertIn("holds %r, which a KMS host's image does not carry" % word, str(caught.exception))
 
 
@@ -434,7 +436,7 @@ class Build(Case):
         self.assertEqual(record["pcr11"], {phase: predicted(parts, path) for phase, path in uki.PHASE_PATHS.items()})
         self.assertNotEqual(record["pcr11"]["initrd"], record["pcr11"]["system"])
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
-        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot")            # the file's newline is not in the image
+        self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")            # the file's newline is not in the image
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
         self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "stub"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
@@ -482,7 +484,7 @@ class Build(Case):
 
     def test_names_and_the_command_line_are_checked_before_anything_runs(self):
         for kw, reason in (({"name": "an image"}, "short plain name"), ({"name": "../x"}, "short plain name"), ({"uname": "6.12; rm"}, "--uname must be a kernel version"),
-                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n")}}, "holds 'rd.luks.uuid=1'")):
+                           ({"inputs": {"cmdline": self.write("c", b"root=x rd.luks.uuid=1 systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n")}}, "holds 'rd.luks.uuid=1'")):
             with self.subTest(**{k: str(v) for k, v in kw.items()}):
                 self.tools.calls.clear()
                 self.refused(reason, self.build, **kw)
@@ -922,7 +924,7 @@ class Records(Case):
         self.refused("the record is of an unsigned image", uki.load_record, json.dumps(record).encode(), signed=True)
 
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
-        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n"),
+        argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
                 "--initrd-build", self.initrd_build(), "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
@@ -1031,7 +1033,7 @@ class InitrdReview(Case):
 
     def test_the_module_s_initrd_passes_and_the_record_says_so(self):
         review = self.passes(unlock_initrd())
-        self.assertEqual(review["crypttab"], "root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach")
+        self.assertEqual(review["crypttab"], "root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0")
         self.assertEqual(sorted(review["units"]), sorted(uki.UNLOCK_UNITS))
         self.assertEqual(review["clients"], {"usr/bin/regalia-unlock": hashlib.sha256(b"\x7fELF regalia-unlock").hexdigest()})
         record = self.build()
@@ -1039,8 +1041,7 @@ class InitrdReview(Case):
         uki.load_record(m.canonical(record), signed=False)
         with open(os.path.join(INITRD, "dracut", "90regalia-unlock", "module-setup.sh")) as f:
             setup = f.read()
-        for content in (uki.RELAY_DROPIN[1], uki.RESET_DROPIN[1]):
-            self.assertIn("printf '%s'" % content.decode().replace("\n", "\\n"), setup)
+        self.assertIn("printf '%s'" % uki.RESET_DROPIN[1].decode().replace("\n", "\\n"), setup)
 
     def test_one_changed_byte_anywhere_is_refused_with_a_diff_naming_it(self):
         extra = {"usr/lib/dracut/hooks/pre-mount/10-x.sh": (0o100755, b"#!/bin/sh\ntrue\n"),
@@ -1124,10 +1125,11 @@ class InitrdReview(Case):
         self.passes(unlock_initrd({"etc/cmdline.d/20.conf": (0o100644, b"rd.emergency=reboot\n")}))
 
     def test_the_crypttab_holds_the_one_generic_line_and_nothing_else(self):
-        line = b"root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach\n"
+        line = b"root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0\n"
         for name, change, drop in (
                 ("an extra line", {"etc/crypttab": (0o100644, line + b"swap /dev/sda2 /dev/urandom swap\n")}, ()),
-                ("another key file", {"etc/crypttab": (0o100644, line.replace(b"/run/regalia-unlock/key.sock", b"/etc/root.key"))}, ()),
+                ("a key file", {"etc/crypttab": (0o100644, line.replace(b" none ", b" /etc/root.key "))}, ()),
+                ("tries left at the default", {"etc/crypttab": (0o100644, line.replace(b",tries=0", b""))}, ()),
                 ("the build machine's", {"etc/crypttab": (0o100644, b"sda3_crypt UUID=1234 none luks,discard\n")}, ()),
                 ("none at all", None, ("etc/crypttab",)),
                 ("a link out of the image", {"etc/crypttab": (0o120777, b"/sysroot/etc/crypttab")}, ())):
@@ -1150,10 +1152,10 @@ class InitrdReview(Case):
                         "etc/systemd/system/regalia-unlock.service: a copy of the unlock client's unit outside")
         self.refused_by(unlock_initrd(drop=("usr/bin/regalia-unlock",)), "usr/bin/regalia-unlock, the unlock client, is not in the image")
         self.refused_by(unlock_initrd({"usr/lib/regalia/wg-boot": (0o100755, b"#!/bin/sh\nexit 0\n")}), "usr/lib/regalia/wg-boot is not this repository's")
-        link = "etc/systemd/system/sockets.target.wants/regalia-unlock-core.socket"
+        link = "etc/systemd/system/cryptsetup.target.wants/regalia-unlock.service"
         self.refused_by(unlock_initrd(drop=(link,)), link + " is not in the image")
-        self.refused_by(unlock_initrd({link: (0o120777, b"/usr/lib/systemd/system/evil.socket"), "usr/lib/systemd/system/evil.socket": (0o100644, b"")}),
-                        link + " is not this repository's (a link to /usr/lib/systemd/system/evil.socket)")
+        self.refused_by(unlock_initrd({link: (0o120777, b"/usr/lib/systemd/system/evil.service"), "usr/lib/systemd/system/evil.service": (0o100644, b"")}),
+                        link + " is not this repository's (a link to /usr/lib/systemd/system/evil.service)")
 
     def test_the_client_is_bound_to_the_binary_the_build_compiled_not_to_a_hash(self):
         # the inventory says "=compiled" for it; the review fails without the compiled binary, or with another
@@ -1185,13 +1187,16 @@ class InitrdReview(Case):
     def test_every_drop_in_of_the_unlock_path_must_be_the_module_s(self):
         hostile = (0o100644, b"[Service]\nExecStart=\nExecStart=/usr/bin/sh -c 'echo key'\n")
         for where in ("usr/lib/systemd/system/regalia-unlock.service.d/z.conf", "etc/systemd/system/regalia-unlock.service.d/z.conf",
-                      "etc/systemd/system/regalia-.service.d/z.conf", "etc/systemd/system/regalia-unlock-.service.d/z.conf",
+                      "etc/systemd/system/regalia-.service.d/z.conf",
                       "etc/systemd/system/systemd-cryptsetup@root.service.d/z.conf", "etc/systemd/system/systemd-cryptsetup@.service.d/z.conf",
                       "usr/lib/systemd/system/service.d/z.conf", "etc/systemd/system/socket.d/z.conf", "etc/systemd/system/cryptsetup.target.d/z.conf",
                       "etc/systemd/system/initrd-switch-root.target.d/z.conf", "etc/systemd/system.control/regalia-unlock.service.d/z.conf",
                       "run/systemd/transient/regalia-unlock.service.d/z.conf"):
             with self.subTest(where):
                 self.refused_by(unlock_initrd({where: hostile}), where + ": a drop-in of the unlock path that is not the module's")
+        # a dash prefix that names no unit of the unlock path applies to none (systemd: "regalia-unlock-.service.d"
+        # is for regalia-unlock-*.service, and since #70 there is none): not refused
+        self.passes(unlock_initrd({"etc/systemd/system/regalia-unlock-.service.d/z.conf": hostile}))
         # the module's credential reset: on any unit, the cryptsetup@ template (made at boot by the generator) included
         for unit in ("systemd-journald.service", "systemd-cryptsetup@.service"):
             reset = "usr/lib/systemd/system/%s.d/%s" % (unit, uki.RESET_DROPIN[0])
@@ -1363,3 +1368,129 @@ def newc_owned(data, path, uid):
     """`data` (one newc archive) with `path`'s owner changed: the uid field of its header rewritten."""
     i = data.index(path.encode() + b"\0") - 110
     return data[:i + 22] + b"%08x" % uid + data[i + 30:]
+
+
+class OfflineKeys(Case):
+    """ADR-0002 D28: the three boot-image keys are software keys handed down by regalia-ceremony's offline-keys.py on
+    sealed memfds (--*-key-fd), never files. uki reads them only after every check, matches each to its certificate,
+    gives each tool its key as /dev/fd/N, and records the session (regalia-kms-d9 on #353)."""
+
+    SESSION = "fedcba9876543210fedcba9876543210"
+    ROLES = ("initrd", "system", "secure_boot")
+
+    def memfds(self, swap=None):
+        """Each role's key in a sealed memfd, as offline-keys.py passes them; `swap` {role: other role} hands a wrong one."""
+        from deploy.baremetal import keyfd
+        swap = swap or {}
+        return {role: keyfd.sealed_memfd(bytearray(uki.read(self.key(swap.get(role, role), "key")))) for role in self.ROLES}
+
+    def offline(self, record, fds, **kw):
+        return uki.sign(self.inputs, record, {role: (None, self.key(role, "crt")) for role in self.ROLES}, "fd", self.out, run=self.tools,
+                        second_record=kw.pop("second", json.loads(json.dumps(record))), report=lambda line: None,
+                        key_provenance=kw.pop("provenance", "offline-keys session " + self.SESSION), key_fds=fds, **kw)
+
+    @staticmethod
+    def closed(fd):
+        try:
+            os.fstat(fd)
+            return False
+        except OSError:
+            return True
+
+    def test_keys_by_descriptor_sign_the_same_image_and_the_record_names_the_session(self):
+        record, fds = self.build(), self.memfds()
+        signed = self.offline(record, fds)
+        self.assertEqual(signed["signed"]["key_provenance"], "offline-keys session " + self.SESSION)
+        measured = [(FakeTools.options(c[2:])["--private-key"][0], p) for c, (_, p) in zip(self.tools.calls, self.tools.passed)
+                    if c[:2] == [uki.TOOLS["measure"], "sign"]]
+        self.assertEqual([len(p) for _, p in measured], [1, 1])
+        self.assertTrue(all(path == "/dev/fd/%d" % p[0] for path, p in measured))           # each tool handed its own key
+        sb = [(c, p) for c, (_, p) in zip(self.tools.calls, self.tools.passed) if os.path.basename(c[0]) == "sbsign"]
+        self.assertEqual(sb[0][0][sb[0][0].index("--key") + 1], "/dev/fd/%d" % sb[0][1][0])
+        self.assertFalse([c for c in self.tools.calls if "--private-key-source" in " ".join(c) or "--engine" in c])
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+        with open(os.path.join(self.out, "image-7.signed.json"), "rb") as f:
+            self.assertEqual(uki.load_record(f.read(), signed=True), signed)
+        self.assertEqual(uki.verify(os.path.join(self.out, "image-7.efi"), signed, self.public(), self.key("secure_boot", "crt"), run=self.tools),
+                         record["pcr11"])
+
+    def test_a_refused_image_never_reads_the_keys(self):
+        """The two builders' records differ: refused, and the key descriptors are never read, only closed."""
+        record, fds = self.build(), self.memfds()
+        other = dict(json.loads(json.dumps(record)), name="image-8")
+
+        def never(fd, what):
+            raise AssertionError("a key was read for an image that is refused")
+        with mock.patch.object(uki.keyfd, "read", never):
+            self.refused("the two builders' records differ", self.offline, record, fds, second=other)
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+
+    def test_a_key_that_is_not_its_certificates_is_refused_before_any_tool_signs(self):
+        record, fds = self.build(), self.memfds(swap={"initrd": "system"})
+        self.refused("the initrd key is not the key of its certificate: nothing is signed", self.offline, record, fds)
+        self.assertFalse([c for c in self.tools.calls if c[:2] == [uki.TOOLS["measure"], "sign"] or os.path.basename(c[0]) == "sbsign"])
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+        record, fds = self.build(name="image-9"), self.memfds(swap={"secure_boot": "initrd"})
+        self.refused("the secure boot key is not the key of its certificate", self.offline, record, fds)
+        self.assertFalse([c for c in self.tools.calls if os.path.basename(c[0]) == "sbsign"])
+
+    def test_the_provenance_goes_with_descriptors_and_only_with_them(self):
+        record = self.build()
+        self.refused("carry the offline-keys session", self.offline, record, self.memfds(), provenance=None)
+        self.refused("carry the offline-keys session", uki.sign, self.inputs, record, self.signing_keys(), "file", self.out, run=self.tools,
+                     second_record=record, report=lambda line: None, key_provenance="offline-keys session " + self.SESSION)
+        self.refused("not an offline-keys session", self.offline, record, self.memfds(), provenance="offline-keys session ab")
+        self.refused("key descriptors are offline keys", uki.sign, self.inputs, record, self.signing_keys(), "file", self.out, run=self.tools,
+                     second_record=record, report=lambda line: None, key_fds=self.memfds())
+
+    def test_a_key_on_disk_is_refused_after_the_checks_and_before_anything_is_signed(self):
+        record, fds = self.build(), self.memfds()
+        os.close(fds["system"])
+        fds["system"] = os.open(self.key("system", "key"), os.O_RDONLY)
+        self.refused("a key is never read from a file on disk", self.offline, record, fds)
+        self.assertFalse([c for c in self.tools.calls if c[:2] == [uki.TOOLS["measure"], "sign"]])
+        self.assertTrue(all(self.closed(fd) for fd in fds.values()))
+
+    def test_a_signed_record_whose_provenance_is_not_a_session_is_refused(self):
+        record = dict(self.build(), signed={"image_sha256": "ab" * 32, "pcr_signatures": {p: {} for p in attest.PHASES},
+                                            "secure_boot_cert_sha256": "cd" * 32, "key_provenance": "a file"})
+        self.refused("not an offline-keys session", uki.load_record, m.canonical(record), signed=True)
+
+    def command(self, *keyargs):
+        """`uki sign` on the command line with `keyargs`; uki.sign itself is replaced by a recorder of what it is handed."""
+        if not hasattr(self, "built"):
+            self.built = self.write("rec.json", m.canonical(self.build()))
+        path = self.built
+        args = ["sign"] + [a for k in uki.INPUTS if k in self.inputs for a in ("--" + k.replace("_", "-"), self.inputs[k])]
+        args += ["--uname", "6.12.41+deb13-amd64", "--record", path, "--second-record", path, "--out", self.out]
+        for role in ("initrd", "system", "secure-boot"):
+            args += ["--%s-cert" % role, self.key(role.replace("-", "_"), "crt")]
+        seen = {}
+
+        def recorder(inputs, record, keys, source, out, **kw):
+            seen.update(source=source, provenance=kw.get("key_provenance"), keys={role: key for role, (key, _) in keys.items()},
+                        fds=dict(kw.get("key_fds") or {}))
+            return dict(record, signed={"image_sha256": "00" * 32})
+        err = io.StringIO()
+        with mock.patch.object(uki, "sign", recorder), mock.patch("sys.stderr", err), mock.patch("sys.stdout", io.StringIO()):
+            code = uki.main(args + list(keyargs))
+        return code, err.getvalue(), seen
+
+    def test_the_command_hands_sign_the_descriptors_unread(self):
+        fds = self.memfds()
+        code, err, seen = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key-fd", str(fds["system"]),
+                                       "--secure-boot-key-fd", str(fds["secure_boot"]), "--offline-session", self.SESSION)
+        self.assertEqual(code, 0, err)
+        self.assertEqual((seen["source"], seen["provenance"], seen["fds"]), ("fd", "offline-keys session " + self.SESSION, fds))
+        self.assertEqual(seen["keys"], {role: None for role in self.ROLES})
+        self.assertTrue(all(os.lseek(fd, 0, os.SEEK_CUR) == 0 for fd in fds.values()))     # untouched: sign() reads them
+
+    def test_the_command_refuses_a_mix_and_a_missing_session(self):
+        fds = self.memfds()
+        code, err, _ = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key", self.key("system", "key"),
+                                    "--secure-boot-key-fd", str(fds["secure_boot"]), "--offline-session", self.SESSION)
+        self.assertEqual(code, 1)
+        self.assertIn("all three by descriptor", err)
+        code, err, _ = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key-fd", str(fds["system"]),
+                                    "--secure-boot-key-fd", str(fds["secure_boot"]))
+        self.assertIn("--offline-session is 32 lowercase hex", err)

@@ -272,7 +272,10 @@ def scenario(cluster):
         refused = "may not serve under epoch %d" % manifest["epoch"]
 
         def why():
-            denied = [s for s in survivors if any(e.get("event") == "sync-lease" and e.get("subject") == victim and e.get("outcome") == "DENY"
+            # refused at the nonce (#332: the verifier is the current manifest's, and a node that may not serve gets no
+            # nonce) or at the lease itself: the same reason either way
+            denied = [s for s in survivors if any(e.get("event") in ("sync-lease-nonce", "sync-lease") and e.get("subject") == victim
+                                                  and e.get("outcome") == "DENY"
                                                   and refused in e.get("reason", "") and e.get("at", 0) >= since for e in cluster.trail(s))]
             if denied:
                 return "%s refused its lease request: %s" % (", ".join(denied), refused)

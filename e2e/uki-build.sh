@@ -59,19 +59,15 @@ print(v)' "$1" "$2"; }
 UNAME="$(basename "$LINUX" | sed 's/^vmlinuz-//')"
 if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   # a stand-in that passes uki.py's initrd review (#198): the module's crypttab, this repository's unlock
-  # units and script, a stand-in client, and the two enable links. Nothing in it boots.
+  # units and script, a stand-in client, and the client's enable link. Nothing in it boots.
   I="$W/ird"; U="$I/usr/lib/systemd/system"; E="$I/etc/systemd/system"
-  mkdir -p "$U" "$E/sockets.target.wants" "$E/cryptsetup.target.wants" "$I/usr/bin" "$I/usr/lib/regalia" "$I/etc"
+  mkdir -p "$U" "$E/cryptsetup.target.wants" "$I/usr/bin" "$I/usr/lib/regalia" "$I/etc"
   printf '#!/bin/sh\n' > "$I/init"; printf 'stand-in\n' | tee "$I/usr/bin/regalia-unlock" > "$I/usr/bin/sh"; chmod 0755 "$I/init" "$I/usr/bin/regalia-unlock" "$I/usr/bin/sh"
   ln -s usr/bin "$I/bin"; ln -s usr/lib "$I/lib"
   cp deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$I/etc/crypttab"
-  cp deploy/baremetal/initrd/regalia-unlock-relay.service deploy/baremetal/initrd/regalia-unlock-core.socket \
-     deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
+  cp deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
   install -m 0755 deploy/baremetal/initrd/wg-boot "$I/usr/lib/regalia/wg-boot"
-  ln -s /usr/lib/systemd/system/regalia-unlock-core.socket "$E/sockets.target.wants/regalia-unlock-core.socket"
-  ln -s /usr/lib/systemd/system/regalia-unlock-relay.service "$E/cryptsetup.target.wants/regalia-unlock-relay.service"
-  mkdir "$U/systemd-cryptsetup@.service.d"   # the module's relay ordering, its bytes
-  printf '[Unit]\nWants=regalia-unlock-relay.service\nAfter=regalia-unlock-relay.service\n' > "$U/systemd-cryptsetup@.service.d/50-regalia-relay.conf"
+  ln -s /usr/lib/systemd/system/regalia-unlock.service "$E/cryptsetup.target.wants/regalia-unlock.service"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
 python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
 # the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in that
@@ -89,7 +85,7 @@ json.dump({"schema": "regalia.initrd-build/v1", "commit": "0" * 40, "go": "go1.2
                                  "keyring_sha256": sys.argv[5], "inventory_sha256": digest(sys.argv[4]),
                                  "entries": 0, "dracut_over": 0}}, open(sys.argv[3], "w"))
 PY
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot\n' > "$W/cmdline"
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n' > "$W/cmdline"
 printf 'ID=debian\nVERSION_ID=13\nPRETTY_NAME="Regalia KMS host (TEST image)"\n' > "$W/os-release"
 for k in initrd system secure-boot other; do
   openssl genrsa -out "$W/TEST-$k.key" 2048 2>/dev/null
@@ -112,11 +108,11 @@ REC="$W/a/test-image.record.json"
 i11="$(field "$REC" pcr11.initrd)"; s11="$(field "$REC" pcr11.system)"
 [ "${#i11}" = 64 ] && [ "${#s11}" = 64 ] && [ "$i11" != "$s11" ] && P "one image, two PCR 11 values: initrd ${i11:0:16}…, system ${s11:0:16}…" || F "the record's PCR 11 values: '$i11' '$s11'"
 # the same prediction, asked of ukify itself (its --measure runs systemd-measure over the image it builds, for every phase)
-theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot" --os-release "@$W/os-release" \
+theirs="$(ukify build --config /dev/null --linux "$LINUX" --initrd "$W/initrd" --cmdline "root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0" --os-release "@$W/os-release" \
   --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub" --tools "$(dirname "$MEASURE")" --measure --output "$W/ukify-own.efi" 2>/dev/null | sed -n 's/^11:sha256=//p')"
 grep -qx "$i11" <<< "$theirs" && grep -qx "$s11" <<< "$theirs" && P "ukify --measure predicts both values for the image it builds from the same inputs" \
   || F "ukify --measure says '$(tr '\n' ' ' <<< "$theirs")', the record $i11 and $s11"
-printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rd.luks.uuid=0\n' > "$W/cmdline-bad"
+printf 'root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0 rd.luks.uuid=0\n' > "$W/cmdline-bad"
 out="$(uki build "${IN[@]:0:4}" --cmdline "$W/cmdline-bad" "${IN[@]:6}" --name x --out "$W/x" 2>&1)"; rc=$?
 [ "$rc" = 1 ] && grep -q "holds 'rd.luks.uuid=0'" <<< "$out" && [ ! -e "$W/x/x.unsigned.efi" ] && P "a command line that unlocks a disk by itself is refused, nothing built" || F "bad command line: exit $rc: $out"
 

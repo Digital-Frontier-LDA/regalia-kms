@@ -51,6 +51,13 @@ class WithoutTpm(unittest.TestCase):
             signkey.pcr_key_name(pem_of(small))
         with self.assertRaisesRegex(Refused, "not a PEM public key"):
             signkey.pcr_key_name(b"nonsense")
+        three = rsa.generate_private_key(public_exponent=3, key_size=2048)
+        with self.assertRaisesRegex(Refused, "exponent must be 65537 \\(it is 3\\)"):
+            signkey.pcr_key_name(pem_of(three))
+        # and at image build, where the PCR keys are first taken (uki.public_key)
+        with self.assertRaisesRegex(Refused, "exponent is not 65537"):
+            uki.public_key(pem_of(three), "the system-phase key")
+        self.assertEqual(uki.public_key(pem_of(rsa_key()), "k")[0][:0], "")
 
     def test_the_pcr_signature_for_this_boot_and_this_key_only(self):
         key, other = rsa_key(), rsa_key()
@@ -103,9 +110,17 @@ class OnSwtpm(unittest.TestCase):
         subprocess.run(["swtpm", "socket", "--tpm2", "--tpmstate", "dir=" + state, "--server", "type=unixio,path=" + sock,
                         "--ctrl", "type=unixio,path=" + sock + ".ctrl", "--flags", "not-need-init,startup-clear",
                         "--daemon", "--pid", "file=%s/pid" % self.d], check=True, capture_output=True)
-        time.sleep(0.5)
-        with open(self.d + "/pid") as f:
-            pid = int(f.read())
+        # swtpm --daemon writes its pid file after the fork: wait for it (a loaded runner can take more than 0.5 s)
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                with open(self.d + "/pid") as f:
+                    pid = int(f.read())
+                break
+            except (FileNotFoundError, ValueError):
+                if time.monotonic() > deadline:
+                    raise
+                time.sleep(0.05)
         self.addCleanup(lambda: os.kill(pid, 15))
         patcher = unittest.mock.patch.dict(os.environ, TPM2TOOLS_TCTI="swtpm:path=" + sock)
         patcher.start()

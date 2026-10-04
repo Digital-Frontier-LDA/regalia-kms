@@ -137,9 +137,10 @@ ENROLMENT_KEYS = ("schema", "target", "peer", "path_epoch", "ciphertext")
 TOKEN_TYPE = "regalia-peer-unlock"
 TOKEN_KEYS = ("type", "keyslots", "version", "target", "peer", "path_epoch", "local")
 LOCAL_NAME = "regalia.unlock-local"
-# Where systemd-cryptsetup reads the root volume's key: the key-file field of its crypttab entry, and the
-# -listen path of deploy/baremetal/initrd/regalia-unlock-relay.service, which makes the socket itself.
-KEY_SOCKET = "/run/regalia-unlock/key.sock"
+# The root volume's request for its passphrase, as systemd-cryptsetup names it in the ask-password protocol
+# ("cryptsetup:" and crypttab's source device): the one request the pre-root client answers (#70,
+# cmd/regalia-unlock/askpass.RootID; a test holds the two equal).
+ROOT_REQUEST = "cryptsetup:/dev/disk/by-partlabel/regalia-root"
 SECRET_BYTES = 32
 KEY_BITS = 3072
 BOOT_SCHEMA = "regalia.unlock-boot/v1"

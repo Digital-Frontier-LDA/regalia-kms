@@ -21,7 +21,7 @@ import (
 // well signed), and the unlock configuration, the boot WireGuard configuration, its ruleset and boot.env
 // are rendered from it and the measured site document (bootcfg, held to deploy/baremetal/bootcreds.py) into
 // DIR, for regalia-wg-boot and this program. Any refusal ends the start with one line: the units that
-// Require= this one do not start, the relay gives no key, and the console asks for the recovery key.
+// Require= this one do not start, no key is given, and the console's prompt takes the recovery key.
 
 const (
 	// systemd-stub's (and systemd-boot's) vendor GUID: the partition the image was loaded from
@@ -207,7 +207,7 @@ func render(dir string, env renderEnv) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the TPM does not answer: %v", err)
 	}
-	high, err := membership.Anchored(nv, manifests)
+	high, err := membership.Anchored(nv, manifests, nil) // TODO(#242 B2): this node's approved-image policy, from the site configuration
 	closeNV()
 	if err != nil {
 		return "", err

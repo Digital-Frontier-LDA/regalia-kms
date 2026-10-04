@@ -90,11 +90,12 @@ NOT HERE: the WireGuard interface (wgsvc.py); units, firewall rules and probes (
 convergence.recover over this transport.
 """
 import copy
+import re
 import socket
 import threading
 import time
 
-from deploy.baremetal import convergence, heartbeat, lease, membership
+from deploy.baremetal import convergence, heartbeat, lease, measurements, membership
 
 Refused, require = membership.Refused, membership.require
 
@@ -114,6 +115,8 @@ REQUEST_FIELDS = {"pull": ("v", "op", "summary", "sequence"),
                   "ak-activate": ("v", "op", "credential"),
                   "path-nonce": ("v", "op"),
                   "path": ("v", "op", "session_id", "evidence", "binding"),
+                  # the measurement document a manifest commits to, by its policy_version (#332)
+                  "measurements": ("v", "op", "version"),
                   # #199: co-sign a heartbeat the caller proposes and has signed (beat.py)
                   "beat-sign": ("v", "op", "heartbeat", "signature")}
 ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
@@ -125,6 +128,7 @@ ANSWER_FIELDS = {"pull": ("v", "ok", "summary", "bundle"),
                  "ak-activate": ("v", "ok", "secret"),
                  "path-nonce": ("v", "ok", "nonce"),
                  "path": ("v", "ok", "enrolment"),
+                 "measurements": ("v", "ok", "document"),
                  "beat-sign": ("v", "ok", "signature")}
 ENROL_OPS = ("ak-challenge", "ak-enroll", "ak-public", "ak-activate", "path-nonce", "path")
 REFUSAL_FIELDS = ("v", "ok", "refused")
@@ -284,15 +288,22 @@ class Server:
     that has already expired."""
 
     def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None,
-                 cosigner=None):
+                 documents=None, cosigner=None):
         """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused, as on the authority).
         `cosigner(manifest, caller, heartbeat, signature)`: this node's co-signature of a proposed heartbeat (beat.cosign,
         #199), or None: beat-sign is refused."""
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
+        self.documents = documents        # measurements.Documents: what a `measurements` request is answered from (#332)
         self.cosigner = cosigner
         self.enrol, self._offered, self._offered_lock = enrol, {}, threading.Lock()   # ak-public given: caller -> when
         self.identify, self.sink, self.buckets, self.clock = identify, sink, buckets or Buckets(), clock
         self._seen = None       # the manifest of the last request that read the store: see _is_a_node
+
+    def _verifier(self, manifest):
+        """The attest.Verifier to judge by under `manifest`: `attester` itself, or, when it is a function
+        (node.Node.attester_for), the one built from the document THAT manifest commits to (#332), so an epoch moved
+        while this server runs is judged by its own measurements."""
+        return self.attester(manifest) if callable(self.attester) else self.attester
 
     def _record(self, event):
         try:
@@ -485,7 +496,10 @@ class Server:
         require(self.attester is not None, "this source issues no leases")
         require(message["node_id"] == caller, "the request names %s; the tunnel is %s's" % (convergence._printable(message["node_id"]), caller))
         self._spend(view.late, caller, "lease")
-        return {"nonce": self.attester.nonce(caller).hex()}
+        # lease.issue's own refusal, before a verifier is asked: one built for the manifest held now (#332) does not list
+        # a node that may not serve, and its "unknown node" would hide why
+        require(membership.may(manifest, caller, "serve"), "%s may not serve under epoch %d: no lease" % (caller, manifest["epoch"]))
+        return {"nonce": self._verifier(manifest).nonce(caller).hex()}
 
     def _lease(self, view, manifest, caller, message):
         require(self.attester is not None, "this source issues no leases")
@@ -495,8 +509,19 @@ class Server:
         require(request["node_id"] == caller, "the request names %s; the tunnel is %s's" % (request["node_id"], caller))
         membership.exact(evidence, EVIDENCE_FIELDS, "evidence")
         self._spend(view.late, caller, "lease")
-        return {"lease": lease.issue(manifest, self.node_id, request, self.attester, evidence, self.freshness, self.signer)}
+        return {"lease": lease.issue(manifest, self.node_id, request, self._verifier(manifest), evidence, self.freshness, self.signer)}
 
+
+    def _measurements(self, view, manifest, caller, message):
+        """The measurement document of `version`, whole, as this node holds it: what the caller needs to commit an
+        epoch that commits to it (#332). Any held document may be asked for; each is public reference values, and
+        the asker checks it against its own manifest's policy_version before using it."""
+        require(self.documents is not None, "this source holds no measurement documents")
+        wanted = message["version"]
+        require(isinstance(wanted, str) and re.fullmatch(r"m1-[A-Za-z0-9_-]{29}", wanted) is not None, "version must be a policy_version")
+        document = self.documents.get(wanted)
+        require(document is not None, "this source does not hold measurements %s" % wanted)
+        return {"document": document}
 
     def _beat_sign(self, view, manifest, caller, message):
         """#199: this node's signature over a heartbeat `caller` proposes (beat.cosign decides). Its own rate class,
@@ -516,13 +541,13 @@ class Server:
 
     def _ak_challenge(self, view, manifest, caller, message):
         from deploy.baremetal import enrolpeer
-        credential = enrolpeer.challenge(self.attester, manifest, caller, self._hex(message["ek_public"], 1024, "ek_public"),
+        credential = enrolpeer.challenge(self._verifier(manifest), manifest, caller, self._hex(message["ek_public"], 1024, "ek_public"),
                                          self._hex(message["ak_public"], 1024, "ak_public"))
         return {"credential": None if credential is None else credential.hex()}
 
     def _ak_enroll(self, view, manifest, caller, message):
         # the manifest read for THIS request: an AK it no longer names is not enrolled (attest.Verifier.enroll)
-        name = self.attester.enroll(caller, self._hex(message["secret"], 32, "secret"), ak_name=pinned_node(manifest, caller)["ak_name"])
+        name = self._verifier(manifest).enroll(caller, self._hex(message["secret"], 32, "secret"), ak_name=pinned_node(manifest, caller)["ak_name"])
         return {"ak_name": name.hex()}
 
     def _ak_public(self, view, manifest, caller, message):
@@ -543,13 +568,13 @@ class Server:
         return {"secret": self.enrol.activate(self._hex(message["credential"], 1024, "credential")).hex()}
 
     def _path_nonce(self, view, manifest, caller, message):
-        return {"nonce": self.attester.nonce(caller).hex()}
+        return {"nonce": self._verifier(manifest).nonce(caller).hex()}
 
     def _path(self, view, manifest, caller, message):
         from deploy.baremetal import enrolpeer
         require(isinstance(message["evidence"], dict), "evidence is an object")
         return {"enrolment": enrolpeer.contribution(manifest, self.node_id, caller, message["session_id"], message["evidence"],
-                                                    self._hex(message["binding"], 1024, "binding"), self.attester, self.freshness,
+                                                    self._hex(message["binding"], 1024, "binding"), self._verifier(manifest), self.freshness,
                                                     self.enrol.contributions, self.enrol.wraps)}
 
 
@@ -580,8 +605,44 @@ class Client:
     """One node's asking side. `transports` maps a source's name (a node ID, or convergence.AUTHORITY) to a
     callable taking the request bytes and returning the answer bytes (tcp_transport over the tunnel)."""
 
-    def __init__(self, node_id, store, freshness, transports, sink):
+    def __init__(self, node_id, store, freshness, transports, sink, documents=None):
+        """`documents` (measurements.Documents): where the measurement document of an epoch about to be committed is
+        put, fetched from the same source first when it is not held (#332)."""
         self.node_id, self.store, self.freshness, self.transports, self.sink = node_id, store, freshness, transports, sink
+        self.documents = documents
+
+    def _fetch_document(self, source, manifest):
+        """The document `manifest` (verified) commits to, into this node's store, from `source`, unless held already.
+        The answer is taken only if it IS that document: its own version is the manifest's policy_version."""
+        wanted = manifest["policy_version"]
+        if self.documents is None or self.documents.holds(wanted):
+            return
+        document = self._ask(source, "measurements", version=wanted)["document"]
+        require(len(membership.canonical(document)) <= measurements.MAX_BYTES, "the document exceeds %d bytes" % measurements.MAX_BYTES)
+        got = measurements.version(document)
+        require(got == wanted, "%s answered measurements %s for %s: not the document epoch %d commits to" % (source, got, wanted, manifest["epoch"]))
+        self.documents.put(document)
+
+    def _documents_for(self, source, envelopes):
+        """Before a batch is applied: the document of the epoch it would leave this node at, and of the epoch held now
+        (a lost or never-installed document heals itself), each fetched only for a manifest that verifies from the
+        one held, so a source cannot make this node store documents no epoch names."""
+        if self.documents is None:
+            return
+        current = self.store.load()
+        if current is not None:
+            self._fetch_document(source, current)
+        last = None
+        for envelope in envelopes:
+            epoch = envelope.get("manifest", {}).get("epoch") if isinstance(envelope, dict) and isinstance(envelope.get("manifest"), dict) else None
+            if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch <= (current["epoch"] if current else 0):
+                continue                                   # a resent epoch: catch_up compares it, nothing to fetch
+            try:
+                current = last = membership.accept(current, envelope, self.store.root_key)
+            except Refused:
+                break                                      # catch_up refuses it, and says why
+        if last is not None:
+            self._fetch_document(source, last)
 
     def _record(self, event):
         try:
@@ -647,6 +708,7 @@ class Client:
                 require(isinstance(bundle, dict) and isinstance(bundle.get("envelopes"), list)
                         and len(bundle["envelopes"]) <= MAX_ENVELOPES, "a bundle carries at most %d envelopes" % MAX_ENVELOPES)
                 membership.exact(bundle, ("envelopes", "heartbeat"), "bundle")
+                self._documents_for(source, bundle["envelopes"])          # #332: the measurements travel with the epoch
                 try:
                     now_at = self._safely(lambda: convergence.catch_up(self.store, bundle["envelopes"]))()
                 except Refused as refused:
