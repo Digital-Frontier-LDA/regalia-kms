@@ -245,9 +245,9 @@ class Proposing(Case):
 
     def test_a_shorter_interval_scales_the_takeover_jitter_and_retry(self):
         fast = beat.Proposer("b", lambda: self.man, self.nodes["b"].freshness, self.clock, self.nodes["b"].signer, self.asker("b"),
-                             self.events.append, interval=60, rand=lambda: 0.99)
-        self.assertEqual((fast.scaled(beat.TAKEOVER_S), fast.scaled(beat.JITTER_S), fast.scaled(beat.RETRY_FIRST_S)), (8, 2, 4))
-        self.assertEqual(fast.due(self.man, self.now), self.now + 8 + 1)          # rank 1, nothing held: one takeover, the jitter
+                             self.events.append, interval=600, rand=lambda: 0.99)
+        self.assertEqual((fast.scaled(beat.TAKEOVER_S), fast.scaled(beat.JITTER_S), fast.scaled(beat.RETRY_FIRST_S)), (80, 20, 40))
+        self.assertEqual(fast.due(self.man, self.now), self.now + 80 + 19)        # rank 1, nothing held: one takeover, the jitter
         self.assertEqual(self.proposers["b"].scaled(beat.TAKEOVER_S), 120)
 
     def test_the_owner_never_proposes_and_a_node_not_counted_never_does(self):
