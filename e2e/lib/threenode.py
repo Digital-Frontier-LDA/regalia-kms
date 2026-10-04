@@ -702,10 +702,12 @@ class Cluster:
         measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
         # the operator's site change first (every node's site configuration names c2), as on hosts: a node that takes the
         # epoch and runs wg-apply for it must already know where c2 is
+        seed = next((name for name in self.nodes if name not in (old, new) and self.running(name)), None)
+        if seed is None:                              # before any site file is rewritten (CodeRabbit)
+            raise RuntimeError("replacing %s by %s needs a running node to take the epoch" % (old, new))
         for n in self.nodes.values():
             if n.name != old:
                 self._configure(n)
-        seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
         self.advance(seed, candidate=candidate, document=document)
         envelope = self.chain[-1]
         n = self.nodes[new]
