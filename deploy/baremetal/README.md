@@ -676,8 +676,11 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     follows is in the sync trail.
   - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and
     `reanchor.py`, run by hand, take a different lock, so do not run them while the node's units run.
-  - Enrolment still anchors epoch 1 before it writes the ESP. That is safe only because the host has not booted
-    from that ESP yet. A crash in between needs a rerun of `commit`, which resumes.
+  - Enrolment still anchors epoch 1 before it writes the ESP: its render verifies the chain against the anchor,
+    so the order is not cheap to swap. A crash in between leaves no chain on the ESP, and the next boot asks for
+    the recovery key, as every boot does until `enrol paths` is done. The ways out: rerun `enrol commit`, which
+    resumes from its journal (the anchor step is a no-op on a chain already held; the rendered files are
+    replaced), or let `regalia-esp-advance` run at boot, which writes the published chain to the ESP.
   - Proven by unit tests (`tests/test_baremetal_esp_advance.py`, `test_baremetal_store_anchors.py`), under a
     real systemd (`e2e/node-units-systemd.py` step 7, on a plain `/efi` directory and not a FAT partition), and
     by QEMU boots of the three ESP/anchor orders (boots 10-12). Those boots write the ESP with the test's own

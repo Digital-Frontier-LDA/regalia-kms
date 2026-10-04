@@ -63,8 +63,13 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
   - Its run is in the journal and its metrics, not in a hash-chained trail (#278).
   - Its anchor lock is its own (`/run/regalia-esp-advance/`), distinct from enrolment's and reanchor's
     (see #391): run those by hand only with the node's units stopped.
-  - Enrolment still anchors epoch 1 before it writes the ESP; safe only because the host has not booted
-    from that ESP yet.
+  - **Accepted:** enrolment (`enrol commit`) still anchors epoch 1 before it writes the ESP: its render
+    verifies the chain against the anchor, so the order is not cheap to swap. A crash in between leaves no
+    chain on the ESP. The next boot's render then fails and the console asks for the recovery key, as it
+    does at every boot until `enrol paths` has enrolled the peers' paths. Not stranding, two tooled ways
+    out: re-run `enrol commit`, which resumes from its journal (the anchor step is a no-op on a chain
+    already held, and the rendered files are replaced); or let `regalia-esp-advance` run at boot, which
+    writes the published chain to the ESP.
 - **Rotating the system-phase PCR key: not built.** The anchor's write policy names one key, and
   PolicyOR(old, new) is deferred (#242 follow-up). Rotating that key today makes every anchor
   Unusable until each node is re-anchored.
