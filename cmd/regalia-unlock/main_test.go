@@ -575,11 +575,11 @@ func TestTheQuoteIsAskedForThroughGoTPM(t *testing.T) {
 func TestTheInitrdPCR11IsSaidAsTheTPMHoldsIt(t *testing.T) {
 	eleven := bytes.Repeat([]byte{0x11}, 32)
 	device := &wireTPM{pcrs: map[int][]byte{11: eleven}}
-	if got, want := initrdPCR11Line(device), "regalia-unlock: initrd PCR 11 (sha256) = "+hex.EncodeToString(eleven); got != want {
-		t.Fatalf("said %q, want %q", got, want)
+	if got, read := initrdPCR11Line(device); !read || got != "regalia-unlock: initrd PCR 11 (sha256) = "+hex.EncodeToString(eleven) {
+		t.Fatalf("said %q (read %v)", got, read)
 	}
-	if got := initrdPCR11Line(&wireTPM{pcrs: map[int][]byte{}}); !strings.HasPrefix(got, "regalia-unlock: initrd PCR 11 (sha256) could not be read: ") {
-		t.Fatalf("an unreadable PCR 11 said %q", got)
+	if got, read := initrdPCR11Line(&wireTPM{pcrs: map[int][]byte{}}); read || !strings.HasPrefix(got, "regalia-unlock: initrd PCR 11 (sha256) could not be read: ") {
+		t.Fatalf("an unreadable PCR 11 said %q (read %v)", got, read)
 	}
 }
 
