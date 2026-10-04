@@ -37,6 +37,7 @@ throwaway machine (a GitHub-hosted runner)."""
 import configparser
 import contextlib
 import grp
+import hashlib
 import json
 import os
 import pathlib
@@ -229,6 +230,44 @@ class Cluster:
             raise RuntimeError("%s's software TPM did not stop" % name)
         self._tpm(n)
 
+    # ---- images (#75, Phase 15's tier N) ----
+    # CURRENT is the node as the fixture boots it: its PCRs at TPM2_Startup, recorded at build (_reference). Another
+    # image is modelled by what a UKI changes, PCR 11: boot(name, image) extends it with SHA-256(image) after a power
+    # cycle, before the node asks for its disk; image_set says what that boot measures, for a document to accept.
+    # The local half is sealed to PCR 7 alone (enrol), so it opens on every image, as on a host (PIN-CUSTODY.md).
+
+    def boot(self, name, image=None):
+        """`name` boots `image` (None: CURRENT, nothing to extend). Call after power_cycle (or stop) and before unlock."""
+        if image is not None:
+            sh("tpm2_pcrextend", "-T", self.member(name).tcti, "11:sha256=" + hashlib.sha256(image.encode()).hexdigest())
+
+    def image_set(self, name, image=None):
+        """The measurement set `name` is accepted in when it boots `image` (None: its CURRENT set, as built)."""
+        base = self.reference[name]
+        if image is None:
+            return dict(base)
+        value = hashlib.sha256(bytes.fromhex(base["pcrs"]["11"]) + hashlib.sha256(image.encode()).digest()).hexdigest()
+        return dict(base, label=image, pcrs=dict(base["pcrs"], **{"11": value}))
+
+    def accept(self, seed, sets, name):
+        """A new document, {node: [image, ...]} (None: CURRENT), and the epoch that commits to it, taken by every node
+        IN ONE STEP: every node's services are stopped (a crash: the same boot), the document written and the epoch
+        committed to each store, then the services started again. No node judges anything between the two.
+        A node reads ONE measurements.json and binds it to the manifest it holds, so a document that reached a running
+        node before its epoch (or after) would refuse every attestation in between. Delivering the document with the
+        epoch that names it, by its digest, is regalia-kms-24's decision on #75, for the product (d9); until then this
+        fixture keeps the two together by stopping the services, and a host has the same window (KERNEL-UPDATE 2.7).
+        Returns what advance returns."""
+        document = {"schema": measurements.SCHEMA, "name": name,
+                    "nodes": {node: {"accepted": [self.image_set(node, image) for image in images]} for node, images in sets.items()}}
+        others = {node: self.services[node] for node in self.nodes if node != seed and self.running(node)}
+        for node in others:
+            self.stop(node, power=None)
+        result = self.advance(seed, document=document)
+        for node, services in others.items():
+            self.start(node, services)
+        return result
+
     def reset_count(self, name):
         """The TPM's resetCount (TPM2_ReadClock): one higher after each power cycle."""
         out = sh("tpm2_readclock", "-T", self.member(name).tcti).stdout
@@ -273,8 +312,9 @@ class Cluster:
     def _identities_and_chain(self):
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
         self.ids = {n.name: self._identity(n) for n in self.nodes.values()}
+        self.reference = {n.name: self._reference(n, example["pcrs"]) for n in self.nodes.values()}
         self.document = {"schema": measurements.SCHEMA, "name": "e2e3",
-                         "nodes": {n.name: {"accepted": [self._reference(n, example["pcrs"])]} for n in self.nodes.values()}}
+                         "nodes": {n.name: {"accepted": [dict(self.reference[n.name])]} for n in self.nodes.values()}}
         self.manifest = {"schema": membership.SCHEMA, "epoch": 1, "prev_digest": "", "policy_version": measurements.version(self.document),
                          "issued_at": "2026-10-01T00:00:00Z", "revocation_keys": [hbt.pub(hbt.REVOKE)],
                          "nodes": [{"node_id": n.name, "state": "ACTIVE", "ek_name": self.ids[n.name][0], "ak_name": self.ids[n.name][1],
@@ -853,25 +893,36 @@ class Cluster:
         held = self.node(name).freshness().held()
         return bool(held) and held["heartbeat"]["epoch"] == epoch
 
-    def advance(self, seed, signer="root", **states):
+    def advance(self, seed, signer="root", document=None, **states):
         """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key. The
         authority's publication, stood in for: `seed`, a running node, has its services stopped (a crash: the same
         boot), takes the epoch into its store with its heartbeat, and starts again. Nodes whose services are
         stopped take it into their stores as they are (they would pull it when they come back). The other running
         nodes are left to pull it from the seed with their real sync (their trails say from whom); each then gets
         the epoch's heartbeat, written under its sync unit's identity. Returns (the new manifest, when the seed
-        started again)."""
+        started again). With `document`, the epoch commits to that measurement document (its policy_version), and
+        every node's measurements.json is replaced by it just before the epoch is taken (#75)."""
         if self.auth:
             raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
         manifest = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                         issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
+        if document is not None:
+            manifest["policy_version"] = measurements.version(document)
         envelope = self.signed(manifest, signer=signer)
         others = [name for name in self.nodes if name != seed and self.running(name)]
         running = [name for name in others if membership.may(manifest, name, "authorize")]   # they pull it from the seed
         services = self.services[seed]
         self.stop(seed, power=None)
+        if document is not None:                        # after the seed stopped: see accept() for the window this leaves
+            for n in self.nodes.values():               # whole or not at all: a service reads it at every decision
+                target = n.dir / "etc" / "measurements.json"
+                staged = target.with_name(".measurements.json.new")
+                staged.write_text(json.dumps(document))
+                os.chmod(staged, os.stat(target).st_mode & 0o777)
+                os.replace(staged, target)
+            self.document = document
         for name in self.nodes:
             if name in others:                        # running: its store is its sync's (one that may not authorize is left be)
                 continue
