@@ -1,0 +1,63 @@
+# The authority host's service tunnel (wg-svc): every node of the CURRENT manifest a peer, read back from the
+# kernel (deploy/baremetal/authority.py wg_apply, wgsvc.py). A oneshot: at boot, and again each time the
+# authority publishes a new chain (regalia-authority-wg-apply.path), so a revoked node leaves this tunnel
+# too. It reads the published chain (chain.json, 0644) and verifies it itself against the root key and the
+# TPM anchor; its key (authority.json's wg_service_key) is root:regalia-authority 0640, made by
+# `authority.py wg-key`. It holds CAP_NET_ADMIN, never the revocation key, and nothing that parses what a peer sends.
+[Unit]
+Description=Regalia KMS: the authority's service tunnel, from the manifest
+Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+After=network-online.target
+Wants=network-online.target
+
+# Triggered by a file regalia-authority writes: a burst of triggers must not stop the path unit (every run
+# re-verifies the chain, so running again is harmless).
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=/usr/lib/regalia-kms
+# wg, ip and tpm2_* are run by name: from these directories only
+Environment=PATH=/usr/sbin:/usr/bin
+ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.authority --config /etc/regalia/authority.json wg-apply
+User=root
+# the TPM (the anchor the published chain is checked against) is the tss group's: root without
+# CAP_DAC_OVERRIDE is held to file modes like anyone
+SupplementaryGroups=tss
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+# it configures the network and sends nothing on it
+IPAddressDeny=any
+# a run that hangs (a TPM call that does not return) must not absorb every later trigger
+TimeoutStartSec=60
+# A failed run (a transient TPM error, the 60 s timeout, a published chain behind the TPM anchor) leaves the
+# tunnel DOWN; without a retry it would stay down until the chain next
+# changes. Every run re-verifies the chain, and a run that keeps failing keeps the tunnel down, so
+# retrying is safe. It never reaches `failed` while it retries: watch the journal or NRestarts, not
+# --failed.
+Restart=on-failure
+RestartSec=15s
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

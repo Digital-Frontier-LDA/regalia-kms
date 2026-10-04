@@ -123,14 +123,26 @@ def load(path):
 # ---- the published chain ----
 
 def publish(store, path):
-    """Write the store's verified chain where the root services read it: complete or not at all, 0644."""
+    """Write the store's verified chain where the root services read it: complete or not at all, 0644. A file
+    that already holds exactly these bytes, 0644, is left as it is: the path units that watch it fire on a
+    change of the chain, not on every publication."""
     envelopes = store.envelopes(0)
+    encoded = membership.canonical(envelopes)
+    with contextlib.suppress(OSError):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            info = os.fstat(fd)
+            if stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o644 and info.st_size == len(encoded) \
+                    and os.read(fd, len(encoded) + 1) == encoded:
+                return envelopes[-1]["manifest"] if envelopes else None
+        finally:
+            os.close(fd)
     directory = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".chain-")
     try:
         os.fchmod(fd, 0o644)
         with os.fdopen(fd, "wb") as f:
-            f.write(membership.canonical(envelopes))
+            f.write(encoded)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)

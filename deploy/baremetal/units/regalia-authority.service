@@ -5,7 +5,8 @@
 # Revocations are requested with `authority revoke`, as root on this host (revoke_requesters: local-root),
 # which asks THIS service over its control socket (RuntimeDirectory, 0600, root peers only by SO_PEERCRED):
 # one process signs. Nothing takes a revocation from the network. Its tunnel is made by
-# `authority wg-apply` (root, CAP_NET_ADMIN).
+# regalia-authority-wg-apply.service (root, CAP_NET_ADMIN), from the chain this service publishes in its
+# state directory (chain.json, 0644) and its WireGuard key (root:regalia-authority 0640, `authority wg-key`).
 [Unit]
 Description=Regalia KMS: revocation authority (heartbeats and revocations)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
