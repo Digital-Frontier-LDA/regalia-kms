@@ -17,6 +17,11 @@ keys, no spaces, ASCII). The domain differs from a manifest's, so neither signat
 other. The key must be a revocation key named by the CURRENT manifest; the root key is offline and signs
 no heartbeats.
 
+Under a v4 manifest (#199: no authority host) the envelope is {"heartbeat": {...}, "signatures": [{"party",
+"key", "sig"}, ...]} instead, each signature over the same message, and the counting parties must meet the
+CURRENT manifest's heartbeat_signers (two of the nodes and the owner; signed_by). One the owner co-signed lives
+at most owner_heartbeat_lifetime_s, whoever else signed it.
+
 A heartbeat is accepted (Freshness.accept) and later relied on (Freshness.check) only if:
   * it is for the current manifest: the same epoch AND the same digest;
   * it lives no longer (expires_at - issued_at) than THE CURRENT MANIFEST ALLOWS, whatever the signer
@@ -154,8 +159,30 @@ def validate(heartbeat):
 
 
 def signed(envelope, manifest):
-    """The heartbeat inside an envelope, if it is well formed and signed by a revocation key `manifest`
-    names, WHATEVER epoch it is for. Returns (heartbeat, issued, expires). verify() adds the rest."""
+    """The heartbeat inside an envelope, if it is well formed and signed as `manifest` requires (below),
+    WHATEVER epoch it is for. Returns (heartbeat, issued, expires). verify() adds the rest."""
+    return signed_by(envelope, manifest)[:3]
+
+
+def signed_by(envelope, manifest):
+    """signed(), and who signed: (heartbeat, issued, expires, parties).
+
+    Under a v4 manifest (#199) a heartbeat is signed by a QUORUM: {"heartbeat", "signatures": [{party, key, sig}]},
+    each signature over DOMAIN + canonical(heartbeat), counted by membership.counting_parties (a party named twice,
+    a key not the party's, a bad signature: refused; a quarantined, retired or stolen node: not counted), and the
+    counting parties must meet the manifest's heartbeat_signers (two of the nodes and the owner). `parties` is that
+    set, for verify()'s owner rule. Under v1 to v3, one revocation key the manifest names, as before; `parties` is
+    empty."""
+    if manifest is not None and manifest.get("schema") == membership.SCHEMA_V4:
+        membership.exact(envelope, ("heartbeat", "signatures"), "envelope")
+        heartbeat = envelope["heartbeat"]
+        issued, expires = validate(heartbeat)
+        membership.validate(manifest)
+        parties = membership.counting_parties(manifest, DOMAIN + membership.canonical(heartbeat), envelope["signatures"], "heartbeat")
+        rule = manifest["heartbeat_signers"]
+        require(membership.meets(rule, parties), "the heartbeat is signed by %s: %d of %s are needed"
+                % (", ".join(sorted(parties)) or "no counting party", rule["threshold"], ", ".join(rule["parties"])))
+        return heartbeat, issued, expires, parties
     membership.exact(envelope, ("heartbeat", "signature"), "envelope")
     sig = envelope["signature"]
     membership.exact(sig, ("key", "sig"), "signature")
@@ -171,13 +198,18 @@ def signed(envelope, manifest):
         membership.verify_revocation(alg, sig["key"], DOMAIN + membership.canonical(heartbeat), sig["sig"], "heartbeat")
     except Refused:
         raise Refused("the heartbeat signature does not verify") from None
-    return heartbeat, issued, expires
+    return heartbeat, issued, expires, set()
 
 
 def verify(envelope, manifest):
-    """The heartbeat inside an envelope, if it is signed by a revocation key the CURRENT manifest names
-    and is for that manifest. Time and sequence are Freshness's to check."""
-    heartbeat, issued, expires = signed(envelope, manifest)
+    """The heartbeat inside an envelope, if it is signed as the CURRENT manifest requires (signed_by) and is
+    for that manifest. Time and sequence are Freshness's to check."""
+    heartbeat, issued, expires, parties = signed_by(envelope, manifest)
+    # an owner co-signed heartbeat is an emergency credential (a node opened by hand, the operator present): it
+    # lives at most owner_heartbeat_lifetime_s, whoever else signed it (#199)
+    if membership.OWNER in parties:
+        require(expires - issued <= manifest["owner_heartbeat_lifetime_s"], "a heartbeat the owner signed lives at most %d s "
+                "(this one: %d s)" % (manifest["owner_heartbeat_lifetime_s"], expires - issued))
     require(heartbeat["epoch"] == manifest["epoch"], "the heartbeat is for epoch %d, the current manifest is epoch %d"
             % (heartbeat["epoch"], manifest["epoch"]))
     require(heartbeat["manifest_digest"] == membership.digest(manifest), "the heartbeat is for another manifest (digest mismatch)")
@@ -395,12 +427,14 @@ class Freshness:
         # An advance a crash interrupted (the held heartbeat is above the counter) is finished FIRST, under
         # the allowance it was accepted under: a node that stopped at ANY increment of a long catch-up is
         # not stranded by the counter it left behind, and the new heartbeat is measured from there. Only
-        # for a held heartbeat SIGNED by a revocation key the current manifest names (any epoch: the
+        # for a held heartbeat SIGNED as the current manifest requires (any epoch: the
         # catch-up may span one): a file planted on the disk owes nothing and moves nothing.
         owed = pending(state, held, self.counter.MAX_JUMP)
         widen = 0
         if owed:
             try:
+                # signed(), not verify(): no owner lifetime cap here, as this moves only the counter to a number already
+                # accepted; every heartbeat relied on goes through verify(), which caps it
                 signed(state["envelope"], manifest)
             except Refused:
                 # Not finished on the strength of the file (planted, or signed by a key a rotation has since
@@ -424,8 +458,8 @@ class Freshness:
         defined AT the heartbeat's sequence (Counter.define_at, no increment loop), and the heartbeat becomes
         the held one, so the time-derived rule applies from its issue time on. Only for a node that holds no
         heartbeat and whose counter's indices do not exist at all (neither the counter nor its base: a damaged
-        counter is recount.py's case): the same checks as accept() (signed by a revocation
-        key the manifest names, for this manifest, live by authenticated time, issued no later than now +
+        counter is recount.py's case): the same checks as accept() (signed as the manifest
+        requires, for this manifest, live by authenticated time, issued no later than now +
         FUTURE_SKEW). Disk first, then the counter: a cut between leaves a held heartbeat over a counter
         that is missing, which recount.py redefines at that floor. Returns the seconds it has left."""
         with membership._exclusive(self.lock_path):
