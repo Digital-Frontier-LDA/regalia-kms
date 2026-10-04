@@ -217,6 +217,50 @@ class Sync(Case):
         self.assertEqual(measurements.held(self.mine, self.stores["a"].load()), DOC2)
 
 
+class Review(Sync):
+    """regalia-kms-d9's read of #348."""
+
+    def test_a_crash_mid_batch_refuses_naming_the_epoch_and_the_next_pull_heals_it(self):
+        """A batch [K, K+1] crashed after K: K was committed as passed through (final=False) without its document.
+        The node then judges nothing at K, and says which document it lacks; the next pull fetches it."""
+        store = self.stores["a"]
+        chain = self.stores["authority"].envelopes()
+        store.commit(chain[0], final=False)
+        store.commit(chain[1], final=False)                           # epoch 2, K: the crash leaves the node here
+        self.assertEqual(store.load()["epoch"], 2)
+        self.refused("epoch 2 commits to measurements %s, which this node does not hold" % measurements.version(DOC2),
+                     measurements.held, self.mine, store.load())
+        self.client.pull(convergence.AUTHORITY)                       # nothing new to apply: the held epoch's document comes
+        self.assertEqual(measurements.held(self.mine, store.load()), DOC2)
+
+    def test_the_last_new_epoch_is_held_to_its_document_whatever_follows_it(self):
+        """An epoch resent AFTER the last new one in a batch must not turn that last new one into "passed through"."""
+        e1, docs = self.under(DOC1), self.documents("x")
+        e2 = self.under(DOC2, e1["manifest"])
+        store = self.guarded("x", docs)
+        docs.put(DOC1)
+        self.refused("epoch 2 commits to measurements", convergence.catch_up, store, [e1, e2, e1])
+        self.assertEqual(store.load()["epoch"], 1)
+        docs.put(DOC2)
+        self.assertEqual(convergence.catch_up(store, [e1, e2, e1])["epoch"], 2)
+
+    def test_only_a_batch_or_an_enrolment_passes_an_epoch_through(self):
+        """final=False, the one way to commit an epoch without its document, is passed by exactly the three callers
+        that commit a batch: convergence.catch_up, enrol's anchor step and the authority's accept."""
+        import pathlib
+        import re
+        here = pathlib.Path(measurements.__file__).parent
+        callers = sorted(path.name for path in here.glob("*.py") if re.search(r"\.commit\([^)]*\bfinal=", path.read_text()))
+        self.assertEqual(callers, ["authority.py", "convergence.py", "enrol.py"])
+
+    def test_measurements_requests_are_limited_like_every_request(self):
+        """Every request of a node, this one too, is spent from its own bucket before it is decided."""
+        version = measurements.version(DOC2)
+        answers = [self.ask("authority", v=1, op="measurements", version=version) for _ in range(sync.RATE["any"][0] + 1)]
+        self.assertTrue(all(a["ok"] for a in answers[:-1]))
+        self.refusal("RATE: more than %d any requests" % sync.RATE["any"][0], answers[-1])
+
+
 class Verifier(Case):
     def test_a_server_given_attester_for_judges_each_request_under_the_manifest_held_then(self):
         calls, attester = [], self.peers["b"]["attester"]

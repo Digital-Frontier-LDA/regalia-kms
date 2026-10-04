@@ -99,6 +99,15 @@ def catch_up(store, envelopes):
     last good epoch. Returns the summary afterwards."""
     require(isinstance(envelopes, list) and len(envelopes) <= MAX_ENVELOPES, "at most %d envelopes at a time" % MAX_ENVELOPES)
     current = store.load()
+    # the epoch this batch leaves the node at: the last envelope above the epoch held (one resent after it is compared,
+    # not committed), whose measurements must be held when it is committed (#332, regalia-kms-d9's read)
+    top, new = current["epoch"] if current else 0, []
+    for i, e in enumerate(envelopes):
+        epoch = e.get("manifest", {}).get("epoch") if isinstance(e, dict) and isinstance(e.get("manifest"), dict) else None
+        if isinstance(epoch, int) and not isinstance(epoch, bool) and epoch > top:     # above everything before it
+            top = epoch
+            new.append(i)
+    last_new = new[-1] if new else None
     for index, envelope in enumerate(envelopes):
         require(isinstance(envelope, dict) and isinstance(envelope.get("manifest"), dict), "an envelope must hold a manifest")
         epoch = envelope["manifest"].get("epoch")
@@ -112,8 +121,9 @@ def catch_up(store, envelopes):
             require(membership.digest(received) == membership.digest(mine["manifest"]),
                     "CONFLICT: a different manifest at epoch %d: two manifests were signed for one epoch; record an incident" % epoch)
             continue
-        # the last envelope is the epoch this batch leaves the node at: its measurements must be held (#332)
-        current = store.commit(envelope, final=index == len(envelopes) - 1)
+        # only an epoch passed through on the way to `last_new` skips the measurements check; anything else is held
+        # to it (an envelope whose epoch is not even a number included: accept refuses it either way)
+        current = store.commit(envelope, final=index == last_new or index not in new)
     return summary(store)
 
 
