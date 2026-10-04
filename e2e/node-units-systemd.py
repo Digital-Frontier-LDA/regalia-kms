@@ -94,7 +94,7 @@ import tests.test_baremetal_heartbeat as hbt                                    
 
 PREFIX = "/usr/lib/regalia-kms"
 UNITS = ("regalia-authtime.service", "regalia-wg-apply.service", "regalia-wg-apply.path", "regalia-boot-session.service",
-         "regalia-admission.service", "regalia-sync.service")
+         "regalia-admission.service", "regalia-sync.service", "regalia-authority-authtime.service")
 ADMISSION_FILE = "/run/regalia/admission/admission.json"
 DAEMON_UNITS = ("regalia-kms.service", "regalia-audit-collector.service")
 NS, A_TCTI = "regalia-e2e-b", "device:/dev/tpmrm0"
@@ -455,6 +455,21 @@ def scenario(work, binaries, user):
     ok(isinstance(said, str) and "regalia_chrony_latch_set 0" in said and stat.S_IMODE(prom.stat().st_mode) == 0o640
        and grp.getgrgid(prom.stat().st_gid).gr_name == metrics.GROUP,
        "regalia-authtime writes its metrics, 0640, group %s, from its sandbox" % metrics.GROUP, said if isinstance(said, str) else "absent")
+    # #71: the authority host's unit, the same service from authority.json (run_dir and time_servers alone), in its
+    # own sandbox: it publishes the same root-owned status the authority believes
+    sh("systemctl", "stop", "regalia-authtime.service")
+    status.unlink()
+    pathlib.Path("/etc/regalia/authority.json").write_text(json.dumps({"schema": "regalia.authority/v1", "run_dir": "/run/regalia",
+                                                                      "time_servers": ["127.0.0.2", "127.0.0.3"]}))
+    sh("systemctl", "start", "regalia-authority-authtime.service")
+    from_authority = until(lambda: json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 120, 2)
+    ok(isinstance(from_authority, dict) and os.stat(status).st_uid == 0 and oct(os.stat(status).st_mode & 0o777) == "0o644",
+       "regalia-authority-authtime (authority.json) publishes authenticated, root's 0644 in /run/regalia",
+       from_authority if isinstance(from_authority, dict) else journal("regalia-authority-authtime.service"))
+    sh("systemctl", "stop", "regalia-authority-authtime.service")
+    os.unlink("/etc/regalia/authority.json")
+    sh("systemctl", "start", "regalia-authtime.service")
+    until(lambda: json.loads(status.read_text())["authenticated"], 120, 2)
     servers[1].terminate()
     servers[1].wait(10)
     gone = until(lambda: not json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 150, 3)

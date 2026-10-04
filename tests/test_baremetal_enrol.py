@@ -373,5 +373,12 @@ class InitOnSwtpm(unittest.TestCase):
                                           as_sync=in_process, out=io.StringIO()), (1, digest))
 
 
+
+class ChronyPath(unittest.TestCase):
+    def test_enrolment_and_the_authority_host_install_chrony_s_configuration_in_one_place(self):
+        from deploy.baremetal import authtime
+        self.assertEqual(enrol.CHRONY_CONF, authtime.CHRONY_CONF)
+
+
 if __name__ == "__main__":
     unittest.main()
