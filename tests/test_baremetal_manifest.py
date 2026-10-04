@@ -701,3 +701,116 @@ class OfflineRoot(unittest.TestCase):
             with self.assertRaises(m.Refused) as caught:
                 keyfd.tty_line("type: ")
         self.assertIn("no controlling terminal", str(caught.exception))
+
+
+class Genesis(unittest.TestCase):
+    """The first ceremony (`sign --genesis`, ADR-0002 D28): epoch 1 signed by the offline root with no chain before it.
+    At this one moment the pin vouches for itself, so the operator types the root key's full SHA-256 fingerprint from
+    the ceremony record (regalia-kms-24, regalia-kms-51)."""
+
+    SESSION = "00112233445566778899aabbccddeeff"
+
+    def setUp(self):
+        import hashlib
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from tests.test_baremetal_membership_v4 import manifest4, nodes4
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.state = os.path.join(self.d, "state")
+        os.mkdir(self.state, 0o700)
+        self.key = Ed25519PrivateKey.generate()
+        self.root = OfflineRoot.raw(self.key).hex()
+        self.fingerprint = hashlib.sha256(bytes.fromhex(self.root)).hexdigest()
+        self.manifest4, self.nodes4 = manifest4, nodes4
+        self.first = manifest4(1, "", nodes4())
+        self.paths = {n: os.path.join(self.d, n) for n in ("p.json", "e1.json", "chain.json")}
+        self.write(self.first)
+
+    def write(self, proposal):
+        with open(self.paths["p.json"], "w") as f:
+            json.dump(proposal, f)
+
+    def run_genesis(self, *extra, key=None, typed=None, fd=None):
+        from deploy.baremetal import keyfd
+        fd = keyfd.sealed_memfd(OfflineRoot.pem(key or self.key)) if fd is None else fd
+        answers = list(typed if typed is not None else [self.fingerprint, "1 %s" % m.digest(self.first)[:8]])
+        asked = []
+        args = ["sign", "--genesis", "--root-key", self.root, "--proposal", self.paths["p.json"], "--signer", "root",
+                "--key-fd", str(fd), "--offline-session", self.SESSION, "--state-dir", self.state, "--out", self.paths["e1.json"]] + list(extra)
+        out, err = io.StringIO(), io.StringIO()
+
+        def tty(prompt):
+            asked.append(prompt)
+            return answers.pop(0) if answers else ""
+        with unittest.mock.patch("sys.stdout", out), unittest.mock.patch("sys.stderr", err), \
+                unittest.mock.patch.object(tool.keyfd, "tty_line", tty):
+            code = tool.main(args)
+        self.asked, self.out = asked, out.getvalue()
+        return code, err.getvalue()
+
+    def record(self):
+        path = os.path.join(self.state, tool.RECORD)
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def test_the_offline_root_signs_epoch_1_after_the_fingerprint_and_the_digest_are_typed(self):
+        code, err = self.run_genesis("--chain-out", self.paths["chain.json"])
+        self.assertEqual(code, 0, err)
+        with open(self.paths["chain.json"]) as f:
+            chain = json.load(f)
+        self.assertEqual(m.accept_chain(None, chain, self.root)["epoch"], 1)
+        self.assertIn("fingerprint", self.asked[0])
+        self.assertNotIn(self.fingerprint, self.out + "".join(self.asked))       # read from the ceremony record, never shown
+        line = self.record()[-1]
+        self.assertEqual((line["genesis"], line["verified"], line["provenance"]), (True, True, "offline-keys session " + self.SESSION))
+
+    def test_a_wrong_or_short_fingerprint_signs_nothing(self):
+        for typed in (["0" * 64, "1 %s" % m.digest(self.first)[:8]], [self.fingerprint[:8], "1 %s" % m.digest(self.first)[:8]]):
+            with self.subTest(typed[0][:8]):
+                code, err = self.run_genesis(typed=typed)
+                self.assertEqual(code, 2)
+                self.assertIn("the fingerprint typed is not this key's: nothing was signed", err)
+        self.assertFalse(os.path.exists(self.paths["e1.json"]))
+        self.assertEqual(self.record(), [])
+
+    def test_a_key_that_is_not_the_pin_is_refused_before_anything_is_typed(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        code, err = self.run_genesis(key=Ed25519PrivateKey.generate())
+        self.assertEqual(code, 2)
+        self.assertIn("is not the pinned root", err)
+        self.assertEqual((self.asked, self.record()), ([], []))
+
+    def test_only_a_fresh_epoch_1_v4_manifest_is_a_genesis(self):
+        import copy
+        older = {k: v for k, v in copy.deepcopy(self.first).items()}
+        for proposal, reason in ((self.manifest4(2, "", self.nodes4()), "fresh epoch-1"),
+                                 (self.manifest4(1, "ab" * 32, self.nodes4()), "fresh epoch-1"),
+                                 (dict(older, schema=m.SCHEMA_V3), "")):
+            with self.subTest(reason or "v3"):
+                self.write(proposal)
+                code, err = self.run_genesis()
+                self.assertEqual(code, 2, err)
+                self.assertTrue(err, "refused with a reason")
+        self.assertEqual(self.record(), [])
+
+    def test_genesis_takes_no_chain_no_expected_epoch_and_no_token(self):
+        chain = os.path.join(self.d, "c.json")
+        with open(chain, "w") as f:
+            json.dump([], f)
+        for extra, reason in ((("--chain", chain), "--genesis takes no --chain"), (("--expected-epoch", "0"), "--genesis takes no --chain"),
+                              (("--module", "/usr/lib/opensc-pkcs11.so"), "--key-fd and --offline-session only"),
+                              (("--old", chain), "--genesis takes no measurements step")):
+            with self.subTest(reason):
+                code, err = self.run_genesis(*extra)
+                self.assertEqual(code, 2)
+                self.assertIn(reason, err)
+
+    def test_without_genesis_a_chain_is_still_required(self):
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            self.assertEqual(tool.main(["sign", "--root-key", self.root, "--proposal", self.paths["p.json"], "--signer", "root",
+                                        "--key-fd", "3", "--offline-session", self.SESSION, "--state-dir", self.state,
+                                        "--out", self.paths["e1.json"]]), 2)
+        self.assertIn("give --chain and --expected-epoch (or --genesis)", err.getvalue())

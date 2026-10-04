@@ -18,6 +18,8 @@ envelope, so nothing a node would refuse is ever signed.
                                                      --module /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so [--opensc-conf FILE]
                                                      [--pin-env NAME] --state-dir DIR --out ENVELOPE.json [--chain-out NEXT.json]
                                                      (or, the offline root: --signer root --key-fd N --offline-session ID, no --key/--module)
+    python3 -Es -m deploy.baremetal.manifest sign --genesis --root-key ROOT --proposal EPOCH1.json --signer root --key-fd N
+                                                     --offline-session ID --state-dir DIR --out E1.json [--chain-out CHAIN.json]
                                                      [--old OLD.json --new NEW.json [--state NODE=STATE.json]... [--emergency] [--locked-out NODE]...]
     python3 -Es -m deploy.baremetal.manifest clear-pin-latch --state-dir DIR
 
@@ -56,11 +58,21 @@ envelopes), verified from ROOT every time.
      (--out, and with --chain-out the chain plus it, from which the next proposal of the session is made): a
      signature that does not verify, or a record that cannot be written, leaves nothing but the refusal.
 
+GENESIS (`sign --genesis`, the first ceremony): there is no chain yet, so step 1 is replaced. The proposal must be
+a fresh epoch-1 manifest of the current schema (v4) with no prev_digest, passing membership.validate and the
+first-manifest rule; --chain and --expected-epoch are refused; only the offline root (--key-fd) signs it. At this
+one moment the pin vouches for itself (nothing earlier names the root), so before the epoch and digest the operator
+types the root key's FULL SHA-256 fingerprint, 64 hex, read from the ceremony's own record of the generated key and
+never from this screen (the format `enrol check` takes, #243). The key must be --root-key's and have that
+fingerprint. The finished envelope must pass membership.accept(None, ...); the record line carries "genesis": true.
+
 A key in a file is not a signing backend here: the root signs on its token, or from the offline session's
 descriptor, and every step above runs either way."""
 import argparse
 import datetime
 import getpass
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -288,30 +300,45 @@ def check_signer_key(current, root, signer_role, public, alg="ecdsa-p256"):
 
 
 def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confirm, out, state, chain_out=None, say=print,
-         pin_source="terminal", step=None, offline=False):
+         pin_source="terminal", step=None, offline=False, genesis=False):
     """Steps 1 to 7 of the module's docstring. `open_signer()` gives the token's signer (step 4's opening);
     `confirm(prompt)` returns what the operator typed. Returns the envelope written."""
     require(signer_role in ("root", "revocation"), "--signer must be root or revocation")
-    current = verify_chain(chain, root)                                                        # 1
-    require(current["epoch"] == expected_epoch, "the chain ends at epoch %d, not the %d expected: fetch the fleet's chain"
-            % (current["epoch"], expected_epoch))
-    membership.validate(candidate)                                                             # 2
-    require(offline or candidate["schema"] == membership.SCHEMA_V3, "the token's key is ecdsa-p256, which signs only schema %s"
-            % membership.SCHEMA_V3)
-    membership.transition(current, candidate, signer_role)
-    require(candidate["epoch"] == current["epoch"] + 1, "the proposal is epoch %d, already in the chain" % candidate["epoch"])
-    judged = measurement_step(current, candidate, step)                                         # 2a
+    if genesis:                                                                                # 1 and 2, the first ceremony
+        require(offline and signer_role == "root", "the genesis is signed by the offline root only (--signer root --key-fd)")
+        require(chain == [] and expected_epoch is None and step is None, "the genesis takes no chain, no expected epoch and no "
+                "measurements step: nothing comes before it")
+        membership.validate(candidate)
+        require(candidate["schema"] == membership.SCHEMA_V4 and candidate["epoch"] == 1 and candidate["prev_digest"] == "",
+                "the genesis is a fresh epoch-1 %s manifest with no prev_digest" % membership.SCHEMA_V4)
+        current, judged = None, None
+        membership.transition(None, candidate, "root")
+    else:
+        current = verify_chain(chain, root)                                                    # 1
+        require(current["epoch"] == expected_epoch, "the chain ends at epoch %d, not the %d expected: fetch the fleet's chain"
+                % (current["epoch"], expected_epoch))
+        membership.validate(candidate)                                                         # 2
+        require(offline or candidate["schema"] == membership.SCHEMA_V3, "the token's key is ecdsa-p256, which signs only schema %s"
+                % membership.SCHEMA_V3)
+        membership.transition(current, candidate, signer_role)
+        require(candidate["epoch"] == current["epoch"] + 1, "the proposal is epoch %d, already in the chain" % candidate["epoch"])
+        judged = measurement_step(current, candidate, step)                                     # 2a
     for path in (out,) + ((chain_out,) if chain_out else ()):
         require(not os.path.lexists(path), "%s exists: nothing is overwritten" % path)
     require(not offline or signer_role == "root", "--key-fd is the offline root's: a revocation key signs on its token")
     signer = open_signer()                                                                     # 3, 4
     public = signer.public()
     check_signer_key(current, root, signer_role, public, getattr(signer, "alg", "ecdsa-p256"))
+    if genesis:
+        # the pin vouches for itself here: the operator types the full fingerprint from the ceremony record, never shown
+        fingerprint = hashlib.sha256(bytes.fromhex(public)).hexdigest()
+        typed_fp = confirm("GENESIS: type the root key's SHA-256 fingerprint from the ceremony record (64 hex): ").strip().lower()
+        require(hmac.compare_digest(typed_fp.encode(), fingerprint.encode()), "the fingerprint typed is not this key's: nothing was signed")
     digest = membership.digest(candidate)                                                      # 5
-    for line in diff(current, candidate):
+    for line in diff(current or {"nodes": []}, candidate):
         say("  " + line)
     say("signer %s, key %s…, %s" % (signer_role, public[:16], getattr(signer, "provenance", None) or "token serial %s" % signer.serial))
-    say("epoch %d -> %d, manifest digest %s" % (current["epoch"], candidate["epoch"], digest))
+    say("epoch %s -> %d, manifest digest %s" % (current["epoch"] if current else "none (genesis)", candidate["epoch"], digest))
     if judged is not None:
         say("measurements: %s%s" % (judged["transition"], "; LOCKS OUT %s (each refused its next unlock and lease until it boots an "
             "approved image)" % ", ".join(judged["locked_out"]) if judged["locked_out"] else ""))
@@ -326,7 +353,7 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     # signature verified AND its line is on the record (regalia-kms-95 on #156).
     verified, reason, failed = False, "", None
     try:
-        accepted = membership.accept(current, envelope, root)
+        accepted = membership.accept(current, envelope, root)       # current None at genesis: the first-manifest rule
         require(membership.digest(accepted) == digest, "the accepted manifest is not the one signed")
         verified = True
     except Exception as failure:          # noqa: BLE001 - recorded as the reason; raised again below
@@ -337,6 +364,8 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
                 "verified": verified, "reason": reason, "at": int(time.time())}
         if getattr(signer, "provenance", None):
             line["provenance"] = signer.provenance                 # "offline-keys session <ID>": the ceremony's record names it too
+        if genesis:
+            line["genesis"] = True
         _append_record(state, line)
     except OSError as unrecorded:
         if failed is not None:            # both: say both (regalia-kms-95)
@@ -430,8 +459,10 @@ def main(argv=None):
     chain(c)
     c.add_argument("--proposal", required=True)
     c = sub.add_parser("sign", help="sign the proposal on the token (see the steps above)")
-    chain(c)
-    c.add_argument("--expected-epoch", required=True, type=int, help="the epoch the fleet is at; the chain must end there")
+    c.add_argument("--chain", metavar="CHAIN.json", help="the signed chain (a JSON list of envelopes); not with --genesis")
+    c.add_argument("--root-key", required=True, metavar="ROOT", help="the pinned root: 64 hex, or a typed entry or list as JSON")
+    c.add_argument("--genesis", action="store_true", help="the first ceremony: sign epoch 1, with no chain (the offline root only)")
+    c.add_argument("--expected-epoch", type=int, help="the epoch the fleet is at; the chain must end there (not with --genesis)")
     c.add_argument("--proposal", required=True)
     c.add_argument("--signer", required=True, choices=("root", "revocation"))
     c.add_argument("--key", metavar="PKCS11-URI", help="the key on a token (with --module)")
@@ -457,6 +488,19 @@ def main(argv=None):
             print("PIN latch cleared; the token's counter may still be low: one correct login resets it")
             return 0
         root = root_key(args.root_key)
+        if args.command == "sign" and args.genesis:
+            # the first ceremony: no chain at all, the offline root only (see GENESIS above)
+            require(args.chain is None and args.expected_epoch is None, "--genesis takes no --chain and no --expected-epoch")
+            require(args.key_fd is not None and args.key is None and args.module is None and args.pin_env is None
+                    and args.opensc_conf is None, "--genesis is signed by the offline root: --key-fd and --offline-session only")
+            require(not (args.old or args.new or args.state or args.emergency or args.locked_out), "--genesis takes no measurements step")
+            provenance = keyfd.session(args.offline_session)
+            sign([], root, None, read_json(args.proposal, membership.MAX_BYTES), args.signer, lambda: OfflineSigner(args.key_fd, provenance),
+                 keyfd.tty_line, args.out, state_dir(args.state_dir), args.chain_out, pin_source="none (offline key)", offline=True,
+                 genesis=True)
+            return 0
+        if args.command == "sign":
+            require(args.chain is not None and args.expected_epoch is not None, "give --chain and --expected-epoch (or --genesis)")
         chain_doc = read_json(args.chain, membership.MAX_CHAIN_BYTES)
         current = verify_chain(chain_doc, root)
         if args.command == "verify":
