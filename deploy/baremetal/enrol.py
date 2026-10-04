@@ -668,9 +668,17 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     with open(config_path, "rb") as f:
         cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
     n = node_module.Node(cfg, run)
-    hw, store = n.anchor(), n.store()
-    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"))
     envelopes = chain if isinstance(chain, list) else [chain]
+    # Enrolment DEFINES the anchor (#242): under the node's approved-image policy when the signed measurements the
+    # chain's last manifest commits to name a system-phase key for this node (node.define_policy; its measurements are
+    # in the store already, #332), from the chain it is given, since nothing is committed yet; and it reads and writes
+    # by that same policy. Owner-written when they name none.
+    tip = membership.accept_chain(None, envelopes, cfg["root_key"])
+    policy = lambda: node_module.define_policy(cfg, manifest=tip)
+    hw = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=n.path("highwater.lock"), define_policy=policy,
+                              image_key=lambda: node_module.image_key(cfg, manifest=tip))
+    store = membership.Store(n.path("membership.json"), cfg["root_key"], hw, documents=n.documents().require_for)
+    counter = heartbeat.Counter(cfg["nv_heartbeat"], cfg["tcti"], run, lock_path=n.path("heartbeat-counter.lock"), policy=policy)
 
     def defined(owner, indices):
         return [i for i in indices if owner._tpm("nvreadpublic", i).returncode == 0]

@@ -201,5 +201,82 @@ class LazyPolicy(unittest.TestCase):
                 hw.value()
 
 
+class NoOwnerLayoutUnderV4(unittest.TestCase):
+    """24 (#242 B2b): the owner-written layout is for unsigned LAB images only. Under a v4 manifest (production) a
+    definer whose measurements name no system-phase key for the node refuses, loudly, before the first write; under
+    v1-v3 such a node is defined owner-written, and with a key named the policy is the node's."""
+
+    def setUp(self):
+        import tests.test_baremetal_membership_v4 as v4
+        self.v4 = v4
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        pathlib.Path(self.d + "/pcr.pem").write_bytes(KEY)
+        self.cfg = {"state_dir": self.d, "root_key": hbt.pub(hbt.ROOT), "node_id": "a"}
+
+    def bound(self, manifest, document):
+        measurements.Documents(os.path.join(self.d, measurements.STORE_DIR)).put(document)
+        return dict(manifest, policy_version=measurements.version(document))
+
+    def test_v4_with_no_system_key_is_refused(self):
+        manifest = self.bound(self.v4.manifest4(1, "", self.v4.nodes4()), UKI_ONE)
+        with self.assertRaisesRegex(m.Refused, "under regalia.membership/v4 the anchor is defined only in the policy-written layout"):
+            node.define_policy(self.cfg, manifest=manifest, pem_path=self.d + "/pcr.pem")
+
+    def test_v4_with_the_node_s_key_gives_its_policy(self):
+        doc = signed(UKI_ONE, a=KEY, b=KEY, c=KEY)
+        manifest = self.bound(self.v4.manifest4(1, "", self.v4.nodes4()), doc)
+        self.assertEqual(node.define_policy(self.cfg, manifest=manifest, pem_path=self.d + "/pcr.pem"), signkey.policy(KEY).hex())
+
+    def test_a_lab_image_under_v1_to_v3_is_owner_written(self):
+        manifest = self.bound(hbt.manifest(), UKI_ONE)                    # a v1 manifest, its images not signed
+        self.assertEqual(manifest["schema"], m.SCHEMA)
+        self.assertIsNone(node.define_policy(self.cfg, manifest=manifest, pem_path=self.d + "/pcr.pem"))
+
+
+class OneDefinitionOnePolicy(unittest.TestCase):
+    """A definer's policy is asked for ONCE per definition: the counter and both record slots are laid down under the
+    same answer, never one index under one key and the next under another (a key file replaced mid-definition)."""
+
+    def test_the_definer_s_policy_is_resolved_once(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        tpm, answers = FakeTpm(), [POLICY, "c9" * 32, "d0" * 32]
+        hw = m.HighWater("0x1500016", lock_path=d + "/hw.lock", run=tpm, define_policy=lambda: answers.pop(0))
+        hw.define()
+        self.assertEqual(len(answers), 2)
+        self.assertEqual({tpm.policies[i] for i in ("0x1500016", "0x150001a", "0x150001b")}, {POLICY})
+        self.assertNotIn("0x1500017", tpm.policies)                       # the base: never a policy
+
+
+class CounterPolicyUnavailable(unittest.TestCase):
+    """d9 (#362): a heartbeat counter written by policy whose policy cannot be established (the image's key file
+    missing) refuses the heartbeat and changes nothing: the counter is not marked gone, nothing is redefined,
+    the held state is as it was. A request that could not be judged is not evidence about the token."""
+
+    def test_a_missing_image_key_refuses_and_changes_nothing(self):
+        from deploy.baremetal import heartbeat as hb
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        tpm = FakeTpm()
+        first = hb.Counter("0x1500018", lock_path=d + "/c.lock", run=tpm)
+        first.define()
+        manifest = hbt.manifest()
+        clock = lambda: (hbt.T0 + 60, True)
+        hb.Freshness(first, clock, lambda: 5000, d + "/freshness.json").accept(hbt.beat(manifest, 41, issued=hbt.T0), manifest)
+        tpm.nv["0x1500018"][0] |= FakeTpm.BITS["policywrite"]
+        tpm.policies["0x1500018"] = POLICY
+        before = (dict((k, list(v)) for k, v in tpm.nv.items()), pathlib.Path(d + "/freshness.json").read_bytes())
+
+        def unavailable():
+            raise m.Refused("this node's approved-image write policy cannot be established: no such file")
+        counter = hb.Counter("0x1500018", lock_path=d + "/c.lock", run=tpm, policy=unavailable)
+        with self.assertRaises(m.Refused) as caught:
+            hb.Freshness(counter, clock, lambda: 5000, d + "/freshness.json").accept(hbt.beat(manifest, 42, issued=hbt.T0), manifest)
+        self.assertNotIsInstance(caught.exception, m.Unusable)
+        self.assertIn("cannot be established", str(caught.exception))
+        self.assertEqual((dict((k, list(v)) for k, v in tpm.nv.items()), pathlib.Path(d + "/freshness.json").read_bytes()), before)
+
+
 if __name__ == "__main__":
     unittest.main()
