@@ -42,6 +42,7 @@ def decide(hw, ms):
         return {"unusable": str(reason)}
     except m.Refused as reason:
         return {"refused": str(reason)}
+OWNER = "owner-secret-of-this-test"
 hw = m.HighWater("0x1500016", tcti=os.environ["TPM2TOOLS_TCTI"], lock_path=sys.argv[1] + "/hw.lock")
 step = sys.argv[2]
 if step == "anchor 3":
@@ -50,8 +51,10 @@ if step == "anchor 3":
         hw.anchor(e, m.Store._digests(manifests(chains["main"])))
 elif step == "advance 4":
     hw.advance(4)
-else:
-    subprocess.run(["tpm2_nvundefine", step.split()[-1], "-C", "o"], check=True, capture_output=True)
+elif step == "set the owner authorization":
+    subprocess.run(["tpm2_changeauth", "-c", "o", OWNER], check=True, capture_output=True)
+else:                                         # (the undefine steps come after the owner authorization is set)
+    subprocess.run(["tpm2_nvundefine", step.split()[-1], "-C", "o", "-P", OWNER], check=True, capture_output=True)
 print(json.dumps({"%s %d" % (name, n): decide(hw, manifests(chains[name][:n])) for name, n in json.loads(sys.argv[3])}))
 `
 
@@ -119,6 +122,9 @@ func TestTheTPMReaderReadsWhatHighWaterWrote(t *testing.T) {
 	}{
 		{"anchor 3", []read{{"main", 3}, {"main", 2}, {"fork at 3", 3}, {"main", 5}}},
 		{"advance 4", []read{{"main", 4}, {"main", 3}, {"fork at 4", 4}}},
+		// #242: both readers read with each index's own authorization, so they read the same once the owner
+		// authorization is set (and kept off the host)
+		{"set the owner authorization", []read{{"main", 4}, {"main", 3}, {"fork at 4", 4}}},
 		{"undefine 0x150001b", []read{{"main", 4}}},
 		{"undefine 0x1500016", []read{{"main", 4}}},
 	} {
