@@ -677,7 +677,7 @@ class Lying(Case):
             self.refused_pull("the round failed (PermissionError)", self.source(self.answer([e2])))
         self.assertEqual(self.last()["epoch"], 0)                       # the event's header could not name a manifest either
 
-        def full(envelope):
+        def full(envelope, final=True):
             raise OSError(28, "No space left on device")
         with unittest.mock.patch.object(self.stores["a"], "commit", full):
             self.refused_pull("the round failed (OSError)", self.source(self.answer([e2])))

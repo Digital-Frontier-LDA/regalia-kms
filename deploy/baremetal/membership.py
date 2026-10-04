@@ -1178,8 +1178,11 @@ class Store:
     record existed.
     """
 
-    def __init__(self, path, root_key, highwater):
-        self.path, self.root_key, self.hw = path, root_key, highwater
+    def __init__(self, path, root_key, highwater, documents=None):
+        """`documents(manifest)`, when given, refuses (raises Refused) unless the document that manifest commits to is
+        held (measurements.Documents.require_for, #332): no epoch is committed, nor the TPM anchor moved to it,
+        without the reference values to judge it by. Generic here: membership does not know what a document is."""
+        self.path, self.root_key, self.hw, self.documents = path, root_key, highwater, documents
         self.lock_path = path + ".lock"
 
     @staticmethod
@@ -1262,6 +1265,8 @@ class Store:
             # also before anything is written: a chain that is not the anchored one never reaches the disk
             self.hw.verify(self._digests(manifests))
             self._continues_disk(envelopes)
+            if self.documents is not None:              # #332: the epoch restored to is judged by its own document
+                self.documents(current)
             self._write(copy.deepcopy(envelopes))
             self.hw.anchor(current["epoch"], self._digests(manifests))
             self.hw.check(current["epoch"])
@@ -1330,15 +1335,20 @@ class Store:
                     "stored one at epoch %d: record an incident" % mine["epoch"])
         require(len(held) <= len(envelopes), "the fetched chain is shorter than the stored one: nothing to restore")
 
-    def commit(self, envelope):
+    def commit(self, envelope, final=True):
+        """Accept `envelope` as the next epoch, write it durably and move the TPM anchor to it. `final` False marks an
+        epoch passed through on the way to a later one in the same batch (convergence.catch_up, enrolment): the
+        `documents` check is made for the epoch a batch leaves the node at, the only one it then judges by (#332)."""
         with _exclusive(self.lock_path):        # load, write and advance as one step
-            return self._commit(envelope)
+            return self._commit(envelope, final)
 
-    def _commit(self, envelope):
+    def _commit(self, envelope, final=True):
         current = self._load()
         nxt = accept(current, envelope, self.root_key)
         if nxt is current:
             return current
+        if final and self.documents is not None:       # before the disk and the TPM: refused, nothing has moved
+            self.documents(nxt)
         self._write(self.chain + [envelope])
         self.hw.anchor(nxt["epoch"], self._digests(self.manifests + [nxt]))
         self.chain, self.manifests = self.chain + [envelope], self.manifests + [nxt]
