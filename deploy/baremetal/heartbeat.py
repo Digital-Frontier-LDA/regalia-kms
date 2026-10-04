@@ -422,7 +422,7 @@ class Freshness:
         # An advance a crash interrupted (the held heartbeat is above the counter) is finished FIRST, under
         # the allowance it was accepted under: a node that stopped at ANY increment of a long catch-up is
         # not stranded by the counter it left behind, and the new heartbeat is measured from there. Only
-        # for a held heartbeat SIGNED by a revocation key the current manifest names (any epoch: the
+        # for a held heartbeat SIGNED as the current manifest requires (any epoch: the
         # catch-up may span one): a file planted on the disk owes nothing and moves nothing.
         owed = pending(state, held, self.counter.MAX_JUMP)
         widen = 0
