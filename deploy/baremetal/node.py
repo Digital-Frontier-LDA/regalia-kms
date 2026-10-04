@@ -62,13 +62,13 @@ import tempfile
 import threading
 import time
 
-from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
-                              measurements, membership, metrics, sitecfg, sync, unlock, wgsvc)
+from deploy.baremetal import (admission, trails, attest, authtime, beat, bootnet, convergence, enrolpeer, heartbeat, heartbeat_watch, lease,
+                              measurements, membership, metrics, signkey, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
 
 SCHEMA = "regalia.node/v1"
-KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "state_dir", "admission_dir", "run_dir",
+KEYS = ("schema", "node_id", "site", "root_key", "tcti", "nv_epoch", "nv_heartbeat", "nv_signing", "state_dir", "admission_dir", "run_dir",
         "wg_service_key", "measurements", "pcrs", "time_servers", "pull_interval")
 PUBLISHED = "chain.json"        # in the state directory: the verified chain, for the root services
 MAX_BYTES = 64 * 1024
@@ -95,13 +95,18 @@ def validate(doc):
     membership.root_entries(doc["root_key"], "root_key")
     require(doc["tcti"] is None or (isinstance(doc["tcti"], str) and re.fullmatch(r"[a-z]+(:[A-Za-z0-9/_.,=-]{1,200})?", doc["tcti"]) is not None),
             "tcti must be null (the kernel's resource manager) or a TCTI string")
-    epoch, beat = _index(doc["nv_epoch"], "nv_epoch"), _index(doc["nv_heartbeat"], "nv_heartbeat")
     # what each really occupies, from the classes that define them (the anchor: counter, base and two record
-    # slots; the heartbeat counter: counter and base), never retyped here
-    overlap = membership.HighWater(epoch).indices() & heartbeat.Counter(beat).indices()
-    require(not overlap, "nv_epoch and nv_heartbeat must not overlap (both take %s): the anchor takes %s, the heartbeat counter %s" % (
-        ", ".join("0x%x" % i for i in sorted(overlap)), ", ".join("0x%x" % i for i in sorted(membership.HighWater(epoch).indices())),
-        ", ".join("0x%x" % i for i in sorted(heartbeat.Counter(beat).indices()))))
+    # slots; the heartbeat counter and the signing counter (#199): counter and base each), never retyped here
+    taken = {"nv_epoch": membership.HighWater(_index(doc["nv_epoch"], "nv_epoch")).indices(),
+             "nv_heartbeat": heartbeat.Counter(_index(doc["nv_heartbeat"], "nv_heartbeat")).indices(),
+             "nv_signing": heartbeat.Counter(_index(doc["nv_signing"], "nv_signing")).indices()}
+    names = list(taken)
+    for i, one in enumerate(names):
+        for other in names[i + 1:]:
+            overlap = taken[one] & taken[other]
+            require(not overlap, "%s and %s must not overlap (both take %s): %s takes %s, %s takes %s" % (
+                one, other, ", ".join("0x%x" % i for i in sorted(overlap)), one, ", ".join("0x%x" % i for i in sorted(taken[one])),
+                other, ", ".join("0x%x" % i for i in sorted(taken[other]))))
     for key in ("site", "state_dir", "admission_dir", "run_dir", "wg_service_key", "measurements"):
         _absolute(doc[key], key)
     # each directory has ONE writer: sync's, admission's (regalia-admission, #191), and the run directory (root)
@@ -243,6 +248,13 @@ class Trail:
     def __call__(self, event):
         with self.lock:
             trails.append(self.path, dict(event, at=int(time.time())), group=self.group)
+
+
+def signing_counter(cfg, run=subprocess.run):
+    """This node's signing counter (#199): the highest heartbeat sequence it has signed, as proposer or co-signer
+    (beat.Signer). Its own index, never the heartbeat counter's: a node's co-signature must not make the heartbeat a
+    replay to itself."""
+    return heartbeat.Counter(cfg["nv_signing"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "signing-counter.lock"))
 
 
 def heartbeat_counter(cfg, run=subprocess.run):
@@ -494,6 +506,7 @@ class Sync:
         self.node, self.store, self.freshness = node, node.store(), node.freshness()
         self.trail = Trail(node.path("sync-audit.jsonl"), "sync")
         self.signer = lease.TpmSigner(node.tcti, node.run)
+        self._beat_signer = None        # beat.Signer, made at the first heartbeat signed (beat_signer())
         self.published = None
         # the unlock listener's refusals, by cause (#317), in regalia-sync's metrics directory
         self.refusals = metrics.Counter("sync", "regalia_unlock_refused_total", "unlock.prom", metrics.UNLOCK_CAUSES)
@@ -507,7 +520,42 @@ class Sync:
         enrol = enrolpeer.Peer(unlock.Contributions(self.node.path("contributions.json")), enrolpeer.Wraps(self.node.path("enrol-wraps.json")),
                                enrolpeer.tpm_identity(self.node.tcti, self.node.run), enrolpeer.tpm_activate(self.node.tcti, self.node.run))
         return sync.Server(self.node.node_id, self.store, self.freshness, self.node.attester_for(manifest), self.signer,
-                           wgsvc.key_at, self.trail, enrol=enrol)
+                           wgsvc.key_at, self.trail, enrol=enrol, cosigner=self.cosign)
+
+    # ---- heartbeats signed by the nodes (#199, beat.py) ----
+
+    def beat_signer(self):
+        """This node's beat.Signer: the signing counter, and the TPM signing key under the running image's system-phase PCR
+        key (systemd-stub's copy of the image's .pcrpkey: a key the signing key's policy does not name signs nothing)."""
+        if self._beat_signer is None:
+            found = [p for p in signkey.PCR_PUBLIC_KEY_PATHS if os.path.exists(p)]
+            require(found, "no system-phase PCR public key at %s: this boot is not a UKI with a signed PCR policy" % " or ".join(signkey.PCR_PUBLIC_KEY_PATHS))
+            with open(found[0], "rb") as f:
+                pem = f.read(65536)
+            tcti, run = self.node.tcti, self.node.run
+            point = signkey.identity(signkey.public(tcti, run), pem)[1]
+            self._beat_signer = beat.Signer(self.node.node_id, signing_counter(self.node.cfg, run),
+                                            lambda message: signkey.sign(message, pem, tcti, run), point)
+        return self._beat_signer
+
+    def cosign(self, manifest, caller, body, signature):
+        """sync.Server's cosigner: beat.cosign with this node's parts."""
+        return beat.cosign(manifest, self.node.node_id, caller, body, signature, self.freshness, self.node.clock(), self.beat_signer())
+
+    def proposer(self):
+        def ask(peer, body, signature):
+            sources = self.node.sources(self.manifest())
+            return sync.Client(self.node.node_id, self.store, self.freshness, sources, self.trail).beat_sign(peer, body, signature)
+        sync_ = self
+
+        class Lazy:
+            """The Signer, made when a heartbeat is first signed: a node that is not under v4 (or not a UKI) still starts."""
+            def signed(self):
+                return sync_.beat_signer().signed()
+
+            def __call__(self, body, manifest):
+                return sync_.beat_signer()(body, manifest)
+        return beat.Proposer(self.node.node_id, self.manifest, self.freshness, self.node.clock(), Lazy(), ask, self.trail)
 
     def unlock_peer(self):
         return unlock.Peer(self.node.node_id, self.store, self.freshness, self.node.attester_for,
@@ -561,11 +609,15 @@ class Sync:
                    threading.Thread(target=unlock.serve, args=(self.unlock_peer(), unlocking), kwargs={"caller": self.caller}, daemon=True)]
         for thread in threads:
             thread.start()
-        watch = self.watch()
+        watch, proposer = self.watch(), self.proposer()
         self.refusals.flush()                   # its zeros from the start, then every round (refusals only count)
         try:
             while not stop():
                 self.pull_round()
+                # #199: under v4 the nodes sign the heartbeats; this node proposes when it is its turn (beat.Proposer)
+                with contextlib.suppress(Refused, OSError):
+                    if self.manifest()["schema"] == membership.SCHEMA_V4:
+                        proposer.step()
                 with contextlib.suppress(Refused, OSError):
                     watch.step()
                 self.refusals.flush()
