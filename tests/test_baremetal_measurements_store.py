@@ -272,6 +272,15 @@ class Verifier(Case):
         self.assertIn("nonce", self.ask("b", v=1, op="lease-nonce", node_id="a"))
         self.assertEqual(calls, [1])
 
+    def test_a_node_that_may_not_serve_is_told_so_before_a_verifier_is_asked(self):
+        """A verifier built for the manifest held now does not list a quarantined node: its lease-nonce is refused with
+        lease.issue's reason, not the verifier's "unknown node" (three-node-recovery's N case)."""
+        calls = []
+        self.servers["b"].attester = lambda manifest: calls.append(manifest["epoch"]) or self.peers["b"]["attester"]
+        self.stores["b"].restore(self.stores["authority"].envelopes() + [self.revoke(self.m1, state="QUARANTINED", node="a")])
+        self.refusal("a may not serve under epoch 2: no lease", self.ask("b", v=1, op="lease-nonce", node_id="a"))
+        self.assertEqual(calls, [])
+
 
 if __name__ == "__main__":
     import unittest

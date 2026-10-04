@@ -488,6 +488,9 @@ class Server:
         require(self.attester is not None, "this source issues no leases")
         require(message["node_id"] == caller, "the request names %s; the tunnel is %s's" % (convergence._printable(message["node_id"]), caller))
         self._spend(view.late, caller, "lease")
+        # lease.issue's own refusal, before a verifier is asked: one built for the manifest held now (#332) does not list
+        # a node that may not serve, and its "unknown node" would hide why
+        require(membership.may(manifest, caller, "serve"), "%s may not serve under epoch %d: no lease" % (caller, manifest["epoch"]))
         return {"nonce": self._verifier(manifest).nonce(caller).hex()}
 
     def _lease(self, view, manifest, caller, message):
