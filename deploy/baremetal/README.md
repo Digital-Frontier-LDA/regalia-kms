@@ -841,6 +841,20 @@ removing only what it can prove it made.
     EK and AK Names from their public areas, and the signing key certified by that AK, with the attributes and
     policy of the root's own system-phase key. Only then does it print the node's identity fields as a v4
     manifest entry carries them.
+- `ownerauth` (#242 step C), after `init` and before `commit`: `gpg --decrypt ownerauth-X.yk.gpg | enrol ownerauth
+  --node-id X --root-key ROOT --record ownerauth.record.json` sets the TPM's owner authorization to this node's
+  value from the ceremony's envelope (regalia-ceremony#111; the break-glass `.bg.age` gives the same value through
+  `age --decrypt`). The value comes on standard input only. It is checked against the record verified under the
+  pinned root BEFORE the TPM is touched (`deploy/baremetal/ownerauth.py`), and it is never written to disk. Every
+  owner-authorized TPM call then gets it through one channel: a sealed in-memory file descriptor, never the command
+  line. It sets the authorization from EMPTY only: a TPM whose owner authorization is already set is refused, never
+  overwritten. `--check` changes nothing and proves, in one call, that the TPM's value is this envelope's.
+  **Current limitations:**
+  - `commit`, `reanchor`, `recount` and `seal-hsm-pin.sh` do not yet take the value (#242 C2). On a TPM whose owner
+    authorization is set, their owner-authorized steps (defining the anchor and counters, deleting indices,
+    persisting a key) fail closed until C2 lands.
+  - `init` takes no owner authorization; it runs before `ownerauth`.
+  - Rotating a set value is not built.
 - `check` verifies a root-signed manifest chain against this host and writes nothing.
 - `commit` takes the chain, the root fingerprint typed by hand, the measurements document, the site
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
