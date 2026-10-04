@@ -19,10 +19,14 @@
 REPO_GIT_ALLOWED='core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|worktreeconfig)|user\.(name|email)|gc\.auto|remote\.[^[:space:]]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)|branch\.[^[:space:]]+\.(remote|merge|rebase|pushremote)'
 
 repo_git_owner(){
-  # who owns the repository: the owner of .git (a directory, or a worktree's .git file), the user who wrote its
-  # configuration. Not the working tree's top directory: a CI container's checkout has the top owned by the
-  # runner while .git was written by root.
-  stat -c "${1:-%u}" "$REPO/.git"
+  # whom git runs as when root reads the checkout: root ONLY when both the working tree's top and .git are root's;
+  # otherwise the top's owner if it is not root, else .git's. Whoever owns the top can replace the entry .git at any
+  # moment, so they must never get a root git (regalia-kms-1e: a swap between this stat and git opening .git/config
+  # would hand root another user's configuration). A CI container's checkout (top the runner's, .git written by
+  # root) is read as the runner: read-only, --no-optional-locks, and safe.directory for the root-owned .git.
+  local fmt="${1:-%u}" top
+  top="$(stat -c %u "$REPO")"
+  if [ "$top" != 0 ]; then stat -c "$fmt" "$REPO"; else stat -c "$fmt" "$REPO/.git"; fi
 }
 
 repo_git_uid(){

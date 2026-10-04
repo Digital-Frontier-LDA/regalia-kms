@@ -106,6 +106,17 @@ class RepoGit(unittest.TestCase):
         code, err = self.check()
         self.assertEqual(code, 0, err)
 
+    def test_root_runs_git_only_when_the_top_and_dot_git_are_both_roots(self):
+        """regalia-kms-1e: whoever owns the working tree's top can swap .git, so they never get a root git. `stat` is
+        stubbed with the owners (root-owned fixtures need sudo); repo_git_owner picks the top's owner unless it is root."""
+        for top, dot_git, want in (("1001", "0", "1001"), ("0", "1001", "1001"), ("1001", "1002", "1001"), ("0", "0", "0")):
+            with self.subTest(top=top, dot_git=dot_git):
+                script = ('. "$LIB"; stat(){ case "${@: -1}" in "$REPO") echo "$TOP";; "$REPO/.git") echo "$DOTGIT";; esac; }; '
+                          'repo_git_owner %u')
+                done = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                                      env={"PATH": "/usr/bin:/bin", "LIB": LIB, "REPO": "/r", "TOP": top, "DOTGIT": dot_git})
+                self.assertEqual(done.stdout.strip(), want, done.stderr)
+
     def test_the_allowlist_is_uki_pys(self):
         """The builder and the signer refuse the same configurations (#374's CLONE_CONFIG, once it lands)."""
         import re
