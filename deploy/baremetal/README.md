@@ -56,9 +56,10 @@ Commissioning has two halves:
     unlock the disk, read the host key and open the HSM PIN. Such a disk FAILS `root_disk_unlock_revocable`,
     `host_probe.py` exits 1, and there is no option to skip it. The probe passes for `regalia-peer-unlock`
     tokens and no `systemd-tpm2` token, judged with `--node-id <this node> --unlock-peer <peer>` for each
-    peer that holds a path, and a crypttab entry whose key file is the unlock client's socket,
-    `/run/regalia-unlock/key.sock`, with only options known to leave the unlock alone (`luks`, `x-initrd.attach`,
-    `discard`, `tries=`, `timeout=`, …: no `header=`, no `headless`, no other token device) and no `rd.luks.*` on the
+    peer that holds a path, and a crypttab entry with no key file (`none`: systemd-cryptsetup asks, and the
+    unlock client answers that request), `tries=0`, and only options known to leave the unlock alone (`luks`,
+    `x-initrd.attach`, `discard`, `timeout=`, `x-systemd.device-timeout=`, …: no `header=`, no `headless`, no
+    other token device) and no `rd.luks.*` on the
     kernel command line. The probe reads `/etc/crypttab`, which is what the initrd was built from, not necessarily
     what the initrd holds; what the initrd holds is reviewed when the image is built (#198). It also passes for an
     NV-backed policy (`systemd-cryptenroll --tpm2-pcrlock`: it does retire an image on a software TPM,
@@ -387,6 +388,19 @@ commits to: the manifest's `policy_version` is a digest of the document (174 bit
 peer accepts exactly the document the root approved, and an older one is refused by the manifest the peer holds now (which a
 restored disk cannot roll back: the epoch is anchored in the TPM).
 
+**A node keeps documents by digest and judges each epoch by its own (#332).**
+- The documents sit side by side in `<state_dir>/measurements/<sha256>.json`, immutable.
+- Every reader goes through `measurements.held(store, manifest)`: the attestation verifier, a rolling
+  update's decisions, and the sync server's lease and enrolment answers. It takes the document the CURRENT
+  manifest commits to, and refuses with "epoch N commits to measurements vX, which this node does not hold".
+  There is no other file to fall back to.
+- The document travels with the epoch. A node that receives a manifest naming a document it lacks fetches
+  it from the same source (sync's `measurements` request) before committing. A node does not commit an epoch,
+  nor move its TPM anchor to it, without that epoch's document.
+- An operator brings a new document to one place only:
+  - the authority, `authority accept --chain FILE --documents DOC`; or
+  - one node, `python3 -Es -m deploy.baremetal.measurements install --doc DOC --config /etc/regalia/node.json`.
+
 Each node has one accepted set, or two while an update is under way.
 
 **One image, two PCR 11 values.** On a host that boots a unified kernel image, systemd extends PCR 11
@@ -414,8 +428,8 @@ An update is three documents:
    with the PCR-signing key (so the PIN and the disk unseal under it with no reseal), and write the
    CURRENT + NEXT document. `measurements.transition(old, new)` must say `approve`.
 2. **Approve.** The root's operator computes `measurements.version(document)` from the file in hand, at
-   signing time, and the root signs manifest N+1 with that as `policy_version`. Distribute the manifest
-   and the document to all three nodes.
+   signing time, and the root signs manifest N+1 with that as `policy_version`. Give the authority the
+   manifest and the document together (`accept --documents`); sync brings both to every node (#332).
 3. **One node at a time.** On each node, in the order of the node IDs, `rollout.may_reboot(...)` must
    pass before the reboot: an update is approved for this node and it is not yet on NEXT; every node
    before it has been seen back on NEXT by this node's own verifier; and every peer that will have to
@@ -531,33 +545,36 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     `regalia-unlock-local` (`LoadCredentialEncrypted=`);
   - the client reads the LUKS2 header for the peer paths, asks the peers of its boot configuration in
     turn (`unlock.boot_config`: node ID, disk, PCRs to quote, and each peer's address and TPM key
-    names), for a bounded number of rounds;
-  - it gives the derived key to systemd-cryptsetup over the socket that crypttab names as the key
-    file (`/run/regalia-unlock/key.sock`). If no peer helps, it gives nothing.
-- **The relay** (`regalia-unlock-relay.service`): it makes the key socket crypttab names, holds no
-  credential, no TPM and no network, and needs nothing that can fail. It asks the real client on its
-  own socket (`regalia-unlock-core.socket`) and passes on exactly one whole key, or gives nothing after
-  any failure or after 330 s (the real client ends its own attempt within 200 s, so its answer comes
-  first; a client that hangs yields the prompt). With nothing, systemd-cryptsetup asks for the
-  recovery key. It makes the socket ITSELF, with no `.socket` unit, because systemd-cryptsetup asks for
-  the recovery key when the key file does not exist, and fails without asking when a connection is
-  refused or reset (systemd 257): so if the relay cannot start, or is gone, there is no socket, and the
-  console asks. It is restarted without limit; its runtime directory, the socket in it, goes when it
-  stops; systemd-cryptsetup is ordered after it, weakly. Before it, a real client that could not start
-  (a sealed credential that did not decrypt) left systemd-cryptsetup with a reset connection, and it
-  failed without asking (#66). Shown with the real systemd and systemd-cryptsetup: a client that hangs,
-  one that crashes mid-answer, an undecryptable credential, an absent one, and the relay unable to
-  start each end with no key and the prompt's path.
-- **The real client's units** (`deploy/baremetal/initrd/regalia-unlock-core.socket` and `regalia-unlock.service`): the relay's
-  connection to the socket starts the client, sandboxed (no capability, no write anywhere but its own
-  `/run/regalia`, no device but the TPM and the disks, read-only). Shown with a running systemd and
-  the real systemd-cryptsetup: the volume is mapped with the key from the socket; with no peer,
-  systemd-cryptsetup gets no key, gives up within a second and maps nothing, and the client goes on
-  answering the next attempt.
+    names), each peer once per attempt, by one of its paths (the next one at the next attempt), and
+    again after a pause that doubles from 2 s to 60 s (±20 %), for as long as the initrd lasts;
+  - it is a **systemd password agent** (#70, the way Clevis does it): systemd-cryptsetup asks for the
+    root volume's passphrase through the ask-password protocol (`/run/systemd/ask-password`), the
+    console shows that request from the start, and the client answers the same request with the
+    derived key once a peer has given its half. Whichever answers first wins. It answers the root
+    volume's request only (`cryptsetup:/dev/disk/by-partlabel/regalia-root`), and at most five distinct
+    requests with one key: a key the volume refuses is not offered for ever.
+  - it stands down when the volume is open (`/dev/mapper/root` exists, by its answer or by the recovery
+    key) or when systemd stops it at switch-root; NOT when the request merely goes away, since a
+    mistyped recovery key makes systemd-cryptsetup (`tries=0`) remove its request and make a new one.
+  **Nothing can take the console away.** The client is not in front of the prompt: if it cannot start
+  (an undecryptable or absent credential), hangs, crashes, or no peer helps, the prompt is up all the
+  same and takes the recovery key. **A blackout ends by itself:** a host that boots while every peer is
+  down waits at the prompt with its client still asking, and unlocks unattended when a peer comes
+  back, however long that takes. Neither waits forever by accident: crypttab says `tries=0,timeout=0`
+  (ask again after a wrong key, no time limit on the prompt) and `x-systemd.device-timeout=0`, and the
+  image's signed command line says `rootflags=x-systemd.device-timeout=0` (the root's mount waits for
+  the volume without limit; systemd's default is 90 s, after which the boot would fail into the
+  emergency path). `uki.py build` and `host_probe.py` refuse an image or a host without them.
+- **The client's unit** (`deploy/baremetal/initrd/regalia-unlock.service`, wanted by
+  `cryptsetup.target`): sandboxed (no capability, no write anywhere but its own `/run/regalia` and the
+  answer to the request, no device but the TPM and the disks, read-only). Shown with a running systemd
+  and the real systemd-cryptsetup: the volume is mapped with the client's answer; with no peer the
+  console's recovery key opens it and the client stands down; a mistyped recovery key neither stops nor
+  restarts the client, and its attempts go on being numbered.
   **One boot carries one attested session.** The client is one process for the whole initrd phase and
   makes one boot session; a retry in the same boot (a lost reply, peers that came back) is asked under
   the same session and is answered. One valid response is used per boot: the key made from it is kept
-  in memory and given to each later connection on the socket. For the running system it leaves, in
+  in memory and given to each later request for the root volume. For the running system it leaves, in
   `/run/regalia`, `boot-session` and `boot-session.pub` (the session's ID and public key, written
   before the session's first quote is taken: the runtime leases of this boot are asked for under them)
   and `key-given-through` (the peer and keyslot). None is secret. systemd stops the process before
@@ -574,10 +591,10 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   peer refuses this boot's leases until the next reboot. The client says so in the journal; it does
   not leave the disk locked for it.
 - **The initrd** is built with dracut and the module `deploy/baremetal/initrd/dracut/90regalia-unlock`
-  (`dracut --add regalia-unlock`): the client, the two units above, `regalia-wg-boot.service` with its
+  (`dracut --add regalia-unlock`): the client and its unit, `regalia-wg-boot.service` with its
   script (the initrd ruleset first, then the declared address, then WireGuard with the WG-BOOT key
   systemd unsealed), `ip`, `wg`, `nft`, the network drivers, and one crypttab line, the same on every
-  host: `root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach` (the root
+  host: `root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0` (the root
   volume is the GPT partition labelled `regalia-root`). **The image holds nothing per host**, so one
   image has one PCR 11 for every host. What differs per host and per manifest comes at boot as
   **system credentials**, which systemd-stub passes from the ESP (`loader/credentials/<name>.cred`,
@@ -609,7 +626,7 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   without that switch: the dracut module leaves out systemd-debug-generator (which makes units and
   drop-ins from credentials) and resets `ImportCredential=` for the tmpfiles, sysctl, journald,
   sysusers, udev rule-credential and systemd-cryptsetup services (the last imports `cryptsetup.*`: a
-  planted passphrase would be tried before the key socket). It is partial: fstab-generator
+  planted passphrase would be tried before anyone is asked). It is partial: fstab-generator
   (`fstab.extra`; it mounts the root), the network generator and PID 1 itself are covered by the
   first layer only. A PE addon on the ESP could add a command line (systemd-stub appends it, and only
   PCR 12 changes); with Secure Boot on, the stub loads only addons signed by a key in db, and the
@@ -623,8 +640,7 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   answered, the volume's key. All three are byte slices, never strings. As soon as the boot's one
   response is used, the client zeroes the local half and the private key's numbers and drops every
   reference to the key; it keeps only the volume's key, for any later asker in this boot. When systemd
-  stops it at switch-root, it zeroes the volume's key too. The relay zeroes its copy of the key after the
-  write. **What this cannot do:** Go's `crypto/rsa` keeps its own internal copy of the private key,
+  stops it at switch-root, or the volume opens, it zeroes the volume's key too. **What this cannot do:** Go's `crypto/rsa` keeps its own internal copy of the private key,
   which no program can reach (an independent read decrypted with it after the zeroing); the garbage
   collector moves and frees memory without clearing it; and slices copied by the runtime or the
   standard library are not tracked. That is why the image's signed command line also carries
@@ -644,8 +660,8 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   extend PCR 11 by hand to the booted phase. The root device's wait must not time out into that
   emergency path while the recovery-key prompt is up; that timeout is set on the root's own entry
   (#70), not as systemd's default device timeout, which the booted system would apply to every device.
-  The boot test proving both (no shell on a refused unlock; the prompt still takes the recovery key
-  after the old 90 s timeout) lands with #70's ask-password agent.
+  The boot test shows both: no shell on a refused unlock, and the prompt still taking the recovery key
+  after 150 s with no peer (boot 8), as the client does once the peers come back (boot 9).
 
   **The ESP is a channel into the initrd, and PCR 12 is what judges it.** Whoever can write the
   ESP can add credentials of their own, and systemd in the initrd consumes some by name: a unit or a
@@ -684,8 +700,9 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     addresses are gone and the link is down;
   - a planted credential: one more file on the ESP (a unit drop-in for the unlock client, an extra
     unit, a tmpfiles line) changes PCR 12, and both peers refuse the quote, so the console asks;
-  - no peer: the client gives nothing after its five rounds, and the console asks for the passphrase
-    or recovery key, which opens the volume.
+  - no peer for 150 s, past the backoff's cap: the console, up from the start, still takes the
+    recovery key, and nothing ended in a shell;
+  - the peers back after 150 s: nobody types anything, and the host unlocks by itself.
   NOT shown: Secure Boot (OVMF runs with no enrolled keys, so nothing checks the image's signature
   and PCR 7 says so), the membership-derived parts of the configuration verified in the initrd
   instead of passed as credentials (B3 on #66), a network card that udev renames in the initrd (the
@@ -696,7 +713,7 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   rebuilt since the last edit. So it is checked on the image, before the image is approved:
   ```sh
   lsinitrd IMAGE | grep -E 'regalia|etc/crypttab|etc/cmdline\.d|usr/bin/(wg|nft)$'   # what it holds
-  lsinitrd -f etc/crypttab IMAGE          # one entry: root PARTLABEL=regalia-root /run/regalia-unlock/key.sock luks,x-initrd.attach
+  lsinitrd -f etc/crypttab IMAGE          # one entry: root PARTLABEL=regalia-root none luks,x-initrd.attach,tries=0,timeout=0,x-systemd.device-timeout=0
   ```
   No file under `etc/cmdline.d` may configure LUKS (`rd.luks.*`), no other crypttab entry may name
   the root volume, and nothing may be under `etc/regalia`.
@@ -794,7 +811,8 @@ removing only what it can prove it made.
   configuration and the signed boot image (`--image --image-record --initrd-pub --system-pub
   --secure-boot-cert --esp`). It checks all of them before writing: the image goes through `uki.verify`, and
   its PCR 11 must be accepted for this node. Then it writes, in order:
-  - `node.json`, the site configuration and the measurements under `/etc/regalia`;
+  - `node.json` and the site configuration under `/etc/regalia`, and the measurements document into the
+    node's store by digest (`<state_dir>/measurements/`, `regalia-sync`'s, #332);
   - the TPM anchor, the store and the heartbeat counter, as `regalia-sync`;
   - `regalia.unlock-local` and `regalia.wg-boot-key`, sealed to this TPM (PCR 7, and PCR 11 through the
     initrd key) into the ESP's `loader/credentials`. Their SHA-256 and size are journalled for PCR 12.

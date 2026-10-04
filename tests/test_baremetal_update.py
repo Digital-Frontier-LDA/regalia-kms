@@ -36,7 +36,9 @@ class FakeHost:
     def manifest(self):
         return self._manifest
 
-    def document(self):
+    def document(self, manifest):
+        """As update.Host's (#332): the document of the manifest asked about, which here is the one held."""
+        assert manifest == self._manifest, "a document is asked for another manifest than the one held"
         return self._document
 
     def pcrs(self, selection):

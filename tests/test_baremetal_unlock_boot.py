@@ -55,11 +55,30 @@ def booted_pcrs(said):
     return shown
 
 
+def after_attempt(n):
+    """For boot(recovery=): the recovery key is typed once the client has said how attempt `n` went, so the peers were
+    asked before the console's answer opens the volume."""
+    return lambda said, elapsed: "regalia-unlock: attempt %d: " % n in said
+
+
+def no_shell(test, said):
+    """Nothing in the initrd offered a shell (rd.shell=0, rd.emergency=reboot): the console only ever asks for the key."""
+    test.assertNotRegex(said, r"Emergency Shell|Rescue Shell|Give root password|emergency mode")
+
+
+def unattended(test, said):
+    """Nobody typed (boot() was given no recovery), yet the root came up: the client's answer opened it. The prompt is
+    up all the same, from the start (#70: the client answers beside the console, never in front of it)."""
+    test.assertRegex(said, PROMPT.pattern.decode())
+    test.assertIn("regalia-unlock: gave the key of ", said)
+    test.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+
+
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
 class OnQemu(tub.OnSwtpm):
     # the fixtures of OnSwtpm are reused, not its tests
     test_tpm_plus_one_peer_opens_the_disk_and_a_retired_image_a_stolen_disk_or_a_revoked_node_does_not = None
-    test_systemd_cryptsetup_takes_the_key_from_the_socket_and_gets_nothing_when_no_peer_helps = None
+    test_systemd_cryptsetup_asks_the_client_answers_and_the_console_is_never_taken_away = None
 
     def setUp(self):
         self.assertTrue(os.path.exists(BOOT + "/disk.img"), "REGALIA_BOOT_DIR must hold the guest e2e/unlock-boot-qemu.sh built")
@@ -205,9 +224,14 @@ class OnQemu(tub.OnSwtpm):
         self.assertTrue(unmounted, "the ESP did not unmount")
         return files
 
-    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=(), image="e2e"):
+    def boot(self, label, credentials=None, enrol_disk=None, recovery=False, timeout=None, smbios=None, smbios_strings=(), image="e2e",
+             watch=None):
         """One boot of the guest under OVMF, to power-off, with `credentials` and `image` on its ESP. Returns what its
-        console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase."""
+        console said. With `recovery`, the recovery key is typed whenever the console asks for a passphrase; when it is
+        a function of (console so far, seconds since start), only once that says so (and what it returns, when that is
+        bytes, is typed instead). `watch`, a function of the same, is
+        called as the console grows (to change the network under the guest), and the times it returned true are kept in
+        self.watched."""
         self.on_esp = self.esp(credentials or {}, image)
         variables = "%s/vars-%s.fd" % (self.d, label)
         shutil.copyfile(OVMF + "/OVMF_VARS_4M.fd", variables)
@@ -245,7 +269,7 @@ class OnQemu(tub.OnSwtpm):
         qemu = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.processes.append(qemu)
         said, answered, started = b"", 0, time.monotonic()
-        deadline, self.prompted_after = started + timeout, None
+        deadline, self.prompted_after, self.watched = started + timeout, None, []
         with open("%s/console-%s.log" % (BOOT, label), "wb") as log:
             while True:
                 ready, _, _ = select.select([qemu.stdout], [], [], 1)
@@ -259,10 +283,15 @@ class OnQemu(tub.OnSwtpm):
                     prompts = len(PROMPT.findall(said))
                     if prompts and self.prompted_after is None:
                         self.prompted_after = time.monotonic() - started
-                    if recovery and prompts > answered:
+                    elapsed = time.monotonic() - started
+                    text = said.decode(errors="replace") if watch or callable(recovery) else ""   # what boot() returns
+                    if watch and watch(text, elapsed):
+                        self.watched.append(elapsed)
+                    typed = recovery and prompts > answered and (recovery is True or recovery(text, elapsed))
+                    if typed:
                         answered = prompts
                         time.sleep(1)
-                        qemu.stdin.write(tub.RECOVERY + b"\n")
+                        qemu.stdin.write((typed if isinstance(typed, bytes) else tub.RECOVERY) + b"\n")
                         qemu.stdin.flush()
                 elif qemu.poll() is not None:
                     break
@@ -366,13 +395,13 @@ class OnQemu(tub.OnSwtpm):
 
         expected = espcreds.record({name + ".cred": content for name, content in credentials.items()})
 
-        # boot 1b, A SEALED CREDENTIAL THAT DOES NOT DECRYPT (another machine's, or damaged): the real client cannot
-        # start, the relay on the key socket gives nothing, and the console asks, promptly (#66)
+        # boot 1b, A SEALED CREDENTIAL THAT DOES NOT DECRYPT (another machine's, or damaged): the client cannot
+        # start, and the console asks, promptly: it asks from the start whatever the client does (#66, #70)
         broken = dict(credentials, **{"regalia.unlock-local": b"bm90IGEgY3JlZGVudGlhbA==\n"})
         self.reference = reference(espcreds.pcr12({n + ".cred": c for n, c in broken.items()}))
         said = self.boot("1b-undecryptable", broken, recovery=True)
         self.assertRegex(said, PROMPT.pattern.decode())
-        self.assertIn("nothing is given, and the console asks for the recovery key", said)
+        self.assertNotIn("regalia-unlock: gave the key", said)
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
         print("boot 1b: the console asked %.0f s after the guest started" % self.prompted_after, file=sys.stderr)
         self.assertLess(self.prompted_after, 120)
@@ -381,7 +410,7 @@ class OnQemu(tub.OnSwtpm):
         self.reference = reference(expected["pcr12"])
         since = len(self.events)
         said = self.boot("2-unattended", credentials)
-        self.assertNotRegex(said, PROMPT.pattern.decode())
+        unattended(self, said)
         gave = re.search(r"regalia-unlock: gave the key of %s for keyslot ([12]), through ([bc])" % re.escape(device), said)
         self.assertIsNotNone(gave, "the client did not give the key")
         slot, through = gave.group(1), gave.group(2)
@@ -394,7 +423,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertIsNotNone(left, "the booted guest did not report the boot session")
         self.assertEqual((left.group(1), left.group(3), left.group(4)), ("root:root:755", through, slot))
         self.assertEqual(hashlib.sha256(bytes.fromhex(left.group(2))).hexdigest(), self.recorded_session(through)[0])
-        # the long-running client and the relay did not outlive the initrd: systemd stopped both (their Conflicts=)
+        # the client did not outlive the initrd: it stood down when the volume opened, or systemd stopped it (Conflicts=)
         self.assertIn("REGALIA-E2E-CLIENT processes=0", said)
         # and the pages it used are zeroed when freed (#221): the words are signed into the image, and the
         # kernel says it enabled them (a kernel without the options would ignore the words)
@@ -406,8 +435,7 @@ class OnQemu(tub.OnSwtpm):
         print("boot 2: %s" % meminit.strip(), file=sys.stderr)
         self.assertRegex(meminit, r"heap alloc:on")
         self.assertRegex(meminit, r"heap free:on")
-        self.assertIn("Stopped regalia-unlock.service", said)
-        self.assertIn("Stopped regalia-unlock-relay.service", said)
+        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
         booted = booted_pcrs(said)
         self.assertIsNotNone(booted)
@@ -419,7 +447,7 @@ class OnQemu(tub.OnSwtpm):
         self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-old", older)))
         since = len(self.events)
         said = self.boot("2c-older-approved", credentials, image="e2e-old")
-        self.assertNotRegex(said, PROMPT.pattern.decode())
+        unattended(self, said)
         self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
         self.assertIn("regalia.e2e-image=old", re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1).split())
         shown = booted_pcrs(said)
@@ -429,13 +457,17 @@ class OnQemu(tub.OnSwtpm):
         # boot 2d, THE SAME IMAGE, RETIRED (#135): the document lists the current image only. The guest's TPM still
         # releases the local half, as it does for every image the PCR-signing key signed (a signed policy has no
         # counter): the client starts, which it cannot without that half (boot 1b), and asks both peers. Both refuse
-        # the quote, each naming PCR 11 and nothing else; nothing is given; the disk stays locked.
+        # the quote, each naming PCR 11 and nothing else; nothing is given. The client keeps asking, at backoff's
+        # cadence; the console asked from the start, and the recovery key typed there (once both refused) opens.
+        # A refusal never ends in a shell (rd.shell=0, rd.emergency=reboot).
         self.reference = reference(expected["pcr12"])
         since = len(self.events)
-        said = self.boot("2d-older-retired", credentials, recovery=True, image="e2e-old")
-        self.assertIn("the disk stays locked", said)
+        said = self.boot("2d-older-retired", credentials, recovery=after_attempt(1), image="e2e-old")
+        self.assertRegex(said, r"regalia-unlock: attempt 1: .*; asking again in ")
         self.assertRegex(said, PROMPT.pattern.decode())
-        self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())
+        self.assertLess(self.prompted_after, 120)
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+        no_shell(self, said)
         shown = booted_pcrs(said)
         self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], older["pcr11"]["system"], expected["pcr12"]])
         events = self.events[since:]
@@ -459,7 +491,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertNotIn("REGALIA-E2E-PLANTED-RAN", said)
         self.assertIn("REGALIA-E2E-IMPORT credentials-imported=no", said)
         self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
-        self.assertNotRegex(said, PROMPT.pattern.decode())
+        unattended(self, said)
         if "skipping importing of credentials" in said:
             print("boot 2b: systemd said it imports no credential", file=sys.stderr)
 
@@ -475,8 +507,8 @@ class OnQemu(tub.OnSwtpm):
         for n, (name, content) in enumerate(sorted(planted.items()), 3):
             with self.subTest(planted=name):
                 since = len(self.events)
-                said = self.boot("%d-planted" % n, dict(credentials, **{name: content}), recovery=True)
-                self.assertIn("the disk stays locked", said)
+                said = self.boot("%d-planted" % n, dict(credentials, **{name: content}), recovery=after_attempt(1))
+                self.assertRegex(said, r"regalia-unlock: attempt 1: .*; asking again in ")
                 shown = booted_pcrs(said)
                 self.assertIsNotNone(shown)
                 self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], record["pcr11"]["system"], espcreds.pcr12(self.on_esp)])
@@ -500,7 +532,7 @@ class OnQemu(tub.OnSwtpm):
         extra_unit = {"systemd.extra-unit.regalia-planted.service":
                       b"[Unit]\nDefaultDependencies=no\n[Service]\nType=oneshot\nExecStart=/bin/sh -c 'echo \"<2>REGALIA-E2E-PLANTED-RAN\" > /dev/kmsg'\n",
                       "systemd.unit-dropin.initrd.target": b"[Unit]\nWants=regalia-planted.service\n"}
-        said = self.boot("7-cmdline-extra", credentials, recovery=True, smbios=extra_unit,
+        said = self.boot("7-cmdline-extra", credentials, recovery=after_attempt(1), smbios=extra_unit,
                          smbios_strings=["io.systemd.stub.kernel-cmdline-extra=systemd.import_credentials=yes"])
         self.assertNotIn("REGALIA-E2E-PLANTED-RAN", said)
         cmdline = re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1)
@@ -518,16 +550,69 @@ class OnQemu(tub.OnSwtpm):
             print("boot 7: the stub ignored the SMBIOS command line; the unlock went on (%s)" % ("allowed" if allowed else "refused"),
                   file=sys.stderr)
 
-        # boot 8, NO PEER: the client gives nothing after its bounded rounds, the console asks, the recovery key opens
+        # boot 8, NO PEER, FOR LONGER THAN ANY DEFAULT TIMEOUT (#70): the client keeps asking, at the backoff's schedule
+        # and past its cap (attempt 6), and the console, which asked from the start, still takes the recovery key after
+        # 150 s: neither systemd-cryptsetup (timeout=0) nor the root's device wait (rootflags=x-systemd.device-timeout=0;
+        # 90 s by default) gave up meanwhile. A WRONG key typed first only brings the prompt back (tries=0): no
+        # emergency, no reboot. Nothing ends in a shell. Under TCG the long boots 8 and 9 would outlast the job, so they
+        # need KVM; with REGALIA_EXPECT_KVM=1 (CI) its absence FAILS. The skip RETURNS: boots 8 and 9 stay the last ones,
+        # and a boot added after them goes before this line, or it would be skipped with them.
+        kvm = os.access("/dev/kvm", os.R_OK | os.W_OK)
+        if not kvm:
+            self.assertNotEqual(os.environ.get("REGALIA_EXPECT_KVM"), "1", "REGALIA_EXPECT_KVM=1 and no usable /dev/kvm: boots 8 and 9 cannot run")
+            print("boots 8 and 9 SKIPPED: they wait 150 s each, which needs KVM", file=sys.stderr)
+            return
         for peer in ("b", "c"):
             self.ip("ip", "link", "set", "eth0", "down", ns=self.peer_ns[peer])
         since = len(self.events)
-        said = self.boot("8-no-peer", credentials, recovery=True)
-        self.assertIn("the disk stays locked: no peer helped in 5 rounds", said)
-        self.assertRegex(said, PROMPT.pattern.decode())
-        self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())
+        attempts, mistyped = {}, []           # attempt -> (seconds since start when its line arrived, the pause it announced)
+        def seen(said, elapsed):
+            for m in re.finditer(r"regalia-unlock: attempt (\d+): .*; asking again in (?:(\d+)m)?(\d+)s\b", said):
+                attempts.setdefault(int(m.group(1)), (elapsed, int(m.group(2) or 0) * 60 + int(m.group(3))))
+            return False
+        def wrong_then_right(said, elapsed):
+            if elapsed <= 150 or "regalia-unlock: attempt 6: " not in said:
+                return False
+            if not mistyped:
+                mistyped.append(len(said))
+                return b"not-the-recovery-key"
+            return True
+        said = self.boot("8-no-peer", credentials, recovery=wrong_then_right, watch=seen, timeout=1200)
+        self.assertEqual(len(mistyped), 1, "the wrong key was never typed")
+        self.assertRegex(said[mistyped[0]:], PROMPT.pattern.decode(), "the prompt did not come back after a wrong key")
+        self.assertLess(self.prompted_after, 120)
+        print("boot 8: attempts (arrived at, announced pause): %s" % sorted(attempts.items()), file=sys.stderr)
+        self.assertTrue(all(n in attempts for n in range(1, 7)), sorted(attempts))
+        for n in range(1, 7):
+            arrived, pause = attempts[n]
+            nominal = min(2 * 2 ** (n - 1), 60)                  # 2 s doubling, capped at 60 s, then x[0.8, 1.2)
+            self.assertTrue(0.8 * nominal - 1 <= pause <= 1.2 * nominal + 1, "attempt %d announced %d s, nominal %d s" % (n, pause, nominal))
+            if n + 1 in attempts:                                # and it did pause that long: no hot loop
+                self.assertGreaterEqual(attempts[n + 1][0] - arrived, pause - 2, "attempt %d came early" % (n + 1))
         self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
+        self.assertRegex(said, r"regalia-unlock: /dev/mapper/root is open: standing down|Stopped regalia-unlock\.service")
+        no_shell(self, said)
         self.assertEqual(self.events[since:], [])
+
+        # boot 9, THE PEERS COME BACK (#70, the blackout): nobody types anything; the peers are unreachable until the
+        # client is past the backoff's cap and 150 s have passed, then they return, and the host unlocks by itself
+        def back(said, elapsed):
+            if self.watched or elapsed <= 150 or "regalia-unlock: attempt 6: " not in said:
+                return False
+            for peer in ("b", "c"):            # the link back, and its route: setting eth0 down deleted the default route
+                self.ip("ip", "link", "set", "eth0", "up", ns=self.peer_ns[peer])
+                self.ip("ip", "route", "replace", "default", "dev", "eth0", ns=self.peer_ns[peer])
+            return True
+        since = len(self.events)
+        said = self.boot("9-peers-return", credentials, watch=back, timeout=1200)
+        self.assertEqual(len(self.watched), 1, "the peers were never brought back")
+        print("boot 9: the peers came back %.0f s after the guest started" % self.watched[0], file=sys.stderr)
+        gave = re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said)
+        self.assertIsNotNone(gave, "the client did not give the key once the peers came back")
+        self.assertIn("regalia-unlock: attempt 6: ", said[:gave.start()])
+        self.assertIn("REGALIA-E2E-ROOT-UP root=yes wg-boot=absent table=absent addresses=0 link=down", said)
+        self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
+        no_shell(self, said)
 
 
 if __name__ == "__main__":

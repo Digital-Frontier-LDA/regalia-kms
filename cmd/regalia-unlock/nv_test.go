@@ -156,7 +156,7 @@ func TestTheTPMReaderReadsWhatHighWaterWrote(t *testing.T) {
 		for _, r := range step.reads {
 			label := fmt.Sprintf("%s %d", r.name, r.n)
 			want := decided[label]
-			hw, err := membership.Anchored(tpmNV{device}, chain(r.name, r.n))
+			hw, err := membership.Anchored(tpmNV{device}, chain(r.name, r.n), nil)
 			var unusable *membership.Unusable
 			var refused *membership.Refused
 			switch {

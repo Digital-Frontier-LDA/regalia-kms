@@ -51,6 +51,13 @@ class WithoutTpm(unittest.TestCase):
             signkey.pcr_key_name(pem_of(small))
         with self.assertRaisesRegex(Refused, "not a PEM public key"):
             signkey.pcr_key_name(b"nonsense")
+        three = rsa.generate_private_key(public_exponent=3, key_size=2048)
+        with self.assertRaisesRegex(Refused, "exponent must be 65537 \\(it is 3\\)"):
+            signkey.pcr_key_name(pem_of(three))
+        # and at image build, where the PCR keys are first taken (uki.public_key)
+        with self.assertRaisesRegex(Refused, "exponent is not 65537"):
+            uki.public_key(pem_of(three), "the system-phase key")
+        self.assertEqual(uki.public_key(pem_of(rsa_key()), "k")[0][:0], "")
 
     def test_the_pcr_signature_for_this_boot_and_this_key_only(self):
         key, other = rsa_key(), rsa_key()

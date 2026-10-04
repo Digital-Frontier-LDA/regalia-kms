@@ -1,9 +1,6 @@
 package membership
 
 import (
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -29,7 +26,7 @@ const (
 )
 
 var (
-	schemas      = []string{SchemaV1, SchemaV2, SchemaV3} // in order: a chain never goes back
+	schemas      = []string{SchemaV1, SchemaV2, SchemaV3, SchemaV4} // in order: a chain never goes back
 	capabilities = map[string][]string{"ACTIVE": {"authorize", "request", "serve"}, "MAINTENANCE": {"request"}, "DRAINING": {"serve"},
 		"QUARANTINED": {}, "RETIRED": {}, "REVOKED_STOLEN": {}}
 	terminal       = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true}
@@ -103,11 +100,36 @@ func integer(value any) (*big.Int, bool) {
 	return n, ok
 }
 
+// identityKeysOf is membership.identity_keys: v1's four, ssh_host_pub from v2, and signing_key from v4.
 func identityKeysOf(node map[string]any) []string {
+	keys := identityKeys
 	if _, has := node["ssh_host_pub"]; has {
-		return v2IdentityKeys
+		keys = v2IdentityKeys
 	}
-	return identityKeys
+	if _, has := node["signing_key"]; has {
+		keys = append(append([]string(nil), keys...), "signing_key")
+	}
+	return keys
+}
+
+// identityValue is membership.identity_value: the field itself, or a typed key's hex (signing_key).
+func identityValue(node map[string]any, key string) string {
+	if key == "signing_key" {
+		return node[key].(map[string]any)["key"].(string)
+	}
+	return node[key].(string)
+}
+
+func sameKeySet(object map[string]any, keys []string) bool {
+	if len(object) != len(keys) {
+		return false
+	}
+	for _, k := range keys {
+		if _, has := object[k]; !has {
+			return false
+		}
+	}
+	return true
 }
 
 // issuedAt is datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ"): four digits of year, one or two of every other
@@ -142,13 +164,22 @@ func Validate(value any) (map[string]map[string]any, error) {
 		return nil, refuse("manifest must be an object")
 	}
 	schema, _ := manifest["schema"].(string)
-	if schema != SchemaV1 && schema != SchemaV2 && schema != SchemaV3 {
+	if schemaIndex(schema) < 0 {
 		return nil, refuse("schema must be %s", strings.Join(schemas, " or "))
 	}
-	second := schema == SchemaV2 || schema == SchemaV3 // v3 has v2's fields
+	fourth := schema == SchemaV4
+	second := schema == SchemaV2 || schema == SchemaV3 || fourth // v3 and v4 have v2's fields
 	keys, nodeKeySet := manifestKeys, nodeKeys
-	if second {
+	if fourth {
+		keys, nodeKeySet = v4ManifestKeys, v4NodeKeys
+	} else if second {
 		keys, nodeKeySet = v2ManifestKeys, v2NodeKeys
+	}
+	// A tombstone keeps exactly the fields it had: one retired under an earlier schema may lack what later
+	// schemas added (ssh_host_pub from v2, signing_key from v4), and nothing is invented for it.
+	shapes := [][]string{v4NodeKeys, v2NodeKeys, nodeKeys}
+	for len(shapes) > 0 && len(shapes[0]) != len(nodeKeySet) {
+		shapes = shapes[1:]
 	}
 	if _, err := exact(manifest, keys, "manifest"); err != nil {
 		return nil, err
@@ -183,26 +214,28 @@ func Validate(value any) (map[string]map[string]any, error) {
 	if !issuedAt(manifest["issued_at"]) {
 		return nil, refuse("issued_at must be UTC, YYYY-MM-DDTHH:MM:SSZ")
 	}
-	revocation, ok := manifest["revocation_keys"].([]any)
-	if !ok {
-		return nil, refuse("revocation_keys must be a list")
-	}
-	distinct, typed := map[string]bool{}, false
-	for i, entry := range revocation {
-		_, key, err := revocationEntry(entry, fmt.Sprintf("revocation_keys[%d]", i))
-		if err != nil {
-			return nil, err
+	if !fourth {
+		revocation, ok := manifest["revocation_keys"].([]any)
+		if !ok {
+			return nil, refuse("revocation_keys must be a list")
 		}
-		distinct[key] = true
-		if _, bare := entry.(string); !bare {
-			typed = true
+		distinct, typed := map[string]bool{}, false
+		for i, entry := range revocation {
+			_, key, err := revocationEntry(entry, fmt.Sprintf("revocation_keys[%d]", i))
+			if err != nil {
+				return nil, err
+			}
+			distinct[key] = true
+			if _, bare := entry.(string); !bare {
+				typed = true
+			}
 		}
-	}
-	if len(distinct) != len(revocation) {
-		return nil, refuse("revocation_keys must be distinct")
-	}
-	if typed && schema != SchemaV3 {
-		return nil, refuse("a typed revocation key ({\"alg\": ...}) needs schema %s", SchemaV3)
+		if len(distinct) != len(revocation) {
+			return nil, refuse("revocation_keys must be distinct")
+		}
+		if typed && schema != SchemaV3 {
+			return nil, refuse("a typed revocation key ({\"alg\": ...}) needs schema %s", SchemaV3)
+		}
 	}
 	nodes, ok := manifest["nodes"].([]any)
 	if !ok || len(nodes) == 0 {
@@ -213,10 +246,12 @@ func Validate(value any) (map[string]map[string]any, error) {
 		label := fmt.Sprintf("nodes[%d]", i)
 		keys := nodeKeySet
 		if object, isObject := value.(map[string]any); isObject {
-			_, hasSSH := object["ssh_host_pub"]
 			state, _ := object["state"].(string)
-			if !hasSSH && terminal[state] {
-				keys = nodeKeys // a tombstone keeps the fields it had
+			for _, shape := range shapes {
+				if terminal[state] && sameKeySet(object, shape) {
+					keys = shape // a tombstone keeps the fields it had
+					break
+				}
 			}
 		}
 		node, err := exact(value, keys, label)
@@ -226,6 +261,9 @@ func Validate(value any) (map[string]map[string]any, error) {
 		id, ok := node["node_id"].(string)
 		if !ok || !nodeIDPattern.MatchString(id) {
 			return nil, refuse("%s.node_id must be a short lowercase name", label)
+		}
+		if fourth && id == ownerParty {
+			return nil, refuse("%s: %q is the owner's party name under %s, never a node_id", label, ownerParty, SchemaV4)
 		}
 		if _, dup := byID[id]; dup {
 			return nil, refuse("duplicate node_id %q", id)
@@ -247,6 +285,11 @@ func Validate(value any) (map[string]map[string]any, error) {
 				return nil, err
 			}
 		}
+		if _, has := node["signing_key"]; has {
+			if _, _, err := typedKey(node["signing_key"], label+".signing_key", signingKeyAlgs); err != nil {
+				return nil, err
+			}
+		}
 		serials, ok := node["hsm_serials"].([]any)
 		if !ok {
 			return nil, refuse("%s.hsm_serials", label)
@@ -259,7 +302,7 @@ func Validate(value any) (map[string]map[string]any, error) {
 		}
 		// No identity may belong to two nodes, compared by value across roles.
 		for _, key := range identityKeysOf(node) {
-			value := node[key].(string)
+			value := identityValue(node, key)
 			if owner, used := seen[value]; used {
 				return nil, refuse("%s of %s is already used (%s)", key, id, owner)
 			}
@@ -274,17 +317,29 @@ func Validate(value any) (map[string]map[string]any, error) {
 		}
 		byID[id] = node
 	}
+	if fourth {
+		if err := signerRules(manifest, byID, seen); err != nil {
+			return nil, err
+		}
+	}
 	return byID, nil
 }
 
 // VerifyEnvelope is membership.verify_envelope: the manifest inside, if its signature is by the pinned root
-// key or by a revocation key named in the CURRENT manifest. Returns the manifest and the signer. A current
+// key or by a revocation key named in the CURRENT manifest, or, under v4, by a quorum of the parties the
+// CURRENT manifest names (one of its revocation_signers rules met). Returns the manifest and the signer,
+// "root", "revocation" or "quorum". A current
 // manifest that does not validate is refused here, before Accept reads its fields: only what Accept or
 // AcceptChain returned should be passed.
 func VerifyEnvelope(value any, root any, current map[string]any) (map[string]any, string, error) {
 	if current != nil {
 		if _, err := Validate(current); err != nil {
 			return nil, "", refuse("the current manifest is not valid: %v", err)
+		}
+	}
+	if object, ok := value.(map[string]any); ok {
+		if _, quorum := object["signatures"]; quorum {
+			return verifyQuorum(object, root, current)
 		}
 	}
 	envelope, err := exact(value, []string{"manifest", "signature"}, "envelope")
@@ -334,8 +389,11 @@ func VerifyEnvelope(value any, root any, current map[string]any) (map[string]any
 		return nil, "", err
 	}
 	manifest := envelope["manifest"].(map[string]any)
-	if algorithm != "ed25519" && manifest["schema"] != SchemaV3 {
-		return nil, "", refuse("a manifest signed by a typed (%s) key needs schema %s", algorithm, SchemaV3)
+	if err := apartFromRoot(manifest, root); err != nil {
+		return nil, "", err
+	}
+	if algorithm != "ed25519" && manifest["schema"] != SchemaV3 && manifest["schema"] != SchemaV4 {
+		return nil, "", refuse("a manifest signed by a typed (%s) key needs schema %s or %s", algorithm, SchemaV3, SchemaV4)
 	}
 	sig, _ := hex.DecodeString(signature["sig"].(string))
 	if !verifySignature(algorithm, key, sig, append([]byte(domain), Canonical(manifest)...)) {
@@ -344,29 +402,44 @@ func VerifyEnvelope(value any, root any, current map[string]any) (map[string]any
 	return manifest, signer, nil
 }
 
-// verifySignature is membership.verify_revocation's check, under the algorithm a key's entry names:
-// Ed25519, or ECDSA P-256 over SHA-256 with r || s and only the low-S form (the signer normalises).
+// verifyQuorum is verify_envelope's v4 path: {"manifest", "signatures"}, the counting parties meeting one
+// revocation_signers rule of the CURRENT manifest.
+func verifyQuorum(object map[string]any, root any, current map[string]any) (map[string]any, string, error) {
+	envelope, err := exact(object, []string{"manifest", "signatures"}, "envelope")
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := Validate(envelope["manifest"]); err != nil {
+		return nil, "", err
+	}
+	manifest := envelope["manifest"].(map[string]any)
+	if err := apartFromRoot(manifest, root); err != nil {
+		return nil, "", err
+	}
+	parties, err := countingParties(current, append([]byte(domain), Canonical(manifest)...), envelope["signatures"], "manifest")
+	if err != nil {
+		return nil, "", err
+	}
+	for _, rule := range current["revocation_signers"].([]any) {
+		if meets(rule, parties) {
+			return manifest, "quorum", nil
+		}
+	}
+	counting := make([]string, 0, len(parties))
+	for p := range parties {
+		counting = append(counting, p)
+	}
+	sort.Strings(counting)
+	named := strings.Join(counting, ", ")
+	if named == "" {
+		named = "none"
+	}
+	return nil, "", refuse("the manifest's signatures meet no revocation_signers rule of the current manifest (counting: %s)", named)
+}
+
+// verifySignature is verifyTyped as a yes or no.
 func verifySignature(algorithm, key string, sig, message []byte) bool {
-	public, err := hex.DecodeString(key)
-	if err != nil || len(sig) != 64 {
-		return false
-	}
-	switch algorithm {
-	case "ed25519":
-		return len(public) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(public), message, sig)
-	case "ecdsa-p256":
-		r, s := new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])
-		if r.Sign() <= 0 || r.Cmp(p256Order) >= 0 || s.Sign() <= 0 || s.Cmp(p256HalfOrder) > 0 {
-			return false
-		}
-		point, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), public)
-		if err != nil {
-			return false
-		}
-		digest := sha256.Sum256(message)
-		return ecdsa.Verify(point, digest[:], r, s)
-	}
-	return false
+	return verifyTyped(algorithm, key, message, hex.EncodeToString(sig), "a") == nil
 }
 
 func subset(a, b []string) bool {
@@ -396,16 +469,22 @@ func sameKeys(a, b map[string]any) bool {
 
 func equal(a, b any) bool { return string(Canonical(a)) == string(Canonical(b)) }
 
-// restrictive is membership._restrictive: a revocation-signed change only narrows.
-func restrictive(current, candidate map[string]any) error {
-	if !equal(candidate["policy_version"], current["policy_version"]) {
-		return refuse("a revocation key cannot change the policy version")
+// restrictive is membership._restrictive: a revocation-signed (v1-v3) or quorum-signed (v4) change only
+// narrows: identities, policy, keys and signer rules unchanged; capabilities only shrink.
+func restrictive(current, candidate map[string]any, signer string) error {
+	who := "a revocation key"
+	if signer != "revocation" {
+		who = "a revocation quorum"
 	}
-	if !equal(candidate["revocation_keys"], current["revocation_keys"]) {
-		return refuse("a revocation key cannot change the revocation keys")
-	}
-	if !equal(candidate["heartbeat_max_lifetime_s"], current["heartbeat_max_lifetime_s"]) {
-		return refuse("a revocation key cannot change heartbeat_max_lifetime_s")
+	names := map[string]string{"policy_version": "the policy version", "revocation_keys": "the revocation keys"}
+	for _, k := range rootFields {
+		if !equal(candidate[k], current[k]) {
+			name := names[k]
+			if name == "" {
+				name = k
+			}
+			return refuse("%s cannot change %s", who, name)
+		}
 	}
 	old, err := Validate(current)
 	if err != nil {
@@ -416,18 +495,21 @@ func restrictive(current, candidate map[string]any) error {
 		return err
 	}
 	if len(old) != len(fresh) {
-		return refuse("a revocation key cannot add or remove nodes")
+		return refuse("%s cannot add or remove nodes", who)
 	}
 	for id := range old {
 		if _, has := fresh[id]; !has {
-			return refuse("a revocation key cannot add or remove nodes")
+			return refuse("%s cannot add or remove nodes", who)
 		}
 	}
-	for _, id := range sortedIDs(fresh) {
+	for _, id := range listedIDs(candidate) {
 		node := fresh[id]
+		if !sameKeys(node, old[id]) {
+			return refuse("%s cannot add or drop fields of %s", who, id)
+		}
 		for _, key := range append(append([]string(nil), identityKeysOf(node)...), "hsm_serials") {
 			if !equal(node[key], old[id][key]) {
-				return refuse("a revocation key cannot change %s of %s", key, id)
+				return refuse("%s cannot change %s of %s", who, key, id)
 			}
 		}
 		if !subset(capabilities[node["state"].(string)], capabilities[old[id]["state"].(string)]) {
@@ -435,6 +517,17 @@ func restrictive(current, candidate map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// listedIDs are a validated manifest's node IDs in its own order, as Python iterates validate()'s dict: where
+// more than one node breaks a rule, the refusal names the same one.
+func listedIDs(manifest map[string]any) []string {
+	nodes := manifest["nodes"].([]any)
+	ids := make([]string, 0, len(nodes))
+	for _, value := range nodes {
+		ids = append(ids, value.(map[string]any)["node_id"].(string))
+	}
+	return ids
 }
 
 func sortedIDs(nodes map[string]map[string]any) []string {
@@ -456,7 +549,7 @@ func tombstones(current, candidate map[string]any) error {
 	if err != nil {
 		return err
 	}
-	for _, id := range sortedIDs(old) {
+	for _, id := range listedIDs(current) {
 		node := old[id]
 		state := node["state"].(string)
 		next, present := fresh[id]
@@ -466,7 +559,8 @@ func tombstones(current, candidate map[string]any) error {
 			}
 			if terminal[next["state"].(string)] {
 				if !sameKeys(next, node) {
-					return refuse("tombstone: %s becomes %s and its fields cannot change in the same manifest", id, next["state"])
+					return refuse("tombstone: %s becomes %s and its fields cannot change in the same manifest "+
+						"(ssh_host_pub is neither added nor dropped)", id, next["state"])
 				}
 				for _, key := range append(append([]string(nil), identityKeysOf(node)...), "hsm_serials") {
 					if !equal(next[key], node[key]) {
@@ -477,10 +571,10 @@ func tombstones(current, candidate map[string]any) error {
 			continue
 		}
 		if !present {
-			return refuse("tombstone: %s is %s and must stay in every later manifest", id, state)
+			return refuse("tombstone: %s is %s and must stay in every later manifest (its identities are never reused)", id, state)
 		}
 		if !sameKeys(next, node) {
-			return refuse("tombstone: %s is %s and its fields cannot change", id, state)
+			return refuse("tombstone: %s is %s and its fields cannot change (ssh_host_pub is neither added nor dropped)", id, state)
 		}
 		for _, key := range append(append([]string(nil), identityKeysOf(node)...), "hsm_serials") {
 			if !equal(next[key], node[key]) {
@@ -489,7 +583,8 @@ func tombstones(current, candidate map[string]any) error {
 		}
 		nextState := next["state"].(string)
 		if nextState != state && !(state == "RETIRED" && nextState == "REVOKED_STOLEN") {
-			return refuse("tombstone: %s is %s, which is terminal for every signer", id, state)
+			return refuse("tombstone: %s is %s, which is terminal for every signer (%s refused); hardware that may return "+
+				"belongs in MAINTENANCE or QUARANTINED", id, state, nextState)
 		}
 	}
 	return nil
@@ -526,7 +621,7 @@ func Accept(current map[string]any, envelope any, root any) (map[string]any, err
 		return nil, refuse("CONFLICT: a different manifest at epoch %s: record an incident", epoch)
 	}
 	if epoch.Cmp(new(big.Int).Add(have, big.NewInt(1))) != 0 {
-		return nil, refuse("epoch %s does not follow %s", epoch, have)
+		return nil, refuse("epoch %s does not follow %s (fetch the missing manifests and accept them in order)", epoch, have)
 	}
 	if candidate["prev_digest"] != Digest(current) {
 		return nil, refuse("prev_digest does not chain to the current manifest")
@@ -536,14 +631,14 @@ func Accept(current map[string]any, envelope any, root any) (map[string]any, err
 			return nil, refuse("schema %s cannot follow %s: the schema only moves forward", candidate["schema"], current["schema"])
 		}
 		if signer != "root" {
-			return nil, refuse("only the root can change the schema")
+			return nil, refuse("only the root can change the schema (%s to %s)", current["schema"], candidate["schema"])
 		}
 	}
 	if err := tombstones(current, candidate); err != nil {
 		return nil, err
 	}
-	if signer == "revocation" {
-		if err := restrictive(current, candidate); err != nil {
+	if signer != "root" {
+		if err := restrictive(current, candidate, signer); err != nil {
 			return nil, err
 		}
 	}
