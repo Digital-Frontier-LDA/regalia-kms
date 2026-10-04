@@ -71,6 +71,7 @@ def manifest4(epoch, prev, nodes, **fields):
     man = {"schema": m.SCHEMA_V4, "epoch": epoch, "prev_digest": prev, "policy_version": "p1", "issued_at": "2026-10-04T09:00:00Z",
            "heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s": 3600, "owner_keys": [typed(k) for k in OWNER_KEYS],
            "heartbeat_signers": {"threshold": 2, "parties": ["a", "b", "c", "owner"]},
+           "activation_signers": {"threshold": 2, "parties": ["a", "b", "c"]},
            "revocation_signers": [{"threshold": 2, "parties": ["a", "b", "c"]}, {"threshold": 1, "parties": ["owner"]}],
            "nodes": nodes}
     man.update(fields)
@@ -128,6 +129,10 @@ class Format(Case):
     def test_the_floors_are_the_format_s(self):
         for name, change, reason in (
                 ("a heartbeat threshold of 1", lambda x: x["heartbeat_signers"].update(threshold=1), "heartbeat_signers.threshold must be from 2"),
+                ("an activation threshold of 1", lambda x: x["activation_signers"].update(threshold=1), "activation_signers.threshold must be from 2"),
+                ("an activation rule of the owner alone", lambda x: x.update(activation_signers={"threshold": 1, "parties": ["owner"]}),
+                 "activation_signers.threshold must be from 2 to the number of its parties (1)"),
+                ("no activation rule", lambda x: x.pop("activation_signers"), "manifest fields mismatch"),
                 ("a heartbeat rule of the owner alone", lambda x: x.update(heartbeat_signers={"threshold": 1, "parties": ["owner"]}),
                  "heartbeat_signers.threshold must be from 2 to the number of its parties (1)"),
                 ("a node revocation rule at 1", lambda x: x["revocation_signers"][0].update(threshold=1), "revocation_signers[0].threshold must be from 2"),
@@ -273,6 +278,7 @@ class Quorum(Case):
         for name, change, reason in (
                 ("a node made ACTIVE from MAINTENANCE", None, "widens capabilities"),
                 ("a lower heartbeat threshold", lambda x: x["heartbeat_signers"].update(threshold=3), "cannot change heartbeat_signers"),
+                ("an activation party dropped", lambda x: x["activation_signers"]["parties"].pop(), "cannot change activation_signers"),
                 ("a revocation rule dropped", lambda x: x["revocation_signers"].pop(), "cannot change revocation_signers"),
                 ("an owner key added", lambda x: x["owner_keys"].append(typed(STRANGER)), "cannot change owner_keys"),
                 ("the owner's heartbeat bound", lambda x: x.update(owner_heartbeat_lifetime_s=7200), "cannot change owner_heartbeat_lifetime_s"),
@@ -305,6 +311,7 @@ class Replacement(Case):
         d = dict(node("d", "ACTIVE", 3), ssh_host_pub=ssh(3), signing_key=typed(NODE_KEYS["d"]))
         man = manifest4(2, m.digest(self.first), nodes4(c="RETIRED") + [d],
                         heartbeat_signers={"threshold": 2, "parties": ["a", "b", "d", "owner"]},
+                        activation_signers={"threshold": 2, "parties": ["a", "b", "d"]},
                         revocation_signers=[{"threshold": 2, "parties": ["a", "b", "d"]}, {"threshold": 1, "parties": ["owner"]}])
         if rules:
             rules(man)
@@ -318,6 +325,8 @@ class Replacement(Case):
         for name, change, reason in (
                 ("the old node kept in the rules", lambda x: x["heartbeat_signers"].update(parties=["a", "b", "c", "owner"]),
                  "a replacement names d in place of c in heartbeat_signers and changes nothing else there"),
+                ("the old node kept in the activation rule", lambda x: x["activation_signers"].update(parties=["a", "b", "c"]),
+                 "a replacement names d in place of c in activation_signers"),
                 ("a threshold changed", lambda x: x["revocation_signers"][0].update(threshold=3),
                  "a replacement names d in place of c in revocation_signers"),
                 ("an owner key changed", lambda x: x["owner_keys"].pop(), "a replacement does not change owner_keys"),
