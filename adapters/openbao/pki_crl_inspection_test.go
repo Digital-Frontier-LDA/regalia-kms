@@ -1,0 +1,35 @@
+package openbaopoc
+
+import (
+	"bytes"
+	"crypto/x509"
+	"time"
+)
+
+func pocInspectCRL(data []byte, issuer *x509.Certificate, now time.Time) (*x509.RevocationList, error) {
+	fields, err := pocTBSFields(data)
+	if err != nil || len(fields) < 6 || len(fields) > 7 || fields[0].Class != 0 || fields[0].Tag != 2 || fields[len(fields)-1].Class != 2 || fields[len(fields)-1].Tag != 0 {
+		return nil, errPOCProfile
+	}
+	encoded, err := pocSignedStructure(data)
+	if err != nil {
+		return nil, errPOCProfile
+	}
+	crl, err := x509.ParseRevocationList(encoded)
+	if err != nil || !bytes.Equal(crl.RawTBSRevocationList, data) || crl.SignatureAlgorithm != x509.ECDSAWithSHA256 ||
+		!bytes.Equal(crl.RawIssuer, issuer.RawSubject) || !bytes.Equal(crl.AuthorityKeyId, issuer.SubjectKeyId) ||
+		crl.Number == nil || crl.Number.Sign() < 0 || crl.Number.BitLen() > 64 || crl.ThisUpdate.Before(now.Add(-time.Minute)) || crl.ThisUpdate.After(now.Add(10*time.Second)) ||
+		!crl.NextUpdate.After(now) || crl.NextUpdate.Sub(crl.ThisUpdate) > time.Hour || len(crl.RevokedCertificateEntries) > 100 ||
+		!pocExtensions(crl.Extensions, map[string]bool{"2.5.29.35": true, "2.5.29.20": true}) {
+		return nil, errPOCProfile
+	}
+	seen := map[string]bool{}
+	for _, entry := range crl.RevokedCertificateEntries {
+		if entry.SerialNumber == nil || entry.SerialNumber.Sign() <= 0 || entry.SerialNumber.BitLen() > 160 || seen[entry.SerialNumber.String()] ||
+			entry.RevocationTime.IsZero() || entry.RevocationTime.After(now.Add(10*time.Second)) || entry.ReasonCode != 0 || len(entry.Extensions) != 0 {
+			return nil, errPOCProfile
+		}
+		seen[entry.SerialNumber.String()] = true
+	}
+	return crl, nil
+}
