@@ -1,7 +1,7 @@
 # Alert rules for a Regalia KMS node's own services (#305), from node_exporter's textfile collector.
 #
-# The series are deploy/baremetal/metrics.py's registry: tests/test_node_alert_rules.py holds every name
-# here to it, and tests/test_node_alert_firing.py drives a fault at every rule (promtool test rules) and
+# The series are deploy/baremetal/metrics.py's registry: tests/test_node_alert_firing.py holds every name
+# here to it (Structure), and drives a fault at every rule (Firing) (promtool test rules) and
 # requires it to fire, and a healthy state that must not. The KMS daemon's own series are in
 # regalia-kms.rules.yml.
 #

@@ -265,7 +265,8 @@ def _service_mesh(mesh, cfg):
     listen, sync = _port(mesh["listen_port"], "service_mesh.listen_port"), _port(mesh["sync_port"], "service_mesh.sync_port")
     require(listen != boot["listen_port"], "service_mesh.listen_port must differ from boot_mesh.listen_port: two interfaces, two ports")
     require(sync not in (cfg["kms_port"], cfg["ssh_port"], boot["unlock_port"], NODE_EXPORTER_PORT),
-            "service_mesh.sync_port must differ from kms_port, ssh_port and boot_mesh.unlock_port: one number, one service")
+            "service_mesh.sync_port must differ from kms_port, ssh_port, boot_mesh.unlock_port and node_exporter's %d: one number, "
+            "one service" % NODE_EXPORTER_PORT)
     out = {"interface": mesh["interface"], "listen_port": listen, "sync_port": sync, "authority": None}
     authority = mesh["authority"]
     if authority is not None:
