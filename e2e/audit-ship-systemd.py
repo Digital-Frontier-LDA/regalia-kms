@@ -120,6 +120,11 @@ def certificates(work):
     issue("collector", "subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n")
     issue("shipper", "extendedKeyUsage=clientAuth\n")
     issue("shipper2", "extendedKeyUsage=clientAuth\n")                # the rotation's new certificate (#291)
+    # the collector's receipt key (Ed25519, PKCS#8, 0600), and its public half as a host pins it (#351)
+    sh("openssl", "genpkey", "-algorithm", "ed25519", "-out", str(work / "receipt.key"))
+    os.chmod(work / "receipt.key", 0o600)
+    der = subprocess.run(["openssl", "pkey", "-in", str(work / "receipt.key"), "-pubout", "-outform", "DER"], capture_output=True, check=True).stdout
+    (work / "collector-receipt.pub").write_text("# the e2e collector's receipt key\n%s\n" % der[-32:].hex())
 
 
 def stream_lines(state, trail="sync"):
@@ -144,11 +149,12 @@ def scenario(work, binaries):
 
     sh("systemd-run", "--unit", COLLECTOR_UNIT, "--collect", str(binaries / "regalia-audit-collector"), "-state", str(state),
        "-listen", "127.0.0.1:%d" % PORT, "-tls-cert", str(work / "collector.pem"), "-tls-key", str(work / "collector.key"),
-       "-client-ca", str(work / "ca.pem"))
+       "-client-ca", str(work / "ca.pem"), "-receipt-key", str(work / "receipt.key"))
     shutil.copy(binaries / "regalia-audit-ship", BIN)
     os.chmod(BIN, 0o755)
     ETC.mkdir(parents=True)
-    for source, target, mode in (("shipper.pem", "client.crt", 0o644), ("shipper.key", "client.key", 0o640), ("ca.pem", "collector-ca.pem", 0o644)):
+    for source, target, mode in (("shipper.pem", "client.crt", 0o644), ("shipper.key", "client.key", 0o640), ("ca.pem", "collector-ca.pem", 0o644),
+                                 ("collector-receipt.pub", "collector-receipt.pub", 0o644)):
         shutil.copy(work / source, ETC / target)
         shutil.chown(ETC / target, "root", "regalia-audit-ship")
         os.chmod(ETC / target, mode)
@@ -268,6 +274,15 @@ def scenario(work, binaries):
     ok(status.get("ActiveState") == "failed" and status.get("ExecMainStatus") == "3" and len(alarms) == 2,
        "started by hand, it refuses again with a second alarm", (status, len(alarms)))
     ok(stream_lines(state) == 6, "and ships nothing", stream_lines(state))
+
+    print("\n### 5  the collector meets the contract an external one must (#351, deploy/baremetal/AUDIT-COLLECTOR.md)")
+    # the real regalia-audit-collector binary, checked as any candidate service is: through the shippers' own client,
+    # against the documented contract only, on a stream of its own. Last, so its alarm and stream touch no step above.
+    done = subprocess.run([str(BIN), "conformance", "-collector", "https://127.0.0.1:%d" % PORT, "-site", "sitea",
+                           "-tls-cert", str(ETC / "client.crt"), "-tls-key", str(ETC / "client.key"), "-server-ca", str(ETC / "collector-ca.pem"),
+                           "-receipt-keys", str(ETC / "collector-receipt.pub")], capture_output=True, text=True)
+    ok(done.returncode == 0 and "meets the audit collector contract: 13 rules" in done.stdout and "FAIL" not in done.stdout,
+       "regalia-audit-ship conformance: every rule of the contract holds", done.stdout[-1500:] + done.stderr[-500:])
     if failed:
         print(journal(INSTANCE))
         print(journal(COLLECTOR_UNIT))
@@ -304,7 +319,8 @@ def main():
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         for path in (DROPIN / "reader.conf", ADM_DROPIN / "reader.conf", ETC / "admission.env", ADM_HEAD, METRICS.with_name("admission.prom"),
-                     INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem", METRICS, HEAD):
+                     INSTALLED, BIN, ENV, ETC / "sync.env", ETC / "client.crt", ETC / "client.key", ETC / "collector-ca.pem",
+                     ETC / "collector-receipt.pub", METRICS, HEAD):
             if path.exists():
                 path.unlink()
         for directory in (DROPIN, ADM_DROPIN, ETC, METRICS.parent):

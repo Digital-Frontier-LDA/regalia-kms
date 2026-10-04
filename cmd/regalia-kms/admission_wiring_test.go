@@ -26,6 +26,7 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/auth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/pcscwatch"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/yubikey"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/config"
@@ -85,7 +86,7 @@ func TestAdmitRunnerRefusesWorkUntilTheNodeIsAdmitted(t *testing.T) {
 	session := strings.Repeat("5e", 32)
 	document, _ := json.Marshal(map[string]any{
 		"schema": admission.Schema, "node_id": "site-a", "session_id": session, "boot_id": boot, "epoch": 3,
-		"manifest_digest": strings.Repeat("d1", 32), "lease_issued_at": "2026-10-02T09:00:00Z",
+		"manifest_digest": strings.Repeat("d1", 32), "hsm_serials": "DENK0404144", "lease_issued_at": "2026-10-02T09:00:00Z",
 		"requested_boottime_ms": now - 1000, "serve_until_boottime_ms": now + 60_000, "reason": "",
 	})
 	if err := os.Chmod(directory, 0o755); err != nil {
@@ -265,7 +266,7 @@ func TestRequiredAdmissionMakesTheTokenProviderWaitForAFreshLease(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", provider), gate, admission.ProcessStart); err != nil {
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", provider), gate, admission.ProcessStart, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A token the provider fails to open is now remembered as gone: the mark only exists once
@@ -278,7 +279,7 @@ func TestRequiredAdmissionMakesTheTokenProviderWaitForAFreshLease(t *testing.T) 
 	}
 	// Not required, or no PKCS#11 provider: nothing changes and nothing fails.
 	untouched, _ := nitrokey.New(unopenableDriver{}, noPIN{})
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", untouched), nil, admission.ProcessStart); err != nil {
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", untouched), nil, admission.ProcessStart, nil); err != nil {
 		t.Fatal(err)
 	}
 	untouched.Healthy(context.Background(), binding)
@@ -320,13 +321,18 @@ func (sliceProvider) RequireReauthorization(reauth.Gate, func() (int64, error), 
 	return nil
 }
 
+func (sliceProvider) WatchReaders(reauth.Readers) {}
+
 // countingProvider records how often it is told.
 type countingProvider struct {
 	ungatedProvider
-	told  int
-	since int64
-	fail  error
+	told    int
+	since   int64
+	fail    error
+	readers reauth.Readers
 }
+
+func (provider *countingProvider) WatchReaders(readers reauth.Readers) { provider.readers = readers }
 
 func (provider *countingProvider) RequireReauthorization(_ reauth.Gate, _ func() (int64, error), sinceMs int64) error {
 	provider.told++
@@ -345,7 +351,7 @@ func TestEveryProviderThatServesKeysIsGatedOrTheDaemonDoesNotStart(t *testing.T)
 	}
 	start := func() (int64, error) { return 4321, nil }
 	first, second := &countingProvider{}, &countingProvider{}
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", first, "some-new-token", second), gate, start); err != nil {
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", first, "some-new-token", second), gate, start, nil); err != nil {
 		t.Fatal(err)
 	}
 	if first.told != 1 || second.told != 1 || first.since != 4321 || second.since != 4321 {
@@ -353,34 +359,34 @@ func TestEveryProviderThatServesKeysIsGatedOrTheDaemonDoesNotStart(t *testing.T)
 	}
 	// one provider under two backend names (the PKCS#11 provider and the OpenPGP applet) is told once
 	shared := &countingProvider{}
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", shared, nitrokey.OpenPGPAppletBackend, shared), gate, start); err != nil {
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", shared, nitrokey.OpenPGPAppletBackend, shared), gate, start, nil); err != nil {
 		t.Fatal(err)
 	}
 	if shared.told != 1 {
 		t.Fatalf("a provider serving two backends was told %d times: the second would forget what it had seen", shared.told)
 	}
 	// a provider with no hook, under a name nobody wrote down, stops the daemon and is named
-	err = requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "some-new-token", ungatedProvider{}), gate, start)
+	err = requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "some-new-token", ungatedProvider{}), gate, start, nil)
 	if err == nil || !strings.Contains(err.Error(), "some-new-token") {
 		t.Fatalf("an ungated provider did not stop the daemon: %v", err)
 	}
 	// a provider whose hook fails stops the daemon too, with its backend named
 	failing := &countingProvider{fail: errors.New("no clock")}
-	err = requireReauthorization(managing(t, "nitrokey-pkcs11", failing), gate, start)
+	err = requireReauthorization(managing(t, "nitrokey-pkcs11", failing), gate, start, nil)
 	if err == nil || !strings.Contains(err.Error(), "nitrokey-pkcs11") || !strings.Contains(err.Error(), "no clock") {
 		t.Fatalf("a failing hook: %v", err)
 	}
 	// a provider that a map cannot hold as a key is refused, not left to panic when "told once" is asked
-	err = requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "some-new-token", sliceProvider{}), gate, start)
+	err = requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "some-new-token", sliceProvider{}), gate, start, nil)
 	if err == nil || !strings.Contains(err.Error(), "must be a pointer") {
 		t.Fatalf("a provider that is not comparable: %v", err)
 	}
 	// with no admission required nobody is told, gated or not
 	quiet := &countingProvider{}
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", quiet, "some-new-token", ungatedProvider{}), nil, start); err != nil || quiet.told != 0 {
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", quiet, "some-new-token", ungatedProvider{}), nil, start, nil); err != nil || quiet.told != 0 {
 		t.Fatalf("without admission: %v, told %d", err, quiet.told)
 	}
-	if err := requireReauthorization(nil, gate, start); err != nil {
+	if err := requireReauthorization(nil, gate, start, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -403,7 +409,7 @@ func TestTheNamedExemptionsAreExactlyTheProvidersThatLackTheHook(t *testing.T) {
 		t.Fatalf("exemptions = %v: a new one needs a decision recorded on regalia-kms#72, not only a line here", names)
 	}
 	// with nothing exempted, the name that used to be is refused like any other backend with no hook
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "yubikey-piv", ungatedProvider{}), gate, admission.ProcessStart); err == nil {
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", &countingProvider{}, "yubikey-piv", ungatedProvider{}), gate, admission.ProcessStart, nil); err == nil {
 		t.Fatal("a yubikey-piv provider with no hook started the daemon: it is no longer exempt")
 	}
 	// the providers this build really assembles: each is gated, or exempt and NOT gated
@@ -472,7 +478,7 @@ func TestTheReauthorizationBaselineIsTheProcessStart(t *testing.T) {
 	baseline := func(processStart func() (int64, error)) int64 {
 		t.Helper()
 		provider, _ := nitrokey.New(presentDriver{}, noPIN{})
-		if err := requireReauthorization(managing(t, "nitrokey-pkcs11", provider), gate, processStart); err != nil {
+		if err := requireReauthorization(managing(t, "nitrokey-pkcs11", provider), gate, processStart, nil); err != nil {
 			t.Fatal(err)
 		}
 		provider.Healthy(context.Background(), binding) // the first look records what the token waits for
@@ -508,7 +514,7 @@ func TestTheReauthorizationBaselineIsTheProcessStart(t *testing.T) {
 	}
 	// a start time in the future is refused rather than waited for
 	provider, _ := nitrokey.New(presentDriver{}, noPIN{})
-	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", provider), gate, func() (int64, error) { return after + 3_600_000, nil }); err == nil {
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", provider), gate, func() (int64, error) { return after + 3_600_000, nil }, nil); err == nil {
 		t.Fatal("a process start in the future was accepted")
 	}
 }
@@ -552,3 +558,62 @@ func (presentSession) Identity(context.Context) (string, string, error) {
 }
 func (presentSession) EstablishSecureChannel(context.Context) error { return nil }
 func (presentSession) Close() error                                 { return nil }
+
+// Reader: a slot that cannot be removed, which the reader watcher does not apply to (#72, G2).
+func (presentSession) Reader(context.Context) (string, bool, error) { return "", false, nil }
+
+// unwatchableProvider makes a returned token wait for a lease, but cannot be told when a token was away
+// between two operations.
+type unwatchableProvider struct{ ungatedProvider }
+
+func (*unwatchableProvider) RequireReauthorization(reauth.Gate, func() (int64, error), int64) error {
+	return nil
+}
+
+// EVERY GATED PROVIDER SEES THE READER WATCHER (regalia-kms#72, G2): the daemon hands it to each, and a
+// provider that cannot take it stops the daemon, as one with no reauthorization hook does.
+func TestEveryGatedProviderIsGivenTheReaderWatcher(t *testing.T) {
+	directory := t.TempDir()
+	gate, err := admission.Open(admission.Options{Path: filepath.Join(directory, "admission.json"), NodeID: "site-a",
+		SessionPath: filepath.Join(directory, "boot-session")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watcher := pcscwatch.Start(context.Background(), nil, nil)
+	first, second := &countingProvider{}, &countingProvider{}
+	if err := requireReauthorization(managing(t, "nitrokey-pkcs11", first, "yubikey-piv", second), gate, admission.ProcessStart, watcher); err != nil {
+		t.Fatal(err)
+	}
+	if first.readers != reauth.Readers(watcher) || second.readers != reauth.Readers(watcher) {
+		t.Fatal("a gated provider was not given the reader watcher")
+	}
+	err = requireReauthorization(managing(t, "nitrokey-pkcs11", &unwatchableProvider{}), gate, admission.ProcessStart, watcher)
+	if err == nil || !strings.Contains(err.Error(), "cannot be told when a token is away between two operations") {
+		t.Fatalf("a provider that cannot take the watcher: %v", err)
+	}
+}
+
+// A DAEMON THAT COULD NOT WATCH THE READERS DOES NOT START where admission is required and a token is
+// configured (regalia-kms#72, G2): it says why at start, instead of refusing every removable token later.
+func TestADaemonWithoutPCSCRefusesToStartUnderRequiredAdmission(t *testing.T) {
+	directory := t.TempDir()
+	gate, err := admission.Open(admission.Options{Path: filepath.Join(directory, "admission.json"), NodeID: "site-a",
+		SessionPath: filepath.Join(directory, "boot-session")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := managing(t, "nitrokey-pkcs11", &countingProvider{})
+	err = requirePCSCWatch(tokens, gate, false)
+	if err == nil || !strings.Contains(err.Error(), "built without PC/SC (-tags piv)") {
+		t.Fatalf("a build without PC/SC, admission required, a token configured: %v", err)
+	}
+	for name, err := range map[string]error{
+		"the piv build":          requirePCSCWatch(tokens, gate, true),
+		"admission not required": requirePCSCWatch(tokens, nil, false),
+		"no token":               requirePCSCWatch(nil, gate, false),
+	} {
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

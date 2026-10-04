@@ -15,6 +15,7 @@ import (
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/audit"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/nitrokey"
+	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/pcscwatch"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/backend/reauth"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/certs"
 	"github.com/Digital-Frontier-LDA/regalia-kms/internal/controlplane"
@@ -372,7 +373,19 @@ func run() error {
 		tokenObserver = observer
 		// A TOKEN THAT WAS GONE WAITS FOR A FRESH LEASE (regalia-kms#72 PoC 12.4). Only where runtime
 		// admission is required: without a lease service there is no lease to wait for.
-		if err := requireReauthorization(manager, admissionGate, admission.ProcessStart); err != nil {
+		// A TOKEN AWAY BETWEEN TWO OPERATIONS is seen by the PC/SC reader watcher (#72, G2), which runs for the
+		// daemon's life. In a build without PC/SC (no -tags piv) it never runs, and no removable token is served
+		// where admission is required.
+		var readers reauth.Readers
+		if err := requirePCSCWatch(manager, admissionGate, pcscwatch.Built()); err != nil {
+			return err
+		}
+		if admissionGate != nil {
+			readers = pcscwatch.Start(ctx, pcscwatch.System(), func(err error) {
+				slog.Warn("KMS reader watcher lost PC/SC: removable tokens are refused until it runs again, then wait for a fresh lease", "error", err)
+			})
+		}
+		if err := requireReauthorization(manager, admissionGate, admission.ProcessStart, readers); err != nil {
 			return err
 		}
 
@@ -862,6 +875,19 @@ var lookupAdmissionOwner = func(name string) (uint32, error) {
 // It is empty: the PKCS#11 provider (the HSM and the OpenPGP applet) and the PIV provider all wait.
 var awaitingReauthorization = map[string]string{}
 
+// requirePCSCWatch refuses to start a daemon that could not see a token pulled between two operations
+// (regalia-kms#72, G2): runtime admission required, a token configured, and a build without PC/SC (no
+// -tags piv). Such a daemon would refuse every removable token on every operation and look broken; it is
+// stopped here, at start, with the reason. The production build is the piv build.
+func requirePCSCWatch(manager *backend.Manager, gate *admission.Gate, built bool) error {
+	if manager == nil || gate == nil || built || len(manager.Providers()) == 0 {
+		return nil
+	}
+	return errors.New("runtime admission is required and a token is configured, but this daemon was built without PC/SC " +
+		"(-tags piv): it could not see a token pulled and put back between two operations, and would refuse every " +
+		"removable token. Build it with -tags piv, the production build (regalia-kms#72)")
+}
+
 // requireReauthorization makes EVERY key provider wait, after a token's absence and after a start of
 // this daemon, for a runtime lease asked for since (regalia-kms#72, PoC 12.4). The rule is for every
 // key the daemon serves, so the providers are walked, not named: one that can execute a key
@@ -872,7 +898,12 @@ var awaitingReauthorization = map[string]string{}
 // service reads that same time for the daemon's PID and asks at once, so a restart of the daemon
 // costs one renewal and not the wait for the next scheduled one. If the start time cannot be read,
 // "now" stands in: later, so never weaker, and the cost is that wait.
-func requireReauthorization(manager *backend.Manager, gate *admission.Gate, processStart func() (int64, error)) error {
+//
+// Every such provider also takes the PC/SC reader watcher (reauth.Watched; regalia-kms#72, G2), so that a
+// token pulled and put back between two operations, which no operation saw, waits for a fresh lease too.
+// One that cannot take it stops the daemon. A nil watcher (a build without PC/SC) is given as it is:
+// the providers then refuse every removable token.
+func requireReauthorization(manager *backend.Manager, gate *admission.Gate, processStart func() (int64, error), readers reauth.Readers) error {
 	if manager == nil || gate == nil {
 		return nil
 	}
@@ -919,9 +950,15 @@ func requireReauthorization(manager *backend.Manager, gate *admission.Gate, proc
 			continue
 		}
 		told[provider] = true
+		// and every one sees the reader watcher: a token away between two operations is seen too (#72, G2)
+		watched, watches := provider.(reauth.Watched)
+		if !watches {
+			return fmt.Errorf("token reauthorization: the %s backend cannot be told when a token is away between two operations", name)
+		}
 		if err := provider.RequireReauthorization(gate, admission.Boottime, since); err != nil {
 			return fmt.Errorf("token reauthorization (%s): %w", name, err)
 		}
+		watched.WatchReaders(readers)
 	}
 	slog.Info("KMS token reauthorization required: a token that was absent serves again only under a runtime lease asked for after its return")
 	return nil

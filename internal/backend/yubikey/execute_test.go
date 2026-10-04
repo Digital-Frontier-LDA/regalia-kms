@@ -315,3 +315,5 @@ func TestABindingTheProviderCannotServeIsRefusedBeforeTheCardIsOpened(t *testing
 		})
 	}
 }
+
+func (s *riggedSession) Reader() string { return testReader }

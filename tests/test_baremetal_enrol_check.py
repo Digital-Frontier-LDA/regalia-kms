@@ -63,6 +63,34 @@ class Check(unittest.TestCase):
         fp = enrol.fingerprint(self.root).upper()
         self.check(self.envelope(man), typed=" ".join(fp[i:i + 4] for i in range(0, 64, 4)))
 
+    def test_a_v4_manifest_names_this_hosts_signing_key(self):
+        """#199: under v4 the node entry's signing_key must be the one this host made (its bundle's), as every other
+        identity is; a bundle made before #199 has none and is refused for a v4 manifest."""
+        from tests import test_baremetal_membership_v4 as v4
+        man = v4.manifest4(1, "", v4.nodes4(), policy_version=measurements.version(self.document))
+        man["nodes"][0].update(ek_name=self.bundle["ek_name"], ak_name=self.bundle["ak_name"],
+                               wg_service_pub=bytes(range(32)).hex(), wg_boot_pub=bytes(range(32, 64)).hex())
+        mine = man["nodes"][0]["signing_key"]["key"]
+        self.refused("this host's bundle has no signing key: it was made before #199", self.envelope(man))
+        for point, accepted in ((v4.typed(v4.NODE_KEYS["b"])["key"], False), (mine, True)):
+            with open(self.d + "/bundle.json", "w") as f:
+                json.dump(dict(self.bundle, signing_key=point), f)
+            if accepted:
+                self.assertEqual(self.check(self.envelope(man)), man)
+            else:
+                self.refused("the manifest's signing_key for a is not this host's", self.envelope(man))
+
+    def test_a_signing_key_a_manifest_before_v4_does_not_name_is_said(self):
+        """51's read of #358: a host with a signing key checked against a v3 (or older) manifest passes, and is told its key
+        waits for v4."""
+        man = self.manifest()
+        self.check(self.envelope(man))
+        self.assertIsNone(enrol.signing_note(self.d, man))                   # a bundle from before #199: nothing to say
+        with open(self.d + "/bundle.json", "w") as f:
+            json.dump(dict(self.bundle, signing_key="04" + "ab" * 64), f)
+        self.assertEqual(self.check(self.envelope(man)), man)
+        self.assertIn("names no signing key for a; this host's key at 0x81010003", enrol.signing_note(self.d, man))
+
     def test_the_fingerprint_typed_must_be_the_root_keys(self):
         other = enrol.fingerprint(hbt.pub(hbt.OTHER))
         self.refused("is not the one typed", self.envelope(self.manifest()), typed=other)
