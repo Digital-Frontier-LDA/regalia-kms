@@ -286,7 +286,7 @@ class Cluster:
             pol = uki.policy_digest(value)
             sig = self.pcr_private.sign(bytes.fromhex(pol), padding.PKCS1v15(), hashes.SHA256())
             self.pcr_sigs[value] = {"pcrs": [11], "pkfp": signkey.pcr_key_fingerprint(self.pcr_pem), "pol": pol, "sig": base64.b64encode(sig).decode()}
-        self.pcr_values[name].add(value)
+        self.pcr_values.setdefault(name, set()).add(value)
         d = self.nodes[name].dir / "pcr"
         d.mkdir(mode=0o755, exist_ok=True)
         # written IN PLACE, never renamed over: a running unit's BindReadOnlyPaths= holds the inode it was started with,
@@ -673,13 +673,22 @@ class Cluster:
             dict(self.document, nodes=dict(self.document["nodes"], **{new: {"accepted": [self._reference(n, example["pcrs"])]}}))
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
                  "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
+        current = self.manifest
+        if self.v4:                                   # #199: its SSH host key and its signing key; it joins every signer rule
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            entry.update(ssh_host_pub=ssh.hex(), signing_key=self.signing[new])
         if reuse:
             source = next(m for m in self.manifest["nodes"] if m["node_id"] == reuse[0])
             entry.update({k: source[k] for k in reuse[1]})
-        current = self.manifest
         nodes = [dict(m, state="RETIRED") if m["node_id"] == old else m for m in current["nodes"]] + [entry]
         candidate = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                          policy_version=measurements.version(document), issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
+        if self.v4:
+            joined = lambda rule: dict(rule, parties=rule["parties"] + [new])        # noqa: E731
+            candidate.update(heartbeat_signers=joined(current["heartbeat_signers"]), activation_signers=joined(current["activation_signers"]),
+                             revocation_signers=[joined(r) if membership.OWNER not in r["parties"] else r for r in current["revocation_signers"]])
         return candidate, document
 
     def replace(self, old, new):
@@ -691,7 +700,10 @@ class Cluster:
         the new node), so the authority's current heartbeat is new to it and sync delivers it. #279's
         `enrol --replace` instead defines the counter AT a heartbeat the node verifies (Freshness.accept_first).
         The old node keeps the configuration it had, as the hardware left. The running nodes take the epoch from
-        the authority by sync. Returns the envelope."""
+        the authority by sync. Returns the envelope. Under v4 (#199, no authority): the root's envelope is delivered to a
+        running node as advance() delivers an epoch (_replace_v4)."""
+        if self.v4:
+            return self._replace_v4(old, new)
         candidate, document = self.replacement(old, new)
         measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
         envelope = self.signed(candidate)
@@ -730,6 +742,95 @@ class Cluster:
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
         os.chmod(n.admission, ADMISSION_DIR_MODE)            # as the shipped unit makes it (#345)
         return envelope
+
+    def _replace_v4(self, old, new):
+        """replace() under v4: checked and signed by the root as there; given to a running node (the seed) as advance() gives
+        an epoch, and pulled by the other running node; neither `old` (the hardware that left keeps the chain it had) nor
+        `new` (not yet set up) is touched by that. Then every node's site configuration follows, and the new node gets its
+        anchor, the chain, the epoch's document and its two counters at 0: its first heartbeat comes from the nodes by sync."""
+        candidate, document = self.replacement(old, new)
+        measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
+        seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
+        self.advance(seed, candidate=candidate, document=document, skip=(old, new))
+        envelope = self.chain[-1]
+        for n in self.nodes.values():
+            if n.name != old:
+                self._configure(n)
+        n = self.nodes[new]
+        here = self.node(new)
+        here.anchor().define()
+        here.documents().put(document)
+        for i, held in enumerate(self.chain):
+            here.store().commit(held, final=i == len(self.chain) - 1)
+        node.heartbeat_counter(here.cfg).define()
+        node.signing_counter(here.cfg).define()
+        sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
+        os.chmod(n.state, 0o755)
+        sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
+        os.chmod(n.admission, ADMISSION_DIR_MODE)
+        return envelope
+
+    # ---- #199: restrictive changes without the root (revoke.py), as the operators make them ----
+
+    REVOKE_PROPOSE = ("import json, sys\nfrom deploy.baremetal import beat, node, revoke\nd = json.load(sys.stdin)\n"
+                      "n = node.Node(node.load(d['cfg']))\nm = n.store().load()\n"
+                      "nxt = revoke.candidate(m, d['target'], d['state'], beat._now(n.clock()))\ns = node.node_beat_signer(n)\n"
+                      "sig = dict(revoke.node_signature(n.node_id, s._sign, nxt), key=s.key)\n"
+                      "print(json.dumps({'manifest': nxt, 'signatures': [sig], 'reason': revoke.reason_ok(d['reason'])}))\n")
+    REVOKE_COSIGN = ("import json, sys\nfrom deploy.baremetal import membership, node, revoke\nd = json.load(sys.stdin)\n"
+                     "n = node.Node(node.load(d['cfg']))\nm = n.store().load()\ns = node.node_beat_signer(n)\n"
+                     "half = revoke.cosign(m, d['half'], n.node_id, s.key, s._sign, lambda text: d['typed'])\n"
+                     "full = {'manifest': half['manifest'], 'signatures': half['signatures']}\n"
+                     "membership.require(revoke.met(m, full)[0], 'the signatures meet no revocation rule')\n"
+                     "revoke.commit(n, full, node.Trail(n.path('sync-audit.jsonl'), 'sync'))\nprint(json.dumps(full))\n")
+    REVOKE_IMPORT = ("import json, sys\nfrom deploy.baremetal import membership, node, revoke\nd = json.load(sys.stdin)\n"
+                     "n = node.Node(node.load(d['cfg']))\nm = n.store().load()\n"
+                     "membership.require(revoke.met(m, d['full'])[0], 'the signatures meet no revocation rule')\n"
+                     "revoke.commit(n, d['full'], node.Trail(n.path('sync-audit.jsonl'), 'sync'))\nprint('{}')\n")
+
+    @staticmethod
+    def typed(manifest):
+        """What the operator types to confirm a manifest signature: its epoch and the first eight hex digits of the SHA-256
+        of what is signed (revoke.shown)."""
+        return "%d %s" % (manifest["epoch"], hashlib.sha256(membership.DOMAIN + membership.canonical(manifest)).hexdigest()[:8])
+
+    def revoke_by_nodes(self, proposer, cosigner, target, state, reason, owner_recovery=False, pull=None, beat=True):
+        """`target` made `state` by two nodes, each at its own console (revoke.py propose, then cosign): the proposer's TPM
+        signs the next manifest as its sync unit; the cosigner checks it against its own manifest, confirms (the operator's
+        typing, played here), signs and commits it as its sync unit; the running nodes pull it from there. Returns the
+        envelope, once the counting nodes running hold a heartbeat for its epoch (_beaten)."""
+        half = json.loads(self._as_sync(proposer, self.REVOKE_PROPOSE, {"cfg": str(self.nodes[proposer].cfg_path), "target": target,
+                                                                        "state": state, "reason": reason}).strip().splitlines()[-1])
+        full = json.loads(self._as_sync(cosigner, self.REVOKE_COSIGN, {"cfg": str(self.nodes[cosigner].cfg_path), "half": half,
+                                                                       "typed": self.typed(half["manifest"])}).strip().splitlines()[-1])
+        return self._spread(cosigner, full, owner_recovery, pull, beat)
+
+    def revoke_by_owner(self, importer, target, state, reason, owner_recovery=False, pull=None, beat=True):
+        """`target` made `state` by the owner alone, off the nodes (revoke.py export, owner.py sign-manifest against the chain
+        this machine holds, revoke.py import on `importer`, as its sync unit). Returns the envelope, as revoke_by_nodes."""
+        from deploy.baremetal import owner, revoke
+        nxt = revoke.candidate(self.manifest, target, state, int(time.time()))
+        proposal = {"manifest": nxt, "signatures": [], "reason": reason}
+        signed = owner.sign_manifest(self.manifest, proposal, lambda: self.owner_signer(0), lambda text: self.typed(nxt), say=lambda text: None)
+        full = {"manifest": nxt, "signatures": signed["signatures"]}
+        self._as_sync(importer, self.REVOKE_IMPORT, {"cfg": str(self.nodes[importer].cfg_path), "full": full})
+        return self._spread(importer, full, owner_recovery, pull, beat)
+
+    def _spread(self, committer, full, owner_recovery, pull=None, beat=True):
+        """A restrictive envelope committed on `committer`: the fixture's view follows; the nodes in `pull` (default: every
+        other running node that may authorize) take it by sync; with `beat`, the counting nodes running then hold its
+        heartbeat (_beaten). A scenario that cuts a node off names who should take it, and waits for nothing more."""
+        manifest = full["manifest"]
+        self.chain.append(full)
+        self.manifest = manifest
+        if pull is None:
+            pull = [n for n in self.nodes if n != committer and self.running(n) and membership.may(manifest, n, "authorize")]
+        for name in pull:
+            if not until(lambda name=name: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
+                raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], committer))
+        if beat:
+            self._beaten(manifest, owner_recovery)
+        return full
 
     def _start_authority(self):
         """The authority's host booted: its time checked again, its wg-svc applied, then `serve` (which signs a
@@ -1109,7 +1210,7 @@ class Cluster:
         held = self.node(name).freshness().held()
         return bool(held) and held["heartbeat"]["epoch"] == epoch
 
-    def advance(self, seed, signer="root", document=None, owner_recovery=False, **states):
+    def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, skip=(), **states):
         """A new epoch with nodes' states changed ({node: state}), signed by the root or the revocation key. The
         authority's publication, stood in for: `seed`, a running node, has its services stopped (a crash: the same
         boot), takes the epoch into its store with its heartbeat, and starts again. Nodes whose services are
@@ -1124,9 +1225,9 @@ class Cluster:
             raise RuntimeError("with the authority, epochs come from `authority revoke` (cluster.revoke), never from advance()")
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
-        manifest = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
-                        issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
-        if document is not None:
+        manifest = candidate or dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
+                                     issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
+        if document is not None and candidate is None:
             manifest["policy_version"] = measurements.version(document)
         if self.v4 and signer in ("revocation", "owner"):
             # #199: no revocation key under v4: a restrictive change is the owner's alone (or two nodes', revoke.py)
@@ -1141,7 +1242,7 @@ class Cluster:
         if document is not None:
             self.document = document
         for name in self.nodes:
-            if name in others:                        # running: its store is its sync's (one that may not authorize is left be)
+            if name in others or name in skip:        # running: its store is its sync's (one that may not authorize is left be)
                 continue
             if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
                 self.node(name).documents().put(document)
@@ -1372,6 +1473,18 @@ class Cluster:
         until(lambda: not problems(), timeout, 2)
         until(lambda: not problems(receipts=True), 30, 2)      # the shipper's head file follows its next pass
         return problems(receipts=True)
+
+    def moved_by_sync(self, name, since, epoch):
+        """The peer whose sync round moved `name` to `epoch`, from its collector stream since `since`; None if none did. A
+        sync-apply event is filed under the manifest held when its round BEGAN (sync.Client.pull), so the round that
+        moved the node is the last ALLOW filed under the epoch before, ahead of the node's first event under `epoch`
+        (regalia-kms-1e and 3e on #370; lifted here from rolling-threenode.py for every scenario)."""
+        events = self.audit_has(name, "sync", since=since)
+        first = next((i for i, e in enumerate(events) if e.get("epoch") == epoch), None)
+        if first is None:
+            return None
+        rounds = [e for e in events[:first] if e.get("event") == "sync-apply" and e.get("outcome") == "ALLOW" and e.get("epoch") == epoch - 1]
+        return rounds[-1].get("peer") if rounds else None
 
     def audit_has(self, name, trail, since=0, **fields):
         """The node's trail lines that its COLLECTOR stream holds (line i taken from the trail only where it hashes to
