@@ -30,6 +30,9 @@
 #   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
 #           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
 #           unattended, as boot 2.
+#   boot 2k #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS (the same kernel with bytes appended): its predicted PCR 11
+#           differs in both phases, it boots unattended once approved, and the client's console line gives the
+#           initrd-phase PCR 11 its own build record predicts. Its command line has no journald forwarding (#413).
 #   boot 2d THE SAME IMAGE, RETIRED: the document lists the current image only. The TPM releases the local
 #           half all the same (its signed PCR 11 policy has no counter), both peers refuse the quote naming
 #           PCR 11, nothing is given; the client keeps asking, and the recovery key typed at the console opens.
@@ -237,9 +240,26 @@ chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki bui
   && python3 -Es -m deploy.baremetal.uki build $IN_OLD --name e2e-old --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
   && python3 -Es -m deploy.baremetal.uki sign $IN_OLD --record /tmp/uki/out/e2e-old.record.json --second-record /tmp/uki/second/e2e-old.record.json --out /tmp/uki/out $KEYS" >"$W/uki-old.log" 2>&1 \
   || { cat "$W/uki-old.log"; echo "unlock-boot-qemu: the second image did not build or sign"; exit 2; }
+# #75 TIER Q, Q1: AN IMAGE WHOSE KERNEL DIFFERS. The same kernel with bytes appended after its PE image, which the
+# loader ignores (it boots identically) and systemd-stub measures with the whole .linux section into PCR 11: only the
+# measurement differs, the property under test (regalia-kms-d9). A real second kernel would not do: the initrd's
+# modules are built for this one. Its command line has NO systemd.journald.forward_to_console=1 (a production
+# image's has none either, #413): what its console shows is what the units themselves put there.
+{ cat "$ROOT/boot/vmlinuz-$KVER"; head -c 4096 /dev/zero | tr '\0' 'R'; } > "$ROOT/tmp/uki/vmlinuz-k2"
+sed 's/ systemd\.journald\.forward_to_console=1//' "$ROOT/tmp/uki/cmdline" > "$ROOT/tmp/uki/cmdline-k2"
+IN_K2="${IN/--linux \/boot\/vmlinuz-$KVER /--linux /tmp/uki/vmlinuz-k2 }"
+IN_K2="${IN_K2/--cmdline \/tmp\/uki\/cmdline /--cmdline /tmp/uki/cmdline-k2 }"
+[ "$IN_K2" != "$IN" ] || { echo "unlock-boot-qemu: the Q1 image's inputs are the first image's"; exit 2; }
+# shellcheck disable=SC2086  # the two lists are words on purpose
+chroot "$ROOT" sh -c "cd /tmp/uki/src && python3 -Es -m deploy.baremetal.uki build $IN_K2 --name e2e-k2 --out /tmp/uki/out --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki build $IN_K2 --name e2e-k2 --out /tmp/uki/second --unlock-client /tmp/uki/regalia-unlock.compiled \
+  && python3 -Es -m deploy.baremetal.uki sign $IN_K2 --record /tmp/uki/out/e2e-k2.record.json --second-record /tmp/uki/second/e2e-k2.record.json --out /tmp/uki/out $KEYS" >"$W/uki-k2.log" 2>&1 \
+  || { cat "$W/uki-k2.log"; echo "unlock-boot-qemu: the Q1 image (another kernel) did not build or sign"; exit 2; }
+cp "$ROOT/tmp/uki/out/e2e-k2.efi" "$W/e2e-k2.efi"; cp "$ROOT/tmp/uki/out/e2e-k2.signed.json" "$W/e2e-k2.record.json"
 cp "$ROOT/tmp/uki/out/e2e.efi" "$W/e2e.efi"; cp "$ROOT/tmp/uki/out/e2e.signed.json" "$W/e2e.record.json"; cp "$W/keys/TEST-initrd.pub" "$W/initrd.pub"
 cp "$ROOT/tmp/uki/out/e2e-old.efi" "$W/e2e-old.efi"; cp "$ROOT/tmp/uki/out/e2e-old.signed.json" "$W/e2e-old.record.json"
 cmp -s "$W/e2e.efi" "$W/e2e-old.efi" && { echo "unlock-boot-qemu: the two images are the same file"; exit 2; }
+cmp -s "$W/e2e.efi" "$W/e2e-k2.efi" && { echo "unlock-boot-qemu: the Q1 image is the first image's file"; exit 2; }
 rm -rf "$ROOT/tmp/uki" "$W/keys"
 for fs in dev sys proc; do umount -R "$ROOT/$fs"; done; MOUNTED=()
 
