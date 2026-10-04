@@ -867,6 +867,59 @@ class Retire(Case):
         self.assertEqual(rollout.retire_ready(self.manifest2, BOTH, b_says(a={"measurement": {"label": "image-1", "epoch": 1}}))["a"], ["c"])
 
 
+
+class Stranded(Retire):
+    """`propose` asks stranded() before any document that takes a set away: a retire, an abandon or an
+    emergency must not lock out a node that is still running the set that goes (#75)."""
+    def test_a_retire_strands_whoever_retire_ready_would_wait_for(self):
+        done = self.states(a={"b": "image-2", "c": "image-2"}, b={"a": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        self.assertEqual(rollout.stranded(self.manifest2, BOTH, NEXT, done), {})
+        fell_back = self.states(a={"b": "image-2", "c": "image-2"}, b={"a": "image-2", "c": "image-1"}, c={"a": "image-2", "b": "image-2"})
+        self.assertEqual(rollout.stranded(self.manifest2, BOTH, NEXT, fell_back), {"c": "b last saw it on 'image-1', not on image-2"})
+        never = self.states(a={"b": "image-2"}, b={"a": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        self.assertEqual(rollout.stranded(self.manifest2, BOTH, NEXT, never), {"c": "no other node has verified it under epoch 2"})
+
+    def test_abandoning_next_strands_a_node_already_on_it(self):
+        """The other half: NEXT is dropped while a is on it. Nothing guarded this before."""
+        a_moved = self.states(a={"b": "image-1", "c": "image-1"}, b={"a": "image-2", "c": "image-1"}, c={"a": "image-2", "b": "image-1"})
+        self.assertEqual(measurements.transition(BOTH, CURRENT), "abandon")
+        self.assertEqual(rollout.stranded(self.manifest2, BOTH, CURRENT, a_moved),
+                         {"a": "b last saw it on 'image-2'; c last saw it on 'image-2', not on image-1"})
+        nobody = self.states(a={"b": "image-1", "c": "image-1"}, b={"a": "image-1", "c": "image-1"}, c={"a": "image-1", "b": "image-1"})
+        self.assertEqual(rollout.stranded(self.manifest2, BOTH, CURRENT, nobody), {})
+
+    def test_an_emergency_strands_every_node_still_on_the_compromised_image(self):
+        m1 = self.under(CURRENT)
+        on_1 = self.states(a={"b": ("image-1", 1), "c": ("image-1", 1)}, b={"a": ("image-1", 1), "c": ("image-1", 1)},
+                           c={"a": ("image-1", 1), "b": ("image-1", 1)})
+        self.assertEqual(measurements.transition(CURRENT, NEXT, emergency=True), "replace-without-overlap")
+        self.assertEqual(sorted(rollout.stranded(m1, CURRENT, NEXT, on_1)), ["a", "b", "c"])
+
+    def test_seen_only_in_the_initrd_of_the_kept_set_is_not_up(self):
+        both = document("v2", **{n: [uki("image-1", "11", "12"), uki("image-2", "21", "22")] for n in "abc"})
+        nxt = document("v3", **{n: [uki("image-2", "21", "22")] for n in "abc"})
+        manifest = self.under(both, epoch=2, prev=m.digest(self.under(CURRENT)))
+
+        def seen(phase_of_c):
+            rec = {"label": "image-2", "epoch": 2, "phase": "system"}
+            return {p: {"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {
+                n: {"measurement": dict(rec, phase=phase_of_c) if n == "c" else rec} for n in "abc" if n != p}} for p in "abc"}
+        self.assertEqual(rollout.stranded(manifest, both, nxt, seen("system")), {})
+        self.assertEqual(rollout.stranded(manifest, both, nxt, seen("initrd")),
+                         {"c": "a last saw it in the initrd of 'image-2', not up; b last saw it in the initrd of 'image-2', not up, not on image-2"})
+
+    def test_the_witnesses_are_checked_as_retire_ready_checks_them(self):
+        without_b = self.states(a={"b": "image-2", "c": "image-2"}, c={"a": "image-2", "b": "image-2"})
+        self.refused("the state of b is missing", rollout.stranded, self.manifest2, BOTH, NEXT, without_b)
+        self.refused("is not the one the root approved", rollout.stranded, self.manifest2, NEXT, CURRENT, without_b)
+
+    def test_a_node_that_neither_unlocks_nor_serves_is_not_judged_but_named(self):
+        manifest = self.under(BOTH, epoch=2, prev=m.digest(self.under(CURRENT)), c="QUARANTINED")
+        done = self.states(a={"b": "image-2"}, b={"a": "image-2"})
+        self.assertEqual(rollout.stranded(manifest, BOTH, NEXT, done), {})
+        self.assertEqual(rollout.unwatched(manifest, BOTH, NEXT), ["c"])
+        self.assertEqual(rollout.unwatched(self.manifest2, BOTH, NEXT), [])
+
 def sign(manifest, key=hbt.ROOT, signer="root"):
     return {"manifest": manifest, "signature": {"signer": signer, "key": hbt.pub(key),
                                                 "sig": key.sign(m.DOMAIN + m.canonical(manifest)).hex()}}

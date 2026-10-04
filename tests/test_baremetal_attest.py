@@ -263,6 +263,15 @@ class Verification(unittest.TestCase):
         self.assertEqual(self.secrets[-1][0], manifest_ak)
         self.assertEqual(self.v.enroll("site-a", self.secrets[-1][1]).hex(), manifest_ak)
 
+    def test_enroll_refuses_an_ak_the_manifest_no_longer_names(self):
+        """regalia-kms-1e on #272: the manifest moved between the challenge and the answer."""
+        before = attest.ak_identity(self.other_pub)[0].hex()
+        self.v.challenge("site-a", EK_PUB, self.other_pub, replace=True, ak_name=before)
+        with self.assertRaises(attest.Refused) as caught:
+            self.v.enroll("site-a", self.secrets[-1][1], ak_name=attest.ak_identity(self.ak_pub)[0].hex())
+        self.assertIn("not the one the manifest names for this node now", str(caught.exception))
+        self.attempt()                                       # the first AK is still the enrolled one
+
     def test_enrollment_refusals(self):
         def refused(reason, fn, *args, **kw):
             with self.assertRaises(attest.Refused) as caught:

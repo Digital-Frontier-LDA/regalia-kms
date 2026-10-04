@@ -260,14 +260,14 @@ func (h highWater) verify(digestOf func(uint64) string) (uint64, error) {
 
 // ReadChain is the reading half of Store._load: every envelope accepted in order from nothing, none
 // repeating an epoch. Returns the manifests, epoch 1 first.
-func ReadChain(envelopes []any, rootKey string) ([]map[string]any, error) {
+func ReadChain(envelopes []any, root any) ([]map[string]any, error) {
 	if len(envelopes) == 0 {
 		return nil, refuse("the membership file must hold a non-empty list of envelopes")
 	}
 	var current map[string]any
 	manifests := make([]map[string]any, 0, len(envelopes))
 	for _, envelope := range envelopes {
-		next, err := Accept(current, envelope, rootKey)
+		next, err := Accept(current, envelope, root)
 		if err != nil {
 			return nil, err
 		}

@@ -1,6 +1,9 @@
 [Unit]
 Description=regalia e2e: report that the root filesystem is up, and power off
-After=regalia-e2e-enrol.service
+# After systemd-pcrphase.service too (#310, root-caused by regalia-kms-d9): it measures `ready` into PCR 11, and
+# the PCRs printed below must be read after that, or they are one phase short (the sysinit value). It is in the
+# transaction already, pulled in by sysinit.target: this orders, it adds nothing.
+After=regalia-e2e-enrol.service systemd-pcrphase.service
 
 [Service]
 Type=oneshot

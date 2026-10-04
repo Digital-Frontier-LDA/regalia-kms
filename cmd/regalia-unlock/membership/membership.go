@@ -1,7 +1,9 @@
 package membership
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,13 +22,14 @@ import (
 const (
 	SchemaV1         = "regalia.membership/v1"
 	SchemaV2         = "regalia.membership/v2"
+	SchemaV3         = "regalia.membership/v3" // v2 with typed keys ({"alg": ...}): only here (#156, #199)
 	heartbeatMin     = 3600
 	heartbeatHardMax = 7 * 24 * 3600
 	domain           = "regalia-membership/v1\x00"
 )
 
 var (
-	schemas      = []string{SchemaV1, SchemaV2} // in order: a chain never goes back
+	schemas      = []string{SchemaV1, SchemaV2, SchemaV3} // in order: a chain never goes back
 	capabilities = map[string][]string{"ACTIVE": {"authorize", "request", "serve"}, "MAINTENANCE": {"request"}, "DRAINING": {"serve"},
 		"QUARANTINED": {}, "RETIRED": {}, "REVOKED_STOLEN": {}}
 	terminal       = map[string]bool{"RETIRED": true, "REVOKED_STOLEN": true}
@@ -139,10 +142,10 @@ func Validate(value any) (map[string]map[string]any, error) {
 		return nil, refuse("manifest must be an object")
 	}
 	schema, _ := manifest["schema"].(string)
-	if schema != SchemaV1 && schema != SchemaV2 {
-		return nil, refuse("schema must be %s or %s", SchemaV1, SchemaV2)
+	if schema != SchemaV1 && schema != SchemaV2 && schema != SchemaV3 {
+		return nil, refuse("schema must be %s", strings.Join(schemas, " or "))
 	}
-	second := schema == SchemaV2
+	second := schema == SchemaV2 || schema == SchemaV3 // v3 has v2's fields
 	keys, nodeKeySet := manifestKeys, nodeKeys
 	if second {
 		keys, nodeKeySet = v2ManifestKeys, v2NodeKeys
@@ -184,15 +187,22 @@ func Validate(value any) (map[string]map[string]any, error) {
 	if !ok {
 		return nil, refuse("revocation_keys must be a list")
 	}
-	distinct := map[string]bool{}
-	for _, key := range revocation {
-		if err := hexField(key, 64, "a revocation key"); err != nil {
+	distinct, typed := map[string]bool{}, false
+	for i, entry := range revocation {
+		_, key, err := revocationEntry(entry, fmt.Sprintf("revocation_keys[%d]", i))
+		if err != nil {
 			return nil, err
 		}
-		distinct[key.(string)] = true
+		distinct[key] = true
+		if _, bare := entry.(string); !bare {
+			typed = true
+		}
 	}
 	if len(distinct) != len(revocation) {
 		return nil, refuse("revocation_keys must be distinct")
+	}
+	if typed && schema != SchemaV3 {
+		return nil, refuse("a typed revocation key ({\"alg\": ...}) needs schema %s", SchemaV3)
 	}
 	nodes, ok := manifest["nodes"].([]any)
 	if !ok || len(nodes) == 0 {
@@ -271,7 +281,7 @@ func Validate(value any) (map[string]map[string]any, error) {
 // key or by a revocation key named in the CURRENT manifest. Returns the manifest and the signer. A current
 // manifest that does not validate is refused here, before Accept reads its fields: only what Accept or
 // AcceptChain returned should be passed.
-func VerifyEnvelope(value any, rootKey string, current map[string]any) (map[string]any, string, error) {
+func VerifyEnvelope(value any, root any, current map[string]any) (map[string]any, string, error) {
 	if current != nil {
 		if _, err := Validate(current); err != nil {
 			return nil, "", refuse("the current manifest is not valid: %v", err)
@@ -289,27 +299,34 @@ func VerifyEnvelope(value any, rootKey string, current map[string]any) (map[stri
 	if signer != "root" && signer != "revocation" {
 		return nil, "", refuse("signer must be root or revocation")
 	}
-	if err := hexField(signature["key"], 64, "signature.key"); err != nil {
-		return nil, "", err
+	if k, ok := signature["key"].(string); !ok || !signatureKeyPattern.MatchString(k) {
+		return nil, "", refuse("signature.key must be 64 or 130 lowercase hex")
 	}
 	if err := hexField(signature["sig"], 128, "signature.sig"); err != nil {
 		return nil, "", err
 	}
-	key := signature["key"].(string)
+	// the algorithm comes from the pinned root entry or the current manifest's entry for the key, never
+	// from the signature
+	key, algorithm := signature["key"].(string), ""
 	if signer == "root" {
-		if key != rootKey {
+		entries, err := RootEntries(root, "the root key")
+		if err != nil {
+			return nil, "", err
+		}
+		for _, entry := range entries {
+			if entry.Key == key {
+				algorithm = entry.Alg
+				break
+			}
+		}
+		if algorithm == "" {
 			return nil, "", refuse("the signature names a root key that is not the pinned root")
 		}
 	} else {
-		named := false
 		if current != nil {
-			for _, k := range current["revocation_keys"].([]any) {
-				if k == key {
-					named = true
-				}
-			}
+			algorithm = revocationAlg(current, key)
 		}
-		if !named {
+		if algorithm == "" {
 			return nil, "", refuse("the signing revocation key is not named by the current manifest")
 		}
 	}
@@ -317,28 +334,37 @@ func VerifyEnvelope(value any, rootKey string, current map[string]any) (map[stri
 		return nil, "", err
 	}
 	manifest := envelope["manifest"].(map[string]any)
+	if algorithm != "ed25519" && manifest["schema"] != SchemaV3 {
+		return nil, "", refuse("a manifest signed by a typed (%s) key needs schema %s", algorithm, SchemaV3)
+	}
 	sig, _ := hex.DecodeString(signature["sig"].(string))
-	if !verifySignature(algorithmOf(key), key, sig, append([]byte(domain), Canonical(manifest)...)) {
+	if !verifySignature(algorithm, key, sig, append([]byte(domain), Canonical(manifest)...)) {
 		return nil, "", refuse("the manifest signature does not verify")
 	}
 	return manifest, signer, nil
 }
 
-// algorithmOf is the signature algorithm of a key as the manifest names it. Today every key is a bare 64-hex
-// Ed25519 public key (the root's, and every revocation key's). Typed revocation keys (an ECDSA P-256 key of a
-// Nitrokey, #66) will be named by their manifest entry; the algorithm is taken from that entry and from
-// nothing else, so a signature can never choose how it is checked.
-func algorithmOf(key string) string { return "ed25519" }
-
-// verifySignature checks a signature under the algorithm the manifest named for its key.
+// verifySignature is membership.verify_revocation's check, under the algorithm a key's entry names:
+// Ed25519, or ECDSA P-256 over SHA-256 with r || s and only the low-S form (the signer normalises).
 func verifySignature(algorithm, key string, sig, message []byte) bool {
+	public, err := hex.DecodeString(key)
+	if err != nil || len(sig) != 64 {
+		return false
+	}
 	switch algorithm {
 	case "ed25519":
-		public, err := hex.DecodeString(key)
-		if err != nil || len(public) != ed25519.PublicKeySize || len(sig) != ed25519.SignatureSize {
+		return len(public) == ed25519.PublicKeySize && ed25519.Verify(ed25519.PublicKey(public), message, sig)
+	case "ecdsa-p256":
+		r, s := new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])
+		if r.Sign() <= 0 || r.Cmp(p256Order) >= 0 || s.Sign() <= 0 || s.Cmp(p256HalfOrder) > 0 {
 			return false
 		}
-		return ed25519.Verify(ed25519.PublicKey(public), message, sig)
+		point, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), public)
+		if err != nil {
+			return false
+		}
+		digest := sha256.Sum256(message)
+		return ecdsa.Verify(point, digest[:], r, s)
 	}
 	return false
 }
@@ -480,8 +506,8 @@ func schemaIndex(schema string) int {
 
 // Accept is membership.accept: the next manifest, if `envelope` may follow `current` (nil at enrolment,
 // where only a root-signed epoch-1 manifest is accepted).
-func Accept(current map[string]any, envelope any, rootKey string) (map[string]any, error) {
-	candidate, signer, err := VerifyEnvelope(envelope, rootKey, current)
+func Accept(current map[string]any, envelope any, root any) (map[string]any, error) {
+	candidate, signer, err := VerifyEnvelope(envelope, root, current)
 	if err != nil {
 		return nil, err
 	}
@@ -525,9 +551,9 @@ func Accept(current map[string]any, envelope any, rootKey string) (map[string]an
 }
 
 // AcceptChain is membership.accept_chain: each envelope in order.
-func AcceptChain(current map[string]any, envelopes []any, rootKey string) (map[string]any, error) {
+func AcceptChain(current map[string]any, envelopes []any, root any) (map[string]any, error) {
 	for _, envelope := range envelopes {
-		next, err := Accept(current, envelope, rootKey)
+		next, err := Accept(current, envelope, root)
 		if err != nil {
 			return nil, err
 		}
@@ -543,4 +569,26 @@ func LoadDocument(raw []byte) (any, error) {
 		return nil, errors.New("not valid JSON: not UTF-8")
 	}
 	return Load(raw, MaxBytes)
+}
+
+// May is membership.may: whether node may `serve`, `request` (be unlocked) or `authorize` (give a
+// contribution) under a manifest; false for a node it does not name. One difference: Python's may() RAISES
+// for a manifest that does not validate, and May returns false. Call it only on a manifest Validate (or
+// Accept) has passed, as bootcfg does; never rely on it to refuse one.
+func May(manifest map[string]any, node, action string) bool {
+	nodes, err := Validate(manifest)
+	if err != nil {
+		return false
+	}
+	entry, named := nodes[node]
+	if !named {
+		return false
+	}
+	state, _ := entry["state"].(string)
+	for _, allowed := range capabilities[state] {
+		if allowed == action {
+			return true
+		}
+	}
+	return false
 }

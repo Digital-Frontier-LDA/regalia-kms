@@ -40,6 +40,23 @@ class Case(lt.Case):
             return json.load(f)
 
 
+class Metrics(Case):
+    """#305: after every round, serving and the lease left, through deploy/baremetal/metrics.py's registry."""
+
+    def test_serving_and_the_lease_left_are_published_and_registered(self):
+        from deploy.baremetal import metrics
+        published = []
+        service = admission.Service(self.holder, lambda: self.manifest_now, self.renew, self.path,
+                                    boottime=lambda: self.ticks, boot=lambda: BOOT, metrics=published.append)
+        service.step()
+        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 1), ("regalia_admission_lease_seconds_left", {}, lease.MAX_LIFETIME)])
+        self.manifest_now = None                                          # no manifest: not admitted
+        service.step()
+        self.assertEqual(published[-1], [("regalia_admission_serving", {}, 0), ("regalia_admission_lease_seconds_left", {}, 0)])
+        for samples in published:
+            metrics.render("admission", samples)
+
+
 class Admission(Case):
     def test_a_node_with_a_lease_is_admitted_until_its_expiry_less_the_margin(self):
         asked_at = self.ticks

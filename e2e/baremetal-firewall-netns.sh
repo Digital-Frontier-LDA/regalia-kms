@@ -7,8 +7,10 @@
 # inside its namespace, never on the machine running the test), a client, a monitoring host, an admin
 # host, an unauthorized host, and the audit and NTP sinks. Then:
 #   1  network_probe.py from each zone: KMS port and SSH port exactly as the site config says
-#   2  a listener on an undeclared port of the KMS host is reachable from nowhere
-#   3  outbound: the KMS host reaches the audit sink (TCP) and the NTP sink (UDP), and nothing else
+#   2  a listener on an undeclared port of the KMS host is reachable from nowhere; node_exporter's port
+#      (9100, #305) from the monitoring zone only
+#   3  outbound: the KMS host reaches the audit sink (TCP) and the NTS server (NTS-KE TCP 4460, NTP UDP 123,
+#      rendered from time.nts, #303), and nothing else
 #   4  the rendered file passes nft -c and loads; forward and IPv6 are dropped
 #   5  the service tunnel (#80), with real WireGuard: IPv6 is carried only on wg-svc, only between addresses
 #      of the tunnel's prefix, only to the sync port; nothing else gets in or out by the tunnel, a zone's
@@ -62,8 +64,9 @@ x unauth ip route add 10.99.0.0/24 via "${IP[kms]}" dev eth0 onlink
 cat > "$T/site.json" <<EOF
 {"schema": "regalia.baremetal-site/v1", "site": "lab", "host_ipv4": "${IP[kms]}", "kms_port": 8443, "ssh_port": 22,
  "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["${IP[mon]}/32"], "admin_cidrs": ["203.0.113.0/28"],
- "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514},
-              {"name": "ntp", "cidr": "${IP[ntp]}/32", "proto": "udp", "port": 123}], "boot_mesh": null, "service_mesh": null}
+ "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514}],
+ "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["${IP[ntp]}/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]},
+ "boot_mesh": null, "service_mesh": null}
 EOF
 
 # Listeners: a TCP server answers on each port given; a UDP echo answers one datagram.
@@ -86,10 +89,10 @@ for spec in sys.argv[1:]:
     proto, port = spec.split(":"); threading.Thread(target={"tcp": tcp, "tcp6": tcp6, "udp": udp}[proto], args=(int(port),), daemon=True).start()
 threading.Event().wait()
 PY
-x kms python3 -Es "$T/listen.py" tcp:8443 tcp:22 tcp:9999 tcp6:8443 &
+x kms python3 -Es "$T/listen.py" tcp:8443 tcp:22 tcp:9999 tcp:9100 tcp6:8443 &
 x inside python3 -Es "$T/listen.py" tcp:80 &
 x audit python3 -Es "$T/listen.py" tcp:6514 tcp:7000 &
-x ntp python3 -Es "$T/listen.py" udp:123 udp:124 &
+x ntp python3 -Es "$T/listen.py" udp:123 udp:124 tcp:4460 tcp:4461 &
 x unauth python3 -Es "$T/listen.py" tcp:6514 tcp:443 &
 sleep 1
 
@@ -114,8 +117,10 @@ tcpok kms "${IP[unauth]}" 443 && P "the KMS host reaches an undeclared host befo
 # Every listener a negative check below relies on must answer now; a listener that failed to bind would
 # otherwise make "not reachable" pass whatever the firewall does.
 tcpok kms "${IP[audit]}" 7000 && P "control: audit:7000 answers before the ruleset" || F "control: audit:7000 not listening"
+tcpok client "${IP[kms]}" 9100 && P "control: kms:9100 answers before the ruleset" || F "control: kms:9100 not listening"
 tcpok kms "${IP[unauth]}" 6514 && P "control: unauth:6514 answers before the ruleset" || F "control: unauth:6514 not listening"
 udpok 124 && P "control: ntp:124/udp answers before the ruleset" || F "control: ntp:124/udp not listening"
+tcpok kms "${IP[ntp]}" 4461 && P "control: ntp:4461 answers before the ruleset" || F "control: ntp:4461 not listening"
 
 hdr "4  the rendered ruleset: nft -c, then loaded in the KMS namespace only"
 python3 -Es "$BM/firewall.py" "$T/site.json" > "$T/kms.nft" && P "rendered" || F "render failed"
@@ -141,6 +146,12 @@ for h in client mon admin unauth; do
   tcpok "$h" "${IP[kms]}" 9999 && F "$h reached port 9999" || P "$h cannot reach port 9999"
 done
 
+hdr "2a  node_exporter's port (#305): from the monitoring zone only"
+tcpok mon "${IP[kms]}" 9100 && P "the monitoring host reaches 9100" || F "the monitoring host cannot reach 9100"
+for h in client admin unauth; do
+  tcpok "$h" "${IP[kms]}" 9100 && F "$h reached 9100" || P "$h cannot reach 9100"
+done
+
 hdr "2b  IPv6 and forwarding are denied by behaviour, not only by policy"
 tcpok client fd00:5:7::10 8443 && F "the KMS port was reachable over IPv6" || P "the KMS port is not reachable over IPv6 (dropped)"
 tcpok unauth 10.99.0.2 80 && F "traffic was forwarded through the KMS host" || P "nothing is forwarded through the KMS host (forward chain drops)"
@@ -150,8 +161,10 @@ tcpok kms "${IP[audit]}" 6514 && P "audit sink 6514/tcp reachable" || F "audit s
 tcpok kms "${IP[audit]}" 7000 && F "the audit host on an undeclared port was reachable" || P "the audit host on another port is not"
 tcpok kms "${IP[unauth]}" 6514 && F "an undeclared host was reachable" || P "an undeclared host (even on 6514) is not"
 tcpok kms "${IP[unauth]}" 443 && F "an undeclared host:443 was reachable" || P "an undeclared host on 443 is not"
-udpok 123 && P "NTP sink 123/udp reachable" || F "NTP sink unreachable"
-udpok 124 && F "the NTP host on an undeclared UDP port was reachable" || P "the NTP host on another UDP port is not"
+udpok 123 && P "NTS server: NTP 123/udp reachable (rendered from time.nts)" || F "NTS server: NTP unreachable"
+tcpok kms "${IP[ntp]}" 4460 && P "NTS server: NTS-KE 4460/tcp reachable" || F "NTS server: NTS-KE unreachable"
+udpok 124 && F "the NTS server on an undeclared UDP port was reachable" || P "the NTS server on another UDP port is not"
+tcpok kms "${IP[ntp]}" 4461 && F "the NTS server on an undeclared TCP port was reachable" || P "the NTS server on another TCP port is not"
 
 # ---- 5: the service tunnel ---------------------------------------------------------------------------------
 hdr "5  the service tunnel (#80): real WireGuard, and what the ruleset lets through it"
@@ -210,8 +223,8 @@ tcpok client fd00:5:7::10 7444 && P "control: the sync port answers over IPv6 on
 cat > "$T/site-mesh.json" <<EOF
 {"schema": "regalia.baremetal-site/v1", "site": "lab", "host_ipv4": "${IP[kms]}", "kms_port": 8443, "ssh_port": 22,
  "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["${IP[mon]}/32"], "admin_cidrs": ["203.0.113.0/28"],
- "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514},
-              {"name": "ntp", "cidr": "${IP[ntp]}/32", "proto": "udp", "port": 123}],
+ "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514}],
+ "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["${IP[ntp]}/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]},
  "boot_mesh": {"node_id": "kms", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443, "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": null,
                "peers": [{"node_id": "peer", "underlay": "${IP[peer]}", "address": "10.89.0.2"}]},
  "service_mesh": {"interface": "wg-svc", "listen_port": 51821, "sync_port": 7444, "authority": null}}

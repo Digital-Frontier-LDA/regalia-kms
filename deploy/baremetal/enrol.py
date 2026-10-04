@@ -467,14 +467,52 @@ def fingerprint(root_key):
     return hashlib.sha256(bytes.fromhex(root_key)).hexdigest()
 
 
-def check_manifest(directory, chain, root_key, typed, document):
+def _check_replacement_step(envelopes, root_key, node_id, replace):
+    """The step of the chain that first names `node_id`: a replacement only with `replace`, and `replace` only for one."""
+    from deploy.baremetal import replacement
+    previous = None
+    for envelope in envelopes:
+        current = membership.accept(previous, envelope, root_key)
+        if node_id in membership.validate(current):
+            break
+        previous = current
+    else:
+        return                                             # not named at all: check_manifest says so next
+    before = membership.validate(previous) if previous is not None else {}
+    after = membership.validate(current)
+    retired = sorted(n for n, entry in after.items() if n in before and before[n]["state"] not in replacement.TERMINAL
+                     and entry["state"] in replacement.TERMINAL)
+    if replace is None:
+        require(not retired, "the manifest that first names %s (epoch %d) retires %s: it is a replacement, enrolled only with "
+                "`commit --replace %s`" % (node_id, current["epoch"], ", ".join(retired), retired[0] if retired else ""))
+        return
+    require(previous is not None, "%s is named from epoch 1: it replaces nobody" % node_id)
+    require(replace in retired, "the manifest that first names %s (epoch %d) does not replace %s%s: not the replacement typed"
+            % (node_id, current["epoch"], replace, " (it retires %s)" % ", ".join(retired) if retired else ""))
+    try:
+        # policy_version changes with a replacement whose measurements name the new node: the documents are the
+        # root's to compare (measurements.check_replacement); here the identities are asserted
+        replacement._check_replacement(previous, current, replace, node_id, policy_version_may_change=True)
+    except membership.Refused as refusal:
+        raise Refused("the replacement of %s by %s is refused: %s" % (replace, node_id, refusal))
+
+
+def check_manifest(directory, chain, root_key, typed, document, replace=None):
     """Phase 2's first step, and the only one before anything is written: `chain` (one envelope, or the list
     of envelopes from epoch 1 to N) verifies from the root-signed epoch 1 onwards under the root key whose
     fingerprint the operator typed by hand (a file alone never sets a trust anchor, ADR-0002 D21.2); its LAST
     manifest names THIS host exactly as its identity bundle says, and commits to the measurements document
     given. The first three hosts enrol on epoch 1; a host added later (a fourth node, or a replacement under
     #76) is named first at some epoch N and enrols on the whole chain to N. Returns the last manifest; writes
-    nothing."""
+    nothing.
+
+    A REPLACEMENT (#76): when the manifest that first names this host also moves a node to RETIRED or
+    REVOKED_STOLEN, it is a replacement, and it is enrolled only as one: with `replace` = the old node's ID, typed
+    by the operator, and replacement.check_replacement's rules on that step (the old node terminal and kept, no
+    identity of any node ever listed reused, nothing else changed). A replacement is never enrolled by accident as
+    a plain addition, nor an addition as a replacement of a node the operator did not name. The measurement
+    document of that step is the root's ceremony to compare (measurements.check_replacement); enrolment asserts the
+    identities."""
     require(isinstance(root_key, str) and re.fullmatch(r"[0-9a-f]{64}", root_key), "the root key is 64 lower-case hex")
     typed = re.sub(r"[\s:]", "", (typed or "").lower())
     require(re.fullmatch(r"[0-9a-f]{64}", typed), "the fingerprint typed is not 64 hex digits")
@@ -489,6 +527,7 @@ def check_manifest(directory, chain, root_key, typed, document):
         raise Refused("the manifest chain is refused: %s" % refusal)
     nodes = membership.validate(manifest)
     node_id = bundle["node_id"]
+    _check_replacement_step(envelopes, root_key, node_id, replace)
     require(node_id in nodes, "the manifest does not name this host (%s)" % node_id)
     node = nodes[node_id]
     require(membership.CAPABILITIES[node["state"]] & {"request", "serve"},
@@ -508,16 +547,22 @@ def check_manifest(directory, chain, root_key, typed, document):
 NODE_JSON = "/etc/regalia/node.json"
 
 
-def node_config(node_id, root_key, example):
+def node_config(node_id, root_key, example, site):
     """The node configuration enrolment writes: the shipped example (deploy/baremetal/node.example.json) with
-    this host's node ID and the root key whose fingerprint was typed. Checked by node.validate."""
+    this host's node ID, the root key whose fingerprint was typed, and the NTS servers of the validated site
+    config's time.nts (#303: chrony.conf and the firewall are rendered from the same list, so the names chrony
+    uses and the names authtime judges cannot differ). Checked by node.validate."""
     from deploy.baremetal import node as node_module           # imported here: node imports most of the package
-    doc = dict(example, node_id=node_id, root_key=root_key)
+    doc = dict(example, node_id=node_id, root_key=root_key, time_servers=[server["name"] for server in site["time"]["nts"]])
     node_module.validate(doc)
     return doc
 
 
 CONFIG_DIR = "/etc/regalia/"
+# chronyd -f, by units/chrony.service.d/regalia.conf (#303). In /etc/chrony, not CONFIG_DIR: the distribution's AppArmor
+# profile for chronyd reads /etc/chrony/** and nothing else of /etc. A file of its own: Debian's chrony.conf, a package
+# conffile, is never touched.
+CHRONY_CONF = "/etc/chrony/regalia.conf"   # the same as authtime.CHRONY_CONF, the authority host's install (held equal by a test)
 
 
 def _same(target, digest):
@@ -531,8 +576,8 @@ def _install(journal, step, path, data, prefix=""):
     which fails if the target exists (a rename would replace it silently). A file already there, or one that
     appears meanwhile, is accepted only if it is byte-for-byte what this step writes (a resumed run); anything
     else is refused and left. Enrolment never overwrites a node's configuration (re-enrolment is #76)."""
-    require(path.startswith(CONFIG_DIR) and os.path.normpath(path) == path and "\0" not in path,
-            "%s is not under %s: enrolment writes configuration only there" % (path, CONFIG_DIR))
+    require((path.startswith(CONFIG_DIR) or path == CHRONY_CONF) and os.path.normpath(path) == path and "\0" not in path,
+            "%s is not under %s: enrolment writes configuration only there (and %s)" % (path, CONFIG_DIR, CHRONY_CONF))
     target = prefix + path
     digest = hashlib.sha256(data).hexdigest()
     facts = {k: v for k, v in journal.get(step).items() if k not in ("state", "at")}
@@ -578,22 +623,37 @@ def _install(journal, step, path, data, prefix=""):
 
 
 def install_config(journal, node_id, root_key, example, site, document, prefix=""):
-    """Phase 2's configuration: node.json, the site configuration and the measurements document the manifest
-    commits to, each where node.json says, each refused if something else is already there."""
-    from deploy.baremetal import sitecfg
-    sitecfg.validate(site)
-    config = node_config(node_id, root_key, example)
+    """Phase 2's configuration: node.json, the site configuration, the measurements document the manifest
+    commits to, each where node.json says, and chrony.conf (#303), rendered from the site's time.nts by
+    authtime.conf, at CHRONY_CONF, where the shipped chrony drop-in points chronyd (Debian's own
+    /etc/chrony/chrony.conf, a package conffile, is never touched). Each refused if something else is already
+    there."""
+    from deploy.baremetal import authtime, sitecfg
+    validated = sitecfg.validate(site)
+    config = node_config(node_id, root_key, example, validated)
     for key in ("site", "measurements"):
         require(config[key].startswith(CONFIG_DIR), "node.json puts %s at %s, outside %s" % (key, config[key], CONFIG_DIR))
     pretty = lambda doc: (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()        # noqa: E731
     _install(journal, "config", config["site"], pretty(site), prefix)
     _install(journal, "config", config["measurements"], pretty(document), prefix)
+    _install(journal, "config", CHRONY_CONF, authtime.conf(config["time_servers"]).encode(), prefix)
     _install(journal, "config", NODE_JSON, pretty(config), prefix)
     return config
 
 
 SYNC_USER = "regalia-sync"
 PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def first_epoch(envelopes, root_key, node_id):
+    """The epoch of the first manifest of the chain that names `node_id` (None if none does). A node first named
+    above epoch 1 (a replacement, or a node added later) joins a network whose heartbeats have long been running."""
+    current = None
+    for envelope in envelopes:
+        current = membership.accept(current, envelope, root_key)
+        if node_id in membership.validate(current):
+            return current["epoch"]
+    return None
 
 
 def anchor_and_store(config_path, chain, run=subprocess.run):
@@ -623,6 +683,8 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     require(not counter_present or (len(counter_present) == 2 and counter.value() == 0),
             "the TPM already holds the heartbeat counter's indices (%s) at a value other than a fresh one: enrolment "
             "does not take them over" % ", ".join(counter_present))
+    # The heartbeat counter is NOT defined here: first_heartbeat defines it AT the network's current sequence (or at
+    # 0, only at a network's bootstrap, by the operator's --bootstrap), whenever the node enrols (#190, d9's read).
     already = 0
     if os.path.exists(store.path):
         store.load()                                   # refuses a store the TPM anchor does not vouch for
@@ -646,9 +708,107 @@ def anchor_and_store(config_path, chain, run=subprocess.run):
     for envelope in envelopes[already:]:            # what the store holds already is this chain's beginning (checked)
         store.commit(envelope)
     manifest = store.load()
-    if not counter_present:
-        counter.define()
     return manifest["epoch"], membership.digest(manifest)
+
+
+def first_heartbeat(config_path, run=subprocess.run, bootstrap=False):
+    """As regalia-sync (it owns the heartbeat state and the counter's lock), for a node first named above epoch 1:
+    the highest heartbeat any reachable peer or the authority holds, verified under this node's manifest, taken as
+    its FIRST (heartbeat.Freshness.accept_first: same checks as accept, live by authenticated time with no
+    system-clock fallback, its counter defined AT that sequence with no increment loop, and its issued_at the
+    held time). A `heartbeat-first` event goes to the sync trail before (INCOMPLETE) and after (ALLOW). Returns
+    (sequence, seconds left); (None, None) when a heartbeat is already held (done before)."""
+    from deploy.baremetal import node as node_module
+    with open(config_path, "rb") as f:
+        cfg = node_module.validate(membership.load(f.read(node_module.MAX_BYTES + 1), node_module.MAX_BYTES))
+    n = node_module.Node(cfg, run)
+    store = n.store()
+    manifest = store.load()             # the store the anchor step committed, checked against the TPM anchor (the
+    #                                     published chain does not exist yet: the sync service writes it)
+    return take_first_heartbeat(n.node_id, manifest, store, n.freshness(), n.sources(manifest),
+                                node_module.Trail(n.path("sync-audit.jsonl")), bootstrap, note=lambda text: print("NOTE " + " ".join(text.split())))
+
+
+def take_first_heartbeat(node_id, manifest, store, freshness, sources, trail, bootstrap=False, note=lambda text: None):
+    """first_heartbeat's decision, given the node's parts. WHENEVER the node enrols with no heartbeat counter yet (a
+    founding node whose hardware came late, a re-imaged one, a replacement: the network's heartbeats may be far past
+    the jump bound), its counter is defined at the highest heartbeat a source holds that verifies under its
+    manifest. At 0 only at a network's BOOTSTRAP, when no heartbeat was ever issued: the operator says so
+    (`bootstrap`), and no reachable source may hold one. Returns (sequence, seconds left); (None, None) when there is
+    nothing to do (a heartbeat held, or the counter defined already)."""
+    from deploy.baremetal import convergence, heartbeat, sync
+    counter = freshness.counter
+    present = [i for i in (counter.index, counter.base_index) if counter._tpm("nvreadpublic", i).returncode == 0]
+    if freshness.held() is not None:
+        return None, None
+    require(len(present) != 1, "the heartbeat counter is half defined (%s): that is recount.py's case, not enrolment's" % ", ".join(present))
+    client = sync.Client(node_id, store, None, sources, lambda event: None)
+    found, failures = [], []
+    for name in sorted(sources):
+        try:
+            answer = client._ask(name, "pull", summary=convergence.summary(store), sequence=0)
+            envelope = answer["bundle"]["heartbeat"]
+            if envelope is None:
+                failures.append("%s: holds none newer" % name)
+                continue
+            found.append((heartbeat.verify(envelope, manifest)["sequence"], name, envelope))
+        except (Refused, membership.Refused, KeyError, TypeError) as refusal:
+            failures.append("%s: %s" % (name, refusal))
+    if len(present) == 2:
+        # a counter from an earlier life of this TPM (the same board re-enrolled, an earlier commit cut after the define),
+        # with no heartbeat held: fine only if it is within the jump bound of the network (regalia-kms-d9 on #279)
+        # Safe to keep only when a verified heartbeat is within the jump bound of it: accept() then takes that heartbeat
+        # as it would any other, and the node becomes fresh. Otherwise refused, never "nothing to do".
+        value = counter.value()
+        if found:
+            highest = max(f[0] for f in found)
+            require(highest - value <= counter.MAX_JUMP, "the TPM holds a heartbeat counter at %d with no heartbeat held, %d "
+                    "behind the network's %d (more than the jump bound %d): the node would never be fresh. recount.py sets its "
+                    "floor" % (value, highest - value, highest, counter.MAX_JUMP))
+            return None, None
+        require(bootstrap and value == 0 and manifest["epoch"] == 1,
+                "the TPM holds a heartbeat counter at %d with no heartbeat held, and no source gave one to check it against (%s): "
+                "run commit again once one answers, or recount.py sets its floor" % (value, "; ".join(failures) or "none reachable"))
+        return None, None                     # the bootstrap's own counter, before any heartbeat exists
+    event = {"event": "heartbeat-first", "node": node_id, "epoch": manifest["epoch"]}
+    if not found:
+        require(bootstrap, "no peer and no authority gave a heartbeat that verifies under epoch %d (%s): the node cannot start "
+                "its heartbeat counter yet; run commit again once one answers (or, at a network's bootstrap, before any "
+                "heartbeat was ever issued, with --bootstrap)" % (manifest["epoch"], "; ".join(failures) or "none reachable"))
+        require(manifest["epoch"] == 1, "--bootstrap is the first bring-up of a cluster, under epoch 1; this manifest is epoch %d: "
+                "a heartbeat has been issued since, run commit again once a source answers" % manifest["epoch"])
+        # an unreachable source and one that holds none look alike from here: the operator is shown which is which
+        note("bootstrap: no source gave a heartbeat. %s" % ("; ".join(failures) or "no source is configured"))
+        trail(dict(event, sequence=0, outcome="INCOMPLETE", reason="bootstrap (--bootstrap): no source holds a heartbeat (%s)"
+                   % ("; ".join(failures) or "no source configured")))
+        counter.define()
+        trail(dict(event, sequence=0, outcome="ALLOW", reason="bootstrap: the counter starts at 0"))
+        return 0, None
+    sequence, source, envelope = max(found, key=lambda f: f[0])
+    event.update(sequence=sequence, issuer=envelope["signature"]["key"], source=source)
+    trail(dict(event, outcome="INCOMPLETE", reason="taking the first heartbeat"))
+    try:
+        left = freshness.accept_first(envelope, manifest)
+    except (Refused, membership.Refused) as refusal:
+        trail(dict(event, outcome="DENY", reason=str(refusal)))           # the trail never ends open
+        raise Refused("the first heartbeat (sequence %d, from %s) is refused: %s. Run commit again" % (sequence, source, refusal))
+    trail(dict(event, outcome="ALLOW", reason=""))
+    return sequence, left
+
+
+def run_first_heartbeat_as_sync(config_path, run=subprocess.run, bootstrap=False):
+    done = run(["runuser", "-u", SYNC_USER, "-g", SYNC_USER, "-G", "tss", "--", "env", "-i", "PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "LC_ALL=C", sys.executable, "-Es", "-m", "deploy.baremetal.enrol", "_first-heartbeat", "--config", config_path]
+               + (["--bootstrap"] if bootstrap else []),
+               cwd=PACKAGE_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    require(done.returncode == 0, "the first-heartbeat step, as %s, did not finish: %s" % (SYNC_USER, (done.stderr or done.stdout).strip()[-400:]))
+    m = re.search(r"^FIRST-HEARTBEAT (\S+) (\S+)$", done.stdout, re.M)
+    require(m is not None, "the first-heartbeat step did not report its result")
+    for line in re.findall(r"^NOTE (.*)$", done.stdout, re.M):
+        print("  " + line)                                     # to the operator at the console
+    if m.group(1) == "held":
+        return None, None
+    return int(m.group(1)), (None if m.group(2) == "-" else float(m.group(2)))
 
 
 def run_as_sync(config_path, chain, run=subprocess.run):
@@ -925,8 +1085,85 @@ def seal_credentials(journal, directory, esp, initrd_pub, run=subprocess.run):
     return files
 
 
+RENDERED_DIRS = ("loader/credentials/", "EFI/regalia/")   # where bootcreds.esp_files may write or remove, at any B3 stage
+
+
+def _rendered_path(path):
+    """`path` from esp_files, normalized and confined: under loader/credentials/ or EFI/regalia/ (FAT compares names
+    without case), never absolute, never climbing out."""
+    require(isinstance(path, str) and path and "\0" not in path, "bootcreds named %r" % (path,))
+    relative = os.path.normpath(path.lstrip("/"))
+    require(not os.path.isabs(relative) and relative != ".." and not relative.startswith("../")
+            and any((os.path.dirname(relative) + "/").lower() == d.lower() for d in RENDERED_DIRS),   # one level, no deeper
+            "bootcreds named %r, outside %s" % (path, " and ".join(RENDERED_DIRS)))
+    return relative
+
+
+def _replace_esp(directory, filename, data):
+    """A RENDERED file (public, re-derivable from the anchored chain) written over whatever is there: a temporary
+    file in the same directory, fsynced, renamed onto the name, the directory fsynced. The sealed files are never
+    replaced (_publish_esp); a rendered one must be, after every manifest change (regalia-kms-ed on #276)."""
+    target, tmp = os.path.join(directory, filename), os.path.join(directory, "." + filename + ".enrol-new")
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, target)
+    dfd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
+def render_credentials(journal, esp, site, chain, root_key, anchor, device=None):
+    """The ESP files rendered from the anchored chain and the site (bootcreds.esp_files, #271: the ONE call enrol and
+    the update path make; what it returns depends on #66's B3 stage, so its paths are taken as they come, confined
+    to RENDERED_DIRS). {path: bytes} is written, replacing what is there (public, re-derivable: a resumed enrolment
+    whose manifest moved on is not stranded); {path: None} is removed if present (the B3 switch retires files the
+    peers no longer expect). Each is journalled. Then the record of EVERY credential the stub will measure
+    (espcreds.record over loader/credentials as uki reads it): the PCR 12 the peers must expect, journalled as
+    "espcreds". A chain the TPM did not anchor is refused by esp_files before anything is written."""
+    from deploy.baremetal import bootcreds, uki
+    envelopes = chain if isinstance(chain, list) else [chain]
+    files = bootcreds.esp_files(site, envelopes, root_key, device or "/dev/disk/by-partlabel/regalia-root", anchor)
+    planned = sorted((_rendered_path(path), data) for path, data in files.items())
+    require(all(data is None or isinstance(data, bytes) for _, data in planned), "bootcreds gave something that is neither bytes nor None")
+    journal.started("render")
+    done = {}
+    for relative, data in planned:
+        directory, filename = os.path.join(esp, os.path.dirname(relative)), os.path.basename(relative)
+        _ensure_trusted_dir(directory)
+        target = os.path.join(directory, filename)
+        if data is None:
+            removed = False
+            for name in (target, os.path.join(directory, "." + filename + ".enrol-new")):    # and a crash's leftover
+                if os.path.lexists(name):
+                    require(not os.path.islink(name) and os.path.isfile(name), "%s is not a regular file" % name)
+                    os.unlink(name)
+                    removed = True
+            if removed:                                 # durable: a retired credential must not come back after a power cut
+                dfd = os.open(directory, os.O_RDONLY)
+                try:
+                    os.fsync(dfd)
+                finally:
+                    os.close(dfd)
+            done[relative] = None
+        else:
+            _replace_esp(directory, filename, data)
+            done[relative] = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    journal.done("render", files=done)
+    record = espcreds.record(uki.credential_files(esp))
+    journal.done("espcreds", **record)
+    return record
+
+
 def commit(directory, chain, root_key, typed, document, site, example, boot=None, run=subprocess.run, prefix="", as_sync=None,
-           out=sys.stdout):
+           out=sys.stdout, replace=None, first_beat=None, bootstrap=False):
     """Phase 2 (#190): this host's TPM identity re-checked by Name, the manifest chain checked again (never trusted
     from an earlier `check`), the boot image checked (approved_image), the configuration installed, the state
     directory made regalia-sync's, the anchor, the store and the heartbeat counter set up AS regalia-sync, and the
@@ -936,7 +1173,7 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     journal = Journal(directory, _bundle(directory)["node_id"])
     require(journal.state("identity") == "done", "this host has no identity yet: run `enrol init` first")
     identity(journal, directory, run)                               # a done identity is re-checked by Name at both handles
-    manifest = check_manifest(directory, chain, root_key, typed, document)
+    manifest = check_manifest(directory, chain, root_key, typed, document, replace)
     initrd_pub = None
     if boot is not None:                                            # checked before anything is written
         initrd_pub = approved_image(boot["image"], boot["record"], boot["initrd_pub"], boot["system_pub"],
@@ -948,14 +1185,28 @@ def commit(directory, chain, root_key, typed, document, site, example, boot=None
     require(epoch == manifest["epoch"] and digest == membership.digest(manifest),
             "the anchor stands at epoch %d (%s), not at the manifest checked (%d)" % (epoch, digest[:16], manifest["epoch"]))
     journal.done("anchor", epoch=epoch, digest=digest)
+    if journal.state("heartbeat_first") != "done":
+        # the heartbeat counter starts AT the network's current sequence whenever the node enrols (#190), at 0 only at
+        # the network's bootstrap (--bootstrap)
+        journal.started("heartbeat_first")
+        sequence, left = (first_beat or run_first_heartbeat_as_sync)(prefix + NODE_JSON, bootstrap=bootstrap)
+        journal.done("heartbeat_first", sequence=sequence, bootstrap=bool(bootstrap and sequence == 0 and left is None))
+        print("FIRST HEARTBEAT: %s" % ("nothing to do (a heartbeat held, or the counter defined)" if sequence is None else
+                                      "network bootstrap: the counter starts at 0" if left is None else
+                                      "sequence %d, the counter defined at it; live for %.0f s more" % (sequence, left)), file=out)
     print("ENROLLED (trust anchors): node %s, membership epoch %d (%s) anchored in the TPM and committed as %s"
           % (journal.doc["node_id"], epoch, digest[:16], SYNC_USER), file=out)
     if boot is not None:
         files = seal_credentials(journal, directory, boot["esp"], initrd_pub, run)
         print("SEALED to this TPM and the initrd key, on the ESP: %s" % ", ".join(
             "%s (sha256 %s, %d bytes)" % (f, v["sha256"][:16], v["size"]) for f, v in sorted(files.items())), file=out)
-        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled (not built "
-              "yet, #190); the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
+        from deploy.baremetal import node as node_module
+        anchor = node_module.Node(node_module.load(prefix + NODE_JSON), run).anchor()
+        record = render_credentials(journal, boot["esp"], site, chain, root_key, anchor)
+        print("RENDERED the boot credentials onto the ESP; PCR 12 the peers must expect: %s (from %s)" % (
+            record["pcr12"], ", ".join(c["file"] for c in record["credentials"])), file=out)
+        print("NOT FINISHED: the local contribution stays in %s until the peers' LUKS paths are enrolled: run "
+              "`enrol paths` next; the host cannot unlock unattended before then" % os.path.join(directory, LOCAL_FILE), file=out)
     return epoch, digest
 
 
@@ -972,6 +1223,7 @@ def main(argv=None):
     c.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
     c.add_argument("--measurements", required=True, help="the measurements document the manifest commits to")
     c.add_argument("--enrol-dir", default=ENROL_DIR)
+    c.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
     k = sub.add_parser("commit", help="enrol this host's trust anchors from the checked manifest chain")
     k.add_argument("--manifest", required=True, help="the root-signed envelope, or the JSON list of envelopes from epoch 1")
     k.add_argument("--root-key", required=True, help="the membership root's public key, 64 hex")
@@ -986,10 +1238,24 @@ def main(argv=None):
     k.add_argument("--secure-boot-cert", required=True, help="the Secure Boot certificate the record names")
     k.add_argument("--esp", required=True, help="the ESP's mount point: the sealed credentials go to ESP/loader/credentials")
     k.add_argument("--enrol-dir", default=ENROL_DIR)
+    k.add_argument("--replace", metavar="OLD_NODE_ID", help="this host replaces that node (#76): the manifest must say so")
+    k.add_argument("--bootstrap", action="store_true", help="the network has issued no heartbeat yet: start the counter at 0 "
+                   "if no reachable peer or authority holds one")
+    h = sub.add_parser("_first-heartbeat", help=argparse.SUPPRESS)
+    h.add_argument("--config", required=True)
+    h.add_argument("--bootstrap", action="store_true")
     a = sub.add_parser("_anchor", help=argparse.SUPPRESS)
     a.add_argument("--config", required=True)
     a.add_argument("--chain", required=True, choices=["-"], help="always -: the chain comes on standard input")
     args = ap.parse_args(argv)
+    if args.command == "_first-heartbeat":           # run by commit, as regalia-sync
+        try:
+            sequence, left = first_heartbeat(args.config, bootstrap=args.bootstrap)
+        except (Refused, membership.Refused, OSError, ValueError, KeyError, TypeError) as error:
+            print("REFUSED: %s" % error, file=sys.stderr)
+            return 1
+        print("FIRST-HEARTBEAT held -" if sequence is None else "FIRST-HEARTBEAT %d %s" % (sequence, "-" if left is None else "%.0f" % left))
+        return 0
     if args.command == "_anchor":                    # run by commit, as regalia-sync
         try:
             chain = membership.load(sys.stdin.buffer.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
@@ -1014,7 +1280,8 @@ def main(argv=None):
             typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
             boot = {"image": args.image, "record": args.image_record, "initrd_pub": args.initrd_pub, "system_pub": args.system_pub,
                     "secure_boot_cert": args.secure_boot_cert, "esp": args.esp}
-            commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot)
+            commit(args.enrol_dir, chain, args.root_key, typed, loaded["measurements"], loaded["site"], loaded["example"], boot,
+                   replace=args.replace, bootstrap=args.bootstrap)
         except (Refused, membership.Refused, attest.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1
@@ -1028,7 +1295,7 @@ def main(argv=None):
             # TYPED, from a terminal: piped from a file, the fingerprint would be a file again (D21.2)
             require(sys.stdin.isatty(), "the root key's fingerprint is typed at the console; standard input is not a terminal")
             typed = input("The root key's SHA-256 fingerprint, read from the ceremony record (typed by hand): ")
-            manifest = check_manifest(args.enrol_dir, envelope, args.root_key, typed, document)
+            manifest = check_manifest(args.enrol_dir, envelope, args.root_key, typed, document, args.replace)
         except (Refused, membership.Refused, OSError, ValueError, EOFError, KeyError, TypeError) as error:
             print("REFUSED: %s" % error, file=sys.stderr)
             return 1

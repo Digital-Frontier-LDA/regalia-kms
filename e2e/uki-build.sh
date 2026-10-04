@@ -32,7 +32,8 @@ hdr(){ printf '\n\033[1m### %s\033[0m\n' "$1"; }
 MEASURE="$(command -v systemd-measure || echo /usr/lib/systemd/systemd-measure)"
 STUB="${STUB:-/usr/lib/systemd/boot/efi/linuxx64.efi.stub}"
 ENGINE="${ENGINE:-$(ls /usr/lib/x86_64-linux-gnu/engines-3/pkcs11.so 2>/dev/null)}"
-SOFTHSM="${SOFTHSM:-$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so 2>/dev/null | head -1)}"
+# SoftHSM only, from its fixed install paths: no variable may point this script at another module (#225)
+SOFTHSM="$(ls /usr/lib/softhsm/libsofthsm2.so /usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so 2>/dev/null | head -1)"
 for t in ukify sbsign sbverify openssl softhsm2-util swtpm tpm2_pcrextend tpm2_pcrread systemd-creds "$MEASURE" python3; do
   command -v "$t" >/dev/null || { echo "uki-build: $t is required (systemd-ukify, sbsigntool, softhsm2, swtpm, tpm2-tools, systemd)"; exit 2; }
 done

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
+import hashlib
 import re
 import signal
 import subprocess
@@ -21,9 +22,12 @@ import sys
 # python3 -I, the script's own directory is not on sys.path, so it is added explicitly, last.
 sys.path.append(str(Path(__file__).resolve().parent))
 import recovery_state  # noqa: E402
+import trails  # noqa: E402
 
 CRYPTSETUP = '/usr/sbin/cryptsetup'
 LOCKDIR = Path('/run/lock')
+# The audit trail (#278): the registry's fixed path, root's. Tests point it elsewhere, as they do LOCKDIR.
+TRAIL = trails.where('recovery-reconcile')
 ENV = {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin', 'LC_ALL':'C'}
 KEY = re.compile(r'(?:[cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}')
 
@@ -146,13 +150,19 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     # the metadata, so a kill between the two leaves the slot listed while its card
     # opens nothing. That is accepted only when this tool recorded, on the kept
     # slot's token and after proving the card, that it was retiring exactly that slot
-    # (number and salt), and cryptsetup itself answers "no key" (exit 2) for the card.
+    # (number and salt), the slot's key material is no longer what it was when the mark
+    # was written (#255: a run killed after the mark but before the kill leaves the slot
+    # intact, and a wrong card opens nothing there too), and cryptsetup itself answers
+    # "no key" (exit 2) for the card.
     retiring = retiring_marks(before, keep)
     for slot, value in zip(retire, retired_keys):
         if slot in before['keyslots'] and not proves(device, value, slot):
             salt = before['keyslots'][slot].get('kdf', {}).get('salt')
             if (slot, salt) not in retiring:
                 raise Refused('retired card does not open its selected slot')
+            if area_digest(device, before['keyslots'][slot]) == retiring[(slot, salt)]:
+                raise Refused('retired card does not open its selected slot, whose key material is as it was when '
+                              'it was marked: the slot is intact, and this is not its card')
             if command(device, ['open', '--test-passphrase'], value).returncode != 2:
                 raise Refused('cannot prove the retired card opens nothing; inspect and repeat the selections')
     retained = {s: v for s, v in before['keyslots'].items() if s not in retire and s != keep}
@@ -195,8 +205,11 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
         mark = (slot, current['keyslots'][slot]['kdf']['salt'])
         if mark not in retiring_marks(current, keep):
             token_id, token = kept_token(current, keep)
-            marks = [list(m) for m in sorted(retiring_marks(current, keep) | {mark})]
-            data = json.dumps(dict(token, regalia_retiring=marks)).encode()
+            # the slot's key material as it is now, proven by its card: a later retry tells a slot
+            # wiped by a cut luksKillSlot (changed) from an intact one (the same) by it (#255)
+            marks = retiring_marks(current, keep)
+            marks[mark] = area_digest(device, current['keyslots'][slot])
+            data = json.dumps(dict(token, regalia_retiring=[[s, salt, area] for (s, salt), area in sorted(marks.items())])).encode()
             current = checked_write(['token', 'import', '--token-id', token_id, '--token-replace', '--json-file', '-'], input_data=data)
         current = checked_write(['luksKillSlot', '--batch-mode', slot], kept_key)
     for token in describe(header(device))['orphan_recovery_tokens']:
@@ -207,11 +220,11 @@ def reconcile(device, keep, retire, kept_key, retired_keys):
     # Only marks whose slot is gone are cleared; a mark for a slot still listed stays, so a later
     # retry can still finish it.
     marks = retiring_marks(current, keep)
-    pending = sorted(m for m in marks if m[0] in current['keyslots'])
+    pending = sorted((key, area) for key, area in marks.items() if key[0] in current['keyslots'])
     if marks and len(pending) < len(marks):
         token_id, token = kept_token(current, keep)
         token = {k: v for k, v in token.items() if k != 'regalia_retiring'}
-        if pending: token['regalia_retiring'] = [list(m) for m in pending]
+        if pending: token['regalia_retiring'] = [[s, salt, area] for (s, salt), area in pending]
         data = json.dumps(token).encode()
         checked_write(['token', 'import', '--token-id', token_id, '--token-replace', '--json-file', '-'], input_data=data)
     final = header(device)
@@ -234,14 +247,40 @@ def kept_token(data, keep):
 
 
 def retiring_marks(data, keep):
-    """(slot, salt) pairs this tool recorded on the kept slot's token before retiring them."""
+    """{(slot, salt): the sha256 of its key area then} that this tool recorded on the kept slot's token
+    before retiring them. A mark without the area (written before #255) is not one: it is ignored, so a
+    listed slot it names is held to its card again."""
     try:
         _, token = kept_token(data, keep)
     except Refused:
-        return set()
+        return {}
     marks = token.get('regalia_retiring')
-    if not isinstance(marks, list): return set()
-    return {(m[0], m[1]) for m in marks if isinstance(m, list) and len(m) == 2 and all(isinstance(x, str) for x in m)}
+    if not isinstance(marks, list): return {}
+    return {(m[0], m[1]): m[2] for m in marks
+            if isinstance(m, list) and len(m) == 3 and all(isinstance(x, str) for x in m) and re.fullmatch(r'[0-9a-f]{64}', m[2])}
+
+
+def area_digest(device, keyslot):
+    """The SHA-256 of a keyslot's key material, its binary area as the metadata places it: what luksKillSlot
+    overwrites (with random bytes) before it removes the slot from the metadata."""
+    area = keyslot.get('area') or {}
+    try:
+        offset, size = int(area.get('offset', -1)), int(area.get('size', -1))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        raise Refused('a keyslot area that cannot be read') from None
+    if offset < 0 or not 0 < size <= 64 << 20:
+        raise Refused('a keyslot area that cannot be read')
+    fd = os.open(device, os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        # cryptsetup wipes with O_DIRECT: the range is dropped from the page cache first, so this reads
+        # what the device holds, not a copy cached before the wipe (d9 on #255)
+        os.posix_fadvise(fd, offset, size, os.POSIX_FADV_DONTNEED)
+        data = os.pread(fd, size, offset)
+    finally:
+        os.close(fd)
+    if len(data) != size:
+        raise Refused('a keyslot area that cannot be read')
+    return hashlib.sha256(data).hexdigest()
 
 
 @contextmanager
@@ -274,11 +313,57 @@ def main():
                 if args.retire_slot: raise Refused('--retire-slot requires --keep-slot')
                 result = 0 if describe(header(args.device))['state'] == 'clean' else 1
             else:
-                kept = secret('Recovery key to KEEP, read from its card: ')
-                retired = [secret(f'Recovery key to RETIRE from slot {slot}: ') for slot in args.retire_slot]
-                reconcile(args.device, args.keep_slot, args.retire_slot, kept, retired)
-                kept = ''; retired.clear()
-                result = 0 if describe(header(args.device))['state'] == 'clean' else 1
+                # The custodian's choice is recorded before a card is asked for, and the run refuses if it
+                # cannot be (nothing is done unrecorded); then exactly one outcome: ALLOW, DENY (the header
+                # byte for byte as it was) or INCOMPLETE (it changed: repeat the same selection). Never a key.
+                before = header(args.device)
+                identity = recovery_state.device_id(args.device)
+                event = {'event': 'recovery-reconcile', 'device': str(args.device), 'device_id': identity, 'keep': args.keep_slot,
+                         'retire': list(args.retire_slot), 'state_before': describe(before)['header_state']}
+                try:
+                    # a run killed after its request left it unanswered: closed first, so every request on the
+                    # trail has exactly one outcome
+                    stale = trails.unanswered(TRAIL, event='recovery-reconcile', device_id=identity)   # whatever name it was given
+                    if stale is not None:
+                        trails.append(TRAIL, {'event': 'recovery-reconcile', 'device': str(args.device), 'device_id': identity, 'keep': stale.get('keep'),
+                                              'retire': stale.get('retire'), 'outcome': 'INCOMPLETE', 'request': stale['seq'],
+                                              'reason': 'the previous run was killed: no outcome was recorded',
+                                              'state_after': describe(before)['header_state']})
+                        print('the audit trail held an unanswered request (seq %d): it is closed as INCOMPLETE' % stale['seq'], file=sys.stderr)
+                    request = trails.append(TRAIL, dict(event, outcome='REQUESTED', reason=''))
+                except (trails.Refused, OSError) as error:
+                    raise Refused('the audit trail cannot be written, nothing was done: %s' % error)
+                # TERM and HUP raise, so the finally below records the outcome; from here a kill -9 is closed by the
+                # next run (above)
+                def stop(signum, frame):
+                    raise KeyboardInterrupt('signal %d' % signum)
+                for sig in (signal.SIGTERM, signal.SIGHUP):
+                    signal.signal(sig, stop)
+                outcome, reason = 'DENY', ''
+                try:
+                    kept = secret('Recovery key to KEEP, read from its card: ')
+                    retired = [secret(f'Recovery key to RETIRE from slot {slot}: ') for slot in args.retire_slot]
+                    reconcile(args.device, args.keep_slot, args.retire_slot, kept, retired)
+                    kept = ''; retired.clear()
+                    outcome = 'ALLOW'
+                except BaseException as error:
+                    reason = str(error)[:240] or type(error).__name__
+                    raise
+                finally:
+                    try:
+                        after = header(args.device)
+                        if outcome != 'ALLOW' and after != before:
+                            outcome = 'INCOMPLETE'
+                        state_after = describe(after)['header_state']
+                    except (Refused, OSError, subprocess.SubprocessError):
+                        state_after = 'unreadable'
+                        outcome = 'INCOMPLETE' if outcome != 'ALLOW' else outcome
+                    try:
+                        trails.append(TRAIL, dict(event, outcome=outcome, reason=reason, state_after=state_after, request=request))
+                    except (trails.Refused, OSError) as error:
+                        print('REFUSED: the outcome (%s) could not be written to the audit trail: %s' % (outcome, error), file=sys.stderr)
+                        outcome = 'UNRECORDED'
+                result = 0 if outcome == 'ALLOW' and describe(header(args.device))['state'] == 'clean' else 1
     except (Refused, OSError, subprocess.SubprocessError) as error:
         print(f'REFUSED: {error}', file=sys.stderr)
     finally:

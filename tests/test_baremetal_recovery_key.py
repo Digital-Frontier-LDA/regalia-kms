@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import unittest
 
-from deploy.baremetal import host_probe
+from deploy.baremetal import host_probe, trails
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT = os.path.join(ROOT, "deploy", "baremetal", "recovery-key.sh")
@@ -26,6 +26,23 @@ KEY = "cbdefghi-jklnrtuv-vutrnlkj-ihgfedbc-ccddeeff-gghhiijj-kkllnnrr-ttuuvvcb"
 NEW_KEY = "vvuuttrr-nnllkkjj-iihhggff-eeddccbb-cbdefghi-jklnrtuv-bcdefghi-jklnrtuc"
 THIRD_KEY = "rtuvcbde-fghijkln-bcdefghi-jklnrtuv-vvttrrnn-llkkjjii-hhggffee-ddccbbcc"
 FAST = ["--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000"]
+
+
+# trails.py beside a per-test copy of the script (#278) is the REAL one (copied as trails_real.py) behind a
+# wrapper that changes only the path: the registry's /var/log/regalia/recovery-key.jsonl is root's, and no
+# variable redirects it. While a file called "refuse" is beside it, an append refuses as the real one does when
+# it cannot write. Every test that wrote a trail ends by verifying its chain (setUp's cleanup).
+STUB_TRAILS = """import os, sys
+d = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, d)
+import trails_real as trails
+real_where = trails.where
+trails.where = lambda name, cfg=None: real_where(name, cfg) and os.path.join(d, "trail.jsonl")
+if sys.argv[1:2] == ["append"] and os.path.exists(os.path.join(d, "refuse")):
+    print("REFUSED: the test's trail refuses", file=sys.stderr)
+    sys.exit(1)
+sys.exit(trails.main(sys.argv[1:]))
+"""
 
 
 @unittest.skipUnless(CRYPTSETUP or os.environ.get("REGALIA_EXPECT_CRYPTSETUP") == "1", "cryptsetup is not installed")
@@ -43,6 +60,15 @@ class RecoveryKey(unittest.TestCase):
         self.bin = os.path.join(self.dir, "bin")
         os.mkdir(self.bin)
         self.argv_log = os.path.join(self.dir, "argv.log")
+        self.tool = os.path.join(self.dir, "tool")
+        os.mkdir(self.tool)
+        for name in ("recovery-key.sh", "recovery_state.py"):
+            shutil.copy(os.path.join(os.path.dirname(SCRIPT), name), self.tool)
+        shutil.copy(os.path.join(os.path.dirname(SCRIPT), "trails.py"), os.path.join(self.tool, "trails_real.py"))
+        with open(os.path.join(self.tool, "trails.py"), "w", encoding="ascii") as f:
+            f.write(STUB_TRAILS)
+        self.addCleanup(self.verify_trail)
+        self.script = os.path.join(self.tool, "recovery-key.sh")
         # REGALIA_TEST_FAIL: command-line fragments separated by "|"; a call containing one exits 1
         # without reaching cryptsetup. REGALIA_TEST_SIGNAL: "<fragment>" sends the script TERM at a
         # call containing it and fails the call. REGALIA_TEST_SIGNAL_AFTER: "<SIG>:<fragment>" runs
@@ -91,7 +117,7 @@ class RecoveryKey(unittest.TestCase):
 
     def run_script(self, mode, *lines, **faults):
         env = self.env(**faults)
-        return subprocess.run(["bash", SCRIPT, "--" + mode, self.img], input="".join(l + "\n" for l in lines),
+        return subprocess.run(["bash", self.script, "--" + mode, self.img], input="".join(l + "\n" for l in lines),
                               capture_output=True, text=True, env=env, timeout=120)
 
     def header(self):
@@ -247,7 +273,7 @@ class RecoveryKey(unittest.TestCase):
         for value in (INSTALLER, KEY, NEW_KEY, KEY[:8], NEW_KEY[:8]):
             self.assertNotIn(value, argv)
         # ... and the script takes no secret as an argument either.
-        done = subprocess.run(["bash", SCRIPT, "--check", self.img, KEY], capture_output=True, text=True, timeout=60)
+        done = subprocess.run(["bash", self.script, "--check", self.img, KEY], capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 1)
         self.assertIn("one device", done.stderr)
 
@@ -261,12 +287,12 @@ class RecoveryKey(unittest.TestCase):
         """The arming call must be one of THIS run's: the argv log is shared by every run of a test."""
         if os.path.exists(self.argv_log):
             os.unlink(self.argv_log)
-        return subprocess.run(["bash", SCRIPT, "--" + mode, self.img], capture_output=True, text=True, timeout=300,
+        return subprocess.run(["bash", self.script, "--" + mode, self.img], capture_output=True, text=True, timeout=300,
                               input="".join(l + "\n" for l in lines), env=self.env(**faults))
 
     def interrupted(self, mode, lines, close_stderr=False, **faults):
         """Run the script with faults that signal it; stderr may be a pipe whose reader has gone."""
-        with subprocess.Popen(["bash", SCRIPT, "--" + mode, self.img], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+        with subprocess.Popen(["bash", self.script, "--" + mode, self.img], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                               stderr=subprocess.PIPE, text=True, env=self.env(**faults)) as proc:
             if close_stderr:
                 proc.stderr.close()
@@ -456,7 +482,7 @@ class RecoveryKey(unittest.TestCase):
             f.write('open(%r, "w").close()\nraise SystemExit(0)\n' % marker)
 
         def beside(mode, *lines, **faults):
-            return subprocess.run(["bash", SCRIPT, "--" + mode, self.img], cwd=planted, capture_output=True, text=True,
+            return subprocess.run(["bash", self.script, "--" + mode, self.img], cwd=planted, capture_output=True, text=True,
                                   input="".join(l + "\n" for l in lines), env=dict(self.env(**faults), PYTHONPATH=planted), timeout=120)
 
         self.assertIn("keyslot 0", beside("status").stdout)
@@ -768,7 +794,7 @@ class RecoveryKey(unittest.TestCase):
                 if os.path.exists(self.argv_log):
                     os.unlink(self.argv_log)
                 env = self.env(fail_subcommand=fault, armed_by=armed)
-                with subprocess.Popen(["bash", SCRIPT, "--enrol", self.img], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                with subprocess.Popen(["bash", self.script, "--enrol", self.img], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=subprocess.PIPE, text=True, env=env) as held:
                     held.stdin.write(INSTALLER + "\n" + KEY + "\n")
                     held.stdin.flush()
@@ -887,13 +913,125 @@ class RecoveryKey(unittest.TestCase):
 
     def test_there_is_one_source_of_recovery_keys_the_ceremony(self):
         """#175, decided 2026-10-03: no host-generated mode, no switch to one."""
-        done = subprocess.run(["bash", SCRIPT, "--enrol", "--host-generated", self.img], input=INSTALLER + "\n", capture_output=True, text=True, env=self.env(), timeout=60)
+        done = subprocess.run(["bash", self.script, "--enrol", "--host-generated", self.img], input=INSTALLER + "\n", capture_output=True, text=True, env=self.env(), timeout=60)
         self.assertEqual(done.returncode, 1)
         self.assertIn("unknown argument '--host-generated'", done.stderr)
         with open(SCRIPT, encoding="utf-8") as f:
             text = f.read()
         for gone in ("systemd-cryptenroll \"$DEV\" --recovery-key", "recovery-key.conf", "source=host"):
             self.assertNotIn(gone, text)
+
+    def verify_trail(self):
+        """The trail's chain, as the real trails.verify checks it; and every request answered exactly once."""
+        path = os.path.join(self.tool, "trail.jsonl")
+        if os.path.exists(path):
+            trails.verify(path)
+
+    def pairs(self):
+        """{request seq: [the outcomes naming it]} of the trail."""
+        events = self.trail()
+        answers = {e["seq"]: [] for e in events if e["outcome"] == "REQUESTED"}
+        for e in events:
+            if e["outcome"] != "REQUESTED":
+                answers.setdefault(e.get("request"), []).append(e["outcome"])
+        return answers
+
+    def trail(self):
+        path = os.path.join(self.tool, "trail.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as f:
+            return [json.loads(line) for line in f]
+
+    def test_every_run_that_takes_a_key_is_recorded_before_and_after_and_no_key_is(self):
+        """#278: the request before a key is asked for, then exactly one outcome, each with the header's state.
+        --status writes nothing. No key, used, new or installer's, is ever in the trail."""
+        self.run_script("status")
+        self.assertEqual(self.trail(), [])
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertEqual(self.run_script("check", KEY).returncode, 0)
+        self.assertEqual(self.run_script("replace", THIRD_KEY, NEW_KEY).returncode, 1)          # not this host's key
+        self.assertEqual(self.run_script("replace", KEY, NEW_KEY).returncode, 0)
+        events = [(e["mode"], e["outcome"]) for e in self.trail()]
+        self.assertEqual(events, [("enrol", "REQUESTED"), ("enrol", "ALLOW"), ("check", "REQUESTED"), ("check", "ALLOW"),
+                                  ("replace", "REQUESTED"), ("replace", "DENY"), ("replace", "REQUESTED"), ("replace", "ALLOW")])
+        last = self.trail()[-1]
+        self.assertEqual((last["event"], last["state"], last["device"]), ("recovery-key", "clean", self.img))
+        self.assertTrue(all(len(outcomes) == 1 for outcomes in self.pairs().values()), self.pairs())
+        with open(os.path.join(self.tool, "trail.jsonl"), encoding="utf-8") as f:
+            text = f.read()
+        for secret in (KEY, NEW_KEY, THIRD_KEY, INSTALLER, KEY[:8], NEW_KEY[:8]):
+            self.assertNotIn(secret, text)
+
+    def test_nothing_is_done_unrecorded(self):
+        """The Vault rule: a request that cannot be written to the trail is refused before a key is asked for."""
+        open(os.path.join(self.tool, "refuse"), "w").close()
+        before = self.header()
+        done = self.run_script("enrol", INSTALLER, KEY)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("the audit trail cannot be written: nothing was done", done.stderr)
+        self.assertEqual(self.header(), before)
+        os.unlink(os.path.join(self.tool, "trails.py"))
+        done = self.run_script("enrol", INSTALLER, KEY)
+        self.assertIn("nothing is done unrecorded", done.stderr)
+        self.assertEqual(self.header(), before)
+
+    def test_a_run_cut_after_a_write_is_recorded_incomplete(self):
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertNotEqual(self.run_script("replace", KEY, NEW_KEY, fail_subcommand="luksKillSlot --key-file").returncode, 0)
+        self.assertEqual(self.trail()[-1]["outcome"], "INCOMPLETE")
+        self.assertEqual(self.trail()[-1]["state"], "added-unproven")
+
+    def test_an_outcome_that_cannot_be_written_fails_the_run(self):
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        # the request is written; the outcome is refused: armed only after the first write
+        refuse = os.path.join(self.tool, "refuse")
+        shim = os.path.join(self.bin, "cryptsetup")
+        with open(shim) as f:
+            text = f.read()
+        with open(shim, "w") as f:
+            f.write(text.replace('"%s" "$@"; rc=$?' % CRYPTSETUP, '[ "$1" = luksKillSlot ] && touch %s\n"%s" "$@"; rc=$?' % (refuse, CRYPTSETUP), 1))
+        done = self.run_script("replace", KEY, NEW_KEY)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertIn("could not be written to the audit trail", done.stderr)
+        self.assertTrue(self.opens(NEW_KEY) and not self.opens(KEY), "the premise: the replace itself finished")
+        self.assertEqual([e["outcome"] for e in self.trail()][-1], "REQUESTED")
+
+
+    def test_a_run_killed_after_its_request_is_closed_by_the_next(self):
+        """d9's read of #281: a kill -9 after REQUESTED leaves it unanswered; the next run closes it (INCOMPLETE,
+        naming its seq) before its own request, so every request has exactly one outcome."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertEqual(self.run_script("replace", KEY, NEW_KEY, kill="luksAddKey").returncode, -9)
+        killed = self.trail()[-1]
+        self.assertEqual(killed["outcome"], "REQUESTED")
+        done = self.run_script("replace", KEY, NEW_KEY)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("unanswered request (seq %d, --replace)" % killed["seq"], done.stderr)
+        closing = [e for e in self.trail() if e.get("request") == killed["seq"]]
+        self.assertEqual([(e["outcome"], e["mode"]) for e in closing], [("INCOMPLETE", "replace")])
+        self.assertEqual(self.pairs()[killed["seq"]], ["INCOMPLETE"])
+        self.assertTrue(all(len(outcomes) == 1 for outcomes in self.pairs().values()), self.pairs())
+
+    def test_a_killed_request_is_closed_whatever_name_the_disk_is_given_next(self):
+        """d9: the request is matched on the device's identity, not the path typed: a run killed on one name
+        is closed by the next run on another name for the same disk."""
+        self.enrolled()
+        self.cs("luksKillSlot", "--batch-mode", self.img, "0")
+        self.assertEqual(self.run_script("replace", KEY, NEW_KEY, kill="luksAddKey").returncode, -9)
+        killed = self.trail()[-1]
+        alias = os.path.join(self.dir, "by-partlabel-regalia-root")
+        os.symlink(self.img, alias)
+        done = subprocess.run(["bash", self.script, "--replace", alias], input=KEY + "\n" + NEW_KEY + "\n",
+                              capture_output=True, text=True, env=self.env(), timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.pairs()[killed["seq"]], ["INCOMPLETE"])
+        self.assertEqual({e["device_id"] for e in self.trail()}, {killed["device_id"]})
+
 
 if __name__ == "__main__":
     unittest.main()

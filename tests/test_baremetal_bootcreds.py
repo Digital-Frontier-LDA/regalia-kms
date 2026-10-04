@@ -140,3 +140,41 @@ class EspFiles(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SiteDocument(unittest.TestCase):
+    """regalia.site: what the initrd needs of the site configuration (B3), measured, read back strictly."""
+
+    def test_written_canonical_and_read_back_to_the_same_render(self):
+        cfg = sitecfg.validate(bn.site(prefix=24, gateway="192.0.2.1"))
+        raw = bootcreds.site_document(cfg, DEVICE)
+        self.assertEqual(raw, m.canonical(json.loads(raw)))
+        self.assertEqual(sorted(json.loads(raw)), sorted(bootcreds.SITE_KEYS))
+        site, device = bootcreds.read_site(raw)
+        self.assertEqual(device, DEVICE)
+        self.assertEqual(bootcreds.render(hbt.manifest(), site, device), bootcreds.render(hbt.manifest(), cfg, DEVICE))
+        self.assertEqual(raw, bootcreds.site_document(sitecfg.validate(bn.site(prefix=24, gateway="192.0.2.1")), DEVICE))   # deterministic
+
+    def test_refused(self):
+        good = json.loads(bootcreds.site_document(sitecfg.validate(bn.site()), DEVICE))
+
+        def doc(fn):
+            d = copy.deepcopy(good)
+            fn(d)
+            return m.canonical(d)
+        cases = {"not canonical": (json.dumps(good).encode(), "canonical"),
+                 "a newline": (m.canonical(good) + b"\n", "canonical"),
+                 "another schema": (doc(lambda d: d.update(schema="x")), "schema must be"),
+                 "an extra field": (doc(lambda d: d.update(extra=1)), "fields mismatch"),
+                 "a device with a space": (doc(lambda d: d.update(device="a b")), "device must be a plain path"),
+                 "no boot_mesh": (doc(lambda d: d.update(boot_mesh=None)), "must not be null"),
+                 "an upper-case MAC": (doc(lambda d: d["boot_mesh"].update(nic_mac="52:54:00:AB:CD:01")), "nic_mac must be a unicast MAC"),
+                 "a gateway off the link": (doc(lambda d: d["boot_mesh"].update(prefix=24, gateway="192.0.3.1")), "gateway must be another address"),
+                 "the tunnel at the host": (doc(lambda d: d["boot_mesh"].update(address="192.0.2.10")), "not host_ipv4"),
+                 "oversized": (b" " * (bootcreds.SITE_MAX_BYTES + 1), "at most")}
+        for label, (raw, why) in cases.items():
+            with self.subTest(label):
+                with self.assertRaisesRegex(m.Refused, why):
+                    bootcreds.read_site(raw)
+        with self.assertRaisesRegex(m.Refused, "single-site host"):
+            bootcreds.site_document(sitecfg.validate(dict(bn.site(), boot_mesh=None)), DEVICE)
