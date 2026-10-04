@@ -138,13 +138,13 @@ def verify(envelope, root):
     require(release["alg"] == "ed25519", "release_key is not an Ed25519 key")
     key = _key(release["key"], "release_key.key")
     require(isinstance(release["fingerprint"], str) and OPENPGP_FPR.fullmatch(release["fingerprint"]) is not None, "release_key.fingerprint is not 40 HEX")
-    cards = release["cards"]
-    require(isinstance(cards, list) and len(cards) == 2 and len(set(cards)) == 2, "release_key.cards is not two distinct cards")
-    for c in cards:
-        _serial(c, "release_key.cards")
+    require(isinstance(release["cards"], list), "release_key.cards is not a list")
+    cards = [_serial(c, "release_key.cards[%d]" % i) for i, c in enumerate(release["cards"])]       # each a serial, before any set
+    require(len(cards) == 2 and len(set(cards)) == 2, "release_key.cards is not two distinct cards")
     require(release["imported"] is True and release["attested"] is False, "release_key is not an imported (unattested) key, as the ceremony makes it")
     require(key not in owners.values(), "the release key is an owner key: the release card is never an owner key (D30.3)")
     require(not set(cards) & set(owners), "a release card is an owner card (D30.3): %s" % ", ".join(sorted(set(cards) & set(owners))))
+    fingerprints = []                     # every OpenPGP key an ownerauth recipient names: one card's, never two cards'
     for kind, field in (("ownerauth_recipient", "ownerauth_recipients"), ("ssh_signer", "ssh_signers")):
         listed = record[field]
         require(isinstance(listed, list), "%s is not a list" % field)
@@ -155,7 +155,10 @@ def verify(envelope, root):
             if kind == "ownerauth_recipient":
                 for f in ("primary", "subkey"):
                     require(isinstance(entry[f], str) and OPENPGP_FPR.fullmatch(entry[f]) is not None, "%s[%d].%s is not 40 HEX" % (field, i, f))
+                    fingerprints.append(entry[f])
         require(sorted(serials) == sorted(owners), "%s names other cards than the owner cards" % field)
+    require(len(set(fingerprints)) == len(fingerprints), "an OpenPGP key is named twice among the ownerauth recipients: each owner card "
+            "decrypts with its own")
     ssh = [_ssh_ed25519(e["key"], "ssh_signers[%d].key" % i) for i, e in enumerate(record["ssh_signers"])]
     every = list(owners.values()) + [key] + ssh + [root]
     require(len(set(every)) == len(every), "a key appears twice among the owner, release, SSH and root keys")

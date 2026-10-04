@@ -103,6 +103,17 @@ class Content(Case):
         self.refused("release_key.cards is not two distinct cards", self.changed(lambda r: r["release_key"].update(cards=["33333333", "33333333"])))
         self.refused("release_key.fingerprint is not 40 HEX", self.changed(lambda r: r["release_key"].update(fingerprint="e" * 40)))
 
+    def test_a_card_that_is_not_a_serial_is_refused_not_a_crash(self):
+        """regalia-kms-95's read: a dict among the release cards raised TypeError (unhashable) before it was checked."""
+        self.refused("release_key.cards[0] is not a card serial", self.changed(lambda r: r["release_key"].update(cards=[{"a": 1}, "44444444"])))
+
+    def test_two_owner_cards_never_name_one_openpgp_key(self):
+        """regalia-kms-95's read: one decryption key named for both owner cards is not two cards."""
+        self.refused("an OpenPGP key is named twice among the ownerauth recipients",
+                     self.changed(lambda r: r["ownerauth_recipients"][1].update(subkey="B" * 40)))
+        self.refused("an OpenPGP key is named twice among the ownerauth recipients",
+                     self.changed(lambda r: r["ownerauth_recipients"][1].update(primary="A" * 40)))
+
     def test_recipients_and_ssh_signers_are_the_owner_cards(self):
         self.refused("ownerauth_recipients names other cards than the owner cards",
                      self.changed(lambda r: r["ownerauth_recipients"][1].update(serial="99999999")))
