@@ -1,5 +1,6 @@
 """deploy/baremetal/authority.py: the revocation authority's rules, on the fake TPM (#199)."""
 import json
+import stat
 import os
 import shutil
 import tempfile
@@ -9,7 +10,7 @@ import unittest.mock
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from deploy.baremetal import authority, heartbeat as hb, membership as m
+from deploy.baremetal import authority, heartbeat as hb, membership as m, node
 import tests.test_baremetal_heartbeat as hbt
 
 T0 = hbt.T0
@@ -417,9 +418,57 @@ class TunnelApply(Case):
 
     def test_a_fork_the_tpm_never_recorded_is_refused(self):
         fork = dict(self.m1, issued_at="2026-09-30T00:00:00Z")
-        with open(self.d + "/membership.json", "wb") as f:
+        with open(self.d + "/" + node.PUBLISHED, "wb") as f:              # what wg-apply reads: the published chain
             f.write(m.canonical([m_sign(fork)]))
         self.refused("CONFLICT", authority.held_chain, authority.validate(config(self.d)), self.tpm)
+
+    def test_it_reads_the_published_chain_and_never_the_store(self):
+        """Root's wg-apply holds CAP_NET_ADMIN only, so it cannot read the store (0600, the service user's): it reads
+        the chain serve publishes, 0644, which init, accept and every revocation rewrite (#71, found by the
+        three-node outage test)."""
+        published = self.d + "/" + node.PUBLISHED
+        self.assertEqual(stat.S_IMODE(os.stat(published).st_mode), 0o644)
+        os.chmod(self.d + "/membership.json", 0)                         # as root without CAP_DAC_OVERRIDE sees it
+        self.addCleanup(os.chmod, self.d + "/membership.json", 0o600)
+        self.assertEqual(authority.held_chain(authority.validate(config(self.d)), self.tpm)["epoch"], 1)
+        os.chmod(self.d + "/membership.json", 0o600)
+        self.a.revoke("c", "QUARANTINED", "for the tunnel", "local-root")
+        self.assertEqual(authority.held_chain(authority.validate(config(self.d)), self.tpm)["epoch"], 2)
+        m2 = dict(self.a.store.load(), epoch=3, prev_digest=m.digest(self.a.store.load()), issued_at="2026-10-05T00:00:00Z")
+        self.a.accept([m_sign(m2)])
+        self.assertEqual(json.loads(open(published).read())[-1]["manifest"]["epoch"], 3)
+        os.unlink(published)
+        self.refused("cannot be read", authority.held_chain, authority.validate(config(self.d)), self.tpm)
+
+
+class TunnelKey(Case):
+    """wg-key: the authority's WireGuard service key, root:<the service's group> 0640, made and rotated by the one
+    command so that ownership holds (root's wg-apply reads it as its owner, serve through its group)."""
+
+    def make(self, replace=False):
+        chowned = []
+
+        def run(argv, **kw):
+            if argv == ["wg", "genkey"]:                 # a different key each time one is made
+                self.made = getattr(self, "made", 0) + 1
+                return unittest.mock.Mock(returncode=0, stdout=("%s=\n" % ("AB"[self.made % 2] * 43)).encode())
+            if argv[:2] == ["wg", "pubkey"]:
+                return unittest.mock.Mock(returncode=0, stdout=b"AAAA" * 10 + b"AAA=\n")
+            raise AssertionError(argv)
+        cfg = authority.validate(config(self.d))
+        public = authority.wg_key(cfg, replace, run=run, chown=lambda path, uid, gid: chowned.append((uid, gid)))
+        return cfg["wg_service_key"], chowned, public
+
+    def test_made_root_s_and_the_service_group_s_0640_and_rotated_the_same(self):
+        path, chowned, public = self.make()
+        self.assertEqual((chowned, stat.S_IMODE(os.stat(path).st_mode)), ([(0, os.stat(self.d).st_gid)], 0o640))
+        self.assertRegex(public, r"^[0-9a-f]{64}$")
+        first = open(path).read()
+        self.refused("--replace to rotate it", self.make)
+        path, chowned, _ = self.make(replace=True)
+        self.assertEqual((chowned, stat.S_IMODE(os.stat(path).st_mode)), ([(0, os.stat(self.d).st_gid)], 0o640))
+        self.assertNotEqual(open(path).read(), first)
+        self.assertEqual([f for f in os.listdir(self.d) if f.startswith(".wg-service-")], [])
 
 
 SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so") if os.path.exists(c)), None)

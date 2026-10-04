@@ -887,7 +887,8 @@ it (`service_mesh.authority`).
 | `serve` | the one process that signs: publishes, a heartbeat every `interval_s`, and answers the control socket |
 | `revoke --node N --state QUARANTINED\|REVOKED_STOLEN --reason R` | as root on this host, asks the running `serve` (control socket, root peers only): it signs and commits the restrictive manifest, then a heartbeat for it at once |
 | `status` | the same way: epoch, sequence, last heartbeat, pending, signer kind |
-| `wg-apply` | its `wg-svc`, every node a peer |
+| `wg-apply` | as root (`units/regalia-authority-wg-apply.service`, CAP_NET_ADMIN only): its `wg-svc`, every node of the published chain a peer; run again by `regalia-authority-wg-apply.path` at every new chain, so a revoked node leaves this tunnel too |
+| `wg-key [--replace]` | as root: makes its WireGuard service key (`wg_service_key`), `root:regalia-authority` 0640, and prints the public key for every node's `service_mesh.authority.key`. `--replace` rotates it the same way (then every node's site configuration takes the new key). Made only this way, so its ownership holds |
 
 - **Sequence, signed once:** a number is reserved on its own TPM counter before signing (a crash loses it,
   never reuses it; a restored disk cannot move the counter back; no TPM, no authority). It is signed at
@@ -896,6 +897,10 @@ it (`service_mesh.authority`).
   dropped with their number. The key
   is checked against the manifest before reserving, and failures back off from 60 s to `interval_s`.
 - **Time:** it signs only while `authtime` says the clock is authenticated.
+- **What root reads:** the store (`membership.json`) is the service user's alone, 0600. `serve` publishes the
+  verified chain as `chain.json` (0644) after `init`, `accept` and every revocation's commit, at its start and at
+  every beat; `wg-apply` reads that, verifying it from the root key and against the TPM anchor, as a node's
+  `wg-apply` reads regalia-sync's (#71, found by the three-node outage test).
 - **Interval:** at least `heartbeat.MIN_INTERVAL_S` (600 s) times the number of authorities, and at most a
   quarter of the heartbeat's lifetime. A node accepts a sequence jump that grows by one per 600 s since
   the last heartbeat it accepted, so a node back from a month's repair catches up, while a sequence

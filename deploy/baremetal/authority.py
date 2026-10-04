@@ -592,6 +592,7 @@ class Authority:
                                                              "sig": self.signer.sign(membership.DOMAIN + membership.canonical(candidate)).hex()}}
             self.store.commit(envelope)                                         # membership's revocation rule, anchored in the TPM
             try:                                                                # from here the revocation is committed, whatever fails
+                self.publish()                                                  # the tunnel drops the node with it (wg-apply.path)
                 self.trail({"event": "authority-revoke", "outcome": "SIGNED", "epoch": candidate["epoch"], "node": node_id, "state": state,
                             "digest": membership.digest(candidate), "key": self.signer.public(), "signer": self.signer.kind,
                             "requester": requester, "reason": reason})
@@ -613,7 +614,14 @@ class Authority:
                 self.store.commit(envelope)
                 self.trail({"event": "authority-accept", "outcome": "ALLOW", "epoch": envelope["manifest"]["epoch"],
                             "digest": membership.digest(envelope["manifest"]), "signer": envelope["signature"]["signer"]})
+            self.publish()
             return self.store.load()["epoch"]
+
+    def publish(self):
+        """The verified chain where root's wg-apply reads it (chain.json, 0644, as a node's regalia-sync publishes
+        it): the store itself is this user's alone. Rewritten after every commit, at serve's start, and at
+        every beat, so a publication that failed is made good."""
+        return node.publish(self.store, self.path(node.PUBLISHED))
 
     def status(self):
         manifest, held = self.store.load(), self.held()
@@ -689,6 +697,7 @@ class Authority:
         own = wgsvc.address(self.signer_tunnel_key())
         listener = node.bind_when_up((own, self.cfg["sync_port"]), stop, family=socket.AF_INET6)
         listener.settimeout(1)
+        self.publish()                                # a host upgraded from before chain.json, or a publication that failed
         server = sync.Server(convergence.AUTHORITY, self.store, self, None, None, wgsvc.key_at, self.trail)
         threading.Thread(target=sync.serve, args=(server, listener, stop), daemon=True).start()
         self.control_listener(stop)
@@ -705,6 +714,7 @@ class Authority:
                 due = 0.0
             if clock() >= due:
                 try:
+                    self.publish()
                     self.catch_up() or self.beat()
                     due, failures = clock() + self.cfg["interval_s"], 0
                 except Exception as failure:      # noqa: BLE001 - a beat that fails is retried, never the end of serve
@@ -766,33 +776,41 @@ def ask(path, request):
 
 
 def held_chain(cfg, run):
-    """The manifest the authority holds, read as a reader that is not the writer (wg-apply runs as root):
-    the store's file opened without following a link, verified from the root key and against the TPM
-    record with the lock-free check (#182). Nothing is created or locked in the service's state directory,
-    and the revocation key is not touched."""
-    path = os.path.join(cfg["state_dir"], "membership.json")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-    try:
-        require(stat.S_ISREG(os.fstat(fd).st_mode), "the authority's membership file is not a regular file")
-        raw = os.read(fd, membership.MAX_CHAIN_BYTES + 1)
-    finally:
-        os.close(fd)
-    envelopes = membership.load(raw, membership.MAX_CHAIN_BYTES)
-    require(isinstance(envelopes, list) and envelopes, "the authority holds no membership chain")
-    manifest = membership.accept_chain(None, envelopes, cfg["root_key"])
-    manifests = [e["manifest"] for e in envelopes]
-
-    def digest_of(epoch):
-        require(epoch <= len(manifests), "ROLLBACK: the chain ends at epoch %d, below the TPM anchor %d" % (len(manifests), epoch))
-        return membership.digest(manifests[epoch - 1]) if epoch else membership.HighWater.ZERO
+    """The manifest the authority holds, read as root's wg-apply reads it: the chain serve publishes
+    (chain.json, 0644), verified here from the root key and against the TPM anchor, lock-free (node.published,
+    as a node's wg-apply reads regalia-sync's). Root without CAP_DAC_OVERRIDE cannot read the store, which is
+    the service user's alone, and needs nothing else from the state directory."""
     anchor = membership.HighWater(cfg["nv_epoch"], cfg["tcti"], run, lock_path=os.path.join(cfg["state_dir"], "highwater.lock"))
+    return node.published(os.path.join(cfg["state_dir"], node.PUBLISHED), cfg["root_key"], anchor)
+
+
+def wg_key(cfg, replace=False, run=None, chown=os.chown):
+    """Make the authority's WireGuard service key, as root: root:<the service's group> 0640 (root's wg-apply
+    reads it as its owner, serve through its group; neither holds CAP_DAC_*). Refused if one exists, unless
+    `replace` (a rotation: then every node's site configuration takes the new public key,
+    service_mesh.authority.key). Written whole, then renamed: the old key stays until the new one is
+    complete. Returns the public key, hex."""
+    import subprocess
+    run = run or subprocess.run
+    path = cfg["wg_service_key"]
+    require(replace or not os.path.lexists(path), "%s exists: --replace to rotate it" % path)
+    group = os.stat(cfg["state_dir"]).st_gid          # the service's own group, as its StateDirectory= made it
+    private = run(["wg", "genkey"], capture_output=True, timeout=10).stdout.decode().strip()
+    require(re.fullmatch(r"[A-Za-z0-9+/]{43}=", private) is not None, "wg genkey gave no key")
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".wg-service-")
     try:
-        anchor.verify(digest_of, lock=False)
-    except Refused as refused:
-        if str(refused).startswith("ROLLBACK"):
-            raise
-        anchor.verify(digest_of, lock=False)          # a commit racing the read: it stands only if it stays
-    return manifest
+        chown(tmp, 0, group)
+        os.fchmod(fd, 0o640)
+        with os.fdopen(fd, "w") as f:
+            f.write(private + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
+    return tunnel_key(cfg, run)[1]
 
 
 def tunnel_key(cfg, run):
@@ -822,6 +840,8 @@ def main(argv=None):
     sub.add_parser("serve")
     sub.add_parser("status")
     sub.add_parser("wg-apply")
+    wgkey = sub.add_parser("wg-key", help="as root: make the WireGuard service key, root:<the service's group> 0640")
+    wgkey.add_argument("--replace", action="store_true", help="rotate an existing key (the nodes' site configurations take the new public key)")
     sub.add_parser("clear-pin-latch", help="let the token signer log in again. First fix the PIN credential and reset the token's "
                    "counter with one correct login (pkcs11-tool --login --test); then this; then restart the service")
     revoke = sub.add_parser("revoke")
@@ -854,6 +874,10 @@ def main(argv=None):
             if os.path.exists(latch):
                 os.unlink(latch)
                 print("cleared: restart regalia-authority to sign again")
+            return 0
+        if args.command == "wg-key":
+            require(os.geteuid() == 0, "wg-key is the operator's, as root: the key is root's, readable by the service's group")
+            print("wg-svc public key (service_mesh.authority.key in every node's site configuration): %s" % wg_key(cfg, args.replace))
             return 0
         if args.command == "wg-apply":
             print("wg-svc applied: %s" % wg_apply(cfg))    # as root: a reader, never the Authority (no key, no lock files)

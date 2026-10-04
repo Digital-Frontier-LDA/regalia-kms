@@ -158,9 +158,21 @@ class Units(unittest.TestCase):
         self.assertIn("u regalia-sync - ", users)
         self.assertIn("u regalia-admission - ", users)
 
+    def test_the_authority_s_tunnel_is_applied_as_a_node_s_from_the_chain_it_publishes(self):
+        """#71: the authority host's wg-apply is the node's unit in all but its command (root, CAP_NET_ADMIN only,
+        the same sandbox), and its path unit watches the chain the authority publishes in its StateDirectory."""
+        node_unit, authority_unit = unit("regalia-wg-apply.service"), unit("regalia-authority-wg-apply.service")
+        self.assertEqual({k: v for k, v in authority_unit["Service"].items() if k != "ExecStart"},
+                         {k: v for k, v in node_unit["Service"].items() if k != "ExecStart"})
+        self.assertIn("-m deploy.baremetal.authority --config /etc/regalia/authority.json wg-apply", authority_unit["Service"]["ExecStart"])
+        self.assertEqual(unit("regalia-authority-wg-apply.path")["Path"]["PathChanged"],
+                         "/var/lib/%s/%s" % (unit("regalia-authority.service")["Service"]["StateDirectory"], node.PUBLISHED))
+        self.assertEqual(unit("regalia-authority-wg-apply.path")["Path"]["Unit"], "regalia-authority-wg-apply.service")
+
     @unittest.skipUnless(shutil.which("systemd-analyze"), "systemd-analyze is not installed")
     def test_systemd_accepts_the_units_and_scores_them_well_exposed_at_most_a_little(self):
-        paths = [str(UNITS / (name + ".service")) for name in SERVICES] + [str(UNITS / "regalia-wg-apply.path")]
+        paths = [str(UNITS / (name + ".service")) for name in SERVICES + ("regalia-authority-wg-apply",)] + \
+            [str(UNITS / "regalia-wg-apply.path"), str(UNITS / "regalia-authority-wg-apply.path")]
         done = subprocess.run(["systemd-analyze", "verify", "--man=no", "--recursive-errors=no"] + paths, capture_output=True, text=True)
         problems = [line for line in done.stderr.splitlines() if "chrony.service" not in line and "network-online" not in line and line.strip()]
         self.assertEqual(problems, [])
