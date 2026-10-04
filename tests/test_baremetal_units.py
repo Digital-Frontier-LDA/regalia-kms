@@ -22,6 +22,40 @@ def unit(name):
     return parser
 
 
+class ChronyDropIn(unittest.TestCase):
+    """#303: chronyd from enrolment's configuration, the package's own file untouched."""
+
+    def test_chronyd_runs_from_the_rendered_configuration_alone(self):
+        from deploy.baremetal import enrol
+        lines = (UNITS / "chrony.service.d" / "regalia.conf").read_text().splitlines()
+        execs = [line for line in lines if line.startswith("ExecStart=")]
+        # an empty ExecStart= first: a drop-in otherwise ADDS a second command instead of replacing the package's
+        self.assertEqual(execs, ["ExecStart=", "ExecStart=!/usr/sbin/chronyd -f %s $DAEMON_OPTS" % enrol.CHRONY_CONF])
+        self.assertTrue(enrol.CHRONY_CONF.startswith("/etc/chrony/") and enrol.CHRONY_CONF != "/etc/chrony/chrony.conf")
+        self.assertIn("Conflicts=systemd-timesyncd.service", lines)
+        self.assertIn("ConditionPathExists=%s" % enrol.CHRONY_CONF, lines)        # skipped, not latched, before enrolment
+        # the latch (#303): any unclean stop recorded in root's directory, and no start while it is there
+        from deploy.baremetal import authtime
+        pre = [line for line in lines if line.startswith("ExecStartPre=")]
+        post = [line for line in lines if line.startswith("ExecStopPost=")]
+        self.assertEqual((len(pre), len(post)), (1, 1))
+        self.assertTrue(pre[0].startswith("ExecStartPre=!/bin/sh -c ") and "[ -e %s ]" % authtime.LATCH in pre[0] and "exit 1" in pre[0])
+        self.assertIn("[ ! -d %s ]" % authtime.LATCH_DIR, pre[0])                 # no directory: not started either
+        self.assertTrue(post[0].startswith("ExecStopPost=!/bin/sh -c ") and '"$$SERVICE_RESULT" != success' in post[0])
+        self.assertIn("set -C", post[0])                                         # the first record is kept
+        self.assertIn("> %s;" % authtime.LATCH, post[0])
+        self.assertIn("ReadWritePaths=%s" % authtime.LATCH_DIR, lines)
+        tmpfiles = (UNITS / "regalia.tmpfiles.conf").read_text()
+        self.assertIn("d %s 0700 root root -" % authtime.LATCH_DIR, tmpfiles)
+        self.assertFalse([line for line in lines if line.startswith("Restart")])     # an exit on maxchange stays down
+        # and nothing of ours starts it again: regalia-authtime orders itself after chrony, never Wants= or Requires= it
+        authtime_unit = unit("regalia-authtime.service")["Unit"]
+        self.assertIn("chrony.service", authtime_unit["After"])
+        self.assertFalse({"Wants", "Requires", "BindsTo", "Requisite", "Upholds"} & set(authtime_unit))
+        for name in UNITS.glob("*.service"):
+            self.assertNotRegex(name.read_text(), r"(?m)^(Wants|Requires|BindsTo|Upholds|OnFailure)=.*chrony", name.name)
+
+
 class Units(unittest.TestCase):
     def service(self, name):
         return unit(name + ".service")["Service"]
@@ -55,12 +89,12 @@ class Units(unittest.TestCase):
             self.assertEqual(self.service(name)["User"], "root")
 
     def test_what_each_unit_may_write_and_reach(self):
-        self.assertEqual(self.service("regalia-authtime")["ReadWritePaths"], "/run/regalia /run/chrony")
+        self.assertEqual(self.service("regalia-authtime")["ReadWritePaths"], "/run/regalia /run/chrony /var/log/regalia-time")   # + the time trail (#303)
         self.assertEqual(self.service("regalia-authtime")["SupplementaryGroups"], "_chrony")
         authtime_unit = self.service("regalia-authtime")
         # the one capability it holds could read any file: it is shown almost none
         self.assertEqual((authtime_unit["TemporaryFileSystem"], authtime_unit["ProtectProc"]), ("/etc:ro /var:ro /run:ro", "invisible"))
-        self.assertEqual(authtime_unit["BindPaths"], "/run/regalia /run/chrony")
+        self.assertEqual(authtime_unit["BindPaths"], "/run/regalia /run/chrony /var/log/regalia-time")
         self.assertEqual(authtime_unit["BindReadOnlyPaths"].split()[0], "/etc/regalia/node.json")
         self.assertNotIn("site.json", authtime_unit["BindReadOnlyPaths"])
         self.assertNotIn("wg-service", authtime_unit["BindReadOnlyPaths"])

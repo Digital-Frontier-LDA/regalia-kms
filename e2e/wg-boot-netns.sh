@@ -103,8 +103,8 @@ def manifest(epoch, prev, **states):
 def site(node):
     return sitecfg.validate({"schema": sitecfg.SCHEMA, "site": node, "host_ipv4": IP[node], "kms_port": 8443, "ssh_port": 22,
                              "client_cidrs": ["198.18.0.0/24"], "monitoring_cidrs": ["198.18.1.1/32"], "admin_cidrs": ["198.18.2.0/28"],
-                             "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514},
-                                          {"name": "ntp", "cidr": "198.18.3.2/32", "proto": "udp", "port": 123}],
+                             "outbound": [{"name": "audit", "cidr": "198.18.3.1/32", "proto": "tcp", "port": 6514}],
+                             "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["198.18.3.2/32"]}, {"name": "nts-b.lab", "cidrs": ["198.18.3.3/32"]}]},
                              "boot_mesh": {"node_id": node, "interface": "wg-unlock", "listen_port": 51820, "address": TUN[node], "unlock_port": 7443,
                                            "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                                            "peers": [{"node_id": p, "underlay": IP[p], "address": TUN[p]} for p in IP if p != node]},

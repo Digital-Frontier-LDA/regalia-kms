@@ -38,21 +38,47 @@ class Config(unittest.TestCase):
         args.update(kw)
         return enrol.install_config(self.journal, **args)
 
-    def test_the_three_files_are_written_and_node_json_loads(self):
+    def test_the_four_files_are_written_and_node_json_loads(self):
         config = self.install()
         loaded = node.load(self.prefix + enrol.NODE_JSON)
         self.assertEqual((loaded["node_id"], loaded["root_key"]), ("a", self.root_key))
-        for path in (enrol.NODE_JSON, config["site"], config["measurements"]):
+        for path in (enrol.NODE_JSON, config["site"], config["measurements"], enrol.CHRONY_CONF):
             st = os.stat(self.prefix + path)
             self.assertEqual(stat.S_IMODE(st.st_mode), 0o644, path)
         with open(self.prefix + config["measurements"]) as f:
             self.assertEqual(json.load(f), self.document)
         recorded = self.journal.get("config")
-        self.assertEqual(set(recorded) - {"state", "at"}, {enrol.NODE_JSON, config["site"], config["measurements"]})
+        self.assertEqual(set(recorded) - {"state", "at"}, {enrol.NODE_JSON, config["site"], config["measurements"], enrol.CHRONY_CONF})
         # again, as a resumed run: the same bytes are accepted, nothing is rewritten
         before = os.stat(self.prefix + enrol.NODE_JSON).st_mtime_ns
         self.install()
         self.assertEqual(os.stat(self.prefix + enrol.NODE_JSON).st_mtime_ns, before)
+
+    def test_time_comes_from_the_site_s_one_list(self):
+        """#303: node.json's time_servers (what authtime judges), chrony.conf (what chrony uses) and the firewall's
+        time rules are all rendered from the site's time.nts, whatever the example says."""
+        from deploy.baremetal import authtime, firewall, sitecfg
+        self.site["time"]["nts"] = self.site["time"]["nts"][1:]                     # two servers, not the example's three
+        names = [server["name"] for server in self.site["time"]["nts"]]
+        self.assertNotEqual(names, example("node.example.json")["time_servers"])
+        self.install()
+        self.assertEqual(node.load(self.prefix + enrol.NODE_JSON)["time_servers"], names)
+        with open(self.prefix + enrol.CHRONY_CONF) as f:
+            conf = f.read()
+        self.assertEqual(conf, authtime.conf(names))
+        self.assertEqual([line.split()[1] for line in conf.splitlines() if line.startswith("server ")], names)
+        rules = firewall.render(sitecfg.validate(self.site))
+        self.assertEqual(sorted({line.split('"time: ')[1].split(",")[0] for line in rules.splitlines() if '"time: ' in line}), sorted(names))
+
+    def test_a_chrony_conf_already_there_is_never_replaced(self):
+        target = self.prefix + enrol.CHRONY_CONF
+        os.makedirs(os.path.dirname(target))
+        with open(target, "w") as f:
+            f.write("pool pool.ntp.org iburst\n")
+        with self.assertRaisesRegex(enrol.Refused, "/etc/chrony/regalia.conf already exists with other content"):
+            self.install()
+        with open(target) as f:
+            self.assertEqual(f.read(), "pool pool.ntp.org iburst\n")
 
     def test_other_content_is_never_overwritten(self):
         config = self.install()

@@ -519,7 +519,8 @@ def bind_when_up(where, stop, family=socket.AF_INET, create=socket.create_server
 def authtime_service(cfg):
     """Takes the configuration only: it reads nothing else (not the site configuration, not a key), and
     its unit hides the rest of /etc and all of /var from it."""
-    return authtime.Service(os.path.join(cfg["run_dir"], "authtime.json"), cfg["time_servers"])
+    return authtime.Service(os.path.join(cfg["run_dir"], "authtime.json"), cfg["time_servers"],
+                            record=Trail(trails.where(authtime.TRAIL), authtime.TRAIL))      # each transition, audited (#303)
 
 
 # ---- command line ----
@@ -527,9 +528,18 @@ def authtime_service(cfg):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="/etc/regalia/node.json")
-    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check"))
+    parser.add_argument("service", choices=("authtime", "wg-apply", "boot-session", "admission", "sync", "check", "time-clear"))
+    parser.add_argument("--reason", help="time-clear only: why chronyd may run again. FIRST compare the declared NTS servers "
+                        "with an independent clock (another site's, a GNSS receiver, a phone on the mobile network): chronyd "
+                        "stopped because two of them agreed on a jump, and a restarted chronyd steps to what they agree on")
     args = parser.parse_args(argv)
     try:
+        if args.service == "time-clear":
+            # #303: the latch the chrony drop-in leaves when chronyd stops abnormally; root's, recorded first
+            require(os.geteuid() == 0, "time-clear is root's: the latch is in root's %s" % authtime.LATCH_DIR)
+            event = authtime.clear_latch(args.reason or "", Trail(trails.where(authtime.TRAIL), authtime.TRAIL))
+            print("CLEARED the time latch (recorded in the time trail: %s). Start chronyd: systemctl start chrony" % event["chrony_said"][:120])
+            return 0
         if args.service == "authtime":
             authtime_service(load(args.config)).run(lambda: False)
             return 0

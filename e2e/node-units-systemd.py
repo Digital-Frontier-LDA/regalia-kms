@@ -77,6 +77,7 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import admission, attest, authtime, heartbeat, lease, measurements, membership, node, os_probe, sync, wgsvc   # noqa: E402
+from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, node, os_probe, sync, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
 
 PREFIX = "/usr/lib/regalia-kms"
@@ -305,16 +306,38 @@ def nts_server(work, n):
 
 def chrony(work):
     """Two NTS servers on the loopback (each with its own certificate), and the system chrony configured as
-    authtime.conf() renders it, pointed at them."""
+    authtime.conf() renders it, pointed at them, through the shipped drop-in (#303): /etc/chrony/regalia.conf,
+    under the distribution's AppArmor profile, the package's own chrony.conf untouched."""
     servers = [nts_server(work, n) for n in (1, 2)]
+    package_conf = hashlib.sha256(pathlib.Path("/etc/chrony/chrony.conf").read_bytes()).hexdigest()
     text = authtime.conf(["127.0.0.2", "127.0.0.3"])
     for n, address in enumerate(("127.0.0.2", "127.0.0.3"), 1):
         text = text.replace("server %s nts iburst\n" % address, "server %s port %d nts ntsport %d iburst minpoll 0 maxpoll 1\n" % (address, 21120 + n, 21460 + n))
     for n in (1, 2):                       # where the distribution's AppArmor profile lets chronyd read
         shutil.copy(work / ("s%d.crt" % n), "/etc/chrony/e2e-s%d.crt" % n)
     text += "".join("ntstrustedcerts /etc/chrony/e2e-s%d.crt\n" % n for n in (1, 2))
-    pathlib.Path("/etc/chrony/chrony.conf").write_text(text)
+    pathlib.Path(enrol.CHRONY_CONF).write_text(text)
+    # the package's other ways to run chronyd, from its own configuration or with sources added at run time (#303)
+    sh("systemctl", "mask", "chronyd-restricted.service", "chrony-dnssrv@.timer")
+    os.makedirs("/etc/systemd/system/chrony.service.d", exist_ok=True)
+    shutil.copy(ROOT / "deploy" / "baremetal" / "units" / "chrony.service.d" / "regalia.conf", "/etc/systemd/system/chrony.service.d/regalia.conf")
+    sh("systemctl", "daemon-reload")
     sh("systemctl", "restart", "chrony")
+    started = show("chrony.service", "ExecStart", "Conflicts", "ActiveState")
+    ok("-f %s" % enrol.CHRONY_CONF in started["ExecStart"] and started["ActiveState"] == "active",
+       "chronyd runs from %s through the shipped drop-in, under the distribution's AppArmor profile" % enrol.CHRONY_CONF, started)
+    ok("systemd-timesyncd.service" in started["Conflicts"], "systemd-timesyncd conflicts with it: one thing sets the clock", started["Conflicts"])
+    ok(hashlib.sha256(pathlib.Path("/etc/chrony/chrony.conf").read_bytes()).hexdigest() == package_conf,
+       "the package's /etc/chrony/chrony.conf is untouched")
+    # a template (chrony-dnssrv@.timer) has no UnitFileState to show: a mask is the link to /dev/null
+    masked = [os.path.realpath("/etc/systemd/system/" + name) for name in ("chronyd-restricted.service", "chrony-dnssrv@.timer")]
+    ok(masked == ["/dev/null", "/dev/null"], "the package's chronyd-restricted and chrony-dnssrv timer are masked", masked)
+    leap = until(lambda: "Using right/UTC timezone to obtain leap second data" in journal("chrony.service"), 20)
+    ok(leap, "chronyd reads leap seconds from right/UTC under the distribution's AppArmor profile", journal("chrony.service")[-400:])
+    state = os.stat("/var/lib/chrony")
+    ok(stat.S_IMODE(state.st_mode) & 0o007 == 0 and pwd.getpwuid(state.st_uid).pw_name == "_chrony",
+       "the NTS cookies' directory (ntsdumpdir /var/lib/chrony) is chrony's user's, and others cannot read it (%s %s)"
+       % (oct(stat.S_IMODE(state.st_mode)), pwd.getpwuid(state.st_uid).pw_name))
     return servers
 
 
@@ -363,8 +386,8 @@ def provision(work):
     envelope = signed(manifest)
     site = {"schema": "regalia.baremetal-site/v1", "site": "e2e", "host_ipv4": "192.0.2.10", "kms_port": 8443, "ssh_port": 22,
             "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["203.0.113.128/32"], "admin_cidrs": ["203.0.113.0/28"],
-            "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514},
-                         {"name": "ntp", "cidr": "203.0.113.193/32", "proto": "udp", "port": 123}],
+            "outbound": [{"name": "audit", "cidr": "203.0.113.192/32", "proto": "tcp", "port": 6514}],
+            "time": {"nts": [{"name": "127.0.0.2", "cidrs": ["127.0.0.2/32"]}, {"name": "127.0.0.3", "cidrs": ["127.0.0.3/32"]}]},
             "boot_mesh": {"node_id": "a", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443, "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": None,
                           "peers": [{"node_id": "b", "underlay": "192.0.2.20", "address": "10.89.0.2"},
                                     {"node_id": "c", "underlay": "192.0.2.30", "address": "10.89.0.3"}]},
@@ -410,8 +433,8 @@ def scenario(work, binaries, user):
        (without.returncode, (without.stdout + without.stderr).strip()[-200:], with_group.returncode, with_group.stderr.strip()[-200:]))
 
     header("1  regalia-authtime: chrony with two NTS servers")
+    install()                        # first: the latch's directory (regalia.tmpfiles.conf) must exist before chronyd starts
     servers = chrony(work)
-    install()
     ctx = provision(work)
     cfg, epoch, public = ctx["cfg"], ctx["epoch"], ctx["public"]
     sh("systemctl", "start", "regalia-authtime.service")
@@ -431,6 +454,46 @@ def scenario(work, binaries, user):
     reason = gone.get("reason", "") if isinstance(gone, dict) else ""
     ok(gone.get("authenticated") is False and reason and not reason.startswith(("chrony could not be asked", "the check failed")) if isinstance(gone, dict) else False,
        "one server stops: not authenticated, judged from chrony's answer (%s)" % reason[:70], gone)
+    # #303, THE LATCH: chronyd that stopped abnormally (maxchange: two sources agreeing on a jump) stays down
+    # until an operator clears it, because a fresh chronyd steps during its first updates. Nothing may start
+    # it again: not regalia-authtime (After=, never Wants=), not a package upgrade's restart, not a boot.
+    trail = pathlib.Path("/var/log/regalia-time/time.jsonl")
+    # SIGKILL stands in for the real trigger, which a host under test cannot be made to see: on maxchange, Debian 13's
+    # chronyd 4.6.1 exits with status 1 after "exceeds the allowed maximum" (measured by regalia-kms-d9 in
+    # authtime-chrony-nts.py's scenario 8), SERVICE_RESULT=exit-code, which latches the same way as this signal
+    sh("systemctl", "kill", "-s", "KILL", "chrony.service", check=False)
+    latch = pathlib.Path(authtime.LATCH)
+    ok(until(lambda: show("chrony.service", "ActiveState")["ActiveState"] in ("failed", "inactive") and latch.exists(), 20) and
+       json.loads(latch.read_text())["result"] == "signal",
+       "an unclean stop leaves the latch in root's %s (%s)" % (authtime.LATCH_DIR, latch.read_text().strip() if latch.exists() else "none"))
+    sh("systemctl", "restart", "regalia-authtime.service")
+    time.sleep(20)
+    refused = until(lambda: json.loads(status.read_text())["authenticated"] is False and json.loads(status.read_text()), 60, 3)
+    ok(show("chrony.service", "ActiveState")["ActiveState"] in ("failed", "inactive") and isinstance(refused, dict),
+       "regalia-authtime restarting does not start chronyd, and time is not authenticated (%s)"
+       % (refused.get("reason", "")[:50] if isinstance(refused, dict) else refused))
+    upgrade = sh("systemctl", "restart", "chrony.service", check=False)        # what the package's postinst does
+    ok(upgrade.returncode != 0 and show("chrony.service", "ActiveState")["ActiveState"] != "active"
+       and "stopped abnormally before" in journal("chrony.service"),
+       "a package upgrade's restart is refused while the latch is there", journal("chrony.service")[-400:])
+    sh("systemctl", "reset-failed", "chrony.service", check=False)
+    boot = sh("systemctl", "start", "chrony.service", check=False)             # what a boot does
+    ok(boot.returncode != 0 and show("chrony.service", "ActiveState")["ActiveState"] != "active",
+       "and so is a start, as at boot")
+    events = [json.loads(line) for line in trail.read_text().splitlines()] if trail.exists() else []
+    kinds = [e["event"] for e in events]
+    ok("time-authenticated" in kinds and kinds[-1] == "time-unauthenticated" and events[-1]["reason"],
+       "the time trail records the transitions, the last one not authenticated, with the reason (%s)"
+       % (events[-1]["reason"][:50] if events else "no trail"), events[-3:])
+    cleared = sh("python3", "-Es", "-m", "deploy.baremetal.node", "--config", "/etc/regalia/node.json", "time-clear", "--reason",
+                 "the e2e compared the lab servers with the runner's clock", check=False, cwd=PREFIX)
+    events = [json.loads(line) for line in trail.read_text().splitlines()]
+    ok(cleared.returncode == 0 and not latch.exists() and events[-1]["event"] == "time-latch-cleared" and "signal" in events[-1]["latch"],
+       "regalia-node time-clear removes the latch, recorded first with the reason and what the latch held",
+       (cleared.returncode, cleared.stderr[-300:], events[-1:]))
+    sh("systemctl", "reset-failed", "chrony.service", check=False)
+    ok(sh("systemctl", "start", "chrony.service", check=False).returncode == 0 and show("chrony.service", "ActiveState")["ActiveState"] == "active",
+       "then chronyd starts")
 
     header("2  provisioning, by hand (#190 is not built)")
     ok(epoch == "1", "the first manifest is committed under the TPM anchor, by regalia-sync's user through the tss group", epoch)

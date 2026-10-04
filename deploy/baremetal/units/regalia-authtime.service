@@ -13,8 +13,10 @@
 [Unit]
 Description=Regalia KMS: is time authenticated (chrony, NTS)
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
+# After=, never Wants=: chronyd that has exited (maxchange, #303) stays down until an operator starts it. A
+# Wants= here would start it again whenever this unit restarts, and a fresh chronyd steps to whatever two
+# sources agree on during its first updates.
 After=chrony.service
-Wants=chrony.service
 
 [Service]
 Type=simple
@@ -30,7 +32,7 @@ CapabilityBoundingSet=CAP_DAC_OVERRIDE
 AmbientCapabilities=CAP_DAC_OVERRIDE
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/run/regalia /run/chrony
+ReadWritePaths=/run/regalia /run/chrony /var/log/regalia-time
 # CAP_DAC_OVERRIDE would let it read any file it can see, so it sees almost none: /etc is an empty
 # read-only tmpfs with only its own configuration and what the C library needs bound into it, /var is
 # empty, and other processes are invisible under /proc. (Not ProcSubset=pid: the kernel's boot ID,
@@ -38,7 +40,8 @@ ReadWritePaths=/run/regalia /run/chrony
 TemporaryFileSystem=/etc:ro /var:ro /run:ro
 # /run likewise: other units' credentials (/run/credentials) and whatever else is staged there stay out
 # of sight; only the two directories it writes are bound back
-BindPaths=/run/regalia /run/chrony
+# and the time trail's directory (#303): each transition is recorded there before it is published
+BindPaths=/run/regalia /run/chrony /var/log/regalia-time
 BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime
 ProtectProc=invisible
 ProtectHome=yes

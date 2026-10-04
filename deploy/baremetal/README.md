@@ -203,13 +203,53 @@ Commissioning has two halves:
   as authenticated only while chrony is synchronised to **NTS** sources, **at least two of which agree**
   (declare servers of independent operators, so that no single operator can move the clock; with
   exactly two, one operator's outage stops the nodes, so declare **three**), with no source that was not
-  declared or is not NTS, an update within the last hour, and no correction pending. `authtime.conf()`
-  renders the **whole** `chrony.conf`: no `pool`, no `sourcedir` (the distribution's default takes
-  servers from DHCP that way), no `refclock`; and chronyd must be the only thing on the host that sets
-  the clock (no systemd-timesyncd beside it). A host whose RTC is far off never authenticates, because
+  declared or is not NTS, an update within the last hour, and no correction pending. The servers are the
+  site config's `time.nts` (#303): each by the name its certificate carries and the networks (/24 or
+  narrower) it answers from, at least two, three recommended. From that one list `enrol commit` writes
+  node.json's `time_servers` (what authtime judges) and `/etc/chrony/regalia.conf` (`authtime.conf()`,
+  the **whole** configuration: every server with NTS, `authselectmode require`, `minsources 2`, no
+  `pool`, no `sourcedir` (the distribution's default takes servers from DHCP that way), no `refclock`;
+  the clock stepped only during the first three updates, and after them chronyd **exits** on an offset
+  over a second, `maxchange 1 3 0`, which only two sources agreeing on a jump can cause: it stays down,
+  time stops being authenticated and the node stops serving until an operator looks. NOTHING STARTS IT
+  AGAIN BY ITSELF: a fresh chronyd steps during its first updates and would take the jumped time. So any
+  unclean stop of chronyd (that exit, a crash, a kill) leaves a LATCH, `/var/lib/regalia-time/chrony-latch`
+  (root's 0700 directory, made by `regalia.tmpfiles.conf`, never chrony's), written by the drop-in's
+  `ExecStopPost`, and its `ExecStartPre` refuses to start chronyd while it is there: the package upgrade's
+  restart, a manual start and a reboot all leave it stopped. `regalia-authtime` is ordered `After=`
+  chrony and never `Wants=` it. The signal: the node goes unready (the KMS readiness alert), the time trail
+  records `time-unauthenticated` with the reason (below), and chrony's journal says "Adjustment of … seconds
+  exceeds the allowed maximum". The operator compares the declared servers with an independent clock
+  (another site's, a GNSS receiver), runs `python3 -Es -m deploy.baremetal.node time-clear --reason TEXT`
+  as root (recorded in the time trail FIRST, with what the latch held and chrony's line), then
+  `systemctl start chrony`. The systemd e2e kills chronyd and checks: the latch is written; restarting
+  `regalia-authtime`, an upgrade-style restart and a boot-style start leave chronyd down; the clear is
+  recorded; then it starts. A backward jump is refused where expiries are judged anyway
+  (`heartbeat.authenticated_now`: the last reading plus the TPM time since, a floor kept across reboots);
+  what no node can refuse is two declared servers agreeing on a wrong time at the first boot, which is why
+  they must belong to independent operators. Mask the package's other ways of running chronyd at install:
+  `systemctl mask chronyd-restricted.service chrony-dnssrv@.timer`. Leap seconds come from the
+  `right/UTC` zone (`leapsectz`): **on Debian 13 install `tzdata-legacy`**, where `right/` now lives (a host
+  without it is refused by `regalia-authtime`, which publishes "…/right/UTC is missing: chronyd has no
+  leap-second data (install tzdata-legacy)" and records it in the time trail, so the node goes unready
+  visibly instead of chronyd quietly ignoring the directive; `leapseclist` with tzdata's
+  `leap-seconds.list` needs chrony 4.6, and the units are also run under 4.5), and the
+  firewall
+  opens NTS-KE (TCP 4460) and NTP (UDP 123) to those networks and nowhere else; an `outbound` entry for
+  either port is refused, so there is no plain-NTP fallback. `units/chrony.service.d/regalia.conf`
+  (installed in `/etc/systemd/system/chrony.service.d/`) starts chronyd with `-f /etc/chrony/regalia.conf`
+  (Debian's own `chrony.conf`, a package conffile, is never touched; `/etc/chrony` is where the
+  distribution's AppArmor profile lets chronyd read) and conflicts with systemd-timesyncd: chronyd must be
+  the only thing on the host that sets the clock. NTS cookies stay in chrony's own state directory
+  (`/var/lib/chrony`, 0750, `_chrony`'s). DNS for the servers' names is an `outbound` entry of the
+  site's; an NTS-KE server that hands out an NTP address outside its declared networks is dropped by the
+  firewall and refused by authtime, so declare every network an operator uses. A host whose RTC is far off never authenticates, because
   NTS checks certificates against the clock: set the RTC by hand; `nocerttimecheck` is not used. A small root
   service asks chrony every 15 s and publishes the answer in `/run/regalia/authtime.json`; the other
-  services believe it for 60 s.
+  services believe it for 60 s. Each change of that answer (and the first after the service starts) is
+  appended to the **time trail** (`/var/log/regalia-time/time.jsonl`, `trails.py`, shipped by
+  `regalia-audit-ship@time`) before it is published, as `time-authenticated` or `time-unauthenticated`
+  with the reason; a transition that cannot be recorded is published as not authenticated.
   **If time is not authenticated, nothing is served:** peers authorize no unlock and issue no lease, a
   node's own lease is not renewed, and within the lease bound (300 s) the KMS daemon stops. That is
   intended. So NTS must get out of each site: TCP 4460 to each server for the key exchange and UDP 123
@@ -768,7 +808,6 @@ removing only what it can prove it made.
 **Still NOT BUILT** (placed by hand, as the end-to-end test does):
 - each peer's AK in the attestation state (`attest.Verifier`);
 - the LUKS paths with the peers' contributions (`unlock.enrol_path`);
-- `chrony.conf` as `authtime.conf()` renders it;
 - the enrolment record signed by the AK's quote;
 - `commit --replace` (#76).
 

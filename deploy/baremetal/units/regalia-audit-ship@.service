@@ -1,4 +1,4 @@
-# Ships the audit trail %i (deploy/baremetal/trails.py's registry: sync, admission, enrol, authority,
+# Ships the audit trail %i (deploy/baremetal/trails.py's registry: sync, admission, enrol, time, authority,
 # reanchor, recount, recovery-key, recovery-reconcile) to the audit collector, one event a line, on the
 # stream <site>.%i (cmd/regalia-audit-ship, internal/audit/trail.go; #278).
 #
