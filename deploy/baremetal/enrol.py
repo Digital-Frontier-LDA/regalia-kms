@@ -10,6 +10,8 @@ WHAT IT MAKES, each on the host and never imported (ADR-0002 D5's rule, applied 
     PolicyAuthorize of the system-phase PCR key given with --system-pub, and certified by the AK;
   * the WG-SERVICE key, /etc/regalia/wg-service.key, root 0600;
   * the WG-BOOT key, kept root 0600 in the enrolment directory until `commit` seals it to this TPM.
+It READS, and records in the bundle, the serial of every hardware token the node serves from (#363): its SmartCard-HSM's
+PKCS#11 serial and its YubiKey's serial, as the daemon compares them, for the manifest's hsm_serials.
 The local unlock contribution is NOT made here: `commit` makes it and seals it in one step, so it is never
 on disk in the clear between the two phases. It then stays root 0600 in the enrolment directory (local.bin)
 only until the peers' LUKS paths are enrolled, which need it; its sealed copy opens only in the initrd.
@@ -45,10 +47,12 @@ before that object or file existed. Anything else at its handle or path is refus
 """
 import argparse
 import base64
+import glob
 import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -272,7 +276,57 @@ def signing_key(journal, directory, system_pub, ids, run):
     return facts
 
 
-ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key")
+TOKEN_SERIAL = re.compile(r"[A-Za-z0-9]{1,32}")     # membership's hsm_serials entry
+CARDCONTACT = "CardContact"                       # the SmartCard-HSM's PKCS#11 manufacturer (Nitrokey HSM 2, Pico HSM)
+YUBICO_VENDOR = "1050"
+
+
+def token_serials(module, run=subprocess.run, usb_root="/sys/bus/usb/devices"):
+    """The serials of the hardware tokens this host serves from, as the daemon compares them (#363, #72 G1): each
+    SmartCard-HSM's PKCS#11 token serial (TokenInfo.serialNumber, trimmed: the Nitrokey provider's), then each YubiKey's
+    serial (ykman, decimal: the PIV provider's). Read from the devices, never typed. Exactly one SmartCard-HSM; a
+    YubiKey attached with no ykman to read it is refused rather than left out."""
+    done = run(["pkcs11-tool", "--module", module, "--list-token-slots"], capture_output=True, text=True)
+    require(done.returncode == 0, "pkcs11-tool could not list the token slots: %s" % (done.stderr or "").strip()[-200:])
+    hsm, slot = [], {}
+    for line in done.stdout.splitlines() + ["Slot end"]:
+        if line.startswith("Slot "):
+            if CARDCONTACT in slot.get("token manufacturer", "") and slot.get("serial num"):
+                hsm.append(slot["serial num"])
+            slot = {}
+        elif ":" in line:
+            key, _, value = line.partition(":")
+            slot[key.strip()] = value.strip()
+    require(len(hsm) == 1, "%d SmartCard-HSM tokens are attached; a node serves from exactly one (attach only its own)" % len(hsm))
+    yubikeys = []
+    if shutil.which("ykman"):
+        done = run(["ykman", "list", "--serials"], capture_output=True, text=True)
+        require(done.returncode == 0, "ykman could not list the YubiKeys")
+        yubikeys = [line.strip() for line in done.stdout.splitlines() if line.strip()]
+    else:
+        attached = []
+        for vendor in glob.glob(os.path.join(usb_root, "*", "idVendor")):
+            with open(vendor) as f:
+                attached += [vendor] if f.read().strip() == YUBICO_VENDOR else []
+        require(not attached, "a YubiKey is attached and ykman is not installed to read its serial: install yubikey-manager")
+    serials = hsm + yubikeys
+    require(all(TOKEN_SERIAL.fullmatch(s) for s in serials), "a token serial is not one the manifest can list: %s" % serials)
+    require(len(set(serials)) == len(serials), "a token serial appears twice: %s" % serials)
+    return serials
+
+
+def tokens(journal, module, run):
+    """The token serials, journalled: read once at init, and the same tokens required at every later init."""
+    serials = token_serials(module, run)
+    if journal.state("tokens") == "done":
+        require(journal.get("tokens")["hsm_serials"] == serials, "the tokens attached (%s) are not the ones this enrolment recorded (%s)"
+                % (", ".join(serials), ", ".join(journal.get("tokens")["hsm_serials"])))
+        return serials
+    journal.done("tokens", hsm_serials=serials)
+    return serials
+
+
+ENTRY_KEYS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials")
 
 
 def entry(bundle, system_pub, run=subprocess.run):
@@ -293,7 +347,11 @@ def entry(bundle, system_pub, run=subprocess.run):
                                            bytes.fromhex(bundle["signing_sig"]), ak_public, bundle["ek_name"], system_pub, run=run)
     wg = {k: base64.b64decode(bundle[k], validate=True).hex() for k in ("wg_service_pub", "wg_boot_pub")}
     require(all(len(v) == 64 for v in wg.values()), "a WireGuard public key is 32 bytes")
-    return dict(zip(ENTRY_KEYS, (bundle["node_id"], bundle["ek_name"], bundle["ak_name"], wg["wg_service_pub"], wg["wg_boot_pub"], signing)))
+    serials = bundle.get("hsm_serials")
+    require(isinstance(serials, list) and serials and all(isinstance(x, str) and TOKEN_SERIAL.fullmatch(x) for x in serials)
+            and len(set(serials)) == len(serials), "the bundle has no hsm_serials, or a malformed list: it was made before #363")
+    return dict(zip(ENTRY_KEYS, (bundle["node_id"], bundle["ek_name"], bundle["ak_name"], wg["wg_service_pub"], wg["wg_boot_pub"], signing,
+                                 list(serials))))
 
 
 def _der_exact(raw, index):
@@ -497,7 +555,10 @@ def _safe_directory(directory):
         os.close(parent)
 
 
-def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout):
+OPENSC_MODULE = "/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so"
+
+
+def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY, run=subprocess.run, out=sys.stdout, module=OPENSC_MODULE):
     """`system_pub`: the system-phase PCR public key (PEM bytes) the signing key's policy names."""
     require(NODE_ID.fullmatch(node_id or ""), "a node ID is a lower-case name, such as a")
     signkey.pcr_key_name(system_pub)                 # an RSA-2048 PEM, before anything is made
@@ -506,6 +567,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
     ids = identity(journal, directory, run)
     cert = ek_certificate(journal, directory, run)
     signing = signing_key(journal, directory, system_pub, ids, run)     # after the EK checks: nothing more is made on a refusal
+    hsm_serials = tokens(journal, module, run)
     service = wg_key(journal, "wg_service", wg_service_key, run)
     boot = wg_key(journal, "wg_boot", os.path.join(directory, "wg-boot.key"), run)
     bundle = {"schema": SCHEMA_BUNDLE, "node_id": node_id,
@@ -515,7 +577,7 @@ def init(node_id, system_pub, directory=ENROL_DIR, wg_service_key=WG_SERVICE_KEY
               "wg_service_pub": service, "wg_boot_pub": boot,
               "signing_public": signing["signing_public"], "signing_certify": signing["signing_certify"],
               "signing_sig": signing["signing_sig"], "signing_key": signing["signing_key"],
-              "tpm_firmware_version": firmware_version(run)}
+              "hsm_serials": hsm_serials, "tpm_firmware_version": firmware_version(run)}
     _atomic_json(os.path.join(directory, "bundle.json"), bundle)
     os.chmod(os.path.join(directory, "bundle.json"), 0o644)
     print("ENROL INIT: node %s, identity bundle %s (public values only; take it to the manifest ceremony)"
@@ -609,6 +671,11 @@ def check_manifest(directory, chain, root_key, typed, document, replace=None):
     for field, mine in mine_all:
         require(node[field] == mine, "the manifest's %s for %s is not this host's: it was made from another bundle, or "
                 "for another host. Nothing was written" % (field, node_id))
+    # the tokens this host read at init (#363): the manifest lists exactly them, so the daemon serves from them and no other
+    require(isinstance(bundle.get("hsm_serials"), list), "this host's bundle has no hsm_serials: it was made before #363")
+    require(sorted(node["hsm_serials"]) == sorted(bundle["hsm_serials"]),
+            "the manifest's hsm_serials for %s (%s) are not this host's tokens (%s): the daemon would refuse to serve. Nothing was written"
+            % (node_id, ", ".join(node["hsm_serials"]), ", ".join(bundle["hsm_serials"])))
     try:
         measurements.bind(manifest, document)
     except membership.Refused as refusal:            # measurements raises the same class
@@ -1658,6 +1725,7 @@ def main(argv=None):
     p.add_argument("--node-id", required=True)
     p.add_argument("--enrol-dir", default=ENROL_DIR)
     p.add_argument("--wg-service-key", default=WG_SERVICE_KEY)
+    p.add_argument("--pkcs11-module", default=OPENSC_MODULE, help="the PKCS#11 module that reads the SmartCard-HSM's serial")
     p.add_argument("--system-pub", required=True, help="the system-phase PCR key's public half (PEM): the signing key is usable "
                    "only under PCR 11 policies it signed")
     e = sub.add_parser("entry", help="(the root's side, no TPM) check a bundle and print the node's v4 identity fields")
@@ -1818,7 +1886,7 @@ def main(argv=None):
         return 2
     try:
         with open(args.system_pub, "rb") as f:
-            init(args.node_id, f.read(65536), args.enrol_dir, args.wg_service_key)
+            init(args.node_id, f.read(65536), args.enrol_dir, args.wg_service_key, module=args.pkcs11_module)
     except (Refused, attest.Refused, OSError, ValueError) as error:       # json.JSONDecodeError is a ValueError
         print("REFUSED: %s" % error, file=sys.stderr)
         return 1

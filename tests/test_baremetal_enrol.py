@@ -25,7 +25,8 @@ def _rsa_pem():
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
 
 
-SYSTEM_PUB, OTHER_PUB = _rsa_pem(), _rsa_pem()          # the system-phase PCR key the signing key is made for, and another
+SYSTEM_PUB, OTHER_PUB = _rsa_pem(), _rsa_pem()
+TOKENS = ["DENK0500001", "35718625"]                    # a SmartCard-HSM's PKCS#11 serial and a YubiKey's          # the system-phase PCR key the signing key is made for, and another
 
 
 class Crash(BaseException):
@@ -56,6 +57,10 @@ class InitOnSwtpm(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.dir, self.wg = self.d + "/enrol", self.d + "/etc/wg-service.key"
+        # the host's tokens, stood in for: a test never reaches a card on the machine that runs it
+        patcher = unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: list(TOKENS))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def init(self, run=subprocess.run, node_id="a", system_pub=None):
         return enrol.init(node_id, system_pub or SYSTEM_PUB, self.dir, self.wg, run=run, out=io.StringIO())
@@ -63,6 +68,13 @@ class InitOnSwtpm(unittest.TestCase):
     def test_init_makes_the_keys_on_the_host_and_names_them_in_the_bundle(self):
         bundle = self.init()
         self.assertEqual(bundle["schema"], enrol.SCHEMA_BUNDLE)
+        self.assertEqual(bundle["hsm_serials"], TOKENS, "#363: the tokens' serials, read at init")
+        self.assertEqual(enrol.entry(bundle, SYSTEM_PUB)["hsm_serials"], TOKENS)
+        with unittest.mock.patch.object(enrol, "token_serials", lambda module, run=None: ["DENK0599999", "35718625"]):
+            with self.assertRaisesRegex(enrol.Refused, "not the ones this enrolment recorded"):
+                self.init()
+        with self.assertRaisesRegex(enrol.Refused, "it was made before #363"):
+            enrol.entry({k: v for k, v in bundle.items() if k != "hsm_serials"}, SYSTEM_PUB)
         self.assertEqual(stat.S_IMODE(os.stat(self.dir).st_mode), 0o700)
         for path in (self.wg, self.dir + "/wg-boot.key"):
             self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600, path)
@@ -405,7 +417,7 @@ class InitOnSwtpm(unittest.TestCase):
         man["policy_version"] = measurements.version(document)
         man["nodes"][0].update(ek_name=bundle["ek_name"], ak_name=bundle["ak_name"],
                                wg_service_pub=base64.b64decode(bundle["wg_service_pub"]).hex(),
-                               wg_boot_pub=base64.b64decode(bundle["wg_boot_pub"]).hex())
+                               wg_boot_pub=base64.b64decode(bundle["wg_boot_pub"]).hex(), hsm_serials=bundle["hsm_serials"])
         root = hbt.pub(hbt.ROOT)
         example = {"schema": "regalia.node/v1", "node_id": "x", "site": etc + "site.json", "root_key": "00" * 32,
                    "tcti": os.environ["TPM2TOOLS_TCTI"], "nv_epoch": "0x01500016", "nv_heartbeat": "0x01500018",
@@ -440,6 +452,60 @@ class InitOnSwtpm(unittest.TestCase):
             self.assertEqual(enrol.commit(self.dir, rt.sign(man), root, enrol.fingerprint(root), document, nt.SITE, example,
                                           as_sync=in_process, out=io.StringIO(), first_beat=first_beat), (1, digest))
 
+
+
+class Tokens(unittest.TestCase):
+    """#363 (#72 G1): the serials the daemon compares, read from the devices: the SmartCard-HSM's PKCS#11 serial and the
+    YubiKey's, never typed."""
+
+    SLOTS = ("Available slots:\n"
+             "Slot 0 (0x0): Nitrokey Nitrokey HSM (DENK0500001) 00 00\n"
+             "  token label        : SmartCard-HSM (UserPIN)\n"
+             "  token manufacturer : www.CardContact.de\n"
+             "  token model        : PKCS#15 emulated\n"
+             "  serial num         : DENK0500001\n"
+             "Slot 1 (0x4): Yubico YubiKey OTP+FIDO+CCID 01 00\n"
+             "  token label        : YubiKey PIV #35718625\n"
+             "  token manufacturer : piv_II\n"
+             "  serial num         : 00000000\n")
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+
+    def run_with(self, slots=SLOTS, ykman="35718625\n"):
+        def run(argv, **kw):
+            if argv[0] == "pkcs11-tool":
+                return subprocess.CompletedProcess(argv, 0, slots, "")
+            if argv[:2] == ["ykman", "list"]:
+                return subprocess.CompletedProcess(argv, 0, ykman, "")
+            raise AssertionError("no other tool reaches a card: %s" % argv)
+        return run
+
+    def test_the_hsm_and_the_yubikey(self):
+        with unittest.mock.patch.object(enrol.shutil, "which", lambda t: "/usr/bin/" + t):
+            self.assertEqual(enrol.token_serials("m.so", self.run_with()), ["DENK0500001", "35718625"])
+            self.assertEqual(enrol.token_serials("m.so", self.run_with(ykman="")), ["DENK0500001"], "a node with no YubiKey (Pico alone)")
+
+    def test_refusals(self):
+        with unittest.mock.patch.object(enrol.shutil, "which", lambda t: "/usr/bin/" + t):
+            two = self.SLOTS + self.SLOTS.replace("Slot 0", "Slot 2").replace("DENK0500001", "DENK0500002")
+            with self.assertRaisesRegex(enrol.Refused, "2 SmartCard-HSM tokens are attached"):
+                enrol.token_serials("m.so", self.run_with(slots=two))
+            with self.assertRaisesRegex(enrol.Refused, "0 SmartCard-HSM tokens"):
+                enrol.token_serials("m.so", self.run_with(slots="Available slots:\n"))
+            with self.assertRaisesRegex(enrol.Refused, "appears twice"):
+                enrol.token_serials("m.so", self.run_with(ykman="35718625\n35718625\n"))
+            with self.assertRaisesRegex(enrol.Refused, "not one the manifest can list"):
+                enrol.token_serials("m.so", self.run_with(ykman="3571-8625\n"))
+        os.makedirs(self.d + "/1-1")
+        with open(self.d + "/1-1/idVendor", "w") as f:
+            f.write("1050\n")
+        with unittest.mock.patch.object(enrol.shutil, "which", lambda t: None):
+            with self.assertRaisesRegex(enrol.Refused, "a YubiKey is attached and ykman is not installed"):
+                enrol.token_serials("m.so", self.run_with(), usb_root=self.d)
+            os.unlink(self.d + "/1-1/idVendor")
+            self.assertEqual(enrol.token_serials("m.so", self.run_with(), usb_root=self.d), ["DENK0500001"])
 
 
 class ChronyPath(unittest.TestCase):
