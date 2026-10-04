@@ -116,5 +116,54 @@ class Revoke(unittest.TestCase):
         self.assertEqual((len(key.signed), stranger.signed), (1, []))
 
 
+class Console(unittest.TestCase):
+    """regalia-kms-51's read of #367: a revocation is confirmed, and the owner's PIN typed, only at the console's own
+    terminal. A pipe, a script or a cron job has none, and is refused before anything is signed."""
+
+    def run_without_a_terminal(self, code, typed):
+        import subprocess
+        import sys
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # setsid: a new session with no controlling terminal, as a cron job or a script piped into the tool has
+        return subprocess.run(["setsid", "-w", sys.executable, "-c", code], input=typed, capture_output=True, text=True, cwd=root,
+                              env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+
+    def test_a_piped_confirmation_is_refused(self):
+        done = self.run_without_a_terminal("from deploy.baremetal import keyfd, revoke; print('CONFIRMED', keyfd.tty_line(revoke.PROMPT))",
+                                           "2 1a2b3c4d\n")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn("CONFIRMED", done.stdout)
+        self.assertIn("no controlling terminal", done.stderr)
+
+    def test_a_piped_pin_is_refused(self):
+        done = self.run_without_a_terminal("from deploy.baremetal import keyfd; print('PIN', bytes(keyfd.tty_secret('PIN: ', 'the PIN')))",
+                                           "123456\n")
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn("PIN b", done.stdout)
+        self.assertIn("the PIN is typed at the console: no controlling terminal", done.stderr)
+
+    def test_the_tools_read_no_confirmation_or_pin_from_standard_input(self):
+        """No input() and no getpass in the two tools: every prompt goes through keyfd's terminal readers."""
+        for name in ("revoke.py", "owner.py"):
+            with open(os.path.join(os.path.dirname(revoke.__file__), name)) as f:
+                source = f.read()
+            with self.subTest(name):
+                for word in ("input(", "getpass"):
+                    self.assertFalse(word in source, "%s uses %s" % (name, word))
+                # standard input is read only by the regalia-sync halves, for the envelope runuser hands them
+                rest = source.replace("sys.stdin.read(heartbeat", "").replace("sys.stdin.read(membership", "")
+                self.assertFalse("sys.stdin" in rest, "%s reads standard input elsewhere" % name)
+
+    def test_the_owner_signs_a_revocation_only_off_the_nodes(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        mark = os.path.join(d, "node.json")
+        owner.off_the_nodes((mark,))                                   # no node configuration here: fine
+        open(mark, "w").close()
+        with self.assertRaisesRegex(m.Refused, "this is a KMS node .*the owner signs a revocation off the nodes"):
+            owner.off_the_nodes((mark,))
+        self.assertIn("/etc/regalia/node.json", owner.NODE_MARKS)
+
+
 if __name__ == "__main__":
     unittest.main()

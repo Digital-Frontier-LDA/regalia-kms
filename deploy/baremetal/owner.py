@@ -221,7 +221,7 @@ def main(argv=None):
             pin = lambda: os.environ[args.pin_env]      # noqa: E731
         else:
             def pin():
-                # the console's terminal only, echo off; never standard input (getpass's fallback echoes) (51's read)
+                # the console's terminal only, echo off; never standard input (the stdlib prompt's fallback echoes) (51's read)
                 typed = keyfd.tty_secret("The approval key's PIN (not shown): ", "the PIN", limit=64)
                 try:
                     return typed.decode("ascii")
