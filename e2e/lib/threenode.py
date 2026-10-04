@@ -35,6 +35,7 @@ the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (
 Root only; it changes the machine (namespaces, interfaces, transient units), so its callers run only on a
 throwaway machine (a GitHub-hosted runner)."""
 import configparser
+import contextlib
 import grp
 import json
 import os
@@ -111,6 +112,9 @@ class Cluster:
         # the revocation authority, when asked for: its own namespace, TPM, clock and WireGuard key, and its real
         # `serve` signing the heartbeats (then nothing here writes one)
         self.auth = NodeHere(self.work, AUTH, len(names) + 1) if authority else None
+        if self.auth:                                 # authority.json's run_dir is /run/regalia, validated (#323): the real one
+            self.auth.run = pathlib.Path(authtime.RUN_DIR)
+            self.made_run = not self.auth.run.exists()
         self.time = {n: True for n in list(names) + ([AUTH] if authority else [])}   # authenticated time, per member
         self.stop_threads = False
         self.threads = []
@@ -144,7 +148,7 @@ class Cluster:
         self._network()
         for n in self.members():
             for d in (n.dir / "etc", n.state, n.admission, n.run):
-                d.mkdir(parents=True)
+                d.mkdir(parents=True, exist_ok=(d == n.run and n is self.auth))     # /run/regalia may be there already
             os.chmod(n.dir, 0o711)
             self._tpm(n)
             if n is not self.auth:                    # the authority's is made by its own `wg-key`
@@ -416,6 +420,7 @@ class Cluster:
         a.cfg_path.write_text(json.dumps({
             "schema": "regalia.authority/v1", "root_key": hbt.pub(hbt.ROOT), "tcti": a.tcti, "nv_epoch": "0x01500016",
             "nv_sequence": "0x01500020", "state_dir": str(a.state), "run_dir": str(a.run), "signer": {"kind": "file", "path": str(key)},
+            "time_servers": ["nts1.e2e3.invalid", "nts2.e2e3.invalid"],
             "interval_s": 600, "lifetime_s": None, "sequence_offset": 0, "sequence_stride": 1, "revoke_requesters": ["local-root"],
             "wg_service_key": str(etc / "wg-service.key"), "underlays": {n.name: n.underlay for n in self.nodes.values()},
             "listen_port": 51821, "sync_port": 7444, "control_socket": str(a.dir / "control" / "control.sock")}))
@@ -507,8 +512,12 @@ class Cluster:
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
             self.time[name] = False
-            for entry in n.run.iterdir():
-                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+            if n is self.auth:                        # the host's /run/regalia: only what the authority's time stand-in wrote
+                with contextlib.suppress(FileNotFoundError):
+                    (n.run / "authtime.json").unlink()
+            else:
+                for entry in n.run.iterdir():
+                    shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
             for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
             self.power_cycle(name, orderly=(power == "cycle"))
@@ -775,3 +784,9 @@ class Cluster:
         sh("ip", "netns", "del", SWITCH, check=False)
         for loop in self.loops.values():
             sh("losetup", "-d", loop, check=False)
+        if self.auth:                                 # the host's /run/regalia: what this made there, by exact name
+            with contextlib.suppress(FileNotFoundError):
+                (self.auth.run / "authtime.json").unlink()
+            if self.made_run:
+                with contextlib.suppress(OSError):
+                    self.auth.run.rmdir()

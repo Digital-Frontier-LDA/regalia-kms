@@ -21,7 +21,9 @@ hand with its recovery key, then the other two by themselves, through that node.
      the total outage again, the authority first.
   4  the authority revokes c (REVOKED_STOLEN): its published chain changes, and its own wg-apply (the path unit's
      trigger) drops c from its tunnel, as the nodes' do
+  5  its time no longer authenticated: the authority signs no heartbeat, and its trail says why (fail closed)
 """
+import json
 import os
 import pathlib
 import sys
@@ -128,6 +130,18 @@ def scenario(cluster):
     ok(until(lambda: cluster.wg_peers(AUTH, "wg-svc") == {keys["a"], keys["b"]}, 60, 2) is True and keys["c"] in before,
        "after `authority revoke` (epoch 2 published), its wg-apply path dropped c from wg-svc; a and b remain",
        {"before": sorted(before), "after": sorted(cluster.wg_peers(AUTH, "wg-svc")), "said": said[-300:]})
+
+    header("5  without authenticated time the authority signs nothing")
+    cluster.time[AUTH] = False                       # chrony stops vouching (the stand-in's switch)
+    until(lambda: not json.loads((cluster.auth.run / "authtime.json").read_text())["authenticated"], 30, 1)
+    since = time.time()
+    # serve tries a beat at its start and then every interval_s (600 s): restarted, it tries now, as after a reboot
+    sh("systemctl", "restart", cluster.unit(AUTH, "serve"))
+    refused = until(lambda: any(e.get("event") == "authority-heartbeat" and e.get("outcome") == "FAILED" and "time is not authenticated" in e.get("reason", "")
+                                and e.get("at", 0) >= since for e in cluster.trail(AUTH)), 180, 3)
+    signed = [e for e in cluster.trail(AUTH) if e.get("event") == "authority-heartbeat" and e.get("outcome") not in ("FAILED", None) and e.get("at", 0) >= since]
+    ok(refused is True and not signed, "time no longer authenticated: the authority signs no heartbeat, and records why (fail closed)",
+       recent(cluster, AUTH))
 
 
 def main():
