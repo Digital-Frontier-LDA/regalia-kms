@@ -135,4 +135,5 @@ the real hardware or in the real setting), **accepted** (a risk taken on purpose
 ## Tests
 
 - rolling-threenode has an intermittent failure on its audit-stream check (fix: #393).
+- `audit_complete` can race trails that are still growing (#409), and fail on a count that differs by one.
 - The theft scenario's step-8 epoch check can pass vacuously until #381 lands `moved_by_sync`.
