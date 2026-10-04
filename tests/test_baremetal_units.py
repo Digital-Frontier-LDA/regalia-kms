@@ -42,6 +42,27 @@ class TrailsReachTheirShipper(unittest.TestCase):
                                            ("sync", "regalia-sync.service", "0o755")])
         self.assertEqual(unit("regalia-audit-ship@.service")["Service"]["CapabilityBoundingSet"], "")    # the reason: no way around it
 
+    def test_traversal_exposes_no_file_the_admission_service_writes_there(self):
+        """24 on #345: 0711 lets anyone pass, so nothing the service keeps there may be readable by others. The files it
+        writes there (node.admission_service: lease.Holder's lease.json and its lock, the trail audit.jsonl), written
+        as it writes them, under the most permissive umask."""
+        from deploy.baremetal import lease, trails
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        old = os.umask(0)
+        try:
+            holder = lease.Holder("a", "ab" * 32, lambda: (0, True), lambda: 0, os.path.join(d, "lease.json"))
+            holder.request()                                      # the nonce, written to lease.json under its lock
+            trails.append(os.path.join(d, "audit.jsonl"), {"event": "admission", "outcome": "ALLOW"})
+        finally:
+            os.umask(old)
+        names = sorted(os.listdir(d))
+        self.assertIn("lease.json", names)
+        self.assertIn("audit.jsonl", names)
+        for name in names:
+            with self.subTest(file=name):
+                self.assertEqual(os.stat(os.path.join(d, name)).st_mode & 0o007, 0, "%s is readable or writable by others" % name)
+
 
 class ChronyDropIn(unittest.TestCase):
     """#303: chronyd from enrolment's configuration, the package's own file untouched."""
