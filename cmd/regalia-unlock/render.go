@@ -47,7 +47,11 @@ type renderEnv struct {
 	remove   func(path string) error
 	creds    string // $CREDENTIALS_DIRECTORY
 	rootKey  string
+	pcrKey   string // the booting image's PCR-signing public key, as systemd-stub unpacks its .pcrpkey
 }
+
+// pcrPublicKey is where systemd-stub unpacks the booting UKI's .pcrpkey section in the initrd.
+const pcrPublicKey = "/.extra/tpm2-pcr-public-key.pem"
 
 func realRenderEnv(tpmPath string) renderEnv {
 	return renderEnv{
@@ -81,6 +85,26 @@ func realRenderEnv(tpmPath string) renderEnv {
 		remove:  os.Remove,
 		creds:   os.Getenv("CREDENTIALS_DIRECTORY"),
 		rootKey: membership.RootKeyPath,
+		pcrKey:  pcrPublicKey,
+	}
+}
+
+// imagePolicy is this node's approved-image write policy (#242 B2a): PolicyAuthorize of the booting image's
+// PCR-signing key, asked for by the anchor's reader only when it meets an index written under a policy.
+//
+// The initrd does not look the key up in the measurements document (it has none). It is the booting
+// image's own .pcrpkey, measured into PCR 11 by systemd-stub: a substituted key changes PCR 11, the peers
+// unlock only for a PCR 11 the root-approved measurements name, and the local half is sealed to the signed
+// PCR 11 policy too. So nothing the initrd decides with a forged key ever yields a disk key.
+func imagePolicy(env renderEnv) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		raw, err := env.readFile(env.pcrKey)
+		if err != nil {
+			return nil, &membership.Refused{Reason: fmt.Sprintf("the image's PCR public key %s cannot be read: %v; the anchor's write policy "+
+				"cannot be established", env.pcrKey, err)}
+		}
+		_, policy, err := membership.PCRKeyPolicy(raw)
+		return policy, err
 	}
 }
 
@@ -207,7 +231,7 @@ func render(dir string, env renderEnv) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("the TPM does not answer: %v", err)
 	}
-	high, err := membership.Anchored(nv, manifests, nil) // TODO(#242 B2): this node's approved-image policy, from the site configuration
+	high, err := membership.Anchored(nv, manifests, imagePolicy(env))
 	closeNV()
 	if err != nil {
 		return "", err
