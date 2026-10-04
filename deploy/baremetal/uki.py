@@ -264,6 +264,9 @@ def public_key(pem, what, run=subprocess.run, tools=TOOLS):
     bits = re.match(r"(RSA )?Public-Key: \((\d+) bit\)", text)
     require(bits is not None and "Modulus" in text, "%s is not an RSA public key: systemd seals only to RSA" % what)
     require(int(bits.group(2)) == KEY_BITS, "%s is RSA-%s; the keys are RSA-%d, the size every TPM 2.0 loads" % (what, bits.group(2), KEY_BITS))
+    # a TPM loads an RSA public key with exponent 65537 only: another passes every check here and fails at the first
+    # policy session (regalia-kms-95, #357); refused at build instead
+    require(re.search(r"^Exponent: 65537 \(0x10001\)$", text, re.M) is not None, "%s's exponent is not 65537: a TPM loads no other" % what)
     der = _run(run, [tools["openssl"], "rsa", "-pubin", "-RSAPublicKey_out", "-outform", "der"], "reading %s" % what, input=pem)
     return sha256(der), pem
 

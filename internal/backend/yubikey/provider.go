@@ -299,7 +299,7 @@ func (provider *Provider) Execute(ctx context.Context, route registry.Route, ope
 	// A CARD THAT WAS GONE WAITS FOR A FRESH LEASE. Asked once the card has proved to be the bound
 	// one, with the key and policies the binding names, and before anything is done with it, the
 	// PIN included.
-	if !provider.returned.Serves(ctx, binding.DeviceID) {
+	if !provider.returned.Serves(ctx, binding.DeviceID, binding.DeviceSerial) {
 		return nil, "", ErrUnavailable
 	}
 	if operation == "public-key" {
@@ -437,7 +437,7 @@ func (provider *Provider) Healthy(ctx context.Context, binding registry.Binding)
 	}
 	// Present, the right card, and not yet vouched for again: not healthy, so routing and readiness
 	// say so. This is also where a card's return is first noticed.
-	if !provider.returned.Serves(ctx, binding.DeviceID) {
+	if !provider.returned.Serves(ctx, binding.DeviceID, binding.DeviceSerial) {
 		return false
 	}
 	retries, err := provider.pinRetries(ctx, binding, session)

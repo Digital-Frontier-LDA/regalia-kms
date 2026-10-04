@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,9 +51,18 @@ type world struct {
 func good(now int64) map[string]any {
 	return map[string]any{
 		"schema": Schema, "node_id": "a", "session_id": testSession, "boot_id": testBoot, "epoch": 7,
-		"manifest_digest": testDigest, "lease_issued_at": "2026-10-02T09:00:00Z",
+		"manifest_digest": testDigest, "hsm_serials": "DENK0404144 36345471", "lease_issued_at": "2026-10-02T09:00:00Z",
 		"requested_boottime_ms": now - 5_000, "serve_until_boottime_ms": now + 290_000, "reason": "",
 	}
+}
+
+// serials is n distinct serials, one space apart.
+func serials(n int) string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("S%02d", i)
+	}
+	return strings.Join(out, " ")
 }
 
 func newWorld(t *testing.T) *world {
@@ -215,10 +225,19 @@ func TestEveryDefectOfTheFileIsNotAdmitted(t *testing.T) {
 		{"a negative epoch", "epoch is not a whole number", change("epoch", -1)},
 		{"a fractional epoch", "epoch is not a whole number", change("epoch", 7.5)},
 		{"a malformed digest", "manifest_digest is not 64 lowercase hex", change("manifest_digest", "D1")},
+		{"serials as a list", "not one flat JSON object", change("hsm_serials", []any{"DENK0404144"})},
+		{"serials that are not a string", "hsm_serials is not a string", change("hsm_serials", 7)},
+		{"two spaces between serials", "hsm_serials is not distinct serials", change("hsm_serials", "DENK0404144  36345471")},
+		{"a leading space", "hsm_serials is not distinct serials", change("hsm_serials", " DENK0404144")},
+		{"a serial twice", "hsm_serials is not distinct serials", change("hsm_serials", "DENK0404144 DENK0404144")},
+		{"a serial with a dash", "hsm_serials is not distinct serials", change("hsm_serials", "DENK-0404144")},
+		{"a serial of 33 characters", "hsm_serials is not distinct serials", change("hsm_serials", strings.Repeat("S", 33))},
+		{"seventeen serials", "lists more than 16 hardware tokens", change("hsm_serials", serials(17))},
+		{"the old schema", "another schema", change("schema", "regalia.admission/v1")},
 		{"a local time", "lease_issued_at is not UTC", change("lease_issued_at", "2026-10-02T09:00:00+02:00")},
 		{"a fractional bound", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", 1.0e6+0.5)},
-		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"regalia.admission/v1","node_id":"a","session_id":"` + testSession +
-			`","boot_id":"` + testBoot + `","epoch":7,"manifest_digest":"` + testDigest +
+		{"an exponent bound", "serve_until_boottime_ms is not a whole number", raw(`{"schema":"regalia.admission/v2","node_id":"a","session_id":"` + testSession +
+			`","boot_id":"` + testBoot + `","epoch":7,"manifest_digest":"` + testDigest + `","hsm_serials":"DENK0404144` +
 			`","lease_issued_at":"2026-10-02T09:00:00Z","requested_boottime_ms":1,"serve_until_boottime_ms":1e9,"reason":""}`)},
 		{"a bound as text", "serve_until_boottime_ms is not a whole number", change("serve_until_boottime_ms", "1290000")},
 		{"a negative request time", "requested_boottime_ms is not a whole number", change("requested_boottime_ms", -1)},
@@ -630,5 +649,36 @@ func TestParseProcessStartCountsFromTheLastParenthesis(t *testing.T) {
 		if got, err := parseProcessStart(stat); err == nil {
 			t.Fatalf("%s: accepted as %d", label, got)
 		}
+	}
+}
+
+// A key is served from a token only while the manifest lists its serial for this node, and under a
+// lease asked for after the moment given (regalia-kms#72, G1 and PoC 12.4): one reading of the file.
+func TestAdmitsNeedsTheSerialListedAndALeaseAskedForLater(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	requested := w.now - 5_000
+	if !w.gate.Admits(ctx, "DENK0404144", requested-1) || !w.gate.Admits(ctx, "36345471", requested-1) {
+		t.Fatal("a listed token under a lease asked for since is not admitted")
+	}
+	for _, serial := range []string{"DENK0404547", "", "DENK040414", "denk0404144"} {
+		if w.gate.Admits(ctx, serial, requested-1) {
+			t.Errorf("serial %q, which the manifest does not list, is admitted", serial)
+		}
+	}
+	if w.gate.Admits(ctx, "DENK0404144", requested) {
+		t.Error("a listed token is admitted under a lease asked for before the moment")
+	}
+	none := good(w.now)
+	none["hsm_serials"] = ""
+	w.put(none)
+	if w.gate.Admits(ctx, "DENK0404144", requested-1) || !w.gate.Ready(ctx) {
+		t.Error("with no token listed, a token is admitted, or the node itself is not")
+	}
+	revoked := good(w.now)
+	revoked["serve_until_boottime_ms"], revoked["reason"] = 0, "revoked"
+	w.put(revoked)
+	if w.gate.Admits(ctx, "DENK0404144", requested-1) {
+		t.Error("a listed token is admitted while the node is not")
 	}
 }

@@ -6,14 +6,19 @@
 // fact, the admission file; this package reads it. That is the kubelet shape: the agent renews,
 // the server reads the outcome.
 //
-//	{"schema": "regalia.admission/v1", "node_id": ..., "session_id": ..., "boot_id": ...,
-//	 "epoch": ..., "manifest_digest": ..., "lease_issued_at": ...,
+//	{"schema": "regalia.admission/v2", "node_id": ..., "session_id": ..., "boot_id": ...,
+//	 "epoch": ..., "manifest_digest": ..., "hsm_serials": ..., "lease_issued_at": ...,
 //	 "requested_boottime_ms": ..., "serve_until_boottime_ms": ..., "reason": ...}
 //
 // NO WALL CLOCK. serve_until_boottime_ms is in this host's CLOCK_BOOTTIME, which runs through
 // suspend and cannot be set. The node is admitted while the daemon's own CLOCK_BOOTTIME is below
 // it. boot_id is the kernel's boot ID: those numbers mean nothing in another boot, so a file
 // carrying another boot's ID is refused whatever its times say.
+//
+// THE TOKENS ARE THE MANIFEST'S (regalia-kms#72, G1). hsm_serials is this node's entry in the manifest
+// the lease service checked under, space-separated: every hardware token it holds. A key is served
+// from a token only if its serial is listed (Admits), so the root replacing a token in the manifest
+// takes the old one out of service without a change to this daemon's configuration.
 //
 // NOT ADMITTED IS THE ANSWER TO EVERYTHING ELSE. A file that is missing, unreadable, not root's,
 // writable by anyone else, malformed, for another node or boot session, expired, or claiming more
@@ -44,7 +49,9 @@ import (
 )
 
 const (
-	Schema = "regalia.admission/v1"
+	Schema = "regalia.admission/v2"
+	// MaxSerials is admission.MAX_SERIALS: the hardware tokens one node may list.
+	MaxSerials = 16
 	// MaxAheadMilliseconds is one lease lifetime (lease.MAX_LIFETIME, 300 s). The writer holds a
 	// margin back from it, so an admission reaching further ahead was not derived from a lease.
 	MaxAheadMilliseconds = 300_000
@@ -60,7 +67,8 @@ var (
 	nodeIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 	hex64Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	bootIDPattern = regexp.MustCompile(`^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$`)
-	fields        = []string{"schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "lease_issued_at",
+	serialPattern = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
+	fields        = []string{"schema", "node_id", "session_id", "boot_id", "epoch", "manifest_digest", "hsm_serials", "lease_issued_at",
 		"requested_boottime_ms", "serve_until_boottime_ms", "reason"}
 )
 
@@ -71,6 +79,7 @@ type Document struct {
 	BootID               string
 	Epoch                uint64
 	ManifestDigest       string
+	HSMSerials           []string
 	LeaseIssuedAt        time.Time
 	RequestedBoottimeMs  int64
 	ServeUntilBoottimeMs int64
@@ -86,6 +95,8 @@ type Status struct {
 	Epoch uint64
 	// RequestedBoottimeMs is when the node asked for the lease it holds, 0 when not admitted.
 	RequestedBoottimeMs int64
+	// HSMSerials are this node's hardware tokens in the manifest, empty when not admitted.
+	HSMSerials []string
 }
 
 // Options configure a Gate. Boottime, BootID and OwnerUID have production defaults; tests set them.
@@ -231,6 +242,22 @@ func (gate *Gate) Check(ctx context.Context) Status {
 	return status
 }
 
+// Admits reports whether a key may be served from the token with this serial: the node is admitted
+// under a lease it asked for after `boottimeMs`, and the manifest lists the serial among this node's
+// hardware tokens (regalia-kms#72, PoC 12.4 and G1). One reading of the file answers both.
+func (gate *Gate) Admits(ctx context.Context, serial string, boottimeMs int64) bool {
+	status := gate.Check(ctx)
+	if !status.Admitted || status.RequestedBoottimeMs <= boottimeMs || serial == "" {
+		return false
+	}
+	for _, listed := range status.HSMSerials {
+		if listed == serial {
+			return true
+		}
+	}
+	return false
+}
+
 // RequestedAfter reports whether the node is admitted under a lease it asked for after
 // `boottimeMs`. A lease is issued after it is asked for, so this shows a peer vouched after that
 // moment without comparing two machines' clocks (regalia-kms#72, PoC 12.4).
@@ -281,7 +308,7 @@ func (gate *Gate) evaluate(ctx context.Context) Status {
 	if document.RequestedBoottimeMs > now {
 		return refuse("the admission names a request made in the future")
 	}
-	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs}
+	return Status{Admitted: true, Epoch: document.Epoch, RequestedBoottimeMs: document.RequestedBoottimeMs, HSMSerials: document.HSMSerials}
 }
 
 func (gate *Gate) read() (Document, error) {
@@ -426,6 +453,23 @@ func Parse(contents []byte) (Document, error) {
 	}
 	if !hex64Pattern.MatchString(document.ManifestDigest) {
 		return Document{}, errors.New("the admission file's manifest_digest is not 64 lowercase hex")
+	}
+	serials, err := text("hsm_serials")
+	if err != nil {
+		return Document{}, err
+	}
+	if serials != "" {
+		document.HSMSerials = strings.Split(serials, " ")
+	}
+	seen := map[string]bool{}
+	for _, serial := range document.HSMSerials {
+		if !serialPattern.MatchString(serial) || seen[serial] {
+			return Document{}, errors.New("the admission file's hsm_serials is not distinct serials, one space apart")
+		}
+		seen[serial] = true
+	}
+	if len(document.HSMSerials) > MaxSerials {
+		return Document{}, fmt.Errorf("the admission file lists more than %d hardware tokens", MaxSerials)
 	}
 	issued, err := text("lease_issued_at")
 	if err != nil {

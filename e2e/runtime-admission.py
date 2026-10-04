@@ -283,6 +283,7 @@ def scenario(w, etc, state, runtime, module, processes, fixture):
     ok("NOT admitted" in log() and "the admission file" in log(), "the daemon's log says why: there is no admission file")
 
     # ---- the lease side: node a and peer b on software TPMs (the fixture of tests/test_baremetal_lease.py) -------
+    fixture.hsm_serials = {"a": [serial]}   # the daemon serves only from a token the manifest lists for this node (#72 G1)
     fixture.setUp()
     world = {"manifest": fixture.m1, "peer_up": True}
     holder = lease.Holder("a", lt.SESSION, fixture.clock, hbt.simulated_ticks(fixture, fixture.tcti["a"]), str(w / "holder.json"))
