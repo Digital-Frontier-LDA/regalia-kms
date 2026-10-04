@@ -768,8 +768,12 @@ class Cluster:
                         issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
         if document is not None:
             manifest["policy_version"] = measurements.version(document)
-            for n in self.nodes.values():
-                (n.dir / "etc" / "measurements.json").write_text(json.dumps(document))
+            for n in self.nodes.values():               # whole or not at all: a service reads it at every decision
+                target = n.dir / "etc" / "measurements.json"
+                staged = target.with_name(".measurements.json.new")
+                staged.write_text(json.dumps(document))
+                os.chmod(staged, os.stat(target).st_mode & 0o777)
+                os.replace(staged, target)
             self.document = document
         envelope = self.signed(manifest, signer=signer)
         others = [name for name in self.nodes if name != seed and self.running(name)]

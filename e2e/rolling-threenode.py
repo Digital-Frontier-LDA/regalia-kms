@@ -65,6 +65,13 @@ def leased_by(cluster, peer, subject, since):
                for e in cluster.trail(peer))
 
 
+def refused_for_pcr11(cluster, peer, subject, since, value):
+    """Whether `peer` refused `subject` an unlock since `since` BECAUSE of its PCR 11 (attest's reason names the PCR
+    and the value the node quoted), not for any other cause a broken setup would give."""
+    return any(e.get("event") == "unlock" and e.get("subject") == subject and e.get("outcome") == "DENY" and e.get("at", 0) >= since
+               and ("PCR 11 is %s" % value) in e.get("reason", "") for e in cluster.trail(peer))
+
+
 def opened(got):
     return got.get("rc") == 0 and bool(got.get("marker"))
 
@@ -143,8 +150,12 @@ def scenario(cluster):
         ok(bool(until(lambda: cluster.lease(name), 120, 2)), "%s holds a runtime lease on CURRENT" % name, cluster.journal(name, "admission")[-600:])
 
     header("2  NEXT before the root approved it: no key for a; b and c serve on")
+    since = time.time()
     got, leased = reboot(cluster, a, NEXT_IMAGE)
-    ok(not opened(got), "a, booted onto %s under epoch 1, gets no key from either peer" % NEXT_IMAGE, got)
+    quoted = cluster.image_set(a, NEXT_IMAGE)["pcrs"]["11"]
+    ok(not opened(got) and all(refused_for_pcr11(cluster, p, a, since, quoted) for p in (b, c)),
+       "a, booted onto %s under epoch 1, gets no key: both peers refuse it for its PCR 11 (their trails)" % NEXT_IMAGE,
+       {"unlock": got, "denials": [e for p in (b, c) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= since]})
     ok(bool(cluster.lease(b)) and bool(cluster.lease(c)), "b and c still hold leases (the cluster serves on two)")
     got, leased = reboot(cluster, a, None)
     ok(opened(got) and leased, "a, power-cycled onto CURRENT, is unlocked through %s and leased again" % got.get("peer"), got)
@@ -208,8 +219,12 @@ def scenario(cluster):
     ok(verdict == [], "the retire locks out nobody (rollout.check_lockout, the peers' real state files)", verdict)
     manifest, _ = cluster.accept(a, nxt, "v3")
     ok(all(cluster.node(n).store().load()["epoch"] == 3 for n in names), "every node holds epoch 3, NEXT alone")
+    since = time.time()
     got, leased = reboot(cluster, c, None)
-    ok(not opened(got), "c, booted onto the retired CURRENT, gets no key from either peer", got)
+    quoted = cluster.image_set(c)["pcrs"]["11"]
+    ok(not opened(got) and all(refused_for_pcr11(cluster, p, c, since, quoted) for p in (a, b)),
+       "c, booted onto the retired CURRENT, gets no key: both peers refuse it for its PCR 11 (their trails)",
+       {"unlock": got, "denials": [e for p in (a, b) for e in cluster.trail(p) if e.get("event") == "unlock" and e.get("at", 0) >= since]})
     got, leased = reboot(cluster, c, NEXT_IMAGE)
     ok(opened(got) and leased, "c, onto %s, is unlocked through %s and leased" % (NEXT_IMAGE, got.get("peer")), got)
 
