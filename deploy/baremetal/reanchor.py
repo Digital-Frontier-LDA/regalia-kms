@@ -121,9 +121,11 @@ def reanchor(store, sources, node_id, typed, sink, prepare=None):
     if prepare is not None:
         try:
             prepare(planned)
-        except Refused as refusal:
+        except (Refused, OSError, ValueError, KeyError) as refusal:     # a held document unreadable, an odd config: a DENY
             sink(event("reanchor", planned, outcome="DENY", reason=convergence._printable(refusal)))
-            raise
+            if isinstance(refusal, Refused):
+                raise
+            raise Refused("the re-anchor's define policy cannot be established: %s" % refusal) from refusal
     sink(event("reanchor-requested", planned))
     store.reanchor_began = False
     try:
@@ -204,8 +206,10 @@ class NodePolicies:
         return self.defined
 
     def reader(self):
-        """HighWater's policy: the planned one once resolved; before that (the plan reading the old anchor), the node's
-        image policy from the chain it holds, as node_policy does."""
+        """HighWater's policy, for a HighWater that has not resolved its reader yet (it resolves it once): the planned one
+        once prepare has run; before that (the plan reading a policy-written old anchor), the node's image policy from
+        the chain it holds, as node_policy does, and then that value stays (after the redefinition the new indices are
+        read by the define policy's own check; see the PR's limitations)."""
         if self.prepared and self.defined is not None:
             return self.defined
         return node_policy(self.path, self.node_id)()

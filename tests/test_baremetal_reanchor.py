@@ -569,6 +569,22 @@ class Command(Case):
                     self.assertEqual(log[-1]["outcome"], asked_for)
                     self.assertNotIn("reanchor-requested", [e["event"] for e in log[-1:]])
 
+    def test_any_failure_to_establish_the_define_policy_is_a_recorded_deny(self):
+        """regalia-kms-48: rc 1 is a DENY in the audit log (MEMBERSHIP-RECOVERY.md), whatever prepare raised."""
+        from deploy.baremetal import node
+        _, mine = self.node_configs()
+        for failure in (OSError(13, "Permission denied"), KeyError("signing")):
+            with self.subTest(failure=failure):
+                def define_policy(cfg, manifest=None, pem_path=None, failure=failure):
+                    raise failure
+                self.lose_record()
+                before = self.state()
+                with unittest.mock.patch.object(node, "define_policy", define_policy):
+                    rc, asked = self.program("--node-config", mine)
+                self.assertEqual((rc, asked, self.state()), (1, [], before))
+                self.assertEqual(self.audit()[-1]["outcome"], "DENY")
+                self.assertIn("the re-anchor's define policy cannot be established", self.said.getvalue())
+
     def test_the_define_policy_is_the_manifest_being_anchored_s_not_the_disk_s(self):
         """regalia-kms-48 (#416): a node whose state was lost holds no chain, and an old chain on disk may commit to
         another document: the define policy comes from the planned tip (here epoch 4, the disk at 3), and with no chain
