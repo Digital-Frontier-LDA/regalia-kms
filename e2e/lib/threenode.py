@@ -454,8 +454,10 @@ class Cluster:
         if not self.time[AUTH]:
             self.time[AUTH] = True
             self.authtimes[AUTH].step()
-        control = a.dir / "control"                   # its RuntimeDirectory: made again at every start
+        control = a.dir / "control"                   # its RuntimeDirectory: made again, empty, at every start
         control.mkdir(exist_ok=True)
+        for entry in control.iterdir():
+            entry.unlink()
         shutil.chown(control, "regalia-authority", "regalia-authority")
         os.chmod(control, 0o700)
         self._run(a, "wg-apply", oneshot=True)
@@ -497,6 +499,10 @@ class Cluster:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
         self.services[name] = ()
+        if name == AUTH and self.auth:                # its RuntimeDirectory, which systemd removes when the service stops
+            control = self.auth.dir / "control"
+            for entry in (control.iterdir() if control.exists() else ()):
+                entry.unlink()
         if os.path.exists("/dev/mapper/e2e3-" + name):
             sh("cryptsetup", "close", "e2e3-" + name, check=False)
         if power:
