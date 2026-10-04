@@ -1,7 +1,9 @@
 """regalia-manifest: propose, compare, sign and verify membership manifests (#156).
 
-The membership root is an ECDSA P-256 key generated on its own offline Nitrokey HSM 2 (the custody recorded
-on #156, 2026-10-03). This is the tool the root's operator runs at a ceremony to sign the next manifest,
+The membership root is an Ed25519 software key, Shamir-split and reconstructed only in the RAM of the air-gapped
+ceremony laptop (ADR-0002 D28, the owner's decision of 2026-10-04, superseding the Nitrokey of #156), and handed to
+this tool by regalia-ceremony's offline-keys.py on a file descriptor (--key-fd; deploy/baremetal/keyfd.py). A
+PKCS#11 token (--key) remains the path for a P-256 key on a card. This is the tool the root's operator runs at a ceremony to sign the next manifest,
 e.g. the two a kernel update needs (approve, then retire; KERNEL-UPDATE.md). It adds no cryptography and no
 rule of its own: every rule is membership.py's, run BEFORE a signature exists and again on the finished
 envelope, so nothing a node would refuse is ever signed.
@@ -15,6 +17,7 @@ envelope, so nothing a node would refuse is ever signed.
                                                      --signer root|revocation --key 'pkcs11:serial=…;token=…;id=%01;type=private'
                                                      --module /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so [--opensc-conf FILE]
                                                      [--pin-env NAME] --state-dir DIR --out ENVELOPE.json [--chain-out NEXT.json]
+                                                     (or, the offline root: --signer root --key-fd N --offline-session ID, no --key/--module)
                                                      [--old OLD.json --new NEW.json [--state NODE=STATE.json]... [--emergency] [--locked-out NODE]...]
     python3 -Es -m deploy.baremetal.manifest clear-pin-latch --state-dir DIR
 
@@ -30,7 +33,11 @@ envelopes), verified from ROOT every time.
      one step measurements.transition allows, and none that locks out a node still running the set that goes
      except an --emergency naming exactly the nodes it locks out with --locked-out (rollout.check_lockout, #75);
   3. --key is a PKCS#11 URI naming the card by serial= and token= and the key by object= or id=, with
-     type=private and nothing else (p11uri.parse, the UKI build's rule);
+     type=private and nothing else (p11uri.parse, the UKI build's rule); or --key-fd N, the offline root: an
+     Ed25519 PKCS#8 key on a pipe or a sealed memfd (never a file on disk, keyfd.read), --signer root only, with
+     --offline-session (the ID offline-keys.py records too). The key is read into a bytearray, loaded, and the
+     buffer zeroed; the typed confirmation then comes from /dev/tty (offline-keys.py runs this with /dev/null
+     on stdin), and the signing record names "offline-keys session <ID>" as its provenance;
   4. the token is opened in process (authority.Pkcs11Signer, #262): exactly one token attached, its serial
      and label read again in the session that logs in; its P-256 public key must be a pinned root key
      (--signer root) or a revocation key the current manifest names (--signer revocation);
@@ -49,7 +56,8 @@ envelopes), verified from ROOT every time.
      (--out, and with --chain-out the chain plus it, from which the next proposal of the session is made): a
      signature that does not verify, or a record that cannot be written, leaves nothing but the refusal.
 
-A key in a file is not a signing backend here: the root signs only on its token."""
+A key in a file is not a signing backend here: the root signs on its token, or from the offline session's
+descriptor, and every step above runs either way."""
 import argparse
 import datetime
 import getpass
@@ -59,7 +67,7 @@ import re
 import sys
 import time
 
-from deploy.baremetal import attest, measurements, membership, p11uri, rollout
+from deploy.baremetal import attest, keyfd, measurements, membership, p11uri, rollout
 from deploy.baremetal.membership import Refused, require
 
 RECORD = "signing-record.jsonl"
@@ -235,19 +243,50 @@ def token_signer(uri, module, opensc_conf, pin, latch_path, pkcs11=None):
                                   key_label=attributes.get("object"), pin=pin)
 
 
-def check_signer_key(current, root, signer_role, public):
-    """The token's key may sign as `signer_role`: a pinned root key, or a revocation key `current` names."""
+class OfflineSigner:
+    """The offline root (ADR-0002 D28): an Ed25519 key read from a descriptor (keyfd.read), the buffer zeroed once
+    the key is loaded. `provenance` is what the signing record names: "offline-keys session <ID>"."""
+    alg, serial, label = "ed25519", None, None
+
+    def __init__(self, fd, provenance):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        self.provenance = provenance
+        buffer = keyfd.read(fd, "--key-fd")
+        try:
+            try:
+                key = serialization.load_pem_private_key(bytes(buffer), password=None)
+            except (ValueError, TypeError) as error:
+                raise Refused("--key-fd: not an unencrypted PKCS#8 PEM key (%s)" % type(error).__name__) from None
+        finally:
+            keyfd.zero(buffer)
+        require(isinstance(key, Ed25519PrivateKey), "--key-fd: the offline root is an Ed25519 key")
+        self._key = key
+
+    def public(self):
+        from cryptography.hazmat.primitives import serialization
+        return self._key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+
+    def sign(self, message):
+        signature = self._key.sign(message)
+        self._key = None                        # one signature per session's key
+        return signature
+
+
+def check_signer_key(current, root, signer_role, public, alg="ecdsa-p256"):
+    """The signer's key may sign as `signer_role`: a pinned root key of `alg` (the token's ecdsa-p256, or the offline
+    root's ed25519), or a revocation key `current` names."""
     if signer_role == "root":
-        algs = [alg for alg, key in membership.root_entries(root) if key == public]
-        require(algs, "the token's key %s… is not the pinned root" % public[:16])
-        require(algs[0] == "ecdsa-p256", "the pinned entry for the token's key is not ecdsa-p256")
+        algs = [a for a, key in membership.root_entries(root) if key == public]
+        require(algs, "the signer's key %s… is not the pinned root" % public[:16])
+        require(algs[0] == alg, "the pinned entry for the signer's key is not %s" % alg)
     else:
         require(membership.revocation_alg(current, public) == "ecdsa-p256",
                 "the token's key %s… is not an ecdsa-p256 revocation key of epoch %d" % (public[:16], current["epoch"]))
 
 
 def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confirm, out, state, chain_out=None, say=print,
-         pin_source="terminal", step=None):
+         pin_source="terminal", step=None, offline=False):
     """Steps 1 to 7 of the module's docstring. `open_signer()` gives the token's signer (step 4's opening);
     `confirm(prompt)` returns what the operator typed. Returns the envelope written."""
     require(signer_role in ("root", "revocation"), "--signer must be root or revocation")
@@ -255,20 +294,21 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     require(current["epoch"] == expected_epoch, "the chain ends at epoch %d, not the %d expected: fetch the fleet's chain"
             % (current["epoch"], expected_epoch))
     membership.validate(candidate)                                                             # 2
-    require(candidate["schema"] == membership.SCHEMA_V3, "the token's key is ecdsa-p256, which signs only schema %s"
+    require(offline or candidate["schema"] == membership.SCHEMA_V3, "the token's key is ecdsa-p256, which signs only schema %s"
             % membership.SCHEMA_V3)
     membership.transition(current, candidate, signer_role)
     require(candidate["epoch"] == current["epoch"] + 1, "the proposal is epoch %d, already in the chain" % candidate["epoch"])
     judged = measurement_step(current, candidate, step)                                         # 2a
     for path in (out,) + ((chain_out,) if chain_out else ()):
         require(not os.path.lexists(path), "%s exists: nothing is overwritten" % path)
+    require(not offline or signer_role == "root", "--key-fd is the offline root's: a revocation key signs on its token")
     signer = open_signer()                                                                     # 3, 4
     public = signer.public()
-    check_signer_key(current, root, signer_role, public)
+    check_signer_key(current, root, signer_role, public, getattr(signer, "alg", "ecdsa-p256"))
     digest = membership.digest(candidate)                                                      # 5
     for line in diff(current, candidate):
         say("  " + line)
-    say("signer %s, key %s…, token serial %s" % (signer_role, public[:16], signer.serial))
+    say("signer %s, key %s…, %s" % (signer_role, public[:16], getattr(signer, "provenance", None) or "token serial %s" % signer.serial))
     say("epoch %d -> %d, manifest digest %s" % (current["epoch"], candidate["epoch"], digest))
     if judged is not None:
         say("measurements: %s%s" % (judged["transition"], "; LOCKS OUT %s (each refused its next unlock and lease until it boots an "
@@ -290,9 +330,12 @@ def sign(chain, root, expected_epoch, candidate, signer_role, open_signer, confi
     except Exception as failure:          # noqa: BLE001 - recorded as the reason; raised again below
         reason, failed = str(failure) or type(failure).__name__, failure
     try:
-        _append_record(state, {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
-                               "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
-                               "verified": verified, "reason": reason, "at": int(time.time())})
+        line = {"epoch": candidate["epoch"], "digest": digest, "signer": signer_role, "key": public,
+                "token_serial": signer.serial, "token_label": signer.label, "pin_source": pin_source,
+                "verified": verified, "reason": reason, "at": int(time.time())}
+        if getattr(signer, "provenance", None):
+            line["provenance"] = signer.provenance                 # "offline-keys session <ID>": the ceremony's record names it too
+        _append_record(state, line)
     except OSError as unrecorded:
         if failed is not None:            # both: say both (regalia-kms-95)
             raise Refused("the token's signature did not verify (%s) AND it could not be recorded (%s): nothing was written; "
@@ -389,8 +432,11 @@ def main(argv=None):
     c.add_argument("--expected-epoch", required=True, type=int, help="the epoch the fleet is at; the chain must end there")
     c.add_argument("--proposal", required=True)
     c.add_argument("--signer", required=True, choices=("root", "revocation"))
-    c.add_argument("--key", required=True, metavar="PKCS11-URI")
-    c.add_argument("--module", required=True, help="the PKCS#11 module (OpenSC's opensc-pkcs11.so)")
+    c.add_argument("--key", metavar="PKCS11-URI", help="the key on a token (with --module)")
+    c.add_argument("--module", help="the PKCS#11 module (OpenSC's opensc-pkcs11.so)")
+    c.add_argument("--key-fd", type=int, metavar="N", help="the offline root (ADR-0002 D28): an Ed25519 PKCS#8 key on descriptor N, "
+                   "a pipe or a sealed memfd from offline-keys.py, never a file; --signer root only")
+    c.add_argument("--offline-session", metavar="ID", help="with --key-fd: the offline-keys session ID (32 hex), recorded")
     c.add_argument("--opensc-conf", help="an OpenSC configuration, e.g. one that ignores YubiKey readers")
     c.add_argument("--pin-env", metavar="NAME", help="TESTS AND BENCH RUNS ONLY (needs %s=1): read the PIN from this "
                    "environment variable instead of the terminal" % TEST_SWITCH)
@@ -429,6 +475,15 @@ def main(argv=None):
             print("\n".join(diff(current, candidate)))
             return 0
         state = state_dir(args.state_dir)
+        if args.key_fd is not None:                      # the offline root: no token, no PIN; the descriptor and the session
+            require(args.key is None and args.module is None and args.pin_env is None and args.opensc_conf is None,
+                    "--key-fd is not given with --key, --module, --pin-env or --opensc-conf")
+            provenance = keyfd.session(args.offline_session)
+            sign(chain_doc, root, args.expected_epoch, candidate, args.signer, lambda: OfflineSigner(args.key_fd, provenance),
+                 keyfd.tty_line, args.out, state, args.chain_out, pin_source="none (offline key)", step=_step(args), offline=True)
+            return 0
+        require(args.key and args.module and args.offline_session is None, "give --key and --module (a token), or --key-fd and "
+                "--offline-session (the offline root)")
         pin = _pin_reader(args.pin_env)                  # before any token is opened
         sign(chain_doc, root, args.expected_epoch, candidate, args.signer,
              lambda: token_signer(args.key, args.module, args.opensc_conf, pin, os.path.join(state, LATCH)),

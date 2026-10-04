@@ -86,7 +86,7 @@ import subprocess
 import sys
 import tempfile
 
-from deploy.baremetal import attest, debverify, espcreds, membership, p11uri
+from deploy.baremetal import attest, debverify, espcreds, keyfd, membership, p11uri
 
 Refused, require = membership.Refused, membership.require
 
@@ -100,7 +100,7 @@ STUB_SECTIONS = (".text", ".rodata", ".data", ".reloc", ".sdmagic")
 PHASE_PATHS = {"initrd": "enter-initrd", "system": "enter-initrd:leave-initrd:sysinit:ready"}
 assert tuple(PHASE_PATHS) == attest.PHASES
 KEY_BITS = 2048
-KEY_SOURCES = ("file", "engine:pkcs11")
+KEY_SOURCES = ("file", "engine:pkcs11", "fd")      # fd: the offline keys from offline-keys.py (ADR-0002 D28, keyfd.py)
 MAX_IMAGE = 512 * 1024 * 1024
 # Words that have no place on a KMS host's command line. NOT a review: it catches the obvious.
 #   rd.luks*, luks*   every form, rd.luks=0 included: the root volume is opened from the image's crypttab
@@ -1196,7 +1196,11 @@ def load_record(raw, signed=None):
         membership.exact(entry, ("sha256", "size"), "record.inputs.%s" % key)
         require(attest.is_hex(entry["sha256"], 64) and type(entry["size"]) is int, "record.inputs.%s is malformed" % key)
     if has:
-        membership.exact(record["signed"], ("image_sha256", "pcr_signatures", "secure_boot_cert_sha256"), "record.signed")
+        membership.exact(record["signed"], ("image_sha256", "pcr_signatures", "secure_boot_cert_sha256")
+                         + (("key_provenance",) if "key_provenance" in record["signed"] else ()), "record.signed")
+        require("key_provenance" not in record["signed"] or (isinstance(record["signed"]["key_provenance"], str) and re.fullmatch(
+            r"offline-keys session [0-9a-f]{32}", record["signed"]["key_provenance"]) is not None),
+            "record.signed.key_provenance is not an offline-keys session")
         membership.exact(record["signed"]["pcr_signatures"], attest.PHASES, "record.signed.pcr_signatures")
         for phase, entry in record["signed"]["pcr_signatures"].items():
             membership.exact(entry, ("pkfp", "pol"), "record.signed.pcr_signatures.%s" % phase)
@@ -1249,7 +1253,16 @@ URI_ATTRIBUTES = p11uri.ATTRIBUTES
 
 def _key_argument(value, source, what):
     """A key option: a file, or with engine:pkcs11 a PKCS#11 URI that names the card by serial and token
-    label and the key by label or id, and carries nothing else (p11uri.parse, shared with manifest.py)."""
+    label and the key by label or id, and carries nothing else (p11uri.parse, shared with manifest.py), or with fd
+    /dev/fd/N, a sealed memfd of this process that the tool is handed (the offline keys, main's --*-key-fd)."""
+    if source == "fd":
+        found = re.fullmatch(r"/dev/fd/(\d+)", value)
+        require(found is not None, "%s: an offline key is /dev/fd/N" % what)
+        fd = int(found.group(1))
+        import fcntl
+        require(os.readlink("/proc/self/fd/%d" % fd).startswith("/memfd:") and fcntl.fcntl(fd, fcntl.F_GET_SEALS) & fcntl.F_SEAL_WRITE,
+                "%s: descriptor %d is not a sealed memfd" % (what, fd))
+        return value
     if source == "file":
         require(os.path.isfile(value), "%s: %s is not a file (with a token, pass --key-source engine:pkcs11 and a PKCS#11 URI)" % (what, value))
         return value
@@ -1257,11 +1270,17 @@ def _key_argument(value, source, what):
     return value
 
 
-def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS, second_record=None, report=None, inventory=None):
+def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS, second_record=None, report=None, inventory=None,
+         key_provenance=None):
     """Signs the image `record` describes, rebuilt from `inputs`. `second_record` is the same image's record
     from another builder, and must be identical. `keys`: {"initrd" | "system" | "secure_boot": (key file
-    or PKCS#11 URI, certificate file)}. Writes NAME.efi and NAME.signed.json."""
+    or PKCS#11 URI, or with source "fd" /dev/fd/N, certificate file)}. `key_provenance` ("offline-keys session <ID>",
+    required with source "fd" and only then) goes into the signed record. Writes NAME.efi and NAME.signed.json."""
     require(source in KEY_SOURCES, "--key-source is one of %s" % ", ".join(KEY_SOURCES))
+    require((source == "fd") == (key_provenance is not None), "offline keys (fd) and only they carry the offline-keys session")
+    if key_provenance is not None:
+        require(re.fullmatch(r"offline-keys session [0-9a-f]{32}", key_provenance) is not None, "the key provenance is not an offline-keys session")
+    handed = lambda key: {"pass_fds": (int(key.rsplit("/", 1)[1]),)} if source == "fd" else {}       # noqa: E731
     load_record(membership.canonical(record), signed=False)
     require(second_record is not None, "a second builder's record is required: one builder alone does not decide what is signed")
     load_record(membership.canonical(second_record), signed=False)
@@ -1312,13 +1331,13 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         for phase in attest.PHASES:
             argv = [tools["measure"], "sign", "--bank=sha256", "--phase=" + PHASE_PATHS[phase], "--private-key=" + keys[phase][0],
                     "--certificate=" + keys[phase][1]] + ["%s=%s" % (flags[n], os.path.join(work, "section." + n)) for n in parts]
-            if source != "file":
+            if source == "engine:pkcs11":
                 argv.append("--private-key-source=" + source)
             if pcrsig:
                 argv.append("--append=" + pcrsig)
             _purge_pin(run)
             try:
-                out = _run(run, argv, "signing the %s-phase PCR 11" % phase, env=_clean_env())
+                out = _run(run, argv, "signing the %s-phase PCR 11" % phase, env=_clean_env(), **handed(keys[phase][0]))
             finally:
                 _purge_pin(run)
             pcrsig = os.path.join(work, "pcrsig-%s.json" % phase)
@@ -1332,15 +1351,16 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         check_pcrsig(dict(sections(carrying))[".pcrsig"], record, public, run, tools)
         final = os.path.join(work, "signed.efi")
         argv = [tools["sbsign"], "--key", keys["secure_boot"][0], "--cert", keys["secure_boot"][1], "--output", final, os.path.join(work, "pcrsigned.efi")]
-        if source != "file":
+        if source == "engine:pkcs11":
             argv[1:1] = ["--engine", source.split(":", 1)[1]]
-        _run(run, argv, "the Secure Boot signature")
+        _run(run, argv, "the Secure Boot signature", **handed(keys["secure_boot"][0]))
         _run(run, [tools["sbverify"], "--cert", keys["secure_boot"][1], final], "checking the Secure Boot signature")
         signed = read(final)
         require(sections(signed) == sections(carrying), "the Secure Boot signature changed a section of the image")
         certificate = _run(run, [tools["openssl"], "x509", "-outform", "der"], "reading the Secure Boot certificate", input=read(keys["secure_boot"][1], 65536))
         _place(final, os.path.join(out_dir, name + ".efi"))
-    result = dict(record, signed={"image_sha256": sha256(signed), "pcr_signatures": signatures, "secure_boot_cert_sha256": sha256(certificate)})
+    result = dict(record, signed=dict({"image_sha256": sha256(signed), "pcr_signatures": signatures, "secure_boot_cert_sha256": sha256(certificate)},
+                                      **({"key_provenance": key_provenance} if key_provenance else {})))
     _write(os.path.join(out_dir, name + ".signed.json"), result)
     return result
 
@@ -1478,9 +1498,12 @@ def main(argv=None):
     c.add_argument("--second-record", required=True, help="the same image's record from another builder; it must be identical")
     c.add_argument("--out", required=True)
     for role in ("initrd", "system", "secure-boot"):
-        c.add_argument("--%s-key" % role, required=True, help="a key file, or a PKCS#11 URI with --key-source engine:pkcs11")
+        c.add_argument("--%s-key" % role, help="a key file, or a PKCS#11 URI with --key-source engine:pkcs11")
+        c.add_argument("--%s-key-fd" % role, type=int, metavar="N", help="the offline key (ADR-0002 D28) on descriptor N: a pipe or a "
+                       "sealed memfd from offline-keys.py, never a file; all three keys this way, with --offline-session")
         c.add_argument("--%s-cert" % role, required=True, help="the key's X.509 certificate (PEM file)")
-    c.add_argument("--key-source", default="file", choices=KEY_SOURCES)
+    c.add_argument("--key-source", default="file", choices=("file", "engine:pkcs11"))
+    c.add_argument("--offline-session", metavar="ID", help="with the --*-key-fd options: the offline-keys session ID (32 hex), recorded")
     c.add_argument("--initrd-inventory", default=None, help="the reviewed inventory the initrd must match (#198)")
     c = sub.add_parser("verify", help="check a signed image against its record")
     c.add_argument("--image", required=True)
@@ -1516,10 +1539,37 @@ def main(argv=None):
             record = build(_inputs(args), args.uname, args.name, args.out, inventory=args.initrd_inventory, unlock_client=args.unlock_client)
             print("built %s: unsigned image %s" % (record["name"], record["unsigned_sha256"]))
         elif args.command == "sign":
-            keys = {"initrd": (args.initrd_key, args.initrd_cert), "system": (args.system_key, args.system_cert),
-                    "secure_boot": (args.secure_boot_key, args.secure_boot_cert)}
-            record = sign(_inputs(args), load_record(read(args.record, 1024 * 1024), signed=False), keys, args.key_source, args.out,
-                          second_record=load_record(read(args.second_record, 1024 * 1024), signed=False), inventory=args.initrd_inventory)
+            roles = (("initrd", "initrd"), ("system", "system"), ("secure_boot", "secure_boot"))
+            given = {role: getattr(args, attr + "_key") for role, attr in roles}
+            fds = {role: getattr(args, attr + "_key_fd") for role, attr in roles}
+            certs = {role: getattr(args, attr + "_cert") for role, attr in roles}
+            unsigned = load_record(read(args.record, 1024 * 1024), signed=False)
+            second = load_record(read(args.second_record, 1024 * 1024), signed=False)
+            if any(fd is not None for fd in fds.values()):
+                # the offline keys (ADR-0002 D28): all three by descriptor, nothing of a file or a token beside them
+                require(all(fd is not None for fd in fds.values()) and not any(given.values()) and args.key_source == "file",
+                        "the offline keys come all three by descriptor (--initrd-key-fd, --system-key-fd, --secure-boot-key-fd), "
+                        "with no --*-key and no --key-source")
+                provenance = keyfd.session(args.offline_session)
+                memfds = {}
+                try:
+                    for role in fds:
+                        buffer = keyfd.read(fds[role], "--%s-key-fd" % role.replace("_", "-"))
+                        try:
+                            memfds[role] = keyfd.sealed_memfd(buffer)
+                        finally:
+                            keyfd.zero(buffer)
+                    keys = {role: ("/dev/fd/%d" % memfds[role], certs[role]) for role in fds}
+                    record = sign(_inputs(args), unsigned, keys, "fd", args.out, second_record=second, inventory=args.initrd_inventory,
+                                  key_provenance=provenance)
+                finally:
+                    for fd in memfds.values():
+                        os.close(fd)
+            else:
+                require(all(given.values()) and args.offline_session is None, "give --initrd-key, --system-key and --secure-boot-key "
+                        "(files or PKCS#11 URIs), or the three --*-key-fd with --offline-session")
+                keys = {role: (given[role], certs[role]) for role in given}
+                record = sign(_inputs(args), unsigned, keys, args.key_source, args.out, second_record=second, inventory=args.initrd_inventory)
             print("signed %s: image %s" % (record["name"], record["signed"]["image_sha256"]))
         elif args.command == "verify":
             record = load_record(read(args.record, 1024 * 1024), signed=True)
