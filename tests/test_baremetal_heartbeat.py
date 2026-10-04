@@ -93,6 +93,10 @@ class FakeTpm:
             return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: %d\n" % (index, entry[0], entry[2])).encode())
         if tool == "nvread":
             size = int(argv[argv.index("-s") + 1])
+            # a read is authorized by the owner (ownerread) or by the index itself (authread), as the TPM checks
+            auth = argv[argv.index("-C") + 1] if "-C" in argv else index
+            if not entry[0] & (self.BITS["ownerread"] if auth == "o" else self.BITS["authread"] if auth == index else 0):
+                return no
             if entry[1] is None or size > entry[2]:
                 return no
             return ok((entry[1].to_bytes(8, "big") if entry[0] & self.COUNTER else entry[1])[:size])
@@ -146,6 +150,21 @@ class _Callable:
             object.__setattr__(self, name, value)
         else:
             setattr(self.tpm, name, value)
+
+
+class FakeTpmReads(unittest.TestCase):
+    def test_a_read_needs_the_attribute_of_whoever_authorizes_it(self):
+        """The fake checks a read's authorization as the TPM does: the owner needs ownerread, the index itself
+        authread. Without that, a reader that read as the owner would pass every fake test (#242)."""
+        tpm = FakeTpm()
+        for index, words in (("0x1500040", "ownerread|ownerwrite"), ("0x1500041", "authread|ownerwrite"), ("0x1500042", "ownerread|authread|ownerwrite")):
+            tpm(["tpm2_nvdefine", index, "-C", "o", "-s", "8", "-a", words])
+            tpm(["tpm2_nvwrite", index, "-C", "o", "-i", "-"], input=bytes(8))
+        reads = {(index, auth): tpm(["tpm2_nvread", index, "-C", auth, "-s", "8"]).returncode == 0
+                 for index in ("0x1500040", "0x1500041", "0x1500042") for auth in ("o", index, "0x1500043")}
+        self.assertEqual(reads, {("0x1500040", "o"): True, ("0x1500040", "0x1500040"): False, ("0x1500040", "0x1500043"): False,
+                                 ("0x1500041", "o"): False, ("0x1500041", "0x1500041"): True, ("0x1500041", "0x1500043"): False,
+                                 ("0x1500042", "o"): True, ("0x1500042", "0x1500042"): True, ("0x1500042", "0x1500043"): False})
 
 
 class DefineAt(unittest.TestCase):

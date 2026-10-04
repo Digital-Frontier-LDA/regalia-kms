@@ -34,7 +34,12 @@ ProtectSystem=strict
 # stand until it runs out by itself (admission.py).
 ReadWritePaths=/run/regalia/admission -/run/regalia-metrics/admission
 StateDirectory=regalia-admission
-StateDirectoryMode=0700
+# 0755, as regalia-sync's: its audit trail (audit.jsonl, 0640 to regalia-audit-admission, #286) is read by
+# regalia-audit-ship@admission, which holds that group and no capability, and LISTS the trail's directory to find
+# its rotated archives (cmd/regalia-audit-ship: os.ReadDir). Under 0700 it could not, and the admission trail never
+# reached the collector (#340). The names are all that others see: every file here keeps its own mode (lease.json
+# and its lock 0600, the trail 0640 to its reader group).
+StateDirectoryMode=0755
 ProtectHome=yes
 PrivateTmp=yes
 DevicePolicy=closed

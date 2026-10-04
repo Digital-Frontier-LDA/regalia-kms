@@ -491,6 +491,23 @@ class HighWaterOnSwtpm(_Swtpm):
         # reading stays open: the record is not secret
         self.assertEqual(self.nv("nvread", "0x150001a", "-C", "0x150001a", "-s", "48").stdout, m.HighWater.slot_bytes(0, "00" * 32))
 
+    def test_every_read_works_whatever_the_owner_authorization_is(self):
+        """#242: the anchor is read with each index's own authorization, never the owner's, so readers keep
+        working once the owner authorization is set and kept off the host. Writes still take the owner (until
+        the policy layout), so here they are refused."""
+        digest = lambda epoch: "%02x" % epoch * 32 if epoch else "00" * 32
+        self.hw.anchor(3, digest)
+        reads = lambda: (self.hw.value(), self.hw.record(), self.hw.slots(), self.hw.unusable(), self.hw.verify(digest), self.hw.check(3),
+                         self.hw.remains())
+        before = reads()
+        self.assertEqual(before[:2] + before[3:6], (3, (3, "03" * 32), None, 3, 3))
+        self.assertEqual(self.nv("changeauth", "-c", "o", "owner-secret-of-this-test").returncode, 0)
+        self.assertNotEqual(self.nv("nvread", "0x1500016", "-C", "o", "-s", "8").returncode, 0)          # the owner's empty password no longer reads
+        self.assertEqual(reads(), before)
+        with self.assertRaises(m.Refused):
+            self.hw.advance(4)
+        self.assertEqual(self.hw.value(), 3)
+
     def test_a_slot_the_owner_cannot_read_still_counts_and_is_replaced(self):
         """51's fourth read, on a real (software) TPM: a slot defined ownerwrite|authread holding a record made
         every owner read fail, and the node had no tooled way out. Now it is an unusable anchor, its record is

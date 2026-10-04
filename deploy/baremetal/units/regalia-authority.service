@@ -29,10 +29,11 @@ AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
 StateDirectory=regalia-authority
-# 0751: the directory holds the revocation key (0600) and the store; the heartbeat is served over the tunnel.
-# Others may pass through it, not list it: regalia-audit-ship@authority reaches the audit trail (0640, group
-# regalia-audit-authority, #286), and every other file here is 0600 under UMask=0077.
-StateDirectoryMode=0751
+# 0755: the directory holds the revocation key (0600) and the store; the heartbeat is served over the tunnel.
+# regalia-audit-ship@authority reads the audit trail (0640, group regalia-audit-authority, #286) and LISTS this
+# directory for the trail's rotated archives (cmd/regalia-audit-ship: os.ReadDir), so others may list it (#340):
+# the names are all they see, every other file here being 0600 under UMask=0077.
+StateDirectoryMode=0755
 # the control socket (control_socket: /run/regalia-authority/control.sock)
 RuntimeDirectory=regalia-authority
 RuntimeDirectoryMode=0700

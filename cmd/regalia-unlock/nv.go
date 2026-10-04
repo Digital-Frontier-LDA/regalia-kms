@@ -10,7 +10,8 @@ import (
 
 // tpmNV is membership.NV over the TPM, as tpm2-tools reads it for membership.HighWater: the NV indices
 // the TPM lists (tpm2_getcap handles-nv-index), an index's public area (tpm2_nvreadpublic), and its bytes
-// read with the owner's empty authorization (tpm2_nvread -C o; #190 keeps owner authorization empty).
+// read with the index's own empty authorization (authread; tpm2_nvread <index> -C <index>), never the
+// owner's, so the reader works whatever the owner authorization is (#242).
 // Nothing here writes to the TPM.
 type tpmNV struct{ device tpmtransport.TPM }
 
@@ -72,7 +73,7 @@ func (n tpmNV) Read(index uint32, size int) ([]byte, error) {
 		return nil, fmt.Errorf("NV index 0x%x holds %d bytes, not %d", index, public.DataSize, size)
 	}
 	response, err := tpm2.NVRead{
-		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMRHOwner, Auth: tpm2.PasswordAuth(nil)},
+		AuthHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(index), Name: name, Auth: tpm2.PasswordAuth(nil)},
 		NVIndex:    tpm2.NamedHandle{Handle: tpm2.TPMHandle(index), Name: name},
 		Size:       uint16(size),
 	}.Execute(n.device)

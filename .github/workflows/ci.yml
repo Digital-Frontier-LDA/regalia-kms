@@ -74,6 +74,14 @@ jobs:
         # refused for an unsigned kernel, another key, a changed PCR 7 or an uncovered boot phase.
         run: bash e2e/pcr-signed-policy-swtpm.sh
 
+      - name: the signed-boot stand-in for the anchor's policy writes, against systemd-measure and swtpm (#242)
+        # e2e/lib/signed_boot.py signs and boots as systemd-measure does (compared byte for byte), and a
+        # PolicyAuthorize(PCR key) session from its signature file writes an index only at the booted
+        # system's PCR 11. swtpm, tpm2-tools and systemd-measure are installed above: a missing one fails.
+        env:
+          REGALIA_EXPECT_SWTPM: "1"
+        run: python3 -Es -m unittest -v tests.test_e2e_signed_boot
+
       - name: TPM lockout settings and power cuts, against software TPMs (swtpm)
         # deploy/baremetal/tpm-lockout.sh sets the dictionary-attack policy and a lockout authorization;
         # host_probe's tpm_lockout_policy measures it and fails on drift; the PIN import key (noda)

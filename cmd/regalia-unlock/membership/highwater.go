@@ -43,7 +43,7 @@ func requireAnchor(condition bool, format string, args ...any) error {
 }
 
 // NV is what the reader needs of a TPM: the NV indices it lists, an index's public area, and its bytes
-// (read with owner authorization, as tpm2_nvread -C o does).
+// (read with the index's own authorization, as tpm2_nvread <index> -C <index> does).
 type NV interface {
 	Defined() (map[uint32]bool, error)
 	Public(index uint32) (attributes uint32, size int, err error)
