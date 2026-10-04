@@ -512,7 +512,7 @@ class Command(Case):
         self.said = io.StringIO()
         with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(self.said):
             rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty,
-                               highwater=lambda index, tcti, policy=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy))
+                               highwater=lambda index, tcti, policy=None, lock_path=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy))
         return rc, asked
 
     def audit(self, log="audit.jsonl"):
@@ -706,7 +706,7 @@ class OnSwtpm(_Swtpm):
         argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b",
                 "--peer", "a=%s/a.json" % self.d, "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
         os.environ.pop("TPM2TOOLS_TCTI", None)
-        make = lambda index, tcti, policy=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy)
+        make = lambda index, tcti, policy=None, lock_path=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make), 1)
             self.assertEqual(self.hw.slots(), [None, None])                          # refused: the TPM as it was
@@ -729,6 +729,71 @@ class OnSwtpm(_Swtpm):
         gone = m.HighWater("0x1500016", tcti="swtpm:path=%s/absent.sock" % self.d, lock_path=self.d + "/x.lock")
         with self.assertRaisesRegex(m.Refused, "the TPM does not answer"):
             gone.unusable()
+
+
+class HandBack(unittest.TestCase):
+    """#388: a re-anchor is run by root, and the node's sync (regalia-sync, enrol._hand_over) owns the state directory. What
+    root wrote there is given back, or the node could not read its own chain after the recovery; and the anchor's lock is
+    the one the node's own services take."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d)
+        self.path = os.path.join(self.d, "membership.json")
+        for name in ("membership.json", "membership.json.lock", "highwater.lock"):
+            with open(os.path.join(self.d, name), "w") as f:
+                f.write("x")
+        self.chowned = []
+
+    def owned_by(self, uid, gid):
+        """The state directory as its owner would have it: (uid, gid); the files are this test's user's."""
+        real = os.stat
+
+        def fake(path, *a, **kw):
+            held = real(path, *a, **kw)
+            if os.path.abspath(path) == self.d:
+                return mock.Mock(st_uid=uid, st_gid=gid, st_mode=held.st_mode)
+            return held
+        return mock.patch.object(reanchor.os, "stat", side_effect=fake)
+
+    def hand_back(self, euid=0):
+        return reanchor.hand_back(self.path, euid=lambda: euid, chown=lambda fd, uid, gid: self.chowned.append((os.fstat(fd).st_ino, uid, gid)))
+
+    def test_root_gives_the_file_and_its_locks_back_to_the_owner_of_the_state_directory(self):
+        with self.owned_by(4242, 4343):
+            changed = self.hand_back()
+        self.assertEqual(sorted(changed), sorted(os.path.join(self.d, n) for n in ("membership.json", "membership.json.lock", "highwater.lock")))
+        self.assertEqual(sorted(self.chowned), sorted((os.stat(p).st_ino, 4242, 4343) for p in changed))
+
+    def test_nothing_is_changed_when_not_root_when_the_directory_is_roots_or_the_owner_is_already_right(self):
+        with self.owned_by(4242, 4343):
+            self.assertEqual(self.hand_back(euid=1000), [])
+        with self.owned_by(0, 0):
+            self.assertEqual(self.hand_back(), [])
+        with self.owned_by(os.getuid(), os.getgid()):
+            self.assertEqual(self.hand_back(), [])
+        self.assertEqual(self.chowned, [])
+
+    def test_a_link_in_place_of_the_file_is_never_followed(self):
+        os.unlink(self.path)
+        os.symlink(os.path.join(self.d, "highwater.lock"), self.path)
+        with self.owned_by(4242, 4343), self.assertRaises(OSError):
+            self.hand_back()
+        self.assertEqual(self.chowned, [])
+
+    def test_main_says_the_command_to_run_when_the_file_cannot_be_given_back(self):
+        err = io.StringIO()
+        with mock.patch.object(reanchor, "hand_back", side_effect=PermissionError("not permitted")), contextlib.redirect_stderr(err):
+            self.assertFalse(reanchor._give_back(self.path))
+        self.assertIn("chown --reference=%s %s" % (self.d, self.path), err.getvalue())
+
+    def test_the_lock_is_the_one_the_nodes_own_services_take(self):
+        from deploy.baremetal import node
+        with open(os.path.join(os.path.dirname(os.path.abspath(reanchor.__file__)), "node.example.json")) as f:
+            cfg = dict(json.load(f), state_dir=self.d)
+        here = node.Node.__new__(node.Node)            # only what path() and anchor() read: no site, no TPM
+        here.cfg, here.state, here.tcti, here.run = cfg, self.d, None, subprocess.run
+        self.assertEqual(reanchor.anchor_lock(here.path("membership.json")), here.anchor().lock_path)
 
 
 if __name__ == "__main__":

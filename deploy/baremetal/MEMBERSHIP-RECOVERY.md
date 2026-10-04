@@ -57,10 +57,19 @@ believes the chain it was given, exactly as a newly enrolled node does. So:
   without a writable log nothing is done.
 
 ```sh
-python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key "$ROOT_KEY_HEX" \
-    --tpm-index 0x1500016 --node-id b --peer a=a-chain.json --peer c=c-chain.json \
-    --audit-log /var/log/regalia/reanchor.jsonl
+sudo python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia-sync/membership.json --root-key "$ROOT_KEY_HEX" \
+    --tpm-index 0x1500016 --tcti device:/dev/tpmrm0 --node-id b --node-config /etc/regalia/node.json \
+    --peer a=a-chain.json --peer c=c-chain.json
 ```
+
+The membership file is the node's sync store (`state_dir` in `node.json`); the root key, the index and the
+TPM are `node.json`'s `root_key`, `nv_epoch` and `tcti`. `--node-config` is needed on every node whose anchor
+is written by its approved-image policy (#242): all of them since then. The audit log defaults to the
+reanchor trail (`trails.py`). Run as root, it writes the membership file as root; when it is done (or
+INCOMPLETE) it gives that file, and any lock it made, back to the owner of the state directory
+(`regalia-sync`, as `enrol` made it), or the node's own sync could not read its chain (#388). The lock it
+takes is the node's own (`highwater.lock` in the state directory), so it and the node's sync never change
+the anchor at the same moment. Stop the node's services first all the same (below).
 
 It needs the TPM's owner authorization, as defining the anchor did at commissioning. The TPM is
 tpm2-tools' default one, or the one named with `--tcti`; a `TPM2TOOLS_TCTI` left in the environment is
@@ -76,6 +85,7 @@ be computed from the chain files.
 | 3 | `INCOMPLETE` | The re-anchor had begun and a step failed (the chain file could not be written, or a TPM command was refused). The verified chain may or may not be on disk yet; the node's membership does not load | If the reason is a storage error (disk full, read-only), fix that first. Then **run the same command again with the same chains**: it completes from wherever it stopped. A shorter or different chain is refused: the file on disk, if it was written, and whatever the TPM still holds bind the second attempt |
 | none | a `reanchor-requested` line with no outcome after it | The process was killed or the power was lost while it ran: there is no exit status and no outcome line. Anything from nothing changed to finished is possible | The same as status 3: run the same command again with the same chains. If the anchor is already usable, it says so and changes nothing; start the service |
 | 4 | request line only | Done, but the outcome could not be written to the audit log | Record it by hand; the message gives the epoch and digest |
+| 5 | `ALLOW` | Done, but the membership file could not be given back to the owner of the state directory | Run the `chown --reference=…` command the message prints, then start the service. Until then the node's sync cannot read its chain |
 
 ### Deciding that the sources are right
 
@@ -97,6 +107,38 @@ are what the two peers really hold. That is the operator's part, before typing t
 
 If the sources disagree with each other, stop: two manifests were signed for one epoch. That is an
 incident for the root key's holder, not something to resolve on this host.
+
+### In a total outage (#388)
+
+All three servers are down, and when the first one comes back its anchor is unusable (one of the operator rows
+above). There is no authority host to give a chain, so the two chains come from the two other servers, and
+they are opened by hand too. Rehearsed end to end on three nodes by `e2e/three-node-reanchor.py` (CI job
+`three-node-reanchor`).
+
+1. **The damaged server (here b): leave its services stopped.** Its sync refuses its membership anyway; stop
+   `regalia-sync` and `regalia-admission` if they started (`systemctl stop`), so nothing else touches the anchor.
+2. **Open the two other servers (a and c) by hand**, each at its own console with its own recovery key
+   (the PIN card and the host cards, [PIN-CUSTODY.md](../../PIN-CUSTODY.md)): the outage runbook's first step, done on both. Once
+   both run, they sign each other's heartbeats; the owner's hand recovery (`owner.py beat`) is needed only if
+   one of them runs alone.
+3. **Take each one's chain from it:** `/var/lib/regalia-sync/chain.json` (`node.PUBLISHED`: the chain its
+   sync verified and published), copied from a over SSH to a and from c over SSH to c, under each one's
+   manifest-pinned host key. Never both from one place, never from b. Both must end at the same epoch; if
+   one is behind, let them sync and take both again.
+4. **Check the sources** ("Deciding that the sources are right", above): each peer's own `rollout epoch`,
+   the last signing record, and why b's anchor is unusable.
+5. **Open b by hand** with its own recovery key, and run the command above at b's console as root, with
+   `--peer a=a-chain.json --peer c=c-chain.json`. Read what it prints, then type the phrase.
+6. **Status 0: start b's services** (`systemctl start regalia-sync regalia-admission`). b loads its membership
+   at the chain's epoch under the new anchor, takes the heartbeat a and c signed, asks them for a lease and
+   serves again; it issues leases to them in turn. Any other status: the table above.
+
+**A server whose two peers are both destroyed is not re-anchored.** No two other nodes can give it a chain,
+and nothing else may: a single source is refused by design. That is a **root ceremony**: new nodes enrolled
+under a root-signed manifest (`replacement.py`, `enrol.py`), with the owner's keys and the shares it needs.
+With only ONE other node left (the other destroyed or revoked), re-anchoring is refused as well; this is the
+same gap as `convergence.recover(..., minimum=1)` in the refusals table, and no tool covers it yet: decide it
+with the root's holder before acting.
 
 ## What is tested, and what is not
 

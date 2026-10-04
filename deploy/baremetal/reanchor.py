@@ -37,16 +37,20 @@ so it is the one an attacker would want, and it is fenced accordingly:
   * RECORDED. The request, naming the epoch and manifest, is appended to the audit log before anything is
     asked or changed (without a writable log nothing is done); then the outcome: ALLOW, DENY (nothing
     changed), or INCOMPLETE (the anchor was being replaced and it did not finish: run it again).
+  * GIVEN BACK. Run as root, it writes the membership file as root; done (or INCOMPLETE), it gives that file and any
+    lock it made back to the owner of the state directory (regalia-sync's, enrol._hand_over), or the node's own sync
+    could not read its chain (#388). Its lock on the anchor is the node's own (highwater.lock in the state directory).
 
-    python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key HEX \\
-        --tpm-index 0x1500016 --node-id b --peer a=a-chain.json --peer c=c-chain.json \\
-        --audit-log /var/log/regalia/reanchor.jsonl
+    python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia-sync/membership.json --root-key HEX \\
+        --tpm-index 0x1500016 --tcti device:/dev/tpmrm0 --node-id b --node-config /etc/regalia/node.json \\
+        --peer a=a-chain.json --peer c=c-chain.json
 
 It needs the TPM's owner authorization, as defining the anchor did at commissioning.
 """
 import argparse
 import os
 import re
+import stat
 import sys
 import time
 
@@ -146,8 +150,41 @@ def _chain(path):
         return membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), limit=membership.MAX_CHAIN_BYTES)
 
 
-def _highwater(index, tcti, policy=None):
-    return membership.HighWater(index, tcti=tcti, policy=policy)
+def _highwater(index, tcti, policy=None, lock_path=None):
+    return membership.HighWater(index, tcti=tcti, policy=policy, lock_path=lock_path)
+
+
+def anchor_lock(membership_path):
+    """The anchor's lock, where the node's own services take it (node.Node.anchor: highwater.lock in the state directory,
+    which holds the membership file): a re-anchor and the node's sync then serialize on the same file."""
+    return os.path.join(os.path.dirname(os.path.abspath(membership_path)), "highwater.lock")
+
+
+def hand_back(membership_path, euid=os.geteuid, chown=os.fchown):
+    """The membership file and the locks a re-anchor run as root may have made, given back to the owner of the directory
+    that holds them (regalia-sync's state directory, enrol._hand_over): written by root, mkstemp's 0600 would leave the
+    node's own sync unable to read its chain (#388). Each is opened without following a link and must be a regular file;
+    only one whose owner is not the directory's is changed, and only when root runs this and the directory is not
+    root's. Returns the paths changed."""
+    directory = os.path.dirname(os.path.abspath(membership_path))
+    owner = os.stat(directory)
+    if euid() != 0 or owner.st_uid == 0:
+        return []
+    changed = []
+    for path in (os.path.abspath(membership_path), os.path.abspath(membership_path) + ".lock", anchor_lock(membership_path)):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except FileNotFoundError:
+            continue
+        try:
+            held = os.fstat(fd)
+            require(stat.S_ISREG(held.st_mode), "%s is not a regular file: it is not given back" % path)
+            if (held.st_uid, held.st_gid) != (owner.st_uid, owner.st_gid):
+                chown(fd, owner.st_uid, owner.st_gid)
+                changed.append(path)
+        finally:
+            os.close(fd)
+    return changed
 
 
 def node_policy(path, node_id):
@@ -167,7 +204,8 @@ def node_policy(path, node_id):
 
 def main(argv=None, ask=None, highwater=_highwater, tty=None):
     """Exit status: 0 done; 1 refused, nothing changed; 2 usage; 3 INCOMPLETE, the anchor was being replaced:
-    run it again; 4 done, but the outcome could not be written to the audit log."""
+    run it again; 4 done, but the outcome could not be written to the audit log; 5 done, but the membership file could not
+    be given back to the owner of its directory (hand_back: the command to run is printed)."""
     ap = argparse.ArgumentParser(prog="python3 -Es -m deploy.baremetal.reanchor", description=__doc__.splitlines()[0])
     ap.add_argument("--membership", required=True, help="this node's membership file")
     ap.add_argument("--root-key", required=True, help="the pinned membership root key, 64 hex")
@@ -221,21 +259,40 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
             require(node_id not in sources, "--peer names %s twice" % node_id)
             sources[node_id] = _chain(path)
         store = membership.Store(args.membership, args.root_key, highwater(args.tpm_index, args.tcti,
-                                                                          policy=node_policy(args.node_config, args.node_id)))
+                                                                          policy=node_policy(args.node_config, args.node_id),
+                                                                          lock_path=anchor_lock(args.membership)))
         now_at = reanchor(store, sources, args.node_id, typed, record)
     except Incomplete as failure:
         print("reanchor: INCOMPLETE: the anchor was being replaced and it did not finish: %s\nRun this command again with the same "
               "chains. Until it completes, this node's membership does not load." % failure, file=sys.stderr)
+        _give_back(args.membership)
         return 3
     except Unrecorded as failure:
         print("reanchor: DONE, but the outcome could not be written to the audit log (%s). %s now holds epoch %d, manifest %s. "
               "Record it by hand." % (failure, args.node_id, failure.summary["epoch"], failure.summary["manifest_digest"]), file=sys.stderr)
+        _give_back(args.membership)
         return 4
     except (OSError, Refused) as failure:
         print("reanchor: NOT DONE, nothing was changed: %s" % failure, file=sys.stderr)
         return 1
+    if not _give_back(args.membership):
+        return 5
     print("reanchor: done. %s now holds epoch %d, manifest %s, under a new anchor." % (args.node_id, now_at["epoch"], now_at["manifest_digest"]))
     return 0
+
+
+def _give_back(membership_path):
+    """hand_back, said: True when every file is its directory owner's (or nothing needed it); else the command to run."""
+    try:
+        for path in hand_back(membership_path):
+            print("reanchor: %s given back to the owner of its directory" % path)
+        return True
+    except (OSError, Refused) as failure:
+        directory = os.path.dirname(os.path.abspath(membership_path))
+        print("reanchor: the anchor is written, but the membership file could not be given back to the owner of %s (%s): the node's "
+              "sync cannot read it until it is. Run:  chown --reference=%s %s %s.lock %s" % (
+                  directory, failure, directory, membership_path, membership_path, anchor_lock(membership_path)), file=sys.stderr)
+        return False
 
 
 if __name__ == "__main__":
