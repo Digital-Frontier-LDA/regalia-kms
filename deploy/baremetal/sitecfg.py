@@ -76,6 +76,7 @@ MAC = r"[0-9a-f]{2}(:[0-9a-f]{2}){5}"
 MESH_PEER_KEYS = ("node_id", "underlay", "address")
 SERVICE_KEYS = ("interface", "listen_port", "sync_port", "authority")
 SERVICE_AUTHORITY_KEYS = ("key", "underlay", "port")
+NODE_EXPORTER_PORT = 9100                  # node_exporter, from monitoring_cidrs only, behind mutual TLS (#305)
 SERVICE_PREFIX = "fd72:6567:6c61::/48"     # every address inside the service tunnel (wgsvc.PREFIX: a test holds them equal)
 NODE_ID = r"[a-z0-9][a-z0-9-]{0,31}"
 
@@ -124,6 +125,7 @@ def validate(doc):
     require(not (host.is_unspecified or host.is_loopback or host.is_multicast), "host_ipv4 must be a host address")
     kms, ssh = _port(doc["kms_port"], "kms_port"), _port(doc["ssh_port"], "ssh_port")
     require(kms != ssh, "kms_port and ssh_port must differ")
+    require(NODE_EXPORTER_PORT not in (kms, ssh), "kms_port and ssh_port must not be %d, node_exporter's (#305)" % NODE_EXPORTER_PORT)
     cfg = {"schema": SCHEMA, "site": doc["site"], "host_ipv4": str(host), "kms_port": kms, "ssh_port": ssh,
            "client_cidrs": _networks(doc["client_cidrs"], "client_cidrs"),
            "monitoring_cidrs": _networks(doc["monitoring_cidrs"], "monitoring_cidrs"),
@@ -201,7 +203,8 @@ def _boot_mesh(mesh, cfg):
     require(isinstance(mesh["interface"], str) and re.fullmatch(r"wg-[a-z0-9-]{1,12}", mesh["interface"]) and mesh["interface"] != "wg-boot",
             "boot_mesh.interface must be a WireGuard interface of its own, named wg-… (at most 15 characters, and not wg-boot, the initrd's)")
     listen, unlock = _port(mesh["listen_port"], "boot_mesh.listen_port"), _port(mesh["unlock_port"], "boot_mesh.unlock_port")
-    require(unlock not in (cfg["kms_port"], cfg["ssh_port"]), "boot_mesh.unlock_port must differ from kms_port and ssh_port")
+    require(unlock not in (cfg["kms_port"], cfg["ssh_port"], NODE_EXPORTER_PORT),
+            "boot_mesh.unlock_port must differ from kms_port, ssh_port and node_exporter's %d" % NODE_EXPORTER_PORT)
     out = {"node_id": mesh["node_id"], "interface": mesh["interface"], "listen_port": listen, "unlock_port": unlock,
            "address": _address(mesh["address"], "boot_mesh.address"), "peers": []}
     # Where the initrd's own traffic goes (#66, regalia.boot-env): its card by MAC address (an interface name
@@ -261,8 +264,9 @@ def _service_mesh(mesh, cfg):
             "and not the boot mesh's)")
     listen, sync = _port(mesh["listen_port"], "service_mesh.listen_port"), _port(mesh["sync_port"], "service_mesh.sync_port")
     require(listen != boot["listen_port"], "service_mesh.listen_port must differ from boot_mesh.listen_port: two interfaces, two ports")
-    require(sync not in (cfg["kms_port"], cfg["ssh_port"], boot["unlock_port"]),
-            "service_mesh.sync_port must differ from kms_port, ssh_port and boot_mesh.unlock_port: one number, one service")
+    require(sync not in (cfg["kms_port"], cfg["ssh_port"], boot["unlock_port"], NODE_EXPORTER_PORT),
+            "service_mesh.sync_port must differ from kms_port, ssh_port, boot_mesh.unlock_port and node_exporter's %d: one number, "
+            "one service" % NODE_EXPORTER_PORT)
     out = {"interface": mesh["interface"], "listen_port": listen, "sync_port": sync, "authority": None}
     authority = mesh["authority"]
     if authority is not None:

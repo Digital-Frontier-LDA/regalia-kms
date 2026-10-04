@@ -32,7 +32,7 @@ CapabilityBoundingSet=CAP_DAC_OVERRIDE
 AmbientCapabilities=CAP_DAC_OVERRIDE
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/run/regalia /run/chrony /var/log/regalia-time
+ReadWritePaths=/run/regalia /run/chrony /var/log/regalia-time -/run/regalia-metrics/authtime
 # CAP_DAC_OVERRIDE would let it read any file it can see, so it sees almost none: /etc is an empty
 # read-only tmpfs with only its own configuration and what the C library needs bound into it, /var is
 # empty, and other processes are invisible under /proc. (Not ProcSubset=pid: the kernel's boot ID,
@@ -41,8 +41,11 @@ TemporaryFileSystem=/etc:ro /var:ro /run:ro
 # /run likewise: other units' credentials (/run/credentials) and whatever else is staged there stay out
 # of sight; only the two directories it writes are bound back
 # and the time trail's directory (#303): each transition is recorded there before it is published
-BindPaths=/run/regalia /run/chrony /var/log/regalia-time
-BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime
+BindPaths=/run/regalia /run/chrony /var/log/regalia-time -/run/regalia-metrics/authtime
+# and its metrics directory (#305; "-": a missing one never stops the time service, the file's age alerts), and, read only,
+# the latch's whole directory: it holds the latch and nothing else (regalia.tmpfiles.conf, 0700 root), and "-" because a
+# directory that is missing holds no latch either; the chrony latch's directory, for regalia_chrony_latch_set
+BindReadOnlyPaths=/etc/regalia/node.json /etc/passwd /etc/group /etc/nsswitch.conf /etc/ld.so.cache -/etc/localtime -/var/lib/regalia-time
 ProtectProc=invisible
 ProtectHome=yes
 PrivateTmp=yes

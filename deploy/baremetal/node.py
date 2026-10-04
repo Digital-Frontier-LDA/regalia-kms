@@ -63,7 +63,7 @@ import threading
 import time
 
 from deploy.baremetal import (admission, trails, attest, authtime, bootnet, convergence, heartbeat, heartbeat_watch, lease,
-                              measurements, membership, sitecfg, sync, unlock, wgsvc)
+                              measurements, membership, metrics, sitecfg, sync, unlock, wgsvc)
 
 Refused, require = membership.Refused, membership.require
 
@@ -430,7 +430,8 @@ def admission_service(node, daemon_started=None, rand=os.urandom):
                 failures.append("%s: %s" % (name, refused))
         raise Refused("no peer gave a lease (%s)" % "; ".join(failures))
     return admission.Service(holder, node.manifest, renew, admission_file(node.runtime),
-                             daemon_started=daemon_started or admission.unit_started())
+                             daemon_started=daemon_started or admission.unit_started(),
+                             metrics=lambda samples: metrics.publish("admission", samples))      # #305
 
 
 class Sync:
@@ -484,7 +485,7 @@ class Sync:
         return changed
 
     def watch(self):
-        return heartbeat_watch.Watch(self.freshness, self.manifest, self.trail, self.node.path("heartbeat.prom"),
+        return heartbeat_watch.Watch(self.freshness, self.manifest, self.trail, metrics.path("sync"),      # #305: node_exporter's
                                      self.node.path("heartbeat-watch.json"))
 
     def run(self, stop):
@@ -532,7 +533,8 @@ def authtime_service(cfg):
     """Takes the configuration only: it reads nothing else (not the site configuration, not a key), and
     its unit hides the rest of /etc and all of /var from it."""
     return authtime.Service(os.path.join(cfg["run_dir"], "authtime.json"), cfg["time_servers"],
-                            record=Trail(trails.where(authtime.TRAIL), authtime.TRAIL))      # each transition, audited (#303)
+                            record=Trail(trails.where(authtime.TRAIL), authtime.TRAIL),      # each transition, audited (#303)
+                            metrics=lambda samples: metrics.publish("authtime", samples))     # #305
 
 
 # ---- command line ----

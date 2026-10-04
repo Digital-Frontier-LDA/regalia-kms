@@ -17,7 +17,7 @@
 # Its own user (regalia-audit-ship.sysusers.conf) and NO capability: each instance reads its one trail
 # through that trail's group, from its drop-in regalia-audit-ship@%i.service.d/reader.conf (the
 # registry's group: the writer's own, or regalia-audit for the operator tools'). Trails are 0640.
-# It writes nothing but its metrics, in its state directory.
+# It writes nothing but its metrics, in its node_exporter textfile directory (#305, deploy/baremetal/metrics.py).
 [Unit]
 Description=Regalia KMS: ship the %i audit trail to the audit collector
 Documentation=https://github.com/Digital-Frontier-LDA/regalia-kms/blob/main/deploy/baremetal/README.md
@@ -30,7 +30,7 @@ EnvironmentFile=/etc/regalia/audit-ship.env
 EnvironmentFile=/etc/regalia/audit-ship/%i.env
 ExecStart=/usr/bin/regalia-audit-ship -trail %i -path ${TRAIL_PATH} -collector ${COLLECTOR} -site ${SITE} \
     -tls-cert /etc/regalia/audit-ship/client.crt -tls-key /etc/regalia/audit-ship/client.key \
-    -server-ca /etc/regalia/audit-ship/collector-ca.pem -metrics /var/lib/regalia-audit-ship/%i.prom \
+    -server-ca /etc/regalia/audit-ship/collector-ca.pem -metrics /run/regalia-metrics/audit-ship/%i.prom \
     -head /var/lib/regalia-audit-ship/%i.head.json
 Restart=on-failure
 RestartSec=30s
@@ -43,6 +43,7 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
+ReadWritePaths=-/run/regalia-metrics/audit-ship
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

@@ -26,6 +26,7 @@ import os
 import pathlib
 import pwd
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -41,7 +42,7 @@ ENV = pathlib.Path("/etc/regalia/audit-ship.env")
 INSTALLED = pathlib.Path("/etc/systemd/system/regalia-audit-ship@.service")
 DROPIN = pathlib.Path("/etc/systemd/system/regalia-audit-ship@sync.service.d")
 UNITS = HERE.parent / "deploy" / "baremetal" / "units"
-METRICS = pathlib.Path("/var/lib/regalia-audit-ship/sync.prom")
+METRICS = pathlib.Path("/run/regalia-metrics/audit-ship/sync.prom")      # node_exporter's textfile directory (#305)
 HEAD = pathlib.Path("/var/lib/regalia-audit-ship/sync.head.json")      # the unit's -head, for prune
 PORT = 18443
 WORK = pathlib.Path("/var/lib/audit-ship-e2e")   # not under /tmp: the unit has PrivateTmp=yes and would not see it
@@ -129,6 +130,7 @@ def scenario(work, binaries):
     shutil.copy(TRAILS, work / "lib" / "trails.py")             # the writer may not traverse the checkout: a copy it can read
     state = work / "collector"
     sh("systemd-sysusers", str(UNITS / "regalia.sysusers.conf"), str(UNITS / "regalia-audit-ship.sysusers.conf"))
+    sh("systemd-tmpfiles", "--create", str(UNITS / "regalia-audit-ship.tmpfiles.conf"))      # its metrics directory (#305)
     trail_dir = work / "regalia-sync"                          # as its StateDirectory: regalia-sync's, 0755
     trail_dir.mkdir()
     shutil.chown(trail_dir, "regalia-sync", "regalia-sync")
@@ -176,6 +178,14 @@ def scenario(work, binaries):
     ok(until(lambda: stream_lines(state) == 5, 75), "the stream holds 5 lines after the next pass", stream_lines(state))
     ok(until(lambda: metrics_say('regalia_audit_trail_committed{trail="sync"} 5', 'regalia_audit_trail_tampered{trail="sync"} 0'), 30),
        "the metrics say 5 committed, not tampered", METRICS.read_text() if METRICS.exists() else "")
+    # The directory is the control: 2750, group regalia-metrics, so nobody outside the group can reach the file,
+    # which cmd/regalia-audit-ship/main.go's replaceFile makes 0644 (its Chmod) and which takes the group from the
+    # setgid bit.
+    info, held = (METRICS.stat(), METRICS.parent.stat()) if METRICS.exists() else (None, None)
+    ok(info is not None and stat.S_IMODE(held.st_mode) == 0o2750 and grp.getgrgid(held.st_gid).gr_name == "regalia-metrics"
+       and grp.getgrgid(info.st_gid).gr_name == "regalia-metrics",
+       "in its 2750 directory, group regalia-metrics: only node_exporter's group can read it (#305)",
+       (oct(stat.S_IMODE(held.st_mode)), grp.getgrgid(info.st_gid).gr_name) if info else "absent")
 
     print("\n### 2b  the client certificate rotated: a hand-over, and the stream goes on (#291)")
     # first the order error: the files swapped and the unit restarted BEFORE the hand-over (regalia-kms-51)

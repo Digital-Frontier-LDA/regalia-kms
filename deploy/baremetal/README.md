@@ -873,6 +873,60 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
 - **Client-reported alarms are capped:** 20 an hour per client certificate. Past that the collector
   records one "alarm flood" alarm of its own and answers 429.
 
+### Node metrics and alerts (#305)
+
+Each service on a node writes a Prometheus textfile for **node_exporter's textfile collector**: no listener of
+ours. The names live in one registry, `deploy/baremetal/metrics.py` (`METRICS`, the way `trails.py` lists the
+trails), and `metrics.render()` refuses any series, label or value it does not list. Labels are enums and
+values are numbers, never a key, a node secret or a peer's text: authtime's reason becomes a `cause` enum, and
+the reason itself goes to the time trail.
+
+| writer | file | series |
+|---|---|---|
+| `regalia-authtime` | `/run/regalia-metrics/authtime/authtime.prom` | `regalia_time_authenticated{cause}`, `regalia_chrony_latch_set` |
+| `regalia-sync` (heartbeat watch) | `/run/regalia-metrics/sync/heartbeat.prom` | `regalia_heartbeat_*`; `regalia_unlock_refused_total{cause}` with #70 |
+| `regalia-admission` | `/run/regalia-metrics/admission/lease.prom` | `regalia_admission_serving`, `regalia_admission_lease_seconds_left` |
+| `regalia-audit-ship@<trail>` | `/run/regalia-metrics/audit-ship/<trail>.prom` | `regalia_audit_trail_*{trail}` |
+
+- **Who can read the files.** Each directory is its writer's, group `regalia-metrics`, setgid, 2750
+  (`regalia.tmpfiles.conf`, and `regalia-audit-ship.tmpfiles.conf` on the authority host too). The directory is
+  the control: nobody outside the group can reach a file in it. The Python writers make files 0640; the Go
+  shipper makes them 0644. A host upgraded from before #305 keeps a stale
+  `/var/lib/regalia-audit-ship/<trail>.prom` that nothing reads any more: remove it by its exact name.
+  node_exporter is the group's only other member, through its unit
+  (`units/prometheus-node-exporter.service.d/regalia.conf`: `SupplementaryGroups=regalia-metrics`, so the
+  package keeps its own user), so it reads them all and writes none, and no writer can replace another's
+  file. No two writers' files share a name.
+- **When a directory is missing.** A unit's metrics directory is `-`-prefixed in its sandbox. A missing one
+  never stops the service; the file's age raises the alert instead.
+
+**node_exporter on a node.**
+- **Package:** Debian's `prometheus-node-exporter`, 1.9 (it reads several textfile directories from one glob).
+- **Configuration:** `/etc/default/prometheus-node-exporter` takes the line printed by
+  `python3 -Es -m deploy.baremetal.metrics node-exporter-args /etc/regalia/site.json`. That listens on
+  `host_ipv4:9100` only and reads `/run/regalia-metrics/*`.
+- **TLS:** `/etc/regalia/node-exporter/web.yml` comes from `deploy/baremetal/node-exporter/web.yml`. It sets
+  mutual TLS 1.3 and requires a client certificate from the monitoring CA (`monitoring-ca.pem`, beside the
+  server's certificate and key).
+- **Firewall:** `firewall.py` opens TCP 9100 from `monitoring_cidrs` only, the zone that already scrapes the
+  KMS daemon's `/metrics`. The service mesh is not widened (decided on #305). The netns firewall e2e checks it
+  is reachable from the monitoring host and from no other zone.
+
+**Alerts.**
+- **Rules file:** `deploy/monitoring/regalia-node.rules.yml`. Load it beside `regalia-kms.rules.yml`, and
+  scrape the nodes as job `regalia-node`. Each threshold is stated in the file's header.
+- **Pages:** time not authenticated for a minute; the chrony latch set; the heartbeat under a quarter of its
+  lifetime, or none usable; the node not serving for five minutes; a tampered audit trail; an expected file
+  (`authtime.prom`, `heartbeat.prom`, `lease.prom`) absent for five minutes on a node that is scraped (`/run` is
+  empty after a boot, so a writer that never wrote leaves no series for the other rules); node_exporter down.
+- **Warnings:** the heartbeat under half its lifetime (both heartbeat thresholds are relative to the heartbeat
+  held, whose lifetime a manifest sets); an audit trail behind for fifteen minutes, or never shipped; unlock
+  refusals; a textfile that stopped moving (two minutes, five for a shipper's); a textfile node_exporter cannot
+  read (`node_textfile_scrape_error`).
+- **Matching:** every rule comparing two series of a node matches on all their labels, never on `trail` alone.
+- **Tests:** `tests/test_node_alert_firing.py` holds every rule to the registry and drives a fault at each one
+  under `promtool test rules`. Each must fire, and stay silent when healthy.
+
 ### The revocation authority (#199)
 
 `deploy/baremetal/authority.py`, run by `units/regalia-authority.service` on the authority host (not a KMS
