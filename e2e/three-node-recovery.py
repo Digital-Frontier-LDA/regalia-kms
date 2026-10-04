@@ -18,8 +18,9 @@ that peer, held by the node's own regalia-admission; N, for a node that must not
   3  PoC 10.2-10.4: for each survivor, the two others power-cycled and both unlocked through the survivor
      before either starts (the survivor the only source); both then hold leases the survivor issued
   4  PoC 10.5: two returners ask one survivor at the same time: both get their key from it
-  5  PoC 10.5, the session binding: b's initrd, unlocked once, runs its client again in the same TPM boot with a
-     second session and a gives it nothing, while c, in a new boot, unlocks through a at the same time; b power-cycled then unlocks through a
+  5  PoC 10.5, the session binding: b's initrd, unlocked once, runs its client again in the same TPM boot with
+     a second session and a gives it nothing, while c, in a new boot, unlocks through a at the same time; b
+     power-cycled then unlocks through a
   6  PoC 10.5, the rate limits: b's lease requests to a, its admission stopped and its bucket full: the
      first 6 in a minute answered, the 7th refused and recorded; c, beside it, answered
   7  N: a QUARANTINED (by the owner's key, #199), then RETIRED (by the root), then b REVOKED_STOLEN (c is then the only
