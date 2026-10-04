@@ -22,6 +22,11 @@ OUT="${1:?usage: initrd-reproducible.sh OUT [BUILDS]}"
 BUILDS="${2:-2}"
 GO="${REGALIA_GO:?set REGALIA_GO to a go (any release from 1.21: it launches the toolchain go.mod pins)}"
 SNAPSHOT="${REGALIA_SNAPSHOT:-20261003T121500Z}"
+# the membership root the initrd trusts (#156): the TEST root of tests/vectors/highwater-v1.json, canonical
+ROOT_KEY="$OUT/root-key.json"
+mkdir -p "$OUT"
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
+  tests/vectors/highwater-v1.json "$ROOT_KEY"
 HOSTILE_APT=/etc/apt/apt.conf.d/99regalia-initrd-reproducible-hostile
 HOSTILE_TMP=""
 cleanup(){
@@ -42,9 +47,16 @@ for n in $(seq 1 "$BUILDS"); do
     ( umask 077; cd /
       env LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8 TZ=Pacific/Kiritimati TMPDIR="$HOSTILE_TMP" SOURCE_DATE_EPOCH=0 GZIP=-1 ZSTD_CLEVEL=1 \
         GOFLAGS=-ldflags=-X=main.hostile=1 CGO_ENABLED=1 GOTOOLCHAIN=local GOSUMDB=off GONOSUMDB='*' GOINSECURE='*' \
-        "$REPO/deploy/baremetal/initrd/build-initrd.sh" --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n" )
+        "$REPO/deploy/baremetal/initrd/build-initrd.sh" --snapshot "$SNAPSHOT" --go "$GO" --root-key "$ROOT_KEY" --out "$OUT/build-$n" )
   else
-    deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n"
+    deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --root-key "$ROOT_KEY" --out "$OUT/build-$n" | tee "$OUT/build-$n.log"
+    # #382: run as root on a checkout another user owns, git reads it as that owner, never as root
+    # whom git must run as: the top's owner if not root, else .git's (repo-git.sh, regalia-kms-1e)
+    want="$(stat -c %u "$REPO")"; [ "$want" != 0 ] || want="$(stat -c %u "$REPO/.git")"
+    if [ "$(id -u)" = 0 ] && [ "$want" != 0 ]; then
+      grep -q "^build-initrd: the checkout is read as uid $want " "$OUT/build-$n.log" \
+        || { echo "initrd-reproducible: build $n read the checkout as root, not as its owner (#382)"; exit 1; }
+    fi
   fi
 done
 same=yes

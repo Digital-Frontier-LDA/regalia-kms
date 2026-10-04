@@ -31,7 +31,8 @@ cleanup(){
 trap cleanup EXIT
 
 # THE SAME PACKAGES as e2e/unlock-boot-qemu.sh (tests/test_initrd_drift.py holds the two lists together)
-INCLUDE=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography
+# (git: the boot test's guest signs from a clone of its checkout, #266; no dracut module takes it into the initrd)
+INCLUDE=systemd-sysv,udev,kmod,linux-image-amd64,dracut,systemd-cryptsetup,cryptsetup-bin,wireguard-tools,nftables,iproute2,e2fsprogs,tpm2-tools,ca-certificates,systemd-ukify,systemd-boot-efi,sbsigntool,openssl,python3-cryptography,git
 echo "### today's archive: $SUITE, $SUITE-updates, $SUITE-security"
 KEYRING="$(e2e/lib/debian-keyring.sh "$W/keyring")"      # Debian's own, pinned: the runner's predates trixie's keys
 # (apt's lists are kept: the security suite's verified package list is read from them below)
@@ -47,7 +48,8 @@ chroot "$ROOT" apt-get install -y -qq --no-install-recommends 'libtss2-tcti-devi
 # what a KMS host has installed, as e2e/unlock-boot-qemu.sh installs it
 install -D -m 0755 "$BIN" "$ROOT/usr/bin/regalia-unlock"
 install -D -m 0755 deploy/baremetal/initrd/wg-boot "$ROOT/usr/lib/regalia/wg-boot"
-install -m 0644 deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
+install -m 0644 deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service \
+  deploy/baremetal/initrd/regalia-wg-boot.service "$ROOT/usr/lib/systemd/system/"
 install -D -m 0755 deploy/baremetal/initrd/dracut/90regalia-unlock/module-setup.sh "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/module-setup.sh"
 install -m 0644 deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$ROOT/usr/lib/dracut/modules.d/90regalia-unlock/crypttab"
 echo "### the initrd, by its own dracut"

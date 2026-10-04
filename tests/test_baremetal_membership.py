@@ -1470,5 +1470,24 @@ class StoreOnSwtpm(_Swtpm):
                 self.assertEqual(self.hw.value(), 1)
 
 
+class BenchTokens(unittest.TestCase):
+    """One fact, two uses: membership.BENCH_TOKENS refuses the bench as production, and the destructive drills'
+    STAGING_SERIALS default allows only the bench (regalia-kms-95's read on #385). They cannot drift apart."""
+
+    def test_the_drills_staging_serials_are_the_live_bench_hsms(self):
+        import re
+        live = sorted(set(m.BENCH_NITROKEYS) - set(m.BENCH_NITROKEYS_DEAD) | set(m.BENCH_PICOS))
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        for script in ("e2e/pkcs11-contract.sh", "e2e/pkcs11-removal.sh"):
+            with self.subTest(script=script), open(os.path.join(root, script)) as f:
+                found = re.findall(r'^STAGING_SERIALS="\$\{STAGING_SERIALS:-([^}]*)\}"$', f.read(), re.M)
+                self.assertEqual(len(found), 1, "%s sets no STAGING_SERIALS default" % script)
+                self.assertEqual(sorted(found[0].split()), live, "%s's STAGING_SERIALS default is not membership's live bench HSMs" % script)
+
+    def test_every_bench_token_is_refused_in_each_form(self):
+        for serial in ("ESP2202E14A", "ESP41D722E2", "DENK0400664", "35718625", "000635718625"):
+            self.assertIn(serial, m.BENCH_TOKENS)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,9 @@ print(v)' "$1" "$2"; }
 
 # ---- inputs and TEST keys ------------------------------------------------------------------------------
 UNAME="$(basename "$LINUX" | sed 's/^vmlinuz-//')"
+# the membership root the initrd trusts (#156): the TEST root of tests/vectors/highwater-v1.json, canonical
+python3 -I -c 'import json,sys; v=json.load(open(sys.argv[1]))["root_public"]; open(sys.argv[2],"wb").write(json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())' \
+  tests/vectors/highwater-v1.json "$W/root-key.json"
 if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   # a stand-in that passes uki.py's initrd review (#198): the module's crypttab, this repository's unlock
   # units and script, a stand-in client, and the client's enable link. Nothing in it boots.
@@ -65,20 +68,24 @@ if [ -n "${INITRD:-}" ]; then cp "$INITRD" "$W/initrd"; else
   printf '#!/bin/sh\n' > "$I/init"; printf 'stand-in\n' | tee "$I/usr/bin/regalia-unlock" > "$I/usr/bin/sh"; chmod 0755 "$I/init" "$I/usr/bin/regalia-unlock" "$I/usr/bin/sh"
   ln -s usr/bin "$I/bin"; ln -s usr/lib "$I/lib"
   cp deploy/baremetal/initrd/dracut/90regalia-unlock/crypttab "$I/etc/crypttab"
-  cp deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
+  cp deploy/baremetal/initrd/regalia-boot-render.service deploy/baremetal/initrd/regalia-unlock.service deploy/baremetal/initrd/regalia-wg-boot.service "$U/"
   install -m 0755 deploy/baremetal/initrd/wg-boot "$I/usr/lib/regalia/wg-boot"
+  install -m 0644 "$W/root-key.json" "$I/usr/lib/regalia/root-key.json"
   ln -s /usr/lib/systemd/system/regalia-unlock.service "$E/cryptsetup.target.wants/regalia-unlock.service"
   (cd "$I" && find . -mindepth 1 | LC_ALL=C sort | cpio --quiet -o -H newc 2>/dev/null) > "$W/initrd"; fi
 python3 -Es -m deploy.baremetal.uki initrd-inventory --initrd "$W/initrd" > "$W/initrd-inventory.txt"
 # the initrd's build record (#248), as deploy/baremetal/initrd/build-initrd.sh writes one: here a stand-in that
-# names this initrd and this client, which is all uki.py holds it to (the real one is e2e/unlock-boot-qemu.sh's)
+# names this initrd and this client, and this checkout's commit and the files build-initrd.sh records, as uki.py
+# holds it to (#266: `uki provenance` reads them from this checkout; the real record is e2e/unlock-boot-qemu.sh's)
+python3 -Es -m deploy.baremetal.uki provenance > "$W/provenance.json"
 PINNED_KEYRING="$(sed -n 's/^KEYRING_SHA256 = "\([0-9a-f]\{64\}\)"$/\1/p' deploy/baremetal/debverify.py)"
-python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" <<'PY'
+python3 -I - "$W/initrd" "${UNLOCK_CLIENT:-$W/ird/usr/bin/regalia-unlock}" "$W/initrd-build.json" "$W/initrd-inventory.txt" "$PINNED_KEYRING" "$W/provenance.json" "$W/root-key.json" <<'PY'
 import hashlib, json, sys
 digest = lambda path: hashlib.sha256(open(path, "rb").read()).hexdigest()
-json.dump({"schema": "regalia.initrd-build/v1", "commit": "0" * 40, "go": "go1.26.6", "snapshot": "20261003T121500Z",
+provenance = json.load(open(sys.argv[6]))
+json.dump({"schema": "regalia.initrd-build/v1", "commit": provenance["commit"], "go": "go1.26.6", "snapshot": "20261003T121500Z",
            "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "stand-in", "dracut": "stand-in", "packages_requested": [],
-           "client_sha256": digest(sys.argv[2]), "repository_files": {}, "packages_sha256": "0" * 64, "packages": [],
+           "client_sha256": digest(sys.argv[2]), "root_key_sha256": digest(sys.argv[7]), "repository_files": provenance["repository_files"], "packages_sha256": "0" * 64, "packages": [],
            "initrd_sha256": digest(sys.argv[1]), "initrd_size": 0, "initrd_entries": 0,
            # the stand-in's inventory names no package: the builder verified none of it, with the pinned keyring (#246)
            "verified_packages": {"schema": "regalia.initrd-packages/v1", "packages": {}, "releases": {},
@@ -93,7 +100,7 @@ for k in initrd system secure-boot other; do
   openssl req -new -x509 -key "$W/TEST-$k.key" -out "$W/TEST-$k.crt" -subj "/CN=TEST $k key, not for production/" -days 30 2>/dev/null
 done
 IN=(--linux "$LINUX" --initrd "$W/initrd" --cmdline "$W/cmdline" --os-release "$W/os-release" --uname "$UNAME" --stub "$STUB" --pcrpkey "$W/TEST-system.pub"
-    --initrd-build "$W/initrd-build.json")
+    --initrd-build "$W/initrd-build.json" --root-key "$W/root-key.json")
 FILEKEYS=(--initrd-key "$W/TEST-initrd.key" --initrd-cert "$W/TEST-initrd.crt" --system-key "$W/TEST-system.key" --system-cert "$W/TEST-system.crt"
           --secure-boot-key "$W/TEST-secure-boot.key" --secure-boot-cert "$W/TEST-secure-boot.crt")
 

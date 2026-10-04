@@ -45,6 +45,7 @@ membership.verify_revocation accepts), and checked against the key's public poin
 """
 import argparse
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -264,22 +265,33 @@ def certify(tcti=None, run=subprocess.run):
         return _read(info), _read(sig)
 
 
-def sign(message, pem, tcti=None, run=subprocess.run, signatures=None):
-    """ECDSA P-256 over SHA-256(`message`) by the signing key, as r || s hex with low s, under a policy session: PolicyPCR
-    of this boot's PCR 11, then PolicyAuthorize with the system-phase key's signature over it. `signatures`: the parsed
-    tpm2-pcr-signature.json (default: the first of PCR_SIGNATURE_PATHS that exists)."""
-    if signatures is None:
-        found = [p for p in PCR_SIGNATURE_PATHS if os.path.exists(p)]
-        require(found, "no tpm2-pcr-signature.json: this boot is not a UKI with signed PCR policies")
-        signatures = membership.load(_read(found[0]), 65536)
+def boot_signatures(signatures=None):
+    """The parsed tpm2-pcr-signature.json of this boot: `signatures` if given, else the first of PCR_SIGNATURE_PATHS that
+    exists. None found is a refusal: this boot is not a UKI with signed PCR policies."""
+    if signatures is not None:
+        return signatures
+    found = [p for p in PCR_SIGNATURE_PATHS if os.path.exists(p)]
+    require(found, "no tpm2-pcr-signature.json: this boot is not a UKI with signed PCR policies")
+    return membership.load(_read(found[0]), 65536)
+
+
+@contextlib.contextmanager
+def policy_session(pem, tcti=None, run=subprocess.run, signatures=None):
+    """A policy session that satisfies PolicyAuthorize(the system-phase PCR key `pem`) for THIS boot: PolicyPCR of the
+    TPM's PCR 11 now, then PolicyAuthorize with that key's signature over it (from this boot's tpm2-pcr-signature.json),
+    its ticket from TPM2_VerifySignature. Yields the session's context file, for `-P session:<file>` (or -p). The one
+    session every policy-authorized use takes (#242): the signing key here (sign), the TPM anchor's counter and record
+    slots and the heartbeat counter (membership.HighWater). A session authorizes ONE command (the TPM resets its policy
+    when it is used), so open one per command. The TPM's Name for the PCR key is required to be the one the policy is
+    computed from BEFORE its signature is checked, and the session is flushed whatever happens."""
+    signatures = boot_signatures(signatures)
     with tempfile.TemporaryDirectory(prefix="signkey-") as d:
-        p = {n: os.path.join(d, n) for n in ("pcr11", "pcr.pem", "pcr.ctx", "pcr.name", "pol", "pol.sig", "ticket", "session", "digest", "sig")}
+        p = {n: os.path.join(d, n) for n in ("pcr11", "pcr.pem", "pcr.ctx", "pcr.name", "pol", "pol.sig", "ticket", "session")}
         _tpm(run, tcti, "pcrread", "sha256:11", "-o", p["pcr11"])
         approved, rsa_sig = pcr_signature(signatures, pem, _read(p["pcr11"]).hex())
         _write(p["pcr.pem"], pem)
         _write(p["pol"], approved)
         _write(p["pol.sig"], rsa_sig)
-        _write(p["digest"], hashlib.sha256(message).digest())
         _tpm(run, tcti, "loadexternal", "-C", "o", "-G", "rsa", "-a", PCR_KEY_TOOL_ATTRIBUTES, "-u", p["pcr.pem"], "-c", p["pcr.ctx"], "-n", p["pcr.name"])
         require(_read(p["pcr.name"]) == pcr_key_name(pem), "the TPM names the PCR key otherwise than this policy does")
         _tpm(run, tcti, "verifysignature", "-c", p["pcr.ctx"], "-g", "sha256", "-m", p["pol"], "-s", p["pol.sig"], "-f", "rsassa", "-t", p["ticket"])
@@ -287,10 +299,21 @@ def sign(message, pem, tcti=None, run=subprocess.run, signatures=None):
         try:
             _tpm(run, tcti, "policypcr", "-S", p["session"], "-l", "sha256:11")
             _tpm(run, tcti, "policyauthorize", "-S", p["session"], "-i", p["pol"], "-n", p["pcr.name"], "-t", p["ticket"])
-            _tpm(run, tcti, "sign", "-c", HANDLE, "-p", "session:" + p["session"], "-g", "sha256", "-d", "-f", "plain", "-o", p["sig"], p["digest"])
+            yield p["session"]
         finally:
             run(["tpm2_flushcontext", p["session"]], capture_output=True, env=_env(tcti))
-        out = low_s(_read(p["sig"]))
+
+
+def sign(message, pem, tcti=None, run=subprocess.run, signatures=None):
+    """ECDSA P-256 over SHA-256(`message`) by the signing key, as r || s hex with low s, under a policy session
+    (policy_session). `signatures`: the parsed tpm2-pcr-signature.json (default: the first of PCR_SIGNATURE_PATHS that
+    exists)."""
+    with tempfile.TemporaryDirectory(prefix="signkey-") as d:
+        digest, sig = os.path.join(d, "digest"), os.path.join(d, "sig")
+        _write(digest, hashlib.sha256(message).digest())
+        with policy_session(pem, tcti, run, signatures) as session:
+            _tpm(run, tcti, "sign", "-c", HANDLE, "-p", "session:" + session, "-g", "sha256", "-d", "-f", "plain", "-o", sig, digest)
+        out = low_s(_read(sig))
     _, point = identity(public(tcti, run), pem)
     membership.verify_revocation("ecdsa-p256", point, message, out, "the signing key's")
     return out

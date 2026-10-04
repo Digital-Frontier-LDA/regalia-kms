@@ -512,7 +512,7 @@ class Command(Case):
         self.said = io.StringIO()
         with contextlib.redirect_stderr(self.said), contextlib.redirect_stdout(self.said):
             rc = reanchor.main(argv + list(extra), ask=answer if ask == "given" else None, tty=tty, owner_check=owner_check,
-                               highwater=lambda index, tcti, policy=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy))
+                               highwater=lambda index, tcti, policy=None, define_policy=None: m.HighWater(index, lock_path=self.d + "/hw.lock", run=self.run_tpm, policy=policy, define_policy=define_policy))
         return rc, asked
 
     def one_source(self, verdict, peers=(OTHER,), extra=()):
@@ -523,8 +523,11 @@ class Command(Case):
         def owner_check(config, node_id, statement, peer):
             self.checked.append((config, node_id, statement, peer))
             return lambda tip: verdict(tip)
-        return self.program("--one-source", "--owner-statement", self.d + "/st.json", "--node-config", self.d + "/node.json", *extra,
-                            peers=peers, owner_check=owner_check)
+        # the node configuration is only named here: the indices are laid down owner-written, as without one (#242's
+        # define policy has its own tests)
+        with mock.patch.object(reanchor, "node_define_policy", lambda path, node_id: (lambda: None)):
+            return self.program("--one-source", "--owner-statement", self.d + "/st.json", "--node-config", self.d + "/node.json", *extra,
+                                peers=peers, owner_check=owner_check)
 
     def test_one_other_node_and_the_owner_re_anchor_and_the_owner_is_named_as_a_source(self):
         self.lose_record()
@@ -751,7 +754,7 @@ class OnSwtpm(_Swtpm):
         argv = ["--membership", path, "--root-key", ROOT_PUB, "--tpm-index", "0x1500016", "--node-id", "b",
                 "--peer", "a=%s/a.json" % self.d, "--peer", "c=%s/c.json" % self.d, "--audit-log", self.d + "/audit.jsonl", "--tcti", self.tcti]
         os.environ.pop("TPM2TOOLS_TCTI", None)
-        make = lambda index, tcti, policy=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy)
+        make = lambda index, tcti, policy=None, define_policy=None: m.HighWater(index, tcti=tcti, lock_path=self.d + "/hw.lock", policy=policy, define_policy=define_policy)
         with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(reanchor.main(argv, ask=lambda prompt: "no", highwater=make), 1)
             self.assertEqual(self.hw.slots(), [None, None])                          # refused: the TPM as it was

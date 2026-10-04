@@ -38,6 +38,7 @@ the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (
 Root only; it changes the machine (namespaces, interfaces, transient units), so its callers run only on a
 throwaway machine (a GitHub-hosted runner)."""
 import configparser
+import contextlib
 import grp
 import hashlib
 import json
@@ -136,6 +137,22 @@ class NodeHere:
 # The image the fixture boots (v4, #199): PCR 11 extended with this after every TPM start, as a booted UKI extends it, so
 # that the system-phase PCR key's signature over it lets the node's TPM signing key sign
 BOOTED = b"e2e3: an approved image, booted"
+# ...and, once the node leaves its initrd (start(): its services come up), extended once more, as systemd-pcrphase
+# extends "leave-initrd": PCR 11 takes one value in the initrd phase (an unlock is judged by it) and another in the
+# system phase (a lease, and the system-phase key's signature its policy sessions use), as a signed UKI's do
+LEAVE_INITRD = b"e2e3: leave-initrd"
+
+
+def extended(value, data):
+    """PCR 11 `value` (hex) once `data` is extended into it (SHA-256 bank), as tpm2_pcrextend with SHA-256(data) does."""
+    return hashlib.sha256(bytes.fromhex(value) + hashlib.sha256(data).digest()).hexdigest()
+
+
+def unlock_pcr11(entry):
+    """The PCR 11 a node on measurement set `entry` quotes for an unlock: its initrd phase's under v4, else its only one."""
+    return entry["phases"]["initrd"]["11"] if "phases" in entry else entry["pcrs"]["11"]
+
+
 SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so") if os.path.exists(c)), None)
 OWNER_PIN = "246813"                              # the SoftHSM owner token's TEST PIN
 
@@ -147,6 +164,7 @@ class Cluster:
         # party is two Ed25519 keys on a SoftHSM token (the two owner YubiKeys of ADR-0002 D30), and each node boots an
         # image whose PCR 11 a fixture system-phase key signed
         self.pcr_values = {n: set() for n in names}   # the PCR 11 values each node's signature file covers
+        self.left_initrd = set()                      # v4: the nodes whose PCR 11 is in the system phase (start), until a TPM start
         # the real audit trail shippers and collector (#340): each node's own trails shipped as a host ships them,
         # so a scenario can hold every event it caused to the collector's chained stream (audit_complete)
         self.audit = audit
@@ -240,17 +258,36 @@ class Cluster:
             denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
             raise RuntimeError("%s's software TPM did not start (%d): %s %s | log: %s | apparmor: %s"
                                % (n.name, done.returncode, done.stdout.strip(), done.stderr.strip(), log, denied))
+        self.left_initrd.discard(n.name)              # a TPM start: PCR 11 at its reset value, the node in its initrd again
         self._booted(n)
 
     # ---- v4 (#199): the booted image's signed PCR 11, and the owner's two keys ----
 
     def _pcr_key(self):
-        """The fixture's system-phase PCR key (RSA-2048, as uki.py's): what the nodes' signing keys are bound to."""
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import rsa
+        """The fixture's system-phase PCR key (RSA-2048, as uki.py's): what the nodes' signing keys are bound to. Beside
+        it, what a signed image's measurement set names with it (uki.py's signed record, attest.SIGNING_KEYS): an
+        initrd-phase PCR key of its own and a Secure Boot certificate, both made here. Nothing in the fixture signs
+        with either, but the set names them as the root approves a signed UKI's (#242: the system key is the one a
+        node's anchor and counters are written by)."""
+        import datetime
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec, rsa
+        from cryptography.x509.oid import NameOID
+
+        def public(key):
+            return key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
         self.pcr_private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        self.pcr_pem = self.pcr_private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        self.pcr_pem = public(self.pcr_private)
         self.pcr_sigs = {}                            # PCR 11 value -> its signature entry
+        initrd_pem = public(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+        sb = ec.generate_private_key(ec.SECP256R1())
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "e2e3 Secure Boot")])
+        now = datetime.datetime.now(datetime.timezone.utc)
+        cert = x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(sb.public_key()).serial_number(1) \
+            .not_valid_before(now).not_valid_after(now + datetime.timedelta(days=1)).sign(sb, hashes.SHA256())
+        self.image_signing = {"initrd": signkey.pcr_key_fingerprint(initrd_pem), "system": signkey.pcr_key_fingerprint(self.pcr_pem),
+                              "secure_boot_cert": hashlib.sha256(cert.public_bytes(serialization.Encoding.DER)).hexdigest()}
 
     def _pcr11(self, n):
         out = n.dir / "pcr11.bin"
@@ -258,11 +295,33 @@ class Cluster:
         return out.read_bytes().hex()
 
     def _booted(self, n):
-        """The node's TPM, as a host's once systemd-stub and systemd have measured an approved image into PCR 11: the
-        value extended, and signed by the system-phase key in the node's tpm2-pcr-signature.json (properties() binds it,
-        and the key's PEM, where systemd puts them: /run/systemd)."""
+        """The node's TPM, as a host's once systemd-stub has measured an approved image into PCR 11: the value extended
+        (the INITRD phase's), and the value it takes when the node leaves its initrd (start) signed by the system-phase
+        key in the node's tpm2-pcr-signature.json (properties() binds it, and the key's PEM, where systemd puts them:
+        /run/systemd)."""
         sh("tpm2_pcrextend", "-T", n.tcti, "11:sha256=" + hashlib.sha256(BOOTED).hexdigest())
-        self._sign_pcr11(n.name, self._pcr11(n))
+        self._sign_pcr11(n.name, extended(self._pcr11(n), LEAVE_INITRD))
+
+    def _leave_initrd(self, name):
+        """v4: the node's PCR 11 into its system phase, ONCE per boot (systemd-pcrphase's leave-initrd): a service
+        restarted without a TPM start finds it there already."""
+        if name in self.nodes and name not in self.left_initrd:
+            sh("tpm2_pcrextend", "-T", self.nodes[name].tcti, "11:sha256=" + hashlib.sha256(LEAVE_INITRD).hexdigest())
+            self.left_initrd.add(name)
+
+    @contextlib.contextmanager
+    def _as_booted(self, name):
+        """This process as node `name`'s booted system for signkey: its system-phase PCR key and PCR signatures where its
+        units have them bound (/run/systemd), for a node's own step run here (node.define_policy reads the key).
+        NOT THREAD-SAFE: it swaps signkey's module paths for this whole process, so never use it while another thread
+        (the unlock threads of recovery steps 4 and 5) may touch signkey (3e's read)."""
+        d = self.nodes[name].dir / "pcr"
+        saved = signkey.PCR_PUBLIC_KEY_PATH, signkey.PCR_SIGNATURE_PATHS
+        signkey.PCR_PUBLIC_KEY_PATH, signkey.PCR_SIGNATURE_PATHS = str(d / "tpm2-pcr-public-key.pem"), (str(d / "tpm2-pcr-signature.json"),)
+        try:
+            yield
+        finally:
+            signkey.PCR_PUBLIC_KEY_PATH, signkey.PCR_SIGNATURE_PATHS = saved
 
     def _sign_pcr11(self, name, value):
         """`value` added to the PCR 11 values the node's signature file covers (an image it may boot), the file rewritten."""
@@ -343,8 +402,11 @@ class Cluster:
         base = self.reference[name]
         if image is None:
             return dict(base)
-        value = hashlib.sha256(bytes.fromhex(base["pcrs"]["11"]) + hashlib.sha256(image.encode()).digest()).hexdigest()
-        self._sign_pcr11(name, value)                 # an image the root approves: the system-phase key signs its PCR 11 too
+        # an image the root approves: the system-phase key signs its system phase's PCR 11
+        initrd = extended(base["phases"]["initrd"]["11"], image.encode())
+        system = extended(initrd, LEAVE_INITRD)
+        self._sign_pcr11(name, system)
+        return dict(base, label=image, phases={"initrd": {"11": initrd}, "system": {"11": system}})
         return dict(base, label=image, pcrs=dict(base["pcrs"], **{"11": value}))
 
     def accept(self, seed, sets, name):
@@ -399,8 +461,13 @@ class Cluster:
         sh("tpm2_quote", "-T", n.tcti, "-c", attest.AK_HANDLE, "-g", "sha256", "-l", "sha256:%d" % pcrs[0], "-q", "00" * 32,
            "-m", str(n.dir / "ref.quote"), "-s", str(n.dir / "ref.sig"), "-f", "plain")
         sh("tpm2_flushcontext", "-T", n.tcti, "-t", check=False)
-        return {"label": "e2e-image", "tpm_firmware_version": attest.parse_quote((n.dir / "ref.quote").read_bytes())["firmware_version"],
-                "pcrs": {str(i): raw[32 * k:32 * (k + 1)].hex() for k, i in enumerate(pcrs)}}
+        entry = {"label": "e2e-image", "tpm_firmware_version": attest.parse_quote((n.dir / "ref.quote").read_bytes())["firmware_version"],
+                 "pcrs": {str(i): raw[32 * k:32 * (k + 1)].hex() for k, i in enumerate(pcrs)}}
+        # a signed UKI's set (#199, #242): PCR 11 per phase, read here in the initrd phase (before start), and the keys
+        # it is signed with, the system-phase one naming the node's write policy
+        initrd = entry["pcrs"].pop("11")
+        entry.update(phases={"initrd": {"11": initrd}, "system": {"11": extended(initrd, LEAVE_INITRD)}}, signing=dict(self.image_signing))
+        return entry
 
     def _identities_and_chain(self):
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
@@ -463,8 +530,9 @@ class Cluster:
         anchor.define()
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
         here.store().commit(self.chain[0])
-        node.heartbeat_counter(here.cfg).define()
-        node.signing_counter(here.cfg).define()      # #199: the highest sequence this node has signed
+        with self._as_booted(n.name):                 # laid down by the node's policy (node.define_policy: the system key its measurements name)
+            node.heartbeat_counter(here.cfg).define()
+            node.signing_counter(here.cfg).define()  # #199: the highest sequence this node has signed
 
     # ---- the stand-ins ----
 
@@ -526,6 +594,7 @@ class Cluster:
             admission_run.mkdir()
             shutil.chown(admission_run, "regalia-admission", "regalia-admission")
             os.chmod(admission_run, 0o755)
+        self._leave_initrd(name)                      # v4: its services run in the system phase
         if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
             self.time[name] = True
             self.authtimes[name].step()
@@ -541,6 +610,31 @@ class Cluster:
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
         if self.audit and name in self.nodes:         # the node's trail shippers run with it, as regalia-audit-ship@ does
             self._ship_start(name)
+        if "sync" in services:
+            self._caught_up(name)
+
+    def _caught_up(self, name):
+        """v4: a node started behind the cluster's epoch takes the epochs it missed by its OWN sync from a running peer, as
+        a host does when it comes back (#332's path, each epoch with its document); nothing commits into a stopped node's
+        store from here (#242 B3: its anchor is written by its booted system's policy only). Waited for when the node may
+        authorize and a peer that may is running; a node the epoch revoked or quarantined is left as it is (its peers
+        refuse it, and the scenario says what it finds). A store that does not load (a rolled-back disk) is the
+        scenario's own: its sync recovers it, or not."""
+        try:
+            held = self.node(name).store().load()["epoch"]
+        except membership.Refused:
+            return
+        if held >= self.manifest["epoch"] or not membership.may(self.manifest, name, "authorize"):
+            return
+        if not any(other != name and self.running(other) and membership.may(self.manifest, other, "authorize") for other in self.nodes):
+            return
+        def epoch():
+            try:
+                return self.node(name).store().load()["epoch"]
+            except membership.Refused:                # a read during its own restore: asked again (3e's read)
+                return None
+        if not until(lambda: epoch() == self.manifest["epoch"], 180, 2):
+            raise RuntimeError("%s, started at epoch %d, did not take epoch %d by its sync" % (name, held, self.manifest["epoch"]))
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
@@ -609,11 +703,13 @@ class Cluster:
         measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
         # the operator's site change first (every node's site configuration names c2), as on hosts: a node that takes the
         # epoch and runs wg-apply for it must already know where c2 is
+        seed = next((name for name in self.nodes if name not in (old, new) and self.running(name)), None)
+        if seed is None:                              # before any site file is rewritten (CodeRabbit)
+            raise RuntimeError("replacing %s by %s needs a running node to take the epoch" % (old, new))
         for n in self.nodes.values():
             if n.name != old:
                 self._configure(n)
-        seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
-        self.advance(seed, candidate=candidate, document=document, skip=(old, new))
+        self.advance(seed, candidate=candidate, document=document)
         envelope = self.chain[-1]
         n = self.nodes[new]
         here = self.node(new)
@@ -621,8 +717,9 @@ class Cluster:
         here.documents().put(document)
         for i, held in enumerate(self.chain):
             here.store().commit(held, final=i == len(self.chain) - 1)
-        node.heartbeat_counter(here.cfg).define()
-        node.signing_counter(here.cfg).define()
+        with self._as_booted(new):                    # laid down by its policy, as at build (#389: the system key its set names)
+            node.heartbeat_counter(here.cfg).define()
+            node.signing_counter(here.cfg).define()
         sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
         os.chmod(n.state, 0o755)
         sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
@@ -1031,18 +1128,18 @@ class Cluster:
         held = self.node(name).freshness().held()
         return bool(held) and held["heartbeat"]["epoch"] == epoch
 
-    def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, skip=(), **states):
+    def advance(self, seed, signer="root", document=None, owner_recovery=False, candidate=None, **states):
         """A new epoch with nodes' states changed ({node: state}), signed by the root or (signer "owner", a restrictive
         change) by the owner alone. A root-signed epoch reaches `seed`, a running node, as an operator gives it one:
         `deploy.baremetal.deliver` run as root (the real command: it commits as regalia-sync through the node's Store and
         republishes, the services running). An owner-signed one is committed into the seed's store with its services
-        stopped (a crash: the same boot), and they start again. Nodes whose services are
-        stopped take it into their stores as they are (they would pull it when they come back). The other running
+        stopped (a crash: the same boot), and they start again. Nodes whose services are stopped are NOT written to:
+        they take the epochs they missed by their own sync when they start (start(), _caught_up). The other running
         nodes are left to pull it from the seed with their real sync (their trails say from whom); the counting nodes
         then sign the epoch's heartbeat themselves (_beaten). Returns (the new manifest, when the seed
         started again). With `document`, the epoch commits to that measurement document (its policy_version). It goes
-        into the store of every node this step commits to (the seed, and the nodes that are stopped), as an operator's
-        `measurements install` does on one host; the running nodes fetch it from the seed by sync with the epoch,
+        into the seed's store with the epoch (deliver's --documents, or put beside the commit), as an operator's
+        `measurements install` does on one host; every other node fetches it by sync with the epoch,
         and no node is ever judged by another epoch's document (#332)."""
         current = self.manifest
         nodes = [dict(n, state=states.get(n["node_id"], n["state"])) for n in current["nodes"]]
@@ -1065,13 +1162,12 @@ class Cluster:
             self.stop(seed, power=None)
         if document is not None:
             self.document = document
-        for name in self.nodes:
-            if name in others or name in skip or (delivered and name == seed):   # running: its store is its sync's
-                continue
+        if not delivered:                             # the seed only: every other node's store is its own sync's
             if document is not None:                  # by digest, beside the documents it holds: nothing is replaced (#332)
-                self.node(name).documents().put(document)
-            self.node(name).store().commit(envelope)  # #199: its heartbeat for the epoch comes from the nodes once it runs
-            sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[name].state))
+                self.node(seed).documents().put(document)
+            with self._as_booted(seed):               # its booted system's key: it stopped in the same boot, in its system phase
+                self.node(seed).store().commit(envelope)
+            sh("chown", "-R", "regalia-sync:regalia-sync", str(self.nodes[seed].state))
         self.chain.append(envelope)
         self.manifest = manifest
         since = time.time()
@@ -1088,7 +1184,8 @@ class Cluster:
     def deliver(self, name, envelopes, documents):
         """`sudo python3 -Es -m deploy.baremetal.deliver --config … --chain … --documents …` for the running node `name`, as
         an operator gives a node the root's epochs (#199: what `authority accept` did): root reads the files, the node's
-        regalia-sync commits them through its Store and republishes. Returns the command's output."""
+        regalia-sync commits them through its Store and republishes. Run here in a transient unit of root's, named
+        e2e3-<node>-deliver-<epoch>, that sees /run/systemd as the node's services see it. Returns the command's output."""
         d = self.work / "deliver"
         d.mkdir(mode=0o700, exist_ok=True)
         chain = d / ("chain-%d.json" % envelopes[-1]["manifest"]["epoch"])
@@ -1100,7 +1197,18 @@ class Cluster:
                 path = d / ("document-%d-%d.json" % (envelopes[-1]["manifest"]["epoch"], i))
                 path.write_text(json.dumps(document))
                 args.append(str(path))
-        done = sh(*args, cwd=str(self.code), check=False)
+        # in a transient unit of root's with the node's /run/systemd as its services see it (the system-phase PCR key and
+        # its signatures, bound as _props binds them): where an operator runs it on the host, and what the node's policy
+        # sessions read when the anchor is written by policy (#242 B3, 95's read); the other nodes' directories hidden
+        n = self.member(name)
+        pcr = n.dir / "pcr"
+        props = ["WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1",
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-signature.json", "/run/systemd/tpm2-pcr-signature.json"),
+                 "BindReadOnlyPaths=%s:%s" % (pcr / "tpm2-pcr-public-key.pem", signkey.PCR_PUBLIC_KEY_PATH)]
+        props += ["InaccessiblePaths=" + str(o.dir) for o in self.members() if o is not n]
+        done = sh("systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--unit", self.unit(name, "deliver-%d" % envelopes[-1]["manifest"]["epoch"]),
+                  *[a for p in props for a in ("-p", p)], *args, check=False,
+                  stdin=subprocess.DEVNULL)
         if done.returncode != 0:
             raise RuntimeError("deliver to %s failed (%d): %s" % (name, done.returncode, (done.stderr or done.stdout).strip()[-600:]))
         return done.stdout

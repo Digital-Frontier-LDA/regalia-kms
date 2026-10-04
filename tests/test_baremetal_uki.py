@@ -201,6 +201,10 @@ def newc(entries):
 
 
 CLIENT = b"\x7fELF regalia-unlock"          # the stand-in client binary, as the build compiled it
+# the membership root the initrd trusts (#156): the fixed test root of tests/vectors/highwater-v1.json, its
+# canonical file (the JSON string, quotes included, no newline), as the build is given it
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "vectors", "highwater-v1.json")) as _f:
+    ROOT_KEY = m.canonical(json.load(_f)["root_public"])
 INITRD = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "baremetal", "initrd")
 
 
@@ -216,13 +220,44 @@ def unlock_initrd(change=None, drop=()):
              "usr/bin/wg": (0o100755, b"\x7fELF"), "usr/bin/nft": (0o100755, b"\x7fELF"), "usr/bin/sed": (0o100755, b"\x7fELF"),
              "etc/crypttab": (0o100644, mine("dracut", "90regalia-unlock", "crypttab")),
              "etc/cmdline.d/10-quiet.conf": (0o100644, b"quiet rd.shell=0\n"),
-             "usr/lib/regalia/wg-boot": (0o100755, mine("wg-boot")), "etc/marker": (0o100644, b"an initrd")}
+             "usr/lib/regalia/wg-boot": (0o100755, mine("wg-boot")), "etc/marker": (0o100644, b"an initrd"),
+             uki.ROOT_KEY_PATH: (0o100644, ROOT_KEY)}
     for unit in uki.UNLOCK_UNITS:
         files["usr/lib/systemd/system/" + unit] = (0o100644, mine(unit))
     for link, target in uki.UNLOCK_ENABLED.items():
         files[link] = (0o120777, target.encode())
     files.update(change or {})
     return newc([(n, mode, data) for n, (mode, data) in sorted(files.items()) if n not in drop])
+
+class FakeCheckout:
+    """The signer's checkout as uki.Checkout reads it (#266), for the fixtures: a commit, a clean tree, and the files
+    build-initrd.sh records with their SHA-256. Patched in for uki.Checkout by Case: no command can reach it."""
+    COMMIT = "ab" * 20
+    FILES = {uki.BUILDER: "11" * 32, "go.mod": "22" * 32, "deploy/baremetal/uki.py": "33" * 32}
+
+    def __init__(self, commit=COMMIT, files=None, clean=True, go="go1.26.6", config=()):
+        self.commit, self.files, self.is_clean = commit, dict(FakeCheckout.FILES if files is None else files), clean
+        self.go, self.config = go, config
+
+    def check_config(self):
+        m.require(not self.config, "this checkout's git configuration sets %s, which a clone does not" % ", ".join(self.config))
+
+    def go_release(self):
+        return self.go
+
+    def head(self):
+        return self.commit
+
+    def clean(self):
+        return self.is_clean
+
+    def sha256(self, path):
+        m.require(path in self.files, "%s is not a file of this checkout" % path)
+        return self.files[path]
+
+    def builder_files(self):
+        return sorted(self.files)
+
 
 class Case(unittest.TestCase):
     @staticmethod
@@ -232,6 +267,9 @@ class Case(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.d, True)
+        patcher = mock.patch.object(uki, "Checkout", FakeCheckout)        # #266: the fixtures' checkout
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tools = FakeTools()
         self.inputs = {}
         for name, content in (("linux", b"a kernel"), ("initrd", unlock_initrd()), ("cmdline", b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
@@ -239,6 +277,7 @@ class Case(unittest.TestCase):
             self.inputs[name] = self.write(name, content)
         self.inputs["pcrpkey"] = self.key("system", "pub")
         self.inputs["initrd_build"] = self.initrd_build()      # #248: an image is signed only from a builder's initrd
+        self.inputs["root_key"] = self.write("root-key.json", ROOT_KEY)
         self.out = os.path.join(self.d, "out")
 
     def write(self, name, content):
@@ -253,7 +292,7 @@ class Case(unittest.TestCase):
             initrd_sha256 = uki.sha256(f.read())
         record = {"schema": uki.INITRD_BUILD_SCHEMA, "commit": "ab" * 20, "go": "go1.26.6", "snapshot": "20261003T121500Z",
                   "source_date_epoch": 1791029700, "suite": "trixie", "kernel": "6.12.111+deb13-amd64", "dracut": "106-6",
-                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "repository_files": {},
+                  "packages_requested": ["dracut"], "client_sha256": uki.sha256(client), "root_key_sha256": uki.sha256(ROOT_KEY), "repository_files": dict(FakeCheckout.FILES),
                   "packages_sha256": "cd" * 32, "packages": ["dracut=106-6"], "initrd_sha256": initrd_sha256,
                   "initrd_size": 1, "initrd_entries": 1,
                   # #246: what the builder verified against the archive, exactly the inventory's packages (none in the fixture's)
@@ -438,7 +477,7 @@ class Build(Case):
         self.assertEqual(record["sections"], {"." + n: hashlib.sha256(c).hexdigest() for n, c in parts.items()})
         self.assertEqual(parts["cmdline"], b"root=/dev/mapper/root ro quiet systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0")            # the file's newline is not in the image
         self.assertEqual(record["inputs"]["linux"], {"sha256": hashlib.sha256(b"a kernel").hexdigest(), "size": 8})
-        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "stub"])
+        self.assertEqual(sorted(record["inputs"]), ["cmdline", "initrd", "initrd_build", "linux", "os_release", "pcrpkey", "root_key", "stub"])
         self.assertEqual(record["pcrpkey_pkfp"], uki.public_key(self.public()["system"], "k")[0])
         self.assertEqual(record["tools"], {"ukify": "ukify 257 (stand-in)", "systemd_measure": "systemd-measure 257 (stand-in)"})
         with open(os.path.join(self.out, "image-7.record.json"), "rb") as f:
@@ -926,7 +965,7 @@ class Records(Case):
     def test_the_command_refuses_with_a_reason_and_no_traceback(self):
         argv = ["build", "--linux", self.inputs["linux"], "--initrd", self.inputs["initrd"], "--cmdline", self.write("bad", b"root=x init=/bin/sh systemd.import_credentials=no init_on_free=1 init_on_alloc=1 rd.shell=0 rd.emergency=reboot rootflags=x-systemd.device-timeout=0\n"),
                 "--os-release", self.inputs["os_release"], "--uname", "6.12", "--stub", self.inputs["stub"], "--pcrpkey", self.inputs["pcrpkey"],
-                "--initrd-build", self.initrd_build(), "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
+                "--initrd-build", self.initrd_build(), "--root-key", self.inputs["root_key"], "--name", "x", "--out", self.out, "--unlock-client", self.write("client", CLIENT)]
         with contextlib.redirect_stderr(io.StringIO()) as err, contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(uki.main(argv), 1)
         self.assertEqual(out.getvalue(), "")
@@ -940,6 +979,57 @@ if __name__ == "__main__":
     unittest.main()
 
 
+
+
+class RootKey(Case):
+    """#156: the membership root the initrd trusts is a build input (--root-key), canonical and well-formed, and
+    the initrd's /usr/lib/regalia/root-key.json must be it byte for byte; the inventory binds the file to the
+    input, not to a hash, so a deployment's own root passes the same inventory."""
+    OTHER = m.canonical("11" * 32)
+
+    def review(self, data, root=ROOT_KEY):
+        return uki.review_initrd_data(data, inventory=write_inventory(unlock_initrd(), self.d),
+                                      client_sha256=hashlib.sha256(CLIENT).hexdigest(), root_key_sha256=uki.sha256(root))
+
+    def test_the_initrd_must_hold_the_root_it_was_given(self):
+        self.assertTrue(self.review(unlock_initrd())["passed"])
+        self.assertEqual(self.review(unlock_initrd())["root_key"], uki.sha256(ROOT_KEY))
+        missing = self.review(unlock_initrd(drop=(uki.ROOT_KEY_PATH,)))
+        self.assertIn("usr/lib/regalia/root-key.json, the membership root the client trusts, is not in the image", missing["findings"])
+        other = self.review(unlock_initrd({uki.ROOT_KEY_PATH: (0o100644, self.OTHER)}))
+        self.assertTrue(any(f.startswith("usr/lib/regalia/root-key.json is not the root this build was given") for f in other["findings"]))
+        # another deployment's root, given as its build input: the same inventory passes (it binds, it does not pin)
+        self.assertTrue(self.review(unlock_initrd({uki.ROOT_KEY_PATH: (0o100644, self.OTHER)}), root=self.OTHER)["passed"])
+        ungiven = uki.review_initrd_data(unlock_initrd(), inventory=write_inventory(unlock_initrd(), self.d),
+                                         client_sha256=hashlib.sha256(CLIENT).hexdigest())
+        self.assertIn("usr/lib/regalia/root-key.json cannot be held to the root this build was given: it was not given (--root-key)",
+                      ungiven["findings"])
+
+    def test_the_inventory_line_is_bound_to_the_input(self):
+        line = [l for l in uki.initrd_inventory_lines(unlock_initrd()) if " %s " % uki.ROOT_KEY_PATH in l]
+        self.assertEqual(line, ["ours regalia-kms f 0644 0:0 %s =root-key" % uki.ROOT_KEY_PATH])
+
+    def test_the_root_given_must_be_canonical_and_well_formed(self):
+        rotation = m.canonical([json.loads(ROOT_KEY), "11" * 32])
+        self.assertEqual(len(uki.check_root_key({"root_key": self.write("rotation.json", rotation)})), 2)
+        cases = {"--root-key is not canonical JSON": ROOT_KEY + b"\n",
+                 "must be 64 lowercase hex": m.canonical("XY" * 32),
+                 "the root keys must be distinct": m.canonical([json.loads(ROOT_KEY), json.loads(ROOT_KEY)]),
+                 "the root is one key or a list of one to eight": m.canonical(["%02x" % i * 32 for i in range(9)]),
+                 "not valid JSON": b"{"}
+        for reason, raw in cases.items():
+            with self.subTest(reason=reason):
+                self.refused(reason, self.build, inputs={"root_key": self.write("bad-root.json", raw)}, name="image-%d" % len(reason))
+
+    def test_the_build_record_and_the_signer_name_the_root(self):
+        self.refused("the initrd's build record names another membership root", self.build,
+                     inputs={"initrd_build": self.initrd_build(root_key_sha256=uki.sha256(self.OTHER))})
+        inputs = dict(self.inputs, initrd_build=self.initrd_build())
+        record = self.build(inputs={"initrd_build": inputs["initrd_build"]})
+        said = []
+        uki.sign(inputs, record, self.signing_keys(), "file", self.out, run=self.tools, second_record=json.loads(json.dumps(record)),
+                 report=said.append)
+        self.assertIn("the initrd trusts membership root ed25519 %s" % json.loads(ROOT_KEY)[:16], said[0])
 
 
 class InitrdBuildRecord(Case):
@@ -1017,7 +1107,7 @@ class InitrdReview(Case):
         """The review of `data` against the inventory of `against` (default: of `data` itself, so that only the
         rules, layer 1, can refuse)."""
         return uki.review_initrd_data(data, run=subprocess.run, inventory=write_inventory(data if against is None else against, self.d),
-                                      client_sha256=hashlib.sha256(CLIENT).hexdigest())
+                                      client_sha256=hashlib.sha256(CLIENT).hexdigest(), root_key_sha256=uki.sha256(ROOT_KEY))
 
     def refused_by(self, data, *reasons, against=None):
         review = self.review(data, against)
@@ -1037,7 +1127,7 @@ class InitrdReview(Case):
         self.assertEqual(sorted(review["units"]), sorted(uki.UNLOCK_UNITS))
         self.assertEqual(review["clients"], {"usr/bin/regalia-unlock": hashlib.sha256(b"\x7fELF regalia-unlock").hexdigest()})
         record = self.build()
-        self.assertEqual(record["initrd_review"], uki.review_initrd_data(unlock_initrd(), client_sha256=hashlib.sha256(CLIENT).hexdigest()))
+        self.assertEqual(record["initrd_review"], uki.review_initrd_data(unlock_initrd(), client_sha256=hashlib.sha256(CLIENT).hexdigest(), root_key_sha256=uki.sha256(ROOT_KEY)))
         uki.load_record(m.canonical(record), signed=False)
         with open(os.path.join(INITRD, "dracut", "90regalia-unlock", "module-setup.sh")) as f:
             setup = f.read()
@@ -1104,7 +1194,7 @@ class InitrdReview(Case):
         self.assertEqual(classes, sorted(classes, key=["ours", "generated", "package"].index))
         # the inventory reads back, and what is compared ignores the reader's columns
         path = self.write("inv.txt", ("\n".join(lines) + "\n").encode())
-        self.assertTrue(uki.review_initrd_data(data, inventory=path, client_sha256=hashlib.sha256(CLIENT).hexdigest())["passed"])
+        self.assertTrue(uki.review_initrd_data(data, inventory=path, client_sha256=hashlib.sha256(CLIENT).hexdigest(), root_key_sha256=uki.sha256(ROOT_KEY))["passed"])
         self.refused("is not CLASS ORIGIN TYPE MODE UID:GID PATH VALUE", uki.load_inventory, self.write("bad.txt", b"usr/lib/x sha256:00\n"))
 
     def test_a_planted_rd_luks_word_is_refused(self):
@@ -1169,7 +1259,7 @@ class InitrdReview(Case):
         # a client of other bytes but the same type, mode and owner passes layer 2, and is refused by the comparison
         other = unlock_initrd({"usr/bin/regalia-unlock": (0o100755, b"\x7fELF another")})
         findings = uki.review_initrd_data(other, inventory=write_inventory(unlock_initrd(), self.d),
-                                          client_sha256=hashlib.sha256(CLIENT).hexdigest())["findings"]
+                                          client_sha256=hashlib.sha256(CLIENT).hexdigest(), root_key_sha256=uki.sha256(ROOT_KEY))["findings"]
         self.assertEqual([f for f in findings if "regalia-unlock" in f],
                          ["usr/bin/regalia-unlock is not the client this build compiled (%s, not %s)"
                           % (hashlib.sha256(b"\x7fELF another").hexdigest(), hashlib.sha256(CLIENT).hexdigest())])
@@ -1494,3 +1584,236 @@ class OfflineKeys(Case):
         code, err, _ = self.command("--initrd-key-fd", str(fds["initrd"]), "--system-key-fd", str(fds["system"]),
                                     "--secure-boot-key-fd", str(fds["secure_boot"]))
         self.assertIn("--offline-session is 32 lowercase hex", err)
+
+
+class Provenance(Case):
+    """#266: the build record's commit and repository files, held to the signer's own checkout in build and sign. Each
+    case below is refused by one guard only, and by its own message."""
+
+    def built(self, **change):
+        return json.loads(uki.read(self.initrd_build("p.json", **change)))
+
+    def refused_by(self, reason, checkout=None, **change):
+        path = self.initrd_build("p-%d.json" % len(os.listdir(self.d)), **change)
+        self.refused(reason, uki.check_initrd_build, dict(self.inputs, initrd_build=path), uki.sha256(CLIENT), checkout=checkout or FakeCheckout())
+
+    def test_a_record_of_this_checkout_passes(self):
+        self.assertIsNotNone(uki.check_initrd_build(self.inputs, uki.sha256(CLIENT), checkout=FakeCheckout()))
+
+    def test_no_repository_files_is_refused(self):
+        self.refused_by("names no repository files: it was not written by build-initrd.sh", repository_files={})
+
+    def test_other_files_than_the_builder_records_are_refused(self):
+        fewer = {k: v for k, v in FakeCheckout.FILES.items() if k != "go.mod"}
+        self.refused_by("names other repository files than this checkout's deploy/baremetal/initrd/build-initrd.sh records "
+                        "(missing: go.mod; not recorded by it: none)", repository_files=fewer)
+        more = dict(FakeCheckout.FILES, **{"README.md": "44" * 32})
+        self.refused_by("(missing: none; not recorded by it: README.md)", repository_files=more)
+
+    def test_a_file_that_differs_from_this_checkout_is_named(self):
+        self.refused_by("the initrd was built with another go.mod than this checkout's (5555555555555555, not 2222222222222222)",
+                        repository_files=dict(FakeCheckout.FILES, **{"go.mod": "55" * 32}))
+
+    def test_a_digest_that_is_not_one_is_refused(self):
+        self.refused_by("the initrd's build record's go.mod is not a SHA-256", repository_files=dict(FakeCheckout.FILES, **{"go.mod": "x"}))
+
+    def test_another_commit_is_named(self):
+        self.refused_by("the initrd was built from commit %s; this checkout is at %s" % ("cd" * 20, FakeCheckout.COMMIT), commit="cd" * 20)
+
+    def test_a_dirty_checkout_signs_nothing(self):
+        self.refused_by("this checkout has changes or untracked files", checkout=FakeCheckout(clean=False))
+
+    def test_a_client_built_with_another_go_than_go_mod_names_is_refused(self):
+        """48's #300, carried here: build-initrd.sh builds with go.mod's release, so the record's go is that one."""
+        self.refused_by("the initrd's client was built with go1.26.6; this checkout's go.mod names go1.26.7", checkout=FakeCheckout(go="go1.26.7"))
+
+    def test_a_checkout_whose_config_names_a_command_is_refused(self):
+        self.refused_by("this checkout's git configuration sets filter.x.clean, which a clone does not", checkout=FakeCheckout(config=("filter.x.clean",)))
+
+    def test_the_counts_and_the_package_list_are_typed(self):
+        for field, value, reason in (("source_date_epoch", "1791029700", "source_date_epoch is not a count"),
+                                     ("initrd_size", True, "initrd_size is not a count"), ("initrd_entries", -1, "initrd_entries is not a count"),
+                                     ("packages", "dracut=106-6", "packages is not a list of names"), ("packages", [""], "packages is not a list of names")):
+            with self.subTest(field=field, value=value):
+                self.refused_by(reason, **{field: value})
+
+    def test_sign_checks_it_too(self):
+        record = self.build()                                     # built from this checkout
+        with mock.patch.object(uki, "Checkout", lambda: FakeCheckout(commit="cd" * 20)):     # the signer's is at another commit
+            self.refused("the initrd was built from commit %s; this checkout is at %s" % (FakeCheckout.COMMIT, "cd" * 20), self.sign, record=record)
+
+
+class RealCheckout(unittest.TestCase):
+    """uki.Checkout itself, on a real git repository made here."""
+
+    def setUp(self):
+        if not shutil.which("git"):
+            self.skipTest("needs git")
+        self.d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.d, True)
+        os.makedirs(os.path.join(self.d, "deploy/baremetal/initrd"))
+        with open(os.path.join(self.d, uki.BUILDER), "w") as f:
+            f.write('#!/bin/bash\nSCRIPT="deploy/baremetal/initrd/build-initrd.sh"\nREPO_FILES=("$SCRIPT" go.mod\n            go.sum)\n')
+        for name in ("go.mod", "go.sum"):
+            with open(os.path.join(self.d, name), "w") as f:
+                f.write(name + "\n")
+        git = lambda *a: subprocess.run(["git", "-C", self.d, "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True)  # noqa: E731
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-q", "-m", "fixture")
+        self.checkout = uki.Checkout(self.d)
+
+    def test_it_reads_the_head_the_builder_files_and_their_digests(self):
+        head = subprocess.run(["git", "-C", self.d, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(self.checkout.head(), head)
+        self.assertEqual(self.checkout.builder_files(), sorted([uki.BUILDER, "go.mod", "go.sum"]))
+        self.assertEqual(self.checkout.sha256("go.mod"), uki.sha256(b"go.mod\n"))
+        self.assertTrue(self.checkout.clean())
+
+    def test_an_untracked_or_changed_file_makes_it_dirty(self):
+        with open(os.path.join(self.d, "stray"), "w") as f:
+            f.write("x")
+        self.assertFalse(self.checkout.clean())
+        os.unlink(os.path.join(self.d, "stray"))
+        with open(os.path.join(self.d, "go.mod"), "a") as f:
+            f.write("changed\n")
+        self.assertFalse(self.checkout.clean())
+
+    def test_a_path_outside_or_through_a_link_is_not_a_file_of_it(self):
+        os.symlink("go.mod", os.path.join(self.d, "link"))
+        for path in ("../etc/passwd", "/etc/passwd", "link", "deploy/../go.mod"):
+            with self.subTest(path=path), self.assertRaises(m.Refused):
+                self.checkout.sha256(path)
+
+    def git_config(self, *argv):
+        subprocess.run(["git", "-C", self.d, "config", *argv], check=True, capture_output=True)
+
+    def test_a_clone_s_own_config_passes(self):
+        self.git_config("remote.origin.url", "https://example.invalid/r.git")
+        self.git_config("branch.feat/x.merge", "refs/heads/feat/x")
+        self.git_config("gc.auto", "0")                                     # actions/checkout's
+        self.checkout.check_config()
+
+    def test_a_planted_clean_filter_is_refused_before_git_status_can_run_it(self):
+        """regalia-kms-d9's read: `git status` runs a clean filter the checkout's config defines, as the signer."""
+        marker = os.path.join(self.d, "..", os.path.basename(self.d) + ".ran")
+        self.addCleanup(lambda: os.path.exists(marker) and os.unlink(marker))
+        self.git_config("filter.x.clean", "touch %s; cat" % marker)
+        with open(os.path.join(self.d, ".git", "info", "attributes"), "w") as f:
+            f.write("* filter=x\n")
+        os.utime(os.path.join(self.d, "go.mod"), (1, 1))                     # stat changed: status refreshes go.mod
+        self.checkout.clean()
+        self.assertTrue(os.path.exists(marker), "the premise: git status ran the checkout's filter")
+        os.unlink(marker)
+        os.utime(os.path.join(self.d, "go.sum"), (1, 1))
+        with self.assertRaises(m.Refused) as caught:
+            uki.check_provenance({"repository_files": {}}, self.checkout)
+        self.assertIn("this checkout's git configuration sets filter.x.clean, which a clone does not", str(caught.exception))
+        self.assertFalse(os.path.exists(marker))
+
+    def test_an_include_or_a_command_key_is_refused_and_named(self):
+        other = os.path.join(self.d, ".git", "more")
+        with open(other, "w") as f:
+            f.write("[core]\n\tpager = touch /nonexistent\n")
+        self.git_config("include.path", other)
+        with self.assertRaises(m.Refused) as caught:
+            self.checkout.check_config()
+        self.assertIn("sets core.pager, include.path, which a clone does not", str(caught.exception))
+
+    def test_neither_the_signer_s_global_config_nor_git_variables_reach_git(self):
+        """regalia-kms-24 on the limitations list: provenance read the signer's global and system configuration, and
+        took GIT_* from the environment. A filter defined there would run under `git status`; a GIT_DIR would read
+        another repository."""
+        marker = os.path.join(self.d, "..", os.path.basename(self.d) + ".global-ran")
+        self.addCleanup(lambda: os.path.exists(marker) and os.unlink(marker))
+        home = tempfile.mkdtemp()                                           # the signer's HOME: ~/.gitconfig and XDG's git/config
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, ".config", "git"))
+        for glob in (os.path.join(home, ".gitconfig"), os.path.join(home, ".config", "git", "config")):
+            with open(glob, "w") as f:
+                f.write("[filter \"g\"]\n\tclean = touch %s; cat\n" % marker)
+        with open(os.path.join(self.d, ".git", "info", "attributes"), "w") as f:
+            f.write("go.mod filter=g\ngo.sum filter=e\n")                 # one filter per path: the last named would win
+        other = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, other, True)
+        subprocess.run(["git", "init", "-q", other], check=True, capture_output=True)
+        planted = {"HOME": home, "XDG_CONFIG_HOME": os.path.join(home, ".config"), "GIT_DIR": os.path.join(other, ".git"),
+                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "filter.e.clean", "GIT_CONFIG_VALUE_0": "touch %s; cat" % marker}
+        os.utime(os.path.join(self.d, "go.mod"), (1, 1))
+        bare = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        subprocess.run(["git", "-C", self.d, "-c", "safe.directory=*", "status", "--porcelain"], capture_output=True,
+                       env=dict(bare, HOME=home, XDG_CONFIG_HOME=os.path.join(home, ".config")))
+        self.assertTrue(os.path.exists(marker), "the premise: a filter in the signer's ~/.gitconfig runs under git status")
+        os.unlink(marker)
+        for name in ("go.mod", "go.sum"):                                    # both filters due again under status
+            os.utime(os.path.join(self.d, name), (2, 2))
+        head = subprocess.run(["git", "-C", self.d, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        with mock.patch.dict(os.environ, planted):
+            self.checkout.check_config()
+            self.assertTrue(self.checkout.clean())
+            self.assertEqual(self.checkout.head(), head)                         # this checkout's, not GIT_DIR's (which has none)
+        self.assertFalse(os.path.exists(marker), "a filter from the global configuration or GIT_CONFIG_* ran")
+
+    def test_an_untracked_file_an_ignore_rule_hides_is_not_clean(self):
+        """24 and d9 on #404: status hides ignored files, and `go build` compiles an untracked .go file all the same."""
+        stray = os.path.join(self.d, "deploy", "x.go")
+        with open(stray, "w") as f:
+            f.write("package deploy\n")
+        with open(os.path.join(self.d, ".git", "info", "exclude"), "a") as f:
+            f.write("*.go\n")
+        self.assertEqual(subprocess.run(["git", "-C", self.d, "status", "--porcelain"], capture_output=True, text=True).stdout, "",
+                         "the premise: the exclude rule hides x.go from status")
+        self.assertFalse(self.checkout.clean())
+        with open(os.path.join(self.d, ".git", "info", "exclude"), "w") as f:
+            f.write("")
+        home = tempfile.mkdtemp()                                           # the signer's own ignore file (XDG git/ignore)
+        self.addCleanup(shutil.rmtree, home, True)
+        os.makedirs(os.path.join(home, ".config", "git"))
+        with open(os.path.join(home, ".config", "git", "ignore"), "w") as f:
+            f.write("*.go\n")
+        with mock.patch.dict(os.environ, {"HOME": home, "XDG_CONFIG_HOME": os.path.join(home, ".config")}):
+            self.assertFalse(self.checkout.clean())
+
+    def test_git_gets_nothing_of_the_caller_s_environment(self):
+        """repo-git.sh's environment exactly: no HOME or XDG file (ignore, attributes), no GIT_*, nothing else of the caller's."""
+        seen = []
+
+        def run(argv, **kw):
+            seen.append(kw["env"])
+            return subprocess.CompletedProcess(argv, 0, stdout=b"ab" * 20 + b"\n", stderr=b"")
+        with mock.patch.dict(os.environ, {"HOME": "/home/signer", "XDG_CONFIG_HOME": "/home/signer/.config", "GIT_DIR": "/elsewhere",
+                                          "CREDENTIALS_DIRECTORY": "/run/credentials/x"}):
+            uki.Checkout(self.d, run=run).head()
+        self.assertEqual(seen, [{"PATH": "/usr/bin:/bin", "LC_ALL": "C", "HOME": "/nonexistent",
+                                 "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}])
+
+    def test_bytecode_in_pycache_is_the_one_untracked_file_allowed(self):
+        with open(os.path.join(self.d, ".gitignore"), "w") as f:
+            f.write("__pycache__/\n*.py[cod]\n")                            # this repository's .gitignore
+        subprocess.run(["git", "-C", self.d, "add", ".gitignore"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", self.d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "ignore"], check=True, capture_output=True)
+        os.makedirs(os.path.join(self.d, "deploy", "__pycache__"))
+        with open(os.path.join(self.d, "deploy", "__pycache__", "uki.cpython-313.pyc"), "wb") as f:
+            f.write(b"\0")
+        self.assertTrue(self.checkout.clean())
+        with open(os.path.join(self.d, "deploy", "stray.pyc"), "wb") as f:           # ignored by *.py[cod], but not bytecode's place
+            f.write(b"\0")
+        self.assertFalse(self.checkout.clean())
+
+    def test_go_release_is_the_toolchain_line_else_the_go_line(self):
+        def release(text):
+            with open(os.path.join(self.d, "go.mod"), "w") as f:
+                f.write(text)
+            return self.checkout.go_release()
+        self.assertEqual(release("module x\n\ngo 1.26.6\n"), "go1.26.6")
+        self.assertEqual(release("module x\n\ngo 1.26\n\ntoolchain go1.26.7\n"), "go1.26.7")
+        with self.assertRaises(m.Refused) as caught:
+            release("module x\n\ngo 1.26\n")
+        self.assertIn("this checkout's go.mod names no exact Go release", str(caught.exception))
+
+    def test_a_directory_that_is_not_a_checkout_is_refused(self):
+        outside = tempfile.mkdtemp()                              # not under the fixture's repository
+        self.addCleanup(shutil.rmtree, outside, True)
+        with self.assertRaises(m.Refused) as caught:
+            uki.Checkout(outside).head()
+        self.assertIn("is not a git checkout git can read", str(caught.exception))

@@ -274,11 +274,11 @@ class Counter(membership.HighWater):
         for index in (self.index, self.base_index):
             if int(index, 16) in defined:
                 require(self._tpm("nvundefine", index, "-C", "o").returncode == 0, "cannot delete NV index %s" % index)
-        r = self._tpm("nvdefine", self.index, "-C", "o", "-s", "8", "-a", "nt=counter|ownerread|ownerwrite|authread")
+        r = self._nvdefine(self.index, 8, "counter")
         require(r.returncode == 0, "cannot define the NV counter %s" % self.index)
         require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
         base = (self._read8(self.index) - sequence) % self.WRAP
-        r = self._tpm("nvdefine", self.base_index, "-C", "o", "-s", "8", "-a", "ownerread|ownerwrite|authread|writedefine")
+        r = self._nvdefine(self.base_index, 8, "base")
         require(r.returncode == 0, "cannot define the base index %s" % self.base_index)
         r = self._tpm("nvwrite", self.base_index, "-C", "o", "-i", "-", input=base.to_bytes(8, "big"))
         require(r.returncode == 0, "cannot write the base index")
@@ -300,7 +300,8 @@ class Counter(membership.HighWater):
         bound = self.MAX_JUMP if allowance is None else allowance
         require(sequence - now <= bound, "sequence jump %d exceeds the bound %d: anomaly" % (sequence - now, bound))
         while now < sequence:
-            require(self._tpm("nvincrement", self.index, "-C", "o").returncode == 0, "cannot increment the NV counter")
+            # by the counter's layout: a policy session for this boot's approved image when it is policy-written (#242)
+            require(self._write("nvincrement", self.index).returncode == 0, "cannot increment the NV counter")
             nxt = self._epoch(base)
             require(nxt == now + 1, "the NV counter did not advance by one (%d -> %d)" % (now, nxt))
             now = nxt
