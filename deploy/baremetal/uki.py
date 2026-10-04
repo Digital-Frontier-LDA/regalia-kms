@@ -1003,6 +1003,12 @@ def _inventory_counts(path=None):
 # SHA-256. A record written by hand, or by a builder at another commit or with another script, is refused by name.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BUILDER = "deploy/baremetal/initrd/build-initrd.sh"
+# what `git clone`/`git init` + fetch and a developer write into a checkout's own config, none naming a command: any
+# other key there (a filter or textconv driver, core.pager/editor/sshCommand, an include) is refused (Checkout.check_config)
+CLONE_CONFIG = re.compile(r"core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)"
+                          r"|extensions\.(objectformat|worktreeconfig)|user\.(name|email)"
+                          r"|remote\.[^\0\n]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)"
+                          r"|branch\.[^\0\n]+\.(remote|merge|rebase|pushremote)")
 
 
 class Checkout:
@@ -1020,6 +1026,25 @@ class Checkout:
             raise Refused("this checkout cannot be read with git (%s): sign from a clone at the build's commit" % error.strerror)
         require(done.returncode == 0, "%s is not a git checkout git can read: sign from a clone at the build's commit" % self.root)
         return done.stdout.decode("utf-8", "replace")
+
+    def check_config(self):
+        """Refused unless the checkout's own configuration (local and worktree, includes followed) holds only what a
+        clone writes (CLONE_CONFIG). Trusting the path (safe.directory) also trusts its .git/config, and `git status`
+        runs a clean filter that config defines (regalia-kms-d9's read): a checkout another user owns would run its
+        commands as the signer. A .gitattributes alone names no command; only a driver defined in config does."""
+        listed = self._git("config", "--list", "--includes", "--name-only", "--show-scope", "-z").split("\0")
+        foreign = sorted({name for scope, name in zip(listed[0::2], listed[1::2])
+                          if scope in ("local", "worktree") and CLONE_CONFIG.fullmatch(name) is None})
+        require(not foreign, "this checkout's git configuration sets %s, which a clone does not: sign from a fresh clone at the "
+                "build's commit" % ", ".join(foreign))
+
+    def go_release(self):
+        """The Go release build-initrd.sh builds the client with: go.mod's toolchain line, else its go line."""
+        text = read(os.path.join(self.root, "go.mod"), 1024 * 1024).decode("utf-8", "replace")
+        release = "\n".join(re.findall(r"^toolchain (go[0-9][0-9.]*)$", text, re.M)) or \
+            "\n".join("go" + v for v in re.findall(r"^go ([0-9][0-9.]*)$", text, re.M))
+        require(re.fullmatch(r"go1\.[0-9]+\.[0-9]+", release) is not None, "this checkout's go.mod names no exact Go release")
+        return release
 
     def head(self):
         head = self._git("rev-parse", "--verify", "HEAD").strip()
@@ -1046,6 +1071,7 @@ class Checkout:
 
 def check_provenance(built, checkout):
     """The build record's commit and repository files against `checkout` (Checkout): refused, naming what differs."""
+    checkout.check_config()                       # first: before any `git status`, nothing of the checkout's own runs
     files = built["repository_files"]
     require(isinstance(files, dict) and files, "the initrd's build record names no repository files: it was not written by build-initrd.sh")
     expected = checkout.builder_files()
@@ -1061,6 +1087,8 @@ def check_provenance(built, checkout):
     require(built["commit"] == head, "the initrd was built from commit %s; this checkout is at %s: sign from a clone at the build's commit"
             % (built["commit"], head))
     require(checkout.clean(), "this checkout has changes or untracked files: sign from a clean clone at commit %s" % head)
+    release = checkout.go_release()
+    require(built["go"] == release, "the initrd's client was built with %s; this checkout's go.mod names %s" % (built["go"], release))
 
 
 def check_initrd_build(inputs, client_sha256, inventory=None, checkout=None):

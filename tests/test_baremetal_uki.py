@@ -230,8 +230,15 @@ class FakeCheckout:
     COMMIT = "ab" * 20
     FILES = {uki.BUILDER: "11" * 32, "go.mod": "22" * 32, "deploy/baremetal/uki.py": "33" * 32}
 
-    def __init__(self, commit=COMMIT, files=None, clean=True):
+    def __init__(self, commit=COMMIT, files=None, clean=True, go="go1.26.6", config=()):
         self.commit, self.files, self.is_clean = commit, dict(FakeCheckout.FILES if files is None else files), clean
+        self.go, self.config = go, config
+
+    def check_config(self):
+        m.require(not self.config, "this checkout's git configuration sets %s, which a clone does not" % ", ".join(self.config))
+
+    def go_release(self):
+        return self.go
 
     def head(self):
         return self.commit
@@ -1559,6 +1566,13 @@ class Provenance(Case):
     def test_a_dirty_checkout_signs_nothing(self):
         self.refused_by("this checkout has changes or untracked files", checkout=FakeCheckout(clean=False))
 
+    def test_a_client_built_with_another_go_than_go_mod_names_is_refused(self):
+        """48's #300, carried here: build-initrd.sh builds with go.mod's release, so the record's go is that one."""
+        self.refused_by("the initrd's client was built with go1.26.6; this checkout's go.mod names go1.26.7", checkout=FakeCheckout(go="go1.26.7"))
+
+    def test_a_checkout_whose_config_names_a_command_is_refused(self):
+        self.refused_by("this checkout's git configuration sets filter.x.clean, which a clone does not", checkout=FakeCheckout(config=("filter.x.clean",)))
+
     def test_the_counts_and_the_package_list_are_typed(self):
         for field, value, reason in (("source_date_epoch", "1791029700", "source_date_epoch is not a count"),
                                      ("initrd_size", True, "initrd_size is not a count"), ("initrd_entries", -1, "initrd_entries is not a count"),
@@ -1613,6 +1627,51 @@ class RealCheckout(unittest.TestCase):
         for path in ("../etc/passwd", "/etc/passwd", "link", "deploy/../go.mod"):
             with self.subTest(path=path), self.assertRaises(m.Refused):
                 self.checkout.sha256(path)
+
+    def git_config(self, *argv):
+        subprocess.run(["git", "-C", self.d, "config", *argv], check=True, capture_output=True)
+
+    def test_a_clone_s_own_config_passes(self):
+        self.git_config("remote.origin.url", "https://example.invalid/r.git")
+        self.git_config("branch.feat/x.merge", "refs/heads/feat/x")
+        self.checkout.check_config()
+
+    def test_a_planted_clean_filter_is_refused_before_git_status_can_run_it(self):
+        """regalia-kms-d9's read: `git status` runs a clean filter the checkout's config defines, as the signer."""
+        marker = os.path.join(self.d, "..", os.path.basename(self.d) + ".ran")
+        self.addCleanup(lambda: os.path.exists(marker) and os.unlink(marker))
+        self.git_config("filter.x.clean", "touch %s; cat" % marker)
+        with open(os.path.join(self.d, ".git", "info", "attributes"), "w") as f:
+            f.write("* filter=x\n")
+        os.utime(os.path.join(self.d, "go.mod"), (1, 1))                     # stat changed: status refreshes go.mod
+        self.checkout.clean()
+        self.assertTrue(os.path.exists(marker), "the premise: git status ran the checkout's filter")
+        os.unlink(marker)
+        os.utime(os.path.join(self.d, "go.sum"), (1, 1))
+        with self.assertRaises(m.Refused) as caught:
+            uki.check_provenance({"repository_files": {}}, self.checkout)
+        self.assertIn("this checkout's git configuration sets filter.x.clean, which a clone does not", str(caught.exception))
+        self.assertFalse(os.path.exists(marker))
+
+    def test_an_include_or_a_command_key_is_refused_and_named(self):
+        other = os.path.join(self.d, ".git", "more")
+        with open(other, "w") as f:
+            f.write("[core]\n\tpager = touch /nonexistent\n")
+        self.git_config("include.path", other)
+        with self.assertRaises(m.Refused) as caught:
+            self.checkout.check_config()
+        self.assertIn("sets core.pager, include.path, which a clone does not", str(caught.exception))
+
+    def test_go_release_is_the_toolchain_line_else_the_go_line(self):
+        def release(text):
+            with open(os.path.join(self.d, "go.mod"), "w") as f:
+                f.write(text)
+            return self.checkout.go_release()
+        self.assertEqual(release("module x\n\ngo 1.26.6\n"), "go1.26.6")
+        self.assertEqual(release("module x\n\ngo 1.26\n\ntoolchain go1.26.7\n"), "go1.26.7")
+        with self.assertRaises(m.Refused) as caught:
+            release("module x\n\ngo 1.26\n")
+        self.assertIn("this checkout's go.mod names no exact Go release", str(caught.exception))
 
     def test_a_directory_that_is_not_a_checkout_is_refused(self):
         outside = tempfile.mkdtemp()                              # not under the fixture's repository
