@@ -901,6 +901,12 @@ class ProposeGenesis(unittest.TestCase):
         self.refused("the two owner cards have the same key: they are one card", self.propose, owners={self.MAIN: self.owner_a, self.BACKUP: self.owner_a})
         self.refused("the owner card 40000002's key is not a raw Ed25519 public key", self.propose, owners={self.MAIN: self.owner_a, self.BACKUP: "AB" * 32})
 
+    def test_a_bench_card_is_never_an_owner_card_even_from_a_library_caller(self):
+        """95's read on #392, fixed at 24's request: the card record refuses bench serials, and so does propose_genesis
+        itself, for a caller that gives the owners otherwise."""
+        self.refused("the owner card 36345471 is a bench token: the ceremony never uses a bench serial",
+                     self.propose, owners={"36345471": self.owner_a, self.BACKUP: self.owner_b})
+
     def test_the_release_card_root_and_signing_keys_are_never_owner_keys(self):
         self.refused("the release key is one of the owner keys: the release card is never an owner key", self.propose, release=self.owner_b)
         self.refused("the owner card 40000001's key is the pinned root's", self.propose, owners={self.MAIN: self.root, self.BACKUP: self.owner_b})

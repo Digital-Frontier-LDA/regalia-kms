@@ -176,6 +176,8 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
     require(isinstance(owners, dict) and len(owners) == 2, "the owner's keys are exactly two cards' (D30), not %r" % (owners,))
     for serial, key in sorted(owners.items()):
         _raw_ed25519(key, "the owner card %s's key" % serial)
+        require(isinstance(serial, str) and serial.upper() not in membership.BENCH_TOKENS,
+                "the owner card %s is a bench token: the ceremony never uses a bench serial (D28.5, D30)" % serial)
     require(len(set(owners.values())) == 2, "the two owner cards have the same key: they are one card")
     require(isinstance(entries, list) and entries, "no node entry given (--entry, one per node, as `enrol entry` printed it)")
     nodes = []
