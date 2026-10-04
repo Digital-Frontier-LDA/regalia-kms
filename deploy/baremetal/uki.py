@@ -77,6 +77,7 @@ boot. Nothing here has run with a hardware token.
 """
 import argparse
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -1270,12 +1271,59 @@ def _key_argument(value, source, what):
     return value
 
 
+@contextlib.contextmanager
+def _closing(fds):
+    """Close every descriptor `fds` holds when the block ends, however it ends."""
+    try:
+        yield fds
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def _offline_key(fd, fingerprint, role, opened, run, tools):
+    """The offline key on `fd` (keyfd.read), its buffer zeroed, in a sealed memfd appended to `opened`, as /dev/fd/N:
+    refused unless its public half has `fingerprint`, its certificate's."""
+    from cryptography.hazmat.primitives import serialization
+    what = "the %s key" % role.replace("_", " ")
+    buffer = keyfd.read(fd, what)
+    try:
+        try:
+            private = serialization.load_pem_private_key(bytes(buffer), password=None)
+        except (ValueError, TypeError) as error:
+            raise Refused("%s: not an unencrypted PKCS#8 PEM key (%s)" % (what, type(error).__name__)) from None
+        spki = private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        del private
+        require(public_key(spki, what, run, tools)[0] == fingerprint, "%s is not the key of its certificate: nothing is signed" % what)
+        opened.append(keyfd.sealed_memfd(buffer))
+    finally:
+        keyfd.zero(buffer)
+    return "/dev/fd/%d" % opened[-1]
+
+
 def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS, second_record=None, report=None, inventory=None,
-         key_provenance=None):
+         key_provenance=None, key_fds=None):
+    """_signed, with every key descriptor of `key_fds` closed when it returns: those it read (keyfd.read closes each) and
+    those it never reached because a check refused first."""
+    unread = dict(key_fds or {})
+    try:
+        return _signed(inputs, record, keys, source, out_dir, run, tools, second_record, report, inventory, key_provenance, key_fds, unread)
+    finally:
+        for fd in unread.values():
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _signed(inputs, record, keys, source, out_dir, run, tools, second_record, report, inventory, key_provenance, key_fds, unread):
     """Signs the image `record` describes, rebuilt from `inputs`. `second_record` is the same image's record
     from another builder, and must be identical. `keys`: {"initrd" | "system" | "secure_boot": (key file
-    or PKCS#11 URI, or with source "fd" /dev/fd/N, certificate file)}. `key_provenance` ("offline-keys session <ID>",
-    required with source "fd" and only then) goes into the signed record. Writes NAME.efi and NAME.signed.json."""
+    or PKCS#11 URI, certificate file)}; with source "fd" the key is None and `key_fds` names each role's descriptor
+    (the offline keys, keyfd.py). A descriptor is read only after EVERY check below has passed, right before the first
+    signature, and each key's public half must be its certificate's before any tool signs with it (regalia-kms-d9 on
+    #353). `key_provenance` ("offline-keys session <ID>", required with source "fd" and only then) goes into the signed
+    record. Writes NAME.efi and NAME.signed.json."""
     require(source in KEY_SOURCES, "--key-source is one of %s" % ", ".join(KEY_SOURCES))
     require((source == "fd") == (key_provenance is not None), "offline keys (fd) and only they carry the offline-keys session")
     if key_provenance is not None:
@@ -1291,8 +1339,13 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
     # #198: no image is signed whose initrd was not reviewed and found to open the disk only as it must
     require(record["initrd_review"]["passed"], "the record's initrd review did not pass, so nothing is signed: %s"
             % "; ".join(record["initrd_review"]["findings"]))
-    for role in ("initrd", "system", "secure_boot"):
-        _key_argument(keys[role][0], source, "the %s key" % role.replace("_", " "))
+    if source == "fd":
+        require(isinstance(key_fds, dict) and set(key_fds) == {"initrd", "system", "secure_boot"}
+                and all(keys[role][0] is None for role in key_fds), "offline keys: a descriptor for each of the three, and no key path")
+    else:
+        require(key_fds is None, "key descriptors are offline keys (source fd)")
+        for role in ("initrd", "system", "secure_boot"):
+            _key_argument(keys[role][0], source, "the %s key" % role.replace("_", " "))
     public = {role: public_key(read(keys[role][1], 65536), "the %s certificate" % role.replace("_", " "), run, tools) for role in keys}
     fingerprints = [public[role][0] for role in ("initrd", "system", "secure_boot")]
     require(len(set(fingerprints)) == 3, "the two PCR keys and the Secure Boot key must be three different keys")
@@ -1309,7 +1362,8 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
     (report or (lambda line: print(line, file=sys.stderr)))(
         "signing %s: unsigned image %s; inputs %s" % (name, record["unsigned_sha256"],
                                                        ", ".join("%s %s" % (k, e["sha256"][:16]) for k, e in sorted(record["inputs"].items()))))
-    with tempfile.TemporaryDirectory(dir=out_dir) as work:
+    opened = []                                   # the offline keys' memfds: closed whatever happens
+    with tempfile.TemporaryDirectory(dir=out_dir) as work, _closing(opened):
         inputs = _stage(inputs, work)
         for key, entry in record["inputs"].items():               # the copies, not the originals, are what is built
             require(sha256(read(inputs[key])) == entry["sha256"], "the input --%s changed while it was copied" % key.replace("_", "-"))
@@ -1327,6 +1381,10 @@ def sign(inputs, record, keys, source, out_dir, run=subprocess.run, tools=TOOLS,
         values, flags = _predict(parts, run, tools, work)
         require(values == record["pcr11"], "the image does not measure what its record says")
         require(stub_sections(data) == record["stub_sections"], "the image's stub is not the record's")
+        if source == "fd":
+            # every check has passed: only now are the offline keys read, each into its own sealed memfd, and each must
+            # be the key of its certificate before any tool signs with it
+            keys = {role: (_offline_key(unread.pop(role), public[role][0], role, opened, run, tools), keys[role][1]) for role in key_fds}
         pcrsig = None
         for phase in attest.PHASES:
             argv = [tools["measure"], "sign", "--bank=sha256", "--phase=" + PHASE_PATHS[phase], "--private-key=" + keys[phase][0],
@@ -1551,20 +1609,9 @@ def main(argv=None):
                         "the offline keys come all three by descriptor (--initrd-key-fd, --system-key-fd, --secure-boot-key-fd), "
                         "with no --*-key and no --key-source")
                 provenance = keyfd.session(args.offline_session)
-                memfds = {}
-                try:
-                    for role in fds:
-                        buffer = keyfd.read(fds[role], "--%s-key-fd" % role.replace("_", "-"))
-                        try:
-                            memfds[role] = keyfd.sealed_memfd(buffer)
-                        finally:
-                            keyfd.zero(buffer)
-                    keys = {role: ("/dev/fd/%d" % memfds[role], certs[role]) for role in fds}
-                    record = sign(_inputs(args), unsigned, keys, "fd", args.out, second_record=second, inventory=args.initrd_inventory,
-                                  key_provenance=provenance)
-                finally:
-                    for fd in memfds.values():
-                        os.close(fd)
+                # read by sign() only after every check; each descriptor is closed by it, read or not
+                record = sign(_inputs(args), unsigned, {role: (None, certs[role]) for role in fds}, "fd", args.out, second_record=second,
+                              inventory=args.initrd_inventory, key_provenance=provenance, key_fds=fds)
             else:
                 require(all(given.values()) and args.offline_session is None, "give --initrd-key, --system-key and --secure-boot-key "
                         "(files or PKCS#11 URIs), or the three --*-key-fd with --offline-session")

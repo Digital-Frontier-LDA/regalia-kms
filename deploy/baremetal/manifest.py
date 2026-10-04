@@ -245,7 +245,9 @@ def token_signer(uri, module, opensc_conf, pin, latch_path, pkcs11=None):
 
 class OfflineSigner:
     """The offline root (ADR-0002 D28): an Ed25519 key read from a descriptor (keyfd.read), the buffer zeroed once
-    the key is loaded. `provenance` is what the signing record names: "offline-keys session <ID>"."""
+    the key is loaded. `provenance` is what the signing record names: "offline-keys session <ID>". The bytes copy that
+    loading makes, and the key object, cannot be cleared: they last until this process exits (keyfd.py says why that
+    is the ceremony laptop's RAM, and what a pipe cannot prove)."""
     alg, serial, label = "ed25519", None, None
 
     def __init__(self, fd, provenance):

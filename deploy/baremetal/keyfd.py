@@ -17,8 +17,13 @@ The rules here are the receiving side's:
   * the caller zeroes the bytearray (zero) as soon as the key is loaded, and the key itself is never logged or written;
   * the session ID is 32 lowercase hex, and the signing record says "offline-keys session <id>", which the ceremony's
     own record also carries, so each names the other.
-Python and the cryptography library may hold copies of the key that this cannot clear; the ceremony laptop's RAM
-is the boundary, and it is powered off after the session."""
+WHAT THIS DOES NOT PROVE. A pipe is accepted (offline-keys.py may use one), and a pipe cannot show where its bytes came
+from: `cat key.pem | ... --key-fd 0` from a file on disk passes here. That a key was never on disk is guaranteed by the
+ceremony's session routine (offline-keys.py reconstructs it in RAM and hands it over), not by this check; the check
+only refuses the plainly wrong thing, a file descriptor of a file. Likewise for copies in memory: the bytearray is
+zeroed, but loading the key makes an immutable `bytes` copy (load_pem_private_key(bytes(buffer))) and the library
+keeps its own key object; neither can be cleared from Python, and both live until the process exits, seconds later.
+The ceremony laptop's RAM is the boundary, and it is powered off after the session."""
 import fcntl
 import os
 import re
