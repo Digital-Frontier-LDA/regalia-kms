@@ -1048,7 +1048,8 @@ site field `service_mesh.authority` are gone: a site file that still names one i
   unusable (#244).
 - **The hand recovery** when fewer than two nodes run: `python3 -Es -m deploy.baremetal.owner beat`, as root at
   the node's console. The node proposes and signs, the owner's YubiKey co-signs after the typed confirmation, and the
-  heartbeat lives at most the manifest's `owner_heartbeat_lifetime_s` (one hour).
+  heartbeat lives at most the manifest's `owner_heartbeat_lifetime_s` (one hour by the genesis default; a
+  manifest may set it from 300 s up to `heartbeat_max_lifetime_s`).
 - **Revocation and quarantine** (`revoke.py`) need one of the manifest's `revocation_signers` rules: two nodes,
   each from root at its own console (`propose`, then `cosign`, which shows the change and takes the typed epoch
   and digest before the TPM signs), or the owner alone, off the nodes (`export`, `owner.py sign-manifest` on the
