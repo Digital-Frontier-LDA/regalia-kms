@@ -25,14 +25,13 @@ and HOW MUCH of it is accepted.
     beat-sign     a heartbeat body the caller proposes,    this node's signature       beat.cosign (#199)
                   and the caller's signature over it       over it
 
-THE ENROLMENT OPERATIONS (#190) need the node's enrolpeer.Peer; a source without one (the revocation
-authority) refuses them. They are spent from their own rate class, so a node enrolling cannot use up its
+THE ENROLMENT OPERATIONS (#190) need the node's enrolpeer.Peer; a server without one refuses them. They are spent from their own rate class, so a node enrolling cannot use up its
 pulls, and another node is not touched at all.
 
-PULL ONLY. Nobody pushes. A node asks each peer and the authority on a timer (Client.pull) and applies
+PULL ONLY. Nobody pushes. A node asks each peer on a timer (Client.pull) and applies
 what it gets through convergence.apply_bundle. A source that lies or withholds can DELAY a node and
 nothing more: every envelope and heartbeat is verified against the node's own TPM anchors as if a
-stranger had sent it. That holds for the revocation authority's channel too.
+stranger had sent it.
 
 WHO. The caller is the node whose WireGuard key the CURRENT manifest pins (peer_of), and nothing the
 caller says in-band identifies it. `identify(manifest, source)` is injected: it answers which WireGuard
@@ -80,8 +79,7 @@ nothing and is no incident here. The caller is sent this node's chain from that 
 holds another SIGNED manifest there, its own catch-up proves the conflict, with the signature, and
 records it.
 
-A SOURCE THAT ISSUES NO LEASES (the revocation authority) runs the same Server with no attester: it
-answers pull, and refuses the two lease operations.
+A SERVER WITH NO ATTESTER answers pull, and refuses the two lease operations.
 
 NO TLS. WireGuard authenticates both ends by the pinned keys and encrypts; every payload that matters is
 signed or attested end to end. See #80.
@@ -289,7 +287,7 @@ class Server:
 
     def __init__(self, node_id, store, freshness, attester, signer, identify, sink, buckets=None, clock=time.time, enrol=None,
                  documents=None, cosigner=None):
-        """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused, as on the authority).
+        """`enrol`: an enrolpeer.Peer, for the enrolment operations (None: they are refused).
         `cosigner(manifest, caller, heartbeat, signature)`: this node's co-signature of a proposed heartbeat (beat.cosign,
         #199), or None: beat-sign is refused."""
         self.node_id, self.store, self.freshness, self.attester, self.signer = node_id, store, freshness, attester, signer
@@ -602,7 +600,7 @@ def _answer(raw, op):
 
 
 class Client:
-    """One node's asking side. `transports` maps a source's name (a node ID, or convergence.AUTHORITY) to a
+    """One node's asking side. `transports` maps a source's name (a node ID) to a
     callable taking the request bytes and returning the answer bytes (tcp_transport over the tunnel)."""
 
     def __init__(self, node_id, store, freshness, transports, sink, documents=None):

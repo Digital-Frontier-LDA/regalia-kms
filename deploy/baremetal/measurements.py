@@ -365,7 +365,7 @@ def transition(old, new, emergency=False, dropped=()):
 
 # ---- the store, by digest (#332) ----
 
-STORE_DIR = "measurements"          # in a node's (or the authority's) state directory
+STORE_DIR = "measurements"          # in a node's state directory
 _NAME = re.compile(r"[0-9a-f]{64}\.json")
 
 

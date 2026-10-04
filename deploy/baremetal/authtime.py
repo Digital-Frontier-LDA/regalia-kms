@@ -381,11 +381,11 @@ def _last_refused_adjustment(run=subprocess.run):
     return done.stdout.strip() or "no refused adjustment in chrony's journal"
 
 
-# ---- the service's entry point, for a node and for the authority host alike (#71) ----
+# ---- the service's entry point (#71) ----
 
 def configured(path):
-    """(run_dir, time_servers) of a configuration, a node's (node.json) or the authority's (authority.json): those
-    two keys, read and checked alone, so the service needs nothing else of the host it runs on."""
+    """(run_dir, time_servers) of a node's configuration (node.json): those two keys, read and checked alone, so the
+    service needs nothing else of the host it runs on."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError as failure:
@@ -415,7 +415,7 @@ def service(run_dir, names, **how):
 
 
 CHRONY_CONF = "/etc/chrony/regalia.conf"   # as enrol.CHRONY_CONF: chronyd -f, by units/chrony.service.d/regalia.conf
-RUN_DIR = "/run/regalia"                   # where regalia-authtime and regalia-authority-authtime publish: their units' only writable /run
+RUN_DIR = "/run/regalia"                   # where regalia-authtime publishes: its unit's only writable /run
 
 
 def install_chrony_conf(names, path=CHRONY_CONF):
@@ -453,12 +453,12 @@ def install_chrony_conf(names, path=CHRONY_CONF):
 def main(argv=None):
     import argparse
     import sys
-    parser = argparse.ArgumentParser(prog="authtime", description="Whether time is authenticated (chrony, NTS), for a node or the authority host")
+    parser = argparse.ArgumentParser(prog="authtime", description="Whether time is authenticated (chrony, NTS), for a node")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name, text in (("serve", "ask chrony every 15 s and publish the verdict in <run_dir>/authtime.json (units/regalia-*authtime.service)"),
+    for name, text in (("serve", "ask chrony every 15 s and publish the verdict in <run_dir>/authtime.json (units/regalia-authtime.service)"),
                        ("chrony-conf", "print chrony's configuration for the declared servers (NTS only), for /etc/chrony/regalia.conf")):
         command = sub.add_parser(name, help=text)
-        command.add_argument("--config", required=True, help="node.json or authority.json: run_dir and time_servers")
+        command.add_argument("--config", required=True, help="node.json: run_dir and time_servers")
         if name == "chrony-conf":
             command.add_argument("--install", action="store_true", help="write it to %s (root), never replacing a different file" % CHRONY_CONF)
     args = parser.parse_args(argv)

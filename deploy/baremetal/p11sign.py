@@ -40,21 +40,21 @@ class Pkcs11Signer:
         verifiers refuse high-S), and verified against the token's public key before it is returned.
 
     THE PIN IS NEVER SPENT BY RETRYING (regalia-kms-d9, decided by regalia-kms-24; the Go daemon's PIN
-    latch, request-context-is-not-token-evidence). The beat loop retries a failed signature, and a
-    restart retries too, so a wrong PIN credential would lock the token within three tries, and the
-    revocation key with it until an SO-PIN ceremony.
+    latch, request-context-is-not-token-evidence). A caller that retries a failed signature (a loop, a
+    restart) with a wrong PIN would lock the token within three tries, and its key with it until an SO-PIN
+    ceremony.
       * The token refuses the PIN (CKR_PIN_INCORRECT, CKR_PIN_INVALID, CKR_PIN_LEN_RANGE,
         CKR_PIN_LOCKED from C_Login): the signer LATCHES. It never calls C_Login again, writes
         <state_dir>/pin-latch.json (0600, read at every start), and the event goes to the trail once.
-        Only `authority.py clear-pin-latch`, run as root, removes it. Fix the credential first.
+        Only the tool's `clear-pin-latch` (manifest.py's), run as root, removes it. Fix the credential first.
       * Before every C_Login the token's flags are read, and a token with CKF_USER_PIN_COUNT_LOW,
         FINAL_TRY or LOCKED set is refused with no login: its last tries are kept for a human.
       * Nothing else latches. A token pulled out, a session ended, or any other error refuses that
         signature and the next one tries again.
     `pkcs11` is the PyKCS11 module (Debian: python3-pykcs11); a test passes a stand-in.
 
-    FOR AN OPERATOR'S TOOL (manifest.py, #156: the membership root on its offline Nitrokey), each opt-in, the
-    authority's behaviour unchanged without them:
+    FOR AN OPERATOR'S TOOL (manifest.py, #156: the membership root on its offline Nitrokey; owner.py, #199), each
+    opt-in, the behaviour unchanged without them:
       * `label`: the token's label is asserted beside its serial, in the same places: in the listing, and
         again from the session's own slot before C_Login.
       * `only_token`: exactly one initialised token is attached (CKF_TOKEN_INITIALIZED: a module's spare

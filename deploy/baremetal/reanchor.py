@@ -14,11 +14,12 @@ so it is the one an attacker would want, and it is fenced accordingly:
 
   * AN OPERATOR, ON THE HOST. It is this command, run by hand. Nothing calls reanchor() from a service, and
     the code that talks to peers (convergence.py) has no re-anchor in it.
-  * THE AUTHORITY AND A PEER. Whole chains from at least two sources that agree at every epoch they share.
-    One of them must be the revocation authority (convergence.AUTHORITY), and the chain anchored is the
-    AUTHORITY'S: two peers alone cannot re-anchor a node, and a peer that is ahead of the authority is
-    refused (its newest epochs would rest on that peer alone). Every source must be one the newest
-    manifest trusts, and none may be the node being re-anchored.
+  * TWO OTHER NODES. Whole chains from at least two other nodes, each one the newest manifest lets
+    authorize, agreeing at every epoch, and ALL ending at the same epoch: a node that is ahead of the others
+    is refused, since its newest epochs would rest on that node alone. Two nodes are the quorum everything
+    else in the cluster rests on (#199: there is no authority host any more; two compromised nodes could
+    already sign heartbeats and revocations, which is the accepted trade-off on #199). None may be the node
+    being re-anchored.
   * A USABLE ANCHOR IS NEVER RESET. If the counter reads and the record is valid and in step, this refuses.
   * A TPM THAT DOES NOT ANSWER IS NOT RE-ANCHORED. "The index is not defined", said by the TPM, is an
     unusable anchor. A TPM or a tool that fails says nothing about the anchor, and this refuses.
@@ -38,7 +39,7 @@ so it is the one an attacker would want, and it is fenced accordingly:
     changed), or INCOMPLETE (the anchor was being replaced and it did not finish: run it again).
 
     python3 -Es -m deploy.baremetal.reanchor --membership /var/lib/regalia/membership.json --root-key HEX \\
-        --tpm-index 0x1500016 --node-id b --authority authority-chain.json --peer c=c-chain.json \\
+        --tpm-index 0x1500016 --node-id b --peer a=a-chain.json --peer c=c-chain.json \\
         --audit-log /var/log/regalia/reanchor.jsonl
 
 It needs the TPM's owner authorization, as defining the anchor did at commissioning.
@@ -71,11 +72,10 @@ def plan(store, sources, node_id):
     """What a re-anchor would do, having verified everything that can be verified without changing anything:
     {"reason": why the anchor is unusable, "counter": the old counter's epoch or None, "records": the record
     slots that still hold a valid record, "epoch", "manifest_digest" and "manifest": the newest manifest of
-    the chain to anchor, "chain": that chain (the AUTHORITY's), "sources": who gave one}."""
+    the chain to anchor, "chain": that chain (every source's), "sources": who gave one}."""
     require(isinstance(node_id, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", node_id) is not None, "node_id must be a node ID")
     require(isinstance(sources, dict), "sources must map each source to the chain it gave")
-    require(convergence.AUTHORITY in sources, "re-anchoring needs the revocation authority's chain: peers alone cannot re-anchor a node")
-    require(len(sources) >= 2, "re-anchoring needs the authority's chain and at least one peer's (%d source given)" % len(sources))
+    require(len(sources) >= 2, "re-anchoring needs whole chains from at least two other nodes (%d source given)" % len(sources))
     require(node_id not in sources, "%s cannot be a source for its own re-anchor: the peer's chain comes from another node" % node_id)
     reason = store.hw.unusable()             # Refused, not a reason, when the TPM does not answer
     require(reason is not None, "the TPM anchor is usable: it is not reset. A chain that is rolled back, lost or substituted is "
@@ -83,13 +83,14 @@ def plan(store, sources, node_id):
     counter, records = store.hw.remains()
     floor = max([counter or 0] + [epoch for epoch, _ in records])
     longest, newest = convergence.agreed(store.root_key, sources, 2, floor)
-    # The chain anchored is the authority's. A peer may be behind it; a peer AHEAD of it would have its
-    # newest epochs vouched for by that peer alone.
-    require(len(sources[convergence.AUTHORITY]) == len(longest), "a peer's chain ends at epoch %d and the authority's at epoch %d: the chain "
-            "anchored must be the authority's; fetch the authority's current chain" % (len(longest), len(sources[convergence.AUTHORITY])))
+    # Every source gave the same whole chain: one AHEAD of the others would have its newest epochs vouched
+    # for by that node alone.
+    ends = {source: len(chain) for source, chain in sources.items()}
+    require(len(set(ends.values())) == 1, "the nodes' chains end at different epochs (%s): every source must give the same whole chain; "
+            "fetch each node's current chain" % ", ".join("%s at %d" % (k, v) for k, v in sorted(ends.items())))
     require(node_id in membership.validate(newest), "%s is not a node of the chain being anchored" % node_id)
     return {"reason": reason, "counter": counter, "records": records, "epoch": newest["epoch"], "manifest_digest": membership.digest(newest),
-            "manifest": newest, "chain": sources[convergence.AUTHORITY], "sources": sorted(sources)}
+            "manifest": newest, "chain": longest, "sources": sorted(sources)}
 
 
 def phrase(node_id, planned):
@@ -172,8 +173,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
     ap.add_argument("--root-key", required=True, help="the pinned membership root key, 64 hex")
     ap.add_argument("--tpm-index", required=True, help="the NV index of this node's epoch counter (0x1500016)")
     ap.add_argument("--node-id", required=True, help="this node's ID")
-    ap.add_argument("--authority", required=True, metavar="CHAIN.json", help="the whole chain, as the revocation authority gave it")
-    ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain ANOTHER node gave; at least one, repeat for more")
+    ap.add_argument("--peer", action="append", default=[], metavar="NODE=CHAIN.json", help="the whole chain ANOTHER node gave; at least two")
     ap.add_argument("--audit-log", default=trails.where("reanchor"),
                     help="the audit trail (default %(default)s, its place in trails.py's registry)")
     ap.add_argument("--tcti", help="the TPM to re-anchor, as a TCTI (e.g. device:/dev/tpmrm0); default: tpm2-tools' default TPM")
@@ -197,7 +197,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         for epoch, held in planned["records"]:
             print("A record slot still holds epoch %d, manifest %s: the chain carries that manifest at that epoch." % (epoch, held))
         print("Sources that agree: %s." % ", ".join(planned["sources"]))
-        print("The authority's chain ends at epoch %d, manifest %s:" % (planned["epoch"], planned["manifest_digest"]))
+        print("The chain ends at epoch %d, manifest %s:" % (planned["epoch"], planned["manifest_digest"]))
         for node in planned["manifest"]["nodes"]:
             print("    %-32s %s" % (node["node_id"], node["state"]))
         print("Re-anchoring DELETES this node's membership anchor and defines a new one on this chain.")
@@ -214,7 +214,7 @@ def main(argv=None, ask=None, highwater=_highwater, tty=None):
         # The phrase is a deliberate act at this host's terminal, not a line in a script or a pipe. (It is not a
         # secret: what authorizes the change is the TPM's owner authorization.)
         require(ask is not None or (tty or sys.stdin.isatty)(), "the phrase must be typed at a terminal: standard input is not one")
-        sources = {convergence.AUTHORITY: _chain(args.authority)}
+        sources = {}
         for item in args.peer:
             node_id, sep, path = item.partition("=")
             require(sep and node_id and path, "--peer takes NODE=CHAIN.json, not %r" % item)
