@@ -31,6 +31,7 @@ import http.client
 import json
 import os
 import pwd
+import re
 import shutil
 import signal
 import ssl
@@ -76,15 +77,18 @@ def operator(text):
     say("operator: done")
 
 
-def objects(serial):
-    """The token's objects, as pkcs11-tool lists them without a login (public objects): what must be the same after."""
-    return run(["pkcs11-tool", "--module", MODULE, "--token-label", token_label(serial), "--list-objects"])
+def objects(serial, pin):
+    """The token's objects, as pkcs11-tool lists them logged in (private keys included): what must be the same after.
+    The token is found again by its serial each time (token_label refuses if it is not the one, or not alone)."""
+    return run(["pkcs11-tool", "--module", MODULE, "--token-label", token_label(serial), "--login", "--pin", "env:P", "--list-objects"],
+               env=dict(os.environ, P=pin))
 
 
 def token_label(serial):
     slots = [block for block in run(["pkcs11-tool", "--module", MODULE, "-L"]).split("Slot ")[1:] if "serial num         : %s\n" % serial in block]
     if len(slots) != 1:
-        raise SystemExit("hsm-gate-drill: the token %s is not attached exactly once (found %d): refused" % (serial, len(slots)))
+        raise SystemExit("hsm-gate-drill: the token %s is not attached exactly once (found %d; the serial must be exactly as pkcs11-tool -L "
+                         "prints it): refused" % (serial, len(slots)))
     label = next(line.split(":", 1)[1].strip() for line in slots[0].splitlines() if line.strip().startswith("token label"))
     # pkcs11-tool picks the token by label (its slot number changes when it is replugged): no other may carry it
     labels = [line.split(":", 1)[1].strip() for line in run(["pkcs11-tool", "--module", MODULE, "-L"]).splitlines()
@@ -97,7 +101,8 @@ def token_label(serial):
 def main():
     global log
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--serial", required=True, help="the token serial the drill runs on (refused on any other)")
+    parser.add_argument("--serial", required=True, help="the token serial the drill runs on, exactly as pkcs11-tool -L prints its "
+                        "'serial num' (e.g. DENK0404144); refused on any other")
     parser.add_argument("--evidence", default=None, help="the evidence log (default: ./g3-drill-<serial>-<time>.log)")
     args = parser.parse_args()
     if os.geteuid() == 0 or subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0:
@@ -110,14 +115,16 @@ def main():
     say("regalia-kms#72 G3 drill on token %s (evidence: %s)" % (args.serial, path))
     label = token_label(args.serial)
     say("the token: serial %s, label %r, through %s" % (args.serial, label, MODULE))
-    before = objects(args.serial)
     pin = getpass.getpass("User PIN of %s (read from the terminal, never logged): " % args.serial)
     token = ["pkcs11-tool", "--module", MODULE, "--token-label", label]
     if subprocess.run(token + ["--login", "--pin", "env:P", "--list-objects"], capture_output=True, env=dict(os.environ, P=pin)).returncode != 0:
         raise SystemExit("hsm-gate-drill: the PIN was refused (one try of the counter is spent): stopping here")
+    before = objects(args.serial, pin)
+    key_id = os.urandom(4).hex()
+    if re.search(r"ID:\s+%s\b" % key_id, before):
+        raise SystemExit("hsm-gate-drill: an object with id %s is on the token already: run again" % key_id)
     w = Path(tempfile.mkdtemp(dir="/tmp"))
     runtime = Path("/tmp") / ("regalia-run-" + w.name)
-    key_id = os.urandom(4).hex()
     processes = []
     try:
         drill(args.serial, label, pin, w, runtime, key_id, processes)
@@ -129,19 +136,46 @@ def main():
                     process.wait(timeout=20)
                 except subprocess.TimeoutExpired:
                     process.kill()
-        for kind in ("privkey", "pubkey"):
-            subprocess.run(token + ["--login", "--pin", "env:P", "--delete-object", "--type", kind, "--id", key_id],
-                           capture_output=True, env=dict(os.environ, P=pin))
+        cleanup(args.serial, pin, key_id, before)
         for name in ("daemon.log", "state/audit.jsonl"):
             if (w / name).exists():
                 log.write("\n----- %s -----\n%s\n" % (name, (w / name).read_text(errors="replace")[-20000:]))
         subprocess.run(["sudo", "rm", "-rf", str(runtime)], capture_output=True)
         shutil.rmtree(w, ignore_errors=True)
-        after = objects(args.serial)
-        check(after == before, "the token's objects are as they were (the drill's key deleted)", after)
         say("%d passed, %d failed" % (results.count(True), results.count(False)))
         log.close()
+        with open(path) as f:
+            if pin in f.read():
+                print("hsm-gate-drill: THE PIN IS IN THE EVIDENCE LOG %s: delete it and report this" % path, file=sys.stderr)
+                results.append(False)
     return 0 if results and all(results) else 1
+
+
+def cleanup(serial, pin, key_id, before):
+    """Delete the drill's key, and only on THE token: found again by its serial (a token put back may be another
+    with the same label), each delete checked, the logged-in listing compared. Never raises: a key that cannot be
+    deleted is reported loudly, with its id and the command, and the drill fails."""
+    left = "the drill's key (id %s) may be LEFT on token %s: delete it with  pkcs11-tool --module %s --token-label <its label> " \
+           "--login --delete-object --type privkey --id %s  (and --type pubkey)" % (key_id, serial, MODULE, key_id)
+    try:
+        label = token_label(serial)
+        for kind in ("privkey", "pubkey"):
+            done = subprocess.run(["pkcs11-tool", "--module", MODULE, "--token-label", label, "--login", "--pin", "env:P",
+                                   "--delete-object", "--type", kind, "--id", key_id], capture_output=True, env=dict(os.environ, P=pin))
+            check(done.returncode == 0, "the drill's %s (id %s) deleted" % (kind, key_id), done.stderr.decode(errors="replace").strip()[-200:])
+        after = objects(serial, pin)
+        check(after == before, "the token's objects, private keys included, are as they were", after)
+    except (SystemExit, OSError) as failure:
+        check(False, "cleanup could not reach the token (%s); %s" % (failure, left))
+    if not all(results[-3:]):
+        say("ATTENTION: " + left)
+
+
+def confirm(serial):
+    """The token put back is THE token: its serial attached exactly once, its label unique. Else the drill stops
+    before logging in or writing anything more (cleanup then deletes only on the token it finds by serial)."""
+    token_label(serial)
+    say("the token put back is %s (found again by serial, its label unique)" % serial)
 
 
 def drill(serial, label, pin, w, runtime, key_id, processes):
@@ -288,6 +322,7 @@ def drill(serial, label, pin, w, runtime, key_id, processes):
     check(sign()[0] == 503 and wait(503) == 503, "with the token out: a sign is refused, not ready")
     operator("PUT token %s back into a USB port" % serial)
     time.sleep(3)
+    confirm(serial)
     check(sign()[0] == 503 and wait(503, 15) == 503, "back, under the lease from before it left: still refused, not ready")
     lease()
     check(wait(200) == 200 and sign() == (200, True), "under a lease asked for after its return: it serves")
@@ -295,6 +330,10 @@ def drill(serial, label, pin, w, runtime, key_id, processes):
     check(sign() == (200, True), "serving before")
     operator("PULL token %s and PUT IT BACK within ten seconds" % serial)
     time.sleep(3)
+    confirm(serial)          # also: listed again, so a slow re-enumeration is not what refuses the next request
+    # Nothing asked the daemon since the last request: it has no background health check (a binding's health is
+    # evaluated only when a request routes or readiness is asked, internal/registry), so the refusal below is the
+    # reader watcher's, not an absence some other look saw.
     check(sign()[0] == 503, "the next request is refused: the reader watcher saw it go, though no request did")
     lease()
     check(wait(200) == 200 and sign() == (200, True), "under a fresh lease it serves")
