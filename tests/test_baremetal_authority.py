@@ -591,6 +591,24 @@ class Pkcs11(unittest.TestCase):
         _, beat = a.revoke("c", "REVOKED_STOLEN", "stolen", "local-root")
         self.assertEqual(beat["heartbeat"]["epoch"], 2)
 
+    def test_an_ed25519_key_signs_with_eddsa_as_the_owners_approval_key_does(self):
+        """#199: the owner's YubiKeys are Ed25519 (OpenPGP applet, CKM_EDDSA through OpenSC). SoftHSM's Ed25519 key stands in."""
+        import subprocess
+        subprocess.run(["pkcs11-tool", "--module", SOFTHSM, "--token-label", "revocation", "--login", "--pin", "env:P", "--keypairgen",
+                        "--key-type", "EC:edwards25519", "--id", "52", "--label", "owner"], check=True, capture_output=True, env=dict(os.environ, P=self.pin))
+        signer = self.signer(key_id="52", alg="ed25519")
+        self.assertEqual((signer.alg, len(signer.public())), ("ed25519", 64))
+        message = b"regalia-heartbeat/v1\0{}"
+        signature = signer.sign(message)
+        m.verify_revocation("ed25519", signer.public(), message, signature.hex(), "test")
+        # the P-256 key named as Ed25519, and the Ed25519 key named as P-256: refused before any PIN
+        with self.assertRaisesRegex(m.Refused, "is not an Ed25519 key"):
+            self.signer(key_id="51", alg="ed25519")
+        with self.assertRaisesRegex(m.Refused, "is not a P-256 key"):
+            self.signer(key_id="52")
+        with self.assertRaisesRegex(m.Refused, "algorithm is one of"):
+            self.signer(alg="rsa")
+
     def test_the_wrong_serial_or_no_pin_is_refused_before_any_signature(self):
         with self.assertRaises(m.Refused) as caught:
             self.signer(serial="NOSUCHTOKEN")

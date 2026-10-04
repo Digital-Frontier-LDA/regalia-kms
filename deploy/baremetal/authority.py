@@ -68,7 +68,7 @@ import time
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from deploy.baremetal import authtime, convergence, heartbeat, measurements, membership, node, sitecfg, sync, wgsvc
 
@@ -227,16 +227,24 @@ class Pkcs11Signer:
       * `key_label`: the key is found by CKA_LABEL as well as (or instead of) CKA_ID; still exactly one
         object of the class must match, so a label two keys share is refused rather than one picked.
       * `pin`: a callable returning the PIN (the tool reads an environment variable or the terminal, no
-        echo). The latch and the low-tries refusal apply to it exactly as to the credential."""
-    kind, alg = "pkcs11", "ecdsa-p256"
+        echo). The latch and the low-tries refusal apply to it exactly as to the credential.
+      * `alg="ed25519"` (#199: the owner's approval YubiKeys, Ed25519 on the OpenPGP applet through OpenSC, #126):
+        the key must be an Ed25519 key (CKA_EC_PARAMS the curve's OID or its name), the token signs the MESSAGE
+        itself with CKM_EDDSA (EdDSA hashes internally), and the 64-byte signature is verified the same way."""
+    kind = "pkcs11"
+    ALGS = ("ecdsa-p256", "ed25519")
     P256_PARAMS = bytes.fromhex("06082a8648ce3d030107")   # DER OID prime256v1
+    # DER OID 1.3.101.112, or the PrintableString "edwards25519" that OpenSC and SoftHSM also write
+    ED25519_PARAMS = (bytes.fromhex("06032b6570"), bytes.fromhex("130c") + b"edwards25519")
     PIN_REFUSALS = ("CKR_PIN_INCORRECT", "CKR_PIN_INVALID", "CKR_PIN_LEN_RANGE", "CKR_PIN_LOCKED")
     PIN_LOW = ("CKF_USER_PIN_COUNT_LOW", "CKF_USER_PIN_FINAL_TRY", "CKF_USER_PIN_LOCKED")
 
     def __init__(self, module, serial, key_id, pin_credential, opensc_conf=None, credentials=None, pkcs11=None, latch_path=None,
-                 label=None, only_token=False, key_label=None, pin=None):
+                 label=None, only_token=False, key_label=None, pin=None, alg="ecdsa-p256"):
         if pkcs11 is None:
             import PyKCS11 as pkcs11
+        require(alg in self.ALGS, "the key's algorithm is one of %s" % ", ".join(self.ALGS))
+        self.alg = alg
         require(key_id is not None or key_label is not None, "the key is named by its id, its label, or both")
         require((pin_credential is None) != (pin is None), "the PIN comes from one source: a credential or the caller")
         self.pkcs11, self.serial, self.key_id = pkcs11, serial, bytes.fromhex(key_id) if key_id is not None else None
@@ -304,6 +312,12 @@ class Pkcs11Signer:
         point, params = session.getAttributeValue(self._object(session, self.pkcs11.CKO_PUBLIC_KEY),
                                                   [self.pkcs11.CKA_EC_POINT, self.pkcs11.CKA_EC_PARAMS])
         point, params = bytes(point), bytes(params)
+        if self.alg == "ed25519":
+            if len(point) == 34 and point[:2] == b"\x04\x20":     # DER OCTET STRING around the 32-byte key
+                point = point[2:]
+            require(params in self.ED25519_PARAMS and len(point) == 32, "the token's key %s is not an Ed25519 key" % self._key_named())
+            Ed25519PublicKey.from_public_bytes(point)
+            return point.hex()
         if len(point) == 67 and point[:2] == b"\x04\x41":     # DER OCTET STRING around the point
             point = point[2:]
         require(params == self.P256_PARAMS and len(point) == 65 and point[0] == 4, "the token's key %s is not a P-256 key" % self._key_named())
@@ -357,14 +371,20 @@ class Pkcs11Signer:
         try:
             self._login(session, slot, pin)
             try:
-                raw = bytes(session.sign(self._object(session, self.pkcs11.CKO_PRIVATE_KEY), hashlib.sha256(message).digest(),
-                                         self.pkcs11.Mechanism(self.pkcs11.CKM_ECDSA)))
+                if self.alg == "ed25519":           # EdDSA signs the message itself
+                    data, mechanism = message, self.pkcs11.Mechanism(self.pkcs11.CKM_EDDSA)
+                else:
+                    data, mechanism = hashlib.sha256(message).digest(), self.pkcs11.Mechanism(self.pkcs11.CKM_ECDSA)
+                raw = bytes(session.sign(self._object(session, self.pkcs11.CKO_PRIVATE_KEY), data, mechanism))
                 require(self._serial_of(slot) == self.serial, "the token's serial changed while it signed: refused")
             finally:
                 session.logout()
         finally:
             session.closeSession()
-        require(len(raw) == 64, "the token returned a %d-byte ECDSA signature, not r || s" % len(raw))
+        require(len(raw) == 64, "the token returned a %d-byte signature, not 64" % len(raw))
+        if self.alg == "ed25519":
+            membership.verify_revocation(self.alg, self._public, message, raw.hex(), "token")
+            return raw
         r, s = int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big")
         s = min(s, membership.P256_ORDER - s)            # low-S: the verifiers refuse the other form
         signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
