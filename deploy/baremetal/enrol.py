@@ -58,6 +58,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -365,7 +366,6 @@ SSH_HOST_KEY = "/etc/ssh/ssh_host_ed25519_key.pub"
 def ssh_host_pub(path=SSH_HOST_KEY):
     """This host's SSH host key, as the manifest's ssh_host_pub carries it (membership v2: the raw Ed25519 public key,
     64 lowercase hex), read from the host's own public key file. Missing, or not ssh-ed25519, is refused."""
-    import struct
     try:
         with open(path) as f:
             line = f.read(4096).strip()
