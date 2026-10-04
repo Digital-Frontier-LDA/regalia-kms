@@ -63,8 +63,8 @@ x unauth ip route add 10.99.0.0/24 via "${IP[kms]}" dev eth0 onlink
 cat > "$T/site.json" <<EOF
 {"schema": "regalia.baremetal-site/v1", "site": "lab", "host_ipv4": "${IP[kms]}", "kms_port": 8443, "ssh_port": 22,
  "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["${IP[mon]}/32"], "admin_cidrs": ["203.0.113.0/28"],
- "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514},
-], "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["${IP[ntp]}/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]},
+ "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514}],
+ "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["${IP[ntp]}/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]},
  "boot_mesh": null, "service_mesh": null}
 EOF
 
@@ -215,8 +215,7 @@ tcpok client fd00:5:7::10 7444 && P "control: the sync port answers over IPv6 on
 cat > "$T/site-mesh.json" <<EOF
 {"schema": "regalia.baremetal-site/v1", "site": "lab", "host_ipv4": "${IP[kms]}", "kms_port": 8443, "ssh_port": 22,
  "client_cidrs": ["198.51.100.0/24"], "monitoring_cidrs": ["${IP[mon]}/32"], "admin_cidrs": ["203.0.113.0/28"],
- "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514},
-],
+ "outbound": [{"name": "audit", "cidr": "${IP[audit]}/32", "proto": "tcp", "port": 6514}],
  "time": {"nts": [{"name": "nts-a.lab", "cidrs": ["${IP[ntp]}/32"]}, {"name": "nts-b.lab", "cidrs": ["203.0.113.195/32"]}]},
  "boot_mesh": {"node_id": "kms", "interface": "wg-unlock", "listen_port": 51820, "address": "10.89.0.1", "unlock_port": 7443, "nic_mac": "52:54:00:12:34:56", "prefix": 32, "gateway": null,
                "peers": [{"node_id": "peer", "underlay": "${IP[peer]}", "address": "10.89.0.2"}]},
