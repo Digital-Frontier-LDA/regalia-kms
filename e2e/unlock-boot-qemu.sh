@@ -24,6 +24,9 @@
 #           mesh comes up, a peer verifies the guest's quote and gives its half, systemd-cryptsetup maps
 #           the root volume with the key the client answered its request with, the root filesystem comes up, and the boot
 #           interface, its ruleset and its address are gone.
+#   boot 2e A FORKED CHAIN (#66 B3): another epoch 1, validly signed by the root the image trusts, on the ESP in
+#           place of the one the guest's TPM anchored: the initrd's render refuses it (CONFLICT), nothing is asked of
+#           a peer, and the console takes the recovery key.
 #   boot 2c AN OLDER SIGNED IMAGE, APPROVED (#135): a second image of the same build (one word more on its
 #           command line, so another PCR 11, signed by the same keys). The peers' document lists both: it boots
 #           unattended, as boot 2.
@@ -268,4 +271,4 @@ fi
 if ! grep -q '^test_a_host_boots_through_a_peer' <<< "$out" || ! grep -q '^Ran 1 test' <<< "$out" || ! grep -qx 'OK' <<< "$out"; then
   echo "unlock-boot-qemu: the boot test did not run"; exit 1
 fi
-echo "unlock-boot-qemu: 13 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock)"
+echo "unlock-boot-qemu: 14 boots passed (enrolment with the recovery key, an undecryptable credential and the recovery key, unattended through a peer, a forked chain refused by the TPM anchor, an older signed image approved and then retired (refused: the recovery key), an SMBIOS drop-in not acted on, four planted ESP credentials refused (one empty), an SMBIOS command line, no peer for 150 s and the recovery key, the peers back after 150 s and an unattended unlock)"
