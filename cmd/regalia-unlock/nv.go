@@ -55,13 +55,14 @@ func (n tpmNV) public(index uint32) (*tpm2.TPMSNVPublic, tpm2.TPM2BName, error) 
 	return public, response.NVName, nil
 }
 
-// Public is the TPMA_NV mask, as one 32-bit value (tpm2_nvreadpublic's "value"), and the data size.
-func (n tpmNV) Public(index uint32) (uint32, int, error) {
+// Public is the TPMA_NV mask, as one 32-bit value (tpm2_nvreadpublic's "value"), the data size, and the
+// authPolicy (tpm2_nvreadpublic's "authorization policy", empty when the index has none).
+func (n tpmNV) Public(index uint32) (uint32, int, []byte, error) {
 	public, _, err := n.public(index)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
-	return binary.BigEndian.Uint32(tpm2.Marshal(public.Attributes)), int(public.DataSize), nil
+	return binary.BigEndian.Uint32(tpm2.Marshal(public.Attributes)), int(public.DataSize), public.AuthPolicy.Buffer, nil
 }
 
 func (n tpmNV) Read(index uint32, size int) ([]byte, error) {
