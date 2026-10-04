@@ -482,7 +482,7 @@ class Verifier:
             require(replace or "ak_public" not in record, "the node already has an enrolled AK: enrolling another "
                     "replaces its attestation identity (pass replace to do that deliberately)")
             record["pending"] = {"ak_public": ak_public.hex(), "secret_sha256": hashlib.sha256(secret).hexdigest(),
-                                 "expires": self.now() + NONCE_TTL}
+                                 "expires": int(self.now()) + NONCE_TTL}   # whole seconds: see nonce()
             save()
         return credential
 
@@ -525,7 +525,9 @@ class Verifier:
             for old in mine[:max(0, len(mine) - MAX_OUTSTANDING + 1)]:
                 del state["nonces"][old]
             state["issued"] = state.get("issued", 0) + 1   # issue order, whatever the clock says
-            state["nonces"][nonce.hex()] = {"node": node_id, "expires": now + NONCE_TTL, "issued": state["issued"]}
+            # whole seconds: the state is also read by the strict document loader (update.Host.own_state, membership.load
+            # refuses floats), which a wall-clock float here made refuse the node's own state while a nonce was outstanding
+            state["nonces"][nonce.hex()] = {"node": node_id, "expires": int(now) + NONCE_TTL, "issued": state["issued"]}
             save()
         return nonce
 
