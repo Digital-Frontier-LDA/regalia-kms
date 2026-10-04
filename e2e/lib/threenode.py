@@ -127,11 +127,14 @@ class Cluster:
 
     def _tpm(self, n):
         (n.dir / "tpm").mkdir()
-        sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % n.tpm_sock, "--ctrl", "type=unixio,path=%s.ctrl" % n.tpm_sock,
-           "--tpmstate", "dir=%s" % (n.dir / "tpm"), "--flags", "not-need-init,startup-clear", "--daemon",
-           "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", "file=%s" % (n.dir / "tpm.log"))
-        if not until(lambda: n.tpm_sock.exists(), 10, 0.2):
-            raise RuntimeError("%s's software TPM did not start" % n.name)
+        done = sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % n.tpm_sock, "--ctrl", "type=unixio,path=%s.ctrl" % n.tpm_sock,
+                  "--tpmstate", "dir=%s" % (n.dir / "tpm"), "--flags", "not-need-init,startup-clear", "--daemon",
+                  "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", "file=%s" % (n.dir / "tpm.log"), check=False)
+        if done.returncode != 0 or not until(lambda: n.tpm_sock.exists(), 10, 0.2):
+            log = (n.dir / "tpm.log").read_text()[-800:] if (n.dir / "tpm.log").exists() else ""
+            denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
+            raise RuntimeError("%s's software TPM did not start (%d): %s %s | log: %s | apparmor: %s"
+                               % (n.name, done.returncode, done.stdout.strip(), done.stderr.strip(), log, denied))
 
     def _wg_keys(self, n):
         keys = {}

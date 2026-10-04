@@ -117,7 +117,7 @@ def main():
     if os.geteuid() != 0:
         print("three-node-netns: run as root")
         return 2
-    work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/var/tmp"))
+    work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
     cluster = threenode.Cluster(work)
     try:
         scenario(cluster)
