@@ -25,6 +25,9 @@ whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
      refuses it by name, and b's store stays at the current epoch
   7  9.3: b power-cycled with only a (revoked) and nobody else up: b's chain is current, its boot configuration does
      not list a, and it gets no key (it never asks a); with c back, b opens through c
+  8  #340, audit completeness: the real trail shippers and collector ran throughout (Cluster(audit=True)); every node's
+     sync and admission trail is in the collector line for line, chained, each DENY a deny, and the scenario's own
+     security events are there by name, for the node that recorded them
 
 Not here: the expiry itself (a heartbeat lifetime is at least 40 minutes: freshness's unit tests show the refusal at
 expiry, and step 2 measures the window); a stale b asking a (the same window as 4, stated on #69); the physical
@@ -175,6 +178,18 @@ def scenario(cluster):
     got = cluster.unlock("b")
     ok(got["rc"] == 0 and got["peer"] == "c" and got["marker"], "control: with c back, b opens its volume through c's keyslot", got)
 
+    header("8  #340: every event the scenario caused is in the audit collector's chained stream, for the node that recorded it")
+    wrong = cluster.audit_complete()
+    ok(wrong == {}, "every node trail (sync, admission) is in the collector line for line, in order, its chain unbroken, each DENY a deny",
+       {"%s.%s" % k: v for k, v in wrong.items()})
+    named = cluster.audit_has("b", "sync", outcome="DENY", reason=lambda r: bool(r) and "a is REVOKED_STOLEN under epoch 2" in r)
+    ok(bool(named), "b's refusal of the stolen a by name (9.2) is in b's stream", len(named))
+    cut = cluster.audit_has("c", "sync", event="sync-apply", outcome="DENY", reason=lambda r: bool(r) and "did not answer" in r)
+    ok(bool(cut), "c's pulls that did not answer while it was cut off are in c's stream (%d)" % len(cut))
+    for name in ("b", "c"):
+        took = cluster.audit_has(name, "sync", event="sync-apply", outcome="ALLOW", epoch=lambda e: e == 2)
+        ok(bool(took), "%s taking the revocation (epoch 2) is in %s's stream" % (name, name))
+
 
 def main():
     try:
@@ -192,11 +207,13 @@ def main():
     if present:
         print("three-node-theft: refused: %s exists: another run's leftovers, or this host's own, are here" % ", ".join(present))
         return 2
-    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK):
-        print("three-node-theft: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
+    if os.geteuid() != 0 or not os.access(os.environ.get("REGALIA_UNLOCK_BIN", "/nonexistent"), os.X_OK) or not all(
+            os.access(os.path.join(os.environ.get("REGALIA_AUDIT_BIN", "/nonexistent"), b), os.X_OK) for b in ("regalia-audit-ship", "regalia-audit-collector")):
+        print("three-node-theft: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock and REGALIA_AUDIT_BIN a directory "
+              "with the built regalia-audit-ship and regalia-audit-collector (#340)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work, authority=True)
+    cluster = threenode.Cluster(work, authority=True, audit=True)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
