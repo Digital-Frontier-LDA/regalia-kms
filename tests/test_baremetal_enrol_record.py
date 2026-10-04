@@ -157,6 +157,28 @@ class Record(rt.Case):
         with self.assertRaisesRegex(attest.Refused, "does not sign this document"):
             enrol.verify_record(document, [rt.sign(self.m1)], self.root)
 
+    def test_a_record_quote_cannot_pass_as_a_session_quote(self):
+        """regalia-kms-1e on #277: the other direction. A peer's verifier, handed the record's quote as the answer to
+        its own nonce, refuses it: the record's label is not a session transcript."""
+        from deploy.baremetal import replacement
+        record = self.write()
+        document = self.document()
+        policy = replacement.attest_policy(self.m1, {n: rt.MEASURED for n in ("a", "b", "c")}, peer_id="b")
+        verifier = attest.Verifier(policy, self.dir + "/attest-b.json")
+        with open(verifier.state_path, "w") as f:
+            json.dump({"schema": attest.STATE_SCHEMA, "nonces": {}, "nodes": {"a": {"ak_public": self.keys["a"].ak_public.hex()}}}, f)
+        nonce = verifier.nonce("a")
+        with self.assertRaisesRegex(attest.Refused, "not bound to this transcript"):
+            verifier.verify("a", record["epoch"], b"S" * 32, b"ephemeral key", nonce, bytes.fromhex(document["quote"]),
+                            bytes.fromhex(document["signature"]))
+
+    def test_a_peer_ak_the_manifest_does_not_give_is_refused(self):
+        self.write()
+        document = self.document()
+        document["record"]["peers"][0]["ak_name"] = self.keys["x"].ak_name
+        with self.assertRaisesRegex(enrol.Refused, "the record's AK for peer 'b' is not the manifest's"):
+            enrol.verify_record(document, [rt.sign(self.m1)], self.root)
+
 
 def stat_mode(path):
     import stat

@@ -1034,7 +1034,8 @@ def write_record(journal, directory, node, manifest, peers, run=subprocess.run, 
     _atomic_json(os.path.join(directory, RECORD_FILE), document)        # written, fsynced, renamed, directory fsynced
     os.chmod(os.path.join(directory, RECORD_FILE), 0o644)
     with open(os.path.join(directory, RECORD_FILE), "rb") as f:
-        require(hashlib.sha256(membership.canonical(json.loads(f.read()))).hexdigest() == digest, "the record read back is not the one written")
+        read_back = membership.load(f.read(membership.MAX_BYTES + 1))
+    require(hashlib.sha256(membership.canonical(read_back)).hexdigest() == digest, "the record read back is not the one written")
     trail({"event": "enrol", "node": record["node_id"], "epoch": record["epoch"], "manifest_digest": record["manifest_digest"],
            "record_sha256": digest, "outcome": "ALLOW", "reason": ""})
     journal.done("record", sha256=digest)
@@ -1064,6 +1065,12 @@ def verify_record(document, chain, root_key):
     for field, mine in (("ek_name", record["ek_name"]), ("ak_name", record["ak_name"]), ("wg_service_pub", wg["wg_service_pub"]),
                         ("wg_boot_pub", wg["wg_boot_pub"])):
         require(node[field] == mine, "the record's %s is not the manifest's" % field)
+    # the peers too: each AK the record names is the one that manifest gives that peer, so nothing in the record
+    # is only its own claim (regalia-kms-1e on #277)
+    every = membership.validate(at[0])
+    for entry in record["peers"]:
+        require(isinstance(entry, dict) and entry.get("peer") in every and entry.get("ak_name") == every[entry["peer"]]["ak_name"],
+                "the record's AK for peer %r is not the manifest's" % (entry.get("peer") if isinstance(entry, dict) else entry,))
     facts = attest.verify_document(membership.canonical(record), bytes.fromhex(record["ak_public"]), record["ek_name"],
                                    bytes.fromhex(document["quote"]), bytes.fromhex(document["signature"]))
     require(facts["ak_name"] == node["ak_name"], "the record's AK public area is not the manifest's AK")
