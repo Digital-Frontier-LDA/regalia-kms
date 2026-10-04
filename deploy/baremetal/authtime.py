@@ -414,6 +414,41 @@ def service(run_dir, names, **how):
     return Service(os.path.join(run_dir, "authtime.json"), names, record=record, metrics=lambda samples: metrics.publish("authtime", samples), **how)
 
 
+CHRONY_CONF = "/etc/chrony/regalia.conf"   # as enrol.CHRONY_CONF: chronyd -f, by units/chrony.service.d/regalia.conf
+
+
+def install_chrony_conf(names, path=CHRONY_CONF):
+    """chrony's configuration (conf(names)) where chronyd reads it, as a node's enrolment installs it: NEVER
+    replacing a file. The bytes go to a temporary file in the same directory, published with link(2), which
+    fails if the target exists; a file already there is accepted only if it is byte for byte this one (a
+    repeated run), anything else refused and left. Returns "installed" or "already there"."""
+    data = conf(names).encode()
+    try:
+        with open(path, "rb") as f:
+            held = f.read(len(data) + 1)
+        require(held == data, "%s exists and is not this configuration: left as it is (remove it by hand to install)" % path)
+        return "already there"
+    except FileNotFoundError:
+        pass
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".regalia-chrony-")
+    try:
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:                       # appeared meanwhile: only the same bytes are accepted
+            with open(path, "rb") as f:
+                require(f.read(len(data) + 1) == data, "%s appeared meanwhile and is not this configuration" % path)
+            return "already there"
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+    return "installed"
+
+
 def main(argv=None):
     import argparse
     import sys
@@ -421,12 +456,18 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     for name, text in (("serve", "ask chrony every 15 s and publish the verdict in <run_dir>/authtime.json (units/regalia-*authtime.service)"),
                        ("chrony-conf", "print chrony's configuration for the declared servers (NTS only), for /etc/chrony/regalia.conf")):
-        sub.add_parser(name, help=text).add_argument("--config", required=True, help="node.json or authority.json: run_dir and time_servers")
+        command = sub.add_parser(name, help=text)
+        command.add_argument("--config", required=True, help="node.json or authority.json: run_dir and time_servers")
+        if name == "chrony-conf":
+            command.add_argument("--install", action="store_true", help="write it to %s (root), never replacing a different file" % CHRONY_CONF)
     args = parser.parse_args(argv)
     try:
         run_dir, names = configured(args.config)
         if args.command == "chrony-conf":
-            sys.stdout.write(conf(names))
+            if args.install:
+                print("%s: %s" % (CHRONY_CONF, install_chrony_conf(names)))
+            else:
+                sys.stdout.write(conf(names))
             return 0
         service(run_dir, names).run(lambda: False)
     except (OSError, Refused, ValueError) as failure:

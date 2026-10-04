@@ -467,3 +467,17 @@ class EntryPoint(unittest.TestCase):
         with unittest.mock.patch("sys.stdout", new_callable=io.StringIO) as out:
             self.assertEqual(authtime.main(["chrony-conf", "--config", path]), 0)
         self.assertEqual(out.getvalue(), authtime.conf(["nts.netnod.se", "time.cloudflare.com"]))
+
+    def test_chrony_conf_is_installed_as_enrolment_does_never_replacing(self):
+        """regalia-kms-3e on #323: as enrol's _install, a different file already there is refused and left."""
+        target = os.path.join(self.d, "regalia.conf")
+        names = ["nts.netnod.se", "time.cloudflare.com"]
+        self.assertEqual(authtime.install_chrony_conf(names, target), "installed")
+        self.assertEqual((open(target).read(), stat.S_IMODE(os.stat(target).st_mode)), (authtime.conf(names), 0o644))
+        self.assertEqual(authtime.install_chrony_conf(names, target), "already there")
+        with open(target, "w") as f:
+            f.write("server pool.ntp.org iburst\n")
+        with self.assertRaises(m.Refused):
+            authtime.install_chrony_conf(names, target)
+        self.assertEqual(open(target).read(), "server pool.ntp.org iburst\n")
+        self.assertEqual([f for f in os.listdir(self.d) if f.startswith(".regalia-chrony-")], [])

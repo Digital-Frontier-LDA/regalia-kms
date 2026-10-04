@@ -523,7 +523,7 @@ CONFIG_DIR = "/etc/regalia/"
 # chronyd -f, by units/chrony.service.d/regalia.conf (#303). In /etc/chrony, not CONFIG_DIR: the distribution's AppArmor
 # profile for chronyd reads /etc/chrony/** and nothing else of /etc. A file of its own: Debian's chrony.conf, a package
 # conffile, is never touched.
-CHRONY_CONF = "/etc/chrony/regalia.conf"
+CHRONY_CONF = authtime.CHRONY_CONF        # "/etc/chrony/regalia.conf": one constant, the authority host's install too
 
 
 def _same(target, digest):
