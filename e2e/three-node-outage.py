@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
-"""#71 (Phase 11): a total outage, restored by one manual recovery, on three nodes and the revocation authority
-(e2e/lib/threenode.py with authority=True: each node its real services in its own namespace against its own
-TPM; the authority its real `serve`, on its own namespace and TPM, signing the heartbeats).
+"""#71 (Phase 11): a total outage, restored by one manual recovery, on three nodes (e2e/lib/threenode.py, v4 since #199:
+each node its real services in its own namespace against its own TPM, the nodes signing their own heartbeats; no
+authority host; the owner's keys on a SoftHSM token, signed through the real owner.py halves).
 
     REGALIA_UNLOCK_BIN=<built cmd/regalia-unlock> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_UNLOCK_BIN python3 -Es e2e/three-node-outage.py
 
 IT CHANGES THE MACHINE (namespaces, interfaces, loop devices, dm-crypt mappings, transient units), so it runs
 only on a GitHub-hosted runner, or on a throwaway host whose /etc/machine-id is in REGALIA_THREE_NODE_HOST_OK.
 
-The recovery runbook it holds to (threat model A3; no key ceremony for a routine outage): the authority's host
-first (it recovers by itself: its own anchored store, its TPM's heartbeat counter, its key), then one node by
-hand with its recovery key, then the other two by themselves, through that node.
+The recovery runbook it holds to (threat model A3; no key ceremony for a routine outage): one node by hand with its
+recovery key; at its console the operator co-signs its heartbeat with an owner key (owner.py beat, at most 1 h);
+then the other two by themselves, through that node; then the nodes sign their own heartbeats again.
 
-  1  three nodes and the authority: every node takes the authority's heartbeat (its trail names it) and is leased
-  2  PoC 11.1, the total outage: the three nodes and the authority powered off; no node gets a key from anyone.
-     The authority back first: still none (without an ACTIVE peer, the cluster stays encrypted)
+  1  three nodes: every node holds a heartbeat the nodes signed (from bootstrap) and is leased
+  2  PoC 11.1, the total outage: the three nodes powered off; no node gets a key from anyone
   3  PoC 11.2-11.4: for each first node X: X's volume opened by hand with its recovery key (keyslot of no peer);
-     X up, it takes a fresh heartbeat from the authority (a new boot of the authority's: its sequence goes on from
-     its TPM counter); the other two open their volumes through X's keyslot, unattended; all three leased. Then
-     the total outage again, the authority first.
-  4  the authority revokes c (REVOKED_STOLEN): its published chain changes, and its own wg-apply (the path unit's
-     trigger) drops c from its tunnel, as the nodes' do
-  5  its time no longer authenticated (its authtime.json says so): the authority signs no heartbeat, and its trail
-     says why (fail closed)
+     X up, the hand recovery: X and an owner key (either of the two) sign X's heartbeat, living at most 1 h; the other
+     two open their volumes through X's keyslot, unattended; all three leased; (once) the nodes then sign their own
+     heartbeats again, with no owner. Then the total outage again.
+  4  a and b revoke c (REVOKED_STOLEN), each at its own console (revoke.py): their wg-apply drops c from wg-svc
+  5  a's time no longer authenticated (its authtime.json says so): a signs no heartbeat, and its trail says why
+     (fail closed)
 """
 import base64
 import json
@@ -57,40 +55,31 @@ def header(text):
     sys.stdout.flush()
 
 
-def took_heartbeat(cluster, name, since):
-    """Whether the node's sync accepted a heartbeat from the authority at or after `since` (its trail)."""
-    return any(e.get("event") == "sync-heartbeat" and e.get("peer") == "@authority" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since
-               for e in cluster.trail(name))
-
-
-def recent(cluster, name, kinds=("sync-heartbeat", "sync-pull", "sync-apply", "authority-heartbeat", "authority-publish"), n=6):
-    """The member's last trail events of these kinds: why a heartbeat did not come."""
-    return [{k: e.get(k) for k in ("event", "peer", "subject", "outcome", "reason", "epoch", "sequence") if e.get(k) not in (None, "")}
-            for e in cluster.trail(name) if e.get("event") in kinds][-n:]
+def recent(cluster, name, n=8):
+    """The node's last heartbeat events (beat-propose, the beat-sign answers it gave, owner-beat): why it holds none."""
+    return cluster.beat_events([name], last=n)[name]
 
 
 def outage(cluster, names):
-    """Everything powered off, the authority too; then the authority's host first, as the runbook says."""
-    for name in names + [AUTH]:
+    """Everything powered off."""
+    for name in names:
         cluster.stop(name)
 
 
 def scenario(cluster):
     names = list(cluster.nodes)
 
-    header("1  three nodes and the authority: the authority's heartbeats, and leases")
+    header("1  three nodes: the heartbeats the nodes sign themselves, and leases")
     cluster.build()
     for name in names:
         cluster.disk(name)
     for name in names:
         cluster.enrol(name)
-    cluster.start(AUTH)
     for name in names:
         cluster.start(name, SERVICES)
+    fresh = cluster.fresh(names, timeout=240)
     for name in names:
-        ok(until(lambda: took_heartbeat(cluster, name, 0), 120, 2) is True, "%s took a heartbeat from the authority" % name,
-           {"node": recent(cluster, name), "authority": recent(cluster, AUTH), "authority peers": sorted(cluster.wg_peers(AUTH, "wg-svc")),
-            "node peers": sorted(cluster.wg_peers(name, "wg-svc"))})
+        ok(fresh[name], "%s holds a heartbeat the nodes signed (from bootstrap, no authority)" % name, recent(cluster, name))
     for name in names:
         ok(bool(until(lambda: cluster.lease(name), 120, 2)), "%s holds a lease" % name, cluster.journal(name, "admission")[-600:])
 
@@ -99,21 +88,22 @@ def scenario(cluster):
     for name in names:
         got = cluster.unlock(name, timeout=120, rounds=2)
         ok(got["rc"] != 0 and got["peer"] is None, "N: %s, everything down, gets no key" % name, got)
-    cluster.start(AUTH)
-    got = cluster.unlock(names[0], timeout=120, rounds=2)
-    ok(got["rc"] != 0 and got["peer"] is None, "N: the authority back, still no node up: %s gets no key (stays encrypted)" % names[0], got)
 
-    header("3  PoC 11.2-11.4: one node by hand, the other two through it")
+    header("3  PoC 11.2-11.4: one node by hand, the owner's hand recovery, the other two through it")
     for first in names:
         others = [n for n in names if n != first]
         got = cluster.recover(first)
         ok(got["rc"] == 0 and got["peer"] is None and got["marker"],
            "manual: %s's volume opened by hand with its recovery key (keyslot %s, no peer's) and read back" % (first, got["slot"]), got)
-        since = time.time()
         cluster.start(first, SERVICES)
-        ok(until(lambda: took_heartbeat(cluster, first, since), 120, 2) is True,
-           "%s took a fresh heartbeat from the authority, back after its own outage" % first,
-           {"node": recent(cluster, first), "authority": recent(cluster, AUTH)})
+        # #199's hand recovery (owner.py beat): alone, the node can sign no heartbeat with a peer, so the operator at its
+        # console co-signs one with an owner key. It lives at most owner_heartbeat_lifetime_s (1 h)
+        envelope = cluster.owner_beat(first, which=names.index(first) % 2)      # either owner key will do (ADR-0002 D30)
+        body = envelope["heartbeat"]
+        lives = threenode.heartbeat.parse_time(body["expires_at"], "e") - threenode.heartbeat.parse_time(body["issued_at"], "i")
+        ok(cluster.heartbeat_signers(first) == [first, "owner"] and lives <= 3600,
+           "hand recovery: %s holds a heartbeat it and an owner key signed (sequence %d, living %d s, at most 1 h)" % (first, body["sequence"], lives),
+           recent(cluster, first))
         for name in others:
             got = cluster.unlock(name)
             ok(got["rc"] == 0 and got["peer"] == first and got["marker"],
@@ -123,30 +113,34 @@ def scenario(cluster):
         for name in [first] + others:
             ok(bool(until(lambda: cluster.lease(name), 150, 3)), "L: %s holds a lease (from %s)" % (name, cluster.lease_issuer(name)),
                cluster.journal(name, "admission")[-600:])
+        if first == names[-1]:
+            # the next beat is the nodes' own again (6 h), with no owner, once the owner's is due for renewal (its issue
+            # plus beat_interval_s): the emergency credential is not needed any more. Once, not for every first node
+            back = cluster.fresh(names, timeout=900)
+            ok(all(back.values()), "the nodes sign their own heartbeats again, with no owner (%s)" % back, {n: recent(cluster, n) for n in names})
         outage(cluster, names)
-        cluster.start(AUTH)
 
-    header("4  a revocation leaves the authority's own tunnel too")
-    before = cluster.wg_peers(AUTH, "wg-svc")
-    # as `wg show` prints them: base64 (the fixture holds them as the manifest does, in hex)
+    header("4  two nodes revoke the third; their service tunnels drop it")
+    for name in names:
+        cluster.start(name, SERVICES)
+    cluster.fresh(names, timeout=300)
     keys = {name: base64.b64encode(bytes.fromhex(cluster.keys[name]["service"][1])).decode() for name in names}
-    said = cluster.revoke("c", "REVOKED_STOLEN", "e2e: the authority's tunnel follows the chain").stdout
-    ok(until(lambda: cluster.wg_peers(AUTH, "wg-svc") == {keys["a"], keys["b"]}, 60, 2) is True and keys["c"] in before,
-       "after `authority revoke` (epoch 2 published), its wg-apply path dropped c from wg-svc; a and b remain",
-       {"before": sorted(before), "after": sorted(cluster.wg_peers(AUTH, "wg-svc")), "said": said[-300:]})
+    before = {n: cluster.wg_peers(n, "wg-svc") for n in ("a", "b")}
+    cluster.revoke_by_nodes("a", "b", "c", "REVOKED_STOLEN", "e2e: two nodes revoke the third")
+    ok(until(lambda: all(keys["c"] not in cluster.wg_peers(n, "wg-svc") for n in ("a", "b")), 60, 2) is True
+       and all(keys["c"] in before[n] for n in ("a", "b")),
+       "after a and b signed epoch 2 (c REVOKED_STOLEN, revoke.py at each console), their wg-apply dropped c from wg-svc",
+       {n: sorted(cluster.wg_peers(n, "wg-svc")) for n in ("a", "b")})
 
-    header("5  without authenticated time the authority signs nothing")
-    cluster.time[AUTH] = False                       # chrony stops vouching (the stand-in's switch)
-    ok(until(lambda: not json.loads((cluster.auth.run / "authtime.json").read_text())["authenticated"], 30, 1) is True,
-       "the authority's authtime.json says not authenticated")
+    header("5  without authenticated time a node signs nothing")
+    cluster.time["a"] = False                        # chrony stops vouching (the stand-in's switch)
+    ok(until(lambda: not json.loads((cluster.nodes["a"].run / "authtime.json").read_text())["authenticated"], 30, 1) is True,
+       "a's authtime.json says not authenticated")
     since = time.time()
-    # serve tries a beat at its start and then every interval_s (600 s): restarted, it tries now, as after a reboot
-    sh("systemctl", "restart", cluster.unit(AUTH, "serve"))
-    refused = until(lambda: any(e.get("event") == "authority-heartbeat" and e.get("outcome") == "FAILED" and "time is not authenticated" in e.get("reason", "")
-                                and e.get("at", 0) >= since for e in cluster.trail(AUTH)), 180, 3)
-    signed = [e for e in cluster.trail(AUTH) if e.get("event") == "authority-heartbeat" and e.get("outcome") not in ("FAILED", None) and e.get("at", 0) >= since]
-    ok(refused is True and not signed, "time no longer authenticated: the authority signs no heartbeat, and records why (fail closed)",
-       recent(cluster, AUTH))
+    refused = until(lambda: any(e.get("event") == "beat-propose" and e.get("outcome") == "DENY" and "time is not authenticated" in e.get("reason", "")
+                                and e.get("at", 0) >= since for e in cluster.trail("a")), 180, 3)
+    signed = [e for e in cluster.trail("a") if e.get("event") == "beat-propose" and e.get("outcome") == "ALLOW" and e.get("at", 0) >= since]
+    ok(refused is True and not signed, "time no longer authenticated: a signs no heartbeat, and records why (fail closed)", recent(cluster, "a"))
 
 
 def main():
@@ -171,7 +165,7 @@ def main():
         print("three-node-outage: run as root, with REGALIA_UNLOCK_BIN naming a built cmd/regalia-unlock")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="three-node-", dir="/tmp"))   # where swtpm's AppArmor profile lets it write
-    cluster = threenode.Cluster(work, authority=True)
+    cluster = threenode.Cluster(work)
     try:
         scenario(cluster)
     except Exception:                     # noqa: BLE001 - a step that could not run is a failure, said once
@@ -179,7 +173,7 @@ def main():
         ok(False, "the scenario ran to its end", traceback.format_exc()[-1500:])
         for name in list(cluster.nodes):
             print("----- %s sync\n%s\n----- %s admission\n%s" % (name, cluster.journal(name, "sync"), name, cluster.journal(name, "admission")))
-        print("----- authority serve\n%s\n----- authority trail\n%s" % (cluster.journal(AUTH, "serve"), recent(cluster, AUTH, n=15)))
+        print("----- heartbeat events\n%s" % cluster.beat_events(list(cluster.nodes), last=8))
     finally:
         cluster.close()
         sh("rm", "-rf", "--", str(work), check=False)
