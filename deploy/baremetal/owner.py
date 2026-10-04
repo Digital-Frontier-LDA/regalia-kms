@@ -113,7 +113,7 @@ def sign_manifest(current, proposal, open_signer, confirm, say=print):
 # ---- the owner as the second source of a recovery (#387; recover.py): off the nodes ----
 
 def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session, open_signer, confirm, now,
-                  witnesses=None, counter_epoch=None, say=print):
+                  witnesses=None, counter_epoch=None, say=print, issued=None):
     """The owner's statement over ONE peer's chain, for recover.py --one-source (or reanchor's), after the owner has judged
     its tip (regalia-kms-d9's conditions, adopted on #387). The counter does not protect a re-anchor, so this does:
       * the tip is not below the highest epoch this machine's manifest signing record (`record_lines`, manifest.py's
@@ -125,6 +125,8 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
         witness the operator must type "no collector" as part of the line, and the statement says so to the record;
       * the operator types the line naming the purpose, node, epoch and digest (and "no collector"), after reading
         that the record is a lower bound and being asked for any later revocation they know of.
+    The statement expires SESSION_TTL - 60 s after the session was `issued` (the node's authenticated time, which
+    `recover session` prints), not by this machine's clock, which an offline laptop may have wrong (d9's read).
     Returns {"statement", "key", "sig"} for the node."""
     from deploy.baremetal import manifest as manifest_tool, recover
     require(purpose in recover.PURPOSES, "the purpose is one of %s" % ", ".join(recover.PURPOSES))
@@ -152,6 +154,10 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
         lines.append("    epoch %d: %s" % (i + 1, "; ".join(manifest_tool.diff(by_epoch[i], by_epoch[i + 1]))))
     if tip["epoch"] == floor["epoch"]:
         lines.append("    none")
+    if seen is None:
+        lines.append("  WITHOUT THE COLLECTOR, a revocation two nodes signed after epoch %d is invisible here: the root never signs it,"
+                     % floor["epoch"])
+        lines.append("  so it is in no record this machine holds; the peer's tip may be from before it")
     lines.append("  Do you know of any later revocation? If so, stop here.")
     want = "%s %s %d %s%s" % (purpose, node_id, tip["epoch"], membership.digest(tip)[:8], "" if seen is not None else " no collector")
     require((confirm("\n".join(lines) + "\nType exactly: %s\n> " % want) or "").strip() == want,
@@ -159,7 +165,7 @@ def sign_recovery(peer_chain, root_key, record_lines, purpose, node_id, session,
     owners = [e["key"] for e in tip.get("owner_keys", []) if e["alg"] == "ed25519"]
     signer = open_signer()
     require(signer.public() in owners, "the token's key is not one of the tip manifest's owner_keys: nothing is signed")
-    st = recover.statement(purpose, node_id, tip, session, now + recover.SESSION_TTL - 60)
+    st = recover.statement(purpose, node_id, tip, session, (now if issued is None else issued) + recover.SESSION_TTL - 60)
     say("Touch the key now (it signs when touched).")
     return {"statement": st, "key": signer.public(), "sig": signer.sign(recover.message(st)).hex()}
 
@@ -261,6 +267,7 @@ def main(argv=None):
     v.add_argument("--purpose", required=True, choices=("recover", "reanchor"))
     v.add_argument("--node-id", required=True, help="the node being recovered")
     v.add_argument("--session", required=True, help="the session the node printed (`recover session`)")
+    v.add_argument("--session-issued", type=int, required=True, help="the ISSUED time `recover session` printed (the node's authenticated time)")
     v.add_argument("--counter-epoch", type=int, help="the node's counter, where it is still readable")
     v.add_argument("--witness", action="append", default=[], metavar="EXPORT.json:RECEIPT.json",
                    help="the audit collector's export of a node's sync stream and its signed receipt")
@@ -338,7 +345,7 @@ def main(argv=None):
                 return keyfd.tty_line("> ")                 # the console's terminal, never standard input
             signed = sign_recovery(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), manifest_tool.root_key(args.root_key), record,
                                    args.purpose, args.node_id, args.session, open_signer, confirm_line, int(time.time()),
-                                   witnesses=witnesses, counter_epoch=args.counter_epoch)
+                                   witnesses=witnesses, counter_epoch=args.counter_epoch, issued=args.session_issued)
             fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
             with os.fdopen(fd, "w") as f:
                 json.dump(signed, f, sort_keys=True)

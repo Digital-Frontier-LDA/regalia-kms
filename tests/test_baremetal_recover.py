@@ -141,6 +141,9 @@ class OwnerSide(Witness):
         self.assertIn("NOT CONSULTED", text)
         self.assertIn('policy_version: "p1" -> "p2"', text)
         self.assertIn("any later revocation", text)
+        self.assertIn("a revocation two nodes signed after epoch 2 is invisible here", text)
+        late = self.sign_recovery("recover b 3 %s no collector" % m.digest(self.m3)[:8], now=T0 + 7200, issued=T0)
+        self.assertEqual(late["statement"]["expires"], T0 + recover.SESSION_TTL - 60)     # the node's time, not the laptop's
 
     def test_nothing_is_signed_below_the_record_or_the_counter_or_off_its_chain_or_mistyped(self):
         line = "recover b 3 %s no collector" % m.digest(self.m3)[:8]

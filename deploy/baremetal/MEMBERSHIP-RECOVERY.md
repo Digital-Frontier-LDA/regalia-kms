@@ -110,7 +110,7 @@ owner}). Nothing does this by itself:
 python3 -Es -m deploy.baremetal.recover session --config /etc/regalia/node.json
 # 2. on the owner's machine or the offline laptop, with the ONE peer's chain fetched as in step 1 above,
 #    the laptop's manifest signing record, and the audit collector's export and receipt of each node's sync stream
-python3 -Es -m deploy.baremetal.owner sign-recovery --purpose recover --node-id b --session SESSION \
+python3 -Es -m deploy.baremetal.owner sign-recovery --purpose recover --node-id b --session SESSION --session-issued ISSUED \
     --chain a-chain.json --root-key "$ROOT_KEY_HEX" --record signing-record.jsonl \
     --witness a-sync.json:a-receipt.json --stream site-a.sync [--witness ... --stream ...] \
     --receipt-keys collector-keys.json --collector-identity ID [--counter-epoch N] \
@@ -140,10 +140,14 @@ the phrase at the console's terminal. The outcome is recorded in the sync trail 
 re-anchor log, which names `owner` among the sources.
 
 **What is left.** The owner and one node together can install a chain neither of the others has seen:
-that is the 2-of-{a, b, c, owner} rule itself, not a gap in it. What would make it wrong is a later
-restrictive epoch that neither the laptop's record nor the collector holds: one a quorum of nodes signed
-and the collector never received. The operator's answer to "do you know of any later revocation" is the
-only guard left there. The statement cannot be replayed into another operation, boot, node or tip, and
+that is the 2-of-{a, b, c, owner} rule itself, not a gap in it. What it cannot catch: the owner and ONE
+COMPROMISED PEER offering a tip at or above the laptop's floor that predates a revocation two nodes signed.
+Such a revocation is restrictive and never root-signed, so it is in no signing record; only the collector
+holds it. Without the collector (`no collector` typed, and so in the signed line's record), the operator's
+answer to "do you know of any later revocation" is the only guard left. A witness export that is old
+verifies too, and only lowers what the collector is said to have seen: fetch it during the operation.
+The statement expires 15 minutes after the node issued the session, by the node's authenticated time, never
+by the laptop's clock. The statement cannot be replayed into another operation, boot, node or tip, and
 expires within 15 minutes.
 
 ## What is tested, and what is not

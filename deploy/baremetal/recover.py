@@ -165,7 +165,11 @@ def last_known(path, root_key):
 
 
 def restore(node, sources, minimum, trail):
-    """As regalia-sync: convergence.recover through the node's Store. Returns the epoch it is at."""
+    """As regalia-sync: convergence.recover through the node's Store. Returns the epoch it is at.
+    It checks NO owner statement and takes `minimum` as given: every check of --one-source is apply()'s, as root,
+    before the hand-over. That is no weaker than regalia-sync already is (it can call convergence.recover with any
+    minimum from its own process); against a compromised regalia-sync the boundary is the TPM anchor, not this
+    entry point (d9's read)."""
     from deploy.baremetal import convergence, node as node_module
     event = {"event": "recover", "sources": sorted(sources), "minimum": minimum}
     try:
@@ -282,7 +286,8 @@ def main(argv=None):
                 # issued by the same authenticated time the statement is later checked by
                 seconds = _authenticated_now(node_module.Node(cfg))
                 session = new_session(os.path.join(cfg["run_dir"], SESSION_FILE), f.read().strip(), now=lambda: seconds)
-            print("SESSION %s (good for %d s: the owner signs THIS one with owner.py sign-recovery --session)" % (session_id(session), SESSION_TTL))
+            print("SESSION %s ISSUED %d (good for %d s: the owner signs THIS one with owner.py sign-recovery --session SESSION "
+                  "--session-issued ISSUED)" % (session_id(session), session["issued"], SESSION_TTL))
             return 0
         peers = {}
         for item in args.peer:
