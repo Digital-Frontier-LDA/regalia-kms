@@ -940,6 +940,9 @@ Each line becomes one audit event on the stream `<site>.<trail>`.
 
 ### Node metrics and alerts (#305)
 
+Who scrapes them, and what that external service must provide and never receives: [MONITORING.md](MONITORING.md)
+(#351).
+
 Each service on a node writes a Prometheus textfile for **node_exporter's textfile collector**: no listener of
 ours. The names live in one registry, `deploy/baremetal/metrics.py` (`METRICS`, the way `trails.py` lists the
 trails), and `metrics.render()` refuses any series, label or value it does not list. Labels are enums and
