@@ -70,7 +70,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from deploy.baremetal import authtime, convergence, heartbeat, membership, node, sitecfg, sync, wgsvc
+from deploy.baremetal import authtime, convergence, heartbeat, measurements, membership, node, sitecfg, sync, wgsvc
 
 Refused, require = membership.Refused, membership.require
 
@@ -442,7 +442,10 @@ class Authority:
         tcti = cfg["tcti"]
         self.anchor = membership.HighWater(cfg["nv_epoch"], tcti, self.run, lock_path=self.path("highwater.lock"))
         self.counter = sequence_counter(cfg, self.run)
-        self.store = membership.Store(self.path("membership.json"), cfg["root_key"], self.anchor)
+        # the measurement documents by digest (#332): the authority is a sync source, so it holds the document of every
+        # epoch it commits, and answers `measurements` from them
+        self.documents = measurements.Documents(self.path(measurements.STORE_DIR))
+        self.store = membership.Store(self.path("membership.json"), cfg["root_key"], self.anchor, documents=self.documents.require_for)
         # One writer: beat and revoke each hold this from loading the manifest to publishing. A revocation
         # arrives through the control socket of the running `serve`, never from a second process.
         self.lock = threading.RLock()
@@ -608,17 +611,21 @@ class Authority:
                 self.wake.set()                                         # serve retries at once, not an interval later
                 raise Committed(candidate["epoch"], failure) from None
 
-    def init(self, envelopes):
+    def init(self, envelopes, documents=()):
         """First start: define the TPM anchor and the sequence counter, then take the root's chain."""
         self.anchor.define()
         self.counter.define()
-        return self.accept(envelopes)
+        return self.accept(envelopes, documents)
 
-    def accept(self, envelopes):
-        """Root-signed manifests from the ceremony, in order. Returns the epoch now held."""
+    def accept(self, envelopes, documents=()):
+        """Root-signed manifests from the ceremony, in order, with the measurement documents they commit to
+        (`documents`: put into the store by digest first; the last epoch's must be among them or held already,
+        #332). Returns the epoch now held."""
         with self.lock:
-            for envelope in envelopes:
-                self.store.commit(envelope)
+            for document in documents:
+                self.documents.put(document)
+            for index, envelope in enumerate(envelopes):
+                self.store.commit(envelope, final=index == len(envelopes) - 1)
                 self.trail({"event": "authority-accept", "outcome": "ALLOW", "epoch": envelope["manifest"]["epoch"],
                             "digest": membership.digest(envelope["manifest"]), "signer": envelope["signature"]["signer"]})
             self.publish()
@@ -715,7 +722,7 @@ class Authority:
         listener = node.bind_when_up((own, self.cfg["sync_port"]), stop, family=socket.AF_INET6)
         listener.settimeout(1)
         self.publish_or_record()                      # a host upgraded from before chain.json, or a publication that failed
-        server = sync.Server(convergence.AUTHORITY, self.store, self, None, None, wgsvc.key_at, self.trail)
+        server = sync.Server(convergence.AUTHORITY, self.store, self, None, None, wgsvc.key_at, self.trail, documents=self.documents)
         threading.Thread(target=sync.serve, args=(server, listener, stop), daemon=True).start()
         self.control_listener(stop)
         try:
@@ -868,6 +875,8 @@ def main(argv=None):
     for name in ("init", "accept"):
         chain = sub.add_parser(name)
         chain.add_argument("--chain", required=True, help="a JSON list of root-signed envelopes, in epoch order")
+        chain.add_argument("--documents", action="append", default=[], metavar="FILE",
+                           help="a measurements document the chain commits to (repeatable; the last epoch's is required, #332)")
     args = parser.parse_args(argv)
     try:
         cfg = load(args.config)
@@ -906,7 +915,11 @@ def main(argv=None):
             with open(args.chain, "rb") as f:
                 envelopes = membership.load(f.read(membership.MAX_CHAIN_BYTES + 1), membership.MAX_CHAIN_BYTES)
             require(isinstance(envelopes, list) and envelopes, "the chain must be a non-empty JSON list of envelopes")
-            print("epoch %d held" % (authority.init if args.command == "init" else authority.accept)(envelopes))
+            documents = []
+            for name in args.documents:
+                with open(name, "rb") as f:
+                    documents.append(measurements.load(f.read(measurements.MAX_BYTES + 1)))
+            print("epoch %d held" % (authority.init if args.command == "init" else authority.accept)(envelopes, documents))
     except (OSError, Refused, ValueError) as failure:
         print("REFUSED: %s" % failure, file=sys.stderr)
         return 2

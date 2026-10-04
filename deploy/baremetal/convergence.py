@@ -99,7 +99,7 @@ def catch_up(store, envelopes):
     last good epoch. Returns the summary afterwards."""
     require(isinstance(envelopes, list) and len(envelopes) <= MAX_ENVELOPES, "at most %d envelopes at a time" % MAX_ENVELOPES)
     current = store.load()
-    for envelope in envelopes:
+    for index, envelope in enumerate(envelopes):
         require(isinstance(envelope, dict) and isinstance(envelope.get("manifest"), dict), "an envelope must hold a manifest")
         epoch = envelope["manifest"].get("epoch")
         held = current["epoch"] if current else 0
@@ -112,7 +112,8 @@ def catch_up(store, envelopes):
             require(membership.digest(received) == membership.digest(mine["manifest"]),
                     "CONFLICT: a different manifest at epoch %d: two manifests were signed for one epoch; record an incident" % epoch)
             continue
-        current = store.commit(envelope)
+        # the last envelope is the epoch this batch leaves the node at: its measurements must be held (#332)
+        current = store.commit(envelope, final=index == len(envelopes) - 1)
     return summary(store)
 
 
