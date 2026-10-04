@@ -1211,7 +1211,6 @@
    "chain": "main",
    "length": 3,
    "name": "a base of 4 bytes",
-   "refused": "cannot read 8 bytes from NV index 0x1500017",
    "tpm": {
     "broken": false,
     "nv": {
@@ -1238,7 +1237,74 @@
     },
     "public_fails": [],
     "unreadable": []
-   }
+   },
+   "unusable": "NV index 0x1500017 is 4 bytes, not 8"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a base of 16 bytes",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002d",
+      "size": 8
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "00000000000000000000000000000000",
+      "size": 16
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500017 is 16 bytes, not 8"
+  },
+  {
+   "chain": "main",
+   "length": 3,
+   "name": "a counter of 16 bytes (FakeTpm only: a TPM refuses it)",
+   "tpm": {
+    "broken": false,
+    "nv": {
+     "0x1500016": {
+      "attributes": 537264146,
+      "data": "000000000000002e",
+      "size": 16
+     },
+     "0x1500017": {
+      "attributes": 537274370,
+      "data": "000000000000002a",
+      "size": 8
+     },
+     "0x150001a": {
+      "attributes": 537264130,
+      "data": "0000000000000003298d6f7ffe41b3f096f25a2a5a2a7984f81fd62b3698329d5fa1609920daed1a36816d02017b50c8",
+      "size": 48
+     },
+     "0x150001b": {
+      "attributes": 537264130,
+      "data": "0000000000000002d9beb52bb78c9dc3c0baec68f21c41265d6deef8a9e6fd7d0d0b348171e2d0597d5b07e0de11a22d",
+      "size": 48
+     }
+    },
+    "public_fails": [],
+    "unreadable": []
+   },
+   "unusable": "NV index 0x1500016 is 16 bytes, not 8"
   },
   {
    "chain": "main",

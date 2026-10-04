@@ -203,8 +203,22 @@ case("a counter that clears at startup", 3, "main", 3, set_bits(INDEX, add=FakeT
 case("a counter never incremented", 3, "main", 3, redefine(INDEX, size=8, words="nt=counter|ownerread|ownerwrite|authread"), then="not a written counter")
 case("a base that is not write-locked", 3, "main", 3, set_bits("0x1500017", remove=FakeTpm.LOCKED), then="write-locked")
 case("a base others may write", 3, "main", 3, set_bits("0x1500017", add=FakeTpm.BITS["authwrite"]), then="attributes")
-case("a base of 4 bytes", 3, "main", 3, both(redefine("0x1500017", size=4, words="ownerread|ownerwrite|authread|writedefine", data=b"\0" * 4),
-                                              set_bits("0x1500017", add=FakeTpm.LOCKED)), then="cannot read 8 bytes")
+# a counter or base of another size than 8 is not this anchor's: Unusable, which a re-anchor repairs (#336)
+for label, index, size, words in (("a base of 4 bytes", "0x1500017", 4, "ownerread|ownerwrite|authread|writedefine"),
+                                  ("a base of 16 bytes", "0x1500017", 16, "ownerread|ownerwrite|authread|writedefine")):
+    case(label, 3, "main", 3, both(redefine(index, size=size, words=words, data=b"\0" * size), set_bits(index, add=FakeTpm.LOCKED)),
+         then="is %d bytes, not 8" % size)
+
+
+def counter_of(size):
+    def change(tpm, hw):
+        tpm.tpm(["tpm2_nvundefine", INDEX, "-C", "o"])
+        tpm.tpm(["tpm2_nvdefine", INDEX, "-C", "o", "-s", str(size), "-a", "nt=counter|ownerread|ownerwrite|authread"])
+        tpm.tpm(["tpm2_nvincrement", INDEX, "-C", "o"])
+    return change
+
+
+case("a counter of 16 bytes (FakeTpm only: a TPM refuses it)", 3, "main", 3, counter_of(16), then="is 16 bytes, not 8")
 case("the counter below its base", 3, "main", 3, lambda t, hw: nv(t, "0x1500017").__setitem__(1, (10 ** 6).to_bytes(8, "big")), then="below its base")
 case("two slots at one epoch naming different manifests", 3, "main", 3,
      lambda t, hw: (nv(t, SLOTS[0]).__setitem__(1, m.HighWater.slot_bytes(3, "aa" * 32)),
