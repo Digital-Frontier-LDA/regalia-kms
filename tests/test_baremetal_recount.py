@@ -59,8 +59,8 @@ class Recount(Case):
         self.break_counter()
         stranger = Ed25519PrivateKey.generate()
         forged = hbt.beat(self.m1, 10 ** 6, issued=T0, key=stranger)              # signed by nobody the manifest names
-        authority = hbt.beat(self.m1, 55, issued=T0 + 10)                         # the authority's latest
-        planned = recount.plan(self.counter, self.m1, [self.state(), forged, authority])
+        latest = hbt.beat(self.m1, 55, issued=T0 + 10)                            # the nodes' latest
+        planned = recount.plan(self.counter, self.m1, [self.state(), forged, latest])
         self.assertEqual((planned["floor"], planned["held"]), (55, [(40, 1), (55, 1)]))
 
     def test_without_a_verified_heartbeat_nothing_is_done(self):
@@ -263,15 +263,13 @@ class CommandLine(TheHostsTpmAndChain):
         argv = ["--config", self.d + "/node.json", "--audit-log", self.d + "/audit.jsonl", "--heartbeat", self.d + "/nope.json"]
         self.assertEqual(recount.main(argv, ask=lambda prompt: "recount 0x01500018 at 41", run=run), 1)
 
-    def test_on_the_authority_refused_while_it_runs(self):
-        import tests.test_baremetal_authority as at
-        from deploy.baremetal import authority
-        with open(self.d + "/authority.json", "w") as f:
-            json.dump(at.config(self.d), f)
-        held = authority.one_writer(self.d)                   # what regalia-authority holds while it serves
-        self.addCleanup(os.close, held)
-        argv = ["--config", self.d + "/authority.json", "--audit-log", self.d + "/audit.jsonl"]
+    def test_a_configuration_that_is_not_a_node_s_is_refused(self):
+        """#199 retired the authority host: recount runs on a node, from node.json, and nothing else."""
+        with open(self.d + "/other.json", "w") as f:
+            json.dump({"schema": "regalia.authority/v1", "run_dir": "/run/regalia"}, f)
+        argv = ["--config", self.d + "/other.json", "--audit-log", self.d + "/audit.jsonl"]
         self.assertEqual(recount.main(argv, ask=lambda prompt: "", run=self.tpm), 1)
+        self.assertFalse(os.path.exists(self.d + "/audit.jsonl"))
 
 
 if __name__ == "__main__":

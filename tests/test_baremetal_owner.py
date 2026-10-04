@@ -2,7 +2,7 @@
 signed by the node as regalia-sync, shown and confirmed before the owner's key signs, and taken into the node's
 Freshness under the owner's one-hour cap. Each node is beat's test node (a fake TPM and a software signing key); the
 owner's key is a software Ed25519 key standing in for the YubiKey (Pkcs11Signer's Ed25519 path is tested against
-SoftHSM in test_baremetal_authority)."""
+SoftHSM in test_baremetal_p11sign)."""
 import unittest
 
 from deploy.baremetal import heartbeat as hb

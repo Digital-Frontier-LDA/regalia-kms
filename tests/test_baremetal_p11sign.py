@@ -27,7 +27,7 @@ class Pkcs11(unittest.TestCase):
     def setUp(self):
         import gc
         import subprocess
-        # A signer an Authority held (they reference each other through on_latch) keeps its PyKCS11 library,
+        # A signer a holder kept (they may reference each other through on_latch) keeps its PyKCS11 library,
         # and so SoftHSM, initialised on the last test's token directory until it is collected: collect it.
         gc.collect()
         if not (PyKCS11 and SOFTHSM and shutil.which("pkcs11-tool") and shutil.which("softhsm2-util")):
