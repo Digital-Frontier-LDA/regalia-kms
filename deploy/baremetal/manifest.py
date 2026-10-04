@@ -143,6 +143,9 @@ GENESIS_POLICY = {"heartbeat_max_lifetime_s": 21600, "owner_heartbeat_lifetime_s
 OWNER_PARTY = membership.OWNER
 # what `enrol entry` prints for a node (#358, #371 and its ssh_host_pub): the v4 entry is these and state ACTIVE
 ENTRY_FIELDS = ("node_id", "ek_name", "ak_name", "wg_service_pub", "wg_boot_pub", "signing_key", "hsm_serials", "ssh_host_pub")
+# the bench's Nitrokeys (regalia's tools/hsm-staging-registry.json, and DENK0400664, dead): never a production node's
+# token (ADR-0002 D28.5, D30). Genesis is where the root first vouches for a node's tokens, so they are refused here.
+BENCH_SERIALS = frozenset({"DENK0404144", "DENK0404380", "DENK0404547", "DENK0400664"})
 
 
 def _raw_ed25519(value, what):
@@ -179,15 +182,17 @@ def propose_genesis(entries, document, owners, release_key, root, issued_at, pol
                 % (entry.get("node_id", "entry %d" % i), ", ".join(missing)))
         membership.exact(entry, ENTRY_FIELDS, "entry of %s" % entry["node_id"])
         require(isinstance(entry["hsm_serials"], list) and entry["hsm_serials"], "the entry of %s names no token serial" % entry["node_id"])
+        bench = sorted(s for s in entry["hsm_serials"] if isinstance(s, str) and s.upper() in BENCH_SERIALS)
+        require(not bench, "the entry of %s names a bench token (%s): never a production node's (D28.5)" % (entry["node_id"], ", ".join(bench)))
         nodes.append(dict(entry, state="ACTIVE"))
     nodes.sort(key=lambda n: n["node_id"])
     release_key = _raw_ed25519(release_key, "--release-key")
     require(release_key not in owners.values(), "--release-key is one of the owner keys: the release card is never an owner key")
     roots = {key for _, key in membership.root_entries(root)}
-    for serial, key in sorted(owners.items()):
-        require(key not in roots, "the owner card %s's key is the pinned root's" % serial)
+    for name, key in [("owner card %s" % s, k) for s, k in sorted(owners.items())] + [("release card", release_key)]:
+        require(key not in roots, "the %s's key is the pinned root's" % name)
         for node in nodes:
-            require(key != node["signing_key"].get("key"), "the owner card %s's key is %s's signing key" % (serial, node["node_id"]))
+            require(key != node["signing_key"].get("key"), "the %s's key is %s's signing key" % (name, node["node_id"]))
     ids = [n["node_id"] for n in nodes]
     candidate = dict(GENESIS_POLICY, **(policy or {}))
     candidate.update({

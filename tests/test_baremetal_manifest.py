@@ -880,6 +880,17 @@ class ProposeGenesis(unittest.TestCase):
         reused = [dict(e, signing_key={"alg": "ed25519", "key": self.owner_b}) if e["node_id"] == "b" else e for e in self.entries]
         self.refused("the owner card CARD-B's key is b's signing key", self.propose, entries=reused)
 
+    def test_the_release_card_is_neither_the_root_nor_a_node(self):
+        """regalia-kms-d9's read: the release key was compared with the owner keys only."""
+        self.refused("the release card's key is the pinned root's", self.propose, release=self.root)
+        reused = [dict(e, signing_key={"alg": "ed25519", "key": self.release}) if e["node_id"] == "c" else e for e in self.entries]
+        self.refused("the release card's key is c's signing key", self.propose, entries=reused)
+
+    def test_a_bench_token_is_never_a_production_node_s(self):
+        """regalia-kms-d9's read: D28.5, never a bench serial; genesis is where the root first vouches for the tokens."""
+        bench = [dict(e, hsm_serials=e["hsm_serials"] + ["denk0404380"]) if e["node_id"] == "b" else e for e in self.entries]
+        self.refused("the entry of b names a bench token (denk0404380)", self.propose, entries=bench)
+
     def test_an_entry_from_an_older_enrolment_or_with_no_serial_is_refused(self):
         older = [{k: v for k, v in e.items() if k != "ssh_host_pub"} if e["node_id"] == "c" else e for e in self.entries]
         self.refused("the entry of c lacks ssh_host_pub", self.propose, entries=older)
