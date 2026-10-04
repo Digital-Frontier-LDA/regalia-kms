@@ -49,34 +49,74 @@ class RepoGit(unittest.TestCase):
             f.write("*.txt filter=evil\n")
         code, err = self.check()
         self.assertEqual(code, 3, err)
-        self.assertIn("could run a command (filter.evil.clean", err)
+        self.assertIn("sets filter.evil.clean, which a clone does not", err)
         self.assertFalse(os.path.exists(self.marker), "the planted filter ran")
 
-    def test_each_command_bearing_key_is_refused(self):
+    def test_anything_a_clone_does_not_write_is_refused(self):
         for key, value in (("core.fsmonitor", "true"), ("core.hooksPath", "/tmp"), ("core.sshCommand", "true"),
                            ("diff.x.textconv", "cat"), ("include.path", "/dev/null"), ("alias.st", "!true"),
-                           ("core.pager", "cat"), ("core.attributesFile", "/dev/null")):
+                           ("core.pager", "cat"), ("credential.helper", "store"), ("gpg.program", "true"),
+                           ("branch.main.description", "harmless, but not a clone's")):
             with self.subTest(key=key):
                 self.setUp()
                 self.config(key, value)
                 code, err = self.check()
                 self.assertEqual(code, 3, err)
-                self.assertIn(key.lower(), err)
+                self.assertIn(key.lower() if "." not in key[key.index(".") + 1:] else key.split(".")[0], err.lower())
 
-    def test_a_tracked_gitattributes_naming_a_driver_is_refused(self):
-        for line in ("*.txt filter=x\n", "*.txt diff=x\n", "*.bin merge=ours\n"):
-            with self.subTest(line=line):
-                with open(os.path.join(self.repo, ".gitattributes"), "w") as f:
-                    f.write(line)
-                code, err = self.check()
-                self.assertEqual(code, 3, err)
-                self.assertIn(".gitattributes names a filter, diff or merge driver", err)
+    def test_a_worktree_scope_plant_is_refused_and_never_runs(self):
+        """regalia-kms-1e's reproduction on #384: extensions.worktreeConfig, then a filter and an attributes file in the
+        WORKTREE scope (.git/config.worktree), outside the tree; a stale stat makes status run the filter."""
+        attributes = os.path.join(self.d, "attr")
+        with open(attributes, "w") as f:
+            f.write("*.txt filter=evil\n")
+        self.config("extensions.worktreeConfig", "true")
+        env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+        for key, value in (("filter.evil.clean", "touch %s; cat" % self.marker), ("core.attributesFile", attributes)):
+            subprocess.run(["git", "-C", self.repo, "config", "--worktree", key, value], check=True, capture_output=True, env=env)
+        os.utime(os.path.join(self.repo, "file.txt"), (978307200, 978307200))
+        code, err = self.check()
+        self.assertEqual(code, 3, err)
+        self.assertIn("core.attributesfile", err)
+        self.assertIn("filter.evil.clean", err)
+        self.assertFalse(os.path.exists(self.marker), "the planted worktree-scope filter ran")
 
-    def test_a_harmless_gitattributes_is_read(self):
+    def test_core_worktree_is_refused(self):
+        """It would point the clean-tree check at another directory than the one the build reads."""
+        self.config("core.worktree", self.d)
+        code, err = self.check()
+        self.assertEqual(code, 3, err)
+        self.assertIn("core.worktree", err)
+
+    def test_an_include_is_followed(self):
+        inc = os.path.join(self.d, "more.cfg")
+        with open(inc, "w") as f:
+            f.write("[core]\n\tpager = cat\n")
+        self.config("include.path", inc)
+        code, err = self.check()
+        self.assertEqual(code, 3, err)
+        self.assertIn("core.pager", err)
+
+    def test_what_a_clone_writes_is_read(self):
+        for key, value in (("user.name", "x"), ("remote.origin.url", "https://example.invalid/r.git"),
+                           ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"), ("branch.main.remote", "origin")):
+            self.config(key, value)
         with open(os.path.join(self.repo, ".gitattributes"), "w") as f:
-            f.write("*.sh text eol=lf\n")
+            f.write("*.sh text eol=lf\n*.txt filter=undefined\n")       # an attribute names no command without a driver
         code, err = self.check()
         self.assertEqual(code, 0, err)
+
+    def test_the_allowlist_is_uki_pys(self):
+        """The builder and the signer refuse the same configurations (#374's CLONE_CONFIG, once it lands)."""
+        import re
+        import sys
+        sys.path.insert(0, os.path.join(HERE, ".."))
+        from deploy.baremetal import uki
+        if not hasattr(uki, "CLONE_CONFIG"):
+            self.skipTest("uki.CLONE_CONFIG is #374's, not on this branch yet")
+        with open(LIB) as f:
+            shell = re.search(r"^REPO_GIT_ALLOWED='([^']*)'$", f.read(), re.M).group(1)
+        self.assertEqual(shell.replace("[^[:space:]]+", "X"), uki.CLONE_CONFIG.pattern.replace("[^\\0\\n]+", "X"))
 
 
 if __name__ == "__main__":

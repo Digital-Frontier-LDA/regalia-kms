@@ -44,7 +44,12 @@ for n in $(seq 1 "$BUILDS"); do
         GOFLAGS=-ldflags=-X=main.hostile=1 CGO_ENABLED=1 GOTOOLCHAIN=local GOSUMDB=off GONOSUMDB='*' GOINSECURE='*' \
         "$REPO/deploy/baremetal/initrd/build-initrd.sh" --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n" )
   else
-    deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n"
+    deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n" | tee "$OUT/build-$n.log"
+    # #382: run as root on a checkout another user owns, git reads it as that owner, never as root
+    if [ "$(id -u)" = 0 ] && [ "$(stat -c %u "$REPO")" != 0 ]; then
+      grep -q "^build-initrd: the checkout is read as uid $(stat -c %u "$REPO") " "$OUT/build-$n.log" \
+        || { echo "initrd-reproducible: build $n read the checkout as root, not as its owner (#382)"; exit 1; }
+    fi
   fi
 done
 same=yes
