@@ -507,7 +507,15 @@ class HighWater:
       * EXACTLY THESE ATTRIBUTES, apart from "written" and the base's write lock: counter 0x60012, base
         0x62002 (and write-locked), slots 0x60002 (and not write-locked). A reader refuses any other mask:
         that covers authwrite, policywrite, ppwrite and writeall (others could write the index), a missing
-        ownerread (the owner could not read it), and locks that clear at startup. Reads are open (authread):
+        ownerread (the owner could not read it), and locks that clear at startup.
+      * OR THE POLICY-WRITTEN LAYOUT (#242), index by index: the counter 0x6001A and a slot 0x6000A (the same
+        plus policywrite), with authPolicy = PolicyAuthorize(system-phase PCR key) = the node's configured
+        approved-image policy (HighWater(policy=...)). Such an index with any other authPolicy, or on a node
+        with no policy configured, is Unusable ("the anchor's write policy is not this node's approved-image
+        policy"), which a re-anchor repairs. The base is never policy-written. A signed PolicyPCR cannot also
+        restrict the command code, so a session that satisfies the policy may write or increment the index;
+        it can neither delete it (no policydelete) nor lock it (no writedefine or write_stclear on these).
+        Reads are open (authread):
         nothing here is secret, and every reader reads with the index's own empty authorization (nvread
         <index> -C <index>), never the owner's, so a reader works whatever the owner authorization is (#242).
         A slot holds  epoch (8 bytes, unsigned big-endian) || digest (32 bytes) || tag (8 bytes),  where
@@ -538,9 +546,19 @@ class HighWater:
     # locks that clear at startup, ...) is not this anchor's index: comparing the whole mask refuses them all.
     STATE = WRITTEN | WRITELOCKED
     ATTRIBUTES = {"counter": 0x00060012, "base": 0x00062002, "slot": 0x00060002}
+    # The policy-written layout (#242): the counter and the slots are ALSO written through their authPolicy,
+    # PolicyAuthorize(system-phase PCR key), so an approved image's booted system writes them with no owner
+    # authorization. Only with the node's own approved-image policy: an index of this layout whose authPolicy
+    # is anything else is Unusable. The base is written once, at definition, and has no policy in either layout.
+    POLICY_ATTRIBUTES = {"counter": 0x0006001A, "slot": 0x0006000A}
 
-    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None):
+    def __init__(self, index, tcti=None, run=subprocess.run, base_index=None, lock_path=None, record_indices=None, policy=None):
+        """`policy`: the node's approved-image write policy, PolicyAuthorize(system-phase PCR key), as 64 hex
+        (the digest a policy-written index must hold as its authPolicy); None on a node that has none."""
         self.index, self.run, self.env = index, run, ({"TPM2TOOLS_TCTI": tcti} if tcti else None)
+        if policy is not None:
+            hex_field(policy, 64, "the approved-image write policy")
+        self.policy = policy
         self.base_index = base_index or "0x%x" % (int(index, 16) + 1)
         # index + 2 and + 3 are left to the heartbeat's pair (0x1500018/0x1500019 beside 0x1500016)
         self.record_indices = tuple(record_indices or ("0x%x" % (int(index, 16) + 4), "0x%x" % (int(index, 16) + 5))) if self.RECORD else ()
@@ -576,6 +594,13 @@ class HighWater:
 
     def _attributes(self, index):
         return self._public(index)[0]
+
+    def _auth_policy(self, index):
+        """An index's authPolicy as tpm2_nvreadpublic reports it (64 lowercase hex), or "" when it has none."""
+        r = self._tpm("nvreadpublic", index)
+        require(r.returncode == 0, "cannot read NV index %s: the high-water anchor is unavailable (fail closed)" % index)
+        found = re.search(rb"(?m)^\s*authorization policy:\s*([0-9A-Fa-f]*)\s*$", r.stdout)
+        return found.group(1).decode().lower() if found else ""
 
     def _read8(self, index):
         r = self._tpm("nvread", index, "-C", index, "-s", "8")
@@ -688,18 +713,31 @@ class HighWater:
 
     def _is_slot(self, index):
         """Whether `index` is a record slot as this software defines one, which redefine() keeps and writes into:
-        ordinary, RECORD_BYTES long, written with owner authorization only, not write-locked. Anything else
-        holds no record this anchor can use, and is replaced rather than left to make every attempt fail."""
+        ordinary, RECORD_BYTES long, of either layout (_as_defined), not write-locked. Anything else holds no
+        record this anchor can use, and is replaced rather than left to make every attempt fail."""
         attributes, size = self._public(index)
-        return size == self.RECORD_BYTES and attributes & ~self.STATE == self.ATTRIBUTES["slot"] and not attributes & self.WRITELOCKED
+        if size != self.RECORD_BYTES or attributes & self.NT_MASK != self.NT_ORDINARY:
+            return False
+        try:
+            self._as_defined(index, attributes, "slot")
+        except Unusable:
+            return False
+        return True
 
     def _as_defined(self, index, attributes, kind):
-        """The index has exactly the attributes this software gives an index of that kind: written with the
-        owner's authorization only (no authwrite, policywrite or ppwrite, which would let others write it),
-        readable by the owner and by its own empty authorization, no locks that come and go."""
-        want = self.ATTRIBUTES[kind]
-        require_anchor(attributes & ~self.STATE == want, "NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be "
-                       "written or read otherwise than this software defines" % (index, attributes & ~self.STATE, want))
+        """The index has exactly the attributes this software gives an index of that kind, in one of its two
+        layouts: written with the owner's authorization only, or (#242, counter and slots) also through its
+        authPolicy, which must then be this node's approved-image policy. Either way readable by the owner and
+        by its own empty authorization, no authwrite or ppwrite, no locks that come and go."""
+        want, mask = self.ATTRIBUTES[kind], attributes & ~self.STATE
+        if mask == self.POLICY_ATTRIBUTES.get(kind):
+            held = self._auth_policy(index)
+            require_anchor(self.policy is not None and held == self.policy,
+                           "the anchor's write policy is not this node's approved-image policy: NV index %s is written by policy %s, %s"
+                           % (index, held or "(none)", "and this node has none configured" if self.policy is None else "not " + self.policy))
+        else:
+            require_anchor(mask == want, "NV index %s does not have this anchor's attributes (0x%x, not 0x%x): it can be written or read "
+                           "otherwise than this software defines" % (index, mask, want))
         if kind == "base":
             require_anchor(attributes & self.WRITELOCKED, "base index %s is not write-locked" % index)
         else:

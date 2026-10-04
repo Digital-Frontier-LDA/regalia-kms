@@ -70,6 +70,7 @@ class FakeTpm:
 
     def __init__(self, highest=0):
         self.nv, self.highest, self.broken = {}, highest, False
+        self.policies = {}                                   # index -> authPolicy (hex), for an index defined with one (-L)
 
     def __call__(self, argv, input=None, **kw):
         tool, index = argv[0][len("tpm2_"):], argv[1]
@@ -85,12 +86,16 @@ class FakeTpm:
             words = argv[argv.index("-a") + 1].split("|") if "-a" in argv else ["ownerread", "ownerwrite", "authread", "authwrite"]
             bits = sum(self.BITS.get(word, 0) for word in words) | (self.COUNTER if "nt=counter" in words else 0)
             self.nv[index] = [bits, None, int(argv[argv.index("-s") + 1])]
+            if "-L" in argv:
+                with open(argv[argv.index("-L") + 1], "rb") as f:
+                    self.policies[index] = f.read().hex()
             return ok()
         if index not in self.nv:
             return no
         entry = self.nv[index]
         if tool == "nvreadpublic":
-            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: %d\n" % (index, entry[0], entry[2])).encode())
+            policy = "  authorization policy: %s\n" % self.policies[index].upper() if index in self.policies else ""
+            return ok(("%s:\n  attributes:\n    friendly: (not parsed)\n    value: 0x%X\n  size: %d\n%s" % (index, entry[0], entry[2], policy)).encode())
         if tool == "nvread":
             size = int(argv[argv.index("-s") + 1])
             # a read is authorized by the owner (ownerread) or by the index itself (authread), as the TPM checks
@@ -112,6 +117,7 @@ class FakeTpm:
             return ok()
         if tool == "nvundefine":
             del self.nv[index]
+            self.policies.pop(index, None)
             return ok()
         return no
 
