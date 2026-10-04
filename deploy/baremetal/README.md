@@ -838,9 +838,14 @@ removing only what it can prove it made.
     stays until a rerun completes. It is overwritten with zeros, synced and then unlinked; on an SSD the
     overwrite is best effort, and the root volume's encryption is what protects the freed blocks.
   The peers answer through `sync`'s enrolment operations (`enrolpeer.py`).
-
-**Still NOT BUILT** (placed by hand, as the end-to-end test does):
-- the enrolment record signed by the AK's quote.
+- **The enrolment record** (step 8), written by `paths` after the last path and before `local.bin` goes, to
+  `/var/lib/regalia-enrol/enrolment.json`. It holds public values only: the manifest epoch and digest, the
+  root fingerprint, the EK and AK, the WireGuard keys, the NV indices read back, the `espcreds` record (the
+  PCR 12 the peers must expect), and the peers and paths. It is signed by the node's AK in a TPM quote whose
+  qualifying data is the record's digest under its own label, so no session quote can stand in for it.
+  An `enrol` event carrying its SHA-256 goes to the enrol trail (`/var/log/regalia/enrol.jsonl`, `trails.py`)
+  first. To check it with no TPM, run
+  `enrol verify-record --record F --manifest CHAIN --root-key K`.
 
 ### Shipping the audit trails (#278)
 
