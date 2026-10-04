@@ -58,6 +58,12 @@ def took_heartbeat(cluster, name, since):
                for e in cluster.trail(name))
 
 
+def recent(cluster, name, kinds=("sync-heartbeat", "sync-pull", "sync-apply", "authority-heartbeat", "authority-publish"), n=6):
+    """The member's last trail events of these kinds: why a heartbeat did not come."""
+    return [{k: e.get(k) for k in ("event", "peer", "subject", "outcome", "reason", "epoch", "sequence") if e.get(k) not in (None, "")}
+            for e in cluster.trail(name) if e.get("event") in kinds][-n:]
+
+
 def outage(cluster, names):
     """Everything powered off, the authority too; then the authority's host first, as the runbook says."""
     for name in names + [AUTH]:
@@ -78,7 +84,8 @@ def scenario(cluster):
         cluster.start(name, SERVICES)
     for name in names:
         ok(until(lambda: took_heartbeat(cluster, name, 0), 120, 2) is True, "%s took a heartbeat from the authority" % name,
-           cluster.journal(name, "sync")[-600:] + cluster.journal(AUTH, "serve")[-600:])
+           {"node": recent(cluster, name), "authority": recent(cluster, AUTH), "authority peers": sorted(cluster.wg_peers(AUTH, "wg-svc")),
+            "node peers": sorted(cluster.wg_peers(name, "wg-svc"))})
     for name in names:
         ok(bool(until(lambda: cluster.lease(name), 120, 2)), "%s holds a lease" % name, cluster.journal(name, "admission")[-600:])
 
@@ -100,7 +107,8 @@ def scenario(cluster):
         since = time.time()
         cluster.start(first, SERVICES)
         ok(until(lambda: took_heartbeat(cluster, first, since), 120, 2) is True,
-           "%s took a fresh heartbeat from the authority, back after its own outage" % first, cluster.journal(first, "sync")[-600:])
+           "%s took a fresh heartbeat from the authority, back after its own outage" % first,
+           {"node": recent(cluster, first), "authority": recent(cluster, AUTH)})
         for name in others:
             got = cluster.unlock(name)
             ok(got["rc"] == 0 and got["peer"] == first and got["marker"],
@@ -148,7 +156,7 @@ def main():
         ok(False, "the scenario ran to its end", traceback.format_exc()[-1500:])
         for name in list(cluster.nodes):
             print("----- %s sync\n%s\n----- %s admission\n%s" % (name, cluster.journal(name, "sync"), name, cluster.journal(name, "admission")))
-        print("----- authority serve\n%s" % cluster.journal(AUTH, "serve"))
+        print("----- authority serve\n%s\n----- authority trail\n%s" % (cluster.journal(AUTH, "serve"), recent(cluster, AUTH, n=15)))
     finally:
         cluster.close()
         sh("rm", "-rf", "--", str(work), check=False)

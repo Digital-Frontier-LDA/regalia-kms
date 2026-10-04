@@ -739,8 +739,8 @@ class Cluster:
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
 
     def trail(self, name):
-        """The node's sync trail, parsed."""
-        path = self.nodes[name].state / "sync-audit.jsonl"
+        """The node's sync trail (the authority's own trail for AUTH), parsed."""
+        path = (self.auth.state / "audit.jsonl") if name == AUTH and self.auth else self.nodes[name].state / "sync-audit.jsonl"
         if not path.exists():
             return []
         return [json.loads(line) for line in path.read_text().splitlines() if line.startswith("{")]
