@@ -3,6 +3,8 @@
 
     sudo python3 -Es -m deploy.baremetal.owner beat --config /etc/regalia/node.json --module /usr/lib/x86_64-linux-gnu/opensc-pkcs11.so \\
          --serial 35718625 --key-id 03 [--opensc-conf FILE]
+    python3 -Es -m deploy.baremetal.owner sign-manifest --chain CHAIN.json --root-key ROOT --proposal PROPOSAL.json --out SIGNED.json \\
+         --module ... --serial ... --key-id ...        (off the nodes: the owner's machine or the offline laptop; revoke.py)
 
 WHEN. After a total outage, one node is opened by hand with its recovery key. It holds no live heartbeat, and no
 other node is up to co-sign one, so it authorizes no unlock and the cluster stays down. The operator, at that node's
@@ -83,6 +85,31 @@ def accept(node, envelope, trail):
     return left
 
 
+# ---- a revocation the owner signs alone, off the nodes (revoke.py export / import; regalia-kms-24) ----
+
+def sign_manifest(current, proposal, open_signer, confirm, say=print):
+    """The owner's signature over a revocation `proposal` (revoke.py export: {"manifest", "signatures": [], "reason"}),
+    judged against `current`, the tip of the chain THIS machine verified from the root key (never the node's word):
+    membership's quorum rules first, then shown and confirmed, then signed. Returns the envelope to import on a node."""
+    from deploy.baremetal import revoke
+    require(isinstance(proposal, dict) and set(proposal) == {"manifest", "signatures", "reason"} and proposal["signatures"] == [],
+            "not an unsigned revocation proposal (revoke.py export)")
+    manifest = proposal["manifest"]
+    membership.transition(current, manifest, "quorum")
+    require(manifest["epoch"] == current["epoch"] + 1, "the proposal is not for the next epoch of the chain given (%d)" % current["epoch"])
+    owners = [e["key"] for e in current["owner_keys"] if e["alg"] == "ed25519"]
+    signer = open_signer()
+    require(signer.public() in owners, "the token's key %s... is not one of the manifest's owner_keys: nothing is signed" % signer.public()[:16])
+    text, digest = revoke.shown(current, manifest, proposal["reason"])
+    require(revoke.confirmed(manifest, digest, confirm(text)), "the epoch and digest typed are not this revocation's: nothing is signed")
+    say("Touch the key now (it signs when touched).")
+    sig = signer.sign(membership.DOMAIN + membership.canonical(manifest)).hex()
+    envelope = dict(proposal, signatures=[{"party": membership.OWNER, "key": signer.public(), "sig": sig}])
+    enough, _ = revoke.met(current, {"manifest": manifest, "signatures": envelope["signatures"]})
+    require(enough, "the owner's signature meets no revocation rule of the current manifest")
+    return envelope
+
+
 # ---- root's half ----
 
 def shown(body):
@@ -154,6 +181,14 @@ def main(argv=None):
     b.add_argument("--key-label", help="the key's CKA_LABEL")
     b.add_argument("--opensc-conf")
     b.add_argument("--pin-env", help="tests only (REGALIA_OWNER_TEST=1): the PIN from this environment variable")
+    k = sub.add_parser("sign-manifest", help="(off the nodes) the owner's signature over a revocation proposal")
+    k.add_argument("--chain", required=True, help="the signed chain this machine holds (a JSON list of envelopes)")
+    k.add_argument("--root-key", required=True, help="the pinned root, as manifest.py takes it")
+    k.add_argument("--proposal", required=True)
+    k.add_argument("--out", required=True)
+    for flag, kw in (("--module", {"required": True}), ("--serial", {"required": True}), ("--key-id", {}), ("--key-label", {}),
+                     ("--opensc-conf", {}), ("--pin-env", {})):
+        k.add_argument(flag, **kw)                  # the same token options as `beat`
     for name in ("_propose", "_accept"):
         s = sub.add_parser(name)
         s.add_argument("--config", required=True)
@@ -168,7 +203,7 @@ def main(argv=None):
                 envelope = membership.load(sys.stdin.read(heartbeat.MAX_BYTES + 1).encode(), heartbeat.MAX_BYTES)
                 print(json.dumps({"left": int(accept(node, envelope, trail))}))
             return 0
-        if os.geteuid() != 0:
+        if args.op == "beat" and os.geteuid() != 0:
             print("REFUSED: run as root, at the node's console", file=sys.stderr)
             return 2
         if args.pin_env:
@@ -185,6 +220,16 @@ def main(argv=None):
             print(text)
             require(sys.stdin.isatty() or args.pin_env, "the confirmation is typed at the console; standard input is not a terminal")
             return input("Type the epoch and the first 8 hex digits of the SHA-256, e.g. '%s 1a2b3c4d': " % "N")
+        if args.op == "sign-manifest":
+            from deploy.baremetal import manifest as manifest_tool
+            root = manifest_tool.root_key(args.root_key)
+            current = manifest_tool.verify_chain(manifest_tool.read_json(args.chain, 4 * 1024 * 1024), root)
+            envelope = sign_manifest(current, manifest_tool.read_json(args.proposal, membership.MAX_BYTES), open_signer, confirm)
+            fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            with os.fdopen(fd, "w") as f:
+                json.dump(envelope, f, sort_keys=True)
+            print("WRITTEN: %s, signed by the owner; import it on a node (revoke.py import)" % args.out)
+            return 0
         beat_by_hand(args.config, open_signer, confirm)
     except (Refused, OSError, ValueError, KeyError) as refusal:
         print("REFUSED: %s" % refusal, file=sys.stderr)
