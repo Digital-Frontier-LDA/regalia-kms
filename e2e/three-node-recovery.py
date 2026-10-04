@@ -132,8 +132,15 @@ def scenario(cluster):
         ok(bool(held), "%s holds a runtime lease (epoch %s)" % (name, (held or {}).get("epoch")), cluster.journal(name, "admission")[-600:])
 
     header("1b  #75: update.py's live leases, the real call: a asks b and c for a lease for its boot, as root in its namespace")
-    got = json.loads(cluster.nodes["a"].in_ns("env", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-Es", "-c", LIVE_LEASES,
-                                               input=json.dumps({"cfg": str(cluster.nodes["a"].cfg_path)}), cwd=str(cluster.code)).stdout)
+    def live_leases():
+        return json.loads(cluster.nodes["a"].in_ns("env", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-Es", "-c", LIVE_LEASES,
+                                                    input=json.dumps({"cfg": str(cluster.nodes["a"].cfg_path)}), cwd=str(cluster.code)).stdout)
+    got = live_leases()
+    if got["refused"] and all("RATE:" in r for r in got["refused"].values()):
+        # a's own admission may have spent its lease requests at b during the bootstrap (6 a minute, sync.RATE): the
+        # limit doing its job, not this call's. Once the window has passed, the call is made again, once
+        time.sleep(61)
+        got = live_leases()
     ok(sorted(got["leases"]) == ["b", "c"] and not got["refused"], "a got a lease from b and from c, each asked once (%s)" % got.get("refused"), got)
     ok(all(v["node_id"] == "a" and v["issuer"] == p and v["this_session"] and v["left"] > 0 for p, v in got["leases"].items()),
        "each names a as subject, its peer as issuer, a's boot session, and verifies under a's manifest now", got)

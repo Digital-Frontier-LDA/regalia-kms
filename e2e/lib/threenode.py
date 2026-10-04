@@ -102,6 +102,12 @@ def until(what, seconds, interval=1.0):
     return last
 
 
+def beat_stamp(seconds):
+    """A heartbeat's time field (beat.stamp)."""
+    from deploy.baremetal import beat
+    return beat.stamp(int(seconds))
+
+
 def _replace(path, text):
     """`path` written whole: a temporary file beside it, then renamed over it."""
     tmp = pathlib.Path(str(path) + ".tmp")
@@ -575,7 +581,7 @@ class Cluster:
         entry = {"node_id": new, "state": "ACTIVE", "ek_name": self.ids[new][0], "ak_name": self.ids[new][1],
                  "wg_boot_pub": self.keys[new]["boot"][1], "wg_service_pub": self.keys[new]["service"][1], "hsm_serials": ["E2E3%s" % new.upper()]}
         current = self.manifest
-        # #199: its SSH host key and its signing key; it joins every signer rule
+        # #199: its SSH host key and its signing key; it takes the old one's place in every signer rule
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
@@ -586,9 +592,9 @@ class Cluster:
         nodes = [dict(m, state="RETIRED") if m["node_id"] == old else m for m in current["nodes"]] + [entry]
         candidate = dict(current, epoch=current["epoch"] + 1, prev_digest=membership.digest(current), nodes=nodes,
                          policy_version=measurements.version(document), issued_at="2026-10-%02dT00:00:00Z" % (1 + current["epoch"]))
-        joined = lambda rule: dict(rule, parties=rule["parties"] + [new])            # noqa: E731
-        candidate.update(heartbeat_signers=joined(current["heartbeat_signers"]), activation_signers=joined(current["activation_signers"]),
-                         revocation_signers=[joined(r) if membership.OWNER not in r["parties"] else r for r in current["revocation_signers"]])
+        # the new node takes the old one's place in every signer rule, and nothing else changes (replacement.py)
+        for k in ("heartbeat_signers", "activation_signers", "revocation_signers"):
+            candidate[k] = membership.rename_party(current[k], old, new)
         return candidate, document
 
     def replace(self, old, new):
@@ -601,12 +607,14 @@ class Cluster:
         verifies (Freshness.accept_first). Returns the envelope."""
         candidate, document = self.replacement(old, new)
         measurements.check_replacement(self.manifest, candidate, self.document, document, old, new)
-        seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
-        self.advance(seed, candidate=candidate, document=document, skip=(old, new))
-        envelope = self.chain[-1]
+        # the operator's site change first (every node's site configuration names c2), as on hosts: a node that takes the
+        # epoch and runs wg-apply for it must already know where c2 is
         for n in self.nodes.values():
             if n.name != old:
                 self._configure(n)
+        seed = next(name for name in self.nodes if name not in (old, new) and self.running(name))
+        self.advance(seed, candidate=candidate, document=document, skip=(old, new))
+        envelope = self.chain[-1]
         n = self.nodes[new]
         here = self.node(new)
         here.anchor().define()

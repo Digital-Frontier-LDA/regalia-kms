@@ -91,8 +91,11 @@ def scenario(cluster):
     # through the gate that decides (membership.accept_chain, as every Store runs it)
     by_quorum, _ = cluster.replacement("c", "c2", same_policy=True)           # all a quorum may not change, but the nodes
     said = refused(membership.accept_chain, None, cluster.chain + [{"manifest": by_quorum, "signatures": [cluster.owner_signature(by_quorum)]}], root)
-    ok(said is not None and "cannot add or remove nodes" in said,
+    # refused whichever rule it meets first (it names c2 in the signer rules, and adds a node): a quorum enrolls nobody
+    ok(said is not None and "a revocation quorum cannot" in said,
        "the same replacement signed by the owner (a revocation quorum, #199) is refused: only the root enrolls (%s)" % (said or "accepted")[:90])
+    # (the same refusal for a two-node quorum, a's and b's signing keys: membership's own unit test,
+    # tests/test_baremetal_membership_v4.py, test_a_quorum_only_restricts_and_never_touches_the_signers, its "a node added" case, signed by a and b)
     reusing, _ = cluster.replacement("c", "c2", reuse=("c", ("ek_name",)))
     said = refused(membership.accept_chain, None, cluster.chain + [cluster.signed(reusing)], root)
     ok(said is not None and "ek_name of c2 is already used (ek_name of c)" in said,
