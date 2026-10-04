@@ -11,7 +11,7 @@ owner}, #351, not built).
 
 **The machines, decided (ADR-0002 D28 and #351, 2026-10-04):** the three KMS servers and one offline signing laptop, and nothing else
 of ours. Offline keys are Shamir-held software keys reconstructed only in that laptop's RAM for a signing
-session (D28). There are **five share sets** (ADR-0002 D29, regalia#561), the same holders and threshold by
+session (D28). There are **five share sets** (ADR-0002 D29), the same holders and threshold by
 default, one share of each in every holder's case: break-glass; the offline platform keys (the membership
 root and the three image-signing keys, D28); the KMS users' DKEK (one DKEK shared by the three servers'
 Nitrokeys); the developers' set (development and CI secrets, and the release signing key #530 as a Shamir
