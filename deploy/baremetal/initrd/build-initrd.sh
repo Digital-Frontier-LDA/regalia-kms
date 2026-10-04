@@ -36,6 +36,25 @@
 # Debian's signed chain by deploy/baremetal/debverify.py, #246), the record moved in last; a refusal leaves DIR empty.
 # Measured on two runners and a Debian 13 container, in two directories and in a hostile environment
 # (e2e/initrd-reproducible.sh): byte-identical.
+#
+# THE CHECKOUT is read with git as its owner, never as root on someone else's clone, and a clone whose own git
+# configuration could run a command is refused (deploy/baremetal/initrd/repo-git.sh, #382, #390).
+#
+# CURRENT LIMITATIONS (stated, not hidden):
+#   * NETWORK. A build needs snapshot.debian.org (the archive at --snapshot) and the Go module proxy and checksum
+#     database (the toolchain go.mod names). There is no offline build: the air-gapped ceremony laptop does not run
+#     this; the builders do, and the laptop signs what two of them agree on.
+#   * TRUST ROOTS it does not check further: Debian's archive keyring (pinned by hash), snapshot.debian.org serving
+#     the archive as it was, and Go's checksum database (sum.golang.org) for the toolchain.
+#   * MEASURED ONLY WHERE STATED: byte-identical on GitHub's runners and a Debian 13 container, for snapshot
+#     20261003T121500Z, on two days (#248). Not yet on the builders that will build the production image, nor on
+#     the DL360s' own hardware; another snapshot is another build, to be measured again.
+#   * THE BUILD RECORD IS UNSIGNED. Its provenance is checked at signing time against the signer's own clean clone
+#     at the record's commit (uki.py check_provenance, #266), and two builders' records must be identical; nothing
+#     authenticates who produced a record.
+#   * A ROOT READ OF A ROOT-OWNED CHECKOUT (top and .git both root's) is checked by repo_git_root_safe, but that
+#     path is exercised only with a stubbed filesystem (root-owned fixtures need sudo): CI's checkouts are the
+#     runner's, read as the runner.
 set -euo pipefail
 umask 022
 CALLER_GO="$(command -v go || true)"
