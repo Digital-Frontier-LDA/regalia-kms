@@ -78,17 +78,6 @@ EPOCH="${EPOCH:-$SNAPSHOT_EPOCH}"
 [[ "$EPOCH" =~ ^[0-9]{1,11}$ ]] || die "--epoch must be seconds since 1970"
 [ -n "$OUT" ] || die "--out DIR is required"
 [ -n "$ROOT_KEY" ] && [ -f "$ROOT_KEY" ] && [ -r "$ROOT_KEY" ] || die "--root-key FILE is required: the membership root the initrd trusts (#156)"
-# the root, as the client will read it (membership.LoadRoot): well-formed, and canonical as given
-env -i PATH="$PATH" LC_ALL=C TZ=UTC PYTHONPATH="$HERE" python3 -Ps - "$ROOT_KEY" <<'PY' || die "--root-key $ROOT_KEY is not a membership root in canonical form"
-import sys
-from deploy.baremetal import membership
-raw = open(sys.argv[1], "rb").read(65537)
-value = membership.load(raw, 65536)
-entries = membership.root_entries(value, "--root-key")
-if membership.canonical(value) != raw:
-    raise SystemExit("--root-key is not canonical JSON (sorted keys, no whitespace, no newline); nothing rewrites it")
-print("build-initrd: the membership root: " + ", ".join("%s %s" % (alg, key[:16]) for alg, key in entries))
-PY
 [ -n "$GO" ] && [ -x "$GO" ] || die "no go to launch the pinned toolchain with (put go on PATH, or --go FILE)"
 for t in mmdebstrap git python3 gpgv curl dpkg-deb; do command -v "$t" >/dev/null || die "$t is required"; done
 python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is required (the inventory and its check, deploy/baremetal/uki.py)"
@@ -101,6 +90,18 @@ repo_git(){ git -c safe.directory="$REPO" --no-optional-locks -C "$REPO" "$@"; }
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
 [ -z "$(repo_git status --porcelain --untracked-files=all)" ] \
   || die "the checkout has changes or untracked files: build from a clean clone at the agreed commit"
+# the root, as the client will read it (membership.LoadRoot): well-formed, and canonical as given. Checked only
+# NOW, with the checkout's own Python: as root, nothing of the working tree runs before it is the clean commit
+env -i PATH="$PATH" LC_ALL=C TZ=UTC PYTHONPATH="$HERE" python3 -Ps - "$ROOT_KEY" <<'PY' || die "--root-key $ROOT_KEY is not a membership root in canonical form"
+import sys
+from deploy.baremetal import membership
+raw = open(sys.argv[1], "rb").read(65537)
+value = membership.load(raw, 65536)
+entries = membership.root_entries(value, "--root-key")
+if membership.canonical(value) != raw:
+    raise SystemExit("--root-key is not canonical JSON (sorted keys, no whitespace, no newline); nothing rewrites it")
+print("build-initrd: the membership root: " + ", ".join("%s %s" % (alg, key[:16]) for alg, key in entries))
+PY
 GO_VERSION="$(sed -n 's/^toolchain \(go[0-9][0-9.]*\)$/\1/p' go.mod)"
 [ -n "$GO_VERSION" ] || GO_VERSION="$(sed -n 's/^go \([0-9][0-9.]*\)$/go\1/p' go.mod)"
 [[ "$GO_VERSION" =~ ^go1\.[0-9]+\.[0-9]+$ ]] || die "go.mod must name an exact Go release (go 1.X.Y or toolchain go1.X.Y), not '$GO_VERSION'"

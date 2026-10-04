@@ -1416,7 +1416,9 @@ class OnSwtpm(unittest.TestCase):
         binary = "/usr/local/bin/regalia-unlock-e2e-%d" % os.getpid()
         inside = "/run/regalia-e2e-%d" % os.getpid()                  # where the unit sees the test's directory
         request = "cryptsetup:" + self.device                         # systemd-cryptsetup's Id= for this source device
-        installed = [binary, units + "/regalia-unlock.service", units + "/regalia-unlock.service.d", inside]
+        # (with a stand-in for the render unit the client requires, #66 B3: this test gives the client its configuration
+        # directly, as the render would have rendered it)
+        installed = [binary, units + "/regalia-unlock.service", units + "/regalia-unlock.service.d", inside, units + "/regalia-boot-render.service"]
 
         def remove():
             run(["systemctl", "stop", "regalia-unlock.service"], capture_output=True)
@@ -1431,6 +1433,9 @@ class OnSwtpm(unittest.TestCase):
         shutil.copy(self.client, binary)
         os.chmod(binary, 0o700)
         shutil.copy(os.path.join(source, "regalia-unlock.service"), units)
+        with open(installed[4], "w") as f:
+            f.write("[Unit]\nDescription=stand-in for the render (the test writes the configuration itself)\n"
+                    "[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n")
         os.mkdir(installed[2])
         config, local = self.d + "/unlock.json", self.d + "/local"
         with open(installed[2] + "/e2e.conf", "w") as f:
