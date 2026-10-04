@@ -49,9 +49,11 @@ CapabilityBoundingSet=CAP_SYS_ADMIN
 NoNewPrivileges=yes
 ProtectHome=yes
 RestrictAddressFamilies=AF_UNIX
-DevicePolicy=closed
-DeviceAllow=/dev/tpmrm0 rw
-DeviceAllow=block-* r
+# NO device allowlist here, deliberately (95's read): systemd resolves DeviceAllow=block-* when the unit
+# starts, and a storage driver that registers its group later (sd_mod, nvme, a slow controller) would be
+# denied for the whole run, failing the mount and every boot to the console. The render waits (bounded,
+# render.go espWait) for the ESP's /dev/disk/by-partuuid link instead. The client's unit keeps its
+# allowlist: it starts after this unit, so after the disk's driver is there.
 LimitCORE=0
 UMask=0077
 TimeoutStartSec=90
