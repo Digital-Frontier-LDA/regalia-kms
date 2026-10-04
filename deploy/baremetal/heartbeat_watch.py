@@ -223,7 +223,10 @@ class Watch:
         except Refused:
             manifest = None
         current, now = reading(self.freshness, manifest), self.clock()
-        _replace(self.metrics_path, metrics(current, now).encode(), 0o640)      # read through its directory's group (#305)
+        # read through its directory's group (#305). Best effort: a metrics directory that is missing or full must never
+        # keep the warning below from being decided and delivered (metrics never stop a service; the file's age alerts)
+        with contextlib.suppress(OSError):
+            _replace(self.metrics_path, metrics(current, now).encode(), 0o640)
         event, remembered = decide(current, self._remembered(), now, self.thresholds, self.repeat)
         if event is not None:
             self.sink(event)

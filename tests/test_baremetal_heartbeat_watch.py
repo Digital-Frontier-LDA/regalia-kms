@@ -457,11 +457,16 @@ class Watching(hbt.Case):
             with self.subTest(repeat=bad):
                 self.refused("at least 60 seconds", lambda: self.watch(repeat=bad))
 
-    def test_a_failed_write_leaves_no_temporary_file(self):
+    def test_a_failed_metrics_write_leaves_no_temporary_file_and_never_stops_the_warnings(self):
+        """#305: the metrics file is best effort (a missing or full metrics directory never silences a warning, and
+        RegaliaNodeMetricsStale sees the file stop moving); the watch's own state is still written."""
         os.mkdir(self.prom)                                                      # the metrics path cannot be replaced
-        with self.assertRaises(OSError):
-            self.w.step()
+        self.w.step()                                                            # no exception
         self.assertEqual([n for n in os.listdir(self.d) if n.startswith(".heartbeat-watch-")], [])
+        self.assertTrue(os.path.exists(self.wstate))
+        self.left(DAY // 4 - 1)                                                  # a warning due: still delivered
+        self.w.step()
+        self.assertTrue(self.kinds())
 
 
 if __name__ == "__main__":
