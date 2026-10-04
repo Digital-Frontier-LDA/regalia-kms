@@ -248,11 +248,14 @@ class Trail:
 def image_policy(cfg, pem_path=None):
     """This node's approved-image write policy (#242), from root-signed sources only: the chain in the state
     directory (sync's store, else the chain it publishes for the other services), verified under the pinned
-    root; the measurements document its newest manifest commits to (cfg["measurements"]); and the running
-    image's system-phase PCR key (signkey.PCR_PUBLIC_KEY_PATH), which that document must approve for this node
+    root; the measurements document its newest manifest commits to, from the node's store by digest
+    (measurements.held, #332: never the retired cfg["measurements"] file); and the running image's system-phase
+    PCR key (signkey.PCR_PUBLIC_KEY_PATH), which that document must approve for this node
     (measurements.approved_image_policy). HighWater calls it only when it meets an index written by policy.
-    Anything missing is a refusal, never a fallback to an unsigned value. The chain is not checked against the
-    TPM here: that is the anchor's own job, and this only names the key its indices must have been defined under."""
+    Anything missing is a refusal, never a fallback to an unsigned value.
+    The chain is NOT checked against the TPM here, and need not be: a restored older chain yields at most a key
+    the root once approved for this node, and the anchor's own verify refuses the rollback itself. This names
+    only the key the anchor's indices must have been defined under."""
     envelopes = None
     for name in ("membership.json", PUBLISHED):
         try:
@@ -264,13 +267,12 @@ def image_policy(cfg, pem_path=None):
     require(isinstance(envelopes, list) and envelopes, "this node's approved-image write policy cannot be established: no verified "
             "chain in %s" % cfg["state_dir"])
     try:
-        with open(cfg["measurements"], "rb") as f:
-            document = measurements.load(f.read(measurements.MAX_BYTES + 1))
         with open(pem_path or signkey.PCR_PUBLIC_KEY_PATH, "rb") as f:
             pem = f.read(65536)
     except OSError as error:
         raise Refused("this node's approved-image write policy cannot be established: %s" % error) from None
     manifest = membership.accept_chain(None, envelopes, cfg["root_key"])
+    document = measurements.held(os.path.join(cfg["state_dir"], measurements.STORE_DIR), manifest)
     return measurements.approved_image_policy(manifest, document, cfg["node_id"], pem)
 
 

@@ -110,7 +110,8 @@ class ApprovedImagePolicy(rt.Case):
 
 
 class NodePolicy(rt.Case):
-    """node.image_policy, from the files a node holds: its verified chain, its measurements document, the key."""
+    """node.image_policy, from the files a node holds: its verified chain, the measurements its newest manifest
+    commits to (from the store by digest, #332), and the key file."""
 
     def setUp(self):
         super().setUp()
@@ -119,7 +120,8 @@ class NodePolicy(rt.Case):
         doc = signed(UKI_ONE, a=KEY, b=KEY, c=KEY)
         envelope = sign(self.under(doc), hbt.ROOT)
         self.cfg = {"state_dir": self.d, "measurements": self.d + "/measurements.json", "root_key": hbt.pub(hbt.ROOT), "node_id": "a"}
-        pathlib.Path(self.d + "/measurements.json").write_text(json.dumps(doc))
+        self.store = measurements.Documents(os.path.join(self.d, measurements.STORE_DIR))
+        self.store.put(doc)
         pathlib.Path(self.d + "/membership.json").write_text(json.dumps([envelope]))
         pathlib.Path(self.d + "/pcr.pem").write_bytes(KEY)
 
@@ -129,10 +131,18 @@ class NodePolicy(rt.Case):
         os.rename(self.d + "/membership.json", self.d + "/" + node.PUBLISHED)
         self.assertEqual(node.image_policy(self.cfg, self.d + "/pcr.pem"), signkey.policy(KEY).hex())
 
+    def test_the_document_is_the_one_the_manifest_commits_to_never_the_legacy_file(self):
+        """d9: the retired single file (cfg["measurements"]) holding another document that approves ANOTHER key is
+        not read; the store's document, the one the newest manifest commits to, decides."""
+        pathlib.Path(self.d + "/measurements.json").write_text(json.dumps(signed(UKI_BOTH, a=OTHER, b=OTHER, c=OTHER)))
+        self.assertEqual(node.image_policy(self.cfg, self.d + "/pcr.pem"), signkey.policy(KEY).hex())
+        pathlib.Path(self.d + "/pcr.pem").write_bytes(OTHER)
+        self.refused("is not one the root approved for a", node.image_policy, self.cfg, self.d + "/pcr.pem")
+
     def test_a_missing_file_is_a_refusal(self):
         self.refused("cannot be established", node.image_policy, self.cfg, self.d + "/absent.pem")
-        os.remove(self.d + "/measurements.json")
-        self.refused("cannot be established", node.image_policy, self.cfg, self.d + "/pcr.pem")
+        shutil.rmtree(os.path.join(self.d, measurements.STORE_DIR))
+        self.refused("which this node does not hold", node.image_policy, self.cfg, self.d + "/pcr.pem")
         os.remove(self.d + "/membership.json")
         self.refused("no verified chain", node.image_policy, self.cfg, self.d + "/pcr.pem")
 
