@@ -40,6 +40,21 @@ OVMF = os.environ.get("REGALIA_OVMF", "/usr/share/OVMF")
 run = tub.run
 
 
+def booted_pcrs(said):
+    """The REGALIA-E2E-PCRS line's match, read only after systemd-pcrphase.service measured `ready` (#310): the
+    guest says what it saw, and a read before `ready` (the sysinit value, one phase short of the record) fails
+    here by name, not later as a PCR 11 mismatch. This proves ORDERING only: the unit runs systemd-pcrextend
+    --graceful, which exits successfully without a TPM, so "success" is not proof of the extend; the PCR 11
+    comparison that follows is."""
+    shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+    if shown:
+        phase = re.search(r"REGALIA-E2E-PCRPHASE systemd-pcrphase.service=(.*)", said)
+        if not (phase and phase.group(1).split() == ["active", "success"]):       # not `assert`: python -O would drop it
+            raise AssertionError("the PCRs were read before systemd-pcrphase measured ready (#310): %s"
+                                 % (phase.group(1).strip() if phase else "no phase line"))
+    return shown
+
+
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
 class OnQemu(tub.OnSwtpm):
     # the fixtures of OnSwtpm are reused, not its tests
@@ -394,7 +409,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn("Stopped regalia-unlock.service", said)
         self.assertIn("Stopped regalia-unlock-relay.service", said)
         # PCR 12 is what espcreds computes from the ESP's files, and nothing moved it after the initrd
-        booted = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+        booted = booted_pcrs(said)
         self.assertIsNotNone(booted)
         self.assertEqual([v.lower() for v in booted.groups()], [pcrs["7"], record["pcr11"]["system"], expected["pcr12"]])
         print("PCR 12 with the host's six credentials: %s, as espcreds computes it" % expected["pcr12"], file=sys.stderr)
@@ -407,7 +422,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertNotRegex(said, PROMPT.pattern.decode())
         self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
         self.assertIn("regalia.e2e-image=old", re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1).split())
-        shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+        shown = booted_pcrs(said)
         self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], older["pcr11"]["system"], expected["pcr12"]])
         self.assertIn(("unlock", "a", "ALLOW"), [(e["event"], e["subject"], e["outcome"]) for e in self.events[since:]])
 
@@ -421,7 +436,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertIn("the disk stays locked", said)
         self.assertRegex(said, PROMPT.pattern.decode())
         self.assertLess(said.index("the disk stays locked"), re.search(PROMPT.pattern.decode(), said).start())
-        shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+        shown = booted_pcrs(said)
         self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], older["pcr11"]["system"], expected["pcr12"]])
         events = self.events[since:]
         self.assertNotIn(("unlock", "ALLOW"), {(e["event"], e["outcome"]) for e in events})
@@ -462,7 +477,7 @@ class OnQemu(tub.OnSwtpm):
                 since = len(self.events)
                 said = self.boot("%d-planted" % n, dict(credentials, **{name: content}), recovery=True)
                 self.assertIn("the disk stays locked", said)
-                shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said)
+                shown = booted_pcrs(said)
                 self.assertIsNotNone(shown)
                 self.assertEqual([v.lower() for v in shown.groups()], [pcrs["7"], record["pcr11"]["system"], espcreds.pcr12(self.on_esp)])
                 self.assertNotEqual(shown.group(3).lower(), expected["pcr12"])
@@ -489,7 +504,7 @@ class OnQemu(tub.OnSwtpm):
                          smbios_strings=["io.systemd.stub.kernel-cmdline-extra=systemd.import_credentials=yes"])
         self.assertNotIn("REGALIA-E2E-PLANTED-RAN", said)
         cmdline = re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1)
-        shown = re.search(r"REGALIA-E2E-PCRS 7=(\S+) 11=(\S+) 12=(\S+)", said).groups()
+        shown = booted_pcrs(said).groups()
         allowed = ("unlock", "ALLOW") in {(e["event"], e["outcome"]) for e in self.events[since:]}
         if "systemd.import_credentials=yes" in cmdline.split():
             self.assertNotEqual(shown[2].lower(), expected["pcr12"])             # appended: measured, and refused
