@@ -100,6 +100,7 @@ class Cluster:
         self.manifest = None
         self.keys = {}
         self.authtimes = {}
+        self.code = self.work / "src"                 # the package as a host installs it: root's, readable by the services
 
     # ---- building ----
 
@@ -107,6 +108,10 @@ class Cluster:
         # the services' users and groups, from the shipped file (regalia-sync, regalia-admission, their trails' groups)
         sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia.sysusers.conf"))
         os.chmod(self.work, 0o711)                    # each node's directory is reached through it, read in it only
+        # the checkout may sit where the services' users cannot go (a runner's home is 0750): they run a root-owned copy
+        shutil.copytree(ROOT / "deploy", self.code / "deploy", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        sh("chown", "-R", "root:root", str(self.code))
+        sh("chmod", "-R", "u=rwX,go=rX", str(self.code))
         self._network()
         for n in self.nodes.values():
             for d in (n.dir / "etc", n.state, n.admission, n.run):
@@ -303,7 +308,7 @@ class Cluster:
         """systemd-run -p for one service of one node: its namespace, the installed unit's identity, and no view of
         the other nodes' directories."""
         n = self.nodes[name]
-        props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(ROOT), "Environment=PYTHONDONTWRITEBYTECODE=1"]
+        props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(self.code), "Environment=PYTHONDONTWRITEBYTECODE=1"]
         props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
         props += ["InaccessiblePaths=" + str(o.dir) for o in self.nodes.values() if o is not n]
         return props
