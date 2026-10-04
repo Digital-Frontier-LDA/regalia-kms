@@ -34,7 +34,9 @@ nic_name() { case "$1" in ""|*[!A-Za-z0-9._-]*|????????????????*) return 1 ;; es
 mac_form() { case "$1" in [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) return 0 ;; *) return 1 ;; esac; }
 # the interfaces whose address is $1, one per line (the kernel writes it lower case, colon-separated)
 nics_of() { for d in /sys/class/net/*; do [ -r "$d/address" ] && [ "$(cat "$d/address")" = "$1" ] && printf '%s\n' "${d##*/}"; done; return 0; }
-B=/run/regalia-boot
+# (REGALIA_BOOT_DIR only for e2e/wg-boot-netns.sh, which runs this script outside an initrd: the unit never
+# sets it, and the unit is pinned by the image's review)
+B="${REGALIA_BOOT_DIR:-/run/regalia-boot}"
 ENV="$B/regalia.boot-env" NFT="$B/regalia.boot-nft" CONF="$B/regalia.wg-boot-conf" KEY="$C/regalia.wg-boot-key"
 setting() { [ -r "$ENV" ] && sed -n "s/^$1=\([A-Za-z0-9.:/_-]*\)\$/\1/p" "$ENV" | sed -n 1p; }
 BOOT_NIC_MAC="$(setting BOOT_NIC_MAC || true)"; BOOT_NIC=""; BOOT_ADDRESS="$(setting BOOT_ADDRESS || true)"
