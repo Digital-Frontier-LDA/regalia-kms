@@ -343,10 +343,10 @@ def scenario(cluster):
             for target, peer in itertools.permutations(names, 2)}
     ok(all(gave.values()), "every directed unlock of step 2 is in the stream of the peer that gave it",
        {"%s<-%s" % k: v for k, v in gave.items() if not v})
-    second = cluster.audit_has(survivor_5, "sync", since=asked, event="unlock", subject=crashed_5, outcome="DENY",
+    second = cluster.audit_has(survivor_5, "sync", since=asked - 1, event="unlock", subject=crashed_5, outcome="DENY",
                                reason=lambda r: bool(r) and "a second boot session in the same boot" in r)
     ok(bool(second), "%s's refusal of %s's second session in one boot (step 5) is in %s's stream" % (survivor_5, crashed_5, survivor_5))
-    limited = cluster.audit_has("a", "sync", since=rated, event="sync-lease-nonce", subject="b", outcome="DENY",
+    limited = cluster.audit_has("a", "sync", since=rated - 1, event="sync-lease-nonce", subject="b", outcome="DENY",
                                 reason=lambda r: bool(r) and "RATE: more than 6 lease requests in 60 s from b" in r)
     ok(bool(limited), "a's refusal of b's seventh lease request in a minute (step 6) is in a's stream")
     hand = {"%s@%d" % (n, e): (bool(cluster.audit_has(n, "sync", since=t, event="beat-propose", epoch=e, outcome="DENY",
