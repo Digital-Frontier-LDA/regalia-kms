@@ -196,6 +196,10 @@ def apply(host, entry, esp, typed, record, deadline_minutes=DEFAULT_DEADLINE_MIN
         require(anchored == manifest["epoch"], "the TPM anchor is at epoch %d, the published chain at %d: regalia-esp-advance has not "
                 "written this epoch to the ESP and anchored it yet (journalctl -u regalia-esp-advance); reboot once it has"
                 % (anchored, manifest["epoch"]))
+        # and the initrd must be able to render from it, or the reboot is a recovery-key ceremony (regalia-kms-48)
+        unrenderable = host.unrenderable(manifest)
+        require(unrenderable is None, "the initrd cannot render a boot configuration under epoch %d (%s): this host's next boot asks "
+                "for the recovery key; nothing is rebooted" % (manifest["epoch"], unrenderable))
         document = host.document(manifest)
         measurements.bind(manifest, document)
         node_id = host.node_id
@@ -394,6 +398,16 @@ class Host:
 
     def anchored(self):
         return self.node.anchor().value()    # the TPM anchor's epoch: the ESP advance's last completed run
+
+    def unrenderable(self, manifest):
+        """Why the initrd could not render this host's boot configuration under `manifest` (bootcreds.render, as
+        regalia-esp-advance tries it), or None."""
+        from deploy.baremetal import bootcreds
+        try:
+            bootcreds.render(manifest, self.node.site, self._node_module.ESP_RENDER_DEVICE)
+            return None
+        except membership.Refused as refused:
+            return str(refused)
 
     def document(self, manifest):
         """The measurement document `manifest` commits to, from this node's store by digest (#332): refused when it

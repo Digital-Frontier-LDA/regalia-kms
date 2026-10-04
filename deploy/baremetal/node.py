@@ -283,6 +283,24 @@ def esp_advance(node, esp, lock_path=ESP_LOCK):
     return epoch, hashlib.sha256(chain).hexdigest(), rewritten, unrenderable
 
 
+def esp_metrics(node, ok, renderable=None, publish=None):
+    """regalia-esp-advance's own metrics (#66 B3), written at every run, success or not, by root: the anchor as IT reads
+    it, so a sync that lies in membership.prom does not silence the alerts on these (regalia-kms-48), and whether the
+    next boot can render. Never raises: a metric does not change the run's outcome."""
+    publish = publish or (lambda samples: metrics.publish("esp-advance", samples))
+    samples = [("regalia_esp_advance_ok", {}, 1 if ok else 0), ("regalia_esp_advance_run_timestamp_seconds", {}, int(time.time()))]
+    if renderable is not None:
+        samples.append(("regalia_esp_boot_renderable", {}, 1 if renderable else 0))
+    try:
+        samples.append(("regalia_esp_anchor_epoch", {}, node.anchor().value()))
+    except Exception:                                   # noqa: BLE001 - a TPM that cannot be read: said by ok=0 already
+        pass
+    try:
+        publish(samples)
+    except Exception:                                   # noqa: BLE001 - see above
+        pass
+
+
 def _read_regular(path, limit):
     """The bytes of the regular file `path` (up to `limit`), never through a link; None if it is not there."""
     try:
@@ -910,7 +928,12 @@ def main(argv=None):
         elif args.service == "wg-apply":
             print("wg-svc and %s applied under epoch %d" % (node.site["boot_mesh"]["interface"], wg_apply(node)))
         elif args.service == "esp-advance":
-            epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
+            try:
+                epoch, sha, rewritten, unrenderable = esp_advance(node, args.esp, lock_path=args.esp_lock)
+            except BaseException:
+                esp_metrics(node, ok=False)
+                raise
+            esp_metrics(node, ok=True, renderable=unrenderable is None)
             print("the ESP's membership chain is epoch %d (sha256 %s%s), and the TPM anchor with it"
                   % (epoch, sha, ", written now" if rewritten else ", already there"))
             if unrenderable:

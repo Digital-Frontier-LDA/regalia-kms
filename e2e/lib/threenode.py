@@ -647,6 +647,8 @@ class Cluster:
             except membership.Refused as refused:     # e.g. a node the epoch revoked: it runs without, and says so
                 print("  (%s took no heartbeat: %s)" % (name, refused))
             sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
+        if "sync" in services:                        # its path unit FIRST, as paths.target precedes the services on a host:
+            self._esp_watch(n)                        # sync publishes at once, and a change before the watch is missed
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
@@ -656,7 +658,7 @@ class Cluster:
             if service == "wg-apply":                 # and again at every new chain, as regalia-wg-apply.path runs it
                 self._run(n, "wg-apply", unit=self.unit(name, "wg-watch"),
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
-        if "sync" in services:                        # regalia-esp-advance and its path unit, as a host enables them
+        if "sync" in services:                        # and regalia-esp-advance's run at start, as its unit's WantedBy= gives
             self._esp_advance(n)
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
         if self.audit and name in self.nodes:         # the node's trail shippers run with it, as regalia-audit-ship@ does
@@ -666,19 +668,27 @@ class Cluster:
         """The node's ESP stand-in (a directory: what regalia-esp-advance writes; nothing boots from it here)."""
         return self.nodes[name].dir / "esp"
 
-    def _esp_advance(self, n):
-        """#66 B3: the node's regalia-esp-advance, once now and then at every new published chain (its path unit): the
-        chain to the node's ESP, then the TPM anchor. A run that fails is in its journal; anchored() says where it is."""
+    def _esp_args(self, n):
         esp = self.esp(n.name)
         if not esp.exists():
             esp.mkdir(mode=0o755)
             os.chmod(esp, 0o755)
+        return ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"))
+
+    def _esp_watch(self, n):
+        """#66 B3: regalia-esp-advance.path's stand-in, at every new published chain: the chain to the node's ESP, then
+        the TPM anchor. A run that fails is in its journal; anchored() says where the anchor is."""
+        self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=self._esp_args(n),
+                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+
+    def _esp_advance(self, n):
+        """regalia-esp-advance's run at start (its unit is WantedBy=multi-user.target), once sync has published: the path
+        unit's own service, started and waited for, so that two runs never overlap (one unit, as on a host)."""
         if not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
             raise RuntimeError("%s's sync published no chain" % n.name)
-        args = ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"))
-        self._run(n, "esp-advance", oneshot=True, args=args)
-        self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=args,
-                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+        unit = self.unit(n.name, "esp-watch") + ".service"
+        if sh("systemctl", "start", unit, check=False).returncode != 0:
+            raise RuntimeError("%s's regalia-esp-advance failed at start: %s" % (n.name, self.journal(n.name, "esp-watch")[-1500:]))
 
     def anchored(self, name):
         """The node's TPM anchor epoch (read as root)."""
@@ -886,7 +896,7 @@ class Cluster:
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.member(name)
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve", "esp-advance")] + \
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve")] + \
                 [self.unit(name, w) + t for w in ("wg-watch", "esp-watch") for t in (".path", ".service")] + \
                 [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
             sh("systemctl", "stop", unit, check=False)

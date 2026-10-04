@@ -132,7 +132,7 @@ def scenario(cluster):
         ok((held, cluster.esp_epoch(name), cluster.anchored(name)) == (2, 2, 2),
            "%s holds epoch 2; regalia-esp-advance wrote it to the ESP and moved the TPM anchor to it" % name,
            (held, cluster.esp_epoch(name), cluster.anchored(name), cluster.journal(name, "esp-watch")[-400:]))
-        said = cluster.journal(name, "esp-watch", 200) + cluster.journal(name, "esp-advance", 200)
+        said = cluster.journal(name, "esp-watch", 200)
         ok("the ESP's membership chain is epoch 2" in said, "%s's ESP advance said so in its journal" % name, said[-400:])
     # a rollback after the advance: epoch 1's chain, as a compromised sync or a restored disk would publish it
     work = cluster.work

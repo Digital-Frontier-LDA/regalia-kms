@@ -215,7 +215,7 @@ class Units(unittest.TestCase):
         self.assertEqual((service["User"], service["CapabilityBoundingSet"], service["AmbientCapabilities"], service["NoNewPrivileges"]),
                          ("root", "", "", "yes"))
         self.assertEqual((service["ProtectSystem"], service["ReadWritePaths"], service["PrivateNetwork"], service["RestrictAddressFamilies"]),
-                         ("strict", "/efi", "yes", "AF_UNIX"))
+                         ("strict", "/efi -/run/regalia-metrics/esp-advance", "yes", "AF_UNIX"))
         self.assertEqual((service["DevicePolicy"], service["DeviceAllow"], service["SupplementaryGroups"]), ("closed", "/dev/tpmrm0 rw", "tss"))
         # the anchor's writer lock, its own (node.ESP_LOCK)
         self.assertEqual("/run/%s/highwater.lock" % service["RuntimeDirectory"], node.ESP_LOCK)
@@ -422,6 +422,7 @@ class NodeMetricsDirectories(unittest.TestCase):
     made by tmpfiles; its unit may write there and nowhere new; node_exporter's user is the group's member."""
     OWNERS = {"authtime": ("regalia-authtime.service", "root"), "sync": ("regalia-sync.service", "regalia-sync"),
               "admission": ("regalia-admission.service", "regalia-admission"),
+              "esp-advance": ("regalia-esp-advance.service", "root"),
               "audit-ship": ("regalia-audit-ship@.service", "regalia-audit-ship")}
 
     def test_each_writer_s_directory_is_its_own_and_its_unit_may_write_there(self):

@@ -661,10 +661,17 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
     every 15 s and the anchor stays behind: rollback protection stands at the anchor's epoch, and sync stops
     1000 epochs ahead. It is SEEN: sync writes the held epoch and the anchor's to `membership.prom`
     (`regalia_membership_epoch`, `regalia_membership_anchor_epoch`), `RegaliaMembershipAnchorBehind` warns after
-    fifteen minutes behind, and `regalia-node check` prints both. **What the operator does:** read
+    fifteen minutes behind, and `regalia-node check` prints both. regalia-esp-advance (root) writes its own
+    `esp-advance.prom` at every run, success or not (`regalia_esp_advance_ok`, the anchor as it reads it, and
+    `regalia_esp_boot_renderable`): `RegaliaEspAdvanceFailing` and `RegaliaNextBootNeedsRecoveryKey` do not depend
+    on sync telling the truth. **Not covered:** a compromised sync that stops publishing altogether. Then
+    regalia-esp-advance never runs, its last `ok` stays 1, and sync's own file can say anything. That is the
+    withholding a compromised sync could always do (it could refuse to commit); peers that hold a newer epoch
+    still see this node's heartbeats and leases judged under their own. **What the operator does:** read
     `journalctl -u regalia-esp-advance`, fix the cause (mount the ESP, free space), then
     `systemctl start regalia-esp-advance`; check that `regalia-node check` shows `anchor` equal to `epoch`.
-    `update.py apply` refuses to reboot a node in that state.
+    `update.py apply` refuses to reboot a node in that state, and one whose chain the initrd could not render
+    (the next boot would ask for the recovery key).
   - The run is recorded in the journal only. It has no hash-chained trail of its own (#278). The commit it
     follows is in the sync trail.
   - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and

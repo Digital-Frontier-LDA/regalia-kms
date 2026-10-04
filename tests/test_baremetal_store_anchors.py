@@ -90,6 +90,20 @@ class SyncNeverMovesTheAnchor(unittest.TestCase):
         with open(self.d + "/membership.json", "rb") as f:
             self.assertEqual(f.read(), before)
 
+    def test_restore_reads_again_too(self):
+        """regalia-kms-48 (LOW C): restore's lock-free check reads again once, as load's does."""
+        sync = self.store()
+        verify, calls = self.hw.verify, []
+
+        def racing(digest_of, lock=True):
+            calls.append(lock)
+            if len(calls) == 1:
+                raise m.Refused("CONFLICT: a write in progress")
+            return verify(digest_of, lock=lock)
+        self.hw.verify = racing
+        self.assertEqual(sync.restore(self.chain[:2])["epoch"], 2)
+        self.assertEqual(calls[:2], [False, False])
+
     def test_a_write_racing_the_lock_free_read_is_read_again(self):
         """95's and 48's reads: sync verifies without the anchor's lock (the ESP advance writes under its own). A read
         that lands inside a write (a CONFLICT that does not stay) is read again, as node.published() does."""

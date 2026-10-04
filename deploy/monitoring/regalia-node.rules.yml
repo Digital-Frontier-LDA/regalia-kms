@@ -108,6 +108,20 @@ groups:
           severity: warning
         annotations:
           summary: "The TPM anchor is behind the membership chain this node holds: regalia-esp-advance keeps failing, and the next boot renders from an older chain."
+      # regalia-esp-advance's own file (root; regalia-kms-48): a sync that lies in membership.prom does not silence these.
+      - alert: RegaliaEspAdvanceFailing
+        expr: regalia_esp_advance_ok == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "regalia-esp-advance's last run failed fifteen minutes ago and has not succeeded since: the TPM anchor is not following the chain. README §7."
+      - alert: RegaliaNextBootNeedsRecoveryKey
+        expr: regalia_esp_boot_renderable == 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "The chain on this node's ESP leaves the initrd nothing to render (no peer, or the node gone from the manifest): its next boot asks for the recovery key. update.py apply refuses to reboot it."
       - alert: RegaliaNodeMetricsStale
         expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?(authtime|heartbeat|lease|membership)\\.prom"} > 120
         labels:
@@ -141,6 +155,13 @@ groups:
           severity: warning
         annotations:
           summary: "{{ $labels.instance }} is scraped but has no membership.prom: regalia-sync never wrote it, so a TPM anchor left behind is not seen."
+      - alert: RegaliaEspAdvanceMetricsMissing
+        expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?esp-advance\\.prom"}
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.instance }} is scraped but has no esp-advance.prom: regalia-esp-advance has not run since boot (its unit runs at boot)."
       - alert: RegaliaLeaseMetricsMissing
         expr: up{job="regalia-node"} == 1 unless on(instance) node_textfile_mtime_seconds{file=~"(.*/)?lease\\.prom"}
         for: 5m

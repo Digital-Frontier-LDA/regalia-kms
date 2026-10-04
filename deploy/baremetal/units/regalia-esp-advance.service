@@ -34,8 +34,8 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 NoNewPrivileges=yes
 ProtectSystem=strict
-# the one place it writes on disk
-ReadWritePaths=/efi
+# the one place it writes on disk, and its node_exporter textfile directory (deploy/baremetal/metrics.py)
+ReadWritePaths=/efi -/run/regalia-metrics/esp-advance
 # the anchor's writer lock (node.ESP_LOCK): regalia-sync's lock in its state directory is 0600, its own
 RuntimeDirectory=regalia-esp-advance
 RuntimeDirectoryMode=0700

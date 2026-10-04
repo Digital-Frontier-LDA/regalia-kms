@@ -143,6 +143,23 @@ class AnchorLag(EspCase):
         with unittest.mock.patch.object(node.metrics, "publish", side_effect=OSError("full")):
             s.membership_metrics()                                            # never raises: metrics do not stop sync
 
+    def test_the_esp_advance_publishes_its_own_reading_success_or_not(self):
+        """regalia-kms-48: root's own file (sync's could lie), at every run: ok, the anchor as it reads it, and whether the
+        next boot renders. main() writes it on a refusal too."""
+        written = []
+        node.esp_metrics(self.n, ok=True, renderable=False, publish=written.append)
+        got = {name: value for name, _, value in written[0]}
+        self.assertEqual((got["regalia_esp_advance_ok"], got["regalia_esp_boot_renderable"], got["regalia_esp_anchor_epoch"]), (1, 0, 1))
+        self.assertIn("regalia_esp_advance_ok 1", node.metrics.render("esp-advance", written[0]))
+        node.esp_metrics(self.n, ok=True, publish=lambda samples: (_ for _ in ()).throw(OSError("full")))   # never raises
+        published = []
+        with unittest.mock.patch.object(node.metrics, "publish", lambda writer, samples, target=None: published.append((writer, samples))), \
+                unittest.mock.patch.object(node, "load", lambda path: self.cfg), \
+                unittest.mock.patch.object(node, "esp_advance", side_effect=m.Refused("ROLLBACK: below the anchor")):
+            self.assertEqual(node.main(["--config", "x", "esp-advance"]), 2)
+        self.assertEqual(published[0][0], "esp-advance")
+        self.assertEqual({name: value for name, _, value in published[0][1]}.get("regalia_esp_advance_ok"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

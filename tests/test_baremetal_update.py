@@ -39,6 +39,9 @@ class FakeHost:
     def anchored(self):
         return self._anchored if hasattr(self, "_anchored") else self._manifest["epoch"]
 
+    def unrenderable(self, manifest):
+        return getattr(self, "_unrenderable", None)
+
     def document(self, manifest):
         """As update.Host's (#332): the document of the manifest asked about, which here is the one held."""
         assert manifest == self._manifest, "a document is asked for another manifest than the one held"
@@ -131,6 +134,13 @@ class Apply(Case):
         self.host._anchored = self.host.manifest()["epoch"] - 1
         self.refused("the TPM anchor is at epoch %d, the published chain at %d: regalia-esp-advance has not written"
                      % (self.host._anchored, self.host._anchored + 1), self.apply)
+        self.assertEqual((self.bootnexts(), self.prompts, self.host.asked, [e["outcome"] for e in self.trail]), ([], [], [], ["DENY"]))
+
+    def test_a_next_boot_that_needs_the_recovery_key_is_refused(self):
+        """regalia-kms-48: a manifest that leaves the initrd nothing to render turns a reboot into a recovery-key ceremony."""
+        self.host._unrenderable = "the manifest leaves a no peer with an address"
+        self.refused("the initrd cannot render a boot configuration under epoch %d (the manifest leaves a no peer" % self.host.manifest()["epoch"],
+                     self.apply)
         self.assertEqual((self.bootnexts(), self.prompts, self.host.asked, [e["outcome"] for e in self.trail]), ([], [], [], ["DENY"]))
 
     def test_nothing_changes_without_the_phrase(self):

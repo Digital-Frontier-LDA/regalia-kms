@@ -21,12 +21,15 @@ CONTEXT = {
     "regalia_heartbeat_checked_timestamp_seconds": "staleness is node_textfile_mtime_seconds",
     "regalia_admission_lease_seconds_left": "RegaliaNotServing watches the outcome",
     "regalia_audit_trail_lines": "read beside backlog",
+    "regalia_esp_anchor_epoch": "root's reading of the anchor, beside sync's (RegaliaMembershipAnchorBehind)",
+    "regalia_esp_advance_run_timestamp_seconds": "when it last ran: a oneshot, run on each new chain",
     "regalia_audit_trail_committed": "read beside backlog",
 }
 AUTHTIME = "/run/regalia-metrics/authtime/authtime.prom"
 HEARTBEAT = "/run/regalia-metrics/sync/heartbeat.prom"
 LEASE = "/run/regalia-metrics/admission/lease.prom"
 MEMBERSHIP = "/run/regalia-metrics/sync/membership.prom"
+ESP_ADVANCE = "/run/regalia-metrics/esp-advance/esp-advance.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
 NODE_A, NODE_B = {"instance": "a:9100", "job": "regalia-node"}, {"instance": "b:9100", "job": "regalia-node"}
 
@@ -127,6 +130,13 @@ SCENARIOS = {
     "RegaliaMembershipAnchorBehind": {      # published at 5, anchored at 4 for twenty minutes; healthy: caught up
         "fault": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x30")],
         "healthy": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "5+0x30")], "at": 1200},
+    "RegaliaEspAdvanceFailing": {
+        "fault": [("regalia_esp_advance_ok", {}, "0+0x30")], "healthy": [("regalia_esp_advance_ok", {}, "1+0x30")], "at": 1200},
+    "RegaliaNextBootNeedsRecoveryKey": {
+        "fault": [("regalia_esp_boot_renderable", {}, "0+0x5")], "healthy": [("regalia_esp_boot_renderable", {}, "1+0x5")], "at": 120},
+    "RegaliaEspAdvanceMetricsMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=ESP_ADVANCE), "0+0x10")], "at": 420},
     "RegaliaMembershipMetricsMissing": {
         "fault": [("up", NODE_A, "1+0x10")],
         "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},

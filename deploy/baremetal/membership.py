@@ -1381,7 +1381,12 @@ class Store:
                     "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
             # also before anything is written: a chain that is not the anchored one never reaches the disk (read without
             # the anchor's lock when this store is not its writer: see _load)
-            self.hw.verify(self._digests(manifests), lock=self.anchors)
+            try:
+                self.hw.verify(self._digests(manifests), lock=self.anchors)
+            except Refused as refused:              # lock-free (not the writer): a CONFLICT that does not stay is a write racing
+                if self.anchors or str(refused).startswith("ROLLBACK"):
+                    raise
+                self.hw.verify(self._digests(manifests), lock=False)
             self._continues_disk(envelopes)
             if self.documents is not None:              # #332: the epoch restored to is judged by its own document
                 self.documents(current)

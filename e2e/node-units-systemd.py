@@ -903,7 +903,8 @@ def part2(work, binaries, user, ctx, servers, status):
     ok("the ESP's membership chain is epoch 2" in said, "its run said so", said[-600:])
     sandbox = show("regalia-esp-advance.service", "User", "CapabilityBoundingSet", "PrivateNetwork", "ReadWritePaths")
     ok((sandbox.get("User"), sandbox.get("CapabilityBoundingSet"), sandbox.get("PrivateNetwork")) == ("root", "", "yes")
-       and sandbox.get("ReadWritePaths") == ESP, "regalia-esp-advance as systemd applied it: root, no capability, no network, writes %s only" % ESP, sandbox)
+       and sandbox.get("ReadWritePaths") == ESP + " -/run/regalia-metrics/esp-advance",
+       "regalia-esp-advance as systemd applied it: root, no capability, no network, writes %s and its metrics only" % ESP, sandbox)
     # regalia-sync and the path units keep running from here, beside regalia-admission, as on a host
 
     header("8  the KMS daemon, and a lease from b over the tunnel")
