@@ -131,11 +131,11 @@ class Mesh(Case):
         order = [text.index(rule) for rule in ("ct state established,related accept", unlock_rule, 'iifname "wg-unlock" drop',
                                                "tcp dport 8443", "tcp dport 22", "icmp type echo-request")]
         self.assertEqual(order, sorted(order))
-        self.assertEqual(text.count(" dport "), 12)                   # kms, ssh, audit, dns, 2 per NTS server (#303), and the two of the mesh
+        self.assertEqual(text.count(" dport "), 13)                   # kms, node metrics (#305), ssh, audit, dns, 2 per NTS server (#303), and the two of the mesh
         self.assertEqual(text.count("7443"), 1)                       # the unlock port is open inside the tunnel and nowhere else
         plain = firewall.render(sitecfg.validate(json.loads(EXAMPLE.read_text())))
         self.assertNotIn("boot mesh", plain)
-        self.assertEqual(plain.count(" dport "), 10)                  # kms, ssh, audit, dns, 2 per NTS server (#303)
+        self.assertEqual(plain.count(" dport "), 11)                  # kms, node metrics (#305), ssh, audit, dns, 2 per NTS server (#303)
 
     @unittest.skipUnless(shutil.which("nft", path="/usr/sbin:/sbin:/usr/bin"), "nft not installed")
     def test_nft_accepts_both_rulesets(self):
@@ -178,7 +178,7 @@ class SiteMesh(Case):
             "link-local": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("underlay", "169.254.1.1"), "must be a host address"),
             "one address for both": (lambda d: d["boot_mesh"]["peers"][0].__setitem__("address", "198.51.100.7"), "no address is both"),
             "port": (lambda d: d["boot_mesh"].__setitem__("listen_port", 0), "boot_mesh.listen_port must be a port"),
-            "unlock on the KMS port": (lambda d: d["boot_mesh"].__setitem__("unlock_port", 8443), "must differ from kms_port and ssh_port"),
+            "unlock on the KMS port": (lambda d: d["boot_mesh"].__setitem__("unlock_port", 8443), "must differ from kms_port, ssh_port and node_exporter's 9100"),
             "address": (lambda d: d["boot_mesh"].__setitem__("address", "10.89.0.0/24"), "boot_mesh.address must be an IPv4 address"),
             "address is the host's": (lambda d: d["boot_mesh"].__setitem__("address", "192.0.2.10"), "the tunnel's address, not host_ipv4"),
             "no peers": (lambda d: d["boot_mesh"].__setitem__("peers", []), "must list 1 to 8 nodes"),

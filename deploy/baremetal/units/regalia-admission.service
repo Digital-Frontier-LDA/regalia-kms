@@ -32,7 +32,7 @@ ProtectSystem=strict
 # Its own directory under root's /run/regalia, made by tmpfiles and never declared as this unit's
 # RuntimeDirectory: systemd would remove it when this unit stops, and the last admission file must
 # stand until it runs out by itself (admission.py).
-ReadWritePaths=/run/regalia/admission
+ReadWritePaths=/run/regalia/admission -/run/regalia-metrics/admission
 StateDirectory=regalia-admission
 StateDirectoryMode=0700
 ProtectHome=yes

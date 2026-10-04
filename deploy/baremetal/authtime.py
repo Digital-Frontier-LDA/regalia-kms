@@ -252,11 +252,13 @@ class Service:
     request in Vault, nothing is vouched for unrecorded."""
 
     def __init__(self, path, declared, reading=ask, wall=time.time, boottime=admission.boottime_ms, boot=admission.boot_id, minimum=MINIMUM,
-                 record=None, leap=leap_zone):
+                 record=None, leap=leap_zone, metrics=None, latch=LATCH):
         self.path, self.reading, self.wall, self.boottime, self.boot, self.minimum = path, reading, wall, boottime, boot(), minimum
         self.declared = servers(declared)
         self.record, self.recorded = record, None          # the last verdict the trail holds (None: none yet)
         self.leap = leap
+        # #305: metrics(samples) publishes (metrics.publish) after every check; `latch` is read for it
+        self.metrics, self.latch = metrics, latch
 
     def step(self):
         """One check. Returns the document written. The boot clock is read BEFORE chrony is asked: the
@@ -292,6 +294,10 @@ class Service:
             with contextlib.suppress(OSError):
                 os.unlink(self.path)
             raise
+        if self.metrics is not None:
+            from deploy.baremetal import metrics
+            self.metrics([("regalia_time_authenticated", {"cause": metrics.time_cause(reason)}, 1 if authenticated else 0),
+                          ("regalia_chrony_latch_set", {}, 1 if os.path.lexists(self.latch) else 0)])
         return document
 
     def run(self, stop, interval=INTERVAL):

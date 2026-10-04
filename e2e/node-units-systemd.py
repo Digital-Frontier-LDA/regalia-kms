@@ -67,6 +67,7 @@ HOW PART 2 DIFFERS FROM PRODUCTION, stated so nothing is read into it:
 """
 import base64
 import datetime
+import grp
 import hashlib
 import http.client
 import json
@@ -88,7 +89,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, node, os_probe, sync, wgsvc   # noqa: E402
+from deploy.baremetal import admission, attest, authtime, enrol, heartbeat, lease, measurements, membership, metrics, node, os_probe, sync, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                    # noqa: E402  the root and revocation keys, and beat()
 
 PREFIX = "/usr/lib/regalia-kms"
@@ -448,6 +449,12 @@ def scenario(work, binaries, user):
         for n in (1, 2):
             print((work / ("s%d.log" % n)).read_text()[-600:])
     ok(os.stat(status).st_uid == 0 and oct(os.stat(status).st_mode & 0o777) == "0o644", "root's, 0644, in root's /run/regalia")
+    # #305: and its node_exporter textfile, in its own directory, read through the group
+    prom = pathlib.Path(metrics.path("authtime"))
+    said = until(lambda: prom.exists() and 'regalia_time_authenticated{cause="ok"} 1' in prom.read_text() and prom.read_text(), 30, 2)
+    ok(isinstance(said, str) and "regalia_chrony_latch_set 0" in said and stat.S_IMODE(prom.stat().st_mode) == 0o640
+       and grp.getgrgid(prom.stat().st_gid).gr_name == metrics.GROUP,
+       "regalia-authtime writes its metrics, 0640, group %s, from its sandbox" % metrics.GROUP, said if isinstance(said, str) else "absent")
     servers[1].terminate()
     servers[1].wait(10)
     gone = until(lambda: not json.loads(status.read_text())["authenticated"] and json.loads(status.read_text()), 150, 3)
@@ -466,6 +473,8 @@ def scenario(work, binaries, user):
     ok(until(lambda: show("chrony.service", "ActiveState")["ActiveState"] in ("failed", "inactive") and latch.exists(), 20) and
        json.loads(latch.read_text())["result"] == "signal",
        "an unclean stop leaves the latch in root's %s (%s)" % (authtime.LATCH_DIR, latch.read_text().strip() if latch.exists() else "none"))
+    ok(until(lambda: "regalia_chrony_latch_set 1" in prom.read_text(), 60, 3),
+       "and regalia-authtime sees it, read only from its sandbox: regalia_chrony_latch_set 1 (#305)", prom.read_text()[-300:])
     sh("systemctl", "restart", "regalia-authtime.service")
     time.sleep(20)
     refused = until(lambda: json.loads(status.read_text())["authenticated"] is False and json.loads(status.read_text()), 60, 3)
@@ -564,6 +573,9 @@ def scenario(work, binaries, user):
        and doc.get("reason", "").startswith("renewal failed: no peer gave a lease"),
        "not admitted, under epoch 1 verified against the TPM anchor, because no peer answered (%s)" % doc.get("reason", "")[:90],
        doc or journal("regalia-admission.service")[-600:])
+    served = pathlib.Path(metrics.path("admission"))
+    ok(until(lambda: served.exists() and "regalia_admission_serving 0" in served.read_text(), 30, 2),
+       "regalia-admission writes its metrics as its user: regalia_admission_serving 0 (#305)", served.read_text() if served.exists() else "absent")
     uid = pwd.getpwnam("regalia-admission").pw_uid
     written, directory = os.stat(ADMISSION_FILE), os.stat(os.path.dirname(ADMISSION_FILE))
     ok(uid != 0 and written.st_uid == uid and written.st_mode & 0o022 == 0 and directory.st_uid == uid and directory.st_mode & 0o777 == 0o755,

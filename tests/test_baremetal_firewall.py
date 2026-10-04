@@ -48,6 +48,7 @@ class SiteConfig(unittest.TestCase):
             "an extra key in time": (lambda d: d["time"].__setitem__("pool", []), "exactly"),
             "an extra key in a server": (lambda d: d["time"]["nts"][0].__setitem__("key", "x"), "exactly"),
             "bad proto": (lambda d: d["outbound"][0].__setitem__("proto", "icmp"), "tcp or udp"),
+            "kms on node_exporter's port": (lambda d: d.__setitem__("kms_port", 9100), "node_exporter's"),
             "loopback host": (lambda d: d.__setitem__("host_ipv4", "127.0.0.1"), "host address"),
             "duplicate net": (lambda d: d.__setitem__("client_cidrs", ["198.51.100.0/24", "198.51.100.0/24"]), "twice"),
             "admin overlaps clients": (lambda d: d.__setitem__("admin_cidrs", ["198.51.100.16/28"]), "must be disjoint"),
@@ -131,7 +132,10 @@ class Render(unittest.TestCase):
         for name, net in (("nts.netnod.se", "194.58.200.0/24"), ("ptbtime1.ptb.de", "192.53.103.0/24"), ("time.cloudflare.com", "162.159.200.0/24")):
             self.assertIn('ip daddr { %s } tcp dport 4460 accept comment "time: %s, NTS-KE"' % (net, name), self.text)
             self.assertIn('ip daddr { %s } udp dport 123 accept comment "time: %s, NTP"' % (net, name), self.text)
-        self.assertEqual(self.text.count(" dport "), 10)   # kms, ssh, audit, dns, and 2 per NTS server: nothing else opens
+        self.assertEqual(self.text.count(" dport "), 11)   # kms, node metrics, ssh, audit, dns, and 2 per NTS server: nothing else opens
+        # #305: node_exporter from the monitoring zone only, to this host's address only
+        self.assertIn('ip daddr 192.0.2.10 tcp dport 9100 ip saddr { 203.0.113.128/32 } accept comment "node metrics: monitoring only (#305)"', self.text)
+        self.assertEqual(self.text.count("dport 9100"), 1)
         self.assertEqual(self.text.count("dport 123 "), 3)  # NTP only to the three NTS servers
         self.assertNotIn("ip6", self.text)                 # a single-site host carries no IPv6 at all
         self.assertEqual(self.text.count("meta nfproto ipv6 drop"), 2)
