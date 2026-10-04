@@ -633,7 +633,9 @@ def serve(peer, listener, count=None, caller=None, connections=MAX_CONNECTIONS, 
     listener, and the nodes that reboot next are answered beside it. A connection over those limits is
     closed unanswered, recorded at most once a minute per node; the client asks again on its next attempt.
     A connection that breaks, stalls, sends too much, or makes the handler fail in a way nobody foresaw
-    costs only itself: the failure goes to the peer's audit sink by its kind. The loop ends when the
+    costs only itself: the failure goes to the peer's audit sink by its kind. IO_TIMEOUT bounds the
+    connection's I/O, not peer.handle()'s own work (the quote's verification, the TPM, the signer): a hung
+    TPM call holds that connection's place, and so at most one node's `per_caller` places. The loop ends when the
     listener is closed, or after `count` connections (whose answers are then waited for).
     `caller(source address)` names the node that address belongs to, or None (bootnet.caller_of): with it,
     a connection from an address of no node is closed unanswered, and a request must name that node."""
