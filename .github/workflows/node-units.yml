@@ -118,10 +118,10 @@ jobs:
       - name: The software TPM, tpm2-tools, WireGuard
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools wireguard-tools iproute2 python3-cryptography
+          sudo apt-get install -y -qq --no-install-recommends swtpm swtpm-tools tpm2-tools tpm-udev wireguard-tools iproute2 python3-cryptography
       - name: Three nodes, their sync and wg-apply, the service mesh, a power cut
         run: |
           set -o pipefail
           sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
-          grep -q '^three-node-netns: 24 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
-            echo "::error::the three-node test did not pass all 24 checks" >&2; exit 1; }
+          grep -q '^three-node-netns: 26 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
+            echo "::error::the three-node test did not pass all 26 checks" >&2; exit 1; }

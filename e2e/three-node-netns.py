@@ -13,7 +13,10 @@ IT CHANGES THE MACHINE (namespaces, interfaces, transient units), so it runs onl
      wg-svc and wg-unlock up with the two other nodes as peers
   3  the service mesh: every node reaches both others' service addresses (WireGuard on the underlay)
   4  every node pulls from both others: each node's trail names both as callers it answered
-  5  a power cut on a: b and c go on pulling from each other; a started again rejoins: both answer it again
+  5  a power cycle on a (its TPM through Startup(CLEAR): resetCount one higher): b and c go on pulling from each
+     other; a started again rejoins, in a new TPM boot: both answer it again
+  6  isolation: a process with a's sync unit's properties (its user, groups and no view of the others) can
+     read neither b's store nor b's WireGuard key, and cannot reach b's TPM
 """
 import os
 import pathlib
@@ -89,8 +92,10 @@ def scenario(cluster):
                 ok(pulled is True, "%s answered %s's pull (its trail names %s as the caller)" % (server, caller, caller),
                    cluster.journal(caller, "sync")[-500:])
 
-    header("5  a power cut on a: b and c go on; a started again rejoins")
+    header("5  a power cycle on a: b and c go on; a started again rejoins, in a new TPM boot")
+    before = cluster.reset_count("a")
     cluster.stop("a")
+    ok(cluster.reset_count("a") == before + 1, "a's TPM went through Startup(CLEAR): resetCount %d -> %d" % (before, cluster.reset_count("a")))
     cut = time.time()
     ok(until(lambda: answered(cluster, "b", "c", cut) and answered(cluster, "c", "b", cut), 60, 2) is True,
        "with a down, b and c still pull from each other")
@@ -99,6 +104,19 @@ def scenario(cluster):
     cluster.start("a")
     ok(until(lambda: answered(cluster, "b", "a", back) and answered(cluster, "c", "a", back), 90, 2) is True,
        "a started again: b and c answer its pulls", cluster.journal("a", "sync")[-600:])
+
+    header("6  isolation: a's sync, as its unit runs it, sees nothing of b")
+    b = cluster.nodes["b"]
+    probe = ("import socket, sys\nfor path in sys.argv[1:3]:\n    try:\n        open(path, 'rb').read(1); print('READ ' + path)\n"
+             "    except OSError as e:\n        print('refused %s: %s' % (path, e.strerror))\n"
+             "s = socket.socket(socket.AF_UNIX)\ntry:\n    s.connect(sys.argv[3]); print('CONNECTED')\nexcept OSError as e:\n    print('refused tpm: ' + str(e.strerror))\n")
+    argv = ["systemd-run", "--wait", "--pipe", "--collect", "--quiet"]
+    for prop in cluster.properties("a", "sync"):
+        argv += ["-p", prop]
+    said = sh(*(argv + ["/usr/bin/python3", "-I", "-c", probe, str(b.state / "membership.json"), str(b.dir / "etc" / "wg-service.key"), str(b.tpm_sock)]),
+              check=False).stdout
+    ok("READ" not in said and "CONNECTED" not in said and said.count("refused") == 3,
+       "a's sync can read neither b's store nor b's WireGuard key, and cannot reach b's TPM", said)
 
 
 def main():
@@ -111,6 +129,7 @@ def main():
               "GitHub-hosted runner; on another throwaway host set REGALIA_THREE_NODE_HOST_OK to its /etc/machine-id.")
         return 2
     present = [p for p in ("/run/netns/" + threenode.SWITCH,) + tuple("/run/netns/e2e3-" + n for n in threenode.NAMES) if os.path.exists(p)]
+    present += sh("systemctl", "list-units", "--all", "--plain", "--no-legend", threenode.UNIT_PREFIX + "*", check=False).stdout.split()[:1]
     if present:
         print("three-node-netns: refused: %s exists: another run's namespaces are still here" % ", ".join(present))
         return 2

@@ -3,13 +3,17 @@
 Each node is what a host is, less the boot (tier N of #70's design): its own network namespace, its own
 software TPM (EK, AK, the membership anchor and the heartbeat counter in it), its own configuration and
 state directories, and its own processes: the node's real programs (deploy/baremetal/node.py's services),
-each a transient systemd unit (systemd-run) in the node's namespace. The installed units' confinement is
-not what is tested here; e2e/node-units-systemd.py tests that, for one node.
+each a transient systemd unit (systemd-run) in the node's namespace, with the IDENTITY of its installed unit
+(User, Group, SupplementaryGroups, capabilities, NoNewPrivileges, UMask: read from the unit file itself, so
+the two cannot drift) and no view of the other nodes' directories (InaccessiblePaths). The rest of the
+installed units' sandbox is e2e/node-units-systemd.py's test, for one node.
 
     cluster = Cluster(work)          # namespaces, TPMs, identities, the chain, the configurations
     cluster.build()
     cluster.start("a")               # sync, then wg-apply (as a host's path unit would run it)
-    cluster.stop("a")                # a's processes stop; its /run is emptied, as by a power cut
+    cluster.stop("a")                # a power cycle: its processes stop, its /run is emptied, its TPM restarts
+                                     # (Startup(CLEAR): resetCount up, PCRs reset), its time unauthenticated
+    cluster.stop("a", power=None)    # a service crash: the processes only
     cluster.close()                  # everything this made, removed
 
 Stand-ins, each named where it is made, and each replaceable when the real piece runs here:
@@ -23,6 +27,8 @@ Underlay: a bridge in a switch namespace, node i at 192.0.2.(10*i)/24. Each node
 the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (wg-svc), as on a host.
 Root only; it changes the machine (namespaces, interfaces, transient units), so its callers run only on a
 throwaway machine (a GitHub-hosted runner)."""
+import configparser
+import grp
 import json
 import os
 import pathlib
@@ -93,14 +99,19 @@ class Cluster:
         self.chain = []                               # the signed envelopes, epoch 1 first
         self.manifest = None
         self.keys = {}
+        self.authtimes = {}
 
     # ---- building ----
 
     def build(self):
+        # the services' users and groups, from the shipped file (regalia-sync, regalia-admission, their trails' groups)
+        sh("systemd-sysusers", str(ROOT / "deploy" / "baremetal" / "units" / "regalia.sysusers.conf"))
+        os.chmod(self.work, 0o711)                    # each node's directory is reached through it, read in it only
         self._network()
         for n in self.nodes.values():
             for d in (n.dir / "etc", n.state, n.admission, n.run):
                 d.mkdir(parents=True)
+            os.chmod(n.dir, 0o711)
             self._tpm(n)
             self._wg_keys(n)
         self._identities_and_chain()
@@ -110,6 +121,11 @@ class Cluster:
         self._authtime()
         for n in self.nodes.values():
             self.beat(n.name, 1)
+            # owned as the units' StateDirectory= would make them: the services are not root
+            sh("chown", "-R", "regalia-sync:regalia-sync", str(n.state))
+            os.chmod(n.state, 0o755)
+            sh("chown", "-R", "regalia-admission:regalia-admission", str(n.admission))
+            os.chmod(n.admission, 0o700)
 
     def _network(self):
         sh("ip", "netns", "add", SWITCH)
@@ -126,8 +142,13 @@ class Cluster:
             n.in_ns("ip", "link", "set", "eth0", "up")
 
     def _tpm(self, n):
-        (n.dir / "tpm").mkdir()
-        done = sh("swtpm", "socket", "--tpm2", "--server", "type=unixio,path=%s" % n.tpm_sock, "--ctrl", "type=unixio,path=%s.ctrl" % n.tpm_sock,
+        (n.dir / "tpm").mkdir(exist_ok=True)
+        for leftover in (n.tpm_sock, pathlib.Path(str(n.tpm_sock) + ".ctrl")):
+            if leftover.exists():
+                leftover.unlink()
+        # the socket is the tss group's, 0660, as /dev/tpmrm0 is on a host: the services reach it through the group
+        server = "type=unixio,path=%s,mode=0660,gid=%d" % (n.tpm_sock, grp.getgrnam("tss").gr_gid)
+        done = sh("swtpm", "socket", "--tpm2", "--server", server, "--ctrl", "type=unixio,path=%s.ctrl" % n.tpm_sock,
                   "--tpmstate", "dir=%s" % (n.dir / "tpm"), "--flags", "not-need-init,startup-clear", "--daemon",
                   "--pid", "file=%s" % (n.dir / "tpm.pid"), "--log", "file=%s" % (n.dir / "tpm.log"), check=False)
         if done.returncode != 0 or not until(lambda: n.tpm_sock.exists(), 10, 0.2):
@@ -135,6 +156,25 @@ class Cluster:
             denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
             raise RuntimeError("%s's software TPM did not start (%d): %s %s | log: %s | apparmor: %s"
                                % (n.name, done.returncode, done.stdout.strip(), done.stderr.strip(), log, denied))
+
+    def power_cycle(self, name, orderly=True):
+        """The node's TPM through a power loss: (orderly) TPM2_Shutdown(CLEAR) first, then the process stopped and
+        started again on the same state, which sends TPM2_Startup(CLEAR): resetCount one higher, the PCRs back to
+        their reset values, every transient object and session gone, as on a host. Without `orderly`, a cut: no
+        Shutdown, which a TPM counts against its dictionary-attack limit (#57)."""
+        n = self.nodes[name]
+        if orderly:
+            sh("tpm2_shutdown", "-c", "-T", n.tcti, check=False)
+        pid = int((n.dir / "tpm.pid").read_text())
+        os.kill(pid, 15)
+        if not until(lambda: not os.path.exists("/proc/%d" % pid), 10, 0.2):
+            raise RuntimeError("%s's software TPM did not stop" % name)
+        self._tpm(n)
+
+    def reset_count(self, name):
+        """The TPM's resetCount (TPM2_ReadClock): one higher after each power cycle."""
+        out = sh("tpm2_readclock", "-T", self.nodes[name].tcti).stdout
+        return int(next(line.split(":", 1)[1] for line in out.splitlines() if "reset_count" in line))
 
     def _wg_keys(self, n):
         keys = {}
@@ -232,6 +272,7 @@ class Cluster:
                         "sources": [{"name": s, "state": state, "reaching": answering, "mode": "NTS", "keyed": True}
                                     for s, state in (("nts1.e2e3.invalid", "*"), ("nts2.e2e3.invalid", "+"))]}
             service = authtime.Service(str(n.run / "authtime.json"), ["nts1.e2e3.invalid", "nts2.e2e3.invalid"], reading=reading)
+            self.authtimes[n.name] = service
             service.step()
             thread = threading.Thread(target=service.run, args=(lambda: self.stop_threads,), kwargs={"interval": 5}, daemon=True)
             thread.start()
@@ -247,31 +288,58 @@ class Cluster:
     def unit(self, name, service):
         return "%s%s-%s" % (UNIT_PREFIX, name, service)
 
+    IDENTITY = ("User", "Group", "SupplementaryGroups", "CapabilityBoundingSet", "AmbientCapabilities", "NoNewPrivileges", "UMask")
+
+    @staticmethod
+    def identity(service):
+        """The installed unit's identity settings, read from deploy/baremetal/units/regalia-<service>.service."""
+        parser = configparser.ConfigParser(strict=False, interpolation=None, delimiters=("=",))
+        parser.optionxform = str
+        parser.read(ROOT / "deploy" / "baremetal" / "units" / ("regalia-%s.service" % service))
+        unit = parser["Service"]
+        return {key: unit[key] for key in Cluster.IDENTITY if key in unit}
+
+    def properties(self, name, service):
+        """systemd-run -p for one service of one node: its namespace, the installed unit's identity, and no view of
+        the other nodes' directories."""
+        n = self.nodes[name]
+        props = ["NetworkNamespacePath=/run/netns/" + n.ns, "WorkingDirectory=" + str(ROOT), "Environment=PYTHONDONTWRITEBYTECODE=1"]
+        props += ["%s=%s" % (key, value) for key, value in self.identity(service).items()]
+        props += ["InaccessiblePaths=" + str(o.dir) for o in self.nodes.values() if o is not n]
+        return props
+
     def start(self, name, services=("sync", "wg-apply")):
         """The node's services, each a transient unit in its namespace, as a host runs them: sync first (it
         publishes the chain the others verify), wg-apply once the chain is published."""
         n = self.nodes[name]
+        if not self.time[name]:                       # booted again: its time is checked again (chrony, on a host)
+            self.time[name] = True
+            self.authtimes[name].step()
         for service in services:
             if service == "wg-apply" and not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
                 raise RuntimeError("%s's sync published no chain" % name)
-            argv = ["systemd-run", "--unit", self.unit(name, service), "--collect", "-p", "NetworkNamespacePath=/run/netns/" + n.ns,
-                    "-p", "WorkingDirectory=" + str(ROOT), "-p", "Environment=PYTHONDONTWRITEBYTECODE=1"]
+            argv = ["systemd-run", "--unit", self.unit(name, service), "--collect"]
+            for prop in self.properties(name, service):
+                argv += ["-p", prop]
             if service == "wg-apply":
                 argv += ["--wait", "-p", "Type=oneshot"]
             sh(*(argv + ["/usr/bin/python3", "-Es", "-m", "deploy.baremetal.node", "--config", str(n.cfg_path), service]))
 
-    def stop(self, name, power_cut=True):
-        """The node's services stopped; with `power_cut`, its /run emptied (tmpfs on a host) and its tunnels gone."""
+    def stop(self, name, power="cycle"):
+        """The node's services stopped. power="cycle" (an orderly power-off and on) or "cut" (power lost): its /run
+        emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
+        longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.nodes[name]
         for service in ("admission", "sync", "wg-apply"):
             sh("systemctl", "stop", self.unit(name, service), check=False)
             sh("systemctl", "reset-failed", self.unit(name, service), check=False)
-        if power_cut:
+        if power:
+            self.time[name] = False
             for entry in n.run.iterdir():
-                if entry.name != "authtime.json":     # the stand-in keeps writing it: authtime is not a node service here
-                    shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
-            for interface in ("wg-svc", "wg-unlock"):
+                shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
+            for interface in ("wg-svc", "wg-unlock", "wg-boot"):
                 n.in_ns("ip", "link", "del", interface, check=False)
+            self.power_cycle(name, orderly=(power == "cycle"))
 
     def journal(self, name, service, lines=40):
         return sh("journalctl", "-u", self.unit(name, service), "-n", str(lines), "--no-pager", "-o", "cat", check=False).stdout
@@ -286,10 +354,12 @@ class Cluster:
     def close(self):
         self.stop_threads = True
         for name in self.nodes:
-            self.stop(name, power_cut=False)
+            self.stop(name, power=None)
         for n in self.nodes.values():
             try:
-                os.kill(int((n.dir / "tpm.pid").read_text()), 15)
+                pid = int((n.dir / "tpm.pid").read_text())
+                os.kill(pid, 15)
+                until(lambda: not os.path.exists("/proc/%d" % pid), 10, 0.2)      # gone before its state is removed
             except (OSError, ValueError):
                 pass
             sh("ip", "netns", "del", n.ns, check=False)
