@@ -204,7 +204,10 @@ def scenario(cluster, work):
     def unchanged():
         return snapshot() == before and refusal(lambda: cluster.node(b).store().load()) is not None
     rc, shown = reanchor([(a, chains[a])])
-    ok(rc == 1 and "at least two other nodes" in shown and unchanged(), "one peer's chain only: refused (status %s), nothing changed" % rc, shown[-400:])
+    # not vacuous (regalia-kms-1e): the snapshot read what at least one index of b's anchor holds
+    read = sorted("0x%x" % i for i, (code, data) in before[3].items() if code == 0 and data)
+    ok(rc == 1 and "at least two other nodes" in shown and unchanged() and read,
+       "one peer's chain only: refused (status %s), nothing changed (anchor indices read: %s)" % (rc, ", ".join(read) or "none"), shown[-400:])
     rc, shown = reanchor([(a, chains[a]), (b, d / "b-chain.json")])
     ok(rc == 1 and "cannot be a source for its own re-anchor" in shown and unchanged(),
        "b's own chain given as a peer's: refused (status %s), nothing changed" % rc, shown[-400:])
