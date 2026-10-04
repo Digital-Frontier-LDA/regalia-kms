@@ -505,8 +505,9 @@ class HighWater:
         counter below its base is refused.
       * C + 4 and C + 5, the record slots: ordinary, EXACTLY 48 bytes, ownerread|ownerwrite|authread.
       * EXACTLY THESE ATTRIBUTES, apart from "written" and the base's write lock: counter 0x60012, base
-        0x62002 (and write-locked), slots 0x60002 (and not write-locked). A reader refuses any other mask:
-        that covers authwrite, policywrite, ppwrite and writeall (others could write the index), a missing
+        0x62002 (and write-locked), slots 0x60002 (and not write-locked), or the policy-written layout below.
+        A reader refuses any mask other than these two layouts: that covers authwrite, ppwrite and writeall
+        (others could write the index), policywrite without this node's approved-image policy, a missing
         ownerread (the owner could not read it), and locks that clear at startup.
       * OR THE POLICY-WRITTEN LAYOUT (#242), index by index: the counter 0x6001A and a slot 0x6000A (the same
         plus policywrite), with authPolicy = PolicyAuthorize(system-phase PCR key) = the node's configured
