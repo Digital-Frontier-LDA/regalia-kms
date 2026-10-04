@@ -631,7 +631,7 @@ class OfflineRoot(unittest.TestCase):
         self.assertNotIn("PRIVATE", json.dumps(line))
 
     def test_a_later_epoch_is_signed_only_on_the_root_s_signing_state(self):
-        """#403: past the genesis there is no --new-state-dir; a directory without the root's marker signs nothing."""
+        """#403: a later epoch too: a directory without the root's marker signs nothing."""
         from deploy.baremetal import cardrecord
         os.unlink(os.path.join(self.state, cardrecord.SIGNING_STATE))
         code, err = self.run_sign()
@@ -779,8 +779,8 @@ class Genesis(unittest.TestCase):
             return [json.loads(line) for line in f]
 
     def test_the_state_dir_must_be_the_root_s_signing_state(self):
-        """#403, regalia-kms-d9's read of #408: one log of the root's uses. A directory without the marker, or another
-        root's, signs nothing; only --new-state-dir, at the genesis, makes a new one."""
+        """#403, regalia-kms-d9's reads of #408: one log of the root's uses. A directory without the marker, or another
+        root's, signs nothing, and this tool never makes one: the card ceremony, run first, does."""
         from deploy.baremetal import cardrecord
         self.write(self.first)
         marker = os.path.join(self.state, cardrecord.SIGNING_STATE)
@@ -788,41 +788,32 @@ class Genesis(unittest.TestCase):
         code, err = self.run_genesis()
         self.assertEqual(code, 2)
         self.assertIn("has no regalia-signing-state.json: it is not the root's signing state", err)
-        self.assertEqual((self.record(), os.path.exists(self.paths["e1.json"])), ([], False))
+        self.assertEqual((self.record(), os.path.exists(self.paths["e1.json"]), os.path.exists(marker)), ([], False, False))
         marked(self.state, "9b" * 32)
         code, err = self.run_genesis()
         self.assertIn("is another root's signing state: nothing is signed", err)
         self.assertEqual((self.record(), os.path.exists(self.paths["e1.json"])), ([], False))
-        marked(self.state, self.root)                                   # the root's own state: --new-state-dir is not for it
-        code, err = self.run_genesis("--new-state-dir")
-        self.assertIn("--new-state-dir: %s is already a signing state" % self.state, err)
-        os.unlink(marker)
-        code, err = self.run_genesis("--new-state-dir")
-        self.assertEqual(code, 0, err)
-        with open(marker) as f:
-            self.assertEqual(json.load(f), {"schema": cardrecord.SIGNING_STATE_SCHEMA, "root": self.root})
-        self.assertEqual(os.stat(marker).st_mode & 0o777, 0o600)
-        self.assertEqual([line["kind"] for line in self.record()], ["manifest"])
-        self.assertEqual(cardrecord.read_signing_state(self.state, self.root)[0]["kind"], "manifest")   # the card reader takes it whole
 
-    def test_new_state_dir_never_starts_a_log_beside_one(self):
-        from deploy.baremetal import cardrecord
+    def test_there_is_no_way_to_start_a_signing_state_here(self):
+        """d9: --new-state-dir was a second-log hatch (the proposal was already made against the marked directory); gone."""
         self.write(self.first)
-        os.unlink(os.path.join(self.state, cardrecord.SIGNING_STATE))
-        with open(os.path.join(self.state, tool.RECORD), "w") as f:
-            f.write('{"kind": "manifest", "epoch": 1}\n')
-        code, err = self.run_genesis("--new-state-dir")
-        self.assertIn("--new-state-dir: %s already holds a signing record: nothing is signed" % self.state, err)
+        with unittest.mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.run_genesis("--new-state-dir")
         self.assertFalse(os.path.exists(self.paths["e1.json"]))
 
-    def test_new_state_dir_is_for_the_genesis_only(self):
-        err = io.StringIO()
-        with unittest.mock.patch("sys.stderr", err):
-            code = tool.main(["sign", "--chain", os.path.join(self.d, "none.json"), "--root-key", self.root, "--expected-epoch", "1",
-                              "--proposal", self.paths["p.json"], "--signer", "root", "--state-dir", self.state,
-                              "--out", self.paths["e1.json"], "--new-state-dir"])
-        self.assertEqual(code, 2)
-        self.assertIn("--new-state-dir is for the genesis only", err.getvalue())
+    def test_the_genesis_signs_on_the_state_the_card_ceremony_left(self):
+        """regalia-kms-51 on #408: at the first ceremony the card ceremony runs first, so the genesis meets the marker and
+        card-record line 1, and signs there; the card reader then takes the whole log."""
+        from deploy.baremetal import cardrecord
+        self.write(self.first)
+        line = {"kind": "card-record", "sequence": 1, "digest": "cd" * 32, "key": self.root, "at": "2026-10-04T10:00:00Z"}
+        with open(os.path.join(self.state, tool.RECORD), "w") as f:
+            f.write(json.dumps(line) + "\n")
+        os.chmod(os.path.join(self.state, tool.RECORD), 0o600)
+        code, err = self.run_genesis()
+        self.assertEqual(code, 0, err)
+        self.assertEqual([l["kind"] for l in cardrecord.read_signing_state(self.state, self.root)], ["card-record", "manifest"])
+
 
     def test_the_offline_root_signs_epoch_1_after_the_fingerprint_and_the_digest_are_typed(self):
         code, err = self.run_genesis("--chain-out", self.paths["chain.json"])
