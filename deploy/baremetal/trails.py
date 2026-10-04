@@ -74,6 +74,9 @@ TRAILS = {
     "authority": ("state_dir/audit.jsonl", "regalia-authority.service (user regalia-authority)", "authority", "regalia-audit-authority"),
     "reanchor": (TOOL_DIR + "/reanchor.jsonl", "reanchor.py, root, by hand", "reanchor", TOOL_GROUP),
     "recount": (TOOL_DIR + "/recount.jsonl", "recount.py, root, by hand", "recount", TOOL_GROUP),
+    # #75: update.py's BootNext, promotion and removal of a boot entry, each REQUEST before the change, with the
+    # peers whose leases justified a reboot
+    "update": (TOOL_DIR + "/update.jsonl", "update.py, root, by hand, node", "update", TOOL_GROUP),
     "recovery-key": (TOOL_DIR + "/recovery-key.jsonl", "recovery-key.sh, root, by hand", "recovery-key", TOOL_GROUP),
     "recovery-reconcile": (TOOL_DIR + "/recovery-reconcile.jsonl", "recovery-reconcile.py, root, by hand", "recovery-reconcile", TOOL_GROUP),
 }

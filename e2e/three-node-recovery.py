@@ -31,6 +31,7 @@ L always: a live lease in the node's admission, whose holder names the peer as i
 saying it issued one.
 """
 import itertools
+import json
 import os
 import pathlib
 import sys
@@ -92,6 +93,25 @@ def attempt(cluster, results, name, **kw):
         results[name] = {"error": repr(failure)}
 
 
+# update.py's own collection (#75): Host.lease_from (sync.Client.renewer, node.quote, lease.Holder.install) and
+# fresh_leases' private directory, as `update apply` runs them, as root, in the node's namespace
+LIVE_LEASES = (
+    "import json, os, sys, tempfile\n"
+    "from deploy.baremetal import lease, node, update\n"
+    "d = json.load(sys.stdin)\n"
+    "h = update.Host(node.load(d['cfg']))\n"
+    "h.private_root = tempfile.mkdtemp(dir='/run', prefix='regalia-e2e-update-')\n"
+    "m = h.manifest()\n"
+    "s = h.session()\n"
+    "got, refused = update.fresh_leases(h, m, update.authorizers(m, h.node_id), s)\n"
+    "now = h.now()\n"
+    "out = {p: {'node_id': e['lease']['node_id'], 'issuer': e['lease']['issuer'], 'this_session': e['lease']['session_id'] == s,\n"
+    "           'left': lease.verify(e, m, now)} for p, e in got.items()}\n"
+    "left = os.listdir(h.private_root)\n"
+    "os.rmdir(h.private_root)\n"
+    "print(json.dumps({'leases': out, 'refused': refused, 'private_left': left}))\n")
+
+
 def scenario(cluster):
     names = list(cluster.nodes)
 
@@ -106,6 +126,14 @@ def scenario(cluster):
     for name in names:
         held = until(lambda: cluster.lease(name), 120, 2)
         ok(bool(held), "%s holds a runtime lease (epoch %s)" % (name, (held or {}).get("epoch")), cluster.journal(name, "admission")[-600:])
+
+    header("1b  #75: update.py's live leases, the real call: a asks b and c for a lease for its boot, as root in its namespace")
+    got = json.loads(cluster.nodes["a"].in_ns("env", "PYTHONDONTWRITEBYTECODE=1", "/usr/bin/python3", "-Es", "-c", LIVE_LEASES,
+                                               input=json.dumps({"cfg": str(cluster.nodes["a"].cfg_path)}), cwd=str(cluster.code)).stdout)
+    ok(sorted(got["leases"]) == ["b", "c"] and not got["refused"], "a got a lease from b and from c, each asked once (%s)" % got.get("refused"), got)
+    ok(all(v["node_id"] == "a" and v["issuer"] == p and v["this_session"] and v["left"] > 0 for p, v in got["leases"].items()),
+       "each names a as subject, its peer as issuer, a's boot session, and verifies under a's manifest now", got)
+    ok(got["private_left"] == [], "the leases' private directory under /run is gone when the collection returns", got)
 
     header("2  PoC 10.1: every directed relationship, X restored by P alone")
     for target, peer in itertools.permutations(names, 2):

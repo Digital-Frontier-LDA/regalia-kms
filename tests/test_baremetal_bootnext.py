@@ -2,6 +2,7 @@
 efibootmgr is a fake that keeps the variables the firmware would; the images are PE files built as ukify lays
 them out (tests/test_baremetal_uki.py)."""
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -50,6 +51,8 @@ class FakeEfibootmgr:
         rest = argv[2:]
         if rest[:1] == ["--bootnext"]:
             self.next = rest[1]
+        elif rest == ["--delete-bootnext"]:
+            self.next = None
         elif rest[:1] == ["--bootorder"]:
             self.order = rest[1].split(",")
         elif rest[:1] == ["--bootnum"] and rest[2:] == ["--delete-bootnum"]:
@@ -194,6 +197,15 @@ class TrialBoot(OnAnEsp):
             return real(argv, **kw)
         self.refused("BootNext reads None after setting it to 0002: nothing is rebooted on that", self.trial, "0002", None, ignores)
 
+    def test_an_armed_bootnext_is_cleared_and_read_back(self):
+        self.trial("0002")
+        self.assertIsNone(bootnext.clear_next(self.fake)["next"])
+        self.fake.reboot()
+        self.assertEqual(self.fake.current, "0001")
+        calls = len(self.fake.calls)
+        bootnext.clear_next(self.fake)                     # nothing armed: nothing written
+        self.assertNotIn("--delete-bootnext", sum(self.fake.calls[calls:], []))
+
     def test_removing_the_retired_entry(self):
         for entry, prep, reason in (("0001", None, "is the entry this host booted"),):
             self.refused(reason, bootnext.remove, entry, self.fake)
@@ -305,8 +317,11 @@ class NothingElseWritesBootVariables(unittest.TestCase):
                         continue
                     with open(path, encoding="utf-8", errors="replace") as f:
                         text = f.read()
-                    # writing an EFI variable by hand needs its immutable bit cleared first (efivarfs): chattr -i
-                    if "efibootmgr" in text or ("efivars" in text and "chattr -i" in text):
+                    # an invocation, not a mention: the program as a quoted word (Python, Go) or a shell command;
+                    # and writing an EFI variable by hand needs its immutable bit cleared first (efivarfs): chattr -i
+                    called = re.search(r"""["']([^"'\s]*/)?efibootmgr["']""", text) if not name.endswith(".sh") else \
+                        re.search(r"^\s*(sudo\s+)?(\S*/)?efibootmgr\b", text, re.M)
+                    if called or ("efivars" in text and "chattr -i" in text):
                         found.append(os.path.relpath(path, root))
         self.assertEqual(found, [], "only deploy/baremetal/bootnext.py may change the firmware's boot variables")
 

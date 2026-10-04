@@ -461,10 +461,12 @@ the new image; that is the intent.
 
 Proven on three software TPMs, with real quotes, NV counters and TPM-signed leases
 (`e2e/rolling-policy-swtpm.sh`); the rules themselves in `tests/test_baremetal_rollout.py`. **Not done:**
-nothing here is wired into a service or reboots a machine; `may_reboot` is a check an operator or a
-script must call, and it does not stop a reboot it was not asked about. Real UKIs, systemd-boot's boot
-counting and automatic fallback, a TPM firmware update (staged the same way, as a second set) and the
-timing of three reboots are for the DL360s (#65). And retirement by the peers protects what needs a peer:
+nothing here is wired into a service; `may_reboot` is a check, and it does not stop a reboot it was not
+asked about. The reboot itself is `update.py apply` (#75): the firmware's one-shot BootNext into the new
+image, after may_reboot on live leases and a check that the image measures NEXT; the fallback is BootOrder,
+which still starts with the current image, after a reset the operator makes (KERNEL-UPDATE.md, step 3).
+Real UKIs on real firmware, the reset and its deadline, a TPM firmware update (staged the same way, as a
+second set) and the timing of three reboots are for the DL360s (#65). And retirement by the peers protects what needs a peer:
 see PIN-CUSTODY.md, "Why the host key is in the seal", for the local seal and what is still open there.
 
 ## 5. Pass criteria
