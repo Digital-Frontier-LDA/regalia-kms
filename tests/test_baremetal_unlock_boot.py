@@ -66,6 +66,14 @@ def no_shell(test, said):
     test.assertNotRegex(said, r"Emergency Shell|Rescue Shell|Give root password|emergency mode")
 
 
+def unattended(test, said):
+    """Nobody typed (boot() was given no recovery), yet the root came up: the client's answer opened it. The prompt is
+    up all the same, from the start (#70: the client answers beside the console, never in front of it)."""
+    test.assertRegex(said, PROMPT.pattern.decode())
+    test.assertIn("regalia-unlock: gave the key of ", said)
+    test.assertIn("REGALIA-E2E-ROOT-UP root=yes", said)
+
+
 @unittest.skipUnless(os.environ.get("REGALIA_EXPECT_QEMU") == "1", "needs a guest built by e2e/unlock-boot-qemu.sh")
 class OnQemu(tub.OnSwtpm):
     # the fixtures of OnSwtpm are reused, not its tests
@@ -401,7 +409,7 @@ class OnQemu(tub.OnSwtpm):
         self.reference = reference(expected["pcr12"])
         since = len(self.events)
         said = self.boot("2-unattended", credentials)
-        self.assertNotRegex(said, PROMPT.pattern.decode())
+        unattended(self, said)
         gave = re.search(r"regalia-unlock: gave the key of %s for keyslot ([12]), through ([bc])" % re.escape(device), said)
         self.assertIsNotNone(gave, "the client did not give the key")
         slot, through = gave.group(1), gave.group(2)
@@ -438,7 +446,7 @@ class OnQemu(tub.OnSwtpm):
         self.reference = reference(expected["pcr12"], (("e2e", record), ("e2e-old", older)))
         since = len(self.events)
         said = self.boot("2c-older-approved", credentials, image="e2e-old")
-        self.assertNotRegex(said, PROMPT.pattern.decode())
+        unattended(self, said)
         self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
         self.assertIn("regalia.e2e-image=old", re.search(r"REGALIA-E2E-CMDLINE (.*)", said).group(1).split())
         shown = booted_pcrs(said)
@@ -482,7 +490,7 @@ class OnQemu(tub.OnSwtpm):
         self.assertNotIn("REGALIA-E2E-PLANTED-RAN", said)
         self.assertIn("REGALIA-E2E-IMPORT credentials-imported=no", said)
         self.assertIsNotNone(re.search(r"regalia-unlock: gave the key of %s for keyslot [12], through [bc]" % re.escape(device), said))
-        self.assertNotRegex(said, PROMPT.pattern.decode())
+        unattended(self, said)
         if "skipping importing of credentials" in said:
             print("boot 2b: systemd said it imports no credential", file=sys.stderr)
 
