@@ -95,8 +95,8 @@ jobs:
         run: |
           set -o pipefail
           REGALIA_E2E_BIN="$RUNNER_TEMP/bin" sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py | tee "$RUNNER_TEMP/units.log"
-          grep -q '^node-units-systemd: 66 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
-            echo "::error::the units test did not pass all 66 checks" >&2; exit 1; }
+          grep -q '^node-units-systemd: 71 passed, 0 failed$' "$RUNNER_TEMP/units.log" || {
+            echo "::error::the units test did not pass all 71 checks" >&2; exit 1; }
 
   # #278: the trail shipper's unit, as shipped, against the real collector: as its own user with no
   # capability it reads a trail only through its instance's group, and a trail cut short under what was
@@ -141,8 +141,8 @@ jobs:
         run: |
           set -o pipefail
           sudo --preserve-env=RUNNER_ENVIRONMENT python3 -Es e2e/three-node-netns.py | tee "$RUNNER_TEMP/three.log"
-          grep -q '^three-node-netns: 26 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
-            echo "::error::the three-node test did not pass all 26 checks" >&2; exit 1; }
+          grep -q '^three-node-netns: 40 passed, 0 failed$' "$RUNNER_TEMP/three.log" || {
+            echo "::error::the three-node test did not pass all 40 checks" >&2; exit 1; }
 
   # #70 (Phase 10), PR 2: every directed peer recovery path (PoC 10.1) and the nodes that must not be
   # restored, on the three-node fixture: real disks (LUKS2 on loop devices), the real pre-root client.

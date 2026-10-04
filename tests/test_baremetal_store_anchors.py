@@ -79,6 +79,38 @@ class SyncNeverMovesTheAnchor(unittest.TestCase):
         self.assertEqual(sync.restore(self.chain[:3])["epoch"], 3)
         self.assertEqual(self.hw.value(), 1)
 
+    def test_restore_refuses_a_chain_beyond_the_jump_bound_before_writing(self):
+        """95's read: a restore far above the anchor is refused up front, not written and then refused at every load."""
+        self.hw.MAX_JUMP = 2
+        sync = self.store()
+        with open(self.d + "/membership.json", "rb") as f:
+            before = f.read()
+        with self.assertRaisesRegex(m.Refused, "the fetched chain ends at epoch 4, 3 above the TPM high-water: the jump exceeds the bound 2"):
+            sync.restore(self.chain)
+        with open(self.d + "/membership.json", "rb") as f:
+            self.assertEqual(f.read(), before)
+
+    def test_a_write_racing_the_lock_free_read_is_read_again(self):
+        """95's and 48's reads: sync verifies without the anchor's lock (the ESP advance writes under its own). A read
+        that lands inside a write (a CONFLICT that does not stay) is read again, as node.published() does."""
+        sync = self.store()
+        sync.commit(self.chain[1])
+        verify, calls = self.hw.verify, []
+
+        def racing(digest_of, lock=True):
+            calls.append(lock)
+            if len(calls) == 1:
+                raise m.Refused("CONFLICT: a write in progress")
+            return verify(digest_of, lock=lock)
+        self.hw.verify = racing
+        self.assertEqual(sync.load()["epoch"], 2)
+        self.assertEqual(calls, [False, False])
+        calls.clear()
+        self.hw.verify = lambda digest_of, lock=True: (calls.append(lock), (_ for _ in ()).throw(m.Refused("CONFLICT: stays")))[1]
+        with self.assertRaisesRegex(m.Refused, "CONFLICT: stays"):
+            sync.load()
+        self.assertEqual(calls, [False, False])
+
     def test_an_anchoring_store_is_unchanged(self):
         """The default (enrolment, the authority, reanchor, the ESP advance) still anchors on commit and on load."""
         anchoring = self.store(anchors=True)

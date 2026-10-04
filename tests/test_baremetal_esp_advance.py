@@ -15,7 +15,7 @@ import tests.test_baremetal_replacement as rt
 from tests.test_baremetal_node import ROOT, Case
 
 
-class EspAdvance(Case):
+class EspCase(Case):
     def setUp(self):
         super().setUp()
         self.esp = os.path.join(self.d, "esp")
@@ -36,6 +36,9 @@ class EspAdvance(Case):
     def advance(self):
         return node.esp_advance(self.n, self.esp, lock_path=self.lock)
 
+
+class EspAdvance(EspCase):
+
     def test_the_esp_is_written_before_the_anchor_moves(self):
         self.sync.commit(self.e2)
         node.publish(self.sync, self.n.path(node.PUBLISHED))
@@ -45,13 +48,13 @@ class EspAdvance(Case):
         write, anchor = enrol._replace_esp, m.HighWater.anchor
         with unittest.mock.patch.object(enrol, "_replace_esp", lambda *a: (order.append("esp"), write(*a))[1]), \
                 unittest.mock.patch.object(m.HighWater, "anchor", lambda hw, *a: (order.append("anchor"), anchor(hw, *a))[1]):
-            epoch, sha, rewritten = self.advance()
+            epoch, sha, rewritten, unrenderable = self.advance()
         self.assertEqual(order, ["esp", "anchor"])
-        self.assertEqual((epoch, rewritten), (2, True))
+        self.assertEqual((epoch, rewritten, unrenderable), (2, True, None))
         self.assertEqual(self.on_esp(), [self.e1, self.e2])
         self.assertEqual(sha, hashlib.sha256(m.canonical([self.e1, self.e2])).hexdigest())
         self.assertEqual(self.n.anchor().value(), 2)
-        self.assertEqual(self.advance()[1:], (sha, False))                    # again: nothing to write, the anchor already there
+        self.assertEqual(self.advance()[1:], (sha, False, None))                    # again: nothing to write, the anchor already there
 
     def test_a_crash_between_the_write_and_the_anchor_is_completed_by_the_next_run(self):
         self.sync.commit(self.e2)
@@ -82,6 +85,16 @@ class EspAdvance(Case):
                 self.assertEqual(self.on_esp(), [self.e1, self.e2])
                 self.assertEqual(self.n.anchor().value(), 2)
 
+    def test_a_chain_the_initrd_could_not_render_is_still_anchored_with_a_warning(self):
+        """b and c revoked: no peer is left to unlock a. The next boot must go to the recovery prompt, and the anchor must
+        not freeze at epoch 1 (rollback protection with it): written, anchored, and said."""
+        m2 = dict(hbt.manifest(2, m.digest(self.m1), b="REVOKED_STOLEN", c="REVOKED_STOLEN"))
+        self.sync.commit(rt.sign(m2))
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        epoch, _, rewritten, unrenderable = self.advance()
+        self.assertEqual((epoch, rewritten, self.n.anchor().value()), (2, True, 2))
+        self.assertIn("the manifest leaves a no peer", unrenderable)
+
     def test_only_the_chain_is_written(self):
         """The measured site credential is enrolment's; the ESP advance never touches loader/credentials."""
         credentials = os.path.join(self.esp, "loader", "credentials")
@@ -106,6 +119,29 @@ class EspAdvance(Case):
         self.refused("", self.advance)
         self.assertFalse(os.path.exists(os.path.join(self.d, "elsewhere")))
         self.assertEqual(self.n.anchor().value(), 1)
+
+
+class AnchorLag(EspCase):
+    """regalia-kms-48's read: an ESP advance that keeps failing leaves the anchor behind, silently; sync says so in
+    membership.prom (RegaliaMembershipAnchorBehind), and `node check` shows both."""
+
+    def test_sync_publishes_the_held_epoch_and_the_anchor_s(self):
+        self.sync.commit(self.e2)
+        node.publish(self.sync, self.n.path(node.PUBLISHED))
+        written = []
+        with unittest.mock.patch.object(node.metrics, "publish", lambda writer, samples, target=None: written.append((writer, samples, target))):
+            s = node.Sync.__new__(node.Sync)
+            s.node, s.store = self.n, self.sync
+            s.membership_metrics()
+            self.advance()
+            s.membership_metrics()
+        self.assertEqual([(w, dict((name, v) for name, _, v in samples)) for w, samples, _ in written],
+                         [("sync", {"regalia_membership_epoch": 2, "regalia_membership_anchor_epoch": 1}),
+                          ("sync", {"regalia_membership_epoch": 2, "regalia_membership_anchor_epoch": 2})])
+        self.assertEqual(written[0][2], node.metrics.path("sync", "membership.prom"))
+        self.assertIn("regalia_membership_anchor_epoch 1", node.metrics.render("sync", written[0][1]))
+        with unittest.mock.patch.object(node.metrics, "publish", side_effect=OSError("full")):
+            s.membership_metrics()                                            # never raises: metrics do not stop sync
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ CONTEXT = {
 AUTHTIME = "/run/regalia-metrics/authtime/authtime.prom"
 HEARTBEAT = "/run/regalia-metrics/sync/heartbeat.prom"
 LEASE = "/run/regalia-metrics/admission/lease.prom"
+MEMBERSHIP = "/run/regalia-metrics/sync/membership.prom"
 SHIP = "/run/regalia-metrics/audit-ship/sync.prom"
 NODE_A, NODE_B = {"instance": "a:9100", "job": "regalia-node"}, {"instance": "b:9100", "job": "regalia-node"}
 
@@ -71,6 +72,9 @@ EXTRA = [
     ("RegaliaHeartbeatRunningOut", "a 24-hour lifetime, issued 2 h 10 min ago: the age alert's case, not this one", 120,
      [("regalia_heartbeat_live", {}, "1+0x5"), ("regalia_heartbeat_seconds_left", {}, "78600+0x5"),
       ("regalia_heartbeat_lifetime_seconds", {}, "86400+0x5")], []),
+    # the ESP advance runs seconds after a publication: ten minutes behind, then caught up, is not an alert (#66 B3)
+    ("RegaliaMembershipAnchorBehind", "ten minutes behind, then caught up", 1200,
+     [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x9 5+0x20")], []),
     # the authtime file missing on one node only: that node alone
     ("RegaliaAuthtimeMetricsMissing", "two nodes: only the one without the file", 420,
      [("up", NODE_A, "1+0x10"), ("up", NODE_B, "1+0x10"),
@@ -120,6 +124,12 @@ SCENARIOS = {
     "RegaliaUnlockRefused": {
         "fault": [("regalia_unlock_refused_total", {"cause": "rate"}, "0+1x20")],
         "healthy": [("regalia_unlock_refused_total", {"cause": "rate"}, "5+0x20")], "at": 900},
+    "RegaliaMembershipAnchorBehind": {      # published at 5, anchored at 4 for twenty minutes; healthy: caught up
+        "fault": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "4+0x30")],
+        "healthy": [("regalia_membership_epoch", {}, "5+0x30"), ("regalia_membership_anchor_epoch", {}, "5+0x30")], "at": 1200},
+    "RegaliaMembershipMetricsMissing": {
+        "fault": [("up", NODE_A, "1+0x10")],
+        "healthy": [("up", NODE_A, "1+0x10"), ("node_textfile_mtime_seconds", dict(NODE_A, file=MEMBERSHIP), "0+60x10")], "at": 420},
     "RegaliaNodeMetricsStale": {
         "fault": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+0x10")],
         "healthy": [("node_textfile_mtime_seconds", {"file": AUTHTIME}, "0+60x10")], "at": 600},

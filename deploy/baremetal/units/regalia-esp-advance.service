@@ -23,7 +23,11 @@ WorkingDirectory=/usr/lib/regalia-kms
 Environment=PATH=/usr/sbin:/usr/bin
 ExecStart=/usr/bin/python3 -Es -m deploy.baremetal.node --config /etc/regalia/node.json esp-advance --esp /efi
 User=root
-# the TPM (the anchor) is the tss group's: root without CAP_DAC_OVERRIDE is held to file modes like anyone
+# the TPM (the anchor) is the tss group's: root without CAP_DAC_OVERRIDE is held to file modes like anyone.
+# A policy-written anchor (#242) is written in a policy session, which needs what this unit can read only by
+# those modes: the image's PCR key and the boot's tpm2-pcr-signature.json (world-readable under /run/systemd),
+# the published chain (chain.json, 0644; sync's store is 0600 and is not read) and the measurement documents
+# (the state directory's measurements/, 0755/0644). Tightening any of those modes stops the advance (regalia-kms-95).
 SupplementaryGroups=tss
 # no capability: the ESP is root's, the TPM the group's
 CapabilityBoundingSet=

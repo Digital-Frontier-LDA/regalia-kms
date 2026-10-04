@@ -656,9 +656,15 @@ Proven on software TPMs and a real dm-crypt volume (`e2e/peer-unlock-swtpm.sh`):
   - Until it has run, the node's own services act on the published chain while the anchor is behind it (the
     chain is root-signed and not below the anchor, so this is not a rollback). `regalia-sync` refuses to run more
     than the jump bound (1000 epochs) ahead.
-  - The ESP must be mounted at `/efi` (the unit's `RequiresMountsFor=`). If it is not, the run fails, is retried
-    every 15 s, and the anchor stays behind. A failed run is visible in the journal and in NRestarts, not in
-    `--failed`.
+  - The ESP must be mounted at `/efi` (the unit's `RequiresMountsFor=`). If it is not, or a run keeps failing
+    for another reason (an ESP full or read-only, a directory on it refused, a TPM refusal), the run is retried
+    every 15 s and the anchor stays behind: rollback protection stands at the anchor's epoch, and sync stops
+    1000 epochs ahead. It is SEEN: sync writes the held epoch and the anchor's to `membership.prom`
+    (`regalia_membership_epoch`, `regalia_membership_anchor_epoch`), `RegaliaMembershipAnchorBehind` warns after
+    fifteen minutes behind, and `regalia-node check` prints both. **What the operator does:** read
+    `journalctl -u regalia-esp-advance`, fix the cause (mount the ESP, free space), then
+    `systemctl start regalia-esp-advance`; check that `regalia-node check` shows `anchor` equal to `epoch`.
+    `update.py apply` refuses to reboot a node in that state.
   - The run is recorded in the journal only. It has no hash-chained trail of its own (#278). The commit it
     follows is in the sync trail.
   - The anchor's run-time writer lock is its own (`/run/regalia-esp-advance/highwater.lock`). Enrolment and

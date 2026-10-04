@@ -17,9 +17,13 @@ IT CHANGES THE MACHINE (namespaces, interfaces, transient units), so it runs onl
      other; a started again rejoins, in a new TPM boot: both answer it again
   6  isolation: a process with a's sync unit's properties (its user, groups and no view of the others) can
      read neither b's store nor b's WireGuard key, and cannot reach b's TPM
+  7  a new epoch (#66 B3): sync takes it and never moves the TPM anchor; each node's regalia-esp-advance writes
+     it to the node's ESP, then anchors it. After that, a published chain rolled back to epoch 1 is refused
+     (ROLLBACK) by the root services' check and by the ESP advance itself
 """
 import os
 import pathlib
+import shutil
 import sys
 import tempfile
 import time
@@ -54,7 +58,7 @@ def answered(cluster, server, caller, since=0.0):
 
 
 def scenario(cluster):
-    from deploy.baremetal import node, wgsvc
+    from deploy.baremetal import membership, node, wgsvc
     names = list(cluster.nodes)
 
     header("1  three nodes: a TPM, an EK and AK each, one chain naming all three under each node's own anchor")
@@ -117,6 +121,42 @@ def scenario(cluster):
               check=False).stdout
     ok("READ" not in said and "CONNECTED" not in said and said.count("refused") == 3,
        "a's sync can read neither b's store nor b's WireGuard key, and cannot reach b's TPM", said)
+
+    header("7  a new epoch: the ESP first, then the TPM anchor, on every node (#66 B3)")
+    for name in names:
+        ok(cluster.anchored(name) == 1 and cluster.esp_epoch(name) == 1, "%s: anchor and ESP at epoch 1 before" % name,
+           (cluster.anchored(name), cluster.esp_epoch(name)))
+    manifest, _ = cluster.advance("b")             # raises unless every running node's ESP and anchor follow
+    for name in names:
+        held = cluster.node(name).store().load()["epoch"]
+        ok((held, cluster.esp_epoch(name), cluster.anchored(name)) == (2, 2, 2),
+           "%s holds epoch 2; regalia-esp-advance wrote it to the ESP and moved the TPM anchor to it" % name,
+           (held, cluster.esp_epoch(name), cluster.anchored(name), cluster.journal(name, "esp-watch")[-400:]))
+        said = cluster.journal(name, "esp-watch", 200) + cluster.journal(name, "esp-advance", 200)
+        ok("the ESP's membership chain is epoch 2" in said, "%s's ESP advance said so in its journal" % name, said[-400:])
+    # a rollback after the advance: epoch 1's chain, as a compromised sync or a restored disk would publish it
+    work = cluster.work
+    old = work / "rolled-back.json"
+    old.write_bytes(membership.canonical(cluster.chain[:1]))
+    for name in names:
+        try:
+            node.published(str(old), cluster.node(name).cfg["root_key"], cluster.node(name).anchor())
+            refused = ""
+        except membership.Refused as why:
+            refused = str(why)
+        ok(refused.startswith("ROLLBACK"), "%s: the epoch-1 chain is refused below the anchor at 2" % name, refused)
+    a = cluster.nodes["a"]
+    copy = work / "a-published.json"
+    copy.write_bytes((a.state / node.PUBLISHED).read_bytes())
+    os.replace(old, a.state / node.PUBLISHED)       # under a's ESP advance: it must refuse, and leave its ESP and anchor
+    shutil.chown(a.state / node.PUBLISHED, "regalia-sync", "regalia-sync")
+    os.chmod(a.state / node.PUBLISHED, 0o644)
+    said = until(lambda: "ROLLBACK" in cluster.journal("a", "esp-watch", 200), 60, 2)
+    ok(said is True, "a's ESP advance, given the rolled-back chain, refuses it: ROLLBACK in its journal", cluster.journal("a", "esp-watch")[-600:])
+    ok((cluster.esp_epoch("a"), cluster.anchored("a")) == (2, 2), "and leaves a's ESP and anchor at 2",
+       (cluster.esp_epoch("a"), cluster.anchored("a")))
+    os.replace(copy, a.state / node.PUBLISHED)      # what sync publishes again at its next change
+    shutil.chown(a.state / node.PUBLISHED, "regalia-sync", "regalia-sync")
 
 
 def main():

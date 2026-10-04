@@ -32,6 +32,10 @@ Stand-ins, each named where it is made, and each replaceable when the real piece
     passed as a plain credential (on a host LoadCredentialEncrypted= unseals it under the TPM's policy), and
     the key socket (socket activation, systemd-cryptsetup's side played by this fixture);
   * regalia-wg-apply.path: the same trigger (PathChanged= on the published chain), a transient path unit.
+  * regalia-esp-advance (#66 B3): the node's real command, as root with the installed unit's identity, at start and
+    from a transient path unit on the published chain; its ESP is a directory of the node's own (esp/, not a FAT
+    partition, and nothing boots from it) and its anchor lock is in the node's run directory. sync never moves the
+    TPM anchor: this does, so advance() checks that each running node's anchor follows the epoch.
 
 Underlay: a bridge in a switch namespace, node i at 192.0.2.(10*i)/24. Each node's site configuration names
 the others' underlay addresses, its boot mesh (wg-unlock) and its service mesh (wg-svc), as on a host.
@@ -541,12 +545,18 @@ class Cluster:
         """The node as its services see it (deploy/baremetal/node.Node), from its configuration."""
         return node.Node(node.load(str(self.nodes[name].cfg_path)))
 
+    @staticmethod
+    def enrolled_store(here):
+        """The store as enrolment builds it (enrol.py commit): ANCHORING, so a node starts with its anchor at the chain
+        it was enrolled with. The node's own services use node.store(), which never anchors (#66 B3)."""
+        return membership.Store(here.path("membership.json"), here.cfg["root_key"], here.anchor(), documents=here.documents().require_for)
+
     def _anchor_and_store(self, n):
         here = self.node(n.name)
         anchor = here.anchor()
         anchor.define()
         here.documents().put(self.document)          # as enrol commit does, before the first commit (#332)
-        here.store().commit(self.chain[0])
+        self.enrolled_store(here).commit(self.chain[0])
         with self._as_booted(n.name) if self.v4 else contextlib.nullcontext():
             # under v4 laid down by the node's policy (node.define_policy: the system key its measurements name)
             node.heartbeat_counter(here.cfg).define()
@@ -646,9 +656,38 @@ class Cluster:
             if service == "wg-apply":                 # and again at every new chain, as regalia-wg-apply.path runs it
                 self._run(n, "wg-apply", unit=self.unit(name, "wg-watch"),
                           extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+        if "sync" in services:                        # regalia-esp-advance and its path unit, as a host enables them
+            self._esp_advance(n)
         self.services[name] = tuple(dict.fromkeys(self.services[name] + tuple(services)))   # stop() clears it
         if self.audit and name in self.nodes:         # the node's trail shippers run with it, as regalia-audit-ship@ does
             self._ship_start(name)
+
+    def esp(self, name):
+        """The node's ESP stand-in (a directory: what regalia-esp-advance writes; nothing boots from it here)."""
+        return self.nodes[name].dir / "esp"
+
+    def _esp_advance(self, n):
+        """#66 B3: the node's regalia-esp-advance, once now and then at every new published chain (its path unit): the
+        chain to the node's ESP, then the TPM anchor. A run that fails is in its journal; anchored() says where it is."""
+        esp = self.esp(n.name)
+        if not esp.exists():
+            esp.mkdir(mode=0o755)
+            os.chmod(esp, 0o755)
+        if not until(lambda: (n.state / node.PUBLISHED).exists(), 30, 0.5):
+            raise RuntimeError("%s's sync published no chain" % n.name)
+        args = ("--esp", str(esp), "--esp-lock", str(n.run / "esp-advance.lock"))
+        self._run(n, "esp-advance", oneshot=True, args=args)
+        self._run(n, "esp-advance", unit=self.unit(n.name, "esp-watch"), args=args,
+                  extra=["--path-property=PathChanged=%s" % (n.state / node.PUBLISHED), "-p", "Type=oneshot"])
+
+    def anchored(self, name):
+        """The node's TPM anchor epoch (read as root)."""
+        return self.node(name).anchor().value()
+
+    def esp_epoch(self, name):
+        """The epoch of the chain on the node's ESP stand-in, or None."""
+        path = self.esp(name) / "EFI" / "regalia" / "membership.json"
+        return membership.load(path.read_bytes(), membership.MAX_CHAIN_BYTES)[-1]["manifest"]["epoch"] if path.exists() else None
 
     def _run(self, n, service, oneshot=False, unit=None, extra=(), args=()):
         argv = ["systemd-run", "--unit", unit or self.unit(n.name, service), "--collect"] + list(extra)
@@ -785,7 +824,7 @@ class Cluster:
         here.anchor().define()
         here.documents().put(document)               # the new node's own: the document of the epoch it starts at
         for i, held in enumerate(self.chain):
-            here.store().commit(held, final=i == len(self.chain) - 1)
+            self.enrolled_store(here).commit(held, final=i == len(self.chain) - 1)
         if not until(lambda: (a.dir / "control" / "control.sock").exists(), 60, 1):
             raise RuntimeError("the authority's control socket did not appear")
         # one below the authority's current sequence: the heartbeat it holds now is then new to this node, which takes
@@ -847,7 +886,8 @@ class Cluster:
         emptied (tmpfs on a host), its tunnels gone, its TPM through the power loss (power_cycle) and its time no
         longer authenticated until it starts again. power=None: the services only, as a crash."""
         n = self.member(name)
-        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve")] + [self.unit(name, "wg-watch") + t for t in (".path", ".service")] + \
+        for unit in [self.unit(name, s) for s in ("admission", "sync", "wg-apply", "serve", "esp-advance")] + \
+                [self.unit(name, w) + t for w in ("wg-watch", "esp-watch") for t in (".path", ".service")] + \
                 [self.unit(name, "ship-" + trail) for trail, _, _ in AUDIT_TRAILS]:
             sh("systemctl", "stop", unit, check=False)
             sh("systemctl", "reset-failed", unit, check=False)
@@ -1228,6 +1268,13 @@ class Cluster:
         for name in running:
             if not until(lambda: self.node(name).store().load()["epoch"] == manifest["epoch"], 120, 2):
                 raise RuntimeError("%s did not take epoch %d from %s" % (name, manifest["epoch"], seed))
+        # #66 B3: sync does not move the anchor; each running node's regalia-esp-advance writes the epoch to its ESP and
+        # then anchors it. Checked at every advance, so tier N keeps the anchor's progression (regalia-kms-24)
+        for name in [seed] + running:
+            if not until(lambda: self.anchored(name) == manifest["epoch"] and self.esp_epoch(name) == manifest["epoch"], 60, 1):
+                raise RuntimeError("%s's TPM anchor is at %s and its ESP at %s, not epoch %d: regalia-esp-advance did not follow | %s"
+                                   % (name, self.anchored(name), self.esp_epoch(name), manifest["epoch"],
+                                      self.journal(name, "esp-watch")[-800:]))
         if self.v4:
             self._beaten(manifest, owner_recovery)
             return manifest, since

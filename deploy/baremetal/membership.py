@@ -1323,8 +1323,16 @@ class Store:
         require(epoch >= hw, "ROLLBACK: the membership on disk is epoch %d but the TPM high-water is %d; "
                 "fetch the chain from a peer" % (epoch, hw))
         if not self.anchors:
-            # the recorded manifest, or refused; a newer chain on disk is left for the ESP advance to anchor
-            self.hw.verify(self._digests(manifests))
+            # the recorded manifest, or refused; a newer chain on disk is left for the ESP advance to anchor. Read
+            # without the anchor's lock: its one writer (the ESP advance) takes its own, so this is a reader like
+            # node.published(), and as there a CONFLICT may be a write racing the read: it stands only if it stays
+            digest_of = self._digests(manifests)
+            try:
+                self.hw.verify(digest_of, lock=False)
+            except Refused as refused:
+                if str(refused).startswith("ROLLBACK"):
+                    raise
+                self.hw.verify(digest_of, lock=False)
             require(epoch - hw <= self.hw.MAX_JUMP, "the membership on disk is epoch %d, %d above the TPM high-water: the jump "
                     "exceeds the bound %d: anomaly" % (epoch, epoch - hw, self.hw.MAX_JUMP))
             self.chain, self.manifests = chain, manifests
@@ -1371,8 +1379,9 @@ class Store:
             # leaving a disk ahead of the TPM that load() could never anchor
             require(current["epoch"] - hw <= self.hw.MAX_JUMP, "the fetched chain ends at epoch %d, %d above the TPM high-water: "
                     "the jump exceeds the bound %d: anomaly" % (current["epoch"], current["epoch"] - hw, self.hw.MAX_JUMP))
-            # also before anything is written: a chain that is not the anchored one never reaches the disk
-            self.hw.verify(self._digests(manifests))
+            # also before anything is written: a chain that is not the anchored one never reaches the disk (read without
+            # the anchor's lock when this store is not its writer: see _load)
+            self.hw.verify(self._digests(manifests), lock=self.anchors)
             self._continues_disk(envelopes)
             if self.documents is not None:              # #332: the epoch restored to is judged by its own document
                 self.documents(current)
