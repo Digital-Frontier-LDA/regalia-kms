@@ -75,6 +75,12 @@ func run(arguments []string, out io.Writer) error {
 	if len(arguments) > 0 && arguments[0] == "handover" {
 		return handover(arguments[1:], out)
 	}
+	if len(arguments) > 0 && arguments[0] == "check" {
+		return checkCommand(arguments[1:], out)
+	}
+	if len(arguments) > 0 && arguments[0] == "conformance" {
+		return conformanceCommand(arguments[1:], out)
+	}
 	flags := flag.NewFlagSet("regalia-audit-ship", flag.ContinueOnError)
 	flags.SetOutput(out)
 	var o options

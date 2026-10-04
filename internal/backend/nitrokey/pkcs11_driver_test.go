@@ -26,6 +26,8 @@ func (module *fakeCryptoki) DestroyObject(pkcs11.SessionHandle, pkcs11.ObjectHan
 }
 
 type fakeCryptoki struct {
+	// slotInfo is what GetSlotInfo answers: by default not removable, as SoftHSM (regalia-kms#72, G2).
+	slotInfo pkcs11.SlotInfo
 	// mechanisms is what GetMechanismList answers. nil means every mechanism the driver uses, so
 	// that a test about something else is not also a test about the mechanism list.
 	mechanisms   []uint
@@ -172,3 +174,5 @@ func bytesToUint(value []byte) uint {
 	}
 	return result
 }
+
+func (fake *fakeCryptoki) GetSlotInfo(uint) (pkcs11.SlotInfo, error) { return fake.slotInfo, nil }

@@ -138,6 +138,10 @@ class Proposer:
         self.node_id, self.manifest, self.freshness, self.clock, self.signer = node_id, manifest, freshness, clock, signer
         self.ask, self.trail, self.interval, self.rand = ask, trail, interval, rand
         self.failures, self.not_before, self.jitter = 0, 0, None
+        # when this proposer first saw a manifest it holds no heartbeat for: (digest, seconds). The ranks' turns are
+        # counted from there, so the next rank takes over a turn the first one misses (not from `now`, which would
+        # put every rank but the first a takeover ahead forever)
+        self.first_seen = None
 
     def scaled(self, seconds):
         """`seconds` at the production interval, for this proposer's interval (at least 1)."""
@@ -152,7 +156,10 @@ class Proposer:
             self.jitter = int(self.rand() * self.scaled(JITTER_S))
         rank = order.index(self.node_id)
         held = self.freshness.held()
-        base = now - self.interval                      # nothing held for this epoch: go at once, by rank
+        digest = membership.digest(manifest)
+        if self.first_seen is None or self.first_seen[0] != digest:
+            self.first_seen = (digest, now)
+        base = self.first_seen[1] - self.interval       # nothing held for this manifest: go at once, by rank, from then
         try:
             body = heartbeat.verify(held, manifest) if held is not None else None
         except Refused:

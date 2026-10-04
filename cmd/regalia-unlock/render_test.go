@@ -206,7 +206,53 @@ func (f *renderFixture) env() renderEnv {
 			return nil
 		},
 		remove: func(path string) error { f.removed = append(f.removed, path); delete(f.writes, path); return nil },
-		creds:  "/creds", rootKey: "/root-key.json",
+		creds:  "/creds", rootKey: "/root-key.json", pcrKey: "/pcr.pem",
+	}
+}
+
+// An anchor written under a policy (#242 B2a) renders only when that policy is PolicyAuthorize of the booting
+// image's own PCR-signing key (.pcrpkey): the key is read through the same reader as everything else, and
+// a key that is missing or another image's refuses, writing nothing.
+func TestAPolicyWrittenAnchorIsReadWithTheImagesOwnKey(t *testing.T) {
+	keys := map[string][]byte{}
+	for _, n := range []string{"1", "2"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "tests", "fixtures", "pcr-keys", "system-"+n+".pub.pem"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys[n] = raw
+	}
+	_, policy, err := membership.PCRKeyPolicy(keys["1"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := func(key []byte) *renderFixture {
+		f := newFixture(t)
+		f.tpm = tpmCase(t, f.vector, "a policy-written anchor, this node's policy")
+		for _, entry := range f.tpm.nv {
+			if entry["policy"] != nil {
+				entry["policy"] = hex.EncodeToString(policy) // written under image key 1's policy
+			}
+		}
+		if key != nil {
+			f.files["/pcr.pem"] = key
+		}
+		return f
+	}
+	f := fixture(keys["1"])
+	if _, err := render("/run/regalia-boot", f.env()); err != nil || len(f.writes) == 0 {
+		t.Errorf("the image's own key: %v, %d files", err, len(f.writes))
+	}
+	f = fixture(keys["2"])
+	_, err = render("/run/regalia-boot", f.env())
+	if err == nil || !strings.Contains(err.Error(), "is written by policy "+hex.EncodeToString(policy)+", not ") || len(f.writes) != 0 {
+		t.Errorf("another image's key: %v, %d files", err, len(f.writes))
+	}
+	f = fixture(nil)
+	_, err = render("/run/regalia-boot", f.env())
+	var refused *membership.Refused
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), "the image's PCR public key /pcr.pem cannot be read") || len(f.writes) != 0 {
+		t.Errorf("no key: %#v, %d files", err, len(f.writes))
 	}
 }
 

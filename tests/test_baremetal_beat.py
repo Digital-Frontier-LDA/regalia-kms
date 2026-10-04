@@ -205,6 +205,26 @@ class Proposing(Case):
         self.assertEqual((third["heartbeat"]["sequence"], [s["party"] for s in third["signatures"]]), (3, ["b", "c"]))
         self.assertEqual(self.events[-1]["outcome"], "ALLOW")
 
+    def test_the_next_rank_takes_over_a_new_epoch_the_first_cannot_sign(self):
+        """rolling-threenode's first v4 run (#369): a, the first rank, cannot sign under a new epoch (its image's PCR 11
+        has no signature yet), and b must take over two minutes later, not a takeover ahead of every step forever."""
+        first = self.proposers["a"].step()
+        self.spread(first)
+        self.now += 60
+        self.man = manifest4(2, m.digest(self.man), nodes4())
+        self.sign_fails["a"] = True
+        b = self.proposers["b"]
+        self.assertIsNone(b.step())
+        when = b.due(self.man, self.now)
+        for _ in range(6):                                  # stepped every 10 s, as the sync loop does: the turn does not move
+            self.now += 10
+            self.assertEqual(b.due(self.man, self.now), when)
+            self.proposers["a"].step()
+        self.now = when
+        envelope = b.step()
+        # a cannot co-sign either (it cannot sign at all): b asks c
+        self.assertEqual((envelope["heartbeat"]["epoch"], [s["party"] for s in envelope["signatures"]]), (2, ["b", "c"]))
+
     def test_one_node_alone_signs_nothing_and_backs_off(self):
         self.down |= {"b", "c"}
         self.assertIsNone(self.proposers["a"].step())

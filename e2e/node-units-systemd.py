@@ -2,7 +2,7 @@
 """The node's four units under a real systemd (#80, step 3b): they start, reach what their sandboxes let
 them reach, and do their jobs, up to a peer's lease, the KMS daemon serving on it, and a revocation ending it.
 
-    REGALIA_E2E_BIN=<dir with regalia-kms, regalia-audit-collector> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py
+    REGALIA_E2E_BIN=<dir with regalia-kms (-tags piv), regalia-audit-collector> sudo --preserve-env=RUNNER_ENVIRONMENT,REGALIA_E2E_BIN python3 -Es e2e/node-units-systemd.py
 
 IT CHANGES THE MACHINE, so it runs only on a GitHub-hosted runner (RUNNER_ENVIRONMENT=github-hosted: not
 a self-hosted one, where GITHUB_ACTIONS is set too), or where REGALIA_NODE_HOST_OK equals the machine's
@@ -235,7 +235,7 @@ def main():
         return 2
     binaries = pathlib.Path(os.environ.get("REGALIA_E2E_BIN", "/nonexistent"))
     if not all((binaries / name).is_file() for name in ("regalia-kms", "regalia-audit-collector")) or not os.environ.get("SUDO_USER"):
-        print("node-units-systemd: REGALIA_E2E_BIN must name a directory with regalia-kms and regalia-audit-collector built, "
+        print("node-units-systemd: REGALIA_E2E_BIN must name a directory with regalia-kms (built with -tags piv) and regalia-audit-collector built, "
               "and it must run under sudo (the daemon runs as the invoking user)")
         return 2
     work = pathlib.Path(tempfile.mkdtemp(prefix="node-units-"))
@@ -638,6 +638,10 @@ class Daemon:
     admission file regalia-admission writes in /run/regalia."""
 
     def __init__(self, work, binaries, user):
+        """The token, its key and the daemon's files: nothing runs yet (start). Prepared before epoch 2 is signed,
+        so that the manifest can list the token's serial for node a (#72 G1: a token the manifest does not list is
+        not served)."""
+        self.binaries, self.user = binaries, user
         self.w = w = work / "kms"
         w.mkdir(mode=0o700)
         etc, state = w / "etc", w / "state"
@@ -653,7 +657,7 @@ class Daemon:
            env=dict(self.env, P=pin))
         sh(*token, "--read-object", "--type", "pubkey", "--id", "01", "--output-file", str(w / "pub.der"), env=self.env)
         sh("openssl", "pkey", "-pubin", "-inform", "DER", "-in", str(w / "pub.der"), "-out", str(w / "pub.pem"))
-        serial = next(line.split(":", 1)[1].strip() for line in sh(*token, "--list-slots", env=self.env).stdout.splitlines() if "serial num" in line)
+        self.serial = serial = next(line.split(":", 1)[1].strip() for line in sh(*token, "--list-slots", env=self.env).stdout.splitlines() if "serial num" in line)
         keypin = "sha256:" + hashlib.sha256((w / "pub.der").read_bytes()).hexdigest()
         (etc / "card.pin").write_text(pin)
         sh("openssl", "ecparam", "-genkey", "-name", "prime256v1", "-noout", "-out", str(etc / "ca.key"))
@@ -704,7 +708,12 @@ class Daemon:
         for path in etc.iterdir():
             path.chmod(0o600)
         sh("chown", "-R", "%s:" % user, str(w))
-        common = ["systemd-run", "--collect", "-p", "User=" + user, "-p", "WorkingDirectory=" + str(w)]
+        self.etc, self.sink = etc, sink
+
+    def start(self):
+        """The audit collector, then the daemon, as units."""
+        w, etc, sink, binaries = self.w, self.etc, self.sink, self.binaries
+        common = ["systemd-run", "--collect", "-p", "User=" + self.user, "-p", "WorkingDirectory=" + str(w)]
         sh(*common, "--unit=regalia-audit-collector", "--", str(binaries / "regalia-audit-collector"), "-state", str(w / "collector"),
            "-listen", "127.0.0.1:%d" % sink, "-tls-cert", str(etc / "collector.pem"), "-tls-key", str(etc / "collector.key"), "-client-ca", str(etc / "ca.pem"))
         time.sleep(2)
@@ -842,8 +851,12 @@ def part2(work, binaries, user, ctx, servers, status):
        sh("wg", "show", "wg-svc", check=False).stdout)
 
     header("7  catch-up: b holds epoch 2; regalia-sync pulls it over the tunnel, and wg-apply runs for it")
+    # the daemon's token first, so that epoch 2 (root-signed) lists its serial as a's: the daemon serves only from a
+    # token the manifest lists for this node (#72 G1)
+    daemon = Daemon(work, binaries, user)
     m2 = dict(m1, epoch=2, prev_digest=membership.digest(m1), issued_at="2026-10-02T00:00:00Z",
-              nodes=[dict(n, state="DRAINING") if n["node_id"] == "c" else n for n in m1["nodes"]])
+              nodes=[dict(n, state="DRAINING") if n["node_id"] == "c" else dict(n, hsm_serials=[daemon.serial]) if n["node_id"] == "a" else n
+                     for n in m1["nodes"]])
     store.commit(signed(m2))
     freshness.accept(hbt.beat(m2, 2, issued=int(time.time())), m2)
     before = show("regalia-wg-apply.service", "InvocationID")["InvocationID"]
@@ -866,7 +879,7 @@ def part2(work, binaries, user, ctx, servers, status):
     # regalia-sync and the path unit keep running from here, beside regalia-admission, as on a host
 
     header("8  the KMS daemon, and a lease from b over the tunnel")
-    daemon = Daemon(work, binaries, user)
+    daemon.start()
     ok(daemon.wait_for(503, 90) == 503, "regalia-kms.service is up and NOT ready (503): no admission yet", daemon.log()[-900:])
     sh("systemctl", "start", "regalia-admission.service")
     admitted_doc = until(lambda: (lambda d: d["serve_until_boottime_ms"] > admission.boottime_ms() and d)(

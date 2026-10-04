@@ -75,6 +75,14 @@ func NewHTTPSink(baseURL string, client *http.Client, timeout time.Duration, sit
 	return &HTTPSink{baseURL: strings.TrimSuffix(baseURL, "/"), client: &copyClient, timeout: timeout, site: site}, nil
 }
 
+// WithSite is a copy of the sink that files its events under `site` (the X-Regalia-Site header), with the same
+// collector, client and timeout: the conformance checks' own stream (conformance.go).
+func (sink *HTTPSink) WithSite(site string) *HTTPSink {
+	copied := *sink
+	copied.site = site
+	return &copied
+}
+
 func (sink *HTTPSink) Send(ctx context.Context, event Event) error {
 	if sink == nil || sink.client == nil || !auditHashPattern.MatchString(event.Hash) {
 		return ErrSinkUnavailable
