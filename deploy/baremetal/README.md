@@ -195,6 +195,18 @@ Commissioning has two halves:
   token is simply never served. A root-signed manifest that drops a stolen or retired token's serial
   takes it out of service at the lease service's next step, with no change to the daemon's
   configuration.
+  **A pull nobody saw is seen too (#72, G2).** The daemon watches every PC/SC reader for as long as it runs.
+  A Nitrokey HSM 2, a Pico HSM and a YubiKey are each a USB reader with its card, so pulling one takes
+  the reader away and replugging makes a new one. A token whose reader moved between two operations is
+  treated as having been away, though no operation saw it go, and waits for a fresh lease like any
+  returned token. Where admission is required, a token on a removable slot is served only while its
+  reader is watched, and a daemon that has lost pcscd refuses them until it reconnects (then they
+  wait for a fresh lease). The watcher is in the `-tags piv` build, so **the production daemon is the
+  piv build** (`go build -tags piv -trimpath ./cmd/regalia-kms`, which needs libpcsclite). A daemon built
+  without it refuses to START where admission is required and a token is configured, and says why. A warm card reset with no removal
+  is deliberately not an absence: the sealed PIN is presented on every operation under the current
+  lease, so the card's own login state never authorized anything. SoftHSM slots are not removable and
+  are not watched.
   `python3 -Es -m deploy.baremetal.admission` shows what the daemon currently reads. The call from the
   lease service to a peer is not shipped yet (#80). Where admission is required, a token that was
   absent (removed and returned, or the daemon restarted) serves again only once the node holds a lease
