@@ -17,6 +17,11 @@ keys, no spaces, ASCII). The domain differs from a manifest's, so neither signat
 other. The key must be a revocation key named by the CURRENT manifest; the root key is offline and signs
 no heartbeats.
 
+Under a v4 manifest (#199: no authority host) the envelope is {"heartbeat": {...}, "signatures": [{"party",
+"key", "sig"}, ...]} instead, each signature over the same message, and the counting parties must meet the
+CURRENT manifest's heartbeat_signers (two of the nodes and the owner; signed_by). One the owner co-signed lives
+at most owner_heartbeat_lifetime_s, whoever else signed it.
+
 A heartbeat is accepted (Freshness.accept) and later relied on (Freshness.check) only if:
   * it is for the current manifest: the same epoch AND the same digest;
   * it lives no longer (expires_at - issued_at) than THE CURRENT MANIFEST ALLOWS, whatever the signer
@@ -428,6 +433,8 @@ class Freshness:
         widen = 0
         if owed:
             try:
+                # signed(), not verify(): no owner lifetime cap here, as this moves only the counter to a number already
+                # accepted; every heartbeat relied on goes through verify(), which caps it
                 signed(state["envelope"], manifest)
             except Refused:
                 # Not finished on the strength of the file (planted, or signed by a key a rotation has since
@@ -451,8 +458,8 @@ class Freshness:
         defined AT the heartbeat's sequence (Counter.define_at, no increment loop), and the heartbeat becomes
         the held one, so the time-derived rule applies from its issue time on. Only for a node that holds no
         heartbeat and whose counter's indices do not exist at all (neither the counter nor its base: a damaged
-        counter is recount.py's case): the same checks as accept() (signed by a revocation
-        key the manifest names, for this manifest, live by authenticated time, issued no later than now +
+        counter is recount.py's case): the same checks as accept() (signed as the manifest
+        requires, for this manifest, live by authenticated time, issued no later than now +
         FUTURE_SKEW). Disk first, then the counter: a cut between leaves a held heartbeat over a counter
         that is missing, which recount.py redefines at that floor. Returns the seconds it has left."""
         with membership._exclusive(self.lock_path):

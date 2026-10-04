@@ -55,27 +55,35 @@ class Quorum(unittest.TestCase):
     def test_the_owner_counts_once_whichever_of_its_keys(self):
         self.refused("is named twice", quorum(body(self.man), O1, O2), self.man)
 
-    def test_a_quarantined_node_does_not_count(self):
-        man = manifest4(1, "", nodes4(b="QUARANTINED"))
-        self.refused("signed by a: 2 of", quorum(body(man), A, B), man)
-        self.assertEqual(hb.verify(quorum(body(man), A, C), man)["sequence"], 7)
+    def test_a_quarantined_retired_or_stolen_node_does_not_count(self):
+        for state in ("QUARANTINED", "RETIRED", "REVOKED_STOLEN"):
+            with self.subTest(state):
+                man = manifest4(1, "", nodes4(b=state))
+                self.refused("signed by a: 2 of", quorum(body(man), A, B), man)
+                self.assertEqual(hb.verify(quorum(body(man), A, C), man)["sequence"], 7)
+
+    def test_a_node_the_rule_does_not_name_does_not_count(self):
+        """meets() counts only the rule's parties: c is a node of the manifest, its signature verifies, and it is not one."""
+        man = manifest4(1, "", nodes4(), heartbeat_signers={"threshold": 2, "parties": ["a", "b", "owner"]})
+        self.refused("2 of a, b, owner are needed", quorum(body(man), A, C), man)
+        self.assertEqual(hb.verify(quorum(body(man), A, B), man)["sequence"], 7)
 
     def test_a_key_that_is_not_the_party_s_or_a_high_s_signature(self):
         self.refused("the key is not a's signing_key", quorum(body(self.man), ("a", STRANGER), B), self.man)
         self.refused("the key is not one of the current manifest's owner_keys", quorum(body(self.man), A, ("owner", STRANGER)), self.man)
-        self.refused("", quorum(body(self.man), A, B, high=True), self.man)
+        self.refused("the heartbeat (signatures[0], a) signature is not a low-S P-256 signature", quorum(body(self.man), A, B, high=True), self.man)
 
     def test_the_single_key_form_is_not_a_v4_heartbeat(self):
         heartbeat = body(self.man)
         single = {"heartbeat": heartbeat, "signature": {"key": pub(NODE_KEYS["a"]),
                                                           "sig": p256_sig(NODE_KEYS["a"], hb.DOMAIN + m.canonical(heartbeat))}}
-        self.refused("", single, self.man)
+        self.refused("envelope fields mismatch: missing=['signatures'] unknown=['signature']", single, self.man)
 
     def test_a_signature_over_another_body_does_not_count(self):
         heartbeat, other = body(self.man), body(self.man, sequence=8)
         envelope = quorum(heartbeat, A)
         envelope["signatures"].append(quorum(other, B)["signatures"][0])
-        self.refused("", envelope, self.man)
+        self.refused("the heartbeat (signatures[1], b) signature does not verify", envelope, self.man)
 
     def test_the_owner_lifetime_never_loosens_the_manifest_bound(self):
         self.refused("lives at most 21600 s", quorum(body(self.man, lifetime=21601), A, B), self.man)
