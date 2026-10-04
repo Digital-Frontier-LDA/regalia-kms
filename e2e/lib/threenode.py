@@ -55,7 +55,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from deploy.baremetal import attest, authtime, bootnet, heartbeat, measurements, membership, node, sitecfg, unlock, wgsvc   # noqa: E402
+from deploy.baremetal import attest, authtime, bootnet, heartbeat, measurements, membership, node, signkey, sitecfg, unlock, uki, wgsvc   # noqa: E402
 import tests.test_baremetal_heartbeat as hbt                                                        # noqa: E402  the test root and revocation keys
 
 NAMES = ("a", "b", "c")
@@ -112,11 +112,21 @@ class NodeHere:
 
 
 AUTH = "auth"                                     # the revocation authority's member name here (its own host, #199)
+# The image the fixture boots (v4, #199): PCR 11 extended with this after every TPM start, as a booted UKI extends it, so
+# that the system-phase PCR key's signature over it lets the node's TPM signing key sign
+BOOTED = b"e2e3: an approved image, booted"
+SOFTHSM = next((c for c in ("/usr/lib/softhsm/libsofthsm2.so", "/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so") if os.path.exists(c)), None)
+OWNER_PIN = "246813"                              # the SoftHSM owner token's TEST PIN
 
 
 class Cluster:
     def __init__(self, work, names=NAMES, authority=False):
         self.work = pathlib.Path(work)
+        # #199: without the authority the cluster is v4. The nodes sign their own heartbeats with their TPM signing keys
+        # (beat.py), the owner's party is two Ed25519 keys on a SoftHSM token (the two owner YubiKeys of ADR-0002 D30),
+        # and each node boots an image whose PCR 11 a fixture system-phase key signed. With the authority: v1, as before
+        self.v4 = not authority
+        self.pcr_values = {n: set() for n in names}   # the PCR 11 values each node's signature file covers
         self.nodes = {n: NodeHere(self.work, n, i + 1) for i, n in enumerate(names)}
         # the revocation authority, when asked for: its own namespace, TPM, clock and WireGuard key, and its real
         # `serve` signing the heartbeats (then nothing here writes one)
@@ -154,6 +164,9 @@ class Cluster:
         shutil.copytree(ROOT / "deploy", self.code / "deploy", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         sh("chown", "-R", "root:root", str(self.code))
         sh("chmod", "-R", "u=rwX,go=rX", str(self.code))
+        if self.v4:
+            self._pcr_key()
+            self._owner_token()
         self._network()
         for n in self.members():
             for d in (n.dir / "etc", n.state, n.admission, n.run):
@@ -216,6 +229,70 @@ class Cluster:
             denied = sh("journalctl", "-k", "--since", "-2min", "-g", "apparmor", "--no-pager", check=False).stdout[-800:]
             raise RuntimeError("%s's software TPM did not start (%d): %s %s | log: %s | apparmor: %s"
                                % (n.name, done.returncode, done.stdout.strip(), done.stderr.strip(), log, denied))
+        if self.v4 and n is not self.auth:
+            self._booted(n)
+
+    # ---- v4 (#199): the booted image's signed PCR 11, and the owner's two keys ----
+
+    def _pcr_key(self):
+        """The fixture's system-phase PCR key (RSA-2048, as uki.py's): what the nodes' signing keys are bound to."""
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        self.pcr_private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        self.pcr_pem = self.pcr_private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        self.pcr_sigs = {}                            # PCR 11 value -> its signature entry
+
+    def _pcr11(self, n):
+        out = n.dir / "pcr11.bin"
+        sh("tpm2_pcrread", "-T", n.tcti, "sha256:11", "-o", str(out))
+        return out.read_bytes().hex()
+
+    def _booted(self, n):
+        """The node's TPM, as a host's once systemd-stub and systemd have measured an approved image into PCR 11: the
+        value extended, and signed by the system-phase key in the node's tpm2-pcr-signature.json (properties() binds it,
+        and the key's PEM, where systemd puts them: /run/systemd)."""
+        sh("tpm2_pcrextend", "-T", n.tcti, "11:sha256=" + hashlib.sha256(BOOTED).hexdigest())
+        self._sign_pcr11(n.name, self._pcr11(n))
+
+    def _sign_pcr11(self, name, value):
+        """`value` added to the PCR 11 values the node's signature file covers (an image it may boot), the file rewritten."""
+        import base64
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+        if value not in self.pcr_sigs:
+            pol = uki.policy_digest(value)
+            sig = self.pcr_private.sign(bytes.fromhex(pol), padding.PKCS1v15(), hashes.SHA256())
+            self.pcr_sigs[value] = {"pcrs": [11], "pkfp": signkey.pcr_key_fingerprint(self.pcr_pem), "pol": pol, "sig": base64.b64encode(sig).decode()}
+        self.pcr_values[name].add(value)
+        d = self.nodes[name].dir / "pcr"
+        d.mkdir(mode=0o755, exist_ok=True)
+        _replace(d / "tpm2-pcr-signature.json", json.dumps({"sha256": [self.pcr_sigs[v] for v in sorted(self.pcr_values[name])]}))
+        _replace(d / "tpm2-pcr-public-key.pem", self.pcr_pem.decode())
+        for f in d.iterdir():
+            os.chmod(f, 0o644)
+
+    def _owner_token(self):
+        """The owner's party (ADR-0002 D30: the owner YubiKey and its backup): two Ed25519 keys on a SoftHSM token, signed
+        through the real authority.Pkcs11Signer(alg="ed25519"), CKM_EDDSA, as the YubiKeys' OpenPGP applet is through OpenSC."""
+        if SOFTHSM is None:
+            raise RuntimeError("v4 needs SoftHSM (softhsm2), pkcs11-tool (opensc) and PyKCS11 (python3-pykcs11) for the owner's keys")
+        d = self.work / "owner-hsm"
+        (d / "tokens").mkdir(parents=True)
+        conf = d / "softhsm2.conf"
+        conf.write_text("directories.tokendir = %s/tokens\nobjectstore.backend = file\nlog.level = ERROR\n" % d)
+        os.environ["SOFTHSM2_CONF"] = str(conf)       # this process's: the fixture signs as the owner
+        sh("softhsm2-util", "--init-token", "--free", "--label", "owner", "--so-pin", "12345678", "--pin", OWNER_PIN)
+        for key_id, label in (("01", "owner"), ("02", "owner-backup")):
+            sh("pkcs11-tool", "--module", SOFTHSM, "--token-label", "owner", "--login", "--pin", "env:P", "--keypairgen",
+               "--key-type", "EC:edwards25519", "--id", key_id, "--label", label, env=dict(os.environ, P=OWNER_PIN))
+        listing = sh("pkcs11-tool", "--module", SOFTHSM, "--list-slots").stdout
+        self.owner_serial = next(line.split(":", 1)[1].strip() for line in listing.splitlines() if "serial num" in line)
+        self.owner_keys = [{"alg": "ed25519", "key": self.owner_signer(i).public()} for i in range(2)]
+
+    def owner_signer(self, which=0):
+        """The owner's key `which` (0: the owner's, 1: the backup), as owner.py opens a YubiKey: by serial, Ed25519."""
+        from deploy.baremetal import authority
+        return authority.Pkcs11Signer(SOFTHSM, self.owner_serial, "%02x" % (which + 1), None, pin=lambda: OWNER_PIN, alg="ed25519")
 
     def power_cycle(self, name, orderly=True):
         """The node's TPM through a power loss: (orderly) TPM2_Shutdown(CLEAR) first, then the process stopped and
@@ -248,6 +325,8 @@ class Cluster:
         if image is None:
             return dict(base)
         value = hashlib.sha256(bytes.fromhex(base["pcrs"]["11"]) + hashlib.sha256(image.encode()).digest()).hexdigest()
+        if self.v4:                                   # an image the root approves: the system-phase key signs its PCR 11 too
+            self._sign_pcr11(name, value)
         return dict(base, label=image, pcrs=dict(base["pcrs"], **{"11": value}))
 
     def accept(self, seed, sets, name):
@@ -288,7 +367,13 @@ class Cluster:
         finally:
             os.environ.pop("TPM2TOOLS_TCTI") if before is None else os.environ.__setitem__("TPM2TOOLS_TCTI", before)
         ek, ak = (out / "ek.pub").read_bytes(), (out / "ak.pub").read_bytes()
-        return attest.name_of(attest.public_area(ek, "the EK public area")).hex(), attest.ak_identity(ak)[0].hex(), ak.hex()
+        ek_name = attest.name_of(attest.public_area(ek, "the EK public area")).hex()
+        if self.v4:
+            # #199: the signing key, made in the node's TPM and certified by its AK, accepted as `enrol entry` accepts it
+            blob = signkey.create(self.pcr_pem, tcti=n.tcti)
+            info, sig = signkey.certify(tcti=n.tcti)
+            self.signing[n.name] = signkey.verify_certification(blob, info, sig, ak, ek_name, self.pcr_pem)
+        return ek_name, attest.ak_identity(ak)[0].hex(), ak.hex()
 
     def _reference(self, n, pcrs):
         """The node's accepted measurement set, read from its TPM, as pcr_survey.py records it on a host."""
@@ -302,6 +387,7 @@ class Cluster:
 
     def _identities_and_chain(self):
         example = json.loads((ROOT / "deploy" / "baremetal" / "node.example.json").read_text())
+        self.signing = {}
         self.ids = {n.name: self._identity(n) for n in self.nodes.values()}
         self.reference = {n.name: self._reference(n, example["pcrs"]) for n in self.nodes.values()}
         self.document = {"schema": measurements.SCHEMA, "name": "e2e3",
@@ -311,6 +397,20 @@ class Cluster:
                          "nodes": [{"node_id": n.name, "state": "ACTIVE", "ek_name": self.ids[n.name][0], "ak_name": self.ids[n.name][1],
                                     "wg_boot_pub": self.keys[n.name]["boot"][1], "wg_service_pub": self.keys[n.name]["service"][1],
                                     "hsm_serials": ["E2E3%s" % n.name.upper()]} for n in self.nodes.values()]}
+        if self.v4:
+            # #199: the first real manifest is v4 (no ceremony has run): the nodes and the owner sign, by quorum
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+            names = [n.name for n in self.nodes.values()]
+            del self.manifest["revocation_keys"]
+            self.manifest.update(schema=membership.SCHEMA_V4, heartbeat_max_lifetime_s=21600, owner_heartbeat_lifetime_s=3600,
+                                 owner_keys=self.owner_keys,
+                                 heartbeat_signers={"threshold": 2, "parties": names + [membership.OWNER]},
+                                 activation_signers={"threshold": 2, "parties": names},
+                                 revocation_signers=[{"threshold": 2, "parties": names}, {"threshold": 1, "parties": [membership.OWNER]}])
+            for entry in self.manifest["nodes"]:
+                ssh = Ed25519PrivateKey.generate().public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+                entry.update(ssh_host_pub=ssh.hex(), signing_key=self.signing[entry["node_id"]])
         self.chain = [self.signed(self.manifest)]
 
     @staticmethod
