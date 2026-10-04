@@ -18,19 +18,27 @@
 # what a clone writes into its own configuration, and nothing else (uki.py CLONE_CONFIG; names as git prints them)
 REPO_GIT_ALLOWED='core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)|extensions\.(objectformat|worktreeconfig)|user\.(name|email)|gc\.auto|remote\.[^[:space:]]+\.(url|pushurl|fetch|tagopt|prune|promisor|partialclonefilter)|branch\.[^[:space:]]+\.(remote|merge|rebase|pushremote)'
 
+repo_git_owner(){
+  # who owns the repository: the owner of .git (a directory, or a worktree's .git file), the user who wrote its
+  # configuration. Not the working tree's top directory: a CI container's checkout has the top owned by the
+  # runner while .git was written by root.
+  stat -c "${1:-%u}" "$REPO/.git"
+}
+
 repo_git_uid(){
-  # the uid git runs as: the checkout's owner when root reads another user's checkout, else this process's
-  local uid; uid="$(stat -c %u "$REPO")"
+  # the uid git runs as: the repository's owner when root reads another user's repository, else this process's
+  local uid; uid="$(repo_git_owner)"
   if [ "$(id -u)" = 0 ] && [ "$uid" != 0 ]; then echo "$uid"; else id -u; fi
 }
 
 repo_git(){
   local uid gid
-  uid="$(stat -c %u "$REPO")" gid="$(stat -c %g "$REPO")"
+  uid="$(repo_git_owner %u)" gid="$(repo_git_owner %g)"
   if [ "$(id -u)" = 0 ] && [ "$uid" != 0 ]; then
+    # safe.directory: the working tree's top may still belong to someone else (its contents are compared, never run)
     setpriv --reuid="$uid" --regid="$gid" --clear-groups --no-new-privs -- \
       env -i PATH=/usr/bin:/bin LC_ALL=C HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-      git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C "$REPO" "$@"
+      git -c safe.directory="$REPO" -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C "$REPO" "$@"
   else
     env -i PATH=/usr/bin:/bin LC_ALL=C HOME=/nonexistent GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
       git -c safe.directory="$REPO" -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-optional-locks -C "$REPO" "$@"

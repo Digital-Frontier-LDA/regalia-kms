@@ -80,7 +80,7 @@ python3 -I -c 'import cryptography' 2>/dev/null || die "python3-cryptography is 
 # shellcheck source=deploy/baremetal/initrd/repo-git.sh
 . "$REPO/deploy/baremetal/initrd/repo-git.sh"
 repo_git_check || die "the checkout is refused (above)"
-echo "build-initrd: the checkout is read as uid $(repo_git_uid) (its owner, $(stat -c %u "$REPO"))"
+echo "build-initrd: the checkout is read as uid $(repo_git_uid) (its repository's owner, $(repo_git_owner))"
 COMMIT="$(repo_git rev-parse --verify HEAD)" || die "$REPO is not a git checkout"
 [ -z "$(repo_git status --porcelain --untracked-files=all)" ] \
   || die "the checkout has changes or untracked files: build from a clean clone at the agreed commit"

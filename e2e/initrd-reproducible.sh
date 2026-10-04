@@ -46,8 +46,8 @@ for n in $(seq 1 "$BUILDS"); do
   else
     deploy/baremetal/initrd/build-initrd.sh --snapshot "$SNAPSHOT" --go "$GO" --out "$OUT/build-$n" | tee "$OUT/build-$n.log"
     # #382: run as root on a checkout another user owns, git reads it as that owner, never as root
-    if [ "$(id -u)" = 0 ] && [ "$(stat -c %u "$REPO")" != 0 ]; then
-      grep -q "^build-initrd: the checkout is read as uid $(stat -c %u "$REPO") " "$OUT/build-$n.log" \
+    if [ "$(id -u)" = 0 ] && [ "$(stat -c %u "$REPO/.git")" != 0 ]; then
+      grep -q "^build-initrd: the checkout is read as uid $(stat -c %u "$REPO/.git") " "$OUT/build-$n.log" \
         || { echo "initrd-reproducible: build $n read the checkout as root, not as its owner (#382)"; exit 1; }
     fi
   fi
